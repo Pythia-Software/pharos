@@ -363,6 +363,31 @@ accounted under those admitted coarse phases, not an invisible new worker.
 Interactive Thinking fits keep their existing admission; the background CPU
 control does not throttle interactive queries or claim Mac-wide enforcement.
 
+## Review-cycle validation (November 7)
+
+Main `289ad3aa` was merged throughout the stack before resolving the posted
+reviews. Independent reviews covered the common harness, executor,
+domain routing and resource UI; the resulting fixes were verified on the
+integrated stack, with focused checks on independent lower prefixes.
+
+| Check | Result |
+| --- | --- |
+| `go test -short ./...` and `go test ./...` | Passed (four test processes) |
+| Targeted `go test -race` | Passed: sharing, modes, retry, timed policy, label/event sessions, resource history and lease ownership |
+| `go vet -tags probe ./internal/archive` | Passed |
+| Actual retained-binary proofs | Passed: previous-binary recovery and recovery after scheduled publication, plus the common population/CPU-window fixture tests |
+| `npm --prefix web run check` | Passed, including 1,533 unit tests (three skipped) |
+| `npm --prefix web run test:full` | Passed, 1,533 tests (three skipped) |
+| Selected browser focus/layout checks | 14 passed, including wide/narrow Work and activity-panel states |
+| Isolated Python experiment-harness fixtures | 26 passed |
+
+View controls and site-map artifacts were regenerated and reviewed. The
+race-enabled cancellation case now keeps interrupted labels pending rather
+than charging a failure; failed durable fork marks force rediscovery in
+both model domains. Broker and standalone collectors use the slower lease
+cache, and cached ownership cannot survive PID reuse. These are correctness
+and tooling checks, not realistic throughput acceptance.
+
 ## Evidence status
 
 Historical diagnostic runs used the schema-23 baseline. One preparation arm
@@ -372,11 +397,13 @@ unsuitable for acceptance. The subsequent reference arm failed because
 labels returned before full settlement. No successful paired result exists.
 
 Nothing in this PR is release acceptance. No version-3 A/A or A/B
-comparison against the schema-24 baseline has run. Still unmet: the
+comparison against the schema-24 baseline has run. Still unmet:
 normalization of the corpus to schema 24 with that binary, representative
 and full-settlement pairs,
-full-corpus recapture/reindex, and actual recent arrival during coarse
-history (no source replay). The classic executor stays the default.
+full-corpus recapture/reindex, actual recent arrival during coarse history
+(source replay is not implemented), and quantification/admission of retained
+preparation-context memory. Context memory is shared process memory, not an
+enforced per-task grant. The classic executor stays the default.
 
 ## Review cycle 3 comparison policy
 

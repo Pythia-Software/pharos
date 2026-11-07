@@ -8,8 +8,14 @@
 // again now and then. A hidden page holds no stream and polls nothing; it
 // reconnects when shown again.
 //
-// The logic is in createStore and normalize, which take their browser APIs as
-// arguments, so web/tests/unit/page/status-store.test.mjs can drive them.
+// While the panel is open the store also keeps the resource history
+// (docs/work-resource-accounting.md): one fetch when it opens, then a
+// since= fetch whenever a snapshot carries newer resources. Without a
+// collector (classic execution) the document says it is unavailable and the
+// panel draws no chart.
+//
+// The logic is in createStore, normalize and mergeHistory, which take their
+// browser APIs as arguments, so web/tests/unit/page tests can drive them.
 (() => {
   'use strict';
   const POLL_MS = 5000;
@@ -24,6 +30,54 @@
   const endpoints = managed => managed
     ? {stream: '/api/app/status/stream', poll: '/api/app/status'}
     : {stream: '/api/status/stream', poll: '/api/status'};
+  // History follows the Load row: in the app the covered Pharos processes,
+  // otherwise this library service.
+  const historyEndpoint = managed => managed ? '/api/app/resources/history' : '/api/resources/history';
+  // The least time between two history fetches while the panel is open.
+  const HISTORY_MS = 2000;
+
+  // mergeHistory appends a since= document to the history the store holds.
+  // A full document (no since), an unavailable one, or one for another
+  // scope replaces it. Samples are kept in time order without repeating a
+  // time, and everything older than the window is dropped.
+  function mergeHistory(previous, next) {
+    if (!next || typeof next !== 'object') return previous || null;
+    if (!next.available || !previous?.available || next.since == null || (previous.library || '') !== (next.library || '')) return next;
+    const end = Number(next.now) || 0;
+    const start = end - (Number(next.window_seconds) || 900) * 1000;
+    const columns = (old, fresh, keys) => {
+      const merged = Object.fromEntries(keys.map(key => [key, []]));
+      for (const source of [old, fresh]) {
+        const times = source?.t || [];
+        for (let index = 0; index < times.length; index++) {
+          const time = times[index];
+          if (time < start || (merged.t.length && time <= merged.t.at(-1))) continue;
+          for (const key of keys) merged[key].push(key in (source || {}) ? source[key][index] ?? null : null);
+        }
+      }
+      return merged;
+    };
+    const events = (old = [], fresh = [], key, keepLast) => {
+      const seen = new Set(), merged = [];
+      for (const event of [...old, ...fresh].sort((a, b) => a.t - b.t)) {
+        const id = key(event);
+        if (!seen.has(id)) { seen.add(id); merged.push(event); }
+      }
+      // Keep the entry in effect when the window starts.
+      const first = merged.findIndex(event => event.t >= start);
+      const from = first < 0 ? (keepLast ? merged.length - 1 : merged.length) : keepLast ? Math.max(0, first - 1) : first;
+      return merged.slice(Math.max(0, from));
+    };
+    return {...next, since: previous.since ?? null,
+      samples: columns(previous.samples, next.samples, ['t', 'cpu', 'memory', 'disk', 'cpu_partial', 'disk_partial', 'processes']),
+      gpu: next.gpu || previous.gpu ? columns(previous.gpu, next.gpu, ['t', 'value', 'partial']) : null,
+      segments: events(previous.segments, next.segments, event => `${event.t}:${event.reason}`, true),
+      coverage: events(previous.coverage, next.coverage, event => String(event.t), true),
+      markers: events(previous.markers, next.markers, event => `${event.t}:${event.event}:${event.id}`, false)};
+  }
+  const lastSample = history => history?.samples?.t?.length ? history.samples.t.at(-1) : null;
+  // The newest resources reading a snapshot carries, as a time.
+  const sampledAt = view => Date.parse(view?.resources?.sampled_at || view?.service?.resources?.sampled_at || view?.library?.resources?.sampled_at || '') || 0;
 
   const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'interrupted', 'skipped']);
   const touches = (operation, id) => Array.isArray(operation.libraries) && operation.libraries.includes(id);
@@ -77,9 +131,9 @@
   function createStore({managed = false, selectedId = null, EventSource: Source = globalThis.EventSource, fetch: get = (...args) => globalThis.fetch(...args),
     setTimeout: later = (...args) => globalThis.setTimeout(...args), clearTimeout: cancel = id => globalThis.clearTimeout(id),
     hidden = () => Boolean(globalThis.document?.hidden), now = () => Date.now()} = {}) {
-    const paths = endpoints(managed);
+    const paths = endpoints(managed), historyPath = historyEndpoint(managed);
     const listeners = new Set();
-    let state = {document: null, view: null, error: null, mode: 'stopped', receivedAt: 0};
+    let state = {document: null, view: null, error: null, mode: 'stopped', receivedAt: 0, history: null};
     // generation changes whenever the feed is opened, closed or paused, so a
     // poll that was in flight then is dropped when it returns.
     let source = null, timer = null, running = false, tag = null, pollingSince = 0, generation = 0;
@@ -87,6 +141,10 @@
     // flight when a newer event arrived does not overwrite it.
     let streamed = 0;
     let lastLibrarySizes = null;
+    // History: kept only while the panel shows it. historyNone is set when
+    // there is no collector (classic execution, an older service): no more
+    // requests until the panel is opened again.
+    let historyOpen = false, historyBusy = false, historyAt = 0, historySeen = 0, historyGeneration = 0, historyNone = false;
 
     const notify = () => { for (const listener of [...listeners]) { try { listener(state); } catch (error) { console.error(error); } } };
     const set = changes => { state = {...state, ...changes}; notify(); };
@@ -105,7 +163,47 @@
         }
       }
       set({document, view, error: null, receivedAt: now()});
+      if (historyOpen && sampledAt(view) > historySeen) loadHistory();
     };
+
+    // One history request at a time, at most every HISTORY_MS; a snapshot
+    // arriving meanwhile is caught by the next one.
+    async function loadHistory(full = false) {
+      if (!historyOpen || historyNone || historyBusy || (!full && now() - historyAt < HISTORY_MS)) return;
+      const mine = historyGeneration;
+      historyBusy = true;
+      historyAt = now();
+      historySeen = Math.max(historySeen, sampledAt(state.view));
+      const since = full ? null : lastSample(state.history);
+      try {
+        const response = await get(since == null ? historyPath : `${historyPath}?since=${since}`, {});
+        if (!historyOpen || mine !== historyGeneration) return;
+        // An older service has no route: no history, and no chart.
+        const document = response.ok ? await response.json() : {available: false, reason: `HTTP ${response.status}`};
+        if (!historyOpen || mine !== historyGeneration) return;
+        // Unavailable stops asking, unless the collector has just not read
+        // this scope yet (pending).
+        if (document?.available === false && !document.pending) historyNone = true;
+        set({history: since == null ? document : mergeHistory(state.history, document)});
+      } catch { /* the next snapshot tries again */ } finally {
+        if (mine === historyGeneration) historyBusy = false;
+      }
+    }
+    function openHistory() {
+      if (historyOpen) return;
+      historyOpen = true;
+      historyGeneration++;
+      historyBusy = false;
+      historyNone = false;
+      historySeen = 0;
+      loadHistory(true);
+    }
+    function closeHistory() {
+      historyOpen = false;
+      historyGeneration++;
+      historyBusy = false;
+      if (state.history) set({history: null});
+    }
     const clearTimer = () => { if (timer !== null) cancel(timer); timer = null; };
     const closeStream = () => { if (source) { source.onerror = null; source.close(); } source = null; };
 
@@ -212,7 +310,7 @@
       } catch { /* the stream carries on */ }
     }
     return {
-      start, stop, visibility, fresh, refresh,
+      start, stop, visibility, fresh, refresh, openHistory, closeHistory,
       current: () => state,
       subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     };
@@ -230,8 +328,10 @@
     subscribe: listener => instance().subscribe(listener),
     fresh: () => instance().fresh(),
     refresh: () => store?.refresh(),
+    openHistory: () => instance().openHistory(),
+    closeHistory: () => store?.closeHistory(),
     // Pure helpers, for web/tests/unit/page/status-store.test.mjs.
-    createStore, normalize, endpoints, brokerEjectVerdict, POLL_MS,
+    createStore, normalize, endpoints, historyEndpoint, brokerEjectVerdict, mergeHistory, POLL_MS, HISTORY_MS,
   };
   start();
 })();

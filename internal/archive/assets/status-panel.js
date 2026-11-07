@@ -58,6 +58,23 @@
 .pharos-status-load>span>span{display:inline-flex;align-items:center;gap:4px}
 .pharos-status-load .app-icon{width:13px;height:13px;flex:none}
 .pharos-status-load b{font-size:13px;font-weight:600;color:var(--ink,#000);font-variant-numeric:tabular-nums}
+.pharos-status-history{margin-top:10px;padding-top:8px;border-top:1px solid var(--line,#ddd);font-size:11px;color:var(--muted,#666);outline-offset:2px}
+.pharos-status-history-caption{display:flex;gap:6px;justify-content:space-between;margin-bottom:4px;min-width:0}
+.pharos-status-history-caption>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pharos-status-history-row{display:grid;grid-template-columns:32px minmax(0,1fr) 60px;gap:6px;align-items:center;height:20px}
+.pharos-status-history-row>b{font-weight:600;color:var(--ink,#000);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pharos-status-history svg{display:block;width:100%;height:18px;overflow:visible}
+.pharos-status-history .line{fill:none;stroke:var(--accent,#d8ae5e);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.pharos-status-history .base{stroke:var(--line,#ddd);stroke-width:1;vector-effect:non-scaling-stroke}
+.pharos-status-history .marker{stroke:color-mix(in srgb,var(--ink,#000) 22%,transparent);stroke-width:1;stroke-dasharray:2 2;vector-effect:non-scaling-stroke}
+.pharos-status-history .marker.end{stroke-dasharray:1 3}
+.pharos-status-history .cursor{stroke:var(--ink,#000);stroke-width:1;vector-effect:non-scaling-stroke}
+.pharos-status-history .cursor.pinned{stroke-width:2}
+.pharos-status-history-lane{position:relative;height:12px}
+.pharos-status-history-lane>i{position:absolute;top:0;font-style:normal;font-size:10px;line-height:12px}
+.pharos-status-history-readout{min-height:14px;margin-top:2px;overflow-wrap:anywhere}
+.pharos-status-history-readout.hint{opacity:.75}
+.pharos-status-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 @media(max-width:480px){.pharos-status-load{font-size:10px}.pharos-status-load b{font-size:11px}.pharos-status-load .app-icon{display:none}.pharos-status-load>span{padding:0 1px}.pharos-status-load:has(>span:nth-child(6)){font-size:9px}.pharos-status-load:has(>span:nth-child(6)) b{font-size:9px}}
 /* Opacity only, with the ring on ::after: see .pharos-drive .pharos-dot.busy. */
 .pharos-status-panel .pharos-dot.pulse{position:relative;animation:pharos-status-pulse 1.6s ease-in-out infinite}
@@ -241,7 +258,9 @@
   // measured amount · a time range when the server gives one (only while
   // estimating, or early and marked so). A background pass instead leads
   // with its current task and shows its position among the planned tasks.
-  function operationLine(operation, now = Date.now()) {
+  // service is false for the app's own operations, whose records are not
+  // in the library service's ledger.
+  function operationLine(operation, now = Date.now(), {service = true} = {}) {
     const primary = [], secondary = [];
     const pass = operation.kind === 'background.update';
     // A pass may be inside a chain stage, and authorship has its own child
@@ -279,10 +298,13 @@
     const progressLabel = amount || name || current.verb || current.state_label || 'Working…';
     if (!step && !(state.state !== 'running' && state.detail)) secondary.push(current.verb || 'Preparing…');
     const tooltip = [...new Set(path.map(entry => entry.detail).filter(Boolean)), operation.on_eject].filter(Boolean).join('\n');
+    const measured = current.resources ? current : operation;
+    const resources = taskResourceModel(measured.resources);
     return {id: operation.id, label: pass ? (current !== operation ? current.label : name || operation.label) : operation.label, cadence: pass ? CADENCE_NAMES[operation.variant] || '' : '',
       position, primary, secondary, time: state.state === 'running' ? operation.time?.label || '' : '', tooltip,
       fraction, progressLabel, currentLabel: current.label, waiting: state.state !== 'running',
-      state: state.state, background: operation.priority === 'background'};
+      state: state.state, background: operation.priority === 'background', resources,
+      export: resources && service && measured.kind ? {path: resourceExportPath(measured.kind), file: `pharos-${measured.kind}-resources.json`} : null};
   }
   // The schedule cadence is shown beside a background pass's current task;
   // other work says who started it.
@@ -310,6 +332,16 @@
   // What runs for the selected library: the app's operations that touch it
   // (a transfer, a delivery), then its own.
   const currentOperations = view => [...(view?.appOperations || []), ...(view?.library?.operations || [])].filter(running);
+  // Task kinds' names, from the operations in a snapshot and their stages.
+  function operationLabels(view, into = {}) {
+    const visit = operation => {
+      if (!operation || typeof operation !== 'object') return;
+      if (operation.kind && operation.label) into[operation.kind] = operation.label;
+      for (const child of operation.children || []) visit(child);
+    };
+    for (const operation of [...(view?.appOperations || []), ...(view?.library?.operations || [])]) visit(operation);
+    return into;
+  }
   const operationStartTime = operation => {
     const time = Date.parse(operation.started_at);
     return Number.isFinite(time) ? time : Infinity;
@@ -319,17 +351,22 @@
   // panel's eject flow; options.verdict overrides the snapshot's verdict
   // (the debounced one, see settleVerdict); options.stopRequested holds the
   // operations Stop was pressed for.
-  function panelModel(view, {ejectState = null, verdict = null, unavailable = null, nativeEject = false, stopRequested = new Set(), now = Date.now()} = {}) {
+  // options.labels names task kinds for the history's markers (see
+  // operationLabels).
+  function panelModel(view, {ejectState = null, verdict = null, unavailable = null, nativeEject = false, stopRequested = new Set(), history = null, labels = operationLabels(view), now = Date.now()} = {}) {
     const library = view?.library || null;
     const operations = currentOperations(view);
+    const appIds = new Set((view?.appOperations || []).map(operation => operation.id));
     // Oldest first, so new work joins the end and child stages do not move
     // their parent's row. IDs break ties consistently across snapshots;
     // operations without a known start follow those with one.
     const shown = operations.slice().sort((a, b) => operationStartTime(a) - operationStartTime(b) || a.id.localeCompare(b.id));
-    const common = {lines: shown.map(operation => operationLine(operation, now)), attention: (view?.attention || []).map(attentionModel)};
+    const lines = shown.map(operation => operationLine(operation, now, {service: Boolean(library) && !appIds.has(operation.id)}));
+    const common = {lines, attention: (view?.attention || []).map(attentionModel)};
     if (!library) {
+      const load = loadModel(view?.resources ?? view?.service?.resources, view?.lastLibrarySizes?.storage, view?.lastLibrarySizes?.wal, Boolean(view?.lastLibrarySizes));
       return {available: false, title: PANEL_TITLE, library: view?.service?.name ? {name: view.service.name, drive: '', path: ''} : null, ...common, stateLabel: view?.service?.stateLabel || null,
-        load: loadModel(view?.resources ?? view?.service?.resources, view?.lastLibrarySizes?.storage, view?.lastLibrarySizes?.wal, Boolean(view?.lastLibrarySizes)),
+        load, history: load ? historyModel(history, {labels}) : null, profile: null,
         message: operations.length ? null : unavailable || (view?.service?.error ? `${view.service.error}` : null)};
     }
     const drive = library.library?.drive || {};
@@ -351,6 +388,11 @@
       // Null without a schedule (an older service).
       schedule: scheduleModel(library.background, now),
       load: loadModel(view.resources ?? library.resources, library.library?.storage_bytes, library.library?.wal_bytes),
+      // The history strip sits above the Load row, in the same scope.
+      history: historyModel(history, {labels}),
+      // A deliberate, short CPU profile of the service process, offered
+      // only beside a service that keeps task records.
+      profile: lines.some(line => line.export) ? {path: PROFILE_PATH, file: 'pharos-service-cpu-5s.pprof'} : null,
       // Other libraries are only counted, in the library line ("1/3"); an
       // app operation touching no library is listed by its own label.
       others: (view.others || []).filter(other => String(other.id).startsWith('app:')).map(other => {
@@ -393,6 +435,215 @@
     }
     return {metrics};
   }
+
+  // ---- resource history (docs/work-resource-accounting.md)
+  // Four separate series on one time axis, each in its own unit: CPU as % of
+  // one core (it can exceed 100%), GPU as the driver's GPU-time share, RAM
+  // as physical footprint and I/O as bytes per second. A missing reading, a
+  // segment boundary (start, restart, gap) or a sample interval longer than
+  // HISTORY_BREAK_MS breaks the line; nothing is interpolated or drawn as
+  // zero. GPU samples keep their own times.
+  const HISTORY_SERIES = [
+    {id: 'cpu', label: 'CPU', source: 'cpu', unit: '% of one core'},
+    {id: 'gpu', label: 'GPU', source: 'gpu', unit: 'driver GPU-time share'},
+    {id: 'memory', label: 'RAM', source: 'memory', unit: 'physical footprint'},
+    {id: 'io', label: 'I/O', source: 'disk', unit: 'read and written per second'},
+  ];
+  const HISTORY_BREAK_MS = 25000;
+  const HISTORY_WIDTH = 300, HISTORY_HEIGHT = 18;
+  const round1 = value => Math.round(value * 10) / 10;
+  const historyText = (id, value) => !Number.isFinite(value) ? '—' : id === 'cpu' || id === 'gpu' ? `${Math.round(value)}%` : id === 'memory' ? size(value) : `${size(value)}/s`;
+  function historyColumns(history, id) {
+    const samples = history.samples || {};
+    if (id === 'gpu') return {t: history.gpu?.t || [], value: history.gpu?.value || [], partial: history.gpu?.partial || []};
+    if (id === 'memory') return {t: samples.t || [], value: samples.memory || [], partial: []};
+    if (id === 'io') return {t: samples.t || [], value: samples.disk || [], partial: samples.disk_partial || []};
+    return {t: samples.t || [], value: samples.cpu || [], partial: samples.cpu_partial || []};
+  }
+  const historyMinutes = history => Math.round((Number(history.window_seconds) || 900) / 60);
+
+  // historyModel turns a history document into the strip's geometry and
+  // text. Null when there is no history (classic execution, an older
+  // service), so the panel draws nothing.
+  function historyModel(history, {width = HISTORY_WIDTH, height = HISTORY_HEIGHT, labels = {}} = {}) {
+    if (!history?.available || !history.samples?.t?.length) return null;
+    const end = Number(history.now) || history.samples.t.at(-1);
+    const span = (Number(history.window_seconds) || 900) * 1000;
+    const start = end - span;
+    const x = time => round1(Math.max(0, Math.min(1, (time - start) / span)) * width);
+    const breaks = (history.segments || []).map(segment => segment.t);
+    const minutes = historyMinutes(history);
+    const series = [];
+    for (const spec of HISTORY_SERIES) {
+      if (history.series?.[spec.source]?.available === false || (spec.id === 'gpu' && !history.gpu)) continue;
+      const columns = historyColumns(history, spec.id);
+      const points = columns.t.map((time, index) => ({t: time, value: Number.isFinite(columns.value[index]) ? columns.value[index] : null, partial: Boolean(columns.partial[index])}))
+        .filter(point => point.t >= start && point.t <= end);
+      const known = points.filter(point => point.value !== null);
+      const peak = known.length ? Math.max(...known.map(point => point.value)) : null;
+      // CPU's scale starts at one core so idle work does not fill the row.
+      const top = spec.id === 'gpu' ? 100 : Math.max(spec.id === 'cpu' ? 100 : spec.id === 'io' ? 1e6 : 1, peak ?? 0);
+      const y = value => round1(height - 1 - Math.max(0, Math.min(1, value / top)) * (height - 2));
+      const runs = [];
+      let run = null, previous = null;
+      for (const point of points) {
+        if (point.value === null) { run = null; previous = point; continue; }
+        const broken = !run || !previous || point.t - previous.t > HISTORY_BREAK_MS || breaks.some(at => at > previous.t && at <= point.t);
+        if (broken) runs.push(run = []);
+        run.push([x(point.t), y(point.value)]);
+        previous = point;
+      }
+      // A lone sample is a short dash, so it is not lost.
+      const paths = runs.map(line => line.length === 1
+        ? `M${round1(line[0][0] - 1)} ${line[0][1]}L${round1(line[0][0] + 1)} ${line[0][1]}`
+        : `M${line.map(([px, py]) => `${px} ${py}`).join('L')}`);
+      const latest = points.at(-1);
+      const current = latest ? historyText(spec.id, latest.value) : '—';
+      const partial = points.some(point => point.partial);
+      const gaps = runs.length > 1 || points.some(point => point.value === null);
+      const summary = `${spec.label} (${spec.unit}): now ${current}${peak !== null ? `, peak ${historyText(spec.id, peak)}` : ''} over the last ${minutes} min`
+        + `${gaps ? ', with gaps' : ''}${partial ? ', some samples are lower bounds' : ''}.`;
+      series.push({id: spec.id, label: spec.label, unit: spec.unit, current: latest?.partial && latest.value !== null ? `≥${current}` : current,
+        peak: peak !== null ? historyText(spec.id, peak) : null, paths, gaps, partial, summary, basis: history.series?.[spec.source]?.basis || ''});
+    }
+    const coverage = (history.coverage || []).at(-1) || null;
+    const covered = coverage?.covered?.length ?? null;
+    const omitted = coverage?.omitted || [];
+    const markers = (history.markers || []).filter(marker => marker.t >= start && marker.t <= end)
+      .map(marker => ({x: x(marker.t), t: marker.t, event: marker.event === 'end' ? 'end' : 'start', kind: marker.kind, id: marker.id, observed: Boolean(marker.observed),
+        text: markerText(history, marker, labels)}));
+    const starts = markers.filter(marker => marker.event === 'start').length, ends = markers.length - starts;
+    const scope = history.scope || '';
+    const caption = [`Last ${minutes} min`, scope, covered !== null ? `${covered} ${unitName('process', covered)}` : ''].filter(Boolean).join(' · ');
+    return {scope, caption, omitted, note: omitted.join('\n'), start, end, width, height, series, markers, labels,
+      summary: [caption + '.', ...series.map(entry => entry.summary), markers.length ? `Task markers: ${starts} ${unitName('start', starts)}, ${ends} ${unitName('end', ends)}.` : '',
+        omitted.length ? `Not measured: ${omitted.join('; ')}.` : ''].filter(Boolean).join(' ')};
+  }
+
+  // A marker in words. A start is the task's own start time. An end the
+  // collector observed is the first sample that no longer saw the task, so
+  // it ended after the sample before it; an end its owner recorded is exact.
+  const historyClock = time => new Date(time).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit', second: '2-digit'});
+  const kindLabel = (marker, labels) => marker.label || labels[marker.kind] || marker.kind || 'a task';
+  function markerText(history, marker, labels = {}) {
+    const label = kindLabel(marker, labels);
+    if (marker.event !== 'end') return `${label} ${marker.observed ? 'start seen' : 'started'} ${historyClock(marker.t)}`;
+    if (!marker.observed) return `${label} ended ${historyClock(marker.t)}`;
+    const before = (history.samples?.t || []).filter(time => time < marker.t).at(-1);
+    return before !== undefined && marker.t - before <= HISTORY_BREAK_MS
+      ? `${label} ended between ${historyClock(before)} and ${historyClock(marker.t)}` : `${label} end seen ${historyClock(marker.t)}`;
+  }
+
+  // historyInspect is what the strip shows at a time: each series' nearest
+  // sample (within HISTORY_BREAK_MS), the coverage then, and the tasks that
+  // were running. Running at the same time is overlap, not attribution.
+  // Markers near that time are named too.
+  function historyInspect(history, time, {labels = {}} = {}) {
+    if (!history?.available || !Number.isFinite(time)) return null;
+    const values = [];
+    let at = null;
+    for (const spec of HISTORY_SERIES) {
+      if (history.series?.[spec.source]?.available === false || (spec.id === 'gpu' && !history.gpu)) continue;
+      const columns = historyColumns(history, spec.id);
+      let best = -1;
+      for (let index = 0; index < columns.t.length; index++) {
+        if (best < 0 || Math.abs(columns.t[index] - time) < Math.abs(columns.t[best] - time)) best = index;
+      }
+      const near = best >= 0 && Math.abs(columns.t[best] - time) <= HISTORY_BREAK_MS;
+      const value = near && Number.isFinite(columns.value[best]) ? columns.value[best] : null;
+      if (near && spec.id === 'cpu') at = columns.t[best];
+      values.push({id: spec.id, label: spec.label, value, text: `${near && columns.partial[best] && value !== null ? '≥' : ''}${historyText(spec.id, value)}`});
+    }
+    at ??= time;
+    const coverage = (history.coverage || []).filter(entry => entry.t <= at).at(-1) || null;
+    const running = new Map();
+    const markers = [...(history.markers || [])].sort((a, b) => a.t - b.t);
+    for (const marker of markers) {
+      if (marker.t > at) break;
+      if (marker.event === 'start') running.set(marker.id, marker);
+      else running.delete(marker.id);
+    }
+    const tasks = [...new Set([...running.values()].map(marker => marker.kind))];
+    const names = [...new Set([...running.values()].map(marker => kindLabel(marker, labels)))];
+    // Markers within a step of the inspected time are named, start or end.
+    const reach = Math.max(2000, (Number(history.window_seconds) || 900) * 10);
+    const marks = markers.filter(marker => Math.abs(marker.t - at) <= reach).map(marker => markerText(history, marker, labels));
+    const text = [historyClock(at), ...values.map(entry => `${entry.label} ${entry.text}`), names.length ? `running then: ${names.join(', ')}` : '', ...marks].filter(Boolean).join(' · ');
+    return {t: at, values, tasks, marks, covered: coverage?.covered?.length ?? null, omitted: coverage?.omitted || [], text};
+  }
+
+  // ---- a task's resources (opView "resources", work_resources.go)
+  // The same accounting record the API and exports carry. CPU, memory, I/O
+  // and GPU show their basis in the text itself (tooltips are out of reach
+  // of keyboard and touch): a number with its basis word and "partial" for
+  // a lower bound, otherwise the basis alone (shared, not measured). The
+  // grant is an allowance, shown apart from use, and links to the Background
+  // CPU allowance in Settings → Background Processing.
+  const BASIS_WORDS = {shared: 'shared', unavailable: 'not measured', allocated: 'allocated', measured: 'measured', counted: 'counted', sampled: 'sampled', estimated: 'estimated'};
+  const WAIT_WORDS = {queue: 'in the queue', dependency: 'for earlier work', capacity: 'for a CPU slot', writer: 'for the library writer', power: 'for power', lock: 'for a lock'};
+  const waitWords = kind => WAIT_WORDS[kind] || `for ${String(kind).replace(/[_.]+/g, ' ')}`;
+  const ALLOWANCE_PATH = '/settings/sync';
+  function duration(seconds) {
+    if (!Number.isFinite(seconds)) return '—';
+    if (seconds < 1) return '<1 s';
+    if (seconds < 60) return `${Math.round(seconds)} s`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
+    const hours = Math.floor(seconds / 3600), rest = Math.round((seconds % 3600) / 60);
+    return rest ? `${hours} h ${rest} min` : `${hours} h`;
+  }
+  const cpuSeconds = value => `${value.toFixed(1)} s`;
+  // One figure as words: "2.5 s measured", "12 MB counted, partial",
+  // "shared". The server's coverage sentence says when it is a lower bound.
+  function figure(quantity, format) {
+    if (!quantity || typeof quantity !== 'object') return null;
+    const word = BASIS_WORDS[quantity.basis] || 'not measured', note = quantity.coverage || '';
+    if (!Number.isFinite(quantity.value)) return {known: false, basis: word, text: word, note};
+    const basis = /lower bound|partial/i.test(note) ? `${word}, partial` : word;
+    return {known: true, basis, text: `${format(quantity.value)} ${basis}`, note};
+  }
+  function taskResourceModel(resources) {
+    if (!resources || typeof resources !== 'object' || !resources.version) return null;
+    const items = [];
+    const add = (id, text, note = '', link = '') => { if (text) items.push({id, text, note, link}); };
+    const grant = resources.allocation?.current;
+    if (grant && (grant.cpu_slots || grant.gpu)) {
+      add('allocation', `${[grant.cpu_slots ? `${grant.cpu_slots} CPU ${unitName('slot', grant.cpu_slots)}` : '', grant.gpu ? 'GPU' : ''].filter(Boolean).join(' and ')} allowed, not usage`,
+        'A share of the Background CPU allowance (Settings → Background Processing). A grant, not CPU used.', ALLOWANCE_PATH);
+    }
+    const active = resources.time?.active;
+    if (Number.isFinite(active?.value)) add('active', `active ${duration(active.value)}`, active.coverage || '');
+    const waits = Object.entries(resources.waits || {}).filter(([, quantity]) => Number.isFinite(quantity?.value) && quantity.value > 0).sort((a, b) => b[1].value - a[1].value);
+    if (waits.length) add('waits', `waited ${duration(waits.reduce((sum, [, quantity]) => sum + quantity.value, 0))}: ${waits.map(([kind, quantity]) => `${duration(quantity.value)} ${waitWords(kind)}`).join(', ')}`);
+    const helpers = figure(resources.cpu?.helpers, cpuSeconds);
+    if (helpers) add('cpu', `helper-process CPU ${helpers.text}`, helpers.note);
+    // The service process's CPU and memory are shared by every task in it.
+    const service = figure(resources.cpu?.go_process, cpuSeconds), serviceMemory = figure(resources.memory?.process, size);
+    if (service && serviceMemory && !service.known && !serviceMemory.known && service.text === serviceMemory.text) {
+      add('service', `service CPU and memory ${service.text}`, [service.note, serviceMemory.note].filter(Boolean).join(' '));
+    } else {
+      if (service) add('service', `service CPU ${service.text}`, service.note);
+      if (serviceMemory) add('service-memory', `service memory ${serviceMemory.text}`, serviceMemory.note);
+    }
+    const gpu = figure(resources.gpu?.time, duration);
+    if (gpu && (gpu.known || grant?.gpu)) add('gpu', `GPU time ${gpu.text}`, gpu.note);
+    const buffers = resources.memory?.owned_buffers_peak_bytes;
+    if (buffers?.value > 0) add('memory', `working buffers peak ${figure(buffers, size).text}`, buffers.coverage || '');
+    const read = resources.io?.logical_read_bytes, written = resources.io?.logical_written_bytes;
+    if ((Number(read?.value) || 0) + (Number(written?.value) || 0) > 0 ||
+        Number.isFinite(read?.value) !== Number.isFinite(written?.value)) {
+      const basis = figure(read?.value > 0 ? read : written, size);
+      const readText = Number.isFinite(read?.value) ? size(read.value) : 'not measured';
+      const writtenText = Number.isFinite(written?.value) ? size(written.value) : 'not measured';
+      add('io', `read ${readText}, wrote ${writtenText} (${basis.basis})`, basis.note);
+    }
+    if (!items.length) return null;
+    return {items, text: items.map(item => item.text).join(' · '),
+      tooltip: items.filter(item => item.note).map(item => `${item.text}: ${item.note}`).join('\n')};
+  }
+  // The finished-task records the service keeps for a kind (bounded, no
+  // transcript content), and a short CPU profile of the whole service.
+  const resourceExportPath = kind => `/api/operations/resources?kind=${encodeURIComponent(kind)}`;
+  const PROFILE_PATH = '/api/diagnostics/profile?seconds=5';
 
   function attentionModel(item) {
     return {id: `${item.library || ''}:${item.id}`, severity: item.severity === 'warning' ? 'warning' : 'error', title: item.title || '',
@@ -462,6 +713,10 @@
 
   // ---- rendering
   let panel = null, ejectState = null, shown = null, holdTimer = null;
+  let displayedHistory = null, displayedHistoryDocument = null;
+  // Task kinds' names seen while the page is open, so a finished task's
+  // markers keep its name.
+  const knownLabels = {};
   const live = (target, content) => window.pharosLibrary?.updateLiveChildren ? window.pharosLibrary.updateLiveChildren(target, content) : target.replaceChildren(...content.childNodes);
   const chip = () => window.pharosLibrary?.ensureChip?.() || document.getElementById('pharosDrive');
   const anchor = () => window.headerToolAnchor?.(chip()) ?? chip();
@@ -625,8 +880,13 @@
     if (!panel) return;
     const state = storeState();
     for (const id of [...stopRequested]) if (!currentOperations(state?.view).some(operation => operation.id === id && operation.state !== 'stopping')) stopRequested.delete(id);
-    const model = panelModel(state?.view, {ejectState, verdict: currentVerdict(), nativeEject: Boolean(nativeEjectAvailable()), stopRequested,
+    const model = panelModel(state?.view, {ejectState, verdict: currentVerdict(), nativeEject: Boolean(nativeEjectAvailable()), stopRequested, history: state?.history,
+      labels: operationLabels(state?.view, knownLabels),
       unavailable: state?.error ? (state.error.status === 503 ? 'Pharos is stopping; it has released or is releasing the library.' : `Could not read the library's status: ${state.error.message}`) : null});
+    displayedHistory = model.history;
+    displayedHistoryDocument = state?.history || null;
+    // A pinned time that has left the window is let go.
+    if (inspect && (!model.history || inspect.at < model.history.start)) inspect = null;
     const scrollTop = panel.scrollTop;
     const content = node('div');
     const head = node('div', 'pharos-panel-head'), title = node('div'), heading = node('h2', '', model.title);
@@ -659,6 +919,7 @@
       if (model.message) content.append(node('p', 'pharos-error', model.message));
       else if (model.stateLabel) content.append(node('div', 'pharos-sub', model.stateLabel));
       appendNow(content, model);
+      if (model.history) content.append(historyStrip(model.history, state?.history));
       if (model.load) content.append(loadRow(model.load));
       appendAttention(content, model.attention);
       commit(content, scrollTop);
@@ -699,6 +960,7 @@
       content.append(headline);
     }
     appendNow(content, model);
+    if (model.load && model.history) content.append(historyStrip(model.history, state?.history));
     if (model.load) content.append(loadRow(model.load));
     // Settings sits on the Schedule heading's line, at the right.
     const settings = node('a', '', 'Settings');
@@ -733,6 +995,151 @@
     } catch (error) { toast(error.message); }
     window.pharosStatusStore?.refresh();
   }
+
+  // The history strip: one row per series, with its own scale, the task
+  // markers across every row and on their own lane, and an inspection
+  // readout. Pointing inspects; a click or Enter pins the time and another
+  // unpins it; the arrow keys step through samples; Escape clears. The
+  // inspected time is transient, never in the URL. Only keyboard inspection
+  // is announced, so moving the pointer does not chatter.
+  const SVG = 'http://www.w3.org/2000/svg';
+  const svgNode = (tag, attributes) => {
+    const element = document.createElementNS(SVG, tag);
+    for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, String(value));
+    return element;
+  };
+  const HISTORY_HINT = 'Point, or use the arrow keys, to inspect · click or Enter pins a time';
+  // inspect is {at, pinned, keyboard}; announcement is the last keyboard
+  // reading, kept until the next one so a redraw does not repeat it.
+  let inspect = null, announcement = '';
+  function historyStrip(model, history) {
+    const strip = node('div', 'pharos-status-history');
+    strip.dataset.key = 'history';
+    strip.dataset.history = '';
+    strip.tabIndex = 0;
+    strip.setAttribute('role', 'group');
+    strip.setAttribute('aria-label', `Resource history: ${model.summary} Arrow keys step through samples, Enter pins a time, Escape clears.`);
+    const caption = node('div', 'pharos-status-history-caption');
+    caption.dataset.key = 'caption';
+    caption.append(node('span', '', model.caption));
+    if (model.omitted.length) {
+      const omitted = node('span', '', `${model.omitted.length} not measured`);
+      omitted.title = model.note;
+      caption.append(omitted);
+    }
+    strip.append(caption);
+    const inspected = inspect ? historyInspect(history, inspect.at, {labels: model.labels}) : null;
+    if (inspected && inspect.keyboard) announcement = `${inspect.pinned ? 'Pinned · ' : ''}${inspected.text}`;
+    const cursor = inspected ? Math.max(0, Math.min(model.width, ((inspected.t - model.start) / (model.end - model.start)) * model.width)) : null;
+    for (const series of model.series) {
+      const row = node('div', 'pharos-status-history-row');
+      row.dataset.key = `history:${series.id}`;
+      row.title = series.summary;
+      const graph = svgNode('svg', {viewBox: `0 0 ${model.width} ${model.height}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': series.summary, focusable: 'false'});
+      graph.append(svgNode('line', {class: 'base', x1: 0, x2: model.width, y1: model.height - 0.5, y2: model.height - 0.5}));
+      for (const marker of model.markers) graph.append(svgNode('line', {class: `marker ${marker.event}`, x1: marker.x, x2: marker.x, y1: 0, y2: model.height}));
+      for (const d of series.paths) graph.append(svgNode('path', {class: 'line', d}));
+      if (cursor !== null) graph.append(svgNode('line', {class: `cursor${inspect.pinned ? ' pinned' : ''}`, x1: cursor, x2: cursor, y1: 0, y2: model.height}));
+      row.append(node('span', '', series.label), graph, node('b', '', series.current));
+      strip.append(row);
+    }
+    // Starts and ends, told apart by shape, each named in its tooltip. The
+    // readout and the strip's summary carry the same for assistive tech.
+    if (model.markers.length) {
+      const row = node('div', 'pharos-status-history-row'), lane = node('div', 'pharos-status-history-lane');
+      row.dataset.key = 'history:tasks';
+      row.setAttribute('aria-hidden', 'true');
+      for (const marker of model.markers) {
+        const mark = node('i', marker.event, marker.event === 'end' ? '◂' : '▸');
+        mark.dataset.key = `${marker.event}:${marker.id}:${marker.t}`;
+        // Shifted by its own position, so a mark at either edge stays inside.
+        const at = round1((marker.x / model.width) * 100);
+        mark.style.left = `${at}%`;
+        mark.style.transform = `translateX(-${at}%)`;
+        mark.title = marker.text;
+        lane.append(mark);
+      }
+      row.append(node('span', '', 'Tasks'), lane, node('b', ''));
+      strip.append(row);
+    }
+    const readout = node('div', 'pharos-status-history-readout' + (inspected ? '' : ' hint'), inspected ? `${inspect.pinned ? 'Pinned · ' : ''}${inspected.text}` : HISTORY_HINT);
+    readout.dataset.key = 'readout';
+    const status = node('span', 'pharos-status-sr', announcement);
+    status.dataset.key = 'announce';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-atomic', 'true');
+    strip.append(readout, status);
+    return strip;
+  }
+  // Pointer and keys reach the strip through the document, so a re-rendered
+  // panel keeps them (live updates copy attributes, not listeners).
+  let inspectFrame = 0;
+  const setInspect = next => {
+    if (inspect === next || (inspect && next && ['at', 'pinned', 'keyboard'].every(key => inspect[key] === next[key]))) return;
+    if (!next && inspect?.keyboard) announcement = 'Inspection cleared';
+    inspect = next;
+    if (inspectFrame) return;
+    const request = window.requestAnimationFrame || (callback => setTimeout(callback, 16));
+    inspectFrame = request(() => {
+      inspectFrame = 0;
+      const strip = panel?.querySelector('[data-history]');
+      if (strip && displayedHistory) {
+        // Hover changes the cursor/readout only. Reuse plotted geometry
+        // and the small live renderer without rebuilding the task panel.
+        live(strip, historyStrip(displayedHistory, displayedHistoryDocument));
+      }
+    });
+  };
+  const historyElement = target => panel && target?.closest ? target.closest('[data-history]') : null;
+  const historyDocument = () => storeState()?.history || null;
+  // The time under the pointer, or null off the plotted area.
+  function pointerTime(strip, event) {
+    const model = displayedHistory;
+    const graph = strip.querySelector('svg');
+    const box = graph?.getBoundingClientRect();
+    if (!model || !box?.width) return null;
+    const fraction = Math.max(0, Math.min(1, (event.clientX - box.left) / box.width));
+    return Math.round(model.start + fraction * (model.end - model.start));
+  }
+  document.addEventListener('pointermove', event => {
+    if (inspect?.pinned) return;
+    const strip = historyElement(event.target);
+    const time = strip ? pointerTime(strip, event) : null;
+    if (time === null) { if (inspect && !inspect.keyboard && !strip) setInspect(null); return; }
+    setInspect({at: time, pinned: false, keyboard: false});
+  });
+  document.addEventListener('click', event => {
+    const strip = historyElement(event.target);
+    if (!strip) return;
+    const time = pointerTime(strip, event);
+    if (inspect?.pinned) setInspect(time === null ? null : {at: time, pinned: false, keyboard: false});
+    else if (time !== null) setInspect({at: time, pinned: true, keyboard: false});
+  });
+  document.addEventListener('focusout', event => { if (historyElement(event.target) && inspect && !inspect.pinned) setInspect(null); });
+  // Captured, so Escape clears the inspection before it can close the panel.
+  document.addEventListener('keydown', event => {
+    const strip = historyElement(document.activeElement);
+    if (!strip || event.target !== strip) return;
+    if (event.key === 'Escape') {
+      if (!inspect) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setInspect(null);
+      return;
+    }
+    const times = historyDocument()?.samples?.t || [];
+    if (!times.length || !['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    // Step from the inspected sample (or from now) to its neighbour.
+    let index = -1;
+    if (inspect) for (let i = 0; i < times.length; i++) if (index < 0 || Math.abs(times[i] - inspect.at) < Math.abs(times[index] - inspect.at)) index = i;
+    if (index < 0 || event.key === 'End') index = times.length - 1;
+    else if (event.key === 'ArrowLeft') index = Math.max(0, index - 1);
+    else if (event.key === 'ArrowRight') index = Math.min(times.length - 1, index + 1);
+    if (event.key === 'Home') index = 0;
+    const pinned = event.key === 'Enter' || event.key === ' ' ? !(inspect?.pinned) : Boolean(inspect?.pinned);
+    setInspect({at: times[index], pinned, keyboard: true});
+  }, true);
 
   // Now: each shown operation with its step, measured amount, time range
   // and progress, then the Load line.
@@ -800,10 +1207,44 @@
       bar.append(fill);
       item.append(bar);
       if (line.secondary.length) item.append(node('span', 'pharos-sub pharos-status-step', line.secondary.join(' · ')));
+      if (line.resources) item.append(resourceLine(line));
       if (line.tooltip) item.title = line.tooltip;
       now.append(item);
     }
+    if (model.profile) {
+      const profile = node('span', 'pharos-sub pharos-status-step');
+      profile.dataset.key = 'profile';
+      profile.append(download(model.profile, 'Record a 5 s CPU profile', 'Runs only when you click; the download arrives after 5 seconds.'),
+        ' of the whole service process. Samples are labeled with the task that ran them; it is not any one task\'s own CPU.');
+      now.append(profile);
+    }
     content.append(sectionHeading('Running now', 'now-heading'), now);
+  }
+
+  const download = (target, text, title = '') => {
+    const link = node('a', '', text);
+    link.href = target.path;
+    link.download = target.file;
+    if (title) link.title = title;
+    return link;
+  };
+  // A task's resources: each figure with its basis in words; the grant
+  // links to the allowance it comes from; then the kind's finished records.
+  function resourceLine(line) {
+    const element = node('span', 'pharos-sub pharos-status-step');
+    element.dataset.key = 'resources';
+    line.resources.items.forEach((item, index) => {
+      if (index) element.append(' · ');
+      if (!item.link) { element.append(item.text); return; }
+      const link = node('a', '', item.text);
+      link.href = item.link;
+      link.title = item.note;
+      link.onclick = event => { event.preventDefault(); navigate(item.link); };
+      element.append(link);
+    });
+    if (line.export) element.append(' · ', download(line.export, 'finished records (JSON)', 'The recent finished tasks of this kind, as the service keeps them: figures with their bases, no conversation content.'));
+    if (line.resources.tooltip) element.title = line.resources.tooltip;
+    return element;
   }
 
   // One row per cadence, opening to its items. A row the user opened or
@@ -907,6 +1348,9 @@
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-label', 'Library drive');
     document.body.append(panel);
+    inspect = null;
+    announcement = '';
+    window.pharosStatusStore?.openHistory?.();
     renderChip();
     renderPanel();
     if (focus) (panel.querySelector('button:not(:disabled), summary, [href]') || panel).focus({preventScroll: true});
@@ -917,6 +1361,10 @@
     if (!fromURL && window.pharosView?.read('overlay', 'none') === 'drive') window.pharosView.write('overlay', 'none');
     panel.remove();
     panel = null;
+    displayedHistory = displayedHistoryDocument = null;
+    inspect = null;
+    announcement = '';
+    window.pharosStatusStore?.closeHistory?.();
     if (ejectState?.phase !== 'ejecting' && ejectState?.phase !== 'waiting') ejectState = null;
     chip()?.setAttribute('aria-expanded', 'false');
     if (restoreFocus) anchor()?.focus();
@@ -954,6 +1402,7 @@
     open, close, toggle, render, renderHeader,
     // Pure helpers, for web/tests/unit/page/status-panel.test.mjs.
     panelModel, chipModel, ejectLabel, operationLine, lineText, currentOperations, settleVerdict, ejectDecision, indexBusy, sendStops, stepAmount, scheduleModel, scheduleText, ago, until, span,
+    historyModel, historyInspect, taskResourceModel, loadModel, operationLabels,
   };
   const sheet = node('style');
   sheet.textContent = CSS;

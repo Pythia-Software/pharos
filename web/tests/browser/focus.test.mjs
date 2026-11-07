@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
-import { defaultApi, workID, eventStream, busyStatus } from "./fixtures.mjs";
+import { defaultApi, workID, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 test('Settings switches keep keyboard focus and their saved state across Settings and Analyze', {skip}, async t => {
@@ -69,6 +69,52 @@ test('Settings switches keep keyboard focus and their saved state across Setting
   await mcp.waitFor();
   await settled();
   assert.equal(await mcp.getAttribute('aria-checked'), 'false');
+});
+
+test('Background CPU allowance and task Stop/Resume keep keyboard focus across their redraws', {skip}, async t => {
+  const background = structuredClone(workBackgroundDocument), posts = [];
+  let held = true;
+  const {page, settled} = await open(t, {url:'/settings/sync', ready:'#backgroundSchedule [data-card=work] .bg-work-row', api: {
+    'GET /api/background': () => background,
+    'POST /api/work/settings': ({body}) => { background.work.cpu_slots = body.cpu_slots; return background; },
+    'GET /api/work': () => {
+      const value = workInspection();
+      value.state.authority.cpu_cap = background.work.cpu_slots;
+      if (!held) Object.assign(value.state.tasks.find(task => task.kind === 'analysis.labels'), {state: 'queued', blocker: null});
+      return value;
+    },
+    'POST /api/work': ({body}) => { posts.push(body); if (['stop', 'resume'].includes(body.action)) held = body.action === 'stop'; return {changed: true}; },
+  }});
+  const allowance = page.locator('[data-focus-key="work:cpu"]');
+  await allowance.focus();
+  const saved = page.waitForRequest(request => request.url().endsWith('/api/work/settings') && request.method() === 'POST');
+  await allowance.selectOption('2');
+  assert.deepEqual((await saved).postDataJSON(), {cpu_slots: 2});
+  await page.waitForFunction(() => document.activeElement?.dataset.focusKey === 'work:cpu' && document.activeElement.value === '2');
+  await page.waitForFunction(() => document.querySelector('[data-card="work"] .bg-state')?.textContent.includes('2 of 2'));
+  // A refused save restores the saved choice without moving keyboard focus.
+  // Return the fetch refusal locally so no deliberate HTTP error pollutes
+  // the browser harness's unexpected-network-error assertions.
+  await page.evaluate(() => {
+    const fetch = window.fetch;
+    window.fetch = (url, options) => String(url).endsWith('/api/work/settings')
+      ? Promise.resolve({ok: false, status: 409, json: async () => ({error: 'The CPU allowance is fixed by the environment.'})})
+      : fetch(url, options);
+  });
+  await allowance.selectOption('3');
+  await page.waitForFunction(() => document.activeElement?.dataset.focusKey === 'work:cpu' && document.activeElement.value === '2');
+  // Resume and Stop replace each other on the same task row; focus follows.
+  const hold = page.locator('[data-focus-key="work:hold:analysis.labels"]');
+  for (const [action, next] of [['resume', 'stop'], ['stop', 'resume']]) {
+    await hold.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(next => {
+      const element = window.document.activeElement;
+      return element?.isConnected && element.dataset.focusKey === 'work:hold:analysis.labels' && element.dataset.action === next && !element.disabled;
+    }, next);
+    assert.deepEqual(posts.at(-1), {action, kind: 'analysis.labels'});
+  }
+  await settled();
 });
 
 test('Library setup keeps focus in its modal and returns to the choice after cancelling a flow', {skip}, async t => {
@@ -550,6 +596,30 @@ test("Unified activity panel holds focus and its disclosure across refreshes", {
     assert.ok(await stop.evaluate(element => document.activeElement === element), 'an ancestor wait moved focus');
   }
   await app.shot("refreshed");
+  // The resource history: keys inspect and pin a time, and only keyboard
+  // inspection is announced; Escape first clears the inspection, keeping
+  // focus and the panel, and only then closes the panel.
+  const strip = panel.locator('[data-history]');
+  const announced = () => strip.getByRole('status').textContent();
+  await strip.focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForFunction(() => document.querySelector('#pharosStatusPanel [data-history] [role=status]')?.textContent);
+  const reading = await announced();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(text => document.querySelector('#pharosStatusPanel [data-history] [role=status]')?.textContent !== text, reading);
+  const pinned = await announced();
+  const box = await strip.locator('svg').first().boundingBox();
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height / 2);
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2);
+  assert.equal(await announced(), pinned, 'moving the pointer announced a reading');
+  await strip.focus();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(text => document.querySelector('#pharosStatusPanel [data-history] [role=status]')?.textContent !== text, pinned);
+  assert.ok(await panel.isVisible(), 'Escape on an inspected strip closed the panel');
+  assert.ok(await strip.evaluate(element => document.activeElement === element), 'clearing the inspection moved focus');
+  await page.keyboard.press('Escape');
+  await panel.waitFor({ state: 'detached' });
+  assert.ok(await chip.evaluate(element => document.activeElement === element), 'closing did not return focus to the chip');
 });
 
 // Eject when safe keeps checking while the window is hidden: a hidden page

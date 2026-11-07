@@ -1153,7 +1153,7 @@
       "tag": "button",
       "control": "'button', className, text",
       "contract": "settings",
-      "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
+      "reason": "Background-update scheduling, power/source preferences and run actions, plus shared-work actions (bring the last 2 days up to date, catch up history, cancel a request, stop/resume/retry a task); actions are excluded from content view URLs."
     },
     {
       "key": "b463ec7e5caa3d73:0",
@@ -1204,13 +1204,33 @@
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
     },
     {
+      "key": "7a822cb5e10acecd:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderWork",
+      "tag": "details",
+      "control": "'details', 'bg-work-more'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "The Work card's finished requests, idle tasks and export link use the stable background:work:details key in the shared disclosures map."
+    },
+    {
+      "key": "b769577f4fdc6095:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderWork",
+      "tag": "summary",
+      "control": "'summary', '', 'Finished requests and details'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "The Work card's finished requests, idle tasks and export link use the stable background:work:details key in the shared disclosures map."
+    },
+    {
       "key": "c7b7dd6cbc73773b:0",
       "file": "internal/archive/assets/background.js",
       "owner": "select",
       "tag": "select",
       "control": "'select'",
       "contract": "settings",
-      "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
+      "reason": "Background-update scheduling, battery and model thread preferences, and this process's background CPU allowance (/api/work/settings) are saved settings, excluded from content view URLs."
     },
     {
       "key": "d35f0091ebca75f5:0",
