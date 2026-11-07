@@ -137,7 +137,7 @@ func writeLibraryConfig(dir string, identity func(string) string, settings strin
 	}
 	_, err = fmt.Fprintf(file, libraryConfigTemplate, pin, randomToken(), libraryPort, settings)
 	if err == nil {
-		err = file.Sync()
+		err = syncToDrive(file)
 	}
 	if closeErr := file.Close(); err == nil {
 		err = closeErr

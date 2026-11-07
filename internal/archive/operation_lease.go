@@ -143,7 +143,7 @@ func (l *processLease) writeLocked() error {
 	if l.info.volatile && len(l.info.Outcomes) == 0 {
 		return nil
 	}
-	return l.file.Sync()
+	return syncToDrive(l.file)
 }
 
 // update rewrites the lease in place.
