@@ -64,6 +64,14 @@ type askSession struct {
 	Draft              string       `json:"draft"`
 	ClarificationDraft string       `json:"clarificationDraft,omitempty"`
 	Conversation       []askTurn    `json:"conversation"`
+	// Models lists, in history summaries only, each CLI and model the chat's
+	// turns used, most recently used first.
+	Models []askModelUse `json:"models,omitempty"`
+}
+type askModelUse struct {
+	CLI   string `json:"cli"`
+	Model string `json:"model"`
+	Label string `json:"label"`
 }
 type askVisit struct {
 	URL   string `json:"url"`
@@ -220,7 +228,11 @@ func (s *Server) askSessions(ctx context.Context, query string, offset int) ([]a
  json_extract(value,'$.createdAt'), json_extract(value,'$.selection'),
  COALESCE(json_extract(value,'$.draft'),''),
  COALESCE(json_extract(value,'$.conversation[0].prompt'),''),
- json_array_length(json_extract(value,'$.conversation'))
+ json_array_length(json_extract(value,'$.conversation')),
+ (SELECT json_group_array(json_object('cli',cli,'model',model,'label',label) ORDER BY latest DESC) FROM (
+  SELECT COALESCE(json_extract(turn.value,'$.cli'),'') cli,COALESCE(json_extract(turn.value,'$.model'),'') model,
+   COALESCE(json_extract(turn.value,'$.modelLabel'),'') label,MAX(turn.key) latest
+  FROM json_each(ask_sessions.value,'$.conversation') turn GROUP BY cli,model))
  FROM ask_sessions WHERE (?='' OR instr(lower(value),lower(?))>0)
  ORDER BY updated_at DESC,id LIMIT 100 OFFSET ?`, query, query, offset)
 	if err != nil {
@@ -230,11 +242,14 @@ func (s *Server) askSessions(ctx context.Context, query string, offset int) ([]a
 	result := []askSession{}
 	for rows.Next() {
 		var session askSession
-		var selection, title string
-		if err = rows.Scan(&session.ID, &session.UpdatedAt, &session.CreatedAt, &selection, &session.Draft, &title, &session.QuestionCount); err != nil {
+		var selection, title, models string
+		if err = rows.Scan(&session.ID, &session.UpdatedAt, &session.CreatedAt, &selection, &session.Draft, &title, &session.QuestionCount, &models); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal([]byte(selection), &session.Selection); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal([]byte(models), &session.Models); err != nil {
 			return nil, err
 		}
 		session.Conversation = []askTurn{}

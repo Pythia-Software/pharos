@@ -395,6 +395,22 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	if err != nil || len(summaries) != 1 || summaries[0].QuestionCount != 2 || len(summaries[0].Conversation) != 1 {
 		t.Fatalf("history summaries: %+v %v", summaries, err)
 	}
+	if want := []askModelUse{{CLI: "Codex", Model: "test-model", Label: "Test Model"}}; !reflect.DeepEqual(summaries[0].Models, want) {
+		t.Fatalf("history summary models = %+v, want %+v", summaries[0].Models, want)
+	}
+	// A chat that changed models lists each once, most recently used first,
+	// with the label from its latest turn.
+	mixed := askSession{ID: "chat-mixed", CreatedAt: 1, UpdatedAt: 2, Selection: askSelection{Provider: "Claude", Model: "opus"}, Conversation: []askTurn{
+		{ID: "a", Prompt: "Mixed models", CLI: "Claude", Model: "opus", ModelLabel: "Opus (old label)"},
+		{ID: "b", Prompt: "Next", CLI: "Codex", Model: "gpt", ModelLabel: "GPT"},
+		{ID: "c", Prompt: "Last", CLI: "Claude", Model: "opus", ModelLabel: "Opus"},
+	}}
+	if err = s.saveAskSession(t.Context(), mixed, false); err != nil {
+		t.Fatal(err)
+	}
+	if mixedSummaries, err := s.askSessions(t.Context(), "Mixed models", 0); err != nil || len(mixedSummaries) != 1 || !reflect.DeepEqual(mixedSummaries[0].Models, []askModelUse{{CLI: "Claude", Model: "opus", Label: "Opus"}, {CLI: "Codex", Model: "gpt", Label: "GPT"}}) {
+		t.Fatalf("mixed-model summary: %+v %v", mixedSummaries, err)
+	}
 	for _, query := range []string{"retries", "Navigation reply 2", "Explore the recorded evidence", "Review recorded model usage"} {
 		matches, err := s.askSessions(t.Context(), query, 0)
 		if err != nil || len(matches) != 1 || matches[0].ID != session.ID {

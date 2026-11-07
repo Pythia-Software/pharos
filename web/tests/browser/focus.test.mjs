@@ -1751,7 +1751,7 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
 
 // Whether focus moved while the chat loaded is unit tested (askFocusAfterLoad);
 // this checks the composer takes focus once the chat opened from History arrives.
-test("opening a saved chat from History focuses its composer", { skip }, async t => {
+test("the History drawer takes focus, returns it when dismissed, and its chat focuses the composer", { skip }, async t => {
   const selection = { provider: 'Codex', model: 'test-model', effort: 'Low' };
   const sessions = [{ id: 'focus-chat', createdAt: Date.now(), updatedAt: Date.now(), selection, draft: '', conversation: [{ id: 'focus-chat-turn', prompt: 'A prior question', cli: 'Codex', model: 'test-model', modelLabel: 'Test Model', effort: 'Low', status: 'multiple', message: '', elapsedMs: 1000, reply: 'A saved reply', cards: [] }] }];
   const { page, settled } = await open(t, { ready: '#pharos-ask .pharos-ai:not([hidden])', api: {
@@ -1761,13 +1761,33 @@ test("opening a saved chat from History focuses its composer", { skip }, async t
     'GET /api/ask/session': ({ query }) => sessions.find(session => session.id === query.get('id')),
     'POST /api/ask/session': ({ body }) => body,
   } });
-  await press(page.getByRole('button', { name: 'History', exact: true }));
+  const trigger = page.getByRole('button', { name: 'History', exact: true }), drawer = page.getByRole('dialog', { name: 'Chat history', exact: true });
+  const question = page.getByRole('textbox', { name: 'Ask a question', exact: true });
+  const focused = selector => page.waitForFunction(selector => document.activeElement?.matches(selector), selector);
+  await press(trigger);
+  await holdsFocus(page, drawer, trigger);
+  // The drawer is modal: a click beside it dismisses it.
+  await press(trigger);await focused('.pharos-history-close');
+  const size = page.viewportSize();
+  await page.mouse.click(size.width - 20, size.height / 2);
+  await focused('.pharos-history-trigger');
+  // Leaving full screen with Back moves the composer; the drawer must not stay open without its backdrop.
+  await page.locator('#homeAskSearch').getByRole('button', { name: 'Full screen', exact: true }).click();
+  await page.waitForURL(url => url.pathname === '/ask');await settled();
+  await press(trigger);await focused('.pharos-history-close');
+  await page.goBack();await page.waitForURL(url => url.pathname === '/');
+  await activateHeaderTool(page, 'askPharosToggle');
+  await question.waitFor();
+  assert.equal(await page.locator('#pharos-chat-history').evaluate(element => element.open), false, 'moving the composer closes History');
+  await press(trigger);
+  assert.ok(await drawer.evaluate(element => element.matches(':modal')), 'History reopens as a modal drawer');
+  await page.keyboard.press('Escape');await focused('.pharos-history-trigger');
+  await press(trigger);
   // Let the history list finish refreshing before choosing from it.
   await settled();
   await press(page.getByRole('link', { name: 'Open chat: A prior question', exact: true }));
   await page.getByRole('status').filter({ hasText: 'A saved reply' }).waitFor();
   await settled();
-  const question = page.getByRole('textbox', { name: 'Ask a question', exact: true });
   await page.waitForFunction(element => document.activeElement === element, await question.elementHandle());
 });
 

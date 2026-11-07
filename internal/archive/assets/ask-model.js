@@ -138,6 +138,57 @@ function askHistoryEntries({sessions = [], current = null, query = ''}) {
   const entries = query || !current ? sessions : [current, ...sessions.filter(session => session.id !== current.id)];
   return [...entries].sort((a, b) => b.updatedAt - a.updatedAt);
 }
+// Each CLI and model a chat's turns used, most recent first. Server summaries
+// carry the list; the open chat derives it from its turns, and a chat without
+// a question yet names the model it will ask.
+function askHistoryModels(session, labels = {}) {
+  let uses = Array.isArray(session.models) ? session.models : [];
+  if (!Array.isArray(session.models)) {
+    const seen = new Set();
+    for (const turn of [...(session.conversation || [])].reverse()) {
+      const key = turn.cli + '\u0000' + turn.model;
+      if (!turn.model || seen.has(key)) continue;
+      seen.add(key); uses.push({cli: turn.cli, model: turn.model, label: turn.modelLabel});
+    }
+    if (!uses.length && session.selection?.model) uses = [{cli: session.selection.provider, model: session.selection.model}];
+  }
+  return uses.map(use => ({cli: use.cli || '', model: use.model || '', label: use.label || labels[use.cli]?.[use.model] || use.model || use.cli || ''}));
+}
+function askHistoryDay(timestamp) { const day = new Date(timestamp); day.setHours(0, 0, 0, 0); return day; }
+// Recent chats group by day, older ones by month.
+function askHistoryGroup(timestamp, now = Date.now()) {
+  if (!timestamp) return 'Earlier';
+  const days = Math.round((askHistoryDay(now) - askHistoryDay(timestamp)) / 86400000), date = new Date(timestamp);
+  if (days <= 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return 'Previous 7 days';
+  if (days < 30) return 'Previous 30 days';
+  return date.toLocaleDateString(undefined, {month: 'long', ...(date.getFullYear() !== new Date(now).getFullYear() ? {year: 'numeric'} : {})});
+}
+function askHistoryStamp(timestamp, now = Date.now()) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp), days = Math.round((askHistoryDay(now) - askHistoryDay(timestamp)) / 86400000);
+  if (days <= 1) return date.toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
+  if (days < 7) return date.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
+  return date.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(date.getFullYear() !== new Date(now).getFullYear() ? {year: 'numeric'} : {})});
+}
+function askHistoryFullDate(timestamp) {
+  return new Date(timestamp).toLocaleString(undefined, {weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit'});
+}
+// One history row: title, turn count, models and when the chat was last active.
+function askHistoryRow(session, {now = Date.now(), labels = {}} = {}) {
+  const turns = session.questionCount ?? session.conversation?.length ?? 0, models = askHistoryModels(session, labels);
+  const started = session.createdAt && session.createdAt !== session.updatedAt ? 'Started ' + askHistoryFullDate(session.createdAt) : '';
+  return {
+    title: session.conversation?.[0]?.prompt || session.draft || 'Untitled chat',
+    turns: turns ? turns + (turns === 1 ? ' turn' : ' turns') : 'Draft',
+    models,
+    modelSummary: models.map(model => model.label).join(', '),
+    group: askHistoryGroup(session.updatedAt, now),
+    stamp: askHistoryStamp(session.updatedAt, now),
+    when: [session.updatedAt ? (turns ? 'Last active ' : 'Edited ') + askHistoryFullDate(session.updatedAt) : '', started].filter(Boolean).join(' · '),
+  };
+}
 // Keep snapshots/replacements ahead of later removals, even on slow requests.
 // A failed write must not prevent the next deletion or clear from running.
 let askVisitWrites = Promise.resolve();
