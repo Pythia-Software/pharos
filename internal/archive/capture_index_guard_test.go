@@ -251,10 +251,60 @@ func TestManifestPathsCannotLeaveTheCapture(t *testing.T) {
 	}
 	for _, bad := range []string{"history/../../x", "files/../files/../../x", "/etc/passwd", "files\\..\\x", "x/files/y"} {
 		manifest := &captureManifest{Snapshots: []*capturedSnapshot{{Captured: "files/a.db", Generations: []capturedVersion{{Captured: bad}}}}}
-		if manifest.unsafePath() == "" {
+		if _, unsafe := manifest.unsafePath(); !unsafe {
 			t.Errorf("%q was accepted", bad)
 		}
 	}
+	t.Run("persisted captured names", func(t *testing.T) {
+		for _, field := range []struct {
+			name, root string
+			set        func(*captureManifest, string)
+		}{
+			{"file", "files", func(m *captureManifest, name string) { m.Files[0].Captured = name }},
+			{"previous file", "history", func(m *captureManifest, name string) { m.Files[0].Previous[0].Captured = name }},
+			{"snapshot", "files", func(m *captureManifest, name string) { m.Snapshots[0].Captured = name }},
+			{"generation", "history", func(m *captureManifest, name string) { m.Snapshots[0].Generations[0].Captured = name }},
+			{"installation database", "files", func(m *captureManifest, name string) { m.Installations[0].CapturedDB = name }},
+			{"installation transcripts", "files", func(m *captureManifest, name string) { m.Installations[0].CapturedTranscripts = name }},
+			{"mapping destination", "files", func(m *captureManifest, name string) { m.PathMap[1].Captured = name }},
+		} {
+			t.Run(field.name, func(t *testing.T) {
+				dir := t.TempDir()
+				for _, name := range []string{"", field.root + "/bad\x00name", field.root + "/a"} {
+					manifest := &captureManifest{
+						Files:         []*capturedFile{{Captured: "files/a", Previous: []capturedVersion{{Captured: "history/a"}}}},
+						Snapshots:     []*capturedSnapshot{{Captured: "files/a.db", Generations: []capturedVersion{{Captured: "history/a.db"}}}},
+						Installations: []capturedInstallation{{CapturedDB: "files/db", CapturedTranscripts: "files/transcripts"}},
+						PathMap:       []capturePathMapping{{Original: "/src", Captured: "files"}, {Original: "/src/nested", Captured: "files/nested"}},
+					}
+					field.set(manifest, name)
+					before := jsonText(manifest)
+					writeSourceFile(t, filepath.Join(dir, captureManifestName), before)
+					loaded, err := loadCaptureManifest(dir)
+					valid := name == field.root+"/a" || name == "" && field.name == "installation transcripts"
+					if !valid {
+						if err == nil {
+							t.Errorf("invalid captured name %q was loaded", name)
+						}
+					} else if err != nil {
+						t.Errorf("valid captured name %q rejected: %v", name, err)
+					} else {
+						if jsonText(loaded) != before {
+							t.Error("loading changed the manifest")
+						}
+						view := newCaptureView(Host{}, dir, loaded)
+						want := filepath.Join(dir, filepath.FromSlash(loaded.PathMap[1].Captured), "a")
+						if got, ok := view.captured("/src/nested/a"); !ok || got != want || view.original(got) != "/src/nested/a" {
+							t.Errorf("loaded mapping round trip = (%q, %v), want %q", got, ok, want)
+						}
+					}
+					if readText(t, filepath.Join(dir, captureManifestName)) != before {
+						t.Error("validation rewrote the persisted manifest")
+					}
+				}
+			})
+		}
+	})
 	t.Run("view mapping destinations", func(t *testing.T) {
 		for _, bad := range []string{"", "/outside", "../outside", "files/../../outside", "files/../outside", "files//a", "files/a/",
 			"./files", "files/./a", `files\a`, `\outside`, `\\server\share`, "//server/share", "C:/outside", "C:outside", "C:", "files/a\x00b"} {

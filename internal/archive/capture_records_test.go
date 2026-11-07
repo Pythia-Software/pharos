@@ -126,6 +126,37 @@ func TestSQLiteRecordsTypedRoundTrip(t *testing.T) {
 	if e = offline.QueryRow(`SELECT b,CAST(invalid AS BLOB),i FROM "unknown; DROP TABLE sessions;--" LIMIT 1`).Scan(&raw, &original, &integer); e != nil || !reflect.DeepEqual(raw, bad) || !reflect.DeepEqual(original, bad) || integer != math.MaxInt64 {
 		t.Fatalf("offline new extractor: %x %x %d: %v", raw, original, integer, e)
 	}
+	t.Run("revision path guard", func(t *testing.T) {
+		for _, field := range []struct {
+			name string
+			set  func(*sqliteRevision, string)
+		}{
+			{"mapping", func(v *sqliteRevision, name string) { v.Mappings[0].Captured = name }},
+			{"database", func(v *sqliteRevision, name string) { v.Installations[0].CapturedDB = name }},
+			{"transcripts", func(v *sqliteRevision, name string) { v.Installations[0].CapturedTranscripts = name }},
+		} {
+			t.Run(field.name, func(t *testing.T) {
+				for _, name := range []string{"", "files/bad\x00name", "files/valid"} {
+					revision := revs[0].Revision
+					revision.Mappings = []capturePathMapping{{Original: "/src", Captured: "files"}}
+					revision.Installations = []capturedInstallation{{CapturedDB: "files/db", CapturedTranscripts: "files/transcripts"}}
+					field.set(&revision, name)
+					revision.Identity = sqliteEvidenceIdentity(revision)
+					ref, err := s.putJSON(revision)
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, err = s.loadRevision(ref)
+					valid := name == "files/valid" || name == "" && field.name == "transcripts"
+					if valid && err != nil {
+						t.Errorf("valid %s %q rejected: %v", field.name, name, err)
+					} else if !valid && (err == nil || !strings.Contains(err.Error(), "unsafe record path mapping")) {
+						t.Errorf("invalid %s %q bypassed path guard: %v", field.name, name, err)
+					}
+				}
+			})
+		}
+	})
 }
 func TestSQLiteRecordsRebuildKeepsAbsentSessionsAndLatestMessageSet(t *testing.T) {
 	useHost(t, "host-a")
