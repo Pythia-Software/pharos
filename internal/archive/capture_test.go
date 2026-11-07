@@ -424,7 +424,7 @@ func TestCaptureResumesAfterInterruption(t *testing.T) {
 
 func openWritableSQLite(t *testing.T, file string) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+file+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", "file:"+file+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=synchronous("+catalogDurability.synchronous+")")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1812,7 +1812,7 @@ func compressColdFiles(t *testing.T, config Config, catalog *Catalog) []string {
 
 func TestCaptureCompressesColdFiles(t *testing.T) {
 	config, catalog, target, claude := coldFilesFixture(t)
-	plan, err := planCapture(config.Sources[0])
+	plan, err := planCapture(context.Background(), config.Sources[0])
 	if err != nil {
 		t.Fatal(err)
 	}

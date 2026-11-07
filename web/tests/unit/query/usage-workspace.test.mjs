@@ -1,5 +1,6 @@
 import { queryCapabilities } from '../../support/query-server.mjs';
 import messageLabels from "../../../../schemas/message_labels.schema.json";
+import peopleMessageLabels from "../../../../schemas/people_message_labels.schema.json";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EMPTY_QUERY, applyQuery, applyAggregations, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, toQueryRequestV3 } from "@pythia-software/query-table-core";
@@ -18,6 +19,7 @@ import parallelism from "../../../../schemas/parallelism.schema.json";
 import rhythm from "../../../../schemas/rhythm.schema.json";
 import mcpCalls from "../../../../schemas/mcp_calls.schema.json";
 import agentEvents from "../../../../schemas/agent_events.schema.json";
+import sessionShape from "../../../../schemas/session_shape.schema.json";
 import agentEventMessages from "../../../../schemas/agent_event_messages.schema.json";
 import agentEventRates from "../../../../schemas/agent_event_rates.schema.json";
 import { queryURL, queryFromURL, readRollingWindow, resolveRollingQuery } from "../../../src/query-links";
@@ -26,6 +28,8 @@ import { toolSummaryCallFilters } from "../../../src/tools-dashboard-model.ts";
 import { authorshipStatusText, readDashboardLink, readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
 import { trendQuery } from "../../../src/dashboard-trend-model.ts";
 import { analysisQuery } from "../../../src/dashboard-analysis-model.ts";
+import { analysisCatalogFor, analysisCatalogs } from "../../../src/analysis-catalogs";
+import { dashboardDefaults } from "../../../src/dashboard-defaults";
 import { mcpAnalysisCatalog } from "../../../src/mcp-analysis-catalog.ts";
 import { toolsAnalysisCatalog } from "../../../src/tools-analysis-catalog.ts";
 import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../../src/record-analysis-catalogs.ts";
@@ -244,7 +248,7 @@ test("focused dashboard queries execute group thresholds and weighted measures",
 });
 
 test("the live audit provides 25 valid, distinct queries per dataset and dashboard", () => {
-  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, agent_event_rates: agentEventRates };
+  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, agent_event_rates: agentEventRates, session_shape: sessionShape };
   const capabilities = { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), cases = queryCases(dataset, document, []);
@@ -274,7 +278,7 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
   const originalLocation = globalThis.location;
   globalThis.location = new URL("http://localhost/");
   t.after(() => { globalThis.location = originalLocation; });
-  const schemas = {compactions, message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, agent_event_rates: agentEventRates };
+  const schemas = {people_message_labels:peopleMessageLabels, compactions, message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, agent_event_rates: agentEventRates, session_shape: sessionShape };
   for (const [dataset, target] of Object.entries(usageDatasets)) assert.ok(schemas[dataset].fields.some(field => field.name === target.field), `${dataset}'s search entry point belongs to its own schema`);
   for (const dataset of Object.keys(usageDatasets)) for (const mode of ["query", "search"]) {
     const url = new URL(usageWorkspaceURL({ mode, dataset }), "http://localhost");
@@ -364,6 +368,35 @@ test("dashboard returns retain edited source filters and disclose incompatible r
   assert.equal(returned.has("analyze_window"), false, "an edited range must not be promoted back to Today");
   assert.equal(returned.has("window_mode"), false);
   assert.deepEqual(decodeQueryStrict(returned.get("analyze_filters")).where, edited);
+});
+
+test('People label query returns retain the dashboard population and its own date fields',()=>{
+ const now=Date.parse('2026-10-20T12:00:00Z');
+ for(const topic of ['human','activity','habits'])for(const split of ['message_family','message_label'])for(const view of ['trend','compare'])for(const window of ['today','30d','custom']){
+  const source=analysisCatalogs[topic],state={...dashboardDefaults[topic],metric:'messages',split,view};
+  const catalog=analysisCatalogFor(topic,{},state),field=source.time.first;
+  assert.equal(catalog.dataset,'people_message_labels');
+  const dates=[{field,op:'>=',value:window==='today'?'2026-10-20T00:00:00Z':'2026-10-01T00:00:00Z'},{field,op:'<',value:window==='today'?'+0s':'2026-10-21T00:00:00Z'}];
+  const where=[{field:'repository_name',op:'=',value:'importer'},...dates];
+  const dashboard=new URLSearchParams({analyze_mode:'dashboards',analyze_topic:topic,analyze_data:source.dataset,analyze_chart:JSON.stringify(state),analyze_filters:encodeQuery({...EMPTY_QUERY,where}),analyze_window:window,analyze_timezone:'UTC'});
+  const query=(view==='trend'?trendQuery(catalog,state,where,{now}):analysisQuery(catalog,state,where,{now})).supporting;
+  const opened=new URL(usageWorkspaceURL({mode:'query',dataset:catalog.dataset,query},dashboard),'http://localhost').searchParams;
+  const back=usageDashboardReturn(opened),returned=new URL(back.href,'http://localhost').searchParams;
+  assert.equal(back.resetsFilters,false,`${topic} ${split} ${view} ${window}`);
+  assert.deepEqual(decodeQueryStrict(returned.get('analyze_filters')).where,where);
+  assert.equal(returned.get('analyze_window'),window);
+  assert.equal(returned.get('analyze_chart'),JSON.stringify(state));
+  // Edited query dates replace the dashboard's prior date range. In
+  // Conversations and Habits these are event_at and started_at, not sent_at.
+  const editedDates=[{field,op:'>=',value:'2026-09-01T00:00:00Z'},{field,op:'<',value:'2026-09-02T00:00:00Z'}];
+  const sourceQuery=query.grouping?.source??query;
+  const editedWhere=[...sourceQuery.where.filter(term=>term.field!==field),...editedDates];
+  const edited=query.grouping?{...query,grouping:{...query.grouping,source:{...sourceQuery,where:editedWhere}}}:{...query,where:editedWhere};
+  opened.set('q_people_message_labels',encodeQuery(edited));
+  const changed=new URL(usageDashboardReturn(opened).href,'http://localhost').searchParams;
+  assert.equal(changed.has('analyze_window'),false);
+  assert.deepEqual(decodeQueryStrict(changed.get('analyze_filters')).where,[where[0],...editedDates]);
+ }
 });
 
 test("changing records drops stale table context while switching modes keeps the current query window", () => {
@@ -657,7 +690,7 @@ test("Aggregate time and cross-query links express their source scope", () => {
   const calls = new URL(links.find(link => link.label.includes("Tool calls")).href, "http://localhost");
   assert.equal(calls.searchParams.get("analyze_carbon"), "custom-assumptions");
   assert.deepEqual(decodeQueryStrict(calls.searchParams.get("q_tool_calls")).where, [{ field: "conversation_id", op: "=", value: "child" }]);
-  assert.equal(links.find(link => link.label === "Root conversation").href, "/conversation/root");
+  assert.equal(links.find(link => link.kind === "root").href, "/conversation/root");
   const human = usageRowLinks("writing", row, current).find(link => link.label.startsWith("Messages"));
   assert.deepEqual(decodeQueryStrict(new URL(human.href, "http://localhost").searchParams.get("q_writing_messages")).where, [{ field: "work_id", op: "=", value: "work" }]);
 });
@@ -683,7 +716,7 @@ test("MCP Details links use explicit request targets while workspace units link 
   assert.deepEqual(usageRowLinks("mcp_calls", { arguments_json: "invalid" }), []);
   assert.deepEqual(usageRowLinks("mcp_calls", { arguments_json: '{"query":"search terms"}' }), []);
   const [checkout] = usageRowLinks("parallelism", { counting: "workspace", location: "/worktree /+" });
-  assert.equal(checkout.label, "Works at this checkout");
+  assert.equal(checkout.label, "Workspaces at this checkout");
   const url = new URL(checkout.href, "http://localhost");
   assert.equal(url.pathname, "/library");
   assert.deepEqual(decodeQueryStrict(url.searchParams.get("q_library")).where, [{ field: "location", op: "=", value: "/worktree /+" }]);

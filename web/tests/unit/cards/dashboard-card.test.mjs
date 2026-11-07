@@ -10,7 +10,7 @@ import { loadDashboardCardPreview } from '../../../src/dashboard-card-preview';
 import { analysisCatalogs } from '../../../src/analysis-catalogs';
 import { dashboardDefaults } from '../../../src/dashboard-defaults';
 import { readBookmarks, updateBookmark, moveBookmark, removeBookmark } from '../../../src/bookmarks';
-import { normalizeAnalysis, analysisQuery, selectGroups, cycleResult, switchView } from '../../../src/dashboard-analysis-model';
+import { normalizeAnalysis, analysisQuery, analysisResult, analysisLabels, selectGroups, cycleResult, switchView } from '../../../src/dashboard-analysis-model';
 import { trendQuery, trendSeries } from '../../../src/dashboard-trend-model';
 import { optionLabels } from '../../../src/option-labels';
 import { runAnalysisQuery } from '../../../src/analysis-request';
@@ -121,8 +121,8 @@ test('every dashboard creation target supplies bounded default copy from its own
   // Future measures and views therefore have to produce usable defaults too.
   for (const [topic, defaults] of Object.entries(dashboardDefaults)) {
     const catalog = analysisCatalogs[topic], schema = schemas[catalog.dataset];
-    for (const metric of Object.keys(catalog.measures)) for (const [view] of allAnalysisViews) {
-      const state = normalizeAnalysis(catalog, { ...defaults, metric, view });
+    for (const metric of Object.keys(catalog.measures)) for (const [view] of allAnalysisViews) for (const split of [defaults.split, ...Object.keys(catalog.components ?? {})]) {
+      const state = normalizeAnalysis(catalog, { ...defaults, metric, view, split });
       if (!validAnalysisState(catalog, state)) continue;
       check(dashboardCardURL(`/analyze?analyze_topic=${topic}`, catalog, state, []), schema);
     }
@@ -174,7 +174,7 @@ test('catalog default copy follows chart semantics, selections, time windows and
     }
   }
   const part = catalog.components.type.parts[0].key;
-  assert.match(copy({ split: 'type', selection: { values: [part], excluded: false } }).title, new RegExp(`Only series: ${part}`), 'component trends still name their selected parts');
+  assert.match(copy({ split: 'type', selection: { values: [part], excluded: false } }).title, new RegExp(`Only series: ${catalog.components.type.parts[0].label}`), 'component trends still name their selected parts');
   const predicates = [{ any: [{ field: 'provider', op: '=', value: 'codex' }, { field: 'provider', op: '=', value: 'claude' }] },
     { field: 'repository_name', op: 'contains', value: 'pharos', negated: true }];
   const filtered = copy({}, predicates);
@@ -222,7 +222,7 @@ test('bespoke card context follows saved assumptions and chart controls', t => {
   const ribbon = dashboardCardMetadata(ribbonURL, 'ribbon');
   assert.match(ribbon.title, /Concurrent sessions.*pharos/);
   assert.match(ribbon.description, /2026-10-01.*gaps up to 15 minutes/);
-  assert.match(dashboardCardDescription(ribbonURL), /Count top-level sessions.*15 minutes/);
+  assert.match(dashboardCardDescription(ribbonURL), /Count top-level conversations.*15 minutes/);
   const workspace = new URL(parallel({ counting: 'workspace' }), location.origin);
   workspace.searchParams.set('analyze_chart', JSON.stringify({ ...dashboardDefaults.parallelism, split: 'provider' }));
   assert.doesNotMatch(dashboardCardMetadata(workspace.href).title, /provider/i, 'counting controls normalize unavailable breakdowns as the chart does');
@@ -240,7 +240,7 @@ test('bespoke card context follows saved assumptions and chart controls', t => {
 test('saved dashboard trend previews match smoothing, cumulative totals, shares and legend selections', async t => {
   fixture(t);
   const local = usageLedger();
-  for (const options of [{rollingPeriods:3,rollingOp:'sum',norm:true},{display:'cumulative'},{share:true},{metric:'cache_read_share'}, {selection:{values:['claude'],excluded:true}}]) {
+  for (const options of [{rollingPeriods:3,rollingOp:'sum',percentiles:['mean','p90']},{display:'cumulative'},{share:true},{metric:'cache_read_share'}, {selection:{values:['claude'],excluded:true}}]) {
     const url = makeURL({...dashboardDefaults.tokens,metric:'tokens',split:'provider',scale:'linear',...options},[]);
     const {state,where} = readDashboardCard(url,new Date(now));
     const query = trendQuery(catalog,state,where,{now});
@@ -250,7 +250,7 @@ test('saved dashboard trend previews match smoothing, cumulative totals, shares 
     assert.deepEqual(preview.buckets,expected.buckets);
     assert.deepEqual(preview.series,expected.series.filter(item=>!expected.selected.length || expected.selected.includes(item.key)!==expected.excluded));
     assert.equal(preview.dashboardTrend.prepared,true);
-    assert.equal(preview.dashboardTrend.reference,expected.norm);
+    assert.deepEqual(preview.dashboardTrend.references,expected.references);
   }
 });
 
@@ -526,6 +526,17 @@ test('Waiting and Thinking charts are dashboard cards over their page population
   assert.deepEqual(source.where.slice(0, 3), [{ field: 'harness', op: '=', value: 'codex' }, { field: 'model', op: '=', value: 'gpt-5' }, { field: 'requested_at', op: '>=', value: '-30d' }]);
   assert.throws(() => collectDashboardCard(overview, 'Thinking', '', 'thinking-distributions'), /cannot/);
   assert.throws(() => collectDashboardCard(overview, 'Compactions', '', 'thinking-compactions'), /cannot/);
+  for (const groupBy of ['speed', 'model_speed', 'model_effort_speed']) {
+    for (const topic of ['thinking-overview', 'thinking-detail']) {
+      const address = pageCardURL(page(topic, { groupBy, view: 'wait-box' }));
+      const target = topic === 'thinking-overview' ? 'thinking-waits' : 'thinking-distributions';
+      const copy = dashboardCardMetadata(address, target);
+      assert.match(copy.title, /speed/);
+      assert.match(copy.description, /speed/);
+      const state = initialThinking(new URL(address, location.origin).searchParams);
+      assert.deepEqual(thinkingCardRecipe(target, state).measures[0].groupBy, [groupBy]);
+    }
+  }
   const waits = await loadDashboardCardPreview(overview, schemas.model_requests, undefined, undefined, now, 'thinking-waits');
   assert.equal(waits.action, DASHBOARD_CARD_ACTION);
   assert.deepEqual([waits.metrics[0].clause.distribution.kind, waits.metrics[0].clause.groupBy, waits.metrics[0].clause.display.xScale.mode], ['box', ['model'], 'log']);
@@ -553,7 +564,7 @@ test('Waiting and Thinking charts are dashboard cards over their page population
   // Thinking's comparison follows its view and breakdown.
   const detail = (thinking) => pageCardURL(page('thinking-detail', thinking));
   const harness = detail({ view: 'wait-box', groupBy: 'harness', range: 'all' });
-  assert.deepEqual(dashboardCardTargets(harness).map(target => [target.id, target.title]), [['thinking-distributions', 'Wait by agent / harness · harness is codex']]);
+  assert.deepEqual(dashboardCardTargets(harness).map(target => [target.id, target.title]), [['thinking-distributions', 'Wait by agent app · harness is codex']]);
   assert.equal(dashboardCardWindow(harness, 'thinking-distributions'), 'All time');
   assert.deepEqual((await loadDashboardCardPreview(harness, schemas.model_requests, undefined, undefined, now, 'thinking-distributions', undefined, undefined, response)).metrics[0].clause.groupBy, ['harness']);
   const reasoning = detail({ view: 'reasoning', groupBy: 'repository' });
@@ -636,7 +647,46 @@ test('compaction card defaults follow trigger/service controls and filters', t =
   assert.match(triggers.title, /Compactions per day by trigger/);
   assert.equal(dashboardCardPresentation(address({})).category, 'thinking');
   const services = dashboardCardMetadata(address({ view: 'compare', split: 'provider' }, [{ field: 'trigger', op: '=', value: 'human' }]), 'chart', schemas.compactions);
-  assert.match(services.title, /Compactions by service/);
+  assert.match(services.title, /Compactions by provider/);
   assert.match(services.description, /human/);
   assert.notEqual(services.title, triggers.title);
+});
+
+test('People message-label cards retain their source, filters and counting after collection',async t=>{
+ fixture(t);
+ for(const topic of ['human','activity','habits']){
+  const source=analysisCatalogs[topic],state={...dashboardDefaults[topic],metric:'messages',split:'message_family',share:true,period:'day'},at=new Date(now-86400000).toISOString();
+  const filters=[{field:'repository_name',op:'=',value:'importer'},...topic==='human'?[{field:'text',op:'contains',value:'parser'}]:[]];
+  const url=dashboardCardURL('/analyze?analyze_topic='+topic,source,state,filters);
+  const restored=readDashboardCard(url,new Date(now));
+  assert.equal(restored.dataset,'people_message_labels');assert.deepEqual(restored.where,filters);
+  const copy=dashboardCardMetadata(url,'chart',schemas.people_message_labels);
+  assert.match(copy.title,/message label/i);assert.match(copy.description,/importer/);
+  const card=collectDashboardCard(url,copy.title,copy.description);
+  assert.equal(dashboardCardSource(card.url).dataset,'people_message_labels');
+  const data=[{id:'one',message_id:'m',people_scope:topic,label:'P.request.work',family:'P.request',text:'Please fix the parser',repository_name:'importer',sent_at:at,event_at:at,started_at:at,day:at.slice(0,10)}];
+  if(topic==='human')data.push({...data[0],id:'two',message_id:'other',label:'P.control.redirect',family:'P.control',text:'Please review the renderer'});
+  const preview=await loadDashboardCardPreview(url,schemas.people_message_labels,undefined,{rows:data},now);
+  assert.equal(preview.state,'ready');assert.ok(preview.series.some(series=>series.value==='P.request'));
+  if(topic==='human')assert.equal(preview.series.some(series=>series.value==='P.control'),false,'saved previews retain the text filter');
+ }
+});
+
+
+test('saved component shares keep their metric, denominator and context through card previews', async t => {
+  fixture(t);
+  const local = usageLedger();
+  for (const [metric, split] of [['tokens','type'],['input','input_type']]) {
+    const url = makeURL({metric,split,view:'compare',compareAs:'share'},[]);
+    const {state,where} = readDashboardCard(url,new Date(now));
+    assert.equal(state.split,split);
+    const analysis = analysisQuery(catalog,state,where,{now});
+    const expected = analysisResult(analysis,await runAnalysisQuery('usage',schemas.usage,analysis.query,{local,now}));
+    const preview = await loadDashboardCardPreview(url,schemas.usage,undefined,local,now);
+    assert.equal(preview.state,'ready');
+    assert.deepEqual(preview.metrics[0].clause,analysis.clause);
+    assert.deepEqual(preview.metrics[0].result.buckets.map(bucket=>bucket.value),expected.buckets.map(bucket=>bucket.value));
+    assert.deepEqual(preview.metrics[0].result.buckets.map(bucket=>bucket.keys[0]),expected.buckets.map(bucket=>analysisLabels(catalog,state)[split](bucket.keys[0])));
+    assert.match(dashboardCardMetadata(url,'chart',schemas.usage).title,/Share of .* by .*type/);
+  }
 });

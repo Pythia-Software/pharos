@@ -47,7 +47,7 @@ function quickStatsTimingBounds(data: ConcurrencyData, key: string, end: number,
   return [from, end];
 }
 
-// Fixed to top-level sessions across all repositories: changing the chart's
+// Fixed to top-level conversations across all repositories: changing the chart's
 // counting unit or repository filter must not change these library totals.
 export function quickStatsRuntimeWindow(data: ConcurrencyData, gap: number, key: string, end: number, from?: string): { agent: number; active: number } | null {
   const bounds = quickStatsTimingBounds(data, key, end, from);
@@ -96,7 +96,7 @@ export function startConcurrencySummary(): void {
       const cacheKey = JSON.stringify([settings.counting, settings.gap, settings.repository, key, now, from]);
       if (!summaryCache.has(cacheKey)) summaryCache.set(cacheKey, threadedSummaryWindow(cached, settings.gap, settings.repository, key, now, settings.counting, from));
       const result = summaryCache.get(cacheKey);
-      return { amount: result ? `${result.average.toFixed(2)}×` : "—", title: result ? `Average concurrent ${settings.counting === "agent" ? "sessions (root conversations)" : "workspaces"} over ${key === "today" ? "today so far" : `the full ${key} window`}, including idle time · ${settings.gap}-minute turn gap · ${settings.repository || "all repositories"}` : `Incomplete timing coverage for this window. Available: ${cached.period_start} – ${cached.period_end}.` };
+      return { amount: result ? `${result.average.toFixed(2)}×` : "—", title: result ? `Average concurrent ${settings.counting === "agent" ? "conversations (top-level conversations)" : "workspaces"} over ${key === "today" ? "today so far" : `the full ${key} window`}, including idle time · ${settings.gap}-minute turn gap · ${settings.repository || "all repositories"}` : `Incomplete timing coverage for this window. Available: ${cached.period_start} – ${cached.period_end}.` };
     },
     runtime(metric, key, generatedAt, from) {
       if (!cached || loadError) return {value: null, title: loadError || "Loading timing data"};
@@ -105,12 +105,12 @@ export function startConcurrencySummary(): void {
       if (!runtimeCache.has(cacheKey)) runtimeCache.set(cacheKey, quickStatsRuntimeWindow(cached, gap, key, end, from));
       const result = runtimeCache.get(cacheKey);
       if (!result) return {value: null, title: `Incomplete timing coverage for this window. Available: ${cached.period_start} – ${cached.period_end}.`};
-      return {value: metric === "agent_time_ms" ? result.agent : result.active, title: `Estimated ${metric === "agent_time_ms" ? "summed top-level session time; simultaneous sessions count separately" : "wall-clock time with a top-level session active; overlap counts once"} · available transcript timings · ${gap}-minute turn gap · all repositories`};
+      return {value: metric === "agent_time_ms" ? result.agent : result.active, title: `Estimated ${metric === "agent_time_ms" ? "summed top-level conversation time; simultaneous conversations count separately" : "wall-clock time with a top-level conversation active; overlap counts once"} · available transcript timings · ${gap}-minute turn gap · all repositories`};
     },
     note() {
       const settings = readConcurrencySettings();
       const range = cached ? resolveConcurrencyRange(cached, settings) : null;
-      return `Parallelism: ${settings.counting === "agent" ? "sessions (root conversations)" : "workspaces"} · full-window average, including idle time · ${settings.gap}-minute turn gap · ${settings.repository || "all repositories"}${range ? ` · chart ${range.startDay}${range.startDay === range.endDay ? "" : ` – ${range.endDay}`}${settings.zoom ? " (zoomed)" : ""}` : ""}${cached ? ` · timing coverage ${cached.period_start} – ${cached.period_end}` : loadError ? ` · ${loadError}` : ""}`;
+      return `Parallelism: ${settings.counting === "agent" ? "conversations (top-level conversations)" : "workspaces"} · full-window average, including idle time · ${settings.gap}-minute turn gap · ${settings.repository || "all repositories"}${range ? ` · chart ${range.startDay}${range.startDay === range.endDay ? "" : ` – ${range.endDay}`}${settings.zoom ? " (zoomed)" : ""}` : ""}${cached ? ` · timing coverage ${cached.period_start} – ${cached.period_end}` : loadError ? ` · ${loadError}` : ""}`;
     },
   };
 }

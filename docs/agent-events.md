@@ -125,11 +125,15 @@ pass scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog con
 
 Either backlog run (this one and message labels') can be stopped: Stop in its Background Processing item, or in the
 status panel, cancels it (`Op.setStopper`). Committed conversations remain; unfinished conversations are read again
-on the next run. Agent events prepares upcoming conversations while the model scores the current window and a
-writer saves earlier results, one atomic transaction per conversation. A shared budget bounds queued candidates
-and message bookkeeping to three windows of about 512 rows, plus the conversation currently being built. A large
-conversation stays whole and occupies the budget until saved. Partial windows run as soon as preparation pauses,
-so the worker need not wait for 512 candidates. Preparation uses the separate read-only catalog pool. Active runs
+on the next run. Agent events prepares upcoming conversations with up to four CPU workers while the model
+scores the current window and a writer saves earlier results, one atomic transaction per conversation.
+A shared budget bounds queued candidates
+and message bookkeeping to three windows of about 512 rows, plus at most one conversation per preparation worker.
+Each preparation worker owns its builder state; results are handed off in conversation order, and a blocked
+scoring queue stops dispatching new conversations. A large conversation stays whole; its token credits are
+released after scoring, before waiting for the writer. Partial windows run as soon as preparation pauses,
+so the worker need not wait for 512 candidates. Preparation uses the separate read-only catalog pool and the
+[preparation concurrency limits](local-labeler.md#device-status-and-gpu-capacity); limited chain runs remain serial. Active runs
 check the CPU thread target every two minutes and replace CPU workers after the current scoring chunk finishes,
 keeping its results. Changing threads needs no stop or app relaunch; the shared budget and battery cap still apply.
 GPU workers keep running when the saved CPU target changes. Settings shows the expected or confirmed device

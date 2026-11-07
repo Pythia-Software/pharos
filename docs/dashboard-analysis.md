@@ -141,6 +141,23 @@ what each offers and why.
   - an optional `drill`: where terms a bar's or point's records add, so a
     rate opens the records behind its numerator (Agent Events opens the
     messages with an event, `events > 0`, rather than every message read).
+  - an optional `valueBins` (or a `band`), the breakdown whose fine bins
+    hold the per-record value. A record distribution of it without a
+    breakdown is then a histogram over those bins on the value's own axis
+    (`distributionBins`, `BinnedHistogram`): a log axis gives a long tail
+    its shape where Query Table's even steps would put nearly every record
+    in the first bar, zero sits apart, and the median and 90th percentile
+    are marked. Any other log-axis distribution leaves out zero, which a log
+    axis cannot place, and its note says so;
+  - an optional `noDistribution` reason, for a measure whose distribution
+    says nothing, such as a count of rare events nearly every record has
+    none of. Distribution disables it with that reason.
+
+  A unit may be `recordsAlike`: one record each, such as Session Shape's
+  agent session. Its distribution is the records', so Distribution offers
+  the records for a measure with a per-record value and the unit only for
+  one without, and Compare's per-unit Total, which is the records' bars,
+  gives way to a mean. Each disabled choice says why.
 
   A mean is declared as a ratio of a sum and a count, never as `avg`:
   `catalogProblems` rejects an `avg` measure, because a mean of per-period
@@ -160,9 +177,15 @@ what each offers and why.
 - **Component breakdowns** (optional, `components`). These split a measure
   into its additive parts, which are fields rather than groups of records:
   Tokens' "Token type" is uncached input, cache reads, cache writes, output
-  and unclassified tokens. Each lists the `measures` it splits and a
+  and unclassified tokens. "Input token type" partitions input into uncached
+  input, cache reads and cache writes. Each lists the `measures` it splits and a
   `fallback` breakdown for any other measure (cost by token type shows
-  providers, as the Usage chart always has). Only the trend draws them.
+  providers, as the Usage chart always has). The trend draws them per period;
+  Compare groups with Count each set to records draws totals across the selected
+  range. Show as → Share of total draws those parts as a pie covering 100% of
+  the selected measure. Minimum sample thresholds do not remove components.
+  Selecting parts preserves the remaining total as Other. A slice opens records
+  with a positive amount of that component. Missing or partial totals are errors.
   A component breakdown may be **derived** (`derived`): its parts are
   computed rather than summed. The trend queries the summed `inputs.fields`
   per period, grouped further by `inputs.groupBy`, and `derive(totals,
@@ -201,6 +224,14 @@ what each offers and why.
   weekday cards' `weekdayMetric` alike. A catalog without cycle keys offers
   the cycle view disabled with its reason; one without a cycle disables that
   cycle.
+- **Cycle placement** (optional, `cycleOn`). Other timestamps a record can
+  be placed by in a cycle, each with its own cycle keys, offered as *Placed
+  by*. Session Shape places a session by its start (the default) or by its
+  last message (`last_message_at`). The range still picks records by the
+  catalog's `time`, so a timestamp cycle on the other field fills idle days
+  from its first observed occurrence; the note says so. A weekday card does
+  the same: a bound on another datetime field picks records, not dates
+  (`weekdayDatePredicates`).
 - **Record views** follow from the catalog. Without units, Scatter is
   unavailable; without units or any measure with a per-record `value`,
   Distribution is too (the Tools rollup: a daily summary is not an
@@ -296,13 +327,14 @@ fields:
 | `minSamples` | hide groups with fewer observations |
 | `scale`, `scaleY` | `linear` or `logarithmic` |
 | `cycle` | `hour` or `weekday` |
+| `cycleOn` | in a cycle, the catalog's `cycleOn` option that places each record; its default timestamp when absent |
 | `period`, `hours`, `days` | the trend's time bucket, and how many hours or days a custom bucket holds |
 | `rollingPeriods`, `rollingOp` | the trend's trailing window in buckets, and whether each point is its `mean` (default) or `sum` |
-| `display` | `interval` or `cumulative` |
+| `display` | `interval`, `cumulative` or `heatmap` |
 | `share` | each trend series as a share of its bucket's total |
 | `nonzero` | values without zeroes: buckets with nothing drawn are left out, and lines pass over a series' zeroes; ignored with `share` |
 | `completePeriods` | whole periods only |
-| `norm`, `normPeriods` | a reference line at the mean of the `normPeriods` (30) points before the latest |
+| `percentiles`, `normPeriods` | the %ile control's reference levels, any of `mean`, `p50`, `p75`, `p90`, `p95`, `p99`: a line at each level of the `normPeriods` (30) points before the latest, or on a heatmap a trace of each period's percentile. `norm: true` is the older name for `["mean"]` (`canonicalState` reads it). Links, cards and the site map's agents use `percentiles`; the site map's list rule says which levels each chart draws ([site map](site-map.md#valid-combinations)) |
 | `seriesLimit`, `selection` | series drawn before Other, and the legend selection: the breakdown's groups drawn (or hidden, when `excluded`) |
 | `v` | the link format, `2`; see [Selections and links](#selections-and-links) |
 
@@ -381,7 +413,44 @@ can:
   count, mean, median or largest of units is another quantity, so
   `trendUnavailable` disables Over time for it, the View control shows the
   reason, and `switchView` leaves the state unchanged. A breakdown carries
-  across; a component breakdown becomes `none` in the other views.
+  across. A summed component breakdown also carries between Over time and
+  Compare groups; distribution and scatter need record fields, so use `none`.
+  Derived components remain available over time.
+
+### Population
+
+A catalog with `population: true` (Session Shape) shows its population in the
+controls, as a Population field before Range (`dashboard-population.ts`,
+`dashboard-population-control.tsx`):
+
+- **Chips.** Each `analyze_filters` term other than the range is a removable
+  chip. A term on a single-field breakdown's field that the legend could have
+  written reads as that breakdown's values ("Harness is not antigravity-cli",
+  "Archetype is one of Deep or Marathon"); any other reads as the query
+  editor reads it ("Active time (s) is not empty"). With none it reads "All
+  sessions". A measure's own population (`where`) and a unit's are not
+  chips: they belong to the measure, not to the dashboard.
+- **The legend adds terms.** A trend legend value's menu has "Count only this
+  value" and "Leave this value out" below its selection items. They write
+  ordinary Query Table terms on the breakdown's field (`withPopulationGroup`):
+  `{field, op: "=", value}`, or `{any: [{field, op: "!=", value}, {field,
+  op: "is_null"}]}` so sessions without the field stay counted; a missing
+  value left out is `is_not_null`. Count only replaces the field's slice;
+  Leave out narrows an inclusion or adds an exclusion. A combined breakdown's
+  group is one more term (`selectionWhere`). The term outlives the
+  breakdown: switch to another and it still counts.
+- **A selection can become the population.** Where a selection's note shows
+  "Show every group", "Make this the population" moves it into the filters
+  and clears it (`selectionPopulation`).
+- **Edit** opens the same filter editor as a query (`SearchFilters`): any
+  field, operator, OR group or negation, as a draft applied whole.
+- **Partial populations are named.** The chart's title takes a suffix
+  ("· excluding antigravity-cli; only Root agent") on every view, and
+  Create card keeps the filters, so a card says what it leaves out.
+
+There is no other parameter: site_link's `filters` are these terms, and the
+site map's `filters` option says so for such dashboards
+(`testdata/site-map-cases.json`, `population`).
 
 ### Selections and links
 
@@ -521,7 +590,9 @@ no sum, cumulative or share.
   days), a custom multi-day or multi-hour bucket starting before it is
   history, and buckets ending after the range's end or now are left out.
   For days this is `cardTrendDays`' `completeDays`.
-- **Norm.** The mean of the `normPeriods` (default 30) points before the
+- **%ile (reference levels).** Each chosen level (`percentiles`: the mean,
+  or the 50th, 75th, 90th, 95th or 99th percentile, interpolated; `levelOf`)
+  of the `normPeriods` (default 30) points before the
   latest drawn point, whatever the range: the stacked total of the drawn
   series for additive measures, or the one series otherwise. The query
   reaches back for those points and their smoothing windows, and every one
@@ -577,7 +648,63 @@ no sum, cumulative or share.
 - **Controls.** `AnalysisControls` is the one control bar for every view;
   the trend adds Show as (values or shares), Display, Time bucket,
   Smoothing with its Window (average or total), Periods (whole periods
-  only) and Norm.
+  only) and %ile, a multi-select of reference levels (`PercentileControl`;
+  a level the chart cannot draw is disabled with its reason,
+  `percentileLimit`).
+- **Chosen charts.** A catalog may choose each chart itself (`present`):
+  given the view, measure and breakdown, how it is drawn — display, shares,
+  scale, a default reference level, Compare's bars or shares, and for Over time whether it draws
+  lines or bars (`trendDrawing`, without changing the state's view). The
+  choice overrides what a link asked for, the controls for those settings
+  are hidden, and the site map leaves them out of the topic's chart keys
+  (`topicChartKeys`), so a link neither holds nor checks them. Session
+  Shape is the one catalog that chooses
+  ([its charts](session-shape.md#charts)).
+- **Heatmap.** Display = Heatmap draws a value on a continuous axis over
+  time, as an observability heatmap does: one column per period, the value
+  up the side, and each cell shaded by how much falls in that narrow range
+  of the value that period. It needs a breakdown whose value is binned
+  (`bins` on the breakdown, `heatmapAxis`):
+  - without a breakdown, a measure with such a band of its own (`band`,
+    such as Session Shape's tool calls per typed message) draws its
+    records' distribution, counted with the catalog's `records.count`
+    measure among the records in its population with a value;
+  - by such a band, an additive measure draws its total over the band's
+    value: sessions by length band is sessions by messages per session.
+
+  The bins are fine and fixed (`value-bins.ts`): ten log bins a decade, or
+  whole numbers to 9 and then log bins, or linear steps. The service stores
+  each record's bin as its lower edge (`value_bins.go`), and both sides
+  compute edges by parsing the same decimal text, so they agree exactly
+  (`testdata/value-bins.json`). The trend groups by that field
+  (`heatmapSource`, every bin a series, none folded into Other) and lays
+  each bin at its true place on the axis: log for log and count bins, with
+  zero in its own row below, linear otherwise. It reads the trend's own
+  query and prepared buckets, so filters, smoothing (each column then
+  averages its window), whole periods and Refresh apply as they do to
+  columns.
+  - One hue, shaded on a log scale of the largest cell, which the key
+    names, so a burst in one bin does not wash out the rest. A period with
+    nothing is hatched.
+  - A solid line traces each period's median and a dashed one its 90th
+    percentile, read from the bins. Dotted guides mark where each of the
+    band's groups starts (`bins.edges`), labelled at the right.
+  - Hover a cell for its range, the amount in it and its share of the
+    period.
+  - Without such a breakdown (`trendLimits.heatmap`) it falls back to per
+    interval and says why. Show as, Scale and smoothing's Window do
+    not apply and are hidden. The %ile control chooses the traced
+    percentiles (median and 90th by default); a mean has no place in the
+    bins and is disabled. Hovering a column or cell lists each line's value
+    there, and each trace is labelled where it starts.
+  - The model is `dashboard-heatmap-model.ts` (`trendHeatmap`) and the
+    component `dashboard-heatmap.tsx`. A card made from a heatmap draws it
+    as a grid cover (`heatmapGrid`), as does a card recipe whose daily
+    cover groups by a bin field and asks for `timeline.display: "heatmap"`.
+  - Why fixed bins stored with each record rather than Query Table's
+    histograms: those bin each group with its own linear edges, so rows
+    would not line up across columns, and a query cannot group by a
+    computed expression.
 
 ### Queries
 
@@ -725,6 +852,7 @@ around it. Its default view is the one it always opened on.
 | Human Words | `writing_messages`: one classified user message | conversation; work | `typed`, `words` | `sent_at` (timestamp) | Over time |
 | Carbon | `usage`, estimated under the user's assumptions | conversation, agent session, delegated run | `co2`, `energy`, `tokens` | usage `hour`, `day` | Over time |
 | Parallelism | `parallelism`: one local hour of one agent at one level of agents at once, under the saved settings | agent | `agent_hours`, `active_hours`, `parallel_hours` | `started_at` (timestamp) | Over time, below the ribbon |
+| Session Shape | `session_shape`: one agent session | agent session; root conversation (no breakdowns) | `active_time` (`active_seconds`), `turn_cycle`, `context_peak`, `autonomy` | `started_at` (timestamp), or `last_message_at` placed by last message | Over time: sessions by length band, weekly shares |
 
 - **Tools** (`tools-analysis-catalog.ts`). Calls, failed calls, failure
   rate (`error_count` / `call_count`), truncation rate (`truncated_count` /
@@ -800,7 +928,7 @@ around it. Its default view is the one it always opened on.
   conversations (distinct), the typed share of words (pooled), typed words
   per message with typed text (a conditional ratio), and the share of
   messages with copied text (a conditional ratio). Text source is a component breakdown of all user
-  words into the page's five groups (typed, likely pasted, copied or
+  words into five groups (typed, likely pasted, copied or
   re-sent, templates and attachments, harness and automation); Typed words
   by Text source is one total. Breakdowns: repository, app, provider, the
   three origin fields and the main category. Units: a conversation, and a
@@ -810,9 +938,11 @@ around it. Its default view is the one it always opened on.
   `channels`, `machines` and `providers` of a whole work become the
   message's own field, which adds up across groups. The dashboard keeps the
   authorship status (a finished classification reruns its queries), the
-  summary, the note on typed versus supplied text, and the message mix
-  (`MessageMix`, which shares words: messages carry no per-source
-  characters). The `writing` dataset stays a query table and the legacy
+  summary and the note on typed versus supplied text. The primary chart
+  offers Text category for all eight authorship categories, including as a
+  pie under Compare groups → All user words → Text category → Share of total.
+  These are shares of classified words; messages carry no per-source tokens.
+  The `writing` dataset stays a query table and the legacy
   page's chart; no card needs it as a unit source, since `work_id` on
   messages is the same work.
 - **Carbon** (`carbon-analysis-catalog.ts`). Usage records, as in Tokens
@@ -857,6 +987,25 @@ around it. Its default view is the one it always opened on.
   and `gap_minutes` out of the dashboard's filters. A link may open the
   ribbon with settings it has not saved; the views then follow the saved
   ones and say so.
+- **Session Shape** (`session-shape-analysis-catalog.ts`). Sessions, active
+  hours, messages, typed messages, tool calls, and the per-session values
+  (active time, turn cycle, peak context share, tool calls per typed
+  message, whose id stays `autonomy`) as pooled ratios of
+  a sum over the count of sessions that have the value, so Distribution
+  draws the sessions themselves. Every rate (failure rate, steering load,
+  one-shot edit turns, verified handbacks) pools its parts over the sessions
+  whose coverage flag (`has_tool_data`, `has_authorship`,
+  `has_context_window`) says the evidence was there; that `where` is the
+  rate's population. Tool calls per 100 typed words pools `tool_calls × 100`
+  over `typed_words`, over sessions where you typed. Each forensic signal is
+  a summed measure. Breakdowns are the four bands, archetype and the origin
+  fields; the bands and archetype draw in their order on one ramp. The root-conversation
+  unit has no breakdowns, since a root and its delegated runs can differ in
+  every one. Its own panels (`session-shape-panels.tsx`, logic in
+  `session-shape-model.ts`) read the dashboard's filters: the signal table,
+  Sessions to read and the definitions. Its common views are Card Library
+  cards. See
+  [Session shape](session-shape.md#the-dashboard).
 
 Every engine dashboard, Tokens and Cost included, has a Refresh action,
 which reruns its queries (Pharos MCP's own requests arrive while it is open).

@@ -40,6 +40,38 @@ contract. Query URLs use `q_message_labels`, including its registered
 cover all messages, human input and agent thinking. Retired `label_lab` URLs
 redirect to the dashboard, preserving compatible population and chart filters.
 
+## People dashboards
+
+Conversations' **Human messages**, Human Words' **User messages** and
+**Messages with typed text**, and Habits' **Typed messages** offer
+**Message label · general** and **Message label · specific** breakdowns.
+They work in trends and record-level comparisons. Words, tokens and elapsed
+hours keep their existing breakdowns: message labels do not attribute those
+quantities to a message function.
+
+Each message counts once under its highest-confidence most-specific accepted
+label, or that label's family at general resolution. Groups add up to the message
+total, and percentage shares add up to 100%, including missing classifications
+under Uncategorized. Equal or unavailable probabilities use label ID order to
+keep the assignment stable.
+The `people_message_labels` source preserves each dashboard's existing
+population and attribution, including Human Words' supplied-only messages,
+Conversations' human-message criteria and root metadata, and Habits' typed
+message population, canonical thread mapping and recorded hour placement.
+Supporting queries retain the population and link to the exact source message.
+Saved dashboard cards use this same source, filtering and counting.
+Human Words text predicates keep their full-message filtering semantics.
+Returning from a supporting query preserves the dashboard's filters and date
+selection; edited query dates replace that selection using the originating
+dashboard's timestamp fields. V3 requests forward scope and date predicates
+before source rows are staged, so a narrow query avoids unrelated populations
+and old message history.
+
+Reader message labels tint entire prompt, reply and expanded reasoning cards.
+Agent events keep sentence-level marks on top of those backgrounds; the two
+checkboxes and their URL state remain independent. Timeline inspection quotes
+also use a message-level background tint.
+
 ## Fingerprint accounting and appearance
 
 Sender functions use cool cyan, blue, green and violet hues; Receiver functions

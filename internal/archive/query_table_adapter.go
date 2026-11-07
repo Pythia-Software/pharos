@@ -54,6 +54,8 @@ func (a *queryTableAggregate) Final(_ *sqlite.FunctionContext) { a.fn = nil }
 
 func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 	switch dataset {
+	case "people_message_labels":
+		return PharosPeopleMessageLabelsSchema(), nil
 	case "message_labels":
 		return PharosMessageLabelsSchema(), nil
 	case "library":
@@ -92,6 +94,8 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 		return PharosParallelismSchema(), nil
 	case "rhythm":
 		return PharosRhythmSchema(), nil
+	case "session_shape":
+		return PharosSessionShapeSchema(), nil
 	case "agent_events":
 		return PharosAgentEventsSchema(), nil
 	case "agent_event_messages":
@@ -620,8 +624,12 @@ func queryRowActionFields(dataset string, selected []string) []string {
 		required = []string{"conversation_id", "started_at", "location"}
 	case "rhythm":
 		required = []string{"conversation_id", "started_at"}
+	case "session_shape":
+		required = []string{"workspace_id", "conversation_id", "started_at"}
 	case "skill_usages":
 		required = []string{"workspace_id", "conversation_id", "tool_call_id", "evidence_message_id", "body_message_id"}
+	case "people_message_labels":
+		required = []string{"source_workspace_id", "source_conversation_id", "message_id"}
 	case "agent_events", "agent_event_messages", "agent_event_rates", "message_labels", "compactions":
 		required = []string{"workspace_id", "conversation_id", "message_id"}
 	}

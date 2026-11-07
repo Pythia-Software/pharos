@@ -3,7 +3,7 @@ import type { QueryRecipe } from "./curiosity-data";
 import { queryURL, type RollingWindow } from "./query-links";
 import { usageDatasetTopics, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { cardDashboardWhere } from "./card-exploration";
-import { analysisVersion, type AnalysisState } from "./dashboard-analysis-model";
+import { analysisVersion, type AnalysisState, type PercentileLevel } from "./dashboard-analysis-model";
 import { concurrencyWindowRange, defaultConcurrencySettings } from "./concurrency-settings";
 import { defaultCardCover } from "./card-cover";
 import { windowedChart } from "./card-windows";
@@ -25,9 +25,10 @@ const engine = (topic: UsageTopic, view: AnalysisState["view"]) => (metric: stri
   topic, chart: { v: analysisVersion, view, metric, split, period: "day", scale: "linear", nonzero: false, ...extra },
 });
 const activity = engine("activity", "scatter");
+const sessions = engine("session_shape", "compare");
 const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = engine("skills", "trend"), human = engine("human", "trend"), carbon = engine("carbon", "compare"), parallel = engine("parallelism", "trend");
-// A card's trailing window with whole days and a norm (buildCardTrend).
-const trailing = { rollingPeriods: 7, completePeriods: true, norm: true };
+// A card's trailing window with whole days and a mean reference level (buildCardTrend).
+const trailing = { rollingPeriods: 7, completePeriods: true, percentiles: ["mean"] as PercentileLevel[] };
 const calls = (metric: string, split = "tool_name", extra: Partial<AnalysisState> = {}) => engine("calls", "compare")(metric, split, extra);
 // Agent Events compare at the dashboard's minimum of messages read.
 const events = (metric: string, split: string, extra: Partial<AnalysisState> = {}) => engine("agent_event_rates", "compare")(metric, split, { minSamples: 200, ...extra });
@@ -107,9 +108,9 @@ const dashboards: Record<string, CardDashboard> = {
   "mcp-methods": calls("calls", "mcp_server_method"),
   "truncated-outputs": calls("truncation_rate", "tool_name", { minSamples: 10 }),
   "pharos-mcp-sources": calls("calls", "app_provider"),
-  "machine-call-trend": calls("calls", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, norm: true }),
+  "machine-call-trend": calls("calls", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, percentiles: ["mean"] }),
   // Record-level trends retain the card's precise timestamp bounds.
-  "machine-latency-trend": calls("mean_time", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, norm: true }),
+  "machine-latency-trend": calls("mean_time", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, percentiles: ["mean"] }),
   "cache-efficiency": tokens("cache_read_share", "provider_model", { view: "compare" }),
   "cache-repositories": tokens("cache_read_share", "repository_name", { view: "compare" }),
   "price-coverage": tokens("tokens", "price_status", { view: "compare", compareAs: "share" }),
@@ -126,7 +127,7 @@ const dashboards: Record<string, CardDashboard> = {
   "repository-cost-share": tokens("cost", "repository_name", { view: "compare", compareAs: "share" }),
   // Human Words: messages (writing_messages).
   "human-words": human("typed", "none"),
-  "human-word-total": human("typed", "none", { rollingPeriods: 7, rollingOp: "sum", norm: true }),
+  "human-word-total": human("typed", "none", { rollingPeriods: 7, rollingOp: "sum", percentiles: ["mean"] }),
   "explaining-repos": human("typed", "repository_name", { view: "compare", compareAs: "share" }),
   "human-word-mix": human("typed_share", "repository_name", { view: "compare" }),
   "human-repository-words-trend": human("typed", "repository_name", { rollingPeriods: 7 }),
@@ -144,7 +145,7 @@ const dashboards: Record<string, CardDashboard> = {
   "human-specific-feedback": human("typed_messages", "none", { rollingPeriods: 7 }),
   "session-human-output": activity("messages", "provider_model", { unit: "conversation", metricY: "output", scale: "logarithmic", scaleY: "logarithmic" }),
   // Carbon: usage, under the user's assumptions.
-  "carbon-trend": carbon("co2", "none", { view: "trend", rollingPeriods: 7, rollingOp: "sum", norm: true }),
+  "carbon-trend": carbon("co2", "none", { view: "trend", rollingPeriods: 7, rollingOp: "sum", percentiles: ["mean"] }),
   "carbon-tiers": carbon("co2", "carbon_tier", { compareAs: "share" }),
   "carbon-repositories": carbon("co2", "repository_name"),
   "carbon-models": carbon("co2", "model_family"),
@@ -162,6 +163,30 @@ const dashboards: Record<string, CardDashboard> = {
   "agent-events-stale-docs": events("per_thousand", "repository_name"),
   "agent-events-known-failures": events("per_thousand", "repository_name"),
   "agent-events-unseen-choices": events("per_thousand", "choices_repository"),
+  // Session Shape: one record per agent session. Rates carry their coverage
+  // population as the card's filters.
+  "session-sources": sessions("sessions", "harness", {}),
+  "session-archetype-mix": sessions("sessions", "archetype", { view: "trend", rollingPeriods: 7 }),
+  "session-length-mix": sessions("sessions", "length_band", { view: "trend", rollingPeriods: 7 }),
+  "session-active-time": sessions("active_time", "archetype", { view: "distribution", scale: "logarithmic" }),
+  "session-turn-cycle": sessions("turn_cycle", "provider", { view: "distribution", scale: "logarithmic" }),
+  "session-autonomy": sessions("autonomy", "provider", { view: "distribution", scale: "logarithmic" }),
+  "session-model-failure-rates": sessions("failure_rate", "model_family", { minSamples: 20 }),
+  "session-kind-failure-rates": sessions("failure_rate", "archetype", { minSamples: 10 }),
+  "session-failure-trend": sessions("failure_rate", "none", { view: "trend", ...trailing }),
+  "session-count-trend": sessions("sessions", "none", { view: "trend", ...trailing }),
+  "session-hours-trend": sessions("active_hours", "none", { view: "trend", ...trailing }),
+  "session-autonomy-trend": sessions("autonomy", "none", { view: "trend", rollingPeriods: 7 }),
+  "session-turn-cycle-trend": sessions("turn_cycle", "none", { view: "trend", rollingPeriods: 7 }),
+  "session-context-trend": sessions("context_peak", "none", { view: "trend", rollingPeriods: 7 }),
+  "session-active-time-trend": sessions("active_time", "none", { view: "trend", rollingPeriods: 7 }),
+  "session-length-hours": sessions("active_hours", "length_band", { view: "trend", rollingPeriods: 7 }),
+  "session-length-tool-calls": sessions("tool_calls", "length_band", { view: "trend", rollingPeriods: 7 }),
+  "session-repository-hours": sessions("active_hours", "repository_name", {}),
+  "session-repository-verification": sessions("verification", "repository_name", { minSamples: 20 }),
+  "session-model-context": sessions("context_peak", "model_family", { view: "distribution" }),
+  "session-weekday": sessions("sessions", "none", { view: "cycle", cycle: "weekday", reduce: "median" }),
+  "session-last-weekday": sessions("sessions", "none", { view: "cycle", cycle: "weekday", reduce: "median", cycleOn: "last_message" }),
 };
 
 function dashboardFor(recipe: QueryRecipe): CardDashboard {

@@ -189,7 +189,7 @@ export function conversationSelection(conversations: Row[], loaded: Record<strin
     if (findOutlineEntry(state.entries, entryID)) return { id, loadID: id, pending: false, error: "" };
   }
   const failed = roots.some(({ conversation }) => loaded[String(conversation.id)]?.error);
-  return { id: "", loadID: "", pending: false, error: failed ? "Could not load the session for this saved turn." : "This saved turn is no longer available." };
+  return { id: "", loadID: "", pending: false, error: failed ? "Could not load the conversation for this saved turn." : "This saved turn is no longer available." };
 }
 
 export function ResultConversationBrowser({ workspaceID, readJSON, target }: { workspaceID: string; readJSON: (path: string, signal?: AbortSignal) => Promise<Row>; target?: ResultTarget | null }) {
@@ -273,8 +273,8 @@ export function ResultConversationBrowser({ workspaceID, readJSON, target }: { w
   const matched = selected !== entry?.human && selected !== entry?.response ? selected : undefined;
   function entryList(id: string, entries: OutlineEntry[]): React.ReactNode {
     return <ul>{entries.map(item => <li key={item.id} className={`conversation-outline-entry${item.children.length ? " has-subagents" : ""}`}>
-      <button type="button" data-view-field="search_cards" className={item.kind === "turn" && !item.human ? "conversation-outline-setup" : undefined} title={item.prompt} aria-current={id === currentID && item.id === entry?.id ? "true" : undefined} onClick={() => choose(id, item.id)}>
-        <span>{item.kind === "agent" ? "Sub-agent · " : ""}{item.label}{item.tools ? ` · ${item.tools} tool${item.tools === 1 ? "" : "s"}` : ""}</span>{item.prompt !== item.label ? <small>{item.prompt}</small> : null}
+      <button type="button" data-view-field="search_cards" className={item.kind === "turn" && !item.human ? "conversation-outline-setup" : undefined} aria-current={id === currentID && item.id === entry?.id ? "true" : undefined} onClick={() => choose(id, item.id)}>
+        <span data-overflow-title="">{item.kind === "agent" ? "Sub-agent · " : ""}{item.label}{item.tools ? ` · ${item.tools} tool${item.tools === 1 ? "" : "s"}` : ""}</span>{item.prompt !== item.label ? <small data-overflow-title="">{item.prompt}</small> : null}
       </button>
       {item.children.length ? <ViewDisclosure viewKey={`search:${workspaceID}:conversation:${id}:entry:${item.id}:children`} className="conversation-outline-children" defaultOpen summary={<>{item.children.length} sub-agent{item.children.length === 1 ? "" : "s"}<small>in {item.kind === "turn" ? item.label.toLowerCase() : item.label}</small></>}>{entryList(id, item.children)}</ViewDisclosure> : null}
     </li>)}</ul>;
@@ -284,8 +284,8 @@ export function ResultConversationBrowser({ workspaceID, readJSON, target }: { w
       const id = String(conversation.id), data = loaded[id];
       const turnCount = data?.entries.filter(item => item.human).length ?? 0;
       return <li key={id}><ViewDisclosure viewKey={`search:${workspaceID}:conversation:${id}`} defaultOpen={id === String(forest[0]?.conversation.id) || id === currentID}
-        summary={<span title="A session contains a sequence of prompts and replies. Select a turn below to preview it.">{conversation.parent_id ? "Sub-agent session" : "Session"} · {conversation.provider || "Agent"}{data && !data.loading && !data.error ? ` · ${turnCount} turn${turnCount === 1 ? "" : "s"}` : ""}</span>}>
-        <p className="conversation-outline-session" title={conversation.title || conversation.first_prompt || id}>{conversation.title || conversation.first_prompt || id}</p>
+        summary={<span title="A conversation contains a sequence of prompts and replies. Select a turn below to preview it.">{conversation.parent_id ? "Sub-agent conversation" : "Conversation"} · {conversation.provider || "Agent"}{data && !data.loading && !data.error ? ` · ${turnCount} turn${turnCount === 1 ? "" : "s"}` : ""}</span>}>
+        <p className="conversation-outline-session" data-overflow-title="">{conversation.title || conversation.first_prompt || id}</p>
         {data?.loading ? <p role="status">Loading turns…</p> : data?.error ? <p role="alert">{data.error} <button type="button" onClick={() => void load(id)}>Retry</button></p> : data ? data.entries.length ? entryList(id, data.entries) : <p>No retained turns.</p> : null}
         {children.length ? branchList(children) : null}
       </ViewDisclosure></li>;

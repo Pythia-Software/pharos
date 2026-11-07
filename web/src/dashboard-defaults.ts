@@ -29,4 +29,7 @@ export const dashboardDefaults: Record<string, AnalysisState> = {
   skills: { metric: "records", split: "skill_name", ...daily },
   agent_experience: { metric: "events", split: "family_group", ...daily },
   agent_event_rates: { metric: "per_thousand", split: "friction_repository", view: "compare", minSamples: 200 },
+  // Session Shape chooses each chart itself (its catalog's present); a
+  // day with a trailing week's smoothing reads its bands best.
+  session_shape: { metric: "sessions", split: "length_band", period: "day", rollingPeriods: 7 },
 } satisfies Record<keyof typeof engineUsageTopics, AnalysisState>;

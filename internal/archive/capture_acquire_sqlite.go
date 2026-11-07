@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -24,7 +23,7 @@ func (c *Catalog) acquireLogicalGroup(ctx context.Context, source SourceConfig, 
 	if err = session.writeHost(now(), now()); err != nil {
 		return retainedInput{}, err
 	}
-	plan, err := planCapture(source)
+	plan, err := planCapture(ctx, source)
 	if err != nil {
 		return retainedInput{}, err
 	}
@@ -146,7 +145,7 @@ func (catalog *Catalog) acquireLogicalGroupLocked(ctx context.Context, source So
 	// Validate membership and every file/database in the cross-input closure.
 	// Present-but-unreadable dependencies are errors; absent optional inputs are
 	// represented by the immutable inventory, never a live filesystem fallback.
-	after, err := planCapture(source)
+	after, err := planCapture(ctx, source)
 	if err != nil || !after.complete || len(after.warnings) > 0 || !slices.Equal(after.files, plan.files) || !slices.Equal(after.databases, plan.databases) {
 		return retainedInput{}, errors.New("dependency membership changed during acquisition")
 	}
@@ -238,25 +237,9 @@ func preservationMode(source SourceConfig) string {
 	if !retainedAcquisitionEnabled(source) {
 		return "live-rollout-gap"
 	}
-	switch strings.ToLower(source.Kind) {
-	case "conductor":
-		if source.Options["sqlite_record_capture"] == true {
-			return "retained-sessions"
-		}
-		return "live-sqlite-rollout-gap"
-	case "tl1", "antigravity":
-		if source.Options["sqlite_record_capture"] == true {
-			return "retained-sqlite-group"
-		}
-		return "live-sqlite-rollout-gap"
-	case "codex":
-		if source.Options["sqlite_record_capture"] != true {
-			return "filesystem-retained-sqlite-gated"
-		}
-		return "retained-inputs"
-	case "claude", "canonical", "tl1-export", "chatgpt", "chatgpt-export":
-		return "retained-inputs"
-	default:
+	spec, ok := providerFor(source.Kind)
+	if !ok {
 		return fmt.Sprintf("unsupported:%s", source.Kind)
 	}
+	return spec.Preservation(source)
 }

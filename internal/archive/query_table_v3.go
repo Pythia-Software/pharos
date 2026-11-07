@@ -26,8 +26,10 @@ func queryV3Dataset(schema qt.Schema) qt.QueryDatasetV3 {
 	groups := queryV3MaxGroups
 	// Usage has one compact fact per execution/day/model. The built-in Work
 	// preset and message-label conversation results must cover libraries with
-	// more than 10,000 workspaces or conversations.
-	if schema.Name == "pharos_usage" || schema.Name == "pharos_message_labels" {
+	// more than 10,000 workspaces or conversations. Session shape has one
+	// compact row per session, and its dashboard counts each session or root
+	// conversation, a group per conversation.
+	if schema.Name == "pharos_usage" || schema.Name == "pharos_message_labels" || schema.Name == "pharos_session_shape" {
 		groups = queryV3UsageMaxGroups
 	}
 	return qt.QueryDatasetV3{Schema: schema, Scope: queryTableScope, Dataset: schema.Name, Dialect: "sqlite",

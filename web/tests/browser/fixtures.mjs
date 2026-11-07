@@ -105,6 +105,10 @@ for (const row of [...datasets.tools, ...datasets.mcp_calls]) {
 // transcript (long code blocks, a wide table, tool output, an edit, nested
 // agents) and two child sessions.
 export const workID = "work-long", rootConversation = "conv-root";
+datasets.people_message_labels=['human','activity','habits'].flatMap(scope=>datasets.writing_messages.slice(0,24).map((row,i)=>{
+ const label=i%3?'P.request.work.implement':'P.control.redirect';
+ return {...row,id:`${scope}:${row.id}:${label}`,message_id:row.id,people_scope:scope,label,family:label.split('.').slice(0,2).join('.'),label_status:'matched',sent_at:row.sent_at,event_at:row.sent_at,started_at:row.sent_at,typed_words:8,source_conversation_id:rootConversation,source_workspace_id:workID,actor:'you',initiator:'human'};
+}));
 const start = now - 2 * 3600000;
 const at = seconds => new Date(start + seconds * 1000).toISOString();
 let sequence = 0;
@@ -415,8 +419,9 @@ datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.
 // Settings, sync and the header's library status.
 const hosts = [{ id: "studio", label: "Mac Studio", sources: [{ name: "Claude", captured_at: iso(3 * day), indexed_at: iso(3600000) }] }, { id: "air", label: "MacBook Air with a long machine name", sources: [{ name: "Codex", last_data_at: iso(125 * 60000) }] }, { id: "new", label: "New Mac", sources: [] }];
 const sources = { configured: 2, enabled: 2, items: [
-  { name: "claude", enabled: true, path: "/Users/someone/.claude/projects", last_success_at: iso(3600000), last_attempt_at: iso(3600000), coverage: "complete", account: "someone@example.com" },
-  { name: "codex", enabled: false, path: "/Users/someone/.codex/sessions/a/very/long/path/that/should/wrap/inside/its/card", last_success_at: iso(day), last_attempt_at: iso(day), coverage: "partial", error: "The source directory could not be read." },
+  { name: "claude", kind: "claude", tool: "Claude Code", scope: "host", enabled: true, path: "/Users/someone/.claude/projects", last_success_at: iso(3600000), last_attempt_at: iso(3600000), coverage: "complete", account: "someone@example.com",
+    not_recorded: ["Reported cost"], sometimes_recorded: ["Effort", "Title"] },
+  { name: "codex", kind: "codex", tool: "Codex", scope: "library", enabled: false, path: "/Users/someone/.codex/sessions/a/very/long/path/that/should/wrap/inside/its/card", last_success_at: iso(day), last_attempt_at: iso(day), coverage: "partial", error: "The source directory could not be read." },
 ] };
 const syncHistory = Array.from({ length: 6 }, (_, index) => ({ run_id: `run-${index}`, finished_at: iso((index + 1) * 120000), state: index === 2 ? "failed" : "complete", class: index === 1 ? "no_changes" : "changes", changed_groups: 2, conversations: 12, messages_in_changed_groups: 340,
   seconds: 22.1, cpu_seconds: 8.7, cpu_percent_one_core: 39.4, rss_baseline_bytes: 100 * 1048576, rss_observed_peak_bytes: 129 * 1048576, allocated_bytes: 50 * 1048576, sources: ["codex", "claude"],
@@ -545,6 +550,7 @@ const idleBackground = backgroundView([
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
   backgroundItem("writing-refine", "Refine writing history", "daily", "current", { cost: { seconds: 240, runs: 7, class: "heavy", text: "about 4 min", typical: "Typically about 4 min" } }),
   backgroundItem("backup", "Back up to /Volumes/Backup Drive With A Long Name/Pharos Backup", "manual", "unavailable", { column: "daily", cost: null }),
+  ...[["labels", "Message labels"], ["agent_events", "Agent events"]].map(([id, label]) => backgroundItem(id, label, "manual", "disabled", { state_label: "Off", column: "hourly", usual_cadence: "hourly", next_at: null, cost: null })),
 ], { tone: "good", title: "Up to date", text: "Everything is on schedule." });
 const busyBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { fixed: true, choices: null }),
@@ -713,9 +719,11 @@ export const defaultApi = {
   // The header, menus and status polling on every page.
   "GET /api/activity": { active: 0, runs: [] },
   "GET /api/library/status": { idle: true, portable: true, library_dir: "/Volumes/Pharos SSD/Pharos", drive: { name: "Pharos SSD", mounted: true, ejectable: true }, activities: [] },
-  "GET /api/probe/status": { library: true, needs_onboarding: false, host: { id: "test-mac", label: "This Mac" } },
+  "GET /api/probe/status": { library: true, needs_onboarding: false, host_file_exists: true, host: { id: "test-mac", label: "This Mac" } },
+  "GET /api/providers": JSON.parse(readFileSync(join(repo, "testdata", "providers.json"), "utf8")),
   "GET /api/probe/tools": {tools:[{kind:'claude',path:'~/.claude',found_by:'data folder'}]},
   "POST /api/probe": ({body})=>({candidates:sourceSetupCandidates.filter(candidate=>body.kinds.includes(candidate.kind)),checked:[]}),
+  "POST /api/sources/import": ({body})=>({added:[body.kind],enabled:[],declined:[],skipped:[]}),
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
   "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0, prompt: "Refresh the API price history in pricing/cost_changes.json." },
   "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),
@@ -820,6 +828,16 @@ export const defaultApi = {
   "GET /api/work/:id/conversations/:conversation": ({ params }) => {
     const overview = work.conversations.find(item => item.id === params.conversation);
     return params.id === workID && overview ? { ...overview, repo_root: work.location, messages: params.conversation === rootConversation ? transcript() : childMessages(params.conversation) } : undefined;
+  },
+  // The Session signals strip: the failed call's result, and two late prompts
+  // as corrections, so stepping lands in a collapsed turn.
+  "GET /api/work/:id/conversations/:conversation/signals": ({ params }) => {
+    if (params.id !== workID) return undefined;
+    const coverage = { has_tool_data: true, has_timestamps: true, has_authorship: true, has_context_window: false };
+    if (params.conversation !== rootConversation) return { conversation_id: params.conversation, signals: [], coverage };
+    const messages = transcript(), failed = messages.filter(message => message.kind === "tool_result" && JSON.parse(message.text).is_error), late = messages.filter(message => message.role === "user").slice(-2);
+    return { conversation_id: rootConversation, signals: [{ signal: "failed_calls", count: failed.length, message_ids: failed.map(message => message.id) }, { signal: "corrections", count: late.length, message_ids: late.map(message => message.id) }],
+      coverage };
   },
   "GET /api/work/:id/delegation": ({ query }) => delegation(query),
   "GET /api/work/:id/parallel": ({ query }) => parallel(query),

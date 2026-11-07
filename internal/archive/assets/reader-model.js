@@ -61,6 +61,11 @@ function tokenEnvelope(message){
   const record=value.latest_token_usage_record;
   return {raw,value,record,wrappers,type:value.type||raw.type,stream:String(value.agent_id||raw.parent_tool_use_id||message.parent_native_id||'main')};
 }
+// Whether a Codex session_meta says the rollout continues another thread's
+// history rather than starting its own.
+function continuesHistory(meta){
+  return Boolean(meta?.forked_from_id||(meta?.history_base&&typeof meta.history_base==='object')||meta?.subagent_history_start_ordinal>0);
+}
 function conversationTokenReports(messages){
   const envelopes=messages.map(tokenEnvelope),reports=messages.map(()=>null),seen=new Map(),active=new Map(),cumulative=new Map(),runStarts=new Map(),modelCounters=new Map(),resultIDs=new Set();
   const streamAliases=new Map([['main','main']]);
@@ -71,6 +76,11 @@ function conversationTokenReports(messages){
   // New Codex records contain response IDs and exact per-request usage. Legacy
   // token_count snapshots of those same requests must not be charged again.
   const recordStreams=new Set(envelopes.filter(e=>e.raw.type==='token_usage_record'||e.type==='token_usage_record').map(e=>canonical(e.stream)));
+  // A transcript that continues another thread's history (a Codex fork, forked
+  // subagent or revert page) starts its counters at that thread's usage, which
+  // the other thread's transcript counts. inherited holds that start per
+  // stream, from its first counter or record.
+  const inherits=envelopes.some((e,i)=>messages[i].kind==='metadata'&&messages[i].role==='system'&&e.raw.type==='session_meta'&&continuesHistory(e.value)),inherited=new Map();
   const sum=(start,stream=null)=>reports.slice(start).reduce((total,r)=>total+(r&&(!stream||r.stream===stream)?r.total||0:0),0);
   messages.forEach((message,index)=>{
     const envelope=envelopes[index],{raw,value,type}=envelope,stream=canonical(envelope.stream),hasRecords=recordStreams.has(stream),info=envelope.record&&!hasRecords?{total_token_usage:envelope.record.thread_token_usage,last_token_usage:envelope.record.usage}:value.info||{};
@@ -89,7 +99,9 @@ function conversationTokenReports(messages){
     const running=tokenTotal(info.total_token_usage);
     if(running!==null){
       usage=info.total_token_usage;scope='thread';label='Thread usage checkpoint';
-      if(!hasRecords){const previous=cumulative.get(stream)||0;total=running>=previous?running-previous:tokenTotal(info.last_token_usage);cumulative.set(stream,running);if(running<previous)label+=' (counter reset; last request only)'}
+      const last=tokenTotal(info.last_token_usage);
+      if(!inherited.has(stream))inherited.set(stream,inherits&&last!==null?Math.max(0,running-last):0);
+      if(!hasRecords){const previous=cumulative.get(stream)??inherited.get(stream);total=running>=previous?running-previous:tokenTotal(info.last_token_usage);cumulative.set(stream,running);if(running<previous)label+=' (counter reset; last request only)'}
     }else if(type==='token_count'&&info.last_token_usage){usage=info.last_token_usage;total=hasRecords?null:tokenTotal(usage);label='Last request usage'}
     else if(value.subtype==='task_progress'||value.subtype==='task_notification'){
       scope='task';label='Subagent cumulative usage';const key=canonical(value.tool_use_id||value.task_id||raw.parent_tool_use_id||'');
@@ -97,7 +109,7 @@ function conversationTokenReports(messages){
       const prior=seen.get('task:'+key);if(prior)prior.total=null;
       if(key)seen.set('task:'+key,report);reports[index]=report;return;
     }else if(type==='result'||type==='turn.completed'||type==='cost-state'){
-      scope=type==='cost-state'?'session':'run';label=scope==='session'?'Session accounting checkpoint':'Run accounting checkpoint';
+      scope=type==='cost-state'?'session':'run';label=scope==='session'?'Agent usage checkpoint':'Run accounting checkpoint';
       const reported=tokenTotal(usage),aggregate=modelTotal===null?reported:Math.max(reported??0,modelTotal);
       const start=runStarts.get(stream)||0,attributed=sum(start,stream==='main'?null:stream);
       total=aggregate===null?null:Math.max(0,aggregate-attributed);
@@ -107,6 +119,11 @@ function conversationTokenReports(messages){
     const context=value.context_token_count??value.estimated_tokens??value.compact_metadata?.pre_tokens;
     if(total===null&&!compact&&running===null&&typeof context!=='number')return;
     const report={total,compact,trigger,label,scope,stream,usage,context,contextEstimated:value.estimated_tokens!==undefined,breakdown:tokenBreakdown(usage),reportedTotal:tokenTotal(usage),checkpoint:tokenTotal(value.thread_token_usage)};
+    // Codex writes each response's record before its counter, so a stream's
+    // first record reports where its thread usage started. After a counter, a
+    // record cannot tell inherited usage from earlier requests no record
+    // covers: the counter's start stands and checkpoints fill the rest.
+    if(inherits&&!inherited.has(stream)&&type==='token_usage_record'&&report.checkpoint!==null)inherited.set(stream,Math.max(0,report.checkpoint-(total||0)));
     if(requestID&&scope==='request'){
       const key=stream+':'+requestID,prior=seen.get(key);
       if(prior){report.usage={...prior.usage,...usage};report.breakdown=tokenBreakdown(report.usage);report.total=report.breakdown?.total??null;prior.total=null;prior.superseded=true}
@@ -115,7 +132,7 @@ function conversationTokenReports(messages){
     reports[index]=report;
   });
   const requestTotals=new Map();
-  for(const report of reports){if(report?.scope!=='request'||report.total===null||report.superseded)continue;const prior=requestTotals.get(report.stream)||0;if(report.checkpoint!==null&&report.checkpoint!==undefined){const gap=Math.max(0,report.checkpoint-prior-report.total);report.total+=gap;if(gap)report.label+=' + '+gap.toLocaleString()+' earlier unattributed tokens'}requestTotals.set(report.stream,prior+report.total)}
+  for(const report of reports){if(report?.scope!=='request'||report.total===null||report.superseded)continue;const prior=requestTotals.get(report.stream)??inherited.get(report.stream)??0;if(report.checkpoint!==null&&report.checkpoint!==undefined){const gap=Math.max(0,report.checkpoint-prior-report.total);report.total+=gap;if(gap)report.label+=' + '+gap.toLocaleString()+' earlier unattributed tokens'}requestTotals.set(report.stream,prior+report.total)}
   // Reconcile subagent summaries with their retained request records. Keep
   // unallocated excess visible instead of assigning it to an arbitrary tool.
   const tasks=reports.filter(report=>report?.scope==='task'&&report.total!==null).sort((a,b)=>depth(b.stream)-depth(a.stream));
@@ -148,6 +165,8 @@ function contextTokenReports(messages,reports){
   reports.forEach((report,index)=>{
     if(!report||report.superseded)return;
     const {value}=tokenEnvelope(messages[index]),stream=report.stream||'main';
+    // An advisor's request has a context of its own.
+    if(value.advisor_of)return;
     let usage=report.scope==='request'?report.usage:value.info?.last_token_usage;
     const b=tokenBreakdown(usage),separate=usage&&['cache_read_input_tokens','cache_creation_input_tokens','cacheReadInputTokens','cacheCreationInputTokens','cache_creation'].some(key=>key in usage);
     let size=typeof report.context==='number'?report.context:b?.input===undefined?null:b.input+(separate?(b.cacheRead||0)+(b.cacheWrite||0):0);
@@ -244,8 +263,8 @@ function conversationOutline(conversation){
       response:replies.at(-1)||(results.length?{role:'assistant',text:readableValue(toolPayload(results.at(-1)).content)}:null),messages:ownedMessages([message],graph),tools:children.filter(item=>item.kind==='tool_call').length,children:agents(children)};
   });
   let turnNumber=0;
-  return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Session setup',
-    prompt:messageSummary(turn.human)||'Session setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,messages:ownedMessages([turn.human,...turn.events],graph),
+  return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Agent setup',
+    prompt:messageSummary(turn.human)||'Agent setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,messages:ownedMessages([turn.human,...turn.events],graph),
     tools:turn.events.filter(message=>message.kind==='tool_call').length,children:agents(turn.events)}));
 }
 // Publish the result-card model with the model script itself, independently of
@@ -466,11 +485,6 @@ function messageLabelView(message,taxonomy=[]){
   const segment=message.labels.segment||'';
   return{family:labels.find(label=>label.family)?.family||'',segment,segmentName:LABEL_SEGMENTS[segment]||segment,labels};
 }
-// The text a message's labels describe: a person's typed pieces when the
-// classification finds them, otherwise all of it. Typed text stays '1'
-// (human-written); the rest is '2'.
-function labelMask(message,text,mask=humanWritingMask(message,text)){return message?.labels?.ids?.length&&!mask.includes('1')?'2'.repeat(text.length):mask}
-
 // Agent events (agent_events.go, agentEventsAttacher): sentences of an agent
 // message where something happened (an obstacle, a discovery, a workaround),
 // with what it was about (subject) and what the agent did (response). Ranges
@@ -624,7 +638,7 @@ function eventLinkEnd(links,id,from){
 const READER_HIGHLIGHTS=[
   {id:'writing',field:'reader_writing',pref:'pharos-reader-writing',fallback:true,label:'Human writing',title:'Text a person typed or dictated. Pasted, quoted, templated and re-sent text stays plain.'},
   {id:'events',field:'reader_events',pref:'pharos-reader-events',fallback:false,label:'Agent events',title:'Sentences where an agent hit friction, learned something or made a choice you may not see (sentence classifier). Hover a highlighted sentence for its events.'},
-  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:false,label:'Message labels',title:'Each message in the hue of what it does (message classifier). Hover highlighted text for its labels.'}];
+  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:false,label:'Message labels',title:'Tint each message card by what it does (message classifier). Hover the card for its labels.'}];
 // The highlights a conversation offers, in READER_HIGHLIGHTS order: whether
 // each has anything to show (available, else why not in title), a note on
 // its coverage, and a legend of the hues it uses here (label families or
@@ -783,4 +797,56 @@ function transcriptAnchor(messages,{message='',at='',call=''}={}){
   let best=null,distance=Infinity,bestTime=Infinity;
   for(const item of messages){const when=Date.parse(item.created_at),delta=Math.abs(when-time);if(!item.id||!Number.isFinite(when))continue;if(delta<distance||delta===distance&&when<bestTime){best=item.id;distance=delta;bestTime=when}}
   return best;
+}
+
+// Session signals (session_shape.go SessionSignals): the forensic signals
+// that fired in a session, for the reader's strip. Labels are the Session
+// Shape dashboard's (web/src/session-shape-model.ts sessionSignalLabels).
+// A chip steps through the messages that triggered its signal: it reveals
+// one and highlights the others, and each click moves to the next.
+const SESSION_SIGNALS=[
+  ['failed_calls','Failed calls','Calls that failed, other than rejections, interrupts and hook blocks.'],
+  ['failure_streak_max','Longest failure streak','The longest run of consecutive failed calls.'],
+  ['rejections','Rejections','Calls you rejected.'],
+  ['interrupts','Interrupts','Calls interrupted before they finished.'],
+  ['hook_blocks','Hook blocks','Calls a hook blocked.'],
+  ['identical_retries','Identical retries','Three or more consecutive calls with the same tool and byte-identical input.'],
+  ['thrash_retries','Edit–verify–edit retries','Within one turn, an edit to a file, a test or build command, then another edit to that file.'],
+  ['churned_files','Churned files','A file edited three or more times within fewer than 10 messages.'],
+  ['mid_task_compactions','Mid-task compactions','A compaction with the same tools in use just before and just after it.'],
+  ['context_pressure','Context pressure',"A request whose input exceeded 90% of the model's context window."],
+  ['corrections','Corrections','A message you typed with a correction cue in the typed text.'],
+  ['unverified_handbacks','Unverified handbacks','A handback after an edit with no test or build command after the last edit.'],
+  ['long_unprompted_runs','Long unprompted runs','More than 150 tool calls with no message you typed between them.'],
+  ['ended_on_failure','Ended on a failed call','Experimental: the last tool call failed and nothing you typed follows. It does not say the work was abandoned.']];
+// At most this many of a signal's messages are highlighted at once, so a
+// link stays short; stepping still reaches every one.
+const SESSION_SIGNAL_HIGHLIGHTS=40;
+// The chips, in SESSION_SIGNALS order, and a note naming the signals the
+// session lacks the evidence for: those are not counted, not zero.
+function sessionSignalStrip(payload){
+  const fired=new Map((payload?.signals||[]).filter(item=>Array.isArray(item?.message_ids)&&item.message_ids.length).map(item=>[item.signal,item]));
+  const chips=SESSION_SIGNALS.filter(([id])=>fired.has(id)).map(([signal,label,note])=>{const item=fired.get(signal),messageIds=item.message_ids.map(String);
+    return{signal,label,note,count:typeof item.count==='number'?item.count:messageIds.length,messageIds}});
+  const coverage=payload?.coverage||{},missing=[];
+  if(coverage.has_tool_data===false)missing.push('tool call signals (no tool ledger)');
+  if(coverage.has_authorship===false)missing.push('corrections and turn signals (prompts not all classified yet)');
+  if(coverage.has_context_window===false)missing.push("context pressure (the model's window is unknown)");
+  return{chips,note:missing.length?`Not enough evidence for ${missing.join('; ')}.`:''};
+}
+// Which of a chip's messages the URL reveals, or -1.
+function sessionSignalActive(search,chip){
+  const reveal=new URLSearchParams(search).get('reveal')||'';
+  return reveal.startsWith('message:')?chip.messageIds.indexOf(reveal.slice(8)):-1;
+}
+// The URL parameters for a chip's click: the next of its messages revealed
+// (the first, unless one is revealed already), the others highlighted, and
+// any other attention cleared. The reader's own landing anchors (message, at
+// and call) go too, or a reload would scroll to the earlier target instead.
+function sessionSignalAttention(search,chip){
+  const params=new URLSearchParams(search),ids=chip.messageIds,index=(sessionSignalActive(search,chip)+1)%ids.length;
+  for(const name of ['highlight','reveal','message','at','call'])params.delete(name);
+  for(const id of ids.slice(0,SESSION_SIGNAL_HIGHLIGHTS))if(id!==ids[index])params.append('highlight','message:'+id);
+  params.set('reveal','message:'+ids[index]);
+  return params;
 }

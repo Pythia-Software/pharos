@@ -1,8 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi,busyStatus,eventStream,conversationLabelsFixture} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
+import writingMessagesDocument from '../../../schemas/writing_messages.schema.json' with {type:'json'};
+import usageDocument from '../../../schemas/usage.schema.json' with {type:'json'};
 import toolCallsDocument from '../../../schemas/tool_calls.schema.json' with {type:'json'};
 import mcpCallsDocument from '../../../schemas/mcp_calls.schema.json' with {type:'json'};
 import safetyDocument from '../../../schemas/safety.schema.json' with {type:'json'};
@@ -101,8 +103,8 @@ test('saved Parallel activity links open the native Timeline and retain the sele
 
 test('workspace sidebar visibility and width restore without leaving the selected conversation',{skip},async t=>{
  const app=await open(t,{url:`/work/${workID}/conversation/${rootConversation}?sidebar_width=460`,ready:'.conversation-panel .turn'}),{page}=app;
- const show=page.getByRole('button',{name:'Show workspace sessions',exact:true}),hide=page.getByRole('button',{name:'Hide workspace sessions',exact:true});
- const divider=page.getByRole('separator',{name:'Resize workspace sessions sidebar',exact:true});
+ const show=page.getByRole('button',{name:'Show agent sessions',exact:true}),hide=page.getByRole('button',{name:'Hide agent sessions',exact:true});
+ const divider=page.getByRole('separator',{name:'Resize agent sessions sidebar',exact:true});
  assert.equal(await divider.getAttribute('aria-valuenow'),'460');
  await hide.click();await page.reload();await show.waitFor();await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('sidebar_visible'),'0');
@@ -120,14 +122,14 @@ for(const width of [1440,390])test(`workspace Timeline beside a reader expands b
  const params=new URLSearchParams({explorer:'timeline',conversation:rootConversation,message:'m-1',disclosures:JSON.stringify(disclosures),timeline_columns:JSON.stringify({execution:205,events:185,time:480})});
  const app=await open(t,{url:`/work/${workID}?${params}`,viewport:{width,height:900},ready:'.lt-preview-activate'}),{page}=app;
  await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
- const reveal=async()=>{if(width<960){await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();}};
+ const reveal=async()=>{if(width<960){await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();}};
  const settings=()=>page.evaluate(()=>{const p=new URLSearchParams(location.search);return Object.fromEntries(['delegation_start','delegation_end','timeline_columns','disclosures','delegation_collapsed','delegation_event'].map(key=>[key,p.get(key)]));});
  await reveal();
  const before=await settings(),saved=path(page),activate=page.getByRole('button',{name:'Open full-width timeline',exact:true});
  assert.equal(await page.getByRole('slider',{name:'Timeline window start',exact:true}).evaluate(el=>{el.focus();return document.activeElement===el;}),false,'preview controls cannot receive keyboard focus');
  assert.equal(await page.locator('.delegation-parallel').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'static overview fits the sidebar');
  if(width===1440){
-  await page.getByRole('separator',{name:'Resize workspace sessions sidebar',exact:true}).press('End');
+  await page.getByRole('separator',{name:'Resize agent sessions sidebar',exact:true}).press('End');
   await page.locator('.workspace-inbox:not(.compact)').waitFor();
   assert.equal(await activate.isVisible(),true,'a wide sidebar still uses the read-only overview');
   // Even a zoom-like drag is consumed by the overview activation.
@@ -178,7 +180,8 @@ for(const width of [1440,390])test(`hierarchy metric scope and session timeline 
  const row=page.locator('.delegation-table [data-session-id="s-child"]');
  await row.getByRole('button',{name:/^Open session /}).click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
  assert.equal(await page.locator('.workspace-reader').isVisible(),true);
- if(width<960)await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();
+ if(width<960)await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();
+ await page.getByRole('button',{name:'Open workspace overview',exact:true}).first().click();await app.settled();
  await page.getByRole('button',{name:`View timeline for ${child.label}`,exact:true}).click();
  const expanded=page.locator('[data-pharos-target="section:delegation-labels:s-child:session"]');
  await expanded.waitFor();await page.waitForFunction(()=>document.querySelector('[data-pharos-target="section:delegation-labels:s-child:session"]').open);await app.settled();
@@ -201,7 +204,7 @@ for(const width of [1280,390])test(`Timeline session navigation and event expans
  await app.settled();const before=await settings();
  await session('s-root').click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-root');await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-root');assert.deepEqual(await settings(),before);
- const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();};
+ const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();};
  await show();await session('s-child').click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-child');assert.equal(await page.locator('.workspace-reader').isVisible(),true);assert.deepEqual(await settings(),before);
  await show();
@@ -223,16 +226,28 @@ for(const width of [1280,390])test(`Timeline session navigation and event expans
 for(const width of [1280,390])test(`session hierarchy sidebar retains navigation and fits usage columns at ${width}px`,{skip},async t=>{
  const params=new URLSearchParams({conversation:rootConversation,delegation_mode:'rank',delegation_sort:'cost',delegation_direction:'asc',delegation_scope:'all'});
  const app=await open(t,{url:`/work/${workID}?${params}`,viewport:{width,height:900},ready:'.delegation-inbox-row'}),{page}=app;
- const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();};
+ const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();};
  await show();await app.settled();
  assert.equal(app.calls.filter(call=>call.path.endsWith('/delegation')).at(-1).query.get('mode'),'hierarchy','the compact table loads the hierarchy even for a saved ranking');
- const table=page.getByRole('table',{name:'Session hierarchy and usage'});
+ const table=page.getByRole('table',{name:'Agent session hierarchy and usage'});
  assert.equal(await table.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'session names leave space for both usage columns');
  const current=table.locator('[aria-current="true"]');await current.click();await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
- await table.getByRole('button',{name:/Open session 1\.1 ·/}).click();
+ await table.getByRole('button',{name:'Open session Review implementation',exact:true}).click();
  await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
  await show();await app.shot('hierarchy-sidebar');
+ await table.getByRole('button',{name:'Collapse Review implementation',exact:true}).click();await app.settled();
+ await table.getByRole('button',{name:'Expand Review implementation',exact:true}).waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),'conv-child','folding the selected session leaves its reader open');
+ await table.getByRole('button',{name:'Expand Review implementation',exact:true}).click();await app.settled();
+ await table.getByRole('button',{name:'Open session Review timing',exact:true}).waitFor();
+ if(width>=960){
+  await page.getByRole('separator',{name:'Resize agent sessions sidebar',exact:true}).press('End');
+  await page.locator('.workspace-inbox:not(.compact)').waitFor();await app.settled();
+  await page.locator('.delegation-table').getByRole('button',{name:'Open session Review timing',exact:true}).click();
+  await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-nested');await app.settled();
+  await app.shot('hierarchy-wide-sidebar');
+ }
  await page.getByRole('button',{name:'Open workspace overview',exact:true}).first().click();await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('delegation_mode'),'rank','the fixed sidebar presentation preserves the full-width ranking');
  await app.shot('hierarchy-full-width');
@@ -974,20 +989,22 @@ test('row disclosures record deliberate choices without capturing every rendered
 });
 
 test('accordion links restore capture/index diagnostics in fresh browsers and history, and reveal a closed accordion without opening it',{skip},async t=>{
- const keys=['sync:separate','sync:repairs','sync:diagnostics','sync:forecast:capture-forecast'],ready='#syncDiagnosticTables details';
+ const keys=['sync:history','sync:sources','sync:repairs','sync:diagnostics','sync:forecast:capture-forecast','background:labels','background:agent_events'],ready='#syncDiagnosticTables details';
  const route=entries=>'/settings/sync?'+new URLSearchParams({disclosures:JSON.stringify(entries)});
- const entries=Object.fromEntries(keys.map(key=>[key,true])),defaults=Object.fromEntries(keys.map(key=>[key,false]));
+ const entries=Object.fromEntries(keys.map(key=>[key,true])),defaults=Object.fromEntries(keys.map(key=>[key,['sync:history','sync:sources'].includes(key)]));
  const app=await open(t,{url:route(entries),ready}),{page}=app;
  const state=(browser,expected)=>browser.waitForFunction(expected=>Object.entries(expected).every(([key,open])=>{
   const element=[...document.querySelectorAll('[data-view-key],[data-pharos-target]')].find(element=>element.dataset.viewKey===key||element.dataset.pharosTarget==='section:'+key);
   return element&&(element.tagName==='DETAILS'?element.open:element.getAttribute('aria-expanded')==='true')===open;
  }),expected);
  await state(page,entries);
- const first=page.locator('[data-view-key="'+keys[0]+'"]');
+ const first=page.locator('[data-view-key="'+keys[0]+'"],[data-pharos-target="section:'+keys[0]+'"]');
  if(await first.evaluate(element=>element.tagName==='DETAILS'))await first.locator('summary').first().click();else await first.click();
  await state(page,{...entries,[keys[0]]:false});
  await page.waitForFunction(key=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')[key]===false,keys[0]);await app.settled();
  const fresh=await open(t,{url:path(page),ready});
+ await state(fresh.page,{...entries,[keys[0]]:false});
+ await fresh.page.evaluate(()=>window.pharosSync.refresh());
  await state(fresh.page,{...entries,[keys[0]]:false});
  await page.evaluate(url=>window.pharosNavigate(url),route({}));
  await state(page,defaults);
@@ -995,7 +1012,7 @@ test('accordion links restore capture/index diagnostics in fresh browsers and hi
  await page.goForward();await state(page,defaults);
  assert.equal(app.calls.some(call=>call.method!=='GET'&&/^\/api\/(background\/(settings|run)|sync\/|cloud-backup\/(schedule|start))/.test(call.path)),false,'restoring sections must not run work or save settings');
  // Revealing a closed accordion highlights its summary without overriding explicit false.
- const closed={'sync:separate':false,'sync:diagnostics':false};
+ const closed={'sync:history':false,'sync:sources':false,'sync:diagnostics':false};
  await page.evaluate(url=>window.pharosNavigate(url),route(closed)+'&'+new URLSearchParams({reveal:'section:sync:diagnostics'}));
  const target=page.locator('[data-pharos-target="section:sync:diagnostics"].pharos-reveal');await target.waitFor({state:'visible'});
  await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
@@ -1055,7 +1072,7 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  const control=name=>page.locator('.thinking-controls').getByRole('combobox',{name,exact:true});
  const state=()=>JSON.parse(new URL(page.url()).searchParams.get('thinking'));
  const topic=()=>new URL(page.url()).searchParams.get('analyze_topic');
- await control('Model').selectOption('gpt-6.1-sol');await app.settled();
+ await control('Model').selectOption('gpt-6.1-sol');await control('Breakdown').selectOption('model_speed');await app.settled();
  const chart=page.locator('.thinking-brush').first();await chart.scrollIntoViewIfNeeded();const rect=await chart.boundingBox();
  await page.mouse.move(rect.x+rect.width*.3,rect.y+rect.height*.4);await page.mouse.down();await page.mouse.move(rect.x+rect.width*.65,rect.y+rect.height*.4,{steps:8});await page.mouse.up();
  await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('thinking')).range==='custom');await app.settled();
@@ -1066,6 +1083,7 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  await page.locator('.thinking-links').getByRole('link',{name:'Waiting →',exact:true}).click();await page.locator(ready).waitFor();await app.settled();
  const overviewTopic=topic();assert.notEqual(overviewTopic,detailTopic);
  assert.equal(state().from,selected.from);
+ assert.equal(await control('Breakdown').inputValue(),'model_speed');
  await page.getByText('Methodology, exclusions and production limits',{exact:true}).click();await app.settled();
  // An already-open validation section must fetch its evidence on restoration,
  // even though shared accordions notify onOpenChange only for deliberate toggles.
@@ -1081,8 +1099,12 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  assert.ok(copied.calls.some(call=>call.path==='/api/thinking'&&call.query.get('evidence')==='1'));
  await page.goBack();await page.waitForFunction(topic=>new URLSearchParams(location.search).get('analyze_topic')===topic,detailTopic);await page.locator(ready).waitFor();
  assert.equal(state().model,'gpt-6.1-sol');assert.equal(state().from,selected.from);
+ assert.equal(await control('Breakdown').inputValue(),'model_speed');
  await page.goForward();await page.waitForFunction(topic=>new URLSearchParams(location.search).get('analyze_topic')===topic,overviewTopic);await page.locator(ready).waitFor();
  assert.equal(state().from,selected.from);
+ assert.equal(await control('Breakdown').inputValue(),'model_speed');
+ await control('Breakdown').selectOption('model_effort_speed');await app.settled();
+ assert.ok(app.calls.some(call=>call.path==='/api/thinking'&&call.query.get('overview')==='1'&&call.query.get('groupBy')==='model_effort_speed'));
 });
 
 // Date arithmetic is covered in node; here verify the shared editor is wired to
@@ -1326,4 +1348,155 @@ test('Compaction chart controls and source query restore in a fresh browser', {s
  await source.click(); await fresh.page.locator('.usage-workspace-table .qt-row').first().waitFor(); await fresh.settled();
  assert.equal(new URL(fresh.page.url()).searchParams.get('analyze_data'), 'compactions');
  await app.shot('compaction-compare');
+});
+
+
+test('Data Guide terms and example restore and return focus',{skip},async t=>{
+ const app=await open(t,{url:'/library',ready:'.pharos-query-page .view-heading'}),{page}=app;
+ const trigger=page.getByRole('button',{name:'Data Guide',exact:true});
+ await trigger.click();
+ const guide=page.getByRole('dialog',{name:'Data Guide',exact:true});
+ await guide.waitFor();
+ const appsBranch=guide.getByText('Apps & machines',{exact:true});
+ await appsBranch.click();
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('nav_expanded'))?.['data-guide']?.apps===false);
+ await guide.getByRole('button',{name:'Work items',exact:true}).click();
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='work_items');
+ await page.reload();
+ await guide.waitFor();
+ assert.equal(await appsBranch.evaluate(element=>element.closest('details').open),false,'shared guide menu expansion did not restore');
+ assert.equal(await guide.getByRole('button',{name:'Work items',exact:true}).getAttribute('aria-current'),'page');
+ await guide.getByRole('button',{name:'Conversations',exact:true}).click();
+ await guide.getByRole('button',{name:'Conversation Review',exact:true}).click();
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_example')==='review');
+ await guide.getByRole('button',{name:'Repositories',exact:true}).click();
+ await app.settled();
+ await app.shot('data-guide');
+ const linked=path(page);
+ const fresh=await open(t,{url:linked,viewport:{width:320,height:820},ready:'.data-guide[open]'});
+ const mobileGuide=fresh.page.getByRole('dialog',{name:'Data Guide',exact:true});
+ assert.equal(await mobileGuide.getByRole('combobox',{name:'Guide term',exact:true}).inputValue(),'repositories');
+ const picker=mobileGuide.getByRole('combobox',{name:'Guide term',exact:true});
+ await picker.selectOption('machines');
+ await fresh.page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='machines');
+ assert.equal(await mobileGuide.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
+ await fresh.shot('data-guide-narrow');
+ const olderLink=new URL(fresh.page.url());olderLink.searchParams.set('guide_entity','execution_machines');
+ await fresh.page.goto(olderLink.href);
+ await mobileGuide.waitFor();
+ assert.equal(await picker.inputValue(),'machines','older execution-machine links open the combined Machines topic');
+ // Switching illustration types retains the linked example conversation.
+ await picker.selectOption('conversations');
+ assert.equal(await mobileGuide.getByRole('button',{name:'Conversation Review',exact:true}).getAttribute('aria-pressed'),'true');
+ for(const term of ['skills','compactions','tokens']){
+  await picker.selectOption(term);
+  await fresh.page.waitForFunction(value=>new URLSearchParams(location.search).get('guide_entity')===value,term);
+  assert.equal(await mobileGuide.getByRole('button',{name:'Conversation Review',exact:true}).getAttribute('aria-pressed'),'true');
+ }
+ await picker.selectOption('agents');
+ await fresh.page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='agents');
+ await fresh.page.reload();
+ await mobileGuide.waitFor();
+ assert.equal(await picker.inputValue(),'agents');
+ await mobileGuide.getByRole('button',{name:'Explain tool calls',exact:true}).first().click();
+ await fresh.page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='tool_calls');
+ await fresh.page.reload();
+ await mobileGuide.waitFor();
+ assert.equal(await picker.inputValue(),'tool_calls');
+ await mobileGuide.getByRole('button',{name:'Conversation Implementation',exact:true}).click();
+ await fresh.page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_example')!=='review');
+ await guide.getByRole('button',{name:'Close data guide',exact:true}).click();
+ await trigger.click();
+ await page.keyboard.press('Escape');
+ await page.waitForFunction(()=>!document.querySelector('.data-guide').open);
+ assert.equal(await trigger.evaluate(el=>document.activeElement===el),true);
+});
+
+test('message card labels and sentence events restore independently in the reader',{skip},async t=>{
+ const at='2026-11-05T14:00:00Z',prompt='Please review the importer and keep the existing CSV format. Show the evidence before changing the parser.',thought='I should compare the parser with the saved fixtures first. The import fails when a quoted cell contains a newline. I will preserve that cell and add a focused check.',reply='The parser now keeps quoted newlines inside their cells. The existing fixtures pass, and the added check covers the failing import.';
+ const labeled=(id,role,kind,text,label,segment,seconds)=>({id,native_id:id,role,kind,text,created_at:new Date(Date.parse(at)+seconds*1000).toISOString(),labels:{ids:[label],probs:{[label]:.94},segment}});
+ const messages=[labeled('tint-prompt','user','message',prompt,'P.request.work.implement','H-typed',0),labeled('tint-thinking','assistant','reasoning',thought,'C.deliberation.plan','TH',10),labeled('tint-reply','assistant','message',reply,'C.report.verification','AR',25)];
+ const sentence='The import fails when a quoted cell contains a newline.';
+ messages[1].agent_events=[{id:'e-tint',kind:'obstacle',label:'Obstacle or roadblock',group:'Friction',probability:.91,sentence:[thought.indexOf(sentence),thought.indexOf(sentence)+sentence.length],subject:[],response:[]}];
+ const taxonomy=[{id:'P.request.work.implement',name:'Implement',definition:'Requests a concrete change.'},{id:'C.deliberation.plan',name:'Plan',definition:'Considers how to do the work.'},{id:'C.report.verification',name:'Verification',definition:'Reports checks and their evidence.'}];
+ const api={'GET /api/work/:id':request=>({...defaultApi['GET /api/work/:id'](request),title:'Review the CSV importer'}),'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),title:'Review the CSV importer',first_prompt:prompt,agent_nickname:'Review the CSV importer',messages,labels:{labeled:3,pending:false,taxonomy},agent_events:{messages_read:2}})};
+ api['GET /api/work/:id/delegation']=request=>{
+  const data=defaultApi['GET /api/work/:id/delegation'](request);
+  const named=row=>row.conversation_id===rootConversation?{...row,label:'Review the CSV importer'}:row;
+  return {...data,rows:data.rows.map(named),focus:data.focus.map(named)};
+ };
+ const url=`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all&reader_labels=1&reader_events=1&reader_writing=0`;
+ const app=await open(t,{api,url,ready:'.conversation-panel.show-labels.show-events'}),{page}=app;
+ const reasoning=page.locator('.action-row details').filter({has:page.locator('summary .activity-title',{hasText:'Reasoning'})}).first();
+ await reasoning.locator('summary').click();
+ await page.locator('.thinking-card mark.agent-event').waitFor();
+ assert.equal(await page.getByText(sentence,{exact:false}).count()>0,true);
+ await page.locator('.thinking-card').hover();await page.getByRole('tooltip').waitFor();
+ assert.match(await page.getByRole('tooltip').textContent(),/Plan/);
+ await page.mouse.move(0,0);
+ await app.shot('message-card-tints-dark');
+ await page.getByRole('checkbox',{name:'Message labels',exact:true}).uncheck();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('reader_labels'),'0');
+ await page.getByRole('checkbox',{name:'Message labels',exact:true}).check();
+ await page.getByRole('checkbox',{name:'Agent events',exact:true}).uncheck();await app.settled();
+ const copied=await open(t,{api,url:path(page),ready:'.conversation-panel.show-labels'});
+ assert.equal(await copied.page.getByRole('checkbox',{name:'Agent events',exact:true}).isChecked(),false);
+ assert.match(await copied.page.locator('.thinking-card').textContent(),/quoted cell/);
+ await page.getByRole('checkbox',{name:'Agent events',exact:true}).check();
+ await page.evaluate(()=>document.documentElement.dataset.theme='light');
+ await app.shot('message-card-tints-light');
+ await page.setViewportSize({width:390,height:844});
+ await page.locator('.thinking-card').scrollIntoViewIfNeeded();
+ await app.shot('message-card-tints-phone');
+});
+
+test('People message-label breakdowns keep their dashboard and saved URL',{skip},async t=>{
+ const dashboard=topic=>'/analyze?'+new URLSearchParams({analyze_topic:topic,analyze_window:'30d',analyze_filters:encodeQuery({...EMPTY_QUERY,where:[{field:'repository_name',op:'is_not_null',value:''}]}),analyze_chart:JSON.stringify({metric:'messages',split:'message_family',period:'day',share:true})});
+ const app=await open(t,{url:dashboard('human'),ready:'.usage-human-dashboard .usage-chart'}),{page}=app;
+ await app.shot('people-message-label-breakdown');
+ for(const topic of ['human','activity','habits']){
+  if(topic!=='human')await page.goto(new URL(dashboard(topic),page.url()).href);
+  await page.locator('.usage-'+topic+'-dashboard .usage-chart').waitFor();await app.settled();
+  await page.getByRole('combobox',{name:'Breakdown',exact:true}).selectOption('message_label');await app.settled();
+  assert.equal(JSON.parse(new URL(page.url()).searchParams.get('analyze_chart')).split,'message_label');
+  assert.ok(app.calls.some(call=>call.path.includes('/api/query/people_message_labels/')));
+  await page.locator('.usage-query-destination').first().click();
+  const back=page.getByRole('link',{name:'Back to dashboard',exact:true});await back.waitFor();await back.click();
+  await page.locator('.usage-'+topic+'-dashboard .usage-chart').waitFor();await app.settled();
+  assert.equal(new URL(page.url()).searchParams.get('analyze_window'),'30d');
+  assert.equal(await page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'message_label');
+ }
+ await page.reload();await page.locator('.usage-habits-dashboard .usage-chart').waitFor();await app.settled();
+ assert.equal(await page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'message_label');
+});
+
+
+test('component share charts restore their controls across reloads and view switches',{skip},async t=>{
+ const words=Object.fromEntries(Object.entries({typed:40,pasted:22,quoted:12,resent:8,template:6,attachment:2,harness:7,automated:3}).map(([key,value])=>[key+'_words',value]));
+ const rows=queryFixtureDatasets.writing_messages.map(row=>({...row,...words,words:100,copied_words:20,prompt_words:8,machine_words:10}));
+ const api={'POST /api/query/writing_messages/query-v3':({body})=>answerQuery('query-v3',body,rows,loadSchema(writingMessagesDocument))};
+ const app=await open(t,{api,url:'/analyze?analyze_topic=human',viewport:{width:1920,height:1050},ready:'.usage-human-dashboard .usage-chart'}),{page}=app;
+ const control=name=>page.locator('.usage-human-dashboard').getByRole('combobox',{name,exact:true});
+ await control('View').selectOption('compare');
+ await control('Metric').selectOption('words');
+ await control('Breakdown').selectOption('category');
+ await control('Show as').selectOption('share');
+ await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await app.settled();
+ const saved=path(page);
+ await page.getByRole('button',{name:/^Typed:/}).waitFor();
+ await app.shot('human-text-category-shares');
+ const fresh=await open(t,{api,url:saved,ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
+ for(const [name,value] of [['View','compare'],['Metric','words'],['Breakdown','category'],['Show as','share']])assert.equal(await fresh.page.getByRole('combobox',{name,exact:true}).inputValue(),value);
+ await fresh.page.getByRole('combobox',{name:'View',exact:true}).selectOption('trend');
+ await fresh.page.locator('.usage-chart-bars:not(.loading) > button').first().waitFor();await fresh.settled();
+ await fresh.page.getByRole('combobox',{name:'View',exact:true}).selectOption('compare');
+ await fresh.page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await fresh.settled();
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'category');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Show as',exact:true}).inputValue(),'share');
+ await fresh.page.getByRole('button',{name:/^Typed:/}).click();
+ await fresh.page.waitForURL(url=>url.searchParams.get('analyze_mode')==='query');await fresh.settled();
+ const tokenAPI={'POST /api/query/usage/query-v3':({body})=>answerQuery('query-v3',body,queryFixtureDatasets.usage.map(row=>({...row,input_tokens:100,uncached_input_tokens:20,cache_read_input_tokens:70,cache_creation_input_tokens:10})),loadSchema(usageDocument))};
+ const tokens=await open(t,{api:tokenAPI,url:'/analyze?analyze_topic=tokens&analyze_chart='+encodeURIComponent(JSON.stringify({view:'compare',metric:'input',split:'input_type',compareAs:'share'})),viewport:{width:1920,height:1050},ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
+ await tokens.page.getByRole('button',{name:/^Cache reads:/}).waitFor();
+ await tokens.shot('input-token-shares');
 });

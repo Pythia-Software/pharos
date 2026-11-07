@@ -76,7 +76,7 @@ test("options a measure cannot use move to the nearest one, and say why", () => 
     [{ metric: "average_fanout", split: "none", period: "days", days: 3 }, { period: "day" }, /several periods would add/],
     [{ metric: "average_fanout", split: "none", period: "hours", hours: 3 }, { period: "hour" }, /several periods would add/],
     [{ metric: "cost", split: "type" }, { split: "provider" }, /Token type splits tokens only/],
-    [{ metric: "tokens", split: "provider", share: true, norm: true }, { norm: false }, /Shares have no norm/],
+    [{ metric: "tokens", split: "provider", share: true, norm: true }, { norm: false }, /Shares have no reference level/],
     [{ metric: "tokens", split: "none", display: "cumulative", norm: true }, { norm: false }, /running totals/],
     [{ metric: "cache_read_share", split: "provider", norm: true }, { norm: false }, /no total across groups/],
   ];
@@ -168,7 +168,7 @@ test("values without zeroes leave out periods with nothing drawn, and zeroes fro
   assert.deepEqual(draw({ ...state, nonzero: true, share: true }).built.buckets.length, draw({ ...state, share: true }).built.buckets.length);
   const normed = { ...base, metric: "tokens", split: "none", norm: true, normPeriods: 20 };
   const [zeroes, without] = [draw(normed).built, draw({ ...normed, nonzero: true }).built];
-  assert.ok(without.normPoints < zeroes.normPoints && without.norm > zeroes.norm);
+  assert.ok(without.normPoints < zeroes.normPoints && without.references?.[0]?.value > zeroes.references?.[0]?.value);
   assert.equal(validAnalysisState(catalog, { ...state, nonzero: "yes" }), false);
 });
 
@@ -246,18 +246,18 @@ test("a change applies to the state as asked for: old names never override it, a
     assert.deepEqual([values.metric, values.share], [alias === "percent" ? "tokens" : "cost", false], `${alias}: Values takes effect at once`);
     assert.equal(normalizeAnalysis(catalog, changeState(catalog, link, { split: "model_family" })).share, true, `${alias}: other changes keep the shares`);
   }
-  const asked = { ...base, metric: "tokens", split: "provider", share: true, rollingPeriods: 7, rollingOp: "sum", norm: true };
+  const asked = { ...base, metric: "tokens", split: "provider", share: true, rollingPeriods: 7, rollingOp: "sum", percentiles: ["mean"] };
   const ratio = changeState(catalog, asked, { metric: "cache_read_share" });
   assert.deepEqual(["share", "rollingOp", "norm"].map(key => normalizeAnalysis(catalog, ratio)[key]), [false, "mean", false], "drawn without what the ratio cannot use");
   assert.equal(trendAdjustments(catalog, ratio).length, 3, "and each change is explained");
   const back = changeState(catalog, ratio, { metric: "tokens" });
-  assert.deepEqual(["share", "rollingOp", "norm"].map(key => back[key]), [true, "sum", true], "all three are still saved");
+  assert.deepEqual(["share", "rollingOp", "percentiles"].map(key => back[key]), [true, "sum", ["mean"]], "all three are still saved");
   assert.deepEqual(normalizeAnalysis(catalog, back), normalizeAnalysis(catalog, asked), "and tokens draws exactly as before");
-  // Shares have no norm, so without them the saved norm draws again.
+  // Shares have no reference level, so without them the saved mean draws again.
   assert.equal(normalizeAnalysis(catalog, changeState(catalog, back, { share: false })).norm, true);
   // A visit to Compare keeps the trend's own settings.
   const returned = switchView(catalog, switchView(catalog, asked, "compare"), "trend");
-  assert.deepEqual(["share", "rollingOp", "norm", "rollingPeriods"].map(key => returned[key]), [true, "sum", true, 7]);
+  assert.deepEqual(["share", "rollingOp", "percentiles", "rollingPeriods"].map(key => returned[key]), [true, "sum", ["mean"], 7]);
 });
 
 test("a share is of every group in the filters; a legend selection only chooses what is drawn, in the trend and in Compare", () => {
@@ -336,7 +336,7 @@ test("a group only smoothing or norm history holds is listed in Other, so series
   const state = { ...base, metric: "tokens", rollingPeriods: 7, norm: true };
   const byProvider = draw({ ...state, split: "provider" }, { where: week, data }).built, total = draw({ ...state, split: "none" }, { where: week, data }).built;
   assert.deepEqual(byProvider.series.find(item => item.key === "other")?.foldedValues, ["tl1"], "Other lists the history-only group");
-  assert.ok(Math.abs(byProvider.norm - total.norm) < 1e-9, `norm by provider ${byProvider.norm} != ${total.norm}`);
+  assert.ok(Math.abs(byProvider.references?.[0]?.value - total.references?.[0]?.value) < 1e-9, `norm by provider ${byProvider.references?.[0]?.value} != ${total.references?.[0]?.value}`);
   assert.ok(total.buckets.some(bucket => bucket.values.total > 0));
   byProvider.buckets.forEach((bucket, index) => {
     const stacked = byProvider.series.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
@@ -678,4 +678,49 @@ test('message-label conversation results preserve the native source definition a
  const host=messageLabelHostQuery(s.fields),cards=host.normalize({version:1,params:{label_results:['cards']}}),table=host.normalize({version:1,params:{label_results:['table']}});
  assert.equal(labelResultsMode({...query,hostState:cards}),'cards');assert.equal(labelResultsMode({...query,hostState:table}),'table');assert.throws(()=>host.normalize({version:1,params:{label_results:['bad']}}));
  const params=new URLSearchParams({label_chart:JSON.stringify({measure:'count',scale:'logarithmic',smoothing:3,resolution:'label'}),label_audience:'thinking',label_repository:'r',label_focus:'P.request'}),url=new URL(messageLabelLegacyURL(params),'http://localhost');assert.equal(url.searchParams.get('analyze_topic'),'labels');const filters=core.decodeQueryStrict(url.searchParams.get('analyze_filters'));assert.ok(filters.where.some(c=>c.field==='source'&&c.value==='thinking'));assert.equal(JSON.parse(url.searchParams.get('analyze_chart')).rollingPeriods,3);assert.equal(url.searchParams.has('label_lab'),false);
+});
+
+import {humanAnalysisCatalog} from '../../../src/human-analysis-catalog';
+import {habitsAnalysisCatalog} from '../../../src/habits-analysis-catalog';
+import {peopleMessageLabelCatalog} from '../../../src/people-message-labels';
+
+test('People message-label groups and shares add up to their message population',()=>{
+ const at='2026-10-01T12:00:00Z', date=at.slice(0,10), time=Date.parse('2026-10-02');
+ for(const [source,scope] of [[humanAnalysisCatalog,'human'],[conversationAnalysisCatalog,'activity'],[habitsAnalysisCatalog,'habits']]){
+  const state={view:'trend',metric:'messages',split:'message_family',period:'day',share:true};
+  const catalog=peopleMessageLabelCatalog(source,state);
+  assert.equal(catalog.dataset,'people_message_labels');
+  // The service supplies one winning label or coverage row per message.
+  const data=[['a','P.request.work.implement','P.request'],['b','P.control.redirect','P.control'],['c','?','?']].map(([message_id,label,family],i)=>({id:scope+i,message_id,label,family,people_scope:scope,typed_words:1,day:date,sent_at:at,event_at:at,started_at:at}));
+  data.push({...data[0],id:'wrong-scope',message_id:'outside',people_scope:'outside'});
+  const query=trendQuery(catalog,state,[],{now:time});
+  const results=core.evaluateMetrics(data,query.query,schemas.people_message_labels,{now:time}).metrics;
+  const shares=results.find(x=>x.id==='trend').buckets;
+  assert.equal(shares.find(x=>x.keys.includes('P.request')).value,1);
+  assert.equal(shares.reduce((sum,bucket)=>sum+bucket.value,0),3,'every matching message belongs to exactly one group');
+  const built=trendSeries(catalog,state,query,results,{now:time});
+  assert.equal(built.error,undefined);assert.equal(built.additive,true);assert.equal(built.lines,false,'exclusive labels can stack');
+  const bucket=built.buckets.find(b=>b.values['s:P.request']>0);
+  assert.ok(Math.abs(bucket.values['s:P.request']-1/3)<1e-8);
+  assert.ok(Math.abs(Object.values(bucket.values).reduce((sum,value)=>sum+value,0)-1)<1e-8,'shares sum to 100%, including Uncategorized');
+  const compare=analysisQuery(catalog,{...state,view:'compare',compareAs:'share'},[],{now:time});
+  const compared=core.evaluateMetrics(data,compare.query,schemas.people_message_labels,{now:time}).metrics[0].buckets;
+  assert.equal(compared.find(b=>b.keys.includes('P.request')).value,1);
+  assert.equal(compared.reduce((sum,b)=>sum+b.value,0),3);
+  assert.equal(normalizeAnalysis(catalog,{...state,view:'compare',compareAs:'share'}).compareAs,'share');
+  assert.equal(normalizeAnalysis(catalog,{...state,display:'cumulative'}).display,'cumulative');
+  if(scope==='human')for(const split of ['message_family','message_label']){
+   const filtered=data.map(row=>({...row,text:row.message_id==='a'?'Please fix the parser':'Please review the renderer'}));
+   const where=[{field:'text',op:'contains',value:'parser'}];
+   for(const query of [trendQuery(catalog,{...state,split},where,{now:time}),analysisQuery(catalog,{...state,split,view:'compare'},where,{now:time})]){
+    const metrics=core.evaluateMetrics(filtered,query.query,schemas.people_message_labels,{now:time}).metrics;
+    assert.ok(metrics.every(metric=>metric.error===undefined));
+    assert.equal(metrics[0].buckets.reduce((sum,b)=>sum+b.value,0),1,'text filters keep the original Human Words population');
+   }
+  }
+  assert.equal(peopleMessageLabelCatalog(source,{...state,metric:source===humanAnalysisCatalog?'typed':source===habitsAnalysisCatalog?'wall_hours':'output'}),source,'labels never attribute time, words or tokens');
+ }
+ const typed=peopleMessageLabelCatalog(humanAnalysisCatalog,{metric:'typed_messages',split:'message_label'});
+ const query=trendQuery(typed,{metric:'typed_messages',split:'message_label',period:'day'},[],{now:time});
+ assert.ok(query.query.where.some(term=>term.field==='typed_words'&&term.op==='>'));
 });

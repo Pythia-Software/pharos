@@ -76,7 +76,7 @@ export const scopes = [
   { id: "quoted", label: "Quoted text", description: "Only spans classified as quotations.", surface: "quoted" },
   { id: "resent", label: "Resent text", description: "Only spans classified as repeated from an earlier message.", surface: "resent" },
   { id: "template", label: "Template text", description: "Only spans classified as template content.", surface: "template" },
-  { id: "harness", label: "Agent setup text", description: "Only spans classified as content inserted by the agent harness.", surface: "harness" },
+  { id: "harness", label: "Agent setup text", description: "Only spans classified as content inserted by the agent app.", surface: "harness" },
   { id: "automated", label: "Automatically inserted text", description: "Only spans classified as automated content.", surface: "automated" },
   { id: "attachment", label: "Attachment text", description: "Only spans classified as attachment content inside retained messages.", surface: "attachment" },
 ] as const;
@@ -94,7 +94,7 @@ export function textScopeNote(draft: TextSearchDraft): "scan" | "tool-output" | 
 }
 export function scopeChoice(scope: TextScope) { return scopes.find(s => s.surface === scope.surface && scope.kinds.length === 0 && scope.roles.join(",") === ("role" in s ? s.role : "")); }
 export function chooseScope(scope: TextScope, id: string): TextScope { const choice = scopes.find(s => s.id === id); return choice ? { ...scope, surface: choice.surface, roles: "role" in choice ? [choice.role] : [], kinds: [] } : scope; }
-export const sourceLabel = (value: string) => ({ claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", conductor: "Conductor", antigravity: "Antigravity", canonical: "Imported archive", tl1: "TL1", "tl1-export": "TL1 export" }[value] ?? value);
+export const sourceLabel = (value: string) => ({ claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", "claude-ai": "Claude.ai", copilot: "Copilot CLI", opencode: "OpenCode", cline: "Cline", "vscode-copilot": "VS Code Copilot", cursor: "Cursor", "cursor-cli": "Cursor CLI", zed: "Zed", conductor: "Conductor", antigravity: "Antigravity", canonical: "Imported archive", tl1: "TL1", "tl1-export": "TL1 export" }[value] ?? value);
 const hasWord = (text: string) => /[\p{L}\p{N}]/u.test(text);
 const combine = (op: "and" | "or", nodes: TextQuery[]): TextQuery => nodes.length === 1 ? nodes[0] : { op, children: nodes };
 export function compileRules(root: TextGroup): { where?: TextQuery; issues: SearchIssue[] } {

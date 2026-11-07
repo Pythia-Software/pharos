@@ -17,6 +17,7 @@ tests.
 | [machine-time-all-time-cpu.md](machine-time-all-time-cpu.md) | Machine Time's all-time view may take twice the CPU the legacy route did; confirm or fix |
 | [usage-v3-hour-grouping.md](usage-v3-hour-grouping.md) | `/query-v3` groups usage by `hour` over daily records, where it is null; only `/metrics` reads the hourly ledger |
 | [query-table-schema-reload.md](query-table-schema-reload.md) | Every staged Query Table request makes its connection re-parse the whole catalog schema twice, adding about 6 ms of CPU |
+| [query-table-redundant-tooltips.md](query-table-redundant-tooltips.md) | Native table cells, JSON previews and grouped-column labels repeat visible content on hover; requires an upstream release |
 
 ## Analysis chain cost
 

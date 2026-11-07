@@ -5,13 +5,19 @@ import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-sea
 import { safetyRanks } from "./safety-dashboard-model";
 import { fixesKinds, fixesRanks } from "./fixes-model";
 import { logSourceIds } from "./logs-model";
+import { sessionSignals } from "./session-shape-model";
 import {validTimelineVisibility} from "./timeline-visibility";
+import { dataGuideSelectionKeys, dataSources } from "./data-taxonomy-model";
 import { syncSchemas } from "./sync-table-model";
 // One contract for host-owned view state. Query Table owns q_* and its
 // composite controls; the site map exports this contract verbatim to agents.
 export type ViewField = { param: string; pages: string[]; kind: "text" | "boolean" | "enum" | "json" | "strings"; description: string; values?: readonly string[]; default?: unknown; details?: Record<string,unknown>; captureEntries?: boolean };
 const field = (param: string, pages: string[], kind: ViewField["kind"], description: string, values?: readonly string[], fallback?: unknown): ViewField => ({ param, pages, kind, description, ...(values ? { values } : {}), ...(fallback !== undefined ? { default: fallback } : {}) });
 export const viewFields: Record<string, ViewField> = {
+  readiness_open: field("readiness_open", ["*"], "boolean", "Show when the data was last checked and which updates are waiting.", undefined, false),
+  readiness_scope: field("readiness_scope", ["*"], "text", "The selected result, or page for all results shown on this page.", undefined, "page"),
+  readiness_preview: field("readiness_preview", ["*"], "enum", "An example update status for reviewing the prototype. Does not change your data or settings.", ["clear","minutes","recent","hours","orange","days","missing","running","paused","failed","unknown"], "clear"),
+
   label_results: field("label_results",["analyze/query/message_labels"],"enum","Native Query Table host presentation, saved with the query. Cards and rows share filters, grouping and pagination.",["cards","table"],"cards"),
   timeline_visibility: field("timeline_visibility",["work"],"json","Timeline Key visibility by section: modes (message label IDs, including ? for uncategorized), events (friction, learning, second-look, choices), tools (action categories or error), origins (caller text source IDs). Each optional section is {values:string[],excluded:boolean}; absent or empty values shows everything in that section. Selections only hide visualization elements, preserving the clock and underlying records.",undefined,{}),
   timeline_columns: field("timeline_columns",["work"],"json","Timeline text column widths in CSS pixels: {execution,events,time:0}. Session and Events resize; the clock always fills the remaining space. Older fixed time widths are ignored. All rows share these widths.",undefined,{execution:175,events:165,time:0}),
@@ -23,12 +29,12 @@ export const viewFields: Record<string, ViewField> = {
   find_case: field("find_case", ["*"], "boolean", "Page Find matches case. Default off."),
   find_regex: field("find_regex", ["*"], "boolean", "Page Find term is a JavaScript regular expression. Default off (literal)."),
   nav_collapsed: field("nav_collapsed", ["*"], "boolean", "Collapse the application sidebar."),
-  nav_expanded: field("nav_expanded", ["*"], "json", "Expanded sidebar branches by section and page ID."),
-  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["compactions","model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","rhythm","findings","safety","fixes"]),
+  nav_expanded: field("nav_expanded", ["*"], "json", "Expanded application and Data Guide menu branches by section and page ID."),
+  guide_dataset: field("guide_dataset", ["*"], "enum", "Query source that opened the Data Guide; retained as link context.", Object.keys(dataSources)),
   history_collapsed: field("history_collapsed", ["*"], "strings", "Collapsed History groups by displayed calendar date."),
   history_search: field("history_search", ["*"], "text", "Applied History drawer text filter."),
   guide_open: field("guide_open", ["*"], "boolean", "Show the Data Guide."),
-  guide_entity: field("guide_entity", ["*"], "enum", "Selected Data Guide entity.", ["workspaces","conversations","agents","messages","tool_calls"]),
+  guide_entity: field("guide_entity", ["*"], "enum", "Selected agent-history noun. Legacy glossary links open their related current topic.", dataGuideSelectionKeys),
   guide_example: field("guide_example", ["*"], "enum", "Selected example conversation.", ["implementation","review"]),
   overlay: field("overlay", ["*"], "enum", "Open read-only header content.", ["none","history","bookmarks","usage","drive"]),
   window_mode: field("window_mode", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "enum", "Native time intent companion for full queries.", ["relative","calendar","today"]),
@@ -47,7 +53,7 @@ export const viewFields: Record<string, ViewField> = {
   query_search: field("analyze_search", ["analyze/query/*"], "enum", "Retained search-entry route hint.", ["1"]),
   query_layout: field("query_layout", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table","settings/sync"], "json", "Query builder collapsed state by dataset or background table schema ID."),
   reader_content: field("reader_content", ["work","library"], "json", "Expanded prose, turn summaries, file paths, action previews and deliberately loaded events by stable message/conversation identity."),
-  search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by work ID/browse, work ID/conversation, work ID/turn and work ID/message; browse is boolean, conversation is a stable session ID, turn is a stable message or outline entry ID, and message is the normalized message (native ID) a Search match opened within that turn."),
+  search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by workspace ID/browse, workspace ID/conversation, workspace ID/turn and workspace ID/message; browse is boolean, conversation is a stable conversation ID, turn is a stable message or outline entry ID, and message is the normalized message (native ID) a Search match opened within that turn."),
   chart_pins: field("chart_pins", ["analyze/*"], "json", "Pinned chart bucket keys by chart identity (dashboard title or Habits section and automation identity). Hover is transient."),
   conveyor_paused: field("conveyor_paused", ["home"], "boolean", "Pause the Home suggestion carousel."),
   delegation_page: field("delegation_page", ["work"], "text", "Zero-based session page number, 0–250 (site_link accepts a number or decimal string). Replays current cursors on open; does not store expiring server cursors."),
@@ -78,8 +84,9 @@ export const viewFields: Record<string, ViewField> = {
   reader_collapsed: field("reader_collapsed", ["work"], "strings", "Explicitly collapsed disclosure identities, overriding initially open content."),
   reader_expanded: field("reader_expanded", ["work"], "strings", "Expanded disclosure identities: message:<id>, call:<id>, or section:<key>."),
   reader_writing: field("reader_writing", ["work","library"], "boolean", "Highlight human-written text (typed or dictated, not pasted, quoted or templated) in the conversation reader and a library card's Browse. Default on; one of the reader's Highlight checkboxes.", undefined, true),
+  session_signal: field("session_signal", ["analyze/session_shape"], "enum", "Session Shape: the forensic signal the sessions table lists sessions by, most first. Omit to list sessions by all their forensic events.", ["all", ...sessionSignals], "all"),
   reader_events: field("reader_events", ["work","library"], "boolean", "Highlight agent events (Agent Experience, the sentence classifier) in the conversation reader and a library card's Browse: each event's sentence in its kind group's hue, what it was about and what the agent did underlined; hovering names the message's events. Default off; one of the reader's Highlight checkboxes."),
-  reader_labels: field("reader_labels", ["work","library"], "boolean", "Highlight message text by its local labels (Message labels, the message classifier) in the conversation reader and a library card's Browse; hovering highlighted text names the message's labels. Default off; one of the reader's Highlight checkboxes."),
+  reader_labels: field("reader_labels", ["work","library"], "boolean", "Tint whole message cards by their local labels (Message labels, the message classifier), including reasoning, in the conversation reader and a library card's Browse; hovering a card names its labels. Default off; one of the reader's Highlight checkboxes."),
   reader_event_link: field("reader_event_link", ["work"], "text", "Selected two-sided agent event in the conversation reader, by event ID (e<number>): the observation and the earlier text it points back at are highlighted, joined in the gutter, and the observation is revealed. Set from the fingerprint, the session timeline or a click on either end; shown with the Agent events highlight."),
   sidebar_visible: field("sidebar_visible", ["work"], "boolean", "Show the workspace navigation sidebar."),
   sidebar_width: field("sidebar_width", ["work"], "text", "Workspace navigation sidebar width, 300–5000 pixels (site_link accepts a number or decimal string)."),
@@ -110,7 +117,7 @@ const searchTemplate = emptyTextSearch();
 viewFields.disclosures.details={
   example:{quickStatsSettings:true},
   layout_sections:["menuBarPreferences","headerSettings","quickStatsSettings"],
-  sections:{"sync:separate":"settings/sync", "sync:repairs":"settings/sync", "sync:diagnostics":"settings/sync", "library:drive-health":"settings", "library:application":"settings/libraries", "machine:methodology":"/analyze?analyze_view=tokens&machine_view=time", "tokens.pricing-prompt":"analyze/tokens"},
+  sections:{"sync:history":"settings/sync", "sync:sources":"settings/sync", "sync:repairs":"settings/sync", "sync:diagnostics":"settings/sync", "library:drive-health":"settings", "library:application":"settings/libraries", "machine:methodology":"/analyze?analyze_view=tokens&machine_view=time", "tokens.pricing-prompt":"analyze/tokens"},
   families:{"background:<item ID>":"settings/sync", "sync:forecast:<run ID>":"settings/sync", "cloud:schedule:<destination ID>":"settings/backups", "carbon:row:<tier>:<category>":"analyze/carbon", "status:cadence:<cadence ID>":"overlay=drive", "status:support":"overlay=drive", "library:activity:<activity ID>:<started_at>:details":"overlay=drive", "work:<work ID>:files":"work", "feedback:logs:<submission ID>":"feedback inbox"},
   defaults:"Fixed defaults remain implicit; data-dependent initial defaults are captured only in their active view. Explicit false closes a section even when its normal default is open.",
   note:"On settings/layout, true opens a section and false closes it. Combine with reveal=section:<identity> to scroll and highlight without moving focus. Settings values remain saved preferences.",
@@ -129,7 +136,7 @@ viewFields.parallelism.details={
   template:defaultConcurrencySettings,
   values:{mode:["user","model"],counting:["workspace","agent"],gap:[0,15,30,60],range:["today","day",...concurrencyRangePresets.map(([key])=>key),"all","custom"]},
   dates:"day/startDay/endDay are YYYY-MM-DD; zoom is null or [startEpochMs,endEpochMs]. Relative range names resolve when opened.",
-  identifiers:"repository is a repository name; workspace and agent are stable session identities; empty means all.",
+  identifiers:"repository is a repository name; workspace selects a workspace/checkout identity and agent selects a top-level conversation ID; empty means all.",
 };
 viewFields.carbon.details={
   template:{grid:"custom",customGrid:400,scenario:"central",pueScenario:"central",inputSensitivity:"current",vehicle:"car_miles",flightFrom:"jfk",flightTo:"lax"},

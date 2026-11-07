@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -586,7 +588,7 @@ func TestAgentEventsPipelineOverlapsStages(t *testing.T) {
 			stats := &AgentEventsRunStats{}
 			pipeline := agentEventsPipeline{
 				stats: stats, progress: func(string, ...any) {},
-				build: func(job *agentEventsConversation) (*agentEventsConversation, error) {
+				build: func(_ context.Context, _ int, job *agentEventsConversation) (*agentEventsConversation, error) {
 					if job.id == "second" {
 						select {
 						case <-inferring:
@@ -680,8 +682,8 @@ func TestAgentEventsPipelineBoundsPreparedWork(t *testing.T) {
 			}
 			stats := &AgentEventsRunStats{}
 			pipeline := agentEventsPipeline{
-				stats: stats, progress: func(string, ...any) {},
-				build: func(job *agentEventsConversation) (*agentEventsConversation, error) {
+				stats: stats, workers: 3, progress: func(string, ...any) {},
+				build: func(_ context.Context, _ int, job *agentEventsConversation) (*agentEventsConversation, error) {
 					n := retained.Add(1)
 					for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
 					}
@@ -703,11 +705,11 @@ func TestAgentEventsPipelineBoundsPreparedWork(t *testing.T) {
 					t.Fatal("the backlog work list retained prepared message rows")
 				}
 			}
-			// Three unscored windows, one conversation being built, and
+			// Three unscored windows, three conversations being built, and
 			// three scored windows at the bounded writer. Each scored
 			// window can retain one oversized conversation, without tokens.
 			perWindow := max(1, (4+1+rows)/(2+rows))
-			limit := 12/min(2+rows, 12) + 1 + 3*perWindow
+			limit := 12/min(2+rows, 12) + 3 + 3*perWindow
 			if got := peak.Load(); got > int32(limit) || retained.Load() != 0 {
 				t.Fatalf("retained %d conversations (peak %d), limit %d", retained.Load(), got, limit)
 			}
@@ -717,40 +719,57 @@ func TestAgentEventsPipelineBoundsPreparedWork(t *testing.T) {
 
 func TestAgentEventsPipelineFailureCancelsOtherStages(t *testing.T) {
 	override(t, &agentEventsChunkRows, 3)
-	for _, stage := range []string{"inference", "writer", "writer panic", "stop"} {
+	for _, stage := range []string{"inference", "inference while saving", "writer", "writer panic", "stop", "stop rollback"} {
 		t.Run(stage, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			failure := errors.New("injected " + stage + " failure")
+			saving := make(chan struct{})
 			jobs := make([]*agentEventsConversation, 12)
 			for i := range jobs {
 				jobs[i] = &agentEventsConversation{id: strconv.Itoa(i)}
 			}
 			pipeline := agentEventsPipeline{
-				stats: &AgentEventsRunStats{}, progress: func(string, ...any) {},
-				build: func(job *agentEventsConversation) (*agentEventsConversation, error) {
+				stats: &AgentEventsRunStats{}, workers: 3, progress: func(string, ...any) {},
+				build: func(_ context.Context, _ int, job *agentEventsConversation) (*agentEventsConversation, error) {
 					job.messages = []*agentEventsMessage{{rows: make([]labelrt.Framed, 1)}}
 					return job, nil
 				},
-				infer: func([]*agentEventsConversation) error {
+				infer: func(conversations []*agentEventsConversation) error {
 					if stage == "inference" {
 						return failure
+					}
+					if stage == "inference while saving" && conversations[0].id != "0" {
+						select {
+						case <-saving:
+							return failure
+						case <-ctx.Done():
+							return ctx.Err()
+						}
 					}
 					return ctx.Err()
 				},
 				store: func(*agentEventsConversation, *AgentEventsRunStats) error {
+					if stage == "inference while saving" {
+						close(saving)
+						<-ctx.Done()
+						return sql.ErrTxDone
+					}
 					if stage == "writer panic" {
 						panic(failure)
 					}
-					if stage == "stop" {
+					if stage == "stop" || stage == "stop rollback" {
 						cancel()
+						if stage == "stop rollback" {
+							return sql.ErrTxDone
+						}
 						return ctx.Err()
 					}
 					return failure
 				},
 			}
 			want := failure
-			if stage == "stop" {
+			if stage == "stop" || stage == "stop rollback" {
 				want = context.Canceled
 			}
 			err := pipeline.run(ctx, cancel, jobs)
@@ -806,6 +825,32 @@ func TestAgentEventsPipelineUsesOperationIOPriority(t *testing.T) {
 		}
 		if got := wrapped.Load() > 0; got != (priority == priorityBackground) {
 			t.Fatalf("%s pipeline ran at utility IO: %v", priority, got)
+		}
+	}
+}
+
+func TestAgentEventsParallelPreparationMatchesSerial(t *testing.T) {
+	labels, settings := agentEventsTestSettings(t)
+	var wantMessages, wantEvents []map[string]any
+	for _, threads := range []int{1, 4} {
+		catalog := agentEventsCatalog(t)
+		labels.Threads = threads
+		stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+		if err != nil || !stats.Complete || stats.ConversationsFailed != 0 {
+			t.Fatalf("threads=%d: %+v %v", threads, stats, err)
+		}
+		messages, err := queryMaps(catalog.DB, `SELECT message_id,conversation_id,source,occurred_at,day,candidates,events,input_hash FROM agent_event_messages ORDER BY message_id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		events, err := queryMaps(catalog.DB, `SELECT message_id,family,probability,sentence_start,sentence_end,sentence,subject,response,subject_ranges,response_ranges FROM agent_events ORDER BY message_id,family,sentence_start`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if threads == 1 {
+			wantMessages, wantEvents = messages, events
+		} else if len(messages) == 0 || !reflect.DeepEqual(messages, wantMessages) || !reflect.DeepEqual(events, wantEvents) {
+			t.Fatalf("parallel preparation changed messages or events:\n%v\n%v", messages, events)
 		}
 	}
 }

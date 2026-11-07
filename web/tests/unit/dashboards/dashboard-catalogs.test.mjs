@@ -21,15 +21,17 @@ import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catal
 import { mcpAnalysisCatalog as mcp } from "../../../src/mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog as agentEvents } from "../../../src/agent-events-analysis-catalog";
 import { agentEventRatesCatalog as eventRates } from "../../../src/agent-event-rates-catalog";
+import { sessionShapeAnalysisCatalog as sessionShape } from "../../../src/session-shape-analysis-catalog";
 import { toolTimeAnalysisCatalog as time, skillsAnalysisCatalog as skills } from "../../../src/record-analysis-catalogs";
 import { dashboardChartURL } from "../../../src/dashboard-chart-links";
 import { toolMetricPresentation } from "../../../src/tools-dashboard-model";
 import { withTimeRange } from "../../../src/chart-range";
 import { runAnalysisQuery } from "../../../src/analysis-request";
 import { answerQuery } from "../../support/query-server.mjs";
+import { peopleMessageLabelCatalog } from "../../../src/people-message-labels";
 
-const rows = { compactions: population(schemas.compactions, { now }), conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages(), agent_events: population(schemas.agent_events, { now }), agent_event_rates: population(schemas.agent_event_rates, { now }) };
-const catalogs = [compaction,tools, mcp, time, skills, activity, agentEvents, eventRates];
+const rows = { people_message_labels: population(schemas.people_message_labels, { now }), compactions: population(schemas.compactions, { now }), conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages(), agent_events: population(schemas.agent_events, { now }), session_shape: population(schemas.session_shape, { now }), agent_event_rates: population(schemas.agent_event_rates, { now }) };
+const catalogs = [compaction,tools, mcp, time, skills, activity, agentEvents, sessionShape, eventRates];
 const month = catalog => withTimeRange([], catalog.time, new Date(now - 30 * 86400000), new Date(now));
 const run = (catalog, query) => core.evaluateMetrics(rows[catalog.dataset], query, schemas[catalog.dataset], { now }).metrics;
 // A cycle's per-occurrence clause is planned into plain calendar metrics
@@ -49,10 +51,11 @@ test("every view of every measure and breakdown executes over its own dataset", 
       const state = { view, metric, split, unit: view === "scatter" || view === "distribution" && !catalog.measures[metric].value ? undefined : "records", period: "week", rollingPeriods: 3 };
       const label = `${catalog.dataset} ${view} ${metric} by ${split}`;
       assert.ok(validAnalysisState(catalog, state), label);
-      const query = isTrendView(view) ? trendQuery(catalog, state, month(catalog), { now }) : analysisQuery(catalog, state, month(catalog), { now, zone: "America/Denver" });
-      for (const result of run(catalog, query.query)) assert.equal(result.error, undefined, label);
-      compiles(catalog, query.query, label);
-      compiles(catalog, query.supporting, `${label}: supporting`);
+      const resolved = peopleMessageLabelCatalog(catalog, state);
+      const query = isTrendView(view) ? trendQuery(resolved, state, month(resolved), { now }) : analysisQuery(resolved, state, month(resolved), { now, zone: "America/Denver" });
+      for (const result of run(resolved, query.query)) assert.equal(result.error, undefined, label);
+      compiles(resolved, query.query, label);
+      compiles(resolved, query.supporting, `${label}: supporting`);
     }
   }
 });
@@ -319,7 +322,7 @@ test("a Tools minimum sums calls natively: it reports what it hides, and a bar o
 });
 
 test("a scatter says when one measure's population narrows the other", () => {
-  assert.match(analysisNote(skills, { view: "scatter", unit: "conversation", metric: "records", metricY: "body", split: "none" }), /Evidence records counts only retained body volume's records here/);
+  assert.match(analysisNote(skills, { view: "scatter", unit: "conversation", metric: "records", metricY: "body", split: "none" }), /Evidence records counts only saved instruction size's records here/);
   assert.doesNotMatch(analysisNote(skills, { view: "scatter", unit: "conversation", metric: "records", metricY: "conversations", split: "none" }), /counts only/);
 });
 

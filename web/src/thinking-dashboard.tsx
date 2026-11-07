@@ -1,3 +1,4 @@
+import { DataReadinessIndicator } from "./data-readiness";
 import React, { useEffect, useRef, useState } from "react";
 import {
   EMPTY_QUERY,
@@ -14,7 +15,7 @@ import { ViewDisclosure } from "./view-disclosure";
 import { PageLink } from "./nested-pages";
 import { SearchHelp } from "./search-help";
 import { usageWorkspaceURL } from "./usage-workspace-model";
-import { CreateDashboardCard, DashboardCardSourceContext } from "./create-dashboard-card";
+import { DashboardResultActions, DashboardCardSourceContext } from "./create-dashboard-card";
 import { thinkingCardTitle } from "./thinking-card";
 
 import {
@@ -230,9 +231,9 @@ function Methodology() {
       className="usage-query-search thinking-disclosure"
     >
       <p>
-        Think time is a coarse proxy: the first retained usage-bearing response
-        event minus the latest linked tool-result timestamp. The request
-        ledger’s <code>requested_at</code> field names that response evidence,
+        Think time estimates the wait between the latest linked tool result
+        and the first recorded response with token usage. The model-request
+        record’s <code>requested_at</code> field names that response evidence,
         not a verified request-send clock. The wait includes reasoning, some
         generation, queueing, scheduling and delivery. It measures neither
         first-token latency nor pure inference nor complete user-turn duration.
@@ -288,7 +289,7 @@ function Methodology() {
       <p>
         A separate per-model ridge regression estimates log gap from workload,
         cache and effort with five conversation-held-out folds. It uses only the
-        selected cohort; every displayed request is evaluated by a fit that
+        selected group; every displayed request is evaluated by a fit that
         excludes its conversation. Each training fold needs 200 requests from 20
         conversations, a reported effort present in training and numeric
         features within training ranges. Unsupported observations remain
@@ -513,16 +514,16 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
           ]}
           onChange={(effort) => change({ effort })}
         />
+        <ChartSelect
+          label="Breakdown"
+          value={!detail && state.groupBy === "none" ? "model" : state.groupBy}
+          options={thinkingBreakdowns.filter(([key]) => detail || key !== "none").map(([a, b]) => [a, b])}
+          onChange={(groupBy) =>
+            change({ groupBy: groupBy as ThinkingState["groupBy"] })
+          }
+        />
         {detail ? (
           <>
-            <ChartSelect
-              label="Breakdown"
-              value={state.groupBy}
-              options={thinkingBreakdowns.map(([a, b]) => [a, b])}
-              onChange={(groupBy) =>
-                change({ groupBy: groupBy as ThinkingState["groupBy"] })
-              }
-            />
             <ChartSelect
               label="Order by"
               disabled={fixed}
@@ -680,11 +681,16 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               : ""}
             .
           </p>
+          {state.groupBy.includes("speed") ? (
+            <p className="usage-dashboard-note">
+              Speed uses recorded settings; requests without a fast or priority marker count as Standard.
+            </p>
+          ) : null}
           {detail ? (
             <>
               <div className="thinking-card-title">
                 <h2>{thinkingCardTitle("thinking-distributions", state)}</h2>
-                <CreateDashboardCard target="thinking-distributions" />
+                <DashboardResultActions target="thinking-distributions" />
               </div>
               {fixed ? (
                 <p className="usage-dashboard-note">
@@ -800,7 +806,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                         : "≥1.5×"}
                     </span>
                   </div>
-                  <h3>Is one time of day consistently faster?</h3>
+                  <h3>Is one time of day consistently faster? <DataReadinessIndicator id="thinking:hour" title="Is one time of day consistently faster?" dataset="model_requests" query={{state,nativeFilters}} /></h3>
                   <p className="usage-dashboard-note">
                     Day-balanced workload-adjusted gaps in three-hour windows.
                     Each day/window needs 20 modeled gaps from three
@@ -881,17 +887,17 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
             <>
               <div className="thinking-stat-cards thinking-overview-stats">
                 <div>
-                  <span>Typical wait</span>
+                  <span>Typical wait<DataReadinessIndicator id="thinking:metric:typical-wait" title="Typical wait" dataset="model_requests" query={{state,nativeFilters}} /></span>
                   <strong>{thinkingDuration(data.summary.median)}</strong>
                   <small>Median observed gap</small>
                 </div>
                 <div>
-                  <span>Slowest 10% begin at</span>
+                  <span>Slowest 10% begin at<DataReadinessIndicator id="thinking:metric:slowest-10%-begin-at" title="Slowest 10% begin at" dataset="model_requests" query={{state,nativeFilters}} /></span>
                   <strong>{thinkingDuration(data.summary.p90)}</strong>
                   <small>90th percentile</small>
                 </div>
                 <div>
-                  <span>Timing coverage</span>
+                  <span>Timing coverage<DataReadinessIndicator id="thinking:metric:timing-coverage" title="Timing coverage" dataset="model_requests" query={{state,nativeFilters}} /></span>
                   <strong>
                     {data.Retained
                       ? ((100 * data.Timed) / data.Retained).toFixed(1)
@@ -901,7 +907,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   <small>Usable gaps / retained requests</small>
                 </div>
                 <div>
-                  <span>Conversations represented</span>
+                  <span>Conversations represented<DataReadinessIndicator id="thinking:metric:conversations-represented" title="Conversations represented" dataset="model_requests" query={{state,nativeFilters}} /></span>
                   <strong>{thinkingCount(data.Conversations)}</strong>
                   <small>Including requests without timing</small>
                 </div>
@@ -914,11 +920,12 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               <div className="thinking-overview-pair">
                 <ThinkingCDF
                   groups={data.groups}
+                  groupBy={state.groupBy === "none" ? "model" : state.groupBy}
                   title={thinkingCardTitle("thinking-waits", state)}
-                  action={<CreateDashboardCard target="thinking-waits" />}
+                  action={<DashboardResultActions target="thinking-waits" />}
                 />
                 <div>
-                  <h2>What affects the wait?</h2>
+                  <h2>What affects the wait? <DataReadinessIndicator id="thinking:factors" title="What affects the wait?" dataset="model_requests" query={{state,nativeFilters}} /></h2>
                   <p className="usage-dashboard-note">
                     Associated wait multiplier when each input doubles.
                   </p>
@@ -1002,12 +1009,12 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 summary="Which models and agents have usable timing?"
                 className="usage-query-search thinking-disclosure"
               >
-                <h3>By recorded model</h3>
+                <h3>By recorded model <DataReadinessIndicator id="thinking:models" title="By recorded model" dataset="model_requests" query={{state,nativeFilters}} /></h3>
                 <GroupTable
                   data={{ ...data, groups: data.coverage ?? [] }}
                   state={{ ...state, view: "histogram", groupBy: "model" }}
                 />
-                <h3>By agent / harness</h3>
+                <h3>By agent app <DataReadinessIndicator id="thinking:harness" title="By agent app" dataset="model_requests" query={{state,nativeFilters}} /></h3>
                 <GroupTable
                   data={{ ...data, groups: data.agentCoverage ?? [] }}
                   state={{ ...state, view: "histogram", groupBy: "harness" }}
@@ -1015,8 +1022,8 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 <p>
                   Missing timing stays in the retained denominator. A source
                   with no projected usage requests cannot appear in this table.
-                  Model names are retained as recorded; agent family is not
-                  necessarily API vendor.
+                  Model names are retained as recorded; Provider identifies the agent
+                  product and may differ from the API vendor.
                 </p>
               </ViewDisclosure>
               <ViewDisclosure viewKey="thinking:compaction-waits" summary="How compaction changes observed waits" className="usage-query-search thinking-disclosure">
@@ -1134,7 +1141,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                       </p>
                     )}
                     <p>
-                      Harness-reported thinkingDurationMs is matched by
+                      App-reported thinkingDurationMs is matched by
                       conversation and response identity, taking the maximum
                       repeated report once. The chart shows up to 1,600 evenly
                       selected pairs; statistics use all matched pairs.

@@ -1,3 +1,4 @@
+import peopleMessageLabelsDocument from "../../schemas/people_message_labels.schema.json";
 // Runtime timestamp validation and the generated agent/Go contract share these schemas.
 import messageLabelsDocument from "../../schemas/message_labels.schema.json";
 import compactionsDocument from "../../schemas/compactions.schema.json";
@@ -20,11 +21,12 @@ import findingsDocument from "../../schemas/findings.schema.json";
 import agentEventsDocument from "../../schemas/agent_events.schema.json";
 import agentEventMessagesDocument from "../../schemas/agent_event_messages.schema.json";
 import agentEventRatesDocument from "../../schemas/agent_event_rates.schema.json";
+import sessionShapeDocument from "../../schemas/session_shape.schema.json";
 
 export const schemaDocuments = {
-  message_labels:messageLabelsDocument,
+  people_message_labels:peopleMessageLabelsDocument, message_labels:messageLabelsDocument,
   compactions: compactionsDocument, model_requests: modelRequestsDocument, library: libraryDocument, usage: usageDocument, writing: writingDocument, conversation_activity: conversationActivityDocument,
   writing_messages: writingMessagesDocument, mcp_calls: mcpCallsDocument, tools: toolsDocument, tool_calls: toolCallsDocument,
   skill_usages: skillUsagesDocument, tl1_attempts: tl1AttemptsDocument, parallelism: parallelismDocument, rhythm: rhythmDocument, findings: findingsDocument, safety: safetyDocument, fixes: fixesDocument,
-  agent_events: agentEventsDocument, agent_event_messages: agentEventMessagesDocument, agent_event_rates: agentEventRatesDocument,
+  agent_events: agentEventsDocument, agent_event_messages: agentEventMessagesDocument, agent_event_rates: agentEventRatesDocument, session_shape: sessionShapeDocument,
 };

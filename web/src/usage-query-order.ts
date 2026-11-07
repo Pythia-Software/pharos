@@ -2,11 +2,11 @@ import { groupKeyFields, type OrderByClause, type QueryState } from "@pythia-sof
 import type { UsageDataset } from "./usage-workspace-model";
 
 const chronology: Record<UsageDataset, string> = {
-  message_labels:"occurred_at",
+  people_message_labels:"sent_at", message_labels:"occurred_at",
   compactions: "occurred_at", model_requests: "requested_at",
   tl1_attempts: "started_at", usage: "first_usage_at", conversation_activity: "event_at", writing: "last_message_at",
   writing_messages: "sent_at", tool_calls: "started_at", tools: "day",
-  mcp_calls: "called_at", skill_usages: "created_at", parallelism: "started_at", rhythm: "started_at", agent_events: "occurred_at", agent_event_messages: "occurred_at", agent_event_rates: "occurred_at",
+  mcp_calls: "called_at", skill_usages: "created_at", parallelism: "started_at", rhythm: "started_at", agent_events: "occurred_at", agent_event_messages: "occurred_at", agent_event_rates: "occurred_at", session_shape: "started_at",
 };
 
 // Read a single conversation in sequence; browse populations newest first.

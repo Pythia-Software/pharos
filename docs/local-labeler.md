@@ -17,10 +17,11 @@ combine message labels, caller-text origin and recorded tool actions.
 
 ## Turning it on
 
-In **Settings → Background Processing → Labeling on this Mac** (below the
-schedule), turn on **Message labels** (beside it, **Agent events (preview)**
-turns on [agent events](agent-events.md)). This saves `labels_enabled` in the library's configuration
-and applies it immediately, without restarting Pharos. The control stays
+In **Settings → Background Processing**, open the **Message labels** step
+and turn on **Message labels**. This saves `labels_enabled` in the library’s
+configuration and applies it immediately, without restarting Pharos. The
+**Agent events** step has its own **Agent events (preview)** switch for
+[agent events](agent-events.md). Disabled models appear under **Only when you ask**. The control stays
 visible while off, reports missing downloads or workers while on, and
 queues earlier messages for the background schedule. In the app, enabling
 also starts any missing model/runtime download. Turning it off prevents
@@ -43,7 +44,7 @@ runtime instead, and comes first:
 | `labels_backend` | — | `auto` (default), `cpu`, or `mlx`; shared by message labels and agent events. MLX needs a verified FP32 companion ([Apple silicon GPU](#apple-silicon-gpu)) |
 | `labels_mlx_runtime` | `PHAROS_MLX_LIBRARY` | native MLX engine override; default `mlx/libpharos_mlx.dylib` beside the worker |
 | `labels_runtime` | `PHAROS_ORT_LIBRARY` | the ONNX Runtime library the worker loads; default the one beside the worker, then the download |
-| `labels_threads` | — | CPU intra-op threads per worker (default 4); Settings → Background Processing → Labeling on this Mac → Message labels → CPU threads; ignored by MLX GPU inference |
+| `labels_threads` | — | CPU intra-op threads per worker (default 4); Settings → Background Processing → Message labels → Threads; ignored by MLX GPU inference |
 | `labels_workers` | — | worker processes (default 1) |
 | `labels_batch_tokens`, `labels_max_batch` | — | a batch's padded-token budget (default 16,384) and row limit (64) |
 | `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of both models' workers × threads, message labels' and [agent events'](agent-events.md#the-pass), and half the cores; on battery, see [Scheduling and power](#scheduling-and-power)) and estimated memory (default 8,192 MB). A thread budget set here holds on battery too |
@@ -187,6 +188,18 @@ CPU target is retained for fallback. Changing it does not restart an active GPU
 worker; CPU fallback workers still retune. Threads remain a limit on ONNX
 intra-op parallelism, not an assignment of physical CPU cores or a cap on the
 whole process's CPU usage.
+
+Both passes prepare conversations in parallel before inference. Each run starts
+up to four preparation workers, bounded by its saved CPU thread target, Go's
+available parallelism and any explicit thread budget. This also feeds GPU
+inference; the saved CPU target still bounds preparation when the model uses
+MLX. Each worker owns its conversation caches and shares the thread-safe
+tokenizer and read-only catalog metadata. Results reach inference in the original
+conversation order, with at most one preparation window of conversations ahead
+of the existing inference queue. Runs with a message limit, and message-label
+diagnostics with exports or one-at-a-time execution, prepare serially to preserve
+their limits and ordering. Preparation concurrency is chosen at run start;
+live thread changes continue to retune CPU inference at batch boundaries.
 
 There is no GPU core-count or utilization-percentage control. This engine submits
 compiled operations to the default Metal stream; MLX's
@@ -452,20 +465,17 @@ from `readerHighlightOptions` in `reader-model.js`), in the full reader and in
 a library card's Browse preview. A library that has labeling on offers
 Message labels on every conversation:
 
-- **On**, each labeled message's text is highlighted in its family's hue:
-  Report, Control, Deliberation, Input, Feedback, Request, Frame, Difficulty
-  (`LABEL_FAMILIES` in `reader-model.js`, the reference categorical palette's
-  eight hues in that order, stepped for each theme). A message labeled only at
-  a root (asks or steers, responds or reports) is grey. The family is that
-  of the message's likeliest specific label; a legend lists the families the
-  conversation uses. Where labels and human writing cover the same text, the
-  label's hue wins; an agent event's sentence keeps its event hue.
-- **What is highlighted** is the text the labels describe: a person's typed
-  pieces when authorship finds them, otherwise the whole message
-  (`labelMask`). Pasted or quoted context in a typed message stays plain.
-- **Hovering** highlighted text shows the item's segment in words (typed
-  text, agent reply…) and its most specific labels, each with its family,
-  the model's probability and the taxonomy's definition (`messageLabelView`).
+- **On**, each labeled message's whole card is tinted in its likeliest
+  specific label's family hue: Report, Control, Deliberation, Input, Feedback,
+  Request, Frame or Difficulty. Root-only labels use grey. User prompts,
+  agent replies and expanded reasoning all use this treatment; pasted context
+  remains inside the same message card. Message labels never create text marks.
+- **Agent events** keep their sentence-level marks on top of the card tint,
+  controlled independently by the Agent events checkbox. Human writing retains
+  its own span-level highlighting when enabled.
+- **Hovering the card** shows its most specific accepted labels, their
+  probabilities and taxonomy definitions. Hovering an agent-event mark takes
+  precedence and shows that event instead.
 - **The setting** is view state, `reader_labels` in the URL (beside
   `reader_writing` and `reader_events`), so a copied link keeps it; the last
   choice is saved as the fallback for links without it. A checkbox only
@@ -473,8 +483,9 @@ Message labels on every conversation:
 - A conversation with a dirty mark, or never built, says "Still labeling
   this conversation" or "Not labeled yet" (the checkbox is disabled until
   it has labels).
-- **Only prose messages** are highlighted. Thinking and delegations render as
-  activity rows and are labeled but not shown yet.
+- **Reasoning** expands into a message card with its labels, sentence events
+  and raw source disclosure. Delegations remain activity rows. Timeline
+  inspection quotes also tint their whole retained message excerpt.
 
 `WorkConversation` attaches them (`messageLabelsAttacher` in `labels.go`):
 each message's `labels` (`segment`, `ids` in the model's order, `probs` for
@@ -1078,8 +1089,8 @@ every output, as LAPWING did.
   which nothing removes yet (about 160 MB unpacked).
 - **Warm workers last `labels_idle_seconds`.** A run after that pays the
   worker's start-up again (about 0.5 s: process, 152 MB model, its SHA-256).
-- **Only the conversation reader shows labels**: no query table or MCP tool
-  reads them yet, and the reader leaves thinking and delegations plain. Hues
+- **Label presentation**: the reader, timelines and Message Labels/People
+  query surfaces show stored labels; delegations remain activity rows. Hues
   are told apart by the legend and hover as well as colour, but past three
   families on screen some pairs are hard to separate for colour-blind
   readers. Labels are not in the freshness

@@ -1,3 +1,4 @@
+import {peopleLabelBreakdowns} from "./people-message-labels";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 
 // Habits over the rhythm dataset: one record is one local hour of one actor in
@@ -33,13 +34,14 @@ export const initiatorLabels: Record<string, string> = { human: "You", scheduled
 export const habitsAnalysisCatalog: AnalysisCatalog = {
   dataset: "rhythm", time: { first: "started_at", last: "started_at" }, measures,
   breakdowns: {
-    actor: { label: "Actor", fields: ["actor"], order: ["you", "with_you", "unattended", "automated"], values: actorLabels },
+    ...peopleLabelBreakdowns("rhythm"),
+    actor: { label: "Who is active", fields: ["actor"], order: ["you", "with_you", "unattended", "automated"], values: actorLabels },
     initiator: { label: "Started by", fields: ["initiator"], order: ["human", "scheduled", "scripted", "orchestrated", "agent", "delegated", "unknown"], values: initiatorLabels },
     automation: { label: "Automation", fields: ["automation"], empty: "Not automated" },
     repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
     ...single([["provider", "Provider"], ["model", "Model"], ["workspace_name", "Workspace"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"]]),
   },
-  records: { label: "Actor hour", plural: "Actor hours", note: "A record is one local hour of one actor (you, or agents with you, unattended or automated) in one top-level conversation." },
+  records: { label: "Activity hour", plural: "Activity hours", note: "One local hour of activity in a top-level conversation, split between you and agents working with you, unattended or automatically." },
   units: {
     conversation: { label: "Conversation", plural: "Conversations", key: "unit_id", where: [{ field: "unit_id", op: "is_not_null", value: "" }],
       breakdowns: { repository_name: ["repository_name"], provider: ["provider"], model: ["model"], workspace_name: ["workspace_name"], channel: ["channel"], machine_id: ["machine_id"], execution_machine_id: ["execution_machine_id"] },

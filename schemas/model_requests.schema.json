@@ -176,7 +176,7 @@
     },
     {
       "name": "harness",
-      "label": "Harness",
+      "label": "Agent app",
       "type": "text",
       "group": "Request",
       "bindings": {
@@ -556,6 +556,143 @@
           "source": "distinct"
         }
       }
+    },
+    {
+      "name": "speed",
+      "label": "Speed",
+      "type": "enum",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "speed",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"speed\""
+        }
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "fast",
+              "label": "Fast"
+            },
+            {
+              "value": "standard",
+              "label": "Standard"
+            }
+          ]
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "description": "Normalized inference speed: explicit fast speed or priority tier is fast; other and missing evidence is standard."
+    },
+    {
+      "name": "model_speed",
+      "label": "Model + speed",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "model_speed",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"model_speed\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "model_effort_speed",
+      "label": "Model + effort + speed",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "model_effort_speed",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"model_effort_speed\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "service_tier",
+      "label": "Service tier",
+      "type": "text",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "service_tier",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"service_tier\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "speed_source",
+      "label": "Speed classification source",
+      "type": "enum",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "speed_source",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"speed_source\""
+        }
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "speed",
+              "label": "Recorded speed"
+            },
+            {
+              "value": "service_tier",
+              "label": "Recorded service tier"
+            },
+            {
+              "value": "assumed_standard",
+              "label": "Assumed standard"
+            }
+          ]
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "description": "How speed was classified; assumed_standard distinguishes the fallback policy from recorded settings."
     }
   ]
 }
