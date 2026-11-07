@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -10,11 +11,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -23,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -779,6 +784,69 @@ func TestCaptureRootDefaultsAndGuards(t *testing.T) {
 	} else {
 		session.Close()
 	}
+	// Only contention is a busy capture. Any other failure to take the lock
+	// is returned as itself; either way the descriptor is closed, no
+	// operation holds it, and the capture writes nothing.
+	claude := filepath.Join(t.TempDir(), "claude")
+	writeSourceFile(t, filepath.Join(claude, "p", "s.jsonl"), "{}\n")
+	sources := []SourceConfig{{Name: "claude", Kind: "claude", Path: claude, Enabled: true}}
+	hostDir := filepath.Join(config.CaptureRoot, currentHost().ID)
+	for _, failure := range captureLockFailures() {
+		t.Run("writer-"+failure.name, func(t *testing.T) {
+			var files []*os.File
+			override(t, &lockCaptureWriter, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+				files = append(files, file)
+				return failingCaptureLock(t, filelock.Exclusive, failure.err, nil)(file, mode, wait)
+			})
+			ctx, op := newOpRegistry("service").begin(t.Context(), OperationSpec{Kind: "capture.cli"})
+			defer op.Finish(nil)
+			_, captureErr := Capture(ctx, config, sources, nil)
+			lock, targetErr := lockCaptureTarget(ctx, filepath.Join(hostDir, "claude"))
+			if lock != nil {
+				t.Fatal("a failed acquisition returned its lock")
+			}
+			for _, err := range []error{captureErr, targetErr} {
+				if errors.Is(err, errCaptureBusy) != failure.contended || !failure.contended && !errors.Is(err, failure.err) {
+					t.Fatalf("lock failure became %v", err)
+				}
+			}
+			if len(files) != 2 || slices.ContainsFunc(files, func(file *os.File) bool { return file.Fd() != ^uintptr(0) }) {
+				t.Fatalf("a failed lock was left open: %d", len(files))
+			}
+			if locks := op.view().Locks; len(locks) != 0 {
+				t.Fatalf("a failed lock was held by the operation: %+v", locks)
+			}
+			for _, name := range []string{captureHostName, "claude"} {
+				if _, err := os.Stat(filepath.Join(hostDir, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("a capture that failed to lock wrote %s: %v", name, err)
+				}
+			}
+			// A reader waits only for contention, until it is cancelled;
+			// it never retries an unknown failure, even when run by hand.
+			waitCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			phases := 0
+			waitCtx = withWorkProgress(waitCtx, func(activityWork) { phases++ })
+			calls := 0
+			lock, err := waitCaptureLock(waitCtx, "host-a", func() (*os.File, error) {
+				if calls++; calls == 2 {
+					cancel()
+				}
+				return lockCaptureTarget(t.Context(), filepath.Join(hostDir, "claude"))
+			})
+			if lock != nil || failure.contended && (!errors.Is(err, context.Canceled) || calls != 2 || phases != 1) || !failure.contended && (!errors.Is(err, failure.err) || calls != 1 || phases != 0) {
+				t.Fatalf("reader wait: %v after %d attempts and %d phases", err, calls, phases)
+			}
+		})
+	}
+	// A cancelled reader does not touch the lock.
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	override(t, &lockCaptureWriter, failingCaptureLock(t, filelock.Exclusive, errors.New("locked after cancellation"), nil))
+	if _, err := lockCaptureTarget(cancelled, filepath.Join(hostDir, "claude")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled reader: %v", err)
+	}
+	override(t, &lockCaptureWriter, filelock.Lock)
 	for _, cancelled := range []bool{false, true} {
 		t.Run(fmt.Sprint("reader-wait-cancel=", cancelled), func(t *testing.T) {
 			held, err := beginCapture(config)
@@ -912,7 +980,45 @@ func TestCaptureAPIReleasesItsLockWhenAStopBeginsFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capture lock left held: %v", err)
 	}
+	// Status probes the lock shared: another process's capture, or a lock
+	// it cannot test, is an active capture.
+	if !server.captureActive() {
+		t.Fatal("a held capture lock was reported idle")
+	}
 	session.Close()
+	for _, failure := range captureLockFailures() {
+		calls := 0
+		override(t, &lockCaptureStatus, failingCaptureLock(t, filelock.Shared, failure.err, &calls))
+		if !server.captureActive() || calls != 1 {
+			t.Fatalf("status lock failure %s was reported idle", failure.name)
+		}
+	}
+	override(t, &lockCaptureStatus, filelock.Lock)
+	if server.captureActive() {
+		t.Fatal("an idle capture lock was reported active")
+	}
+	// The probe's own shared lock ends with it.
+	if session, err = beginCapture(config); err != nil {
+		t.Fatalf("status probe left the capture lock held: %v", err)
+	}
+	session.Close()
+	// This service's own running capture needs no probe, and a lock file
+	// that cannot be opened is no capture.
+	probes := 0
+	override(t, &lockCaptureStatus, failingCaptureLock(t, filelock.Shared, errors.New("probed"), &probes))
+	run := server.captures.start(config.Sources)
+	if !server.captureActive() || probes != 0 {
+		t.Fatalf("a running capture: probed %d times", probes)
+	}
+	server.captures.mu.Lock()
+	run.State = "complete"
+	server.captures.mu.Unlock()
+	if err := os.Remove(filepath.Join(config.CaptureRoot, currentHost().ID, captureLockName)); err != nil {
+		t.Fatal(err)
+	}
+	if server.captureActive() || probes != 0 {
+		t.Fatal("a missing capture lock was reported active")
+	}
 }
 
 func TestCaptureExports(t *testing.T) {
@@ -1143,6 +1249,299 @@ func TestCaptureCleansOnlyAbandonedReaderLeases(t *testing.T) {
 			t.Fatal("sweep removed a lease it must keep", kept, err)
 		}
 	}
+
+	// A lease staged before its flock is held has an hour's grace; an older
+	// one nobody holds was abandoned between its creation and its lock.
+	staged := func(age time.Duration) string {
+		t.Helper()
+		lease, err := os.MkdirTemp(other, leaseStagingPrefix+"*"+captureTempSuffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSourceFile(t, filepath.Join(lease, "partial.db"), "staged bytes")
+		at := time.Now().Add(-age)
+		if err := os.Chtimes(lease, at, at); err != nil {
+			t.Fatal(err)
+		}
+		return lease
+	}
+	fresh, stale, staleHeld := staged(time.Minute), staged(2*time.Hour), staged(2*time.Hour)
+	staleLock, err := os.OpenFile(filepath.Join(staleHeld, ".reader.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staleLock.Close()
+	// Raw flock, as an older Pharos or the native exporter takes it.
+	if err = syscall.Flock(int(staleLock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(staleHeld, time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	sweepAbandonedLeases(root)
+	if _, err = os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatal("an abandoned staged lease survived its grace", err)
+	}
+	for _, kept := range []string{fresh, staleHeld, held} {
+		if _, err = os.Stat(kept); err != nil {
+			t.Fatal("sweep removed a staged or held lease", kept, err)
+		}
+	}
+	staleLock.Close()
+	if err = os.RemoveAll(fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	// Only a successful probe shows a reader is gone. Contention, however it
+	// is wrapped, and every failure to test the lock keep each candidate of
+	// both scavengers, preservation readers included.
+	for _, failure := range captureLockFailures() {
+		t.Run("probe-"+failure.name, func(t *testing.T) {
+			local := t.TempDir()
+			abandoned := filepath.Join(local, ".reader-gone"+captureTempSuffix)
+			pinned := filepath.Join(local, ".reader-pin-gone"+captureTempSuffix)
+			for _, lease := range []string{abandoned, pinned} {
+				writeSourceFile(t, filepath.Join(lease, ".reader.lock"), "")
+			}
+			swept := filepath.Join(root, "host-c", "conductor")
+			sweptLease := filepath.Join(swept, ".reader-gone"+captureTempSuffix)
+			sweptStaged := filepath.Join(swept, leaseStagingPrefix+"gone"+captureTempSuffix)
+			for _, lease := range []string{sweptLease, sweptStaged} {
+				writeSourceFile(t, filepath.Join(lease, ".reader.lock"), "")
+			}
+			old := time.Now().Add(-2 * time.Hour)
+			if err := os.Chtimes(sweptStaged, old, old); err != nil {
+				t.Fatal(err)
+			}
+			probes := 0
+			override(t, &probeReaderLease, failingCaptureLock(t, filelock.Exclusive, failure.err, &probes))
+			if active, err := preservationReaderActive(local, filepath.Join(filepath.Base(pinned), ".reader.lock")); failure.contended && (!active || err != nil) || !failure.contended && (active || !errors.Is(err, failure.err)) {
+				t.Fatalf("preservation reader liveness: active=%v err=%v", active, err)
+			}
+			removeCaptureTemporaries(local)
+			sweepAbandonedLeases(root)
+			if probes < 4 {
+				t.Fatalf("only %d leases were probed", probes)
+			}
+			for _, kept := range []string{abandoned, pinned, sweptLease, sweptStaged} {
+				if _, err := os.Stat(filepath.Join(kept, ".reader.lock")); err != nil {
+					t.Fatal("a scavenger removed a lease it could not prove abandoned", kept, err)
+				}
+			}
+			if err := os.RemoveAll(filepath.Join(root, "host-c")); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	// A preservation reader whose lease is gone is not live; one whose lease
+	// a reader holds is.
+	if active, err := preservationReaderActive(t.TempDir(), ".reader-pin-x"+captureTempSuffix+"/.reader.lock"); active || err != nil {
+		t.Fatalf("missing preservation reader lease: %v, %v", active, err)
+	}
+	pinHeld, closePin := heldPreservationReader(t, other, "held")
+	if active, err := preservationReaderActive(other, filepath.Join(filepath.Base(pinHeld), ".reader.lock")); !active || err != nil {
+		t.Fatalf("held preservation reader lease: %v, %v", active, err)
+	}
+	closePin()
+	if active, err := preservationReaderActive(other, filepath.Join(filepath.Base(pinHeld), ".reader.lock")); active || err != nil {
+		t.Fatalf("closed preservation reader lease: %v, %v", active, err)
+	}
+
+	// A reader that cannot take its new lease publishes neither the lease
+	// nor pin metadata, and removes only what it just made.
+	for _, failure := range captureLockFailures() {
+		t.Run("acquire-"+failure.name, func(t *testing.T) {
+			dir := t.TempDir()
+			pin, _ := heldPreservationReader(t, dir, "held")
+			lease, release, err := openReaderLease(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			var files []*os.File
+			override(t, &lockReaderLease, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+				files = append(files, file)
+				return failingCaptureLock(t, filelock.Exclusive, failure.err, nil)(file, mode, wait)
+			})
+			c := &sourceCapture{ctx: t.Context(), dir: dir, session: &captureSession{host: Host{ID: "synthetic"}}, manifest: &captureManifest{}}
+			if closeReader, err := c.pinReader(nil); closeReader != nil || !errors.Is(err, failure.err) {
+				t.Fatalf("pin reader without its lease: %v", err)
+			}
+			if lease, lock, err := lockedLease(dir); lease != "" || lock != nil || !errors.Is(err, failure.err) {
+				t.Fatalf("reader lease without its lock: %q, %v", lease, err)
+			}
+			if _, release, err := openReaderLease(dir); release != nil || !errors.Is(err, failure.err) {
+				t.Fatalf("opened reader lease without its lock: %v", err)
+			}
+			if len(files) != 3 || slices.ContainsFunc(files, func(file *os.File) bool { return file.Fd() != ^uintptr(0) }) {
+				t.Fatalf("a failed reader lease was left open: %d", len(files))
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			names := []string{}
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			if want := []string{filepath.Base(lease), filepath.Base(pin)}; !slices.Equal(names, want) && !slices.Equal(names, []string{want[1], want[0]}) {
+				t.Fatalf("after failed reader leases: %v, want only %v", names, want)
+			}
+		})
+	}
+}
+
+// TestCrashedReaderLeaseHelperProcess is the reader of
+// TestCaptureSweepsALeaseOnlyAfterItsReaderCrashes: it takes a reader lease,
+// reports it and holds it until it is killed. It blocks reading stdin, which
+// the parent keeps open, rather than in a way Go's deadlock detector could
+// end; a parent that exits closes it, ending the helper too.
+func TestCrashedReaderLeaseHelperProcess(t *testing.T) {
+	dir := os.Getenv("PHAROS_TEST_READER_LEASE_DIR")
+	if dir == "" {
+		t.Skip("helper process")
+	}
+	lease, lock, err := lockedLease(dir)
+	if err != nil {
+		fmt.Println("error", err)
+		os.Exit(1)
+	}
+	writeSourceFile(t, filepath.Join(lease, "history", "decoded.db"), "decoded bytes")
+	fmt.Println("lease", lease)
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	// The lease is the open lock file: it must not be collected, and so
+	// unlocked by its finalizer, while the helper is meant to hold it.
+	runtime.KeepAlive(lock)
+	os.Exit(1)
+}
+
+// A reader lease in another process survives every sweep while that
+// process lives, and is swept once it is killed without releasing it.
+func TestCaptureSweepsALeaseOnlyAfterItsReaderCrashes(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "host-b", "conductor")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	helper := exec.Command(os.Args[0], "-test.run=^TestCrashedReaderLeaseHelperProcess$")
+	helper.Env = append(os.Environ(), "PHAROS_TEST_READER_LEASE_DIR="+dir)
+	output, err := helper.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Held open, unwritten, until the helper is killed.
+	input, err := helper.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	var stderr strings.Builder
+	helper.Stderr = &stderr
+	if err := helper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- helper.Wait() }()
+	killed := false
+	defer func() {
+		if !killed {
+			_ = helper.Process.Kill()
+			<-exited
+		}
+	}()
+	lines := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(output)
+		for scanner.Scan() {
+			if line := scanner.Text(); strings.HasPrefix(line, "lease ") || strings.HasPrefix(line, "error ") {
+				lines <- line
+				return
+			}
+		}
+		close(lines)
+	}()
+	var lease string
+	select {
+	case line, ok := <-lines:
+		if !ok || !strings.HasPrefix(line, "lease ") {
+			t.Fatalf("helper took no lease: %q %s", line, stderr.String())
+		}
+		lease = strings.TrimPrefix(line, "lease ")
+	case <-time.After(20 * time.Second):
+		t.Fatalf("helper took no lease: %s", stderr.String())
+	}
+	sweepAbandonedLeases(root)
+	removeCaptureTemporaries(dir)
+	if _, err := os.Stat(filepath.Join(lease, "history", "decoded.db")); err != nil {
+		t.Fatal("a live reader's lease was swept", err)
+	}
+	killed = true
+	if err := helper.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	<-exited
+	sweepAbandonedLeases(root)
+	if _, err := os.Stat(lease); !os.IsNotExist(err) {
+		t.Fatal("a crashed reader's lease survived the sweep", err)
+	}
+}
+
+// captureLockFailures are lock results each capture lock policy must tell
+// apart: contention as filelock reports it, joined with its errno and
+// possibly wrapped, and failures that are not contention, including a bare
+// errno without the contention sentinel.
+func captureLockFailures() []struct {
+	name      string
+	err       error
+	contended bool
+} {
+	return []struct {
+		name      string
+		err       error
+		contended bool
+	}{
+		{"contended", errors.Join(filelock.ErrContended, syscall.EWOULDBLOCK), true},
+		{"wrapped-contended", fmt.Errorf("lock: %w", errors.Join(filelock.ErrContended, syscall.EAGAIN)), true},
+		{"unsupported", filelock.ErrUnsupported, false},
+		{"permission", fmt.Errorf("lock: %w", syscall.EACCES), false},
+		{"io", syscall.EIO, false},
+		{"no-locks", syscall.ENOLCK, false},
+		{"interrupted", syscall.EINTR, false},
+		{"bare-errno", syscall.EWOULDBLOCK, false},
+	}
+}
+
+// failingCaptureLock fails every acquisition with failure, after checking
+// it is a nonblocking acquisition of mode on an open file, and counts calls.
+func failingCaptureLock(t *testing.T, mode filelock.Mode, failure error, calls *int) func(*os.File, filelock.Mode, filelock.WaitMode) error {
+	return func(file *os.File, got filelock.Mode, wait filelock.WaitMode) error {
+		if got != mode || wait != filelock.Try || file == nil || file.Fd() == ^uintptr(0) {
+			t.Errorf("lock %v: mode %v, wait %v", file, got, wait)
+		}
+		if calls != nil {
+			*calls++
+		}
+		return failure
+	}
+}
+
+// heldPreservationReader makes a preservation reader lease in dir that this
+// test holds until the returned close.
+func heldPreservationReader(t *testing.T, dir, name string) (string, func()) {
+	t.Helper()
+	lease := filepath.Join(dir, ".reader-pin-"+name+captureTempSuffix)
+	if err := os.MkdirAll(lease, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(filepath.Join(lease, ".reader.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { lock.Close() })
+	if err := filelock.Lock(lock, filelock.Exclusive, filelock.Try); err != nil {
+		t.Fatal(err)
+	}
+	return lease, func() { lock.Close() }
 }
 
 func TestFreezeRetainedInputsWithoutHardLinks(t *testing.T) {

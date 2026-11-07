@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 	"github.com/gbdubs/pharos/internal/sourcepath"
 )
 
@@ -362,8 +362,11 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 		return fail(err)
 	}
 	defer releaseLockFile(lock)
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return fail(fmt.Errorf("%s is already being indexed: %w", target.label(), err))
+	if err := lockCaptureIndex(lock, filelock.Exclusive, filelock.Try); err != nil {
+		if errors.Is(err, filelock.ErrContended) {
+			return fail(fmt.Errorf("%s is already being indexed: %w", target.label(), err))
+		}
+		return fail(fmt.Errorf("lock the index of %s: %w", target.label(), err))
 	}
 	opFrom(ctx).holdLock(lock)
 	historyWarnings := []captureError{}
