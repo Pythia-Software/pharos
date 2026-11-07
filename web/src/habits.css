@@ -68,7 +68,8 @@
 .habits-vacations { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
 .habits-vacations li { display: flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; border: 1px solid var(--line); border-radius: 4px; }
 /* A Habits section drawn as a Home card's cover (habits-charts.tsx). */
-.habits-cover { display: block; flex: 1 1 auto; min-height: 0; width: 100%; }
+.habits-cover { display: block; flex: 1 1 auto; min-height: 0; width: 100%; overflow: hidden; }
+.habits-cover .habits-axis { font-size: 11px; }
 .habits-cover .habits-calendar { overflow: visible; height: 100%; }
 .habits-cover .habits-days-chart { height: 100%; }
 .habits-cover svg { display: block; }

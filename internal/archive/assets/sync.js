@@ -239,11 +239,18 @@
         const details = data.issues.find(item => item.id === issue.id);
         const dialog = node('dialog', '', 'sync-dialog');
         const copyStatus = node('p'); copyStatus.setAttribute('role', 'status');
-        const copy = button('Copy diagnostics', async () => {
-          copyStatus.textContent = '';
+        // Copying changes nothing to refresh, and native disabled would drop
+        // keyboard focus to the body while the write is pending: mark the
+        // control aria-disabled and ignore repeat presses until it settles.
+        const copy = node('button', 'Copy diagnostics'); copy.type = 'button';
+        let copying = false;
+        copy.onclick = async () => {
+          if (copying) return;
+          copying = true; copy.setAttribute('aria-disabled', 'true'); copyStatus.textContent = '';
           try { await window.pharosHost.clipboard.writeText(JSON.stringify(details, null, 2)); copyStatus.textContent = 'Diagnostics copied.'; }
           catch { copyStatus.textContent = 'Could not copy diagnostics. Select and copy the details above.'; }
-        });
+          finally { copying = false; copy.removeAttribute('aria-disabled'); }
+        };
         dialog.append(node('h2', 'Index integrity issue'), node('pre', JSON.stringify(details, null, 2)), copy, copyStatus, button('Close', () => dialog.close()));
         dialog.addEventListener('close', () => dialog.remove()); document.body.append(dialog); dialog.showModal();
       }), button('Full recapture & reindex…', () => recovery('full', [issue.source_name])));

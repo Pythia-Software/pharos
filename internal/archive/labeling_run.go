@@ -18,6 +18,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // Runner timing, overridable by tests. The attempt timeout is the default of
@@ -147,13 +149,19 @@ func runLabelingJob(ctx context.Context, opts labelingRunOptions) error {
 	// Preparation takes this lock exclusively, so it cannot replace a
 	// dataset a runner is using; the job lock admits one runner per job.
 	shared, err := fileLease(filepath.Join(dir, labelingLockFile), false)
-	if err != nil {
+	if errors.Is(err, filelock.ErrContended) {
 		return fmt.Errorf("a labeling prepare is using %s", dir)
+	}
+	if err != nil {
+		return err
 	}
 	defer shared.Close()
 	lock, err := fileLease(filepath.Join(dir, ".run-"+opts.Job+".lock"), true)
-	if err != nil {
+	if errors.Is(err, filelock.ErrContended) {
 		return fmt.Errorf("another runner is already running job %s in %s", opts.Job, dir)
+	}
+	if err != nil {
+		return err
 	}
 	defer lock.Close()
 	db, err := openLabelingLedger(dir)
@@ -1675,8 +1683,11 @@ func (r *labelingRunner) progress(attempt labelingAttemptInfo, outcome string, u
 // and lets in-flight attempts finish.
 func requestLabelingStop(dir, name string) error {
 	shared, err := fileLease(filepath.Join(dir, labelingLockFile), false)
-	if err != nil {
+	if errors.Is(err, filelock.ErrContended) {
 		return fmt.Errorf("a labeling prepare is using %s", dir)
+	}
+	if err != nil {
+		return err
 	}
 	defer shared.Close()
 	if err := requireLabelingLedger(dir); err != nil {
@@ -1723,13 +1734,19 @@ func withLabelingJobLock(dir, name string, create bool, fn func(db *sql.DB) erro
 		return err
 	}
 	shared, err := fileLease(filepath.Join(dir, labelingLockFile), false)
-	if err != nil {
+	if errors.Is(err, filelock.ErrContended) {
 		return fmt.Errorf("a labeling prepare is using %s", dir)
+	}
+	if err != nil {
+		return err
 	}
 	defer shared.Close()
 	lock, err := fileLease(filepath.Join(dir, ".run-"+name+".lock"), true)
-	if err != nil {
+	if errors.Is(err, filelock.ErrContended) {
 		return fmt.Errorf("a runner is running job %s; stop it first", name)
+	}
+	if err != nil {
+		return err
 	}
 	defer lock.Close()
 	if !create {

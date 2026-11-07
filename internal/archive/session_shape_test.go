@@ -2,6 +2,7 @@ package archive
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 // shapeScript builds a session's inputs in order: each step adds messages at
@@ -462,6 +465,17 @@ func TestSessionShapeMirrorsAndRoots(t *testing.T) {
 func TestSessionShapeIncremental(t *testing.T) {
 	c, config := parallelismTestCatalog(t)
 	all := countRows(t, c, "SELECT COUNT(*) FROM conversations")
+	t.Run("large backlog stays in maintenance", func(t *testing.T) {
+		override(t, &sessionShapeInlineLimit, 1)
+		rows, err := c.sessionShapeQueryRows(t.Context(), nil)
+		var diagnostic *qt.PlanDiagnostic
+		if len(rows) != 0 || !errors.As(err, &diagnostic) || diagnostic.Code != qt.ErrorCodeResourceLimit {
+			t.Fatalf("a page derived an unbounded backlog or returned partial totals: %d rows, %v", len(rows), err)
+		}
+		if countRows(t, c, "SELECT COUNT(*) FROM session_shape_facts") != 0 || countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty") != all {
+			t.Fatal("a page published the backfill")
+		}
+	})
 	// Pages derive dirty conversations without storing them; maintenance does.
 	if len(shapeRows(t, c)) == 0 || countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty") != all {
 		t.Fatal("a page stored session shape")

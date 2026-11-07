@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,64 @@ func otherProcess(t *testing.T, catalog *Catalog) *Catalog {
 
 func sameRow(left, right map[string]any) bool {
 	return reflect.ValueOf(left).UnsafePointer() == reflect.ValueOf(right).UnsafePointer()
+}
+
+func TestLibraryCacheLoadsRequestedFields(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	read := func(fields ...string) []map[string]any {
+		t.Helper()
+		rows, err := catalog.cachedLibraryRows(t.Context(), libraryFieldsFor(fields...))
+		if err != nil || len(rows) == 0 {
+			t.Fatalf("read %v: %d rows, %v", fields, len(rows), err)
+		}
+		return rows
+	}
+	for _, row := range read("title") {
+		for _, unrequested := range []string{"tool_error_count", "compaction_count", "cost_usd", "purpose"} {
+			if _, ok := row[unrequested]; ok {
+				t.Fatalf("title query loaded unrequested %s", unrequested)
+			}
+		}
+	}
+	for _, row := range read("compaction_count") {
+		if _, ok := row["compaction_count"]; !ok {
+			t.Fatal("an explicitly requested statistic was omitted")
+		}
+		if _, ok := row["title"]; !ok {
+			t.Fatal("alternating fields dropped the current generation's title")
+		}
+	}
+	execTx(t, catalog.DB, `UPDATE workspaces SET title='Changed' WHERE id='c'`)
+	for _, row := range read("title") {
+		if _, ok := row["compaction_count"]; ok {
+			t.Fatal("a source change eagerly rebuilt a statistic this request did not need")
+		}
+	}
+}
+
+func TestLibraryCacheWaitHonorsCancellation(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	catalog.reader().SetMaxOpenConns(1)
+	held, err := catalog.reader().Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	started := catalog.reader().Stats().WaitCount
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := catalog.cachedLibraryRows(ctx, libraryFieldsFor("title")); done <- err }()
+	waitUntil(t, time.Second, "cache build to wait for its reader", func() bool { return catalog.reader().Stats().WaitCount > started })
+	waiting, stop := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer stop()
+	if _, err := catalog.cachedLibraryRows(waiting, libraryFieldsFor("title")); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("cache waiter ignored its deadline: %v", err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cache build ignored cancellation: %v", err)
+	}
 }
 
 func TestLibraryCacheSeesCommitsFromAnotherConnection(t *testing.T) {
@@ -171,7 +230,7 @@ func TestWarmCachesRebuildsWhatPagesUse(t *testing.T) {
 	catalog, _ := libraryFixture(t)
 	other := otherProcess(t, catalog)
 	ctx := context.Background()
-	if _, err := catalog.searchRows(SearchOptions{}, libraryCompactFields); err != nil {
+	if _, err := catalog.searchRows(SearchOptions{}, libraryFieldsFor("title")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := catalog.localUsageRows(ctx); err != nil {
@@ -193,6 +252,9 @@ func TestWarmCachesRebuildsWhatPagesUse(t *testing.T) {
 	renamed := false
 	for _, row := range rows {
 		renamed = renamed || row["title"] == "Renamed"
+		if _, ok := row["tool_error_count"]; ok {
+			t.Fatal("warming eagerly loaded an unrequested statistic")
+		}
 	}
 	if !renamed {
 		t.Fatal("the Library rows were not rebuilt after the commit")

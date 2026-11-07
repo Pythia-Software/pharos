@@ -356,7 +356,12 @@ var faultSink byte
 func faultingAnswer(t *testing.T) func(*Catalog, map[string]any) map[string]any {
 	return func(catalog *Catalog, request map[string]any) map[string]any {
 		if strings.Contains(jsonText(request), "fault-now") {
-			touchVanishedMapping(t)
+			_, _ = cachedValue(context.Background(), catalog, "fault-now", func(ctx context.Context) (bool, error) {
+				return cachedValue(ctx, catalog, "fault-now-inner", func(context.Context) (bool, error) {
+					touchVanishedMapping(t)
+					return true, nil
+				})
+			})
 		}
 		return handleMCP(catalog, request)
 	}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	labelrt "github.com/gbdubs/pharos/internal/labeler"
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // The agent events pass runs the JAYHAWK verifier on this Mac
@@ -337,8 +338,11 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 	defer c.agentEventsRun.Unlock()
 	if c.Path != "" {
 		lease, err := fileLease(canonical(c.Path)+".agent-events.lock", true)
+		if errors.Is(err, filelock.ErrContended) {
+			return stats, fmt.Errorf("%w: %w", errAgentEventsRunning, err)
+		}
 		if err != nil {
-			return stats, fmt.Errorf("%w: %v", errAgentEventsRunning, err)
+			return stats, fmt.Errorf("lock the agent events pass: %w", err)
 		}
 		defer lease.Close()
 	}

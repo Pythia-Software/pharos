@@ -25,6 +25,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 type applicationEndpoint struct {
@@ -118,8 +120,11 @@ func runApplicationCLI(args []string) error {
 		return err
 	}
 	owner, err := fileLease(filepath.Join(filepath.Dir(installationPath(m.id)), ".application.lock"), true)
-	if err != nil {
+	if errors.Is(err, filelock.ErrContended) {
 		return fmt.Errorf("this copy of Pharos is already open: %w", err)
+	}
+	if err != nil {
+		return fmt.Errorf("lock this copy of Pharos: %w", err)
 	}
 	defer owner.Close()
 	if *initial != "" && len(m.registry.Libraries) == 0 {

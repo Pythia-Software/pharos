@@ -5,7 +5,7 @@ import (
 	"container/list"
 	"context"
 	"crypto/sha256"
-	_ "embed"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -16,35 +16,29 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 
-	"github.com/dop251/goja"
 	"github.com/fogleman/gg"
 )
 
-// Built from the reviewed TypeScript layout, together with the frontend.
+// Hash all native layout/raster sources so a changed renderer automatically
+// requeues durable images. No generated JavaScript is embedded in the service.
 //
-//go:embed assets/fingerprint-renderer.js
-var fingerprintRendererJS string
+//go:embed fingerprint_prepare.go fingerprint_layout.go fingerprint_svg.go fingerprint_render.go
+var fingerprintRendererSources embed.FS
 
-// Bump the native version when rasterization changes. Source changes to the
-// shared layout/palette automatically invalidate the durable image cache.
 var fingerprintVersion = func() string {
-	sum := sha256.Sum256([]byte("fingerprint-native-1\n" + fingerprintRendererJS))
-	return hex.EncodeToString(sum[:])
+	digest := sha256.New()
+	for _, name := range []string{"fingerprint_prepare.go", "fingerprint_layout.go", "fingerprint_svg.go", "fingerprint_render.go"} {
+		source, _ := fingerprintRendererSources.ReadFile(name)
+		digest.Write([]byte(name + "\n"))
+		digest.Write(source)
+	}
+	return hex.EncodeToString(digest.Sum(nil))
 }()
 
 func fingerprintRendererVersion() string { return fingerprintVersion }
 
-var fingerprintProgram struct {
-	sync.Once
-	program *goja.Program
-	err     error
-}
-
 type fingerprintRenderer struct {
-	vm     *goja.Runtime
-	render goja.Callable
 	// One worker owns this renderer. Reuse bounded raster/encoder scratch across
 	// the backfill instead of allocating megabytes for each of its four PNGs.
 	raster        map[int]gg.Context
@@ -136,48 +130,52 @@ type fingerprintRendered struct {
 	Branches int                        `json:"branches"`
 }
 
-func newFingerprintRenderer() (*fingerprintRenderer, error) {
-	fingerprintProgram.Do(func() {
-		fingerprintProgram.program, fingerprintProgram.err = goja.Compile("fingerprint-renderer.js", fingerprintRendererJS, false)
-	})
-	if fingerprintProgram.err != nil {
-		return nil, fingerprintProgram.err
-	}
-	vm := goja.New()
-	if _, err := vm.RunProgram(fingerprintProgram.program); err != nil {
-		return nil, err
-	}
-	fn, ok := goja.AssertFunction(vm.Get("PharosFingerprint").ToObject(vm).Get("render"))
-	if !ok {
-		return nil, fmt.Errorf("fingerprint renderer has no entry point")
-	}
-	return &fingerprintRenderer{vm: vm, render: fn}, nil
-}
+func newFingerprintRenderer() (*fingerprintRenderer, error) { return &fingerprintRenderer{}, nil }
 
-// One worker owns each VM. Cancellation interrupts JavaScript too, so even a
-// very large conversation cannot hold up release/eject in a selection loop.
-func (renderer *fingerprintRenderer) Render(ctx context.Context, input any, eventsMask int) (fingerprintRendered, error) {
+func renderFingerprintSVG(ctx context.Context, input any, eventsMask int) (fingerprintRendered, error) {
 	var result fingerprintRendered
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	data, err := json.Marshal(input)
 	if err != nil {
 		return result, err
 	}
-	done := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() { renderer.vm.Interrupt(ctx.Err()); close(done) })
-	defer func() {
-		if !stop() {
-			<-done
-		}
-		renderer.vm.ClearInterrupt()
-	}()
-	if err := ctx.Err(); err != nil {
+	var source fingerprintInput
+	if err := json.Unmarshal(data, &source); err != nil {
 		return result, err
 	}
-	value, err := renderer.render(goja.Undefined(), renderer.vm.ToValue(string(data)), renderer.vm.ToValue(eventsMask))
+	prepared, err := prepareFingerprint(ctx, &source)
 	if err != nil {
 		return result, err
 	}
-	if err := json.Unmarshal([]byte(value.String()), &result); err != nil {
+	result.Messages, result.Events, result.Tools, result.Branches = prepared.messages, prepared.events, prepared.toolCount, prepared.branches
+	for _, events := range []bool{true, false} {
+		bit := 2
+		if events {
+			bit = 1
+		}
+		if eventsMask&bit == 0 {
+			continue
+		}
+		for _, profile := range []string{"wide", "card"} {
+			layout, err := layoutFingerprint(ctx, prepared, profile, events)
+			if err != nil {
+				return result, err
+			}
+			for _, theme := range fingerprintThemes {
+				result.Images = append(result.Images, fingerprintRenderedImage{Profile: profile, Theme: theme, Events: events, SVG: fingerprintSVGSource(layout, theme)})
+			}
+		}
+	}
+	return result, ctx.Err()
+}
+
+// One worker owns the reusable raster/encoder scratch and bounded PNG cache.
+// Preparation and selection cooperate with shutdown/eject cancellation too.
+func (renderer *fingerprintRenderer) Render(ctx context.Context, input any, eventsMask int) (fingerprintRendered, error) {
+	result, err := renderFingerprintSVG(ctx, input, eventsMask)
+	if err != nil {
 		return result, err
 	}
 	for i := range result.Images {

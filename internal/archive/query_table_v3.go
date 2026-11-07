@@ -214,21 +214,25 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 				early, err = querytable.ResolveRelativeWhere(early, localSchema, time.UnixMilli(q.Now))
 				if err == nil {
 					readFields := libraryFieldsFor(required...)
-					if q.Grouping == nil && q.Rows && readFields != nil && readFields.hasAny(libraryCostFields) {
+					if q.Grouping == nil && q.Rows {
+						// libraryPage fills native display columns after filtering,
+						// sorting and paging. Only predicates, order, metrics and
+						// computed expressions need their inputs across all workspaces.
 						copy := q
-						copy.Result.Select = slices.DeleteFunc(slices.Clone(q.Result.Select), func(name string) bool { return slices.Contains(libraryCostFields, name) })
-						if !slices.Contains(copy.Result.Select, schema.IDField) {
-							copy.Result.Select = append(copy.Result.Select, schema.IDField)
+						copy.Result.Select = []string{schema.IDField}
+						for _, field := range q.Result.Select {
+							if _, native := localSchema.Fields[field]; !native {
+								copy.Result.Select = append(copy.Result.Select, field)
+							}
 						}
 						dependencies, e := s.queryV3SourceFields(ctx, schema, copy)
 						if e != nil {
 							return qt.QueryResultV3{}, nil, e
 						}
-						for _, field := range libraryCostFields {
-							if !slices.Contains(dependencies, field) {
-								delete(readFields, field)
-							}
-						}
+						readFields = libraryFieldsFor(dependencies...)
+					}
+					if record != nil && readFields != nil {
+						readFields[record.field] = true
 					}
 					rows, find, err = s.libraryRows(ctx, params, readFields, nil, early)
 				}

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // Indexing a capture must never delete, overwrite or roll back what its host
@@ -214,6 +216,30 @@ func TestOnlyOneIndexOfACaptureRunsAtATime(t *testing.T) {
 		t.Fatalf("a second index ran: %#v", result)
 	}
 	lock.Close()
+	// Only contention is explained as another index. Any other failure is
+	// an acquisition failure; neither indexes anything or holds the lock.
+	for _, failure := range captureLockFailures() {
+		t.Run(failure.name, func(t *testing.T) {
+			var files []*os.File
+			override(t, &lockCaptureIndex, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+				files = append(files, file)
+				return failingCaptureLock(t, filelock.Exclusive, failure.err, nil)(file, mode, wait)
+			})
+			ctx, op := newOpRegistry("service").begin(t.Context(), OperationSpec{Kind: "index.captures"})
+			defer op.Finish(nil)
+			result := catalog.IndexCapture(ctx, targets[0], nil)
+			busy := strings.Contains(fmt.Sprint(result.Error), "already being indexed")
+			if result.Error == nil || busy != failure.contended || !busy && !strings.Contains(fmt.Sprint(result.Error), "lock the index of") {
+				t.Fatalf("index lock failure: %#v", result)
+			}
+			if result.Workspaces != 0 || conversationMessages(t, catalog, "s") != 0 {
+				t.Fatalf("an index that failed to lock indexed: %#v", result)
+			}
+			if len(files) != 1 || files[0].Fd() != ^uintptr(0) || len(op.view().Locks) != 0 {
+				t.Fatalf("a failed index lock was left open or held: %+v", op.view().Locks)
+			}
+		})
+	}
 	if result := catalog.IndexCapture(context.Background(), targets[0], nil); result.Error != nil || result.Workspaces != 1 {
 		t.Fatalf("index after the other finished: %#v", result)
 	}

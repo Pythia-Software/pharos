@@ -415,6 +415,35 @@ test('Reader file copying keeps keyboard focus through delayed success, failure 
   await deferredCopyKeepsFocus(page,button,{moveFocusTo:page.locator('#settingsToggle')});
 });
 
+test('Sync diagnostics copying keeps keyboard focus through delayed success, failure and retry', {skip}, async t=>{
+  const issue={id:'mismatch',source_name:'codex',unit:'/sessions/rollout.jsonl'};
+  const {page}=await open(t,{url:'/settings/sync',ready:'.sync-warning',api:{
+    'GET /api/sync/status':{...defaultApi['GET /api/sync/status'],issues:[issue]},
+    'GET /api/sync/issues':{issues:[issue]},
+  }});
+  await page.getByRole('button',{name:'View details / copy diagnostics',exact:true}).click();
+  const dialog=page.locator('dialog.sync-dialog');
+  const button=dialog.getByRole('button',{name:'Copy diagnostics',exact:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{fail:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{moveFocusTo:dialog.getByRole('button',{name:'Close',exact:true})});
+});
+
+test('Feedback inbox report copying keeps keyboard focus through delayed success, failure and retry', {skip}, async t=>{
+  const id='00000000-0000-4000-8000-000000000001',received_at='2026-10-01T00:00:00Z';
+  const application={name:'Example app',version:'1.0'};
+  const {page}=await open(t,{inbox:true,url:`/?submission=${id}`,ready:'.report-detail',api:{
+    'GET /api/submissions':{submissions:[{id,application,kind:'bug',comment:'Synthetic report',received_at,annotation_count:0,screenshot_count:0,has_diagnostics:false,tags:[],revision:'1'}]},
+    [`GET /api/submissions/${id}`]:{version:1,id,application,kind:'bug',comment:'Synthetic report',annotations:null,received_at,tags:[],revision:'1'},
+  }});
+  const button=page.getByRole('button',{name:'Copy report for an agent',exact:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{fail:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{moveFocusTo:page.getByRole('button',{name:'Download report',exact:true})});
+});
+
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
   const { page, settled, shot } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
   await activateHeaderTool(page, "usageSummaryToggle");

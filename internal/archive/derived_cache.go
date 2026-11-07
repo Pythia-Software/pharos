@@ -3,6 +3,8 @@ package archive
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -19,8 +21,8 @@ import (
 //   - A key names the value and whatever else it depends on, such as the local
 //     date for costs at today's prices.
 //   - Concurrent requests for a missing value wait for one computation. It
-//     finishes even if the request that started it is abandoned, since the
-//     others still want it and the next request can use it.
+//     can finish after the initiating request is abandoned. Every caller can
+//     cancel its wait; builders keep their own budgets and stop on catalog close.
 //   - After source changes, warmCaches recomputes the values pages used recently,
 //     so the next visit does not wait.
 //
@@ -37,6 +39,15 @@ type derivedCache struct {
 	// happen while a computation is running outside mu.
 	version int64
 	entries map[string]*derivedEntry
+	// Builds have a lifetime independent of any one waiter. Close
+	// cancels and joins them before the catalog's connections are closed.
+	builds  map[*derivedEntry]context.CancelFunc
+	workers sync.WaitGroup
+	closed  bool
+	// A service exits immediately on mapped-memory faults, even after every
+	// waiter has left. Direct MCP calls receive the original panic instead.
+	onFault func(any)
+	fault   any
 }
 
 type derivedEntry struct {
@@ -44,6 +55,7 @@ type derivedEntry struct {
 	ready   chan struct{} // closed once value and err are set
 	value   any
 	err     error
+	fault   any
 	// compute and usedAt let warmCaches recompute a value still in use.
 	compute func(context.Context) (any, error)
 	usedAt  time.Time
@@ -124,10 +136,33 @@ func (cache *derivedCache) pruneThinkingEntries(version int64, now time.Time) {
 }
 
 func (cache *derivedCache) close() {
-	cache.versions.close()
+	cache.closed = true
+	for _, cancel := range cache.builds {
+		cancel()
+	}
+	if cache.fault == nil {
+		cache.versions.close()
+	}
 	cache.entries = nil
 	cache.generation++
 	cache.version = 0
+}
+
+func (c *Catalog) closeDerivedCache() {
+	c.derived.mu.Lock()
+	c.derived.close()
+	c.derived.mu.Unlock()
+	c.derived.workers.Wait()
+	c.derived.repanicFault()
+}
+
+func (cache *derivedCache) repanicFault() {
+	cache.mu.Lock()
+	fault := cache.fault
+	cache.mu.Unlock()
+	if fault != nil {
+		panic(fault) // SQLite is unusable; never close or checkpoint it after a fault.
+	}
 }
 
 // cachedValue returns key's value while the catalog is unchanged, and
@@ -164,9 +199,19 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 	cache := &c.derived
 	for {
 		if err := ctx.Err(); err != nil {
+			cache.repanicFault()
 			return nil, err
 		}
 		cache.mu.Lock()
+		if cache.fault != nil {
+			fault := cache.fault
+			cache.mu.Unlock()
+			panic(fault)
+		}
+		if cache.closed {
+			cache.mu.Unlock()
+			return nil, context.Canceled
+		}
 		version, err := c.cacheVersion(ctx, &cache.versions)
 		if err != nil {
 			cache.entries = nil
@@ -189,6 +234,10 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			}
 			select {
 			case <-entry.ready:
+				cache.repanicFault()
+				if entry.fault != nil {
+					panic(entry.fault)
+				}
 				return entry.value, entry.err
 			default:
 				return nil, errDerivedCold
@@ -238,6 +287,7 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 				case <-entry.ready:
 					continue
 				case <-ctx.Done():
+					cache.repanicFault()
 					return nil, ctx.Err()
 				}
 			}
@@ -256,24 +306,55 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 				entry.usedAt = time.Now()
 			}
 			generation := cache.generation
-			cache.mu.Unlock()
-			value, err := compute(context.WithoutCancel(ctx))
-			cache.mu.Lock()
-			entry.value, entry.err = value, err
-			if isThinkingCohortKey(key) {
-				// These entries rebuild on demand, never in warmCaches. Release the
-				// closure's selected request slice once its result is ready.
-				entry.compute = nil
+			work, cancel := context.WithCancel(context.WithoutCancel(ctx))
+			onFault := cache.onFault
+			if cache.builds == nil {
+				cache.builds = map[*derivedEntry]context.CancelFunc{}
 			}
-			if (err != nil || cache.generation != generation) && cache.entries[key] == entry {
-				delete(cache.entries, key)
-			}
-			close(entry.ready)
-			// The catalog may have changed while this computation was in flight.
-			// Use the monitor's latest observed version, so an old completion does
-			// not evict snapshots built for a newer commit.
-			cache.pruneDelegationEntries(cache.version, time.Now())
-			cache.pruneThinkingEntries(cache.version, time.Now())
+			cache.builds[entry] = cancel
+			cache.workers.Add(1)
+			go func() {
+				defer cache.workers.Done()
+				defer cancel()
+				debug.SetPanicOnFault(true)
+				var value any
+				var err error
+				var fault any
+				defer func() {
+					if failure := recover(); failure != nil {
+						if _, mapped := failure.(interface{ Addr() uintptr }); mapped {
+							fault = failure
+							// The service exits before any cleanup or cache locking can
+							// touch an unusable catalog. Direct MCP relays the fault.
+							if onFault != nil {
+								onFault(fault)
+							}
+							cache.mu.Lock()
+							cache.fault = fault
+							for _, stop := range cache.builds {
+								stop()
+							}
+							cache.mu.Unlock()
+						} else {
+							err = fmt.Errorf("building cached %s: %v", key, failure)
+						}
+					}
+					cache.mu.Lock()
+					defer cache.mu.Unlock()
+					entry.value, entry.err, entry.fault = value, err, fault
+					delete(cache.builds, entry)
+					if isThinkingCohortKey(key) {
+						entry.compute = nil
+					}
+					if (err != nil || cache.generation != generation) && cache.entries[key] == entry {
+						delete(cache.entries, key)
+					}
+					close(entry.ready)
+					cache.pruneDelegationEntries(cache.version, time.Now())
+					cache.pruneThinkingEntries(cache.version, time.Now())
+				}()
+				value, err = compute(work)
+			}()
 		} else if request {
 			entry.usedAt = time.Now()
 		}
@@ -281,7 +362,12 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 		select {
 		case <-entry.ready:
 		case <-ctx.Done():
+			cache.repanicFault()
 			return nil, ctx.Err()
+		}
+		cache.repanicFault()
+		if entry.fault != nil {
+			panic(entry.fault)
 		}
 		return entry.value, entry.err
 	}
@@ -292,6 +378,9 @@ func (c *Catalog) catalogVersion(ctx context.Context) (int64, error) {
 	cache := &c.derived
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
+	if cache.fault != nil {
+		panic(cache.fault)
+	}
 	version, err := c.cacheVersion(ctx, &cache.versions)
 	if err != nil {
 		cache.entries = nil
@@ -331,7 +420,10 @@ func (c *Catalog) warmCaches(ctx context.Context) {
 	c.warmVersion = version
 	// The rows keep the fields recent requests needed, such as long text.
 	if usedAt, fields := c.libraryUse(); first || time.Since(usedAt) < recentUse {
-		_, _ = c.cachedLibraryRows(ctx, libraryCompactFields.union(fields))
+		if usedAt.IsZero() {
+			fields = libraryFieldsFor("title", "repository_name")
+		}
+		_, _ = c.cachedLibraryRows(ctx, fields)
 	}
 	if first {
 		// Usage, the Settings pricing card, and the Library's cost columns;

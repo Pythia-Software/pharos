@@ -501,12 +501,16 @@ func (c *Catalog) parallelismThreads(ctx context.Context, now time.Time, activit
 		}
 	}
 	mirrors, kept := map[string][]string{}, []map[string]any{}
-	for _, row := range c.suppressMirrors(candidates) {
+	representatives, err := c.suppressMirrorsContext(ctx, candidates)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range representatives {
 		id := firstString(row["id"])
 		mirrors[id], _ = row["mirrored_workspace_ids"].([]string)
 		kept = append(kept, map[string]any{"workspace_id": id})
 	}
-	lineage, err := c.usageConversationRoots(kept)
+	lineage, err := c.usageConversationRootsContext(ctx, kept)
 	if err != nil {
 		return nil, err
 	}

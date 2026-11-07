@@ -2366,6 +2366,15 @@
       "reason": "Durable status and diagnostic sections use shared disclosure keys, including stable activity, cadence and operation-run identities."
     },
     {
+      "key": "7035ac58d919c09a:0",
+      "file": "internal/archive/assets/sync.js",
+      "owner": "renderDashboard",
+      "tag": "button",
+      "control": "'button', 'Copy diagnostics'",
+      "contract": "action",
+      "reason": "Copies the integrity issue's diagnostics to the clipboard; this action has no durable view state."
+    },
+    {
       "key": "html:0135b6ac2c05c3f9:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",

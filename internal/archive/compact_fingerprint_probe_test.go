@@ -22,8 +22,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/dop251/goja"
 )
 
 func TestCompactFingerprintExport(t *testing.T) {
@@ -100,8 +98,7 @@ func TestCompactFingerprintExport(t *testing.T) {
 // go test -tags probe -run '^TestCompactFingerprintBatch$' -v ./internal/archive
 // The manifest is [{"id":"..."},...] with exactly 100 distinct IDs. First run
 // saves frozen inputs; repeats reuse them. Add PHAROS_FINGERPRINT_PROFILE=1 for
-// cpu.pprof and js.pprof. Optional PHAROS_FINGERPRINT_RENDERER overrides only
-// this probe's embedded bundle (use an unminified build for readable JS stacks).
+// cpu.pprof. The renderer is entirely native Go.
 // PHAROS_FINGERPRINT_WORKERS=1..4 measures independent renderer concurrency.
 // PHAROS_FINGERPRINT_DURABLE=1 uses production drive flushes. Optional
 // PHAROS_FINGERPRINT_CACHE_ROOT creates and removes an owned temporary cache
@@ -148,13 +145,6 @@ func TestCompactFingerprintBatch(t *testing.T) {
 		defer db.Close()
 		db.SetMaxOpenConns(1)
 		source = &Catalog{DB: db, Path: path, readOnly: true, queryOnly: true}
-	}
-	if path := os.Getenv("PHAROS_FINGERPRINT_RENDERER"); path != "" {
-		bundle, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fingerprintRendererJS = string(bundle)
 	}
 	if os.Getenv("PHAROS_FINGERPRINT_DURABLE") == "1" {
 		useDurableCatalog(t)
@@ -204,14 +194,6 @@ func TestCompactFingerprintBatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { pprof.StopCPUProfile(); cpu.Close() }()
-		js, err := os.Create(filepath.Join(output, "js.pprof"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := goja.StartProfile(js); err != nil {
-			t.Fatal(err)
-		}
-		defer func() { goja.StopProfile(); js.Close() }()
 	}
 	type timing struct {
 		ID                             string  `json:"id"`

@@ -1,5 +1,5 @@
 import { ViewDisclosure } from "../view-disclosure";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { loadSchema, memoryStorageAdapter } from "@pythia-software/query-table-core";
 import { useQueryTable } from "@pythia-software/query-table-react";
@@ -29,7 +29,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 function Inbox() {
   const [rows, setRows] = useState<Row[]>([]), [loading, setLoading] = useState(true), [error, setError] = useState(""), [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState<Entry | null>(null), [tag, setTag] = useState(""), [notice, setNotice] = useState("");
-  const [copying, setCopying] = useState(false);
+  // The ref guards repeat presses before React re-renders; the state marks
+  // the button aria-disabled, which keeps it focusable while the write is pending.
+  const [copying, setCopying] = useState(false), copyPending = useRef(false);
   const storage = useMemo(() => memoryStorageAdapter(), []);
   const api = useQueryTable<Row>({ schema, clientRows: rows, storage, syncUrl: false, onRefresh: () => { void refresh(); } });
   const renderers = useMemo(() => ({ ...defaultRenderers,
@@ -40,11 +42,11 @@ function Inbox() {
   async function open(id: string) { try { setDetail(normalizeEntry(await request<Entry>(`/api/submissions/${id}`))); const u = new URL(location.href); u.searchParams.set("submission", id); history.replaceState(null, "", u); } catch (e) { setError(String(e)); } }
   useEffect(() => { void refresh(); const id = new URLSearchParams(location.search).get("submission"); if (id) void open(id); }, []);
   async function copyReport() {
-    if (!detail || copying) return;
-    setCopying(true); setError(""); setNotice("");
+    if (!detail || copyPending.current) return;
+    copyPending.current = true; setCopying(true); setError(""); setNotice("");
     try { await window.pharosHost.clipboard.writeText(JSON.stringify(detail, null, 2)); setNotice("Report copied."); }
     catch { setError("Could not copy. Download the report instead."); }
-    finally { setCopying(false); }
+    finally { copyPending.current = false; setCopying(false); }
   }
   async function mutate(ids: string[], action: "add" | "remove" | "delete") {
     if (action !== "delete" && !tag.trim()) return;
@@ -76,7 +78,7 @@ function Inbox() {
       <p className="commentary">{detail.comment}</p>
       {detail.annotations.map((a, i) => <article key={a.id}><h3>{i + 1}. {a.label || "Annotation"}</h3><p className="commentary">{a.comment}</p><p><code>{a.selector}</code></p><p><time>{new Date(a.captured_at).toLocaleString()}</time> · {a.viewport.width} × {a.viewport.height}</p>{a.url && <p><a href={a.url} target="_blank" rel="noreferrer">{a.url}</a></p>}{a.text && <blockquote>{a.text}</blockquote>}{a.screenshot && <img alt={`Captured element: ${a.label || i + 1}`} src={`data:${a.screenshot.mime};base64,${a.screenshot.data}`} />}</article>)}
       {detail.diagnostics && <ViewDisclosure viewKey={`feedback:logs:${detail.id}`} summary="Diagnostic logs">{Object.entries(detail.diagnostics).map(([kind, text]) => <section key={kind}><h3>{kind}</h3><pre>{text}</pre></section>)}</ViewDisclosure>}
-      <div className="report-actions"><button onClick={() => { const blob = new Blob([JSON.stringify(detail, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${detail.id}.json`; a.click(); URL.revokeObjectURL(url); }}>Download report</button><button disabled={copying} onClick={() => void copyReport()}>Copy report for an agent</button></div>
+      <div className="report-actions"><button onClick={() => { const blob = new Blob([JSON.stringify(detail, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${detail.id}.json`; a.click(); URL.revokeObjectURL(url); }}>Download report</button><button aria-disabled={copying || undefined} onClick={() => void copyReport()}>Copy report for an agent</button></div>
     </section>}
   </main>;
 }

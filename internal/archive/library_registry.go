@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 const libraryDescriptorName = "pharos-library.json"
@@ -61,20 +63,28 @@ type installationRegistry struct {
 	DeliveryTarget string `json:"delivery_target,omitempty"`
 }
 
+// Tests replace only fileLease's lock calls to exercise adapter failures.
+var lockFileLease = filelock.Lock
+
 // fileLease is deliberately separate from SQLite's short transaction locks:
 // offline migrations must exclude services, captures and other CLI writers.
+// Only another holder is "busy"; any other failure keeps its own cause, so
+// callers test errors.Is(err, filelock.ErrContended) before saying busy.
 func fileLease(path string, exclusive bool) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	mode := syscall.LOCK_SH
+	mode := filelock.Shared
 	if exclusive {
-		mode = syscall.LOCK_EX
+		mode = filelock.Exclusive
 	}
-	if err = syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB); err != nil {
+	if err = lockFileLease(f, mode, filelock.Try); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("Pharos is using this library; close its active operation and retry: %w", err)
+		if errors.Is(err, filelock.ErrContended) {
+			return nil, fmt.Errorf("Pharos is using this library; close its active operation and retry: %w", err)
+		}
+		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
 	return f, nil
 }
