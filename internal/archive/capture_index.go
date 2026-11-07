@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
+
+	"github.com/gbdubs/pharos/internal/sourcepath"
 )
 
 // Indexing parses a host's captures (see capture.go) into the catalog, on any
@@ -53,7 +56,23 @@ func (v *captureView) planSignature() string {
 func newCaptureView(host Host, dir string, manifest *captureManifest) *captureView {
 	view := &captureView{host: host, dir: dir, manifest: manifest}
 	for _, mapping := range manifest.PathMap {
-		view.mappings = append(view.mappings, capturePathMapping{Original: mapping.Original, Captured: filepath.Join(dir, filepath.FromSlash(mapping.Captured))})
+		// Views also serve temporary source/ and retained history/ readers.
+		// Validate archive names here without imposing persisted files/-only
+		// policy or changing the recorded manifest. Drive prefixes are invalid
+		// archive roots even on a host that could store a literal colon.
+		name := mapping.Captured
+		drive := len(name) >= 2 && name[1] == ':' && (name[0] >= 'A' && name[0] <= 'Z' || name[0] >= 'a' && name[0] <= 'z')
+		if drive || strings.ContainsAny(name, "\\\x00") {
+			continue
+		}
+		local, err := filepath.Localize(name)
+		if err != nil {
+			continue
+		}
+		captured := filepath.Join(dir, local)
+		if capturePathIsWithin(captured, dir) {
+			view.mappings = append(view.mappings, capturePathMapping{Original: mapping.Original, Captured: captured})
+		}
 	}
 	return view
 }
@@ -81,28 +100,56 @@ func (v *captureView) capturedSource(source captureSourceInfo) (string, bool) {
 }
 
 // translate maps path through the mapping with the longest matching prefix.
-func (v *captureView) translate(path string, forward bool) (string, bool) {
-	best, length := "", -1
+func (v *captureView) translate(name string, forward bool) (string, bool) {
+	var best capturePathMapping
+	suffix, length := "", -1
+	if !forward {
+		name = filepath.ToSlash(name)
+	}
 	for _, mapping := range v.mappings {
-		from, to := mapping.Captured, mapping.Original
-		if forward {
-			from, to = to, from
+		from := mapping.Original
+		if !forward {
+			from = filepath.ToSlash(mapping.Captured)
 		}
-		if rest, ok := pathUnder(path, from); ok && len(from) > length {
-			best, length = filepath.Join(to, rest), len(from)
+		if rest, ok := sourcepath.CutLegacyPOSIX(name, from); ok && len(from) > length {
+			best, suffix, length = mapping, rest, len(from)
 		}
 	}
-	return best, length >= 0
+	if length < 0 {
+		return "", false
+	}
+	// Choose the longest prefix before resolving its suffix: an unsafe match
+	// must fail, never fall back to a shorter mapping. Repeated slash separators
+	// after the cut retain legacy behavior; only the suffix is cleaned.
+	if strings.ContainsRune(suffix, 0) {
+		return "", false
+	}
+	suffix = path.Clean(strings.TrimLeft(suffix, "/"))
+	if suffix == ".." || strings.HasPrefix(suffix, "../") {
+		return "", false
+	}
+	local, err := filepath.Localize(suffix)
+	if err != nil {
+		return "", false
+	}
+	captured := filepath.Join(best.Captured, local)
+	if !capturePathIsWithin(captured, best.Captured) || !capturePathIsWithin(captured, v.dir) {
+		return "", false
+	}
+	if forward {
+		return captured, true
+	}
+	if suffix == "." {
+		suffix = ""
+	}
+	return sourcepath.JoinLegacyPOSIX(best.Original, suffix), true
 }
 
-func pathUnder(path, root string) (string, bool) {
-	if path == root {
-		return "", true
-	}
-	if root != "" && strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/") {
-		return path[len(strings.TrimSuffix(root, "/"))+1:], true
-	}
-	return "", false
+// capturePathIsWithin establishes lexical bounds only. It does not resolve
+// symlinks or protect I/O from symlink races.
+func capturePathIsWithin(name, root string) bool {
+	rel, err := filepath.Rel(root, name)
+	return err == nil && filepath.IsLocal(rel)
 }
 
 // databaseVersion is a captured database's version: the source state the
