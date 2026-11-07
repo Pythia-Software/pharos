@@ -350,7 +350,8 @@ func TestBackgroundPlanMovesEveryItem(t *testing.T) {
 			settings.Temporary[item.ID] = temporaryCadence{Cadence: cadence}
 		}
 		for _, plan := range backgroundPlan(settings, in, at) {
-			wantDue := cadence != cadenceManual && plan.ID != "conversations" && !(plan.ID == "search" && cadence == cadenceFrequent)
+			item, _ := backgroundItemByID(plan.ID)
+			wantDue := cadence != cadenceManual && plan.ID != "conversations" && !(item.continuous && cadence == cadenceFrequent)
 			if plan.Cadence != cadence || plan.Due != wantDue || (cadence == cadenceManual && !plan.Next.IsZero()) {
 				t.Errorf("%s on %s: %+v, want due=%v", plan.ID, cadence, plan, wantDue)
 			}
