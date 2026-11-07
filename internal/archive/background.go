@@ -492,6 +492,7 @@ type backgroundInputs struct {
 	writingPending               bool
 	writingBacklog               authorshipBacklog
 	writingRefinedAt             string
+	writingRefinementPending     bool
 	upgradePending               bool
 	otherSources                 []string
 	backupDestination            string
@@ -523,6 +524,8 @@ func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
 	in.writingBacklog, backlogErr = c.authorshipBacklog(ctx)
 	in.writingPending = err != nil || backlogErr != nil || want != built || in.writingBacklog.Pending > 0
 	in.writingRefinedAt, _ = c.metaValue(ctx, "authorship_refined_at")
+	in.writingRefinementPending, err = c.authorshipRefinementPending(ctx)
+	in.writingRefinementPending = in.writingRefinementPending || err != nil
 	in.deferred, _ = c.freshnessDeferred(ctx)
 	generation, _ := c.metaValue(ctx, "findings_generation")
 	in.findingsBuilt, in.findingsToday = generation != "", generation == c.findingsGeneration()
@@ -624,8 +627,10 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			if refined, ok := parseTime(in.writingRefinedAt); ok {
 				plan.LastDone = maxTime(plan.LastDone, refined)
 			}
-			plan.Pending = true
-			standaloneNext(&plan, settings, quiet, at)
+			plan.Pending = in.writingRefinementPending
+			if plan.Pending {
+				standaloneNext(&plan, settings, quiet, at)
+			}
 		case len(item.Stages) > 0:
 			completed := time.Time{}
 			first := true

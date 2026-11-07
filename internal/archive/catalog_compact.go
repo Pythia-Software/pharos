@@ -61,6 +61,12 @@ var (
 	compactFingerprint = catalogFingerprint
 	compactLink        = os.Link
 	compactOpen        = openCompacted
+	// The cancellation test holds a partial copy here, without manufacturing
+	// a large catalog to race a progress poll against VACUUM.
+	compactVacuum = func(ctx context.Context, source *sql.DB, staging string) error {
+		_, err := source.ExecContext(ctx, "VACUUM INTO ?", staging)
+		return err
+	}
 )
 
 // compactionReceipt is what a compaction did.
@@ -233,7 +239,7 @@ func writeCompacted(ctx context.Context, source *sql.DB, staging string, live in
 			}
 		}
 	}()
-	_, err := source.ExecContext(ctx, "VACUUM INTO ?", staging)
+	err := compactVacuum(ctx, source, staging)
 	// No size report may land after the next step's.
 	close(done)
 	<-stopped

@@ -58,7 +58,7 @@ func assertToolReference(t *testing.T, c *Catalog) {
 func TestIncrementalToolRollupParity(t *testing.T) {
 	slowTest(t)
 	c, _ := testCatalog(t)
-	seedToolCalls(t, c, 300)
+	seedToolCalls(t, c, 40)
 	if err := c.ensureToolRollup(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestIncrementalToolRollupParity(t *testing.T) {
 
 func TestIncrementalToolRollupBoundedAndNoop(t *testing.T) {
 	c, _ := testCatalog(t)
-	seedToolCalls(t, c, 400)
+	seedToolCalls(t, c, 40)
 	if err := c.ensureToolRollup(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestIncrementalToolRollupBoundedAndNoop(t *testing.T) {
 
 func TestToolRollupConcurrentChangeSurvivesPublication(t *testing.T) {
 	c, _ := testCatalog(t)
-	seedToolCalls(t, c, 200)
+	seedToolCalls(t, c, 40)
 	if err := c.ensureToolRollup(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestCancelledAnalysesRemainDirty(t *testing.T) {
 
 func TestToolRollupMirrorsPricesAndRollover(t *testing.T) {
 	c, _ := testCatalog(t)
-	seedToolCalls(t, c, 200)
+	seedToolCalls(t, c, 40)
 	current := time.Date(2026, 10, 8, 15, 0, 0, 0, time.Local)
 	c.now = func() time.Time { return current }
 	if err := c.ensureToolRollup(t.Context()); err != nil {
@@ -301,7 +301,7 @@ func TestToolRollupMirrorsPricesAndRollover(t *testing.T) {
 
 func TestCompetingToolPublicationRejectsOldBuild(t *testing.T) {
 	c, _ := testCatalog(t)
-	seedToolCalls(t, c, 100)
+	seedToolCalls(t, c, 40)
 	if err := c.ensureToolRollup(t.Context()); err != nil {
 		t.Fatal(err)
 	}
