@@ -337,8 +337,9 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
 });
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
-  const { page } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
+  const { page, settled, shot } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
   await activateHeaderTool(page, "usageSummaryToggle");
+  await settled();
   const link = page.getByRole("link", { name: /^Tokens, 6h:/ });
   await link.focus();
   await page.evaluate(() => window.dispatchEvent(new Event("pharos:carbon-settings")));
@@ -346,6 +347,18 @@ test("summary value links retain keyboard focus when the summary rerenders", { s
   await page.keyboard.press("Escape");
   await page.locator("#usageSummary").waitFor({ state: "hidden" });
   await page.waitForFunction(() => document.activeElement?.id === "usageSummaryToggle");
+  // A full reload restores the saved card while its fresh request is pending.
+  let finish;
+  const pending = new Promise(resolve => {finish = resolve;});
+  t.after(() => finish());
+  await page.route('**/api/usage/summary*', async route => {await pending; await route.continue();});
+  await page.reload();
+  await activateHeaderTool(page, 'usageSummaryToggle');
+  await link.waitFor();
+  await link.focus();
+  await shot('quick-stats-cached-refresh');
+  finish(); await settled();
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label')?.startsWith('Tokens, 6h:'));
 });
 
 // Focus is in `surface`, or with the browser itself (a native modal dialog
@@ -2155,13 +2168,28 @@ test('Ask Pharos blocking and reopened browsing overlays handle a ready destinat
 });
 
 test('Quick Stats disclosure and editing keep keyboard focus on the control being used', { skip }, async t => {
-  const { page, shot } = await open(t, { url: '/settings/layout', ready: '#quickStatsExpand' });
+  const { page, settled, shot } = await open(t, { url: '/settings/layout', ready: '#quickStatsExpand' });
+  let finish;
+  const pending = new Promise(resolve => {finish = resolve;});
+  t.after(() => finish());
+  await page.route('**/api/usage/summary*', async route => {await pending; await route.continue();});
   const disclosure = page.locator('#quickStatsExpand');
   await press(disclosure);
   await page.locator('#quickStatsOptions').waitFor();
+  await page.locator('#quickStatsPreview td.usage-summary-pending').first().waitFor();
   assert.ok(await disclosure.evaluate(element => document.activeElement === element));
   const handle = page.getByRole('button', { name: 'Arrange Tokens', exact: true });
   const focused = async locator => page.waitForFunction(element => document.activeElement === element, await locator.elementHandle());
+  await handle.focus();
+  finish(); await settled();
+  // Loaded preview and toolbox values follow the numeric column headings,
+  // even when their existing cells were first rendered as placeholders.
+  await page.waitForFunction(() => {
+    const heading = document.querySelector('#quickStatsPreview th[data-quick-stats-window]');
+    return [...document.querySelectorAll('#quickStatsEditor td')].every(cell => getComputedStyle(cell).textAlign === getComputedStyle(heading).textAlign);
+  });
+  await focused(handle);
+  await shot('quick-stats-values-loaded');
   await press(handle, 'Alt+ArrowUp');
   await focused(handle);
   await page.keyboard.press('Delete');
