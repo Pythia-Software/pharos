@@ -409,6 +409,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureRequestTimings(); err != nil {
 		return fmt.Errorf("initialize request timings: %w", err)
 	}
+	if err := c.ensureFastTiers(); err != nil {
+		return fmt.Errorf("apply fast service tiers: %w", err)
+	}
 	if err := c.ensureRequestEvidence(); err != nil {
 		return fmt.Errorf("initialize request evidence: %w", err)
 	}
