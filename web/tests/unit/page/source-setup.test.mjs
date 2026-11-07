@@ -18,14 +18,14 @@ test('source setup begins without tool assumptions or implicit agent dependencie
 
 test('presence detection offers only found tools first and preserves deliberate choices',()=>{
   const wizard=create();wizard.detect([{kind:'codex'},{kind:'conductor'},{kind:'unknown'},{kind:'codex'}]);
-  assert.deepEqual(plain(wizard.toolGroups()),{found:['codex','conductor'],other:['claude','tl1','antigravity','copilot','opencode']});
+  assert.deepEqual(plain(wizard.toolGroups()),{found:['codex','conductor'],other:['claude','tl1','antigravity','copilot','opencode','cline']});
   assert.deepEqual(plain(wizard.request().kinds),['codex','conductor']);
   wizard.choose('codex',false);wizard.choose('tl1',true);
   wizard.detect([{kind:'codex'},{kind:'conductor'}]);
   assert.deepEqual(plain(wizard.request().kinds),['conductor','tl1']);
   const empty=create();empty.detect([]);
   assert.deepEqual(plain(empty.request().kinds),[]);
-  assert.equal(empty.toolGroups().other.length,7);
+  assert.equal(empty.toolGroups().other.length,8);
 });
 
 test('source consent includes only selected tools and preserves excluded folders across rediscovery',()=>{

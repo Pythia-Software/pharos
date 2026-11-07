@@ -146,6 +146,17 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 			rel, _ := filepath.Rel(source.Path, file)
 			plan.files = append(plan.files, captureItem{file, filepath.ToSlash(rel)})
 		}
+	case "cline":
+		// The sessions' manifests and messages: not the provider settings,
+		// which hold credentials, nor Cline's index or checkpoints.
+		files, err := (&clineAdapter{baseAdapter{config: source}}).captureFiles()
+		if err != nil {
+			return plan, fmt.Errorf("Cline sessions are unavailable: %w", err)
+		}
+		for _, file := range files {
+			rel, _ := filepath.Rel(source.Path, file)
+			plan.files = append(plan.files, captureItem{file, filepath.ToSlash(rel)})
+		}
 	case "opencode":
 		// Each database, without the tables that hold credentials and
 		// settings (captureTables).
