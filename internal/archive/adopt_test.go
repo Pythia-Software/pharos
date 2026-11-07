@@ -39,9 +39,9 @@ func newLegacyInstall(t *testing.T) legacyInstall {
 	if err := os.MkdirAll(projects, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for session := range 12 {
+	for session := range 8 {
 		lines := []string{}
-		for message := range 8 {
+		for message := range 2 {
 			lines = append(lines, fmt.Sprintf(`{"sessionId":"s%d","uuid":"s%d-m%d","type":"user","cwd":"/Users/test/pharos","timestamp":"2026-09-%02dT00:%02d:00Z","message":{"content":"session%d message %d %s"}}`,
 				session, session, message, session+1, message, session, message, strings.Repeat("padding ", 50)))
 		}
@@ -107,15 +107,14 @@ include_archived = true
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := OpenCatalog(loaded.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The fixture rewinds a current catalog; adoption itself still runs the
+	// real legacy migration. Building today's schema is not under test here.
+	catalog := openTestCatalog(t, loaded.CatalogPath)
 	adapter, err := MakeAdapter(loaded.Sources[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result := catalog.Ingest(adapter, nil); result.Error != nil || result.Conversations != 12 {
+	if result := catalog.Ingest(adapter, nil); result.Error != nil || result.Conversations != 8 {
 		t.Fatalf("legacy ingest: %+v", result)
 	}
 	rewindToSchema4(t, catalog.DB)
@@ -154,7 +153,7 @@ func rewindToSchema4(t *testing.T, db *sql.DB) {
 // one pooled connection that never checkpoints, so commits stay in the WAL.
 func openService(t *testing.T, path string) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous("+catalogDurability.synchronous+")")
 	if err != nil {
 		t.Fatal(err)
 	}

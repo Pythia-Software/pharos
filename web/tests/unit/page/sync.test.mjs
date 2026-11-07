@@ -14,6 +14,41 @@ const { pharosSync, document: syncDocument } = loadClassicScript("sync.js", { Da
 
 const run = (id, state, conversations = 0, workspaces = conversations) => ({ id, kind: "automatic-sync", state, phase: "checking", conversations, workspaces });
 
+test("verification summaries distinguish selective repairs from unresolved checks", () => {
+  assert.equal(pharosSync.verificationSummary(null), "");
+  const verification = { checked: 5, passed: 2, reindexed: 1, mismatch: 1, deferred: 1, errors: 1 };
+  const summary = pharosSync.verificationSummary({ state: "complete", verification });
+  for (const text of ["5 inputs checked", "2 passed", "1 reindexed", "1 still mismatch", "1 deferred", "1 errors"]) assert.ok(summary.includes(text));
+  assert.match(pharosSync.verificationSummary({ state: "interrupted", verification }), /stopped/);
+  assert.match(pharosSync.verificationSummary({ state: "running", verification }), /in progress/);
+});
+
+test("mismatch actions request full verification in the selected source scope", async () => {
+  const dashboard = syncDocument.createElement("div");
+  dashboard.prepend = (...nodes) => dashboard.children.unshift(...nodes);
+  const posts = [];
+  const script = loadClassicScript("sync.js", {
+    document: { ...syncDocument, getElementById: id => id === "syncDashboard" ? dashboard : null },
+    fetch: async (path, options) => {
+      if (options?.method === "POST") posts.push({ path, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => path === "/api/sync/status" ? { settings: {}, issues: [{ id: "old-alert", source_name: "codex", unit: "rollout" }] } : { runs: [], issues: [] } };
+    },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  const elements = root => [root, ...(root.children || []).flatMap(elements)];
+  for (const [label, repair] of [["Verify this source again", false], ["Verify & repair this source", true]]) {
+    const button = elements(dashboard).find(el => el.tagName === "BUTTON" && el.textContent === label);
+    assert.ok(button, label);
+    await button.onclick();
+    assert.deepEqual(posts.at(-1), { path: "/api/sync/verify", body: { all: true, repair, sources: ["codex"] } });
+  }
+  const button = elements(dashboard).find(el => el.tagName === "BUTTON" && el.textContent === "Verify all & repair mismatches");
+  assert.ok(button);
+  await button.onclick();
+  assert.deepEqual(posts.at(-1), { path: "/api/sync/verify", body: { all: true, repair: true } });
+  assert.equal(script.window.pharosSync.status().issues.length, 1);
+});
+
 test("empty pages distinguish source setup, idle sources and a running sync", () => {
   const message = status => emptyLibraryState(status)?.message ?? null;
   assert.equal(emptyLibraryState(null), null);

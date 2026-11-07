@@ -671,7 +671,6 @@ func (j *backupJob) execute() error {
 		item.Files, item.Bytes = j.run.FilesTotal-files, j.run.BytesTotal-bytes
 		manifest.Items = append(manifest.Items, item)
 	}
-	j.run.BytesTotal += j.run.CatalogBytes
 	if len(j.run.Errors) > 0 {
 		return nil
 	}
@@ -734,6 +733,7 @@ func (j *backupJob) backupCatalog(previous *backupCatalog) (*backupCatalog, erro
 	destination := filepath.Join(j.dest, filepath.FromSlash(j.plan.catalog.Path))
 	if previous != nil && previous.Path == j.plan.catalog.Path && previous.Source == state && current(destination, previous.Size, previous.MTimeNS) {
 		j.run.CatalogBytes = previous.Size
+		j.run.BytesTotal = previous.Size
 		return previous, nil
 	}
 	if err := ensureFree(j.dest, state.Size+state.WALSize); err != nil {
@@ -745,7 +745,18 @@ func (j *backupJob) backupCatalog(previous *backupCatalog) (*backupCatalog, erro
 	temporary := destination + backupTempSuffix
 	os.Remove(temporary)
 	ctx, stop := j.boundWAL(source, state.WALSize)
-	err = snapshotSQLite(ctx, source, temporary)
+	var reported time.Time
+	var reportedDone int64
+	err = snapshotSQLiteWithProgress(ctx, source, temporary, func(done, total int64) {
+		// The catalog is copied first. Keep absolute counts so retries do
+		// not count abandoned pages twice, and later files add to this copy.
+		j.run.BytesCopied, j.run.BytesTotal = done, total
+		if done == 0 || reportedDone == 0 || done == total || time.Since(reported) >= 250*time.Millisecond {
+			j.report()
+			reported = time.Now()
+			reportedDone = done
+		}
+	})
 	stop()
 	if cause := context.Cause(ctx); err != nil && errors.Is(cause, errBackupWALGrew) {
 		err = cause
@@ -766,7 +777,7 @@ func (j *backupJob) backupCatalog(previous *backupCatalog) (*backupCatalog, erro
 		return nil, toBackupDestination(err)
 	}
 	j.run.CatalogBytes, j.run.CatalogCopied = info.Size(), true
-	j.run.BytesCopied += info.Size()
+	j.run.BytesCopied, j.run.BytesTotal = info.Size(), info.Size()
 	j.report()
 	return &backupCatalog{Path: j.plan.catalog.Path, Size: info.Size(), MTimeNS: info.ModTime().UnixNano(), Method: "sqlite-backup", TakenAt: now(), Source: state}, nil
 }

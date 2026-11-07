@@ -124,6 +124,10 @@ type labelingJob struct {
 	CLIVersion, CLIPath                string
 }
 
+// Tests use the same unflushed commits as their catalogs. Production always
+// waits for a FULL commit before acknowledging paid work.
+var labelingLedgerSynchronous = "FULL"
+
 // openLabelingLedger opens a prepared dataset for writing the run ledger.
 func openLabelingLedger(dir string) (*sql.DB, error) {
 	dir, err := filepath.Abs(dir)
@@ -141,7 +145,7 @@ func openLabelingLedger(dir string) (*sql.DB, error) {
 	// busy timeout. A finished dataset leaves prepare in rollback-journal mode;
 	// the first ledger writer switches it.
 	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+
-		"?_pragma=busy_timeout(60000)&_pragma=synchronous(FULL)&_txlock=immediate")
+		"?_pragma=busy_timeout(60000)&_pragma=synchronous("+labelingLedgerSynchronous+")&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}

@@ -51,6 +51,12 @@ var durableCatalog = catalogPragmas{synchronous: "FULL", fullfsync: true, checkp
 // durability itself restore durableCatalog.
 var catalogDurability = durableCatalog
 
+// syncToDrive flushes retained files and their directories before publication.
+// Ordinary tests keep writes in the OS cache, as testDurability does for
+// SQLite; durability tests restore the real flush. A process exit alone does
+// not discard that cache, and the suite does not simulate drive power loss.
+var syncToDrive = (*os.File).Sync
+
 func catalogDSN(path string) string {
 	pragmas := catalogDurability
 	fullfsync, checkpointFullfsync := 0, 0
