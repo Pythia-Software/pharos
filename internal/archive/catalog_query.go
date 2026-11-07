@@ -144,6 +144,22 @@ const initializeLockName = ".initialize.lock"
 
 var errCatalogInitializing = errors.New("Pharos is upgrading this library's catalog; try again in a moment")
 
+// catalogInitializationInProgress lets the app's startup watchdog distinguish
+// a catalog upgrade from a service that failed to become ready. The shared
+// probe never blocks or excludes other readers, and leaves no lock behind.
+func catalogInitializationInProgress(path string) bool {
+	file, err := os.Open(filepath.Join(filepath.Dir(path), initializeLockName))
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	err = syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+	if err == nil {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	}
+	return errors.Is(err, syscall.EWOULDBLOCK)
+}
+
 // initializeLocked runs Initialize under the initialize lock, unless this
 // build already completed it. A service waits for an in-progress upgrade;
 // query opens give up after a moment and leave older schemas to the service.
