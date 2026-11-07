@@ -216,6 +216,7 @@ body[data-application-setup] #navigator{display:none}
 </form></section>
 <section class="card" id="next" tabindex="-1" hidden><h2 id="ready-title">Your library is ready</h2><p>Next, choose how Pharos finds your AI conversations on this Mac: in the places your tools usually keep them, or only in folders you name. Nothing is copied until you approve it.</p><div class="setup-actions"><a class="button secondary" href="/library">Browse library</a><button class="primary" id="configure-sources" type="button">Continue</button></div></section>
 </div></dialog>
+<script src="/assets/host-services.js"></script>
 <script id="setup-wizard-model">
 function nextPharosLibraryName(libraries) {
   const names = new Set(libraries.map(library => library.name));
@@ -435,8 +436,7 @@ async function pickFolder(id,button){
   for(const [el]of controls)el.disabled=true;
   notice('');
   try{
-    const native=window.webkit?.messageHandlers?.pharosLibrary;
-    const path=native?await native.postMessage({action:'chooseFolder'}):(await call('choose-folder',{})).path;
+    const path=window.pharosHost.capabilities.folders.available?await window.pharosHost.folders.chooseLibraryFolder():(await call('choose-folder',{})).path;
     if(path){$(id).value=path+(id==='recover-path'?'/Recovered Library':'');if(id==='path')updateLibraryProposal()}
   }finally{for(const [el,disabled]of controls)el.disabled=disabled;button.focus()}
 }

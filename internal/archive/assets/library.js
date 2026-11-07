@@ -1,7 +1,7 @@
 // Pharos library, drive and captures. GET /api/library/status says what holds
 // or writes the library; the header shows it and estimated completion times.
-// In the app, the drive panel's Eject goes through the pharosLibrary message
-// handler, which releases the library, stops agents' MCP servers running from
+// In the app, the drive panel's Eject goes through the host adapter, which
+// asks native code to release the library, stop agents' MCP servers running from
 // the drive, quits, and ejects the drive. Settings → Sources shows
 // captures from other Macs alongside this Mac's sources; Settings →
 // Health gains the drive's checks; Backups holds backup checks and controls.
@@ -380,8 +380,7 @@
   }
   const copy = async text => {
     try {
-      if (typeof window.pharosCopyText === 'function') await window.pharosCopyText(text);
-      else await navigator.clipboard.writeText(text);
+      await window.pharosHost.clipboard.writeText(text);
       toast('Copied');
     } catch { toast('Could not copy'); }
   };
@@ -390,7 +389,7 @@
     line.append(node('code', '', text), button('Copy', '', () => copy(text)));
     return line;
   };
-  const nativeLibrary = () => window.webkit?.messageHandlers?.pharosLibrary;
+  const nativeEjectAvailable = () => window.pharosHost.capabilities.eject.available;
   // With the unified activity preference on, status-panel.js renders the
   // chip, its panel and the header's Index changes state from the status
   // store; this file then leaves them alone (one renderer, #92 and #137).
@@ -540,7 +539,7 @@
 
   // Sparkle supplies only verified, installable releases through the native
   // bridge. Source builds and ordinary browser sessions have no update action.
-  const nativeUpdates = () => window.webkit?.messageHandlers?.pharosUpdates;
+  const nativeUpdatesAvailable = () => window.pharosHost.capabilities.updates.available;
   function appUpdatePresentation(state) {
     if (!state?.version || !['available', 'downloading', 'preparing', 'installing'].includes(state.phase)) return null;
     const busy = state.phase !== 'available';
@@ -563,7 +562,7 @@
     return element;
   };
   function renderAppUpdate() {
-    const view = nativeUpdates() && appUpdatePresentation(appUpdate);
+    const view = nativeUpdatesAvailable() && appUpdatePresentation(appUpdate);
     if (!view) { appUpdateButton?.remove(); appUpdateButton = null; return; }
     if (!ensureHeaderAction()) return;
     if (!appUpdateButton) {
@@ -584,7 +583,7 @@
         try {
           // Native status events own state after this starts: an older reply
           // must not overwrite download progress that arrived in the meantime.
-          await nativeUpdates().postMessage({action: 'install'});
+          await window.pharosHost.updates.install();
         } catch (error) { toast(error.message || 'Could not start the Pharos update.'); }
         finally { appUpdateRequest = false; await refreshAppUpdate(); }
       };
@@ -605,10 +604,10 @@
   }
   let appUpdateRevision = 0;
   async function refreshAppUpdate() {
-    if (!nativeUpdates()) return;
+    if (!nativeUpdatesAvailable()) return;
     const revision = appUpdateRevision;
     try {
-      const state = await nativeUpdates().postMessage({action: 'status'});
+      const state = await window.pharosHost.updates.status();
       if (revision === appUpdateRevision) { appUpdate = state; renderAppUpdate(); }
     } catch { /* Native update dialogs report update failures. */ }
   }
@@ -851,7 +850,7 @@
     const drive = status.drive || {};
     const head = node('div', 'pharos-panel-head');
     head.append(node('h2', '', drive.ejectable ? drive.name : status.portable ? 'Library' : 'This Mac'));
-    if (drive.ejectable && nativeLibrary()) head.append(ejectButton(drive, status.activities || []));
+    if (drive.ejectable && nativeEjectAvailable()) head.append(ejectButton(drive, status.activities || []));
     content.append(head);
     const where = [{external: 'External drive', 'disk-image': 'Disk image', internal: "This Mac's internal disk"}[drive.location] || 'Drive', status.library_dir].filter(Boolean).join(' · ');
     content.append(node('div', 'pharos-sub', where));
@@ -967,12 +966,10 @@
   }
 
   async function eject(drive) {
-    const handler = nativeLibrary();
-    if (!handler) return;
     ejectState = {phase: 'ejecting', message: 'Releasing…'};
     renderPanel();
     try {
-      await handler.postMessage({action: 'eject'});
+      await window.pharosHost.lifecycle.requestEject();
       // The app now quits, and the drive ejects once it has.
       ejectState = {phase: 'ejecting', message: 'Ejecting…'};
     } catch (error) {

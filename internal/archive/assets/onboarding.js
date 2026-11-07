@@ -336,10 +336,9 @@ function pharosCapabilityRows(providers,kinds) {
 
   // The app's folder picker, where there is one: the native panel, or the
   // app manager's (a browser window of the app). purpose is source or export.
-  const pickerAvailable = () => Boolean(document.getElementById('application-setup') || window.pharosManagedSession || window.webkit?.messageHandlers?.pharosLibrary);
+  const pickerAvailable = () => Boolean(document.getElementById('application-setup') || window.pharosManagedSession || window.pharosHost.capabilities.folders.available);
   async function choosePath(purpose) {
-    const native = window.webkit?.messageHandlers?.pharosLibrary;
-    return native ? await native.postMessage({action: 'chooseFolder', purpose}) : (await call('/api/app/choose-folder', {method: 'POST', body: JSON.stringify({purpose})})).path;
+    return window.pharosHost.capabilities.folders.available ? await window.pharosHost.folders.chooseLibraryFolder(purpose) : (await call('/api/app/choose-folder', {method: 'POST', body: JSON.stringify({purpose})})).path;
   }
 
   // A tool as a chip: a checkbox and its name, marked when spotted here.

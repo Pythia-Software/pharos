@@ -3,7 +3,10 @@
 // (window.pharosLibrary).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadClassicScript, plain } from "../helpers/classic-script.mjs";
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import vm from 'node:vm';
+import { assets, loadClassicScript, plain } from "../helpers/classic-script.mjs";
 
 const script = loadClassicScript("library.js");
 const library = script.window.pharosLibrary;
@@ -322,4 +325,17 @@ test("a run that left sources to the next index for a capture is not a failure",
   assert.equal(failed({ state: 'failed', results: [] }), true);
   assert.equal(failed({ state: 'interrupted', results: [] }), true);
   assert.equal(failed({ state: 'interrupted', stop_requested: true, results: [{ source: 'codex', error: 'interrupted: stopped' }] }), false);
+});
+
+test('library copy actions use host services and keep copy failures visible', async () => {
+  const source=readFileSync(join(assets,'library.js'),'utf8');
+  const copy=source.slice(source.indexOf('  const copy = async text => {'),source.indexOf('\n  const codeLine ='));
+  for(const fail of [false,true]) {
+    const writes=[],toasts=[];
+    const window={pharosHost:{clipboard:{writeText:async text=>{writes.push(text);if(fail)throw new Error('Copy denied');}}}};
+    const run=vm.runInNewContext(copy+';copy',{window,toast:message=>toasts.push(message)});
+    await run('folder path');
+    assert.deepEqual(writes,['folder path']);
+    assert.deepEqual(toasts,[fail?'Could not copy':'Copied']);
+  }
 });

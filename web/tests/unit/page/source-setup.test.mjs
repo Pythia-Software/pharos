@@ -117,3 +117,27 @@ test('setup describes each tool from the registry and says what each records',()
   assert.equal(tokens.cells[0].name,'Claude Code');
   assert.deepEqual(plain(capabilityRows(registry.providers,['unknown'])),[]);
 });
+
+test('source and export pickers use host capabilities, retaining service fallback and manual path input', async () => {
+  const source=readFileSync(join(assets,'onboarding.js'),'utf8');
+  const picker=source.slice(source.indexOf('  const pickerAvailable ='),source.indexOf('\n  // A tool as a chip:'));
+  const pathField=source.slice(source.indexOf('  function pathField('),source.indexOf('\n  // mode: start'));
+  const element=()=>({children:[],append(...children){this.children.push(...children);},setAttribute(){}});
+  for(const native of [false,true]) for(const managed of [false,true]) for(const purpose of ['source','export']) {
+    const calls=[],window={pharosHost:{capabilities:{folders:{available:native}},folders:{chooseLibraryFolder:async value=>{calls.push(['host',value]);return '/chosen';}}},pharosManagedSession:managed};
+    const model=vm.runInNewContext(picker+pathField+';({pickerAvailable,choosePath,pathField})',{
+      window,document:{getElementById:()=>null},node:element,button:()=>element(),
+      call:async(path,options)=>{calls.push([path,JSON.parse(options.body)]);return {path:'/service-machine'};},
+    });
+    assert.equal(model.pickerAvailable(),native||managed);
+    assert.equal(await model.choosePath(purpose),native?'/chosen':'/service-machine');
+    assert.deepEqual(calls,native?[['host',purpose]]:[['/api/app/choose-folder',{purpose}]]);
+    let changed;
+    const {row,input}=model.pathField('Folder','/manual','path',purpose,value=>{changed=value;},()=>{});
+    input.value='/typed/path';input.oninput();
+    assert.equal(changed,'/typed/path');
+    assert.equal(row.children.length,native||managed?2:1,'manual entry is always available; unsupported pickers stay hidden');
+    window.pharosHost.folders.chooseLibraryFolder=async()=>null;
+    if(native)assert.equal(await model.choosePath(purpose),null);
+  }
+});
