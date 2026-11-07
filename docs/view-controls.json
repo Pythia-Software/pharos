@@ -260,6 +260,10 @@
       "field": "nav_expanded"
     },
     {
+      "file": "web/src/data-taxonomy.tsx",
+      "field": "nav_expanded"
+    },
+    {
       "file": "web/src/findings.tsx",
       "field": "optimize_area"
     },
@@ -2041,6 +2045,15 @@
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
+      "key": "4c1b6b4095ac45f2:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "openPanel",
+      "tag": "button",
+      "control": "'button', 'pharos-source-guide', 'Data Guide'",
+      "contract": "view.guide_open",
+      "reason": "Opens the shared read-only guide at Sources, loading its standalone entry during first-run setup. Dialog visibility and selected noun use guide_open and guide_entity."
+    },
+    {
       "key": "72f7e973d26732d2:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "optionalBackup",
@@ -2328,6 +2341,16 @@
       "reason": "Library-wide fingerprint event display preference, persisted independently of a page URL and applied immediately to every fingerprint."
     },
     {
+      "key": "html:6ee22a83547c6076:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button type=\"button\" data-view-field=\"guide_open\" onclick=\"pharosOpenDataGuide('sources',this)\">",
+      "binding": "guide_open",
+      "contract": "view.guide_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "html:6f2936f3f335b6b5:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -2507,6 +2530,16 @@
       "control": "<button data-view=\"analyze\">",
       "contract": "action",
       "reason": "Navigation, clipboard, refresh or bookmark/history mutation action; no applied content view state."
+    },
+    {
+      "key": "html:2ce0e745682cc646:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"dataGuideToggle\" class=\"header-icon\" type=\"button\" hidden data-view-field=\"guide_open\" aria-label=\"Data Guide\" title=\"Data Guide\" aria-haspopup=\"dialog\" onclick=\"pharosOpenDataGuide(undefined,headerToolAnchor(this))\">",
+      "binding": "guide_open",
+      "contract": "view.guide_open",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "html:302c09e984c88945:0",
@@ -4017,13 +4050,13 @@
       "reason": "Shared group-count field of the card editors; each editor owns its draft value and saves it with the card or template."
     },
     {
-      "key": "02366ad58dfcddfb:0",
+      "key": "561d101f966db39a:0",
       "file": "web/src/card-library.tsx",
       "owner": "CardLibrary",
       "tag": "select",
-      "control": "aria-label=\"Data source\" value={dataset} onChange={event => filter(setDataset)(event.target.value)}",
+      "control": "aria-label=\"Dataset\" value={dataset} onChange={event => filter(setDataset)(event.target.value)}",
       "contract": "cards",
-      "reason": "card_* filters/sort/topic plus card_window/card_filters; navigation and collection actions use their existing contracts."
+      "reason": "Dataset filter uses the existing card_dataset URL field; its label distinguishes query datasets from imported history sources."
     },
     {
       "key": "8dab89eb60a6517d:0",
@@ -4165,13 +4198,13 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "106858b8ced78552:0",
+      "key": "acb2c88ae5fd36c5:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyChart",
       "tag": "svg",
-      "control": "aria-label={`${mode === \"user\" ? \"Continuous conversation threads\" : \"Estimated model activity\"} stacked by ${counting === \"agent\" ? \"session\" : \"workspace\"}; drag to zoom`} onPointerMove={event => { const point = coordinates(event), current = dragRef.current;if (current) moveDrag({ ...current, current: point.time });else onHover(point); }} onPointerLeave={() => { if (!dragRef.current) onHover(null); }} onPointerDown={event => { if (event.button !== 0) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientY - rect.top < top || event.clientY - rect.top > bottom) return; event.preventDefault();const time = coordinates(event).time; moveDrag({ anchor: time, current: time, pointerId: event.pointerId });onHover(null);event.currentTarget.setPointerCapture(event.pointerId); }} onPointerUp={event => { const current = dragRef.current;if (!current || current.pointerId !== event.pointerId) return; const point = coordinates(event);cancelDrag(); if (Math.abs(x(point.time) - x(current.anchor)) > 6) onZoom([Math.min(current.anchor, point.time), Math.max(current.anchor, point.time)]); else if (point.unit) onSelect(point.unit); }} onPointerCancel={cancelDrag} onLostPointerCapture={() => { if (dragRef.current) cancelDrag(); }}",
+      "control": "aria-label={`${mode === \"user\" ? \"Continuous conversations\" : \"Estimated model activity\"} stacked by ${counting === \"agent\" ? \"conversation\" : \"workspace\"}; drag to zoom`} onPointerMove={event => { const point = coordinates(event), current = dragRef.current;if (current) moveDrag({ ...current, current: point.time });else onHover(point); }} onPointerLeave={() => { if (!dragRef.current) onHover(null); }} onPointerDown={event => { if (event.button !== 0) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientY - rect.top < top || event.clientY - rect.top > bottom) return; event.preventDefault();const time = coordinates(event).time; moveDrag({ anchor: time, current: time, pointerId: event.pointerId });onHover(null);event.currentTarget.setPointerCapture(event.pointerId); }} onPointerUp={event => { const current = dragRef.current;if (!current || current.pointerId !== event.pointerId) return; const point = coordinates(event);cancelDrag(); if (Math.abs(x(point.time) - x(current.anchor)) > 6) onZoom([Math.min(current.anchor, point.time), Math.max(current.anchor, point.time)]); else if (point.unit) onSelect(point.unit); }} onPointerCancel={cancelDrag} onLostPointerCapture={() => { if (dragRef.current) cancelDrag(); }}",
       "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
+      "reason": "Ribbon selection and zoom use analyze_parallelism. The updated accessible label names the counted conversation or workspace; hover and an unfinished drag remain transient."
     },
     {
       "key": "cc8808c8b6fc9051:0",
@@ -4665,6 +4698,46 @@
       "reason": "Leaf and category actions write analyze_chart.selection once via the shared dashboard owner. Group actions expand to stable descendant values. Range and optional series expansion retain their existing analyze_filters/analyze_chart bindings."
     },
     {
+      "key": "81c65876d0ac42ca:0",
+      "file": "web/src/data-guide-examples.tsx",
+      "owner": "ConversationChoices",
+      "tag": "button",
+      "control": "data-view-field=\"guide_example\" aria-label={`Conversation ${key === \"review\" ? \"Review\" : \"Implementation\"}`} onClick={() => onConversationChange(key)}",
+      "binding": "guide_example",
+      "contract": "view.guide_example",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "e38f2db022ab5cbf:0",
+      "file": "web/src/data-guide-examples.tsx",
+      "owner": "ExampleTerm",
+      "tag": "button",
+      "control": "data-view-field=\"guide_entity\" aria-label={label ?? `Explain ${dataEntities[term].label.toLowerCase()}`} onClick={() => onSelect(term)}",
+      "binding": "guide_entity",
+      "contract": "view.guide_entity",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "5ca558edb583b4b4:0",
+      "file": "web/src/data-guide-examples.tsx",
+      "owner": "FinderExample",
+      "tag": "button",
+      "control": "data-view-field=\"guide_entity\" aria-label=\"Show Pharos library\" onClick={() => props.onSelect(\"libraries\")}",
+      "binding": "guide_entity",
+      "contract": "view.guide_entity",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "a1751b7f0956574c:0",
+      "file": "web/src/data-guide-examples.tsx",
+      "owner": "FinderExample",
+      "tag": "button",
+      "control": "data-view-field=\"guide_entity\" aria-label=\"Show Applications\" onClick={() => props.onSelect(\"sources\")}",
+      "binding": "guide_entity",
+      "contract": "view.guide_entity",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "14a033ebe0d2b22e:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "DataTaxonomyModal",
@@ -4674,72 +4747,33 @@
       "reason": "Guide visibility, entity and example are registered view fields."
     },
     {
-      "key": "1757ca3bdc87d6fe:0",
+      "key": "1e830d92a97c6ec1:0",
+      "file": "web/src/data-taxonomy.tsx",
+      "owner": "DataTaxonomyModal",
+      "tag": "DataGuideExample",
+      "control": "onSelect={selectEntity} onConversationChange={selectConversation}",
+      "contract": "view.guide_entity",
+      "reason": "Composite illustration delegates term and conversation selections to guide_entity and guide_example through shared useViewState bindings."
+    },
+    {
+      "key": "66209fc099270fa0:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "DataTaxonomyModal",
       "tag": "button",
-      "control": "data-view-field=\"guide_entity\" aria-label=\"Explain workspaces\" onClick={() => setEntity(\"workspaces\")}",
+      "control": "data-view-field=\"guide_entity\" onClick={() => selectEntity(page.id as DataEntity)}",
       "binding": "guide_entity",
       "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
+      "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "1af86a76eaac9620:0",
+      "key": "8dcc1701be64110c:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "onClick={() => { setConversation(\"implementation\"); setEntity(\"conversations\"); }}",
-      "contract": "view.guide_open",
-      "reason": "Guide visibility, entity and example are registered view fields."
-    },
-    {
-      "key": "2130c282d7af426f:0",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(\"tool_calls\")}",
+      "tag": "DashboardSelect",
+      "control": "data-view-field=\"guide_entity\" value={entity} onChange={event => selectEntity(event.target.value as DataEntity)}",
       "binding": "guide_entity",
       "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "2774eab82c3e530c:0",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "onClick={() => { setConversation(\"review\"); setEntity(\"conversations\"); }}",
-      "contract": "view.guide_open",
-      "reason": "Guide visibility, entity and example are registered view fields."
-    },
-    {
-      "key": "419506cdd3a665d8:0",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(\"agents\")}",
-      "binding": "guide_entity",
-      "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "419506cdd3a665d8:1",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(\"agents\")}",
-      "binding": "guide_entity",
-      "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "533b65543dfdeb48:0",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(key)}",
-      "binding": "guide_entity",
-      "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "aa1d3fedd850af1b:0",
@@ -4749,36 +4783,6 @@
       "control": "data-view-field=\"guide_open\" onClick={event => { if (event.target !== event.currentTarget) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.currentTarget.close(); }}",
       "binding": "guide_open",
       "contract": "view.guide_open",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "dd2a8d0fc2f37f17:0",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(\"messages\")}",
-      "binding": "guide_entity",
-      "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "dd2a8d0fc2f37f17:1",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(\"messages\")}",
-      "binding": "guide_entity",
-      "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "dd2a8d0fc2f37f17:2",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(\"messages\")}",
-      "binding": "guide_entity",
-      "contract": "view.guide_entity",
       "reason": "Bound by the shared view-state primitive."
     },
     {
@@ -6243,6 +6247,16 @@
       "control": "onChange={next => api.setDefinition?.(previous => ({ query: queryForSearchResultsView(previous.query, next), hostState: libraryHostState({ ...readLibraryHost(previous.hostState), view: next }) }))}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
+    },
+    {
+      "key": "67724fec68594a8b:0",
+      "file": "web/src/index.tsx",
+      "owner": "LibraryPage",
+      "tag": "button",
+      "control": "data-view-field=\"guide_open\" onClick={event => openDataTaxonomy(undefined, event.currentTarget)}",
+      "binding": "guide_open",
+      "contract": "view.guide_open",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "b2e3b1e8425cba7a:0",

@@ -51,7 +51,7 @@ const machineRecipes: QueryRecipe[] = [
 
 // ----- Parallel agents (parallelism) -----------------------------------------
 
-const parallelNote = "Counts workspaces or agents (your Parallelism counting setting) with an active conversation: observed prompt-to-response turns joined across gaps up to your Parallelism gap setting. Delegated agents run inside their root's workspace. Timing is estimated from transcript timestamps.";
+const parallelNote = "Counts workspaces or top-level conversations (your Parallelism counting setting) with an active conversation: observed prompt-to-response turns joined across gaps up to your Parallelism gap setting. Linked sub-agent activity stays with its initiating conversation. Timing is estimated from transcript timestamps.";
 const parallel = (recipe: Omit<QueryRecipe, "category" | "idea" | "dataset" | "field" | "unit"> & Partial<QueryRecipe>): QueryRecipe => ({ category: "machines", idea: "rhythm-03", dataset: "parallelism", field: "started_at", unit: "hours", note: parallelNote, ...recipe });
 
 const parallelRecipes: QueryRecipe[] = [
@@ -63,16 +63,16 @@ const parallelRecipes: QueryRecipe[] = [
     note: `${parallelNote} Each point weights concurrency by time: agent-hours ÷ hours with any agent active.`,
     measures: [daily("pl_daily_concurrency", "sum", "unit_ms", "Agents at once while active", { expression: "SUM([unit_ms])/NULLIF(SUM([elapsed_ms]),0)" })], cover: trendCover("pl_daily_concurrency"),
     trend: { value: { op: "sum", field: "unit_ms" }, per: { op: "sum", field: "elapsed_ms" }, lookback: 7, completeDays: true, valueLabel: "agents at once while active · 7-day average", pointValueLabel: "agents at once", trendLabel: "7d avg", sample: "agent-hour records",
-      detail: "Each point: agent time ÷ wall time with any agent active, over its trailing seven complete local days. Windows with no activity are gaps." } }),
-  // Agent hours, not an average: a per-day average would bake the lookback
+      detail: "Each point: summed workspace or conversation time ÷ clock time with any active, over its trailing seven complete local days. Windows with no activity are gaps." } }),
+  // Summed active hours, not an average: a per-day average would bake the lookback
   // into the formula, and a collected card's window can change later.
-  parallel({ id: "parallel-hours", title: "When agents overlap", description: "Agent hours at each hour of the day over the last {days} days, counting parallel agents separately.", days: [7, 30], action: "Find your parallel hours",
+  parallel({ id: "parallel-hours", title: "When agents overlap", description: "Summed active hours at each hour of the day over the last {days} days, counting parallel agents separately.", days: [7, 30], action: "Find your parallel hours",
     note: `${parallelNote} Taller hours had more agents running at once, more often. Hours with no activity are omitted.`,
-    measures: [{ id: "pl_hours", op: "sum", field: "unit_hours", groupBy: ["hour_of_day"], groupLimit: 24, sort: [{ key: "group0", dir: "asc" }], label: "Agent hours by local hour",
-      display: { kind: "bar-vertical", xLabel: "Local hour", yLabel: "Agent hours", format: { kind: "number", decimals: 1 } } }],
+    measures: [{ id: "pl_hours", op: "sum", field: "unit_hours", groupBy: ["hour_of_day"], groupLimit: 24, sort: [{ key: "group0", dir: "asc" }], label: "Summed active hours by local hour",
+      display: { kind: "bar-vertical", xLabel: "Local hour", yLabel: "Summed active hours", format: { kind: "number", decimals: 1 } } }],
     cover: { mode: "source", metricId: "pl_hours", kind: "bar-vertical", maxGroups: 24, height: 170 } }),
-  parallel({ id: "parallel-repositories", title: "Agent hours by repository", description: "Active agent hours per repository over the last {days} days, counting parallel agents separately.", days: [7, 30], action: "Compare repositories", measures: [],
-    exploration: compare(["repository_name"], [sum("pl_agent_hours", "unit_hours", "Agent hours"), sum("pl_elapsed", "repo_elapsed_hours", "Hours with any active"), { id: "pl_together", op: "formula", expression: "SUM([unit_hours])/NULLIF(SUM([repo_elapsed_hours]),0)", label: "At once while active" }, { id: "pl_units", op: "count_distinct", field: "unit_id", label: "Agents" }],
+  parallel({ id: "parallel-repositories", title: "Summed active hours by repository", description: "Active agent hours per repository over the last {days} days, counting parallel agents separately.", days: [7, 30], action: "Compare repositories", measures: [],
+    exploration: compare(["repository_name"], [sum("pl_agent_hours", "unit_hours", "Summed active hours"), sum("pl_elapsed", "repo_elapsed_hours", "Hours with any active"), { id: "pl_together", op: "formula", expression: "SUM([unit_hours])/NULLIF(SUM([repo_elapsed_hours]),0)", label: "At once while active" }, { id: "pl_units", op: "count_distinct", field: "unit_id", label: "Agents" }],
       "hours", "repositories", "Compare repositories", { context: [{ field: "pl_elapsed", label: "h with any active" }, { field: "pl_units", label: "agents" }] }),
     cover: { mode: "result", metricId: "pl_agent_hours", kind: "bar-horizontal", maxGroups: 6, showOther: true } }),
 ];
@@ -100,7 +100,7 @@ const carbonRecipes: QueryRecipe[] = [
   carbon("carbon-models", "CO₂e by model", "Models with the largest estimated emissions from recorded tokens over the last {days} days.", ["model_family"], "Compare models", false),
   carbon("carbon-providers", "CO₂e by provider", "Share of estimated emissions by agent provider over the last {days} days.", ["provider"], "Compare providers", true),
   carbon("carbon-effort", "CO₂e by effort", "Share of estimated emissions by recorded reasoning effort over the last {days} days.", ["effort"], "Compare effort levels", true,
-    { note: `${carbonNote} Effort is the level recorded on each usage fact; unspecified effort stays its own slice.` }),
+    { note: `${carbonNote} Effort is the level recorded on each usage record; unspecified effort stays its own slice.` }),
 ];
 
 // ----- Findings and pricing (current state) ----------------------------------

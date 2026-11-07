@@ -453,7 +453,7 @@ var failurePatterns = []failurePattern{
 	{name: "sandbox-write", match: regexp.MustCompile(`(?i)operation not permitted`), title: func(program, _ string) string {
 		return "The sandbox stops `" + defaultString(program, "a command") + "`"
 	},
-		why: "The agent's sandbox refuses the write, so the command fails however it is phrased.", change: "allow that path in the harness's sandbox settings, or move the write inside the workspace", lever: "harness-settings", label: "A sandbox setting"},
+		why: "The agent's sandbox refuses the write, so the command fails however it is phrased.", change: "allow that path in the agent app’s sandbox settings, or move the write inside the workspace", lever: "harness-settings", label: "A sandbox setting"},
 	{name: "test-imports", match: regexp.MustCompile(`(?i)importerror while importing test module|no module named`), title: func(program, scope string) string { return "Tests" + scopeIn(scope) + " fail on imports" },
 		why: "The test runner can't import the package, usually because the working directory isn't on the import path.", change: "document how to run the tests (for example `PYTHONPATH=. pytest`), or add a test command that sets it"},
 	{name: "zsh-glob", match: regexp.MustCompile(`(?i)no matches found`), title: func(string, string) string { return "zsh stops on file patterns that match nothing" },

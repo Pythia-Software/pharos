@@ -3,7 +3,7 @@ import type { AggregationClause, AggregationResultEntry } from "@pythia-software
 import { metricSeriesColor, otherSeriesColor } from "./chart-colors";
 
 type Role = "root" | "singleton" | "parent" | "subagent";
-const roleLabels: Record<Role, string> = { root: "Root", singleton: "Singleton", parent: "Parent", subagent: "Subagent" };
+const roleLabels: Record<Role, string> = { root: "Main agent", singleton: "Standalone agent", parent: "Parent agent", subagent: "Sub-agent" };
 
 // Distinct-session metrics are reduced before role shares. Preserve old saved
 // two-role views while the revised definition splits roots into two categories.
