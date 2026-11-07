@@ -2201,7 +2201,11 @@ func TestAuthorshipQuickUpgradeRetainsExcludedMirrors(t *testing.T) {
 	execTx(t, c.DB,
 		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('native','mirror','mirror',1,'{}')`,
 		`UPDATE workspaces SET source_kind='conductor' WHERE id='native'`,
-		`UPDATE workspaces SET source_kind='codex' WHERE id='mirror'`)
+		`UPDATE workspaces SET source_kind='codex' WHERE id='mirror'`,
+		`DELETE FROM meta WHERE key='authorship_quick_initialized'`)
+	if err := c.ensureQuickAuthorshipState(); err != nil {
+		t.Fatal(err)
+	}
 	update()
 	check("native", authorshipSuppressed, false)
 	check("mirror", authorshipCounted, true)
