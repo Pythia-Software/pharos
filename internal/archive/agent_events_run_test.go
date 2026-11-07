@@ -980,7 +980,15 @@ func TestAgentEventsSessionScoresSelectedConversations(t *testing.T) {
 	if token := agentEventsDirtyToken(t, catalog, "c-fork-late"); token != "" {
 		t.Fatalf("the late fork is dirty before its parent changed: %q", token)
 	}
-	execTx(t, catalog.DB, `UPDATE messages SET text='I will look into the export button first.' WHERE id='m-a1'`)
+	execTx(t, catalog.DB, `UPDATE messages SET text='I will look into the export button first.' WHERE id='m-a1'`,
+		`CREATE TRIGGER fail_event_fork_mark BEFORE INSERT ON agent_events_dirty WHEN NEW.conversation_id='c-fork3' BEGIN SELECT RAISE(ABORT,'test fork mark failure'); END`)
+	if _, err := session.Run(t.Context(), []string{"c-root"}, 0); err == nil || session.Discovered() {
+		t.Fatalf("a failed fork mark kept adopted input state: %v", err)
+	}
+	execTx(t, catalog.DB, `DROP TRIGGER fail_event_fork_mark`)
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	agentEventsStepDone(t, catalog, session, "c-root")
 	for _, id := range []string{"c-fork3", "c-fork-late"} {
 		if agentEventsDirtyToken(t, catalog, id) == "" {

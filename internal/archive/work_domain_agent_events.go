@@ -315,6 +315,9 @@ func (s *agentEventsSession) Run(ctx context.Context, ids []string, limit int) (
 	}
 	rediscover, err := s.refresh(ctx, ids)
 	if err != nil {
+		// A failed durable fork mark must not leave an adopted input
+		// token trusted on the next invocation.
+		s.discovered.Store(false)
 		return step, err
 	}
 	if rediscover {
