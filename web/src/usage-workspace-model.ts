@@ -9,27 +9,27 @@ import { peopleMessageLabelScope } from "./people-message-labels";
 // analysis URLs remain available while their specialized controls migrate.
 export const usageDatasets = {
   people_message_labels:{label:"People message labels",description:"Message classifications within People dashboard populations.",field:"label",searchLabel:"Message label"},
-  message_labels:{label:"Message labels",description:"Stored message functions, coverage and matching conversations.",field:"text",searchLabel:"Labeled message text"},
-  compactions: { label: "Compactions", description: "Recorded context compaction boundaries and trigger evidence.", field: "model", searchLabel: "Compaction Model Names" },
-  model_requests: { label: "Model requests", description: "Retained request usage and post-tool timing evidence.", field: "model", searchLabel: "Model request names" },
+  message_labels:{label:"Message labels",description:"What messages do, labeling coverage and matching conversations.",field:"text",searchLabel:"Labeled message text"},
+  compactions: { label: "Compactions", description: "Recorded context compactions and what triggered them.", field: "model", searchLabel: "Compaction Model Names" },
+  model_requests: { label: "Model requests", description: "Recorded model responses, token usage and timing after tool results.", field: "model", searchLabel: "Model request names" },
   usage: { label: "Token usage", description: "Tokens, API costs, models, cache, and pricing coverage.", field: "model", searchLabel: "Token Usage Model Names" },
   conversation_activity: { label: "Conversation activity", description: "Human messages and recorded output across conversations.", field: "root_model_family", searchLabel: "Top-level Conversation Model Names" },
-  writing: { label: "Human words by workspace", description: "Authorship totals across each workspace’s conversations and folded delegated work.", field: "title", searchLabel: "Workspace Titles" },
-  writing_messages: { label: "Human messages", description: "Individual messages and their authorship evidence.", field: "text", searchLabel: "Conversation Message Text" },
+  writing: { label: "Human words by workspace", description: "Word totals across each workspace’s conversations, including linked sub-agent activity.", field: "title", searchLabel: "Workspace Titles" },
+  writing_messages: { label: "User messages", description: "Messages in the user role, with text classified by where it came from.", field: "text", searchLabel: "Conversation Message Text" },
   tool_calls: { label: "Tool calls", description: "Commands, results, timing, status, and context added or carried.", field: "command", searchLabel: "Workspace Tool Command Text" },
-  tools: { label: "Tool summary", description: "Tool use grouped by work, tool, and command.", field: "tool_name", searchLabel: "Workspace Tool Names" },
-  mcp_calls: { label: "MCP calls", description: "Calls to Pharos's MCP server, sanitized arguments, output estimates, and timing.", field: "arguments_json", searchLabel: "MCP Call Arguments" },
-  skill_usages: { label: "Skill evidence", description: "Invocations, file loads, retained bodies, and source evidence.", field: "skill_name", searchLabel: "Skill Names" },
+  tools: { label: "Tool summary", description: "Daily tool-call totals by tool, command, repository and agent settings.", field: "tool_name", searchLabel: "Workspace Tool Names" },
+  mcp_calls: { label: "Pharos MCP requests", description: "Calls to Pharos's MCP server, sanitized arguments, output estimates, and timing.", field: "arguments_json", searchLabel: "MCP Call Arguments" },
+  skill_usages: { label: "Skill evidence", description: "Recorded skill invocations, file loads and saved instruction text.", field: "skill_name", searchLabel: "Skill Names" },
   tl1_attempts: { label: "TL1 attempts", description: "Recorded task attempts, configurations, outcomes, and costs.", field: "title", searchLabel: "TL1 Task Titles" },
-  parallelism: { label: "Parallel activity", description: "Hour-by-agent records with the existing counting assumptions.", field: "model", searchLabel: "Parallel Activity Model Names" },
-  rhythm: { label: "Rhythm", description: "Hour-by-actor records: your engaged time and your agents' time, by who started it.", field: "unit_label", searchLabel: "Rhythm Conversation Titles" },
+  parallelism: { label: "Parallel activity", description: "Hourly activity counted by workspace or top-level conversation, using your Parallelism settings.", field: "model", searchLabel: "Parallel Activity Model Names" },
+  rhythm: { label: "Rhythm", description: "Hourly activity for you and agents working with you, unattended or automatically.", field: "unit_label", searchLabel: "Rhythm Conversation Titles" },
   agent_events: { label: "Agent events", description: "Sentences where agents hit obstacles, were surprised, discovered something, worked around a problem, and more.", field: "sentence", searchLabel: "Agent Event Sentences" },
-  agent_event_messages: { label: "Agent messages read for events", description: "Every agent reply and thinking block the event pass read, with its keyword hits and events.", field: "title", searchLabel: "Agent Event Conversation Titles" },
+  agent_event_messages: { label: "Messages checked for agent events", description: "Agent replies and thinking blocks checked for events, with matching keywords and classifications.", field: "title", searchLabel: "Agent Event Conversation Titles" },
 } as const;
 export type UsageDataset = keyof typeof usageDatasets;
 export type UsageMode = "dashboards" | "query";
 export const engineUsageTopics = {
-  compaction: { label: "Compaction", description: "Count context compactions and compare human and machine triggers across services, models and repositories." },
+  compaction: { label: "Compaction", description: "Count context compactions and compare human and agent-app triggers across providers, models and repositories." },
   labels:{label:"Message Labels",description:"Explore conversation functions over time, compare labels and follow their matching conversations."},
   activity: { label: "Conversations", description: "How many conversations are you having, and how much do they produce? Explore conversations, your messages and model output across models and repositories." },
   human: { label: "Human Words", description: "How much are you contributing? Explore your writing over time." },
@@ -46,7 +46,7 @@ export const engineUsageTopics = {
 } as const;
 export const usageTopics = { ...engineUsageTopics,
   "thinking-overview": {label:"Waiting",description:"Understand observed model waits, context associations and timing evidence."},
-  "thinking-detail": {label:"Thinking",description:"Compare complete request distributions across models, effort, workloads and dates."},
+  "thinking-detail": {label:"Thinking",description:"Compare recorded model-request distributions across models, effort, workloads and dates."},
 } as const;
 export type UsageTopic = keyof typeof usageTopics;
 export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {

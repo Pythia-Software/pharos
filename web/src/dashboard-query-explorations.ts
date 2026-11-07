@@ -34,7 +34,7 @@ export function dashboardExplorations(dataset: UsageDataset, source: QueryState,
     ];
     case "writing": return [
       records("Conversations with most typed words", ["title", "repository_name", "providers", "typed_words", "user_words", "pasted_words", "cost_usd"], "typed_words"),
-      grouped("Writing mix by repository & provider", ["repository_name", "providers"], [sum("typed_words", "Typed words"), sum("pasted_words", "Likely pasted words"), sum("machine_words", "Harness & automation words")]),
+      grouped("Writing mix by repository & provider", ["repository_name", "providers"], [sum("typed_words", "Typed words"), sum("pasted_words", "Likely pasted words"), sum("machine_words", "App instruction and automation words")]),
       grouped("Repository input vs token use", ["repository_name"], [formula("explore_words_per_mtok", "SUM([typed_words])*1000000/NULLIF(SUM([total_tokens]),0)", "Typed words / 1M tokens"), sum("typed_words", "Typed words"), sum("total_tokens", "Tokens")]),
     ];
     case "skill_usages": return [

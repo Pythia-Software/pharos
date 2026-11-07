@@ -6,6 +6,7 @@ import { safetyRanks } from "./safety-dashboard-model";
 import { fixesKinds, fixesRanks } from "./fixes-model";
 import { logSourceIds } from "./logs-model";
 import {validTimelineVisibility} from "./timeline-visibility";
+import { dataGuideSelectionKeys, dataSources } from "./data-taxonomy-model";
 import { syncSchemas } from "./sync-table-model";
 // One contract for host-owned view state. Query Table owns q_* and its
 // composite controls; the site map exports this contract verbatim to agents.
@@ -23,12 +24,12 @@ export const viewFields: Record<string, ViewField> = {
   find_case: field("find_case", ["*"], "boolean", "Page Find matches case. Default off."),
   find_regex: field("find_regex", ["*"], "boolean", "Page Find term is a JavaScript regular expression. Default off (literal)."),
   nav_collapsed: field("nav_collapsed", ["*"], "boolean", "Collapse the application sidebar."),
-  nav_expanded: field("nav_expanded", ["*"], "json", "Expanded sidebar branches by section and page ID."),
-  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["compactions","model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","rhythm","findings","safety","fixes"]),
+  nav_expanded: field("nav_expanded", ["*"], "json", "Expanded application and Data Guide menu branches by section and page ID."),
+  guide_dataset: field("guide_dataset", ["*"], "enum", "Query source that opened the Data Guide; retained as link context.", Object.keys(dataSources)),
   history_collapsed: field("history_collapsed", ["*"], "strings", "Collapsed History groups by displayed calendar date."),
   history_search: field("history_search", ["*"], "text", "Applied History drawer text filter."),
   guide_open: field("guide_open", ["*"], "boolean", "Show the Data Guide."),
-  guide_entity: field("guide_entity", ["*"], "enum", "Selected Data Guide entity.", ["workspaces","conversations","agents","messages","tool_calls"]),
+  guide_entity: field("guide_entity", ["*"], "enum", "Selected agent-history noun. Legacy glossary links open their related current topic.", dataGuideSelectionKeys),
   guide_example: field("guide_example", ["*"], "enum", "Selected example conversation.", ["implementation","review"]),
   overlay: field("overlay", ["*"], "enum", "Open read-only header content.", ["none","history","bookmarks","usage","drive"]),
   window_mode: field("window_mode", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "enum", "Native time intent companion for full queries.", ["relative","calendar","today"]),
@@ -47,7 +48,7 @@ export const viewFields: Record<string, ViewField> = {
   query_search: field("analyze_search", ["analyze/query/*"], "enum", "Retained search-entry route hint.", ["1"]),
   query_layout: field("query_layout", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table","settings/sync"], "json", "Query builder collapsed state by dataset or background table schema ID."),
   reader_content: field("reader_content", ["work","library"], "json", "Expanded prose, turn summaries, file paths, action previews and deliberately loaded events by stable message/conversation identity."),
-  search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by work ID/browse, work ID/conversation, work ID/turn and work ID/message; browse is boolean, conversation is a stable session ID, turn is a stable message or outline entry ID, and message is the normalized message (native ID) a Search match opened within that turn."),
+  search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by workspace ID/browse, workspace ID/conversation, workspace ID/turn and workspace ID/message; browse is boolean, conversation is a stable conversation ID, turn is a stable message or outline entry ID, and message is the normalized message (native ID) a Search match opened within that turn."),
   chart_pins: field("chart_pins", ["analyze/*"], "json", "Pinned chart bucket keys by chart identity (dashboard title or Habits section and automation identity). Hover is transient."),
   conveyor_paused: field("conveyor_paused", ["home"], "boolean", "Pause the Home suggestion carousel."),
   delegation_page: field("delegation_page", ["work"], "text", "Zero-based session page number, 0–250 (site_link accepts a number or decimal string). Replays current cursors on open; does not store expiring server cursors."),
@@ -129,7 +130,7 @@ viewFields.parallelism.details={
   template:defaultConcurrencySettings,
   values:{mode:["user","model"],counting:["workspace","agent"],gap:[0,15,30,60],range:["today","day",...concurrencyRangePresets.map(([key])=>key),"all","custom"]},
   dates:"day/startDay/endDay are YYYY-MM-DD; zoom is null or [startEpochMs,endEpochMs]. Relative range names resolve when opened.",
-  identifiers:"repository is a repository name; workspace and agent are stable session identities; empty means all.",
+  identifiers:"repository is a repository name; workspace selects a workspace/checkout identity and agent selects a top-level conversation ID; empty means all.",
 };
 viewFields.carbon.details={
   template:{grid:"custom",customGrid:400,scenario:"central",pueScenario:"central",inputSensitivity:"current",vehicle:"car_miles",flightFrom:"jfk",flightTo:"lax"},

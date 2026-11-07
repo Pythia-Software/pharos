@@ -53,6 +53,25 @@ function pharosCapabilityRows(providers,kinds) {
 // indexing. The CLI retains its separate full-discovery probe.
 (() => {
   'use strict';
+  let guideReady;
+  const loadDataGuide = async () => {
+    if (!document.querySelector('#dataGuideHost dialog[data-ready="true"]')) {
+      if (!guideReady) guideReady = new Promise((resolve, reject) => {
+        const ready = () => resolve();
+        window.addEventListener('pharos:data-guide-ready', ready, {once:true});
+        if (document.getElementById('dataGuideHost')) return;
+        const style = document.createElement('link');style.rel='stylesheet';style.href='/assets/data-guide.css';
+        const script = document.createElement('script');script.src='/assets/data-guide.js';
+        script.onerror=()=>{window.removeEventListener('pharos:data-guide-ready',ready);script.remove();style.remove();guideReady=null;reject(Error('Could not load the Data Guide.'))};
+        document.head.append(style,script);
+      });
+      await guideReady;
+    }
+  };
+  window.pharosOpenDataGuide = async (entity, invoker) => {
+    await loadDataGuide();
+    window.dispatchEvent(new CustomEvent('pharos:open-data-guide',{detail:{entity,invoker}}));
+  };
   const DISMISSED = 'pharos-onboarding-dismissed:';
   // Display names by kind, from GET /api/providers once setup has loaded it.
   let NAMES = {};
@@ -61,6 +80,7 @@ function pharosCapabilityRows(providers,kinds) {
 .source-setup-open .application-body{overflow:hidden}
 .source-setup-open .application-body>:not(#pharosOnboarding){display:none!important}
 .source-setup-open .application-body>#pharosOnboarding{display:flex;flex:1;min-height:0}
+.pharos-source-guide{align-self:flex-start;margin:0 0 12px;padding:4px 0;color:var(--accent);text-decoration:underline;text-underline-offset:3px;font:inherit;font-size:12px}
 .pharos-onboard{position:fixed;inset:0;margin:auto;width:min(1040px,calc(100% - 48px));height:min(720px,calc(100dvh - 64px));max-width:none;max-height:calc(100dvh - 64px);padding:32px 40px;box-sizing:border-box;display:flex;flex-direction:column;background:var(--panel,#fff);color:var(--ink,#222);border:1px solid var(--line,#ccc);border-radius:12px;box-shadow:0 24px 70px #0006;overflow:hidden;font:14px/1.55 var(--sans,sans-serif)}
 .pharos-onboard::backdrop{background:color-mix(in srgb,var(--bg) 52%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 .pharos-onboard.pharos-embedded{position:static;margin:0;width:100%;height:100%;max-height:none;padding:0;border:0;border-radius:0;box-shadow:none}
@@ -243,7 +263,8 @@ function pharosCapabilityRows(providers,kinds) {
     const body=node('div','pharos-onboard-body'),actions=node('div','pharos-onboard-actions');
     let wizard=createPharosSourceWizard();
     active={embedded:!!embedded,opener:document.activeElement,stage:0,back:()=>renderTools()};
-    dialog.append(title,intro,body,actions);
+    const guide=node('button','pharos-source-guide','Data Guide');guide.type='button';guide.dataset.viewField='guide_open';guide.onclick=()=>window.pharosOpenDataGuide('sources',guide).catch(failure=>{guide.textContent='Retry Data Guide';guide.title=failure.message});
+    dialog.append(title,intro,guide,body,actions);
     if(embedded){embedded.classList.add('source-setup-open');embedded.setAttribute('aria-labelledby',title.id);embedded.querySelector('.application-body').append(dialog)}
     else{document.body.append(dialog);dialog.showModal();dialog.addEventListener('cancel',event=>{event.preventDefault();active?.back()})}
     const heading=(text,description)=>{title.textContent=text;intro.textContent=description;body.scrollTop=0;title.focus()};
@@ -319,7 +340,7 @@ function pharosCapabilityRows(providers,kinds) {
       const kind=node('select');kind.setAttribute('aria-label','Tool for this folder');
       wizard.tools.forEach(tool=>{const option=node('option','',toolName(tool));option.value=tool;kind.append(option)});
       const path=node('input');path.setAttribute('aria-label','Source folder');path.placeholder='/path/to/source';path.spellcheck=false;
-      const hint=node('p','pharos-muted'),hints={claude:'Choose the Claude configuration folder containing projects, or the projects folder itself.',codex:'Choose the Codex home folder containing sessions.',conductor:'Choose the Conductor app data folder containing its databases.',tl1:'Choose the TL1 folder containing registry.json or workspaces.json.',antigravity:'Choose the Antigravity profile folder.'};
+      const hint=node('p','pharos-muted'),hints={claude:'Choose the Claude configuration folder containing projects, or the projects folder itself.',codex:'Choose the Codex home folder containing the sessions directory.',conductor:'Choose the Conductor app data folder containing its databases.',tl1:'Choose the TL1 folder containing registry.json or workspaces.json.',antigravity:'Choose the Antigravity profile folder.'};
       kind.onchange=()=>hint.textContent=hints[kind.value];kind.onchange();
       custom.append(kind,hint,path);
       if(embedded||window.pharosManagedSession||window.webkit?.messageHandlers?.pharosLibrary){
@@ -540,7 +561,7 @@ function pharosCapabilityRows(providers,kinds) {
     const skippedParts = (run?.results || []).reduce((count, result) => count + (result.unchanged || 0), 0);
     const summary = run?.state === 'complete'
       ? !run.conversations && !parsedParts && !skippedParts && (alreadyCurrent || !run.results?.length) ? `${label} is already up to date; no conversations rewritten.`
-        : `Indexed ${plural(run.conversations, 'conversation')} (${plural(run.messages, 'message')}) from ${label}.${parsedParts ? ` ${plural(parsedParts, 'source part')} parsed.` : ''}${skippedParts ? ` ${skippedParts.toLocaleString()} unchanged files or sessions skipped.` : ''}`
+        : `Indexed ${plural(run.conversations, 'conversation')} (${plural(run.messages, 'message')}) from ${label}.${parsedParts ? ` ${plural(parsedParts, 'source part')} parsed.` : ''}${skippedParts ? ` ${skippedParts.toLocaleString()} unchanged history files or conversations skipped.` : ''}`
       : run?.state === 'interrupted' ? `Indexing ${label} was interrupted; the next index resumes it.` : `Indexing ${label} finished with errors.`;
     if (!shown()) return toast(summary);
     setTitle(body, run?.state === 'complete' ? `${label} is in the library` : `Indexing ${label}`);
@@ -575,7 +596,13 @@ function pharosCapabilityRows(providers,kinds) {
     open:async({library}={})=>{libraryScope=library||null;const status=await call('/api/probe/status?discovery=none');openPanel(status)},
     back:()=>active?.back(),
   };
-  if(document.body.hasAttribute('data-application-setup'))return;
+  if(document.body.hasAttribute('data-application-setup')){
+    // A copied setup URL can restore the guide without starting library pages.
+    document.addEventListener('DOMContentLoaded',()=>{
+      if(new URLSearchParams(location.search).get('guide_open')==='1')loadDataGuide().catch(failure=>toast(failure.message));
+    },{once:true});
+    return;
+  }
   refreshNote().then(status => {
     if (!status || sessionStorage.getItem(DISMISSED + status.host?.id)) return;
     if (status.needs_onboarding) openPanel(status);

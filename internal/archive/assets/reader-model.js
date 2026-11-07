@@ -109,7 +109,7 @@ function conversationTokenReports(messages){
       const prior=seen.get('task:'+key);if(prior)prior.total=null;
       if(key)seen.set('task:'+key,report);reports[index]=report;return;
     }else if(type==='result'||type==='turn.completed'||type==='cost-state'){
-      scope=type==='cost-state'?'session':'run';label=scope==='session'?'Session accounting checkpoint':'Run accounting checkpoint';
+      scope=type==='cost-state'?'session':'run';label=scope==='session'?'Agent usage checkpoint':'Run accounting checkpoint';
       const reported=tokenTotal(usage),aggregate=modelTotal===null?reported:Math.max(reported??0,modelTotal);
       const start=runStarts.get(stream)||0,attributed=sum(start,stream==='main'?null:stream);
       total=aggregate===null?null:Math.max(0,aggregate-attributed);
@@ -263,8 +263,8 @@ function conversationOutline(conversation){
       response:replies.at(-1)||(results.length?{role:'assistant',text:readableValue(toolPayload(results.at(-1)).content)}:null),messages:ownedMessages([message],graph),tools:children.filter(item=>item.kind==='tool_call').length,children:agents(children)};
   });
   let turnNumber=0;
-  return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Session setup',
-    prompt:messageSummary(turn.human)||'Session setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,messages:ownedMessages([turn.human,...turn.events],graph),
+  return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Agent setup',
+    prompt:messageSummary(turn.human)||'Agent setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,messages:ownedMessages([turn.human,...turn.events],graph),
     tools:turn.events.filter(message=>message.kind==='tool_call').length,children:agents(turn.events)}));
 }
 // Publish the result-card model with the model script itself, independently of
