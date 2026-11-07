@@ -22,6 +22,9 @@ type providerSpec struct {
 	KindAliases []string
 	// DisplayName names the provider to people ("Claude Code").
 	DisplayName string
+	// Content declares what its records hold, so a missing value it never
+	// records is shown as not recorded rather than zero.
+	Content contentCapabilities
 	// Mutation is what the adapter's Capability reports.
 	Mutation string
 	// Resolve, when set, rewrites a configured source before it is read or
@@ -136,6 +139,8 @@ func init() {
 	providerRegistry = []providerSpec{
 		{
 			Kind: "claude", DisplayName: "Claude Code", Mutation: "retrieval-only", Automatic: true, Setup: 1, MirrorRank: 1,
+			Content: contentCapabilities{Supported: "cwd git_branch model message_tokens tool_calls tool_results reasoning timestamps subagents harness_version", Varies: "effort speed title",
+				Notes: map[string]string{"effort": "When the transcript records it.", "speed": "When the transcript records the request's speed or service tier.", "title": "When Claude Code named the session."}},
 			New:          func(base baseAdapter) Adapter { return &jsonlAdapter{baseAdapter: base, provider: "claude"} },
 			Plan:         (*capturePlan).claude,
 			Preservation: retainedInputs,
@@ -167,6 +172,8 @@ func init() {
 		},
 		{
 			Kind: "codex", DisplayName: "Codex", Mutation: "retrieval-only", Automatic: true, Setup: 2, MirrorRank: 1,
+			Content: contentCapabilities{Supported: "cwd git_branch model message_tokens tool_calls tool_results timestamps harness_version", Varies: "effort speed reasoning subagents title",
+				Notes: map[string]string{"effort": "From releases that record it.", "speed": "From releases that record the turn's service tier.", "reasoning": "A summary, or only that it reasoned when the reasoning is encrypted.", "subagents": "From releases that record which session started another.", "title": "When Codex named the session."}},
 			Resolve: resolveRolloutSource,
 			New:     func(base baseAdapter) Adapter { return &jsonlAdapter{baseAdapter: base, provider: "codex"} },
 			Plan:    (*capturePlan).codex,
@@ -184,6 +191,8 @@ func init() {
 		},
 		{
 			Kind: "copilot", DisplayName: "Copilot CLI", Mutation: "retrieval-only", Automatic: true, Setup: 6, MirrorRank: 1,
+			Content: contentCapabilities{Supported: "cwd model tool_calls tool_results timestamps subagents", Varies: "git_branch effort message_tokens reasoning title harness_version",
+				Notes: map[string]string{"speed": "Fast mode is a model of its own in Copilot's picker, so its requests count as standard.", "message_tokens": "Older releases record only the session's total.", "reasoning": "A summary for OpenAI models, or only that it reasoned."}, VariesNote: "When the session records it."},
 			New:          func(base baseAdapter) Adapter { return &copilotAdapter{base} },
 			Plan:         (*capturePlan).copilot,
 			Preservation: retainedInputs,
@@ -203,6 +212,8 @@ func init() {
 		},
 		{
 			Kind: "opencode", DisplayName: "OpenCode", Mutation: "retrieval-only", Automatic: true, Setup: 7, MirrorRank: 1,
+			Content: contentCapabilities{Supported: "cwd model message_tokens tool_calls reasoning timestamps subagents harness_version", Varies: "speed tool_results title cost",
+				Notes: map[string]string{"speed": "The tier an OpenAI reply reports. A fast mode chosen as a model of its own is not told apart.", "tool_results": "For calls that finished.", "title": "When OpenCode named the session.", "cost": "The session's total."}},
 			New:          func(base baseAdapter) Adapter { return &opencodeAdapter{baseAdapter: base} },
 			Plan:         (*capturePlan).opencode,
 			Preservation: sqliteGroupPreservation, Acquisition: acquireSQLiteGroup, CaptureTables: opencodeKept(),
@@ -224,6 +235,8 @@ func init() {
 		},
 		{
 			Kind: "cline", DisplayName: "Cline", Mutation: "retrieval-only", Automatic: true, Setup: 8, MirrorRank: 1,
+			Content: contentCapabilities{Supported: "cwd model message_tokens tool_calls tool_results timestamps", Varies: "git_branch reasoning title harness_version cost",
+				Notes: map[string]string{"speed": "Cline has no fast mode.", "reasoning": "Redacted thinking records only that it reasoned.", "cost": "The session's total.", "subagents": "A teammate's transcripts aren't read."}, VariesNote: "When the session records it."},
 			New:          func(base baseAdapter) Adapter { return &clineAdapter{base} },
 			Plan:         (*capturePlan).cline,
 			Preservation: retainedInputs,
@@ -243,6 +256,8 @@ func init() {
 		},
 		{
 			Kind: "vscode-copilot", DisplayName: "VS Code Copilot", Mutation: "retrieval-only", Automatic: true, Setup: 9, MirrorRank: 1,
+			Content: contentCapabilities{Supported: "tool_calls tool_results reasoning subagents", Varies: "cwd model message_tokens timestamps title harness_version",
+				Notes: map[string]string{"speed": "Fast mode is a model of its own in Copilot's picker, so its requests count as standard.", "cwd": "The window's folder.", "model": "Auto is known once it replied.", "message_tokens": "Some releases record only the last round's input.", "timestamps": "Per request, not per message.", "title": "When the chat was renamed.", "harness_version": "The Copilot Chat extension's version."}},
 			New:          func(base baseAdapter) Adapter { return &vscodeCopilotAdapter{base} },
 			Plan:         (*capturePlan).vscodeCopilot,
 			Preservation: retainedInputs,
@@ -267,6 +282,8 @@ func init() {
 		},
 		{
 			Kind: "cursor", DisplayName: "Cursor", Mutation: "retrieval-only", Automatic: true, Setup: 10, MirrorRank: 1,
+			Content: contentCapabilities{Supported: "tool_calls subagents", Varies: "cwd model speed message_tokens tool_results reasoning timestamps title",
+				Notes: map[string]string{"speed": "The chat's fast mode setting now, which stands for all of its requests.", "message_tokens": "Before Cursor 3. Cursor 3 records only the size of the context.", "tool_results": "For calls that finished.", "timestamps": "Some messages are given the time of the one before."}, VariesNote: "When the chat records it."},
 			New:          func(base baseAdapter) Adapter { return &cursorAdapter{baseAdapter: base} },
 			Plan:         (*capturePlan).cursor,
 			Preservation: liveSQLite, Acquisition: acquireNever, CaptureTables: cursorCaptureTables,
@@ -284,6 +301,8 @@ func init() {
 		},
 		{
 			Kind: "cursor-cli", DisplayName: "Cursor CLI", Mutation: "retrieval-only", Automatic: true, Setup: 11, MirrorRank: 1,
+			Content: contentCapabilities{Supported: "tool_calls tool_results", Varies: "cwd model reasoning timestamps title",
+				Notes: map[string]string{"speed": "Fast mode is kept in the CLI's settings, which Pharos does not read.", "message_tokens": "Only the size of the context.", "reasoning": "Encrypted: only that it reasoned.", "timestamps": "Prompts only; replies are placed after them."}, VariesNote: "When the chat records it."},
 			New:          func(base baseAdapter) Adapter { return &cursorCLIAdapter{baseAdapter: base} },
 			Plan:         (*capturePlan).cursorCLI,
 			Preservation: liveSQLite, Acquisition: acquireNever, CaptureTables: cursorCLICaptureTables,
@@ -300,6 +319,8 @@ func init() {
 		},
 		{
 			Kind: "zed", DisplayName: "Zed", Mutation: "retrieval-only", Automatic: true, Setup: 12, MirrorRank: 1,
+			Content: contentCapabilities{Supported: "tool_calls tool_results", Varies: "cwd model effort speed message_tokens reasoning subagents title",
+				Notes: map[string]string{"speed": "The thread's fast mode setting now, which stands for all of its requests.", "message_tokens": "Each turn's last request.", "reasoning": "Or only that it was redacted.", "timestamps": "Every message is given its thread's start."}, VariesNote: "When the thread records it."},
 			New:          func(base baseAdapter) Adapter { return &zedAdapter{baseAdapter: base} },
 			Plan:         (*capturePlan).zed,
 			Preservation: sqliteGroupPreservation, Acquisition: acquireSQLiteGroup, CaptureTables: zedCaptureTables,
@@ -318,6 +339,8 @@ func init() {
 		},
 		{
 			Kind: "antigravity", DisplayName: "Antigravity", Mutation: "retrieval-only", Automatic: true, Setup: 5, MirrorRank: 1,
+			Content: contentCapabilities{Supported: "tool_calls tool_results timestamps subagents", Varies: "cwd model effort message_tokens title harness_version",
+				Notes: map[string]string{"reasoning": "Only how many tokens it spent thinking.", "message_tokens": "When the conversation's database is present.", "harness_version": "The installed app's version, seen on this Mac."}, VariesNote: "When the conversation records it."},
 			New:          func(base baseAdapter) Adapter { return &antigravityAdapter{baseAdapter: base} },
 			Plan:         (*capturePlan).antigravity,
 			Preservation: sqliteGroupPreservation, Acquisition: acquireSQLiteGroup,
@@ -345,6 +368,8 @@ func init() {
 		},
 		{
 			Kind: "conductor", DisplayName: "Conductor", Mutation: "retrieval-only", Automatic: true, Setup: 3, MirrorRank: 9,
+			Content: contentCapabilities{Supported: "cwd model tool_calls tool_results reasoning", Varies: "git_branch effort speed message_tokens timestamps title harness_version",
+				Notes: map[string]string{"harness_version": "When the Claude Code or Codex session it ran is also a source.", "subagents": "Recorded by the Claude Code or Codex session it ran."}, VariesNote: "When Conductor stores it."},
 			New:  func(base baseAdapter) Adapter { return &conductorAdapter{baseAdapter: base} },
 			Plan: (*capturePlan).conductor,
 			Preservation: func(source SourceConfig) string {
@@ -364,6 +389,8 @@ func init() {
 		},
 		{
 			Kind: "tl1", DisplayName: "TL1", Mutation: "retrieval-only", Setup: 4, MirrorRank: 0,
+			Content: contentCapabilities{Supported: "cwd model effort tool_calls title", Varies: "git_branch speed message_tokens tool_results reasoning timestamps subagents harness_version cost",
+				Notes: map[string]string{"cwd": "The repository's folder.", "message_tokens": "Per request for Claude Code runs, per turn for Codex.", "timestamps": "Not in Codex exec runs.", "subagents": "Codex runs that record which session started another.", "harness_version": "Claude Code runs only.", "cost": "From TL1's run summary."}, VariesNote: "When the run records it."},
 			New: func(base baseAdapter) Adapter { return &tl1Adapter{baseAdapter: base} },
 			Plan: func(p *capturePlan, ctx context.Context, source SourceConfig, info fs.FileInfo) error {
 				return p.tl1(source)
@@ -385,21 +412,27 @@ func init() {
 		},
 		{
 			Kind: "canonical", DisplayName: "Canonical export", Mutation: "retrieval-only", MirrorRank: 5,
-			New:  func(base baseAdapter) Adapter { return &canonicalAdapter{base} },
-			Plan: (*capturePlan).canonical, Preservation: retainedInputs,
+			Content: contentCapabilities{Varies: "cwd git_branch model effort speed message_tokens tool_calls tool_results reasoning timestamps subagents title harness_version cost", VariesNote: "When the export holds it."},
+			New:     func(base baseAdapter) Adapter { return &canonicalAdapter{base} },
+			Plan:    (*capturePlan).canonical, Preservation: retainedInputs,
 		},
 		{
 			Kind: "tl1-export", DisplayName: "TL1 export", Mutation: "tl1-release", MirrorRank: 0,
-			New:  func(base baseAdapter) Adapter { return &canonicalAdapter{base} },
-			Plan: (*capturePlan).canonical, Preservation: retainedInputs,
+			Content: contentCapabilities{Varies: "cwd git_branch model effort speed message_tokens tool_calls tool_results reasoning timestamps subagents title harness_version cost", VariesNote: "When the export holds it."},
+			New:     func(base baseAdapter) Adapter { return &canonicalAdapter{base} },
+			Plan:    (*capturePlan).canonical, Preservation: retainedInputs,
 		},
 		{
 			Kind: "chatgpt", DisplayName: "ChatGPT", KindAliases: []string{"chatgpt-export"}, Mutation: "retrieval-only", MirrorRank: 1,
+			Content: contentCapabilities{Supported: "model tool_calls tool_results timestamps", Varies: "effort speed reasoning title", NotApplicable: "cwd git_branch subagents harness_version",
+				Notes: map[string]string{"speed": "When the export records the tier.", "reasoning": "Or only how long it thought.", "message_tokens": "Exports have no token counts."}, VariesNote: "When the export holds it."},
 			New:  func(base baseAdapter) Adapter { return &chatGPTAdapter{base} },
 			Plan: (*capturePlan).chatGPT, Preservation: retainedInputs,
 		},
 		{
 			Kind: "claude-ai", DisplayName: "Claude.ai", Mutation: "retrieval-only", MirrorRank: 1,
+			Content: contentCapabilities{Supported: "timestamps", Varies: "tool_calls tool_results reasoning title", NotApplicable: "cwd git_branch subagents harness_version",
+				Notes: map[string]string{"tool_calls": "Not in older exports, which flatten each message to text.", "tool_results": "Not in older exports, which flatten each message to text.", "model": "The export names no model.", "message_tokens": "Exports have no token counts.", "reasoning": "A summary, when the export holds one."}, VariesNote: "When the export holds it."},
 			New:  func(base baseAdapter) Adapter { return &claudeAIAdapter{base} },
 			Plan: (*capturePlan).claudeAI, Preservation: retainedInputs,
 		},

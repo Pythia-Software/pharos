@@ -175,6 +175,51 @@ func TestIngestSkipsUnchangedRecordsWhenSourceFingerprintChanges(t *testing.T) {
 	}
 }
 
+// Conductor once stored its extractor as its conversations' coverage. The
+// upgrade moves it, and a saved catalog recovered later is read alike.
+func TestConductorExtractorLeavesCoverage(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	if _, err := catalog.DB.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','conductor','local','s','Session','2026-09-23T00:00:00Z');
+		INSERT INTO conversations(id,workspace_id,provider,account,native_id,coverage) VALUES('old','w','codex','local','old','conductor-v12'),('partial','w','codex','local','partial','partial');
+		DELETE FROM meta WHERE key='conversation_extractor_version'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMaps(catalog.DB, "SELECT id,coverage,COALESCE(extractor,'') extractor FROM conversations ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jsonText(rows); got != `[{"coverage":"complete","extractor":"conductor-v12","id":"old"},{"coverage":"partial","extractor":"","id":"partial"}]` {
+		t.Fatal(got)
+	}
+	// A record in the old form, from a recovery envelope saved before, is
+	// stored in the new one.
+	tx, err := catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := ConversationRecord{NativeID: "envelope", Provider: "codex", Account: "local", Coverage: "conductor-v12"}
+	if _, _, err := ingestWorkspace(tx, WorkspaceRecord{SourceID: "s2", SourceKind: "conductor", Account: "local", Title: "Saved", Conversations: []ConversationRecord{legacy}}, false); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var coverage, extractor string
+	if err := catalog.DB.QueryRow("SELECT coverage,extractor FROM conversations WHERE native_id='envelope'").Scan(&coverage, &extractor); err != nil || coverage != "complete" || extractor != "conductor-v12" {
+		t.Fatal(coverage, extractor, err)
+	}
+	// Delivery checkpoints taken of the old form still match the new one.
+	current := legacy
+	current.Coverage, current.Extractor = "complete", "conductor-v12"
+	if conversationDeliveryDigest("w", current) != conversationDeliveryDigest("w", legacy) {
+		t.Fatal("a checkpoint of the old form no longer matches")
+	}
+}
+
 func TestLegacyConductorResumeChecksActivityTime(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	adapter, err := MakeAdapter(SourceConfig{Name: "conductor", Kind: "conductor", Path: t.TempDir(), Account: "local"})
@@ -183,7 +228,7 @@ func TestLegacyConductorResumeChecksActivityTime(t *testing.T) {
 	}
 	record := WorkspaceRecord{SourceID: "session", SourceKind: "conductor", Account: "local", Title: "Session",
 		ActivityAt: "2026-09-20T00:00:00Z", Conversations: []ConversationRecord{{
-			NativeID: "thread", Provider: "codex", Account: "local", Coverage: conductorExtractor,
+			NativeID: "thread", Provider: "codex", Account: "local", Extractor: conductorExtractor,
 			Messages: []MessageRecord{{NativeID: "one", Role: "user", Kind: "message", Text: "hello", Selected: true}},
 		}},
 	}

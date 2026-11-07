@@ -50,6 +50,10 @@ type ConversationRecord struct {
 	// Instructions are the instruction files and skills the transcript
 	// recorded as loaded (see instructions.go).
 	Instructions []InstructionRecord `json:"Instructions,omitempty"`
+	// Extractor, when set, versions the parser that read the conversation,
+	// so an unchanged record its current parser read need not be read
+	// again (recordUsesCurrentExtractor). Coverage stays a completeness word.
+	Extractor string `json:"Extractor,omitempty"`
 	// Unread, on a partial conversation, names the messages its source lists
 	// but could not read; what was indexed from them is kept (see
 	// keepStoredMessages). A partial conversation without it keeps every

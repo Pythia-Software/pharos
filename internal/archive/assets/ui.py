@@ -1656,6 +1656,9 @@ async function loadSources(){
     sourceFact(facts,'Last index attempt',sourceTime(source.last_attempt_at));
     sourceFact(facts,'Coverage',source.coverage);
     sourceFact(facts,'Account',source.account);
+    // What this kind of source never records, or only sometimes (its provider's capabilities).
+    if(source.not_recorded?.length)sourceFact(facts,'Not recorded',source.not_recorded.join(', '));
+    if(source.sometimes_recorded?.length)sourceFact(facts,'Sometimes recorded',source.sometimes_recorded.join(', '));
     card.append(head,path,facts);
     if(source.error)card.append(node('div','sync-note badtext',source.error));
     else if(source.path_status==='missing')card.append(node('div','sync-note badtext','The configured path is unavailable.'));
