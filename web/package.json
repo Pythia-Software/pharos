@@ -10,6 +10,7 @@
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
     "check-bundle": "node build.mjs --check",
+    "generate-fingerprint-fixtures": "node generate-fingerprint-fixtures.mjs",
     "generate-schemas": "node generate-schemas.mjs",
     "check-schemas": "node generate-schemas.mjs --check",
     "generate-recipes": "node generate-recipe-snapshot.mjs",

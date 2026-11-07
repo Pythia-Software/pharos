@@ -3,15 +3,17 @@ package archive
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"image/png"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/dop251/goja"
 )
 
 type fingerprintRenderFunc func(context.Context, any, int) (fingerprintRendered, error)
@@ -255,7 +257,7 @@ UPDATE fingerprint_entities SET dirty=1,priority=100,next_attempt=0 WHERE entity
 		t.Fatal("workers claimed the same entity", ids)
 	}
 	// A third runnable conversation must wait; a new generation of an active
-	// conversation must wait too, rather than being rendered in another VM.
+	// conversation must wait too, rather than being rendered in another renderer.
 	execTx(t, c.DB, `UPDATE messages SET text='changed during concurrent render' WHERE id='fp-m1'; UPDATE fingerprint_entities SET next_attempt=0`)
 	third, stop := context.WithTimeout(ctx, 100*time.Millisecond)
 	more, err := c.refreshFingerprintImages(third)
@@ -568,24 +570,33 @@ func TestFingerprintRenderer(t *testing.T) {
 		t.Fatal("cancelled render succeeded")
 	}
 	if _, err := renderer.Render(context.Background(), fingerprintTestInput(), 1); err != nil {
-		t.Fatalf("cancelled VM cannot be reused: %v", err)
+		t.Fatalf("cancelled renderer cannot be reused: %v", err)
 	}
-	// Exercise interruption during execution, not only before entering the VM.
-	original := renderer.render
-	loop, err := renderer.vm.RunString(`(function() { while (true) {} })`)
+	// Exercise cancellation inside native preparation, then reuse its scratch.
+	during := &fingerprintStepContext{Context: t.Context(), remaining: 8}
+	if _, err := renderer.Render(during, fingerprintTestInput(), 1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("native preparation ignored cancellation: %v", err)
+	}
+	if _, err := renderer.Render(t.Context(), fingerprintTestInput(), 1); err != nil {
+		t.Fatal("cancelled renderer did not recover", err)
+	}
+
+	var dense fingerprintInput
+	raw, _ := json.Marshal(fingerprintTestInput())
+	if err := json.Unmarshal(raw, &dense); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		dense.Events = append(dense.Events, fingerprintEvent{ID: fmt.Sprintf("cancel-e%d", i), Message: fmt.Sprintf("m%d", i+1), Kind: "obstacle", Group: "Friction", Probability: .9})
+	}
+	prepared, err := prepareFingerprint(t.Context(), &dense)
 	if err != nil {
 		t.Fatal(err)
 	}
-	renderer.render, _ = goja.AssertFunction(loop)
-	deadline, stop := context.WithTimeout(t.Context(), 20*time.Millisecond)
-	defer stop()
-	if _, err := renderer.Render(deadline, fingerprintTestInput(), 1); err == nil {
-		t.Fatal("running JavaScript ignored its deadline")
+	if _, err := layoutFingerprint(&fingerprintStepContext{Context: t.Context(), remaining: 3}, prepared, "wide", true); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("native selection ignored cancellation: %v", err)
 	}
-	renderer.render = original
-	if _, err := renderer.Render(t.Context(), fingerprintTestInput(), 1); err != nil {
-		t.Fatal("interrupted VM did not recover", err)
-	}
+
 }
 
 func TestFingerprintRasterReuse(t *testing.T) {
@@ -628,5 +639,169 @@ func TestFingerprintRasterReuse(t *testing.T) {
 	again, err := renderer.cachedRasterize(t.Context(), source("one message", "#399bed", 128))
 	if err != nil || !bytes.Equal(again, retained) {
 		t.Fatal("eviction changed the drawing", err)
+	}
+}
+
+// A deterministic deadline while visiting input, without timing/scheduler races.
+type fingerprintStepContext struct {
+	context.Context
+	remaining int
+}
+
+func (c *fingerprintStepContext) Err() error {
+	c.remaining--
+	if c.remaining <= 0 {
+		return context.DeadlineExceeded
+	}
+	return c.Context.Err()
+}
+
+// The expected SVG/PNG hashes were captured from 0.8.9's Goja renderer on
+// synthetic, nonprivate inputs. The TS unit test independently checks the SVG
+// hashes against the current frontend model; neither side can silently drift.
+type fingerprintRenderCase struct {
+	Name   string          `json:"name"`
+	Input  json.RawMessage `json:"input"`
+	Images []struct {
+		Profile string `json:"profile"`
+		Theme   string `json:"theme"`
+		Events  bool   `json:"events"`
+		SVGHash string `json:"svg_sha256"`
+		PNGHash string `json:"png_sha256"`
+		SVG     string `json:"svg,omitempty"`
+	} `json:"images"`
+}
+
+func fingerprintRenderCases(tb testing.TB) []fingerprintRenderCase {
+	tb.Helper()
+	path := filepath.Join("..", "..", "testdata", "fingerprint-rendering.json")
+	if reference := os.Getenv("PHAROS_FP_REFERENCE"); reference != "" {
+		path = reference
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	var cases []fingerprintRenderCase
+	if err = json.Unmarshal(data, &cases); err != nil {
+		tb.Fatal(err)
+	}
+	return cases
+}
+func TestFingerprintRendererParity(t *testing.T) {
+	slowTest(t)
+	renderer, err := newFingerprintRenderer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := fingerprintRenderCases(t)
+	update := os.Getenv("PHAROS_UPDATE_FINGERPRINTS") == "1"
+	if update && os.Getenv("PHAROS_FP_REFERENCE") != "" {
+		t.Fatal("cannot update the external reference corpus")
+	}
+	for sampleIndex, sample := range cases {
+		t.Run(sample.Name, func(t *testing.T) {
+			var input any
+			if err := json.Unmarshal(sample.Input, &input); err != nil {
+				t.Fatal(err)
+			}
+			result, err := renderFingerprintSVG(t.Context(), input, 3)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Images) != len(sample.Images) {
+				t.Fatalf("variants: got %d want %d", len(result.Images), len(sample.Images))
+			}
+			for i, image := range result.Images {
+				expected := sample.Images[i]
+				sum := sha256.Sum256([]byte(image.SVG))
+				hash := hex.EncodeToString(sum[:])
+				svgHash := hash
+				if image.Profile != expected.Profile || image.Theme != expected.Theme || image.Events != expected.Events {
+					t.Fatalf("variant order changed: %+v", image)
+				}
+				if hash != expected.SVGHash {
+					if expected.SVG != "" {
+						at := 0
+						for at < min(len(expected.SVG), len(image.SVG)) && expected.SVG[at] == image.SVG[at] {
+							at++
+						}
+						t.Errorf("%s/%s/events=%t SVG difference at %d: got %q want %q", image.Profile, image.Theme, image.Events, at, image.SVG[max(0, at-80):min(len(image.SVG), at+100)], expected.SVG[max(0, at-80):min(len(expected.SVG), at+100)])
+					} else {
+						t.Errorf("%s/%s/events=%t SVG hash got %s want %s", image.Profile, image.Theme, image.Events, hash, expected.SVGHash)
+					}
+				}
+				png, err := renderer.cachedRasterize(t.Context(), image.SVG)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sum = sha256.Sum256(png)
+				if hash = hex.EncodeToString(sum[:]); hash != expected.PNGHash {
+					if update && svgHash == expected.SVGHash {
+						cases[sampleIndex].Images[i].PNGHash = hash
+					} else {
+						t.Errorf("%s/%s/events=%t PNG hash got %s want %s", image.Profile, image.Theme, image.Events, hash, expected.PNGHash)
+					}
+				}
+				if output := os.Getenv("PHAROS_FINGERPRINT_PARITY_OUTPUT"); output != "" && sample.Name == "mixed" {
+					suffix := "-plain"
+					if image.Events {
+						suffix = "-events"
+					}
+					if err = os.WriteFile(filepath.Join(output, "native-"+image.Profile+"-"+image.Theme+suffix+".png"), png, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		})
+	}
+	if update && !t.Failed() {
+		data, err := json.Marshal(cases)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join("..", "..", "testdata", "fingerprint-rendering.json"), append(data, '\n'), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+}
+func BenchmarkFingerprintRender(b *testing.B) {
+	for _, sample := range fingerprintRenderCases(b) {
+		if sample.Name != "small" && sample.Name != "mixed" && sample.Name != "dense" {
+			continue
+		}
+		var input any
+		if err := json.Unmarshal(sample.Input, &input); err != nil {
+			b.Fatal(err)
+		}
+		for _, cache := range []bool{false, true} {
+			name := "uncached"
+			if cache {
+				name = "warm"
+			}
+			b.Run(sample.Name+"/"+name, func(b *testing.B) {
+				old := fingerprintPNGCacheLimit
+				defer func() { fingerprintPNGCacheLimit = old }()
+				fingerprintPNGCacheLimit = 0
+				if cache {
+					fingerprintPNGCacheLimit = 64
+				}
+				r, err := newFingerprintRenderer()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, err = r.Render(context.Background(), input, 1); err != nil {
+					b.Fatal(err)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if _, err = r.Render(context.Background(), input, 1); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }
