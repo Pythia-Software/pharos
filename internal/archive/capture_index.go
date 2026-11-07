@@ -43,7 +43,8 @@ type captureView struct {
 	host     Host
 	dir      string // <capture_root>/<host-id>/<source>
 	manifest *captureManifest
-	// mappings pair original paths with absolute captured paths.
+	// mappings pair original paths with absolute captured paths. An empty
+	// captured path blocks an unusable destination without losing precedence.
 	mappings []capturePathMapping
 }
 
@@ -56,6 +57,9 @@ func (v *captureView) planSignature() string {
 func newCaptureView(host Host, dir string, manifest *captureManifest) *captureView {
 	view := &captureView{host: host, dir: dir, manifest: manifest}
 	for _, mapping := range manifest.PathMap {
+		// Keep every source prefix in its original order, including blocked
+		// destinations. Dropping one could select different captured evidence.
+		view.mappings = append(view.mappings, capturePathMapping{Original: mapping.Original})
 		// Views also serve temporary source/ and retained history/ readers.
 		// Validate archive names here without imposing persisted files/-only
 		// policy or changing the recorded manifest. Drive prefixes are invalid
@@ -71,7 +75,7 @@ func newCaptureView(host Host, dir string, manifest *captureManifest) *captureVi
 		}
 		captured := filepath.Join(dir, local)
 		if capturePathIsWithin(captured, dir) {
-			view.mappings = append(view.mappings, capturePathMapping{Original: mapping.Original, Captured: captured})
+			view.mappings[len(view.mappings)-1].Captured = captured
 		}
 	}
 	return view
@@ -109,13 +113,16 @@ func (v *captureView) translate(name string, forward bool) (string, bool) {
 	for _, mapping := range v.mappings {
 		from := mapping.Original
 		if !forward {
+			if mapping.Captured == "" {
+				continue // Blocked destinations are never physical roots.
+			}
 			from = filepath.ToSlash(mapping.Captured)
 		}
 		if rest, ok := sourcepath.CutLegacyPOSIX(name, from); ok && len(from) > length {
 			best, suffix, length = mapping, rest, len(from)
 		}
 	}
-	if length < 0 {
+	if length < 0 || best.Captured == "" {
 		return "", false
 	}
 	// Choose the longest prefix before resolving its suffix: an unsafe match

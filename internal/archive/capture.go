@@ -672,23 +672,25 @@ func loadCaptureManifest(dir string) (*captureManifest, error) {
 	if manifest.Version > captureManifestUnderstood {
 		return nil, fmt.Errorf("capture manifest %s has version %d; this build understands up to %d", file, manifest.Version, captureManifestUnderstood)
 	}
-	if bad := manifest.unsafePath(); bad != "" {
-		return nil, fmt.Errorf("capture manifest %s names %q, outside its capture directory", file, bad)
+	if bad, unsafe := manifest.unsafePath(); unsafe {
+		return nil, fmt.Errorf("capture manifest %s names unsafe captured path %q", file, bad)
 	}
 	return manifest, nil
 }
 
-// unsafePath returns a captured path that is not clean, relative, and under
-// files/ (latest) or history/ (superseded), so that no manifest can make a
-// capture or an index read, move or delete anything outside its directory.
-func (m *captureManifest) unsafePath() string {
+// unsafePath reports the first captured path that is not a clean, native
+// relative name under files/ (latest) or history/ (superseded). The boolean
+// distinguishes an invalid required empty name from a valid manifest.
+// These are lexical bounds, not symlink-safe I/O checks.
+func (m *captureManifest) unsafePath() (string, bool) {
 	check := func(rel string, root string) bool {
-		return rel == path.Clean(rel) && !strings.Contains(rel, "\\") && (rel == root || strings.HasPrefix(rel, root+"/"))
+		_, err := filepath.Localize(rel)
+		return err == nil && rel == path.Clean(rel) && !strings.ContainsAny(rel, "\\\x00") && (rel == root || strings.HasPrefix(rel, root+"/"))
 	}
-	bad := ""
+	bad, unsafe := "", false
 	test := func(rel, root string) {
-		if bad == "" && !check(rel, root) {
-			bad = rel
+		if !unsafe && !check(rel, root) {
+			bad, unsafe = rel, true
 		}
 	}
 	for _, file := range m.Files {
@@ -712,7 +714,7 @@ func (m *captureManifest) unsafePath() string {
 	for _, mapping := range m.PathMap {
 		test(mapping.Captured, captureFilesDir)
 	}
-	return bad
+	return bad, unsafe
 }
 
 // lastCapturedDataAt ignores no-op captures and later indexing. Individual
