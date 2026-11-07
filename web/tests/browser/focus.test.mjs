@@ -366,12 +366,12 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
   await page.getByLabel('Google Cloud project ID',{exact:true}).fill('pharos-example');
   await page.getByLabel('Require a password to restore',{exact:true}).selectOption('true');
   await page.getByRole('button',{name:'Review configuration & commands',exact:true}).click();
-  await page.evaluate(()=>{window.cloudCopies=0;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{window.cloudCopies++;}}});});
   for(const [index,label]of ['Copy preparation commands','Copy password setup command','Copy final commands'].entries()){
-    const button=page.getByRole('button',{name:label,exact:true});await button.focus();await page.keyboard.press('Enter');
-    await page.waitForFunction(count=>window.cloudCopies===count,index+1);
-    assert.ok(await button.evaluate(element=>element===document.activeElement));
+    const button=page.getByRole('button',{name:label,exact:true});
+    await deferredCopyKeepsFocus(page,button,{fail:index===1});
+    if(index===1)await deferredCopyKeepsFocus(page,button);
   }
+  await deferredCopyKeepsFocus(page,page.getByRole('button',{name:'Copy final commands',exact:true}),{moveFocusTo:page.getByRole('button',{name:'Reset cloud backup options',exact:true})});
   // Reset focuses the calculator; closing returns to Explore.
   await page.getByRole('button',{name:'Reset cloud backup options',exact:true}).click();
   assert.ok(await page.locator('#cloud-step-0').evaluate(panel=>panel===document.activeElement));
@@ -379,6 +379,40 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
   assert.ok(await page.getByLabel('Cloud provider',{exact:true}).evaluate(input=>input===document.activeElement));
   await page.getByRole('button',{name:'Close cloud backup options',exact:true}).click();
   assert.ok(await explore.evaluate(input=>input===document.activeElement));
+});
+
+async function deferredCopyKeepsFocus(page,button,{fail=false,moveFocusTo=null}={}){
+  await page.evaluate(()=>{
+    delete window.finishClipboardWrite;
+    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>new Promise((resolve,reject)=>{
+      window.finishClipboardWrite=fail=>fail?reject(new Error('Clipboard denied')):resolve();
+    })}});
+  });
+  await button.focus();await page.keyboard.press('Enter');
+  await page.waitForFunction(()=>typeof window.finishClipboardWrite==='function');
+  // Cross a rendering frame while the clipboard promise is still pending.
+  await page.evaluate(()=>new Promise(requestAnimationFrame));
+  assert.ok(await button.evaluate(element=>element===document.activeElement),'a pending clipboard write keeps keyboard focus');
+  if(moveFocusTo)await moveFocusTo.focus();
+  await page.evaluate(async fail=>{window.finishClipboardWrite(fail);await new Promise(requestAnimationFrame);},fail);
+  assert.ok(await (moveFocusTo??button).evaluate(element=>element===document.activeElement),'clipboard completion preserves the current keyboard focus');
+}
+
+test('Reader file copying keeps keyboard focus through delayed success, failure and retry', {skip},async t=>{
+  const {page}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.file-copy',api:{
+    'GET /api/work/:id/conversations/:conversation':call=>{
+      const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
+      const message=(id,role,kind,text,extra={})=>({id,native_id:id,role,kind,text:JSON.stringify(text),created_at:'2026-10-01T00:00:00Z',...extra});
+      return {...body,messages:[message('prompt','user','message','Read this file'),
+        message('read','assistant','tool_call',{name:'Read',input:{file_path:'/repo/notes.txt'}},{call_id:'read'}),
+        message('result','tool','tool_result',{content:'Notes'},{call_id:'read'})]};
+    },
+  }});
+  const button=page.getByRole('button',{name:'Copy path /repo/notes.txt',exact:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{fail:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{moveFocusTo:page.locator('#settingsToggle')});
 });
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {

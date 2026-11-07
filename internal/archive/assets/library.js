@@ -1,8 +1,8 @@
 // Pharos library, drive and captures. GET /api/library/status says what holds
 // or writes the library; the header shows it and estimated completion times.
 // In the app, the drive panel's Eject goes through the host adapter, which
-// asks native code to release the library, stop agents' MCP servers running from
-// the drive, quits, and ejects the drive. Settings → Sources shows
+// releases the library and asks the app to eject the drive. Installed Pharos
+// can stay open; portable Pharos quits when running from that drive. Settings → Sources shows
 // captures from other Macs alongside this Mac's sources; Settings →
 // Health gains the drive's checks; Backups holds backup checks and controls.
 (() => {
@@ -934,9 +934,8 @@
     commit();
   }
 
-  // Pharos runs from the drive, as do the MCP servers agents start from it, so
-  // ejecting quits Pharos and stops those servers too.
-  const ejectNote = drive => `Quits Pharos and stops agents' Pharos MCP servers on this Mac, then ejects ${drive.name}. Reconnect agents (/mcp in Claude Code) once it is back.`;
+  // Release and physical ejection are separate; the app owns the eject policy.
+  const ejectNote = drive => `Releases the library and asks the app to eject ${drive.name}. Installed Pharos can stay open. Portable Pharos running from this drive quits and stops its Pharos MCP servers; reconnect affected agents (/mcp in Claude Code) once it is back.`;
 
   function ejectButton(drive, activities) {
     const ejecting = ejectState?.phase === 'ejecting';
@@ -970,7 +969,7 @@
     renderPanel();
     try {
       await window.pharosHost.lifecycle.requestEject();
-      // The app now quits, and the drive ejects once it has.
+      // The library is released; this reply does not confirm physical ejection.
       ejectState = {phase: 'ejecting', message: 'Ejecting…'};
     } catch (error) {
       ejectState = {phase: 'error', message: error?.message || String(error)};

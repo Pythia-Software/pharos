@@ -14,6 +14,37 @@ const { pharosSync, document: syncDocument } = loadClassicScript("sync.js", { Da
 
 const run = (id, state, conversations = 0, workspaces = conversations) => ({ id, kind: "automatic-sync", state, phase: "checking", conversations, workspaces });
 
+test('issue diagnostics copy waits for the host and shows a local outcome', async () => {
+  const elements = root => [root, ...(root.children || []).flatMap(elements)];
+  for (const outcome of ['native', 'native-failure', 'browser-denial']) {
+    const dashboard=syncDocument.createElement('div'),body=syncDocument.createElement('body');
+    dashboard.prepend=(...nodes)=>dashboard.children.unshift(...nodes);
+    const transfer=Promise.withResolvers(),writes=[];let browserCalls=0;
+    const details={id:'issue',source_name:'codex',unit:'/Volumes/My drive/資料\nfile'};
+    loadClassicScript('sync.js', {
+      document:{...syncDocument,body,getElementById:id=>id==='syncDashboard'?dashboard:null,createElement:tag=>{
+        const element=syncDocument.createElement(tag);element.showModal=()=>{};return element;
+      }},
+      ...(outcome==='browser-denial'?{}:{webkit:{messageHandlers:{pharosClipboard:{postMessage:text=>{writes.push(text);return transfer.promise;}}}}}),
+      navigator:{clipboard:{writeText:()=>{browserCalls++;return outcome==='browser-denial'?transfer.promise:Promise.reject(Error('Browser denied'));}}},
+      fetch:async path=>({ok:true,json:async()=>path==='/api/sync/status'?{settings:{},issues:[details]}:path==='/api/sync/issues'?{issues:[details]}:{runs:[]}}),
+    });
+    await new Promise(resolve=>setImmediate(resolve));
+    await elements(dashboard).find(el=>el.textContent==='View details / copy diagnostics').onclick();
+    const dialog=body.children.find(el=>el.tagName==='DIALOG');
+    const copy=elements(dialog).find(el=>el.textContent==='Copy diagnostics');
+    const status=dialog.children.find(el=>el.tagName==='P');
+    const pending=copy.onclick();
+    assert.equal(copy.disabled,true);assert.equal(status.textContent,'');
+    if(outcome==='native')transfer.resolve(true);else transfer.reject(Error('Copy denied'));
+    await pending;
+    assert.equal(copy.disabled,false);
+    assert.match(status.textContent,outcome==='native'?/copied/i:/could not copy/i);
+    assert.deepEqual(writes,outcome==='browser-denial'?[]:[JSON.stringify(details,null,2)]);
+    assert.equal(browserCalls,outcome==='browser-denial'?1:0);
+  }
+});
+
 test("verification summaries distinguish selective repairs from unresolved checks", () => {
   assert.equal(pharosSync.verificationSummary(null), "");
   const verification = { checked: 5, passed: 2, reindexed: 1, mismatch: 1, deferred: 1, errors: 1 };
