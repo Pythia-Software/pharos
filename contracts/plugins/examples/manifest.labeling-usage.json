@@ -1,0 +1,52 @@
+{
+  "plugin": "pharos-plugin/1",
+  "id": "local.labeling-usage",
+  "name": "Labeling usage",
+  "publisher": "You",
+  "version": "0.1.0",
+  "direction": "import",
+  "description": "Adds the token usage and cost of pharos labeling runs from their dataset ledgers. No conversations or text.",
+  "permissions": {
+    "produce": {
+      "kinds": [
+        "usage-records/1"
+      ],
+      "namespaces": [
+        "pharos-labeling"
+      ]
+    },
+    "fetches_from": [
+      "dataset.sqlite3 in the labeling dataset folders you choose"
+    ]
+  },
+  "params": {
+    "type": "object",
+    "required": [
+      "datasets"
+    ],
+    "properties": {
+      "datasets": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "minItems": 1
+      }
+    }
+  },
+  "triggers": [
+    {
+      "schedule": {
+        "every": "1h"
+      }
+    }
+  ],
+  "limits": {
+    "max_runtime": "5m",
+    "max_bytes": "200MiB"
+  },
+  "run": {
+    "interpreter": "python3",
+    "entry": "labeling_usage.py"
+  }
+}

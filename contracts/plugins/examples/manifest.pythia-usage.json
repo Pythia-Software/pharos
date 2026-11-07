@@ -1,0 +1,141 @@
+{
+  "plugin": "pharos-plugin/1",
+  "id": "software.pythia.usage",
+  "name": "Pythia AI usage",
+  "publisher": "Pythia Software",
+  "version": "1.4.0",
+  "direction": "export",
+  "description": "Shares daily AI usage and work-item summaries with your company's Pythia workspace. No message text.",
+  "homepage": "https://pythia.software/pharos",
+  "permissions": {
+    "read": {
+      "datasets": {
+        "usage/1": {
+          "fields": [
+            "at",
+            "provider",
+            "model",
+            "repository_name",
+            "total_tokens",
+            "cost_usd"
+          ],
+          "mode": "aggregate"
+        },
+        "library/1": {
+          "fields": [
+            "id",
+            "activity_at",
+            "repository_name",
+            "cost_usd",
+            "outcome",
+            "conversation_count"
+          ],
+          "mode": "rows"
+        }
+      },
+      "text": false
+    },
+    "redaction": {
+      "preset": "metadata",
+      "hash": [
+        "repository_name"
+      ]
+    },
+    "destinations": [
+      "https://ingest.pythia.software"
+    ]
+  },
+  "triggers": [
+    {
+      "after_index": {
+        "min_interval": "1h"
+      }
+    },
+    {
+      "schedule": {
+        "every": "24h"
+      }
+    }
+  ],
+  "guards": {
+    "max_runs_per_day": 30
+  },
+  "limits": {
+    "max_runtime": "10m",
+    "max_requests": 500,
+    "max_served_bytes": "50MiB",
+    "max_bytes": "1MiB"
+  },
+  "registration": {
+    "url": "https://app.pythia.software/pharos/authorize",
+    "token_url": "https://app.pythia.software/pharos/token"
+  },
+  "supports": [
+    "retract"
+  ],
+  "identity": {
+    "on_reinstall": "keep"
+  },
+  "run": {
+    "builtin": "declarative-export/1",
+    "receiver": {
+      "url": "https://ingest.pythia.software/pharos"
+    },
+    "send": [
+      {
+        "name": "daily-usage",
+        "dataset": "usage/1",
+        "incremental": "changes",
+        "query": {
+          "query": "export-query/1",
+          "group": {
+            "period": {
+              "field": "at",
+              "interval": "day"
+            },
+            "keys": [
+              "provider",
+              "model",
+              "repository_name"
+            ],
+            "summaries": [
+              {
+                "id": "total_tokens",
+                "op": "sum",
+                "field": "total_tokens"
+              },
+              {
+                "id": "cost_usd",
+                "op": "sum",
+                "field": "cost_usd"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "work-items",
+        "dataset": "library/1",
+        "incremental": "changes",
+        "query": {
+          "query": "export-query/1",
+          "select": [
+            "id",
+            "activity_at",
+            "repository_name",
+            "cost_usd",
+            "outcome",
+            "conversation_count"
+          ],
+          "order_by": [
+            {
+              "field": "activity_at",
+              "dir": "desc"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "update_url": "https://plugins.pythia.software/usage/manifest.json"
+}

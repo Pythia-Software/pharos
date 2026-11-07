@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "field_not_granted",
+    "dataset": "usage/1",
+    "field": "title",
+    "message": "usage/1 field title is not in this plugin's permissions; granted fields: at, provider, model, repository_name, total_tokens, cost_usd"
+  }
+}

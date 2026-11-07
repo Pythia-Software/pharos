@@ -1,0 +1,17 @@
+{
+  "contract": "pharos-run/1",
+  "status": "complete",
+  "message": "52 weeks of totals published",
+  "cursor": {
+    "changes": "chg_0001f3b0"
+  },
+  "delivered": {
+    "periods": 104,
+    "bytes": 18211
+  },
+  "receipt": {
+    "commit": "5d1e2c9"
+  },
+  "transferred_bytes": 20480,
+  "warnings": []
+}

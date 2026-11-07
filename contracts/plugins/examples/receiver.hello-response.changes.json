@@ -1,0 +1,11 @@
+{
+  "need": "changes",
+  "accepts": [
+    "usage/1",
+    "library/1"
+  ],
+  "max_batch_bytes": 4194304,
+  "max_version": 1793700000000004,
+  "retention_days": 395,
+  "receipt": "rcpt_000149"
+}
