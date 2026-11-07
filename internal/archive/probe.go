@@ -195,6 +195,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		"cline":          {".cline/data"},
 		"vscode-copilot": vscodeUserDirs,
 		"cursor":         {cursorUserDir},
+		"cursor-cli":     {".cursor/chats"}, // the editor's extensions are in .cursor too
 	} {
 		for _, path := range paths {
 			check(kind, filepath.Join(home, filepath.FromSlash(path)), "data folder")
@@ -240,7 +241,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		check(source.Kind, source.Path, "configured source")
 	}
 	tools := []ProbeTool{}
-	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline", "vscode-copilot", "cursor"} {
+	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline", "vscode-copilot", "cursor", "cursor-cli"} {
 		if tool, exists := found[kind]; exists {
 			tools = append(tools, tool)
 		}
@@ -336,6 +337,14 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 			}
 		}
 	}
+	if status.HostFileExists && (kinds == nil || kinds["cursor-cli"]) {
+		dir := filepath.Join(home, ".cursor")
+		if chats, _ := (&cursorCLIAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).chats(); len(chats) > 0 {
+			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "cursor-cli", resolved) == nil {
+				status.NewSources++
+			}
+		}
+	}
 	if status.HostFileExists && (kinds == nil || kinds["copilot"]) {
 		for _, dir := range probeStatusDirs(home, "COPILOT_HOME", "", ".copilot") {
 			if info, err := os.Stat(filepath.Join(dir, "session-state")); err == nil && info.IsDir() {
@@ -421,6 +430,7 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 		}
 	})
 	timed("cursor", func() { run.cursor(filepath.Join(home, filepath.FromSlash(cursorUserDir)), "default location") })
+	timed("cursor-cli", func() { run.cursorCLI(filepath.Join(home, ".cursor"), "default location") })
 	timed("antigravity", func() {
 		for _, dir := range antigravityDirs(home) {
 			foundBy := "~/.gemini/antigravity* directory"
@@ -500,6 +510,8 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 			run.vscodeCopilot(path, foundBy)
 		case "cursor":
 			run.cursor(path, foundBy)
+		case "cursor-cli":
+			run.cursorCLI(path, foundBy)
 		case "antigravity":
 			run.antigravity(path, foundBy)
 		case "conductor":
@@ -794,6 +806,54 @@ func (r *probeRun) cursor(dir, foundBy string) {
 		var stats probeStats
 		if err == nil {
 			stats, err = cursorProbeStats(database)
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// cursorCLI finds the Cursor CLI's folder and counts its chats, each a
+// database, from when the first began to when the last was active.
+func (r *probeRun) cursorCLI(dir, foundBy string) {
+	candidate, resolved := r.locate("cursor-cli", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	candidate.Unit, candidate.baseName = "session", ""
+	if candidate.Status == "found" {
+		chats, err := (&cursorCLIAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: resolved}}}).chats()
+		if err == nil && len(chats) == 0 {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"cursor-cli", candidate.DisplayPath, foundBy, "no chats/*/*/store.db"})
+			return
+		}
+		stats := probeStats{}
+		for _, chat := range chats {
+			info, statErr := os.Stat(chat.store)
+			if statErr != nil {
+				err = errors.Join(err, statErr)
+				continue
+			}
+			stats.sessions++
+			stats.files++
+			stats.bytes += info.Size()
+			started, updated := info.ModTime(), info.ModTime()
+			if chat.meta != "" {
+				if value, err := readJSON(chat.meta); err == nil {
+					meta := mapValueDefault(value)
+					if at, ok := number(meta["createdAtMs"]); ok {
+						started = time.UnixMilli(int64(at))
+					}
+					if at, ok := number(meta["updatedAtMs"]); ok {
+						updated = time.UnixMilli(int64(at))
+					}
+				}
+			}
+			if stats.oldest.IsZero() || started.Before(stats.oldest) {
+				stats.oldest = started
+			}
+			if updated.After(stats.newest) {
+				stats.newest = updated
+			}
 		}
 		stats.apply(candidate, err)
 	}

@@ -23,7 +23,7 @@ type retainedInput struct {
 
 func productionAdapter(adapter Adapter) bool {
 	switch adapter.(type) {
-	case *jsonlAdapter, *canonicalAdapter, *chatGPTAdapter, *claudeAIAdapter, *copilotAdapter, *clineAdapter, *vscodeCopilotAdapter, *cursorAdapter, *opencodeAdapter, *conductorAdapter, *tl1Adapter, *antigravityAdapter:
+	case *jsonlAdapter, *canonicalAdapter, *chatGPTAdapter, *claudeAIAdapter, *copilotAdapter, *clineAdapter, *vscodeCopilotAdapter, *cursorAdapter, *cursorCLIAdapter, *opencodeAdapter, *conductorAdapter, *tl1Adapter, *antigravityAdapter:
 		return true
 	}
 	// Synthetic record adapters are package/test inputs, never MakeAdapter results.
@@ -70,7 +70,7 @@ func (c *Catalog) acquireRetainedInput(ctx context.Context, adapter Adapter, pro
 	if isConductorSource(source.Kind) {
 		return result, nil
 	} // session exporter; production-size gate remains opt-in
-	if strings.EqualFold(source.Kind, "cursor") {
+	if strings.EqualFold(source.Kind, "cursor") || strings.EqualFold(source.Kind, "cursor-cli") {
 		// Only Cursor's snapshots leave out what it keeps beside its chats
 		// (captureTables): no rows are copied before indexing.
 		return result, nil

@@ -2080,10 +2080,16 @@ func (c *Catalog) reindexStaleMetricLedgers() error {
 func upsertSummary(tx *sql.Tx, workspaceID string, record WorkspaceRecord) error {
 	var firstUser, lastAgent *MessageRecord
 	failures := []MessageRecord{}
+	// What a branch left behind (not selected) is not summarized, when a
+	// source selects what it kept.
+	selectedOnly := false
+	for _, conversation := range record.Conversations {
+		selectedOnly = selectedOnly || slices.ContainsFunc(conversation.Messages, func(message MessageRecord) bool { return message.Selected })
+	}
 	for ci := range record.Conversations {
 		for mi := range record.Conversations[ci].Messages {
 			message := &record.Conversations[ci].Messages[mi]
-			if message.Text == "" {
+			if message.Text == "" || selectedOnly && !message.Selected {
 				continue
 			}
 			if firstUser == nil && message.Role == "user" && defaultString(message.Kind, "message") == "message" {
