@@ -906,6 +906,9 @@ f = open(sys.argv[1], "a"); fcntl.flock(f, fcntl.LOCK_EX); print("locked", flush
 	if line, err := bufio.NewReader(locked).ReadString('\n'); err != nil || line != "locked\n" {
 		t.Fatalf("lock holder: %q %v", line, err)
 	}
+	if !catalogInitializationInProgress(path) {
+		t.Fatal("startup watchdog did not recognize the running catalog upgrade")
+	}
 	setBuild("another build")
 	started := time.Now()
 	if _, err := OpenCatalogForQuery(path); !errors.Is(err, errCatalogInitializing) || time.Since(started) > 15*time.Second {
@@ -931,6 +934,14 @@ f = open(sys.argv[1], "a"); fcntl.flock(f, fcntl.LOCK_EX); print("locked", flush
 	if err := <-opened; err != nil || build() != buildDigest() {
 		t.Fatalf("full open once the lock was free: %v, build %q", err, build())
 	}
+	if catalogInitializationInProgress(path) || catalogInitializationInProgress(filepath.Join(t.TempDir(), "missing.sqlite3")) {
+		t.Fatal("startup watchdog reported an upgrade without an initialize lock")
+	}
+	probe, err := fileLease(filepath.Join(filepath.Dir(path), initializeLockName), true)
+	if err != nil {
+		t.Fatalf("startup watchdog retained the initialize lock: %v", err)
+	}
+	probe.Close()
 	setBuild("another build")
 	light, err := OpenCatalogForQuery(path)
 	if err != nil || build() != buildDigest() {
