@@ -9,10 +9,13 @@ import agentEventKinds from "./agent-event-kinds.json";
 // shade of its group's hue, darkest first.
 const eventGroupHues: Record<string, string> = { Friction: "var(--event-friction)", "Reactions and learning": "var(--event-learning)", "Worth a second look": "var(--event-second-look)", "Choices you may not see": "var(--event-choices)" };
 // A kind's legend entry sits under its group (groupPath), so a group's chip
-// selects its kinds.
+// selects its kinds. Kinds of one group, drawn together, alternate darker
+// (toward ink) and lighter (toward the page) so neighbours stay apart.
+const kindShades: Array<[number, "--ink" | "--bg"]> = [[100, "--bg"], [55, "--ink"], [50, "--bg"], [80, "--ink"], [75, "--bg"], [35, "--ink"], [30, "--bg"], [65, "--ink"]];
 const eventKindStyles = new Map<string, { color: string; group: string; groupPath: string[]; order: string }>(agentEventKinds.kinds.flatMap(kind => {
   const siblings = agentEventKinds.kinds.filter(other => other.group === kind.group), index = siblings.indexOf(kind);
-  const style = { color: `color-mix(in srgb,${eventGroupHues[kind.group]} ${100 - Math.round(55 * index / Math.max(1, siblings.length - 1))}%,var(--bg))`, group: kind.group, groupPath: [kind.group],
+  const [share, toward] = kindShades[index % kindShades.length];
+  const style = { color: share === 100 ? eventGroupHues[kind.group] : `color-mix(in srgb,${eventGroupHues[kind.group]} ${share}%,var(${toward}))`, group: kind.group, groupPath: [kind.group],
     order: `${agentEventKinds.groups.indexOf(kind.group)}:${String(index).padStart(2, "0")}` };
   return [[kind.key, style], [kind.label, style]] as [string, typeof style][];
 }));
