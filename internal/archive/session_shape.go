@@ -927,6 +927,41 @@ func activeBand(seconds float64) string {
 	return "2h+"
 }
 
+// turnCycleBand places a session's median turn cycle; gaps over 30 minutes
+// never reach it.
+func turnCycleBand(seconds float64) string {
+	switch {
+	case seconds < 10:
+		return "<10s"
+	case seconds < 30:
+		return "10-30s"
+	case seconds < 60:
+		return "30-60s"
+	case seconds < 180:
+		return "1-3m"
+	case seconds < 600:
+		return "3-10m"
+	}
+	return "10m+"
+}
+
+// contextBand places a session's peak context share of its model's window.
+func contextBand(ratio float64) string {
+	switch {
+	case ratio < 0.1:
+		return "<10%"
+	case ratio < 0.25:
+		return "10-25%"
+	case ratio < 0.5:
+		return "25-50%"
+	case ratio < 0.75:
+		return "50-75%"
+	case ratio < 0.9:
+		return "75-90%"
+	}
+	return "90%+"
+}
+
 func toolBand(calls int64) string {
 	switch {
 	case calls == 0:
@@ -1123,7 +1158,7 @@ func (c *Catalog) newSessionShapeTable(ctx context.Context, facts map[string]ses
 func sessionShapeRow(shape sessionShapeFacts) map[string]any {
 	row := map[string]any{"messages": shape.Messages, "compactions": shape.Compactions, "length_band": lengthBand(shape.Messages),
 		"has_tool_data": shape.HasToolData, "has_timestamps": shape.HasTimestamps, "has_authorship": shape.HasAuthorship, "has_context_window": shape.HasContextWindow,
-		"active_band": nil, "tool_band": nil, "autonomy_band": nil, "archetype": nil, "autonomy": nil, "autonomy_prompts": nil,
+		"active_band": nil, "tool_band": nil, "autonomy_band": nil, "turn_cycle_band": nil, "context_band": nil, "archetype": nil, "autonomy": nil, "autonomy_prompts": nil,
 		"idle_seconds": nil, "active_hours": nil, "unverified_handbacks": nil, "forensic_events": nil}
 	for field, value := range map[string]any{
 		"typed_human_messages": pointerValue(shape.TypedHumanMessages), "typed_words": pointerValue(shape.TypedWords), "tool_calls": pointerValue(shape.ToolCalls),
@@ -1151,12 +1186,36 @@ func sessionShapeRow(shape sessionShapeFacts) map[string]any {
 	if shape.ToolCalls != nil {
 		row["tool_band"] = toolBand(*shape.ToolCalls)
 	}
+	if shape.TurnCycleP50 != nil {
+		row["turn_cycle_band"] = turnCycleBand(*shape.TurnCycleP50)
+	}
+	if shape.ContextPeakRatio != nil {
+		row["context_band"] = contextBand(*shape.ContextPeakRatio)
+	}
 	if shape.TypedHumanMessages != nil {
 		row["archetype"] = sessionArchetype(*shape.TypedHumanMessages)
 		if shape.ToolCalls != nil {
 			prompts := max(1, *shape.TypedHumanMessages)
 			ratio := float64(*shape.ToolCalls) / float64(prompts)
 			row["autonomy"], row["autonomy_prompts"], row["autonomy_band"] = ratio, prompts, autonomyBand(ratio)
+		}
+	}
+	// Each per-session value's fine bin, for the heatmaps' continuous axis
+	// (value_bins.go); empty where the value is.
+	for field, bin := range map[string]struct {
+		value  string
+		scheme binScheme
+	}{
+		"messages_bin": {"messages", binCount}, "typed_messages_bin": {"typed_human_messages", binCount}, "tool_calls_bin": {"tool_calls", binCount},
+		"active_seconds_bin": {"active_seconds", binLog}, "autonomy_bin": {"autonomy", binLog}, "turn_cycle_bin": {"turn_cycle_p50_seconds", binLog},
+		"context_peak_bin": {"context_peak_ratio", binLinear(40)},
+	} {
+		row[field] = nil
+		switch value := row[bin.value].(type) {
+		case int64:
+			row[field] = valueBin(float64(value), bin.scheme)
+		case float64:
+			row[field] = valueBin(value, bin.scheme)
 		}
 	}
 	if shape.EditHandbacks != nil {

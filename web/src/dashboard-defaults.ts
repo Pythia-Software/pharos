@@ -28,5 +28,7 @@ export const dashboardDefaults: Record<string, AnalysisState> = {
   time: { metric: "time", split: "activity", ...daily },
   skills: { metric: "records", split: "skill_name", ...daily },
   agent_experience: { metric: "events", split: "family_group", ...daily },
-  session_shape: { metric: "sessions", split: "length_band", period: "week", share: true },
+  // Session Shape chooses each chart itself (its catalog's present); a
+  // day with a trailing week's smoothing reads its bands best.
+  session_shape: { metric: "sessions", split: "length_band", period: "day", rollingPeriods: 7 },
 } satisfies Record<keyof typeof engineUsageTopics, AnalysisState>;

@@ -1,8 +1,11 @@
 package archive
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -241,7 +244,9 @@ func TestSessionShapeBands(t *testing.T) {
 	row := sessionShapeRow(sessionShapeFacts{Messages: 16, TypedHumanMessages: shapeCount(6), ToolCalls: shapeCount(21),
 		ActiveSeconds: shapeSeconds(299), WallSeconds: shapeSeconds(4000), HasToolData: true, HasAuthorship: true, HasTimestamps: true})
 	want := map[string]any{"length_band": "16-30", "tool_band": "21-50", "active_band": "<5m", "autonomy_band": "2-5", "archetype": "standard",
-		"autonomy": 3.5, "autonomy_prompts": int64(6), "idle_seconds": 3701.0}
+		"autonomy": 3.5, "autonomy_prompts": int64(6), "idle_seconds": 3701.0,
+		// Fine bins for the heatmaps' axis; a value without evidence has none.
+		"messages_bin": 15.0, "typed_messages_bin": 6.0, "tool_calls_bin": 20.0, "active_seconds_bin": 250.0, "autonomy_bin": 3.0, "turn_cycle_bin": nil, "context_peak_bin": nil}
 	for field, expected := range want {
 		if row[field] != expected {
 			t.Errorf("%s = %v, want %v", field, row[field], expected)
@@ -254,7 +259,8 @@ func TestSessionShapeBands(t *testing.T) {
 	for _, edge := range []struct {
 		got, want string
 	}{{lengthBand(5), "1-5"}, {lengthBand(121), "121+"}, {activeBand(300), "5-15m"}, {activeBand(7200), "2h+"}, {toolBand(0), "0"}, {toolBand(101), "101+"},
-		{autonomyBand(0.49), "<0.5"}, {autonomyBand(10), "10+"}, {sessionArchetype(5), "quick"}, {sessionArchetype(51), "marathon"}} {
+		{autonomyBand(0.49), "<0.5"}, {autonomyBand(10), "10+"},
+		{turnCycleBand(9.9), "<10s"}, {turnCycleBand(60), "1-3m"}, {turnCycleBand(1800), "10m+"}, {contextBand(0.09), "<10%"}, {contextBand(0.5), "50-75%"}, {contextBand(0.95), "90%+"}, {sessionArchetype(5), "quick"}, {sessionArchetype(51), "marathon"}} {
 		if edge.got != edge.want {
 			t.Errorf("band %q, want %q", edge.got, edge.want)
 		}
@@ -532,5 +538,33 @@ func TestSessionShapeIncremental(t *testing.T) {
 		fmt.Sprintf(`{"version":3,"profile":"qt-sqlite-v1","now":%d,"rows":true,"source":{},"result":{"select":["id","archetype","active_seconds","has_authorship"],"limit":50}}`, time.Now().UnixMilli()))
 	if w.Code != 200 || strings.Count(w.Body.String(), `"archetype"`) < 5 {
 		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+// The bins match the frontend's (web/src/value-bins.ts) case for case.
+func TestValueBinsMatchTheFrontend(t *testing.T) {
+	var fixture struct {
+		Cases []struct {
+			Scheme struct {
+				Scale string `json:"scale"`
+				Per   int    `json:"per"`
+			} `json:"scheme"`
+			Pairs [][2]float64 `json:"pairs"`
+		} `json:"cases"`
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "value-bins.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range fixture.Cases {
+		scheme := binScheme{scale: group.Scheme.Scale, per: group.Scheme.Per}
+		for _, pair := range group.Pairs {
+			if got := valueBin(pair[0], scheme); got != pair[1] {
+				t.Errorf("%s bin of %v = %v, want %v", scheme.scale, pair[0], got, pair[1])
+			}
+		}
 	}
 }

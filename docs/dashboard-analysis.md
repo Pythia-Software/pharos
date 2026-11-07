@@ -130,7 +130,24 @@ what each offers and why.
   - an optional per-record `value`, which makes the measure eligible for
     record distributions;
   - an `additive` flag, which decides whether groups may be shown as shares;
-  - an optional implied population (`where`), such as fully priced usage.
+  - an optional implied population (`where`), such as fully priced usage;
+  - an optional `valueBins` (or a `band`), the breakdown whose fine bins
+    hold the per-record value. A record distribution of it without a
+    breakdown is then a histogram over those bins on the value's own axis
+    (`distributionBins`, `BinnedHistogram`): a log axis gives a long tail
+    its shape where Query Table's even steps would put nearly every record
+    in the first bar, zero sits apart, and the median and 90th percentile
+    are marked. Any other log-axis distribution leaves out zero, which a log
+    axis cannot place, and its note says so;
+  - an optional `noDistribution` reason, for a measure whose distribution
+    says nothing, such as a count of rare events nearly every record has
+    none of. Distribution disables it with that reason.
+
+  A unit may be `recordsAlike`: one record each, such as Session Shape's
+  agent session. Its distribution is the records', so Distribution offers
+  the records for a measure with a per-record value and the unit only for
+  one without, and Compare's per-unit Total, which is the records' bars,
+  gives way to a mean. Each disabled choice says why.
 
   A mean is declared as a ratio of a sum and a count, never as `avg`:
   `catalogProblems` rejects an `avg` measure, because a mean of per-period
@@ -303,11 +320,11 @@ fields:
 | `cycleOn` | in a cycle, the catalog's `cycleOn` option that places each record; its default timestamp when absent |
 | `period`, `hours`, `days` | the trend's time bucket, and how many hours or days a custom bucket holds |
 | `rollingPeriods`, `rollingOp` | the trend's trailing window in buckets, and whether each point is its `mean` (default) or `sum` |
-| `display` | `interval` or `cumulative` |
+| `display` | `interval`, `cumulative` or `heatmap` |
 | `share` | each trend series as a share of its bucket's total |
 | `nonzero` | values without zeroes: buckets with nothing drawn are left out, and lines pass over a series' zeroes; ignored with `share` |
 | `completePeriods` | whole periods only |
-| `norm`, `normPeriods` | a reference line at the mean of the `normPeriods` (30) points before the latest |
+| `percentiles`, `normPeriods` | the %ile control's reference levels, any of `mean`, `p50`, `p75`, `p90`, `p95`, `p99`: a line at each level of the `normPeriods` (30) points before the latest, or on a heatmap a trace of each period's percentile. `norm: true` is the older name for `["mean"]` (`canonicalState` reads it). Links, cards and the site map's agents use `percentiles`; the site map's list rule says which levels each chart draws ([site map](site-map.md#valid-combinations)) |
 | `seriesLimit`, `selection` | series drawn before Other, and the legend selection: the breakdown's groups drawn (or hidden, when `excluded`) |
 | `v` | the link format, `2`; see [Selections and links](#selections-and-links) |
 
@@ -389,6 +406,41 @@ can:
   across. A summed component breakdown also carries between Over time and
   Compare groups; distribution and scatter need record fields, so use `none`.
   Derived components remain available over time.
+
+### Population
+
+A catalog with `population: true` (Session Shape) shows its population in the
+controls, as a Population field before Range (`dashboard-population.ts`,
+`dashboard-population-control.tsx`):
+
+- **Chips.** Each `analyze_filters` term other than the range is a removable
+  chip. A term on a single-field breakdown's field that the legend could have
+  written reads as that breakdown's values ("Harness is not antigravity-cli",
+  "Archetype is one of Deep or Marathon"); any other reads as the query
+  editor reads it ("Active time (s) is not empty"). With none it reads "All
+  sessions". A measure's own population (`where`) and a unit's are not
+  chips: they belong to the measure, not to the dashboard.
+- **The legend adds terms.** A trend legend value's menu has "Count only this
+  value" and "Leave this value out" below its selection items. They write
+  ordinary Query Table terms on the breakdown's field (`withPopulationGroup`):
+  `{field, op: "=", value}`, or `{any: [{field, op: "!=", value}, {field,
+  op: "is_null"}]}` so sessions without the field stay counted; a missing
+  value left out is `is_not_null`. Count only replaces the field's slice;
+  Leave out narrows an inclusion or adds an exclusion. A combined breakdown's
+  group is one more term (`selectionWhere`). The term outlives the
+  breakdown: switch to another and it still counts.
+- **A selection can become the population.** Where a selection's note shows
+  "Show every group", "Make this the population" moves it into the filters
+  and clears it (`selectionPopulation`).
+- **Edit** opens the same filter editor as a query (`SearchFilters`): any
+  field, operator, OR group or negation, as a draft applied whole.
+- **Partial populations are named.** The chart's title takes a suffix
+  ("· excluding antigravity-cli; only Root agent") on every view, and
+  Create card keeps the filters, so a card says what it leaves out.
+
+There is no other parameter: site_link's `filters` are these terms, and the
+site map's `filters` option says so for such dashboards
+(`testdata/site-map-cases.json`, `population`).
 
 ### Selections and links
 
@@ -528,7 +580,9 @@ no sum, cumulative or share.
   days), a custom multi-day or multi-hour bucket starting before it is
   history, and buckets ending after the range's end or now are left out.
   For days this is `cardTrendDays`' `completeDays`.
-- **Norm.** The mean of the `normPeriods` (default 30) points before the
+- **%ile (reference levels).** Each chosen level (`percentiles`: the mean,
+  or the 50th, 75th, 90th, 95th or 99th percentile, interpolated; `levelOf`)
+  of the `normPeriods` (default 30) points before the
   latest drawn point, whatever the range: the stacked total of the drawn
   series for additive measures, or the one series otherwise. The query
   reaches back for those points and their smoothing windows, and every one
@@ -584,7 +638,63 @@ no sum, cumulative or share.
 - **Controls.** `AnalysisControls` is the one control bar for every view;
   the trend adds Show as (values or shares), Display, Time bucket,
   Smoothing with its Window (average or total), Periods (whole periods
-  only) and Norm.
+  only) and %ile, a multi-select of reference levels (`PercentileControl`;
+  a level the chart cannot draw is disabled with its reason,
+  `percentileLimit`).
+- **Chosen charts.** A catalog may choose each chart itself (`present`):
+  given the view, measure and breakdown, how it is drawn — display, shares,
+  scale, a default reference level, Compare's bars or shares, and for Over time whether it draws
+  lines or bars (`trendDrawing`, without changing the state's view). The
+  choice overrides what a link asked for, the controls for those settings
+  are hidden, and the site map leaves them out of the topic's chart keys
+  (`topicChartKeys`), so a link neither holds nor checks them. Session
+  Shape is the one catalog that chooses
+  ([its charts](session-shape.md#charts)).
+- **Heatmap.** Display = Heatmap draws a value on a continuous axis over
+  time, as an observability heatmap does: one column per period, the value
+  up the side, and each cell shaded by how much falls in that narrow range
+  of the value that period. It needs a breakdown whose value is binned
+  (`bins` on the breakdown, `heatmapAxis`):
+  - without a breakdown, a measure with such a band of its own (`band`,
+    such as Session Shape's tool calls per typed message) draws its
+    records' distribution, counted with the catalog's `records.count`
+    measure among the records in its population with a value;
+  - by such a band, an additive measure draws its total over the band's
+    value: sessions by length band is sessions by messages per session.
+
+  The bins are fine and fixed (`value-bins.ts`): ten log bins a decade, or
+  whole numbers to 9 and then log bins, or linear steps. The service stores
+  each record's bin as its lower edge (`value_bins.go`), and both sides
+  compute edges by parsing the same decimal text, so they agree exactly
+  (`testdata/value-bins.json`). The trend groups by that field
+  (`heatmapSource`, every bin a series, none folded into Other) and lays
+  each bin at its true place on the axis: log for log and count bins, with
+  zero in its own row below, linear otherwise. It reads the trend's own
+  query and prepared buckets, so filters, smoothing (each column then
+  averages its window), whole periods and Refresh apply as they do to
+  columns.
+  - One hue, shaded on a log scale of the largest cell, which the key
+    names, so a burst in one bin does not wash out the rest. A period with
+    nothing is hatched.
+  - A solid line traces each period's median and a dashed one its 90th
+    percentile, read from the bins. Dotted guides mark where each of the
+    band's groups starts (`bins.edges`), labelled at the right.
+  - Hover a cell for its range, the amount in it and its share of the
+    period.
+  - Without such a breakdown (`trendLimits.heatmap`) it falls back to per
+    interval and says why. Show as, Scale and smoothing's Window do
+    not apply and are hidden. The %ile control chooses the traced
+    percentiles (median and 90th by default); a mean has no place in the
+    bins and is disabled. Hovering a column or cell lists each line's value
+    there, and each trace is labelled where it starts.
+  - The model is `dashboard-heatmap-model.ts` (`trendHeatmap`) and the
+    component `dashboard-heatmap.tsx`. A card made from a heatmap draws it
+    as a grid cover (`heatmapGrid`), as does a card recipe whose daily
+    cover groups by a bin field and asks for `timeline.display: "heatmap"`.
+  - Why fixed bins stored with each record rather than Query Table's
+    histograms: those bin each group with its own linear edges, so rows
+    would not line up across columns, and a query cannot group by a
+    computed expression.
 
 ### Queries
 
