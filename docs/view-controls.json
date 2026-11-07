@@ -3296,6 +3296,15 @@
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
     },
     {
+      "key": "97a8fc4b6ef3368e:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "mountSessionSignals",
+      "tag": "button",
+      "control": "'button', 'session-signal'",
+      "contract": "navigation",
+      "reason": "Writes reveal=message:<id> and highlight to the URL to step through the messages where a session signal fired: scroll and highlight, never focus. The URL owns the state."
+    },
+    {
       "key": "089cfe80425bbb90:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "rawDisclosure",
