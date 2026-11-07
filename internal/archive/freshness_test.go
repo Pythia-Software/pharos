@@ -29,6 +29,13 @@ func newFreshnessFixture(t *testing.T) *freshnessFixture {
 	// has nothing to process: see TestFreshnessOfAnEmptyLibrary).
 	f.exec(append([]string{`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','claude','local','w','Work','2026-10-27')`,
 		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','claude','local','c')`}, f.builtToday()...)...)
+	var revision string
+	if err := catalog.DB.QueryRow("SELECT revision FROM authorship_dirty WHERE id=1").Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	f.exec(setMetaSQL("authorship_state_version", authorshipStateVersion),
+		setMetaSQL("authorship_refinement_inputs", authorshipRefinementKey(revision)),
+		setMetaSQL("authorship_refined_at", "2026-10-27T08:00:00Z"))
 	return f
 }
 

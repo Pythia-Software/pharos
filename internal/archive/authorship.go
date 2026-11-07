@@ -1436,6 +1436,7 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, forc
 	}
 	full := run.classifier == nil
 	if full {
+		run.refinementKey = authorshipRefinementKey(run.checkpoint.revision)
 		run.inputs, run.launches, err = c.authorshipInputs(ctx)
 		if err != nil {
 			return err
@@ -1776,7 +1777,7 @@ func (c *Catalog) AuthorshipStats(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	want, refined, err := c.authorshipGenerations()
+	refinementPending, err := c.authorshipRefinementPending(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1799,7 +1800,7 @@ func (c *Catalog) AuthorshipStats(ctx context.Context) (map[string]any, error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return map[string]any{
-		"refined_at": nilIfEmpty(refinedAt), "refinement_pending": want != refined || provisional > 0 || deferred > 0 || backlog.Pending > 0, "provisional_messages": provisional, "deferred_messages": deferred, "pending_messages": backlog.Pending,
+		"refined_at": nilIfEmpty(refinedAt), "refinement_pending": refinementPending, "provisional_messages": provisional, "deferred_messages": deferred, "pending_messages": backlog.Pending,
 		"pending_recent_messages": backlog.Recent, "pending_historical_messages": backlog.Historical, "oldest_pending_sent_at": nilIfEmpty(backlog.OldestSent), "oldest_pending_queued_at": nilIfEmpty(backlog.OldestQueued), "complete_at": nilIfEmpty(completeAt), "refining": state.refining,
 		"version": authorshipVersion, "built_at": nilIfEmpty(builtAt), "running": state.running, "stale": stale, "error": nilIfEmpty(state.lastError),
 		"window_hours": int(authorshipWindow.Hours()), "totals": totals[0], "last_30_days": recent[0], "daily": daily,
