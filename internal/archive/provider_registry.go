@@ -23,6 +23,11 @@ type providerSpec struct {
 	KindAliases []string
 	// DisplayName names the provider to people ("Claude Code").
 	DisplayName string
+	// Instructions is where a person keeps the provider's rules for every
+	// project: a home-relative file ("~/.claude/CLAUDE.md"), a folder of rule
+	// files ending in "/", or, when the app keeps them in its settings, the
+	// place to find them there. Fixes and Findings point at it.
+	Instructions string
 	// Content declares what its records hold, so a missing value it never
 	// records is shown as not recorded rather than zero.
 	Content contentCapabilities
@@ -139,7 +144,7 @@ var providerRegistry []providerSpec
 func init() {
 	providerRegistry = []providerSpec{
 		{
-			Kind: "claude", DisplayName: "Claude Code", Mutation: "retrieval-only", Automatic: true, Setup: 1, MirrorRank: 1,
+			Kind: "claude", DisplayName: "Claude Code", Instructions: "~/.claude/CLAUDE.md", Mutation: "retrieval-only", Automatic: true, Setup: 1, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd git_branch model message_tokens tool_calls tool_results reasoning timestamps subagents harness_version", Varies: "effort speed title",
 				Notes: map[string]string{"effort": "When the transcript records it.", "speed": "When the transcript records the request's speed or service tier.", "title": "When Claude Code named the session."}},
 			New:          func(base baseAdapter) Adapter { return &jsonlAdapter{baseAdapter: base, provider: "claude"} },
@@ -172,7 +177,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "codex", DisplayName: "Codex", Mutation: "retrieval-only", Automatic: true, Setup: 2, MirrorRank: 1,
+			Kind: "codex", DisplayName: "Codex", Instructions: "~/.codex/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 2, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd git_branch model message_tokens tool_calls tool_results timestamps harness_version", Varies: "effort speed reasoning subagents title",
 				Notes: map[string]string{"effort": "From releases that record it.", "speed": "From releases that record the turn's service tier.", "reasoning": "A summary, or only that it reasoned when the reasoning is encrypted.", "subagents": "From releases that record which session started another.", "title": "When Codex named the session."}},
 			Resolve: resolveRolloutSource,
@@ -191,7 +196,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "copilot", DisplayName: "Copilot CLI", Mutation: "retrieval-only", Automatic: true, Setup: 6, MirrorRank: 1,
+			Kind: "copilot", DisplayName: "Copilot CLI", Instructions: "~/.copilot/copilot-instructions.md", Mutation: "retrieval-only", Automatic: true, Setup: 6, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd model tool_calls tool_results timestamps subagents", Varies: "git_branch effort message_tokens reasoning title harness_version",
 				Notes: map[string]string{"speed": "Fast mode is a model of its own in Copilot's picker, so its requests count as standard.", "message_tokens": "Older releases record only the session's total.", "reasoning": "A summary for OpenAI models, or only that it reasoned."}, VariesNote: "When the session records it."},
 			New:          func(base baseAdapter) Adapter { return &copilotAdapter{base} },
@@ -212,7 +217,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "opencode", DisplayName: "OpenCode", Mutation: "retrieval-only", Automatic: true, Setup: 7, MirrorRank: 1,
+			Kind: "opencode", DisplayName: "OpenCode", Instructions: "~/.config/opencode/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 7, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd model message_tokens tool_calls reasoning timestamps subagents harness_version", Varies: "speed tool_results title cost",
 				Notes: map[string]string{"speed": "The tier an OpenAI reply reports. A fast mode chosen as a model of its own is not told apart.", "tool_results": "For calls that finished.", "title": "When OpenCode named the session.", "cost": "The session's total."}},
 			New:          func(base baseAdapter) Adapter { return &opencodeAdapter{baseAdapter: base} },
@@ -235,7 +240,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "cline", DisplayName: "Cline", Mutation: "retrieval-only", Automatic: true, Setup: 8, MirrorRank: 1,
+			Kind: "cline", DisplayName: "Cline", Instructions: "~/Documents/Cline/Rules/", Mutation: "retrieval-only", Automatic: true, Setup: 8, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd model message_tokens tool_calls tool_results timestamps", Varies: "git_branch reasoning title harness_version cost",
 				Notes: map[string]string{"speed": "Cline has no fast mode.", "reasoning": "Redacted thinking records only that it reasoned.", "cost": "The session's total.", "subagents": "A teammate's transcripts aren't read."}, VariesNote: "When the session records it."},
 			New:          func(base baseAdapter) Adapter { return &clineAdapter{base} },
@@ -256,7 +261,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "vscode-copilot", DisplayName: "VS Code Copilot", Mutation: "retrieval-only", Automatic: true, Setup: 9, MirrorRank: 1,
+			Kind: "vscode-copilot", DisplayName: "VS Code Copilot", Instructions: "~/.copilot/copilot-instructions.md", Mutation: "retrieval-only", Automatic: true, Setup: 9, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls tool_results reasoning subagents", Varies: "cwd model message_tokens timestamps title harness_version",
 				Notes: map[string]string{"speed": "Fast mode is a model of its own in Copilot's picker, so its requests count as standard.", "cwd": "The window's folder.", "model": "Auto is known once it replied.", "message_tokens": "Some releases record only the last round's input.", "timestamps": "Per request, not per message.", "title": "When the chat was renamed.", "harness_version": "The Copilot Chat extension's version."}},
 			New:          func(base baseAdapter) Adapter { return &vscodeCopilotAdapter{base} },
@@ -282,7 +287,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "cursor", DisplayName: "Cursor", Mutation: "retrieval-only", Automatic: true, Setup: 10, MirrorRank: 1,
+			Kind: "cursor", DisplayName: "Cursor", Instructions: "Cursor's User Rules (Cursor Settings → Rules)", Mutation: "retrieval-only", Automatic: true, Setup: 10, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls subagents", Varies: "cwd model speed message_tokens tool_results reasoning timestamps title",
 				Notes: map[string]string{"speed": "The chat's fast mode setting now, which stands for all of its requests.", "message_tokens": "Before Cursor 3. Cursor 3 records only the size of the context.", "tool_results": "For calls that finished.", "timestamps": "Some messages are given the time of the one before."}, VariesNote: "When the chat records it."},
 			New:          func(base baseAdapter) Adapter { return &cursorAdapter{baseAdapter: base} },
@@ -319,7 +324,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "zed", DisplayName: "Zed", Mutation: "retrieval-only", Automatic: true, Setup: 12, MirrorRank: 1,
+			Kind: "zed", DisplayName: "Zed", Instructions: "~/.config/zed/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 12, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls tool_results", Varies: "cwd model effort speed message_tokens reasoning subagents title",
 				Notes: map[string]string{"speed": "The thread's fast mode setting now, which stands for all of its requests.", "message_tokens": "Each turn's last request.", "reasoning": "Or only that it was redacted.", "timestamps": "Every message is given its thread's start."}, VariesNote: "When the thread records it."},
 			New:          func(base baseAdapter) Adapter { return &zedAdapter{baseAdapter: base} },
@@ -339,7 +344,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "antigravity", DisplayName: "Antigravity", Mutation: "retrieval-only", Automatic: true, Setup: 5, MirrorRank: 1,
+			Kind: "antigravity", DisplayName: "Antigravity", Instructions: "~/.gemini/GEMINI.md", Mutation: "retrieval-only", Automatic: true, Setup: 5, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls tool_results timestamps subagents", Varies: "cwd model effort message_tokens title harness_version",
 				Notes: map[string]string{"reasoning": "Only how many tokens it spent thinking.", "message_tokens": "When the conversation's database is present.", "harness_version": "The installed app's version, seen on this Mac."}, VariesNote: "When the conversation records it."},
 			New:          func(base baseAdapter) Adapter { return &antigravityAdapter{baseAdapter: base} },
@@ -424,7 +429,7 @@ func init() {
 			Plan:    (*capturePlan).canonical, Preservation: retainedInputs,
 		},
 		{
-			Kind: "chatgpt", DisplayName: "ChatGPT", KindAliases: []string{"chatgpt-export"}, Mutation: "retrieval-only", MirrorRank: 1,
+			Kind: "chatgpt", DisplayName: "ChatGPT", Instructions: "ChatGPT's custom instructions (Settings → Personalization)", KindAliases: []string{"chatgpt-export"}, Mutation: "retrieval-only", MirrorRank: 1,
 			Content: contentCapabilities{Supported: "model tool_calls tool_results timestamps", Varies: "effort speed reasoning title", NotApplicable: "cwd git_branch subagents harness_version",
 				Notes: map[string]string{"speed": "When the export records the tier.", "reasoning": "Or only how long it thought.", "message_tokens": "Exports have no token counts."}, VariesNote: "When the export holds it."},
 			New:  func(base baseAdapter) Adapter { return &chatGPTAdapter{base} },
@@ -541,6 +546,18 @@ func providerFor(kind string) (*providerSpec, bool) {
 		}
 	}
 	return nil, false
+}
+
+// globalInstructionPaths are the files and folders, home-relative, where
+// providers keep their rules for every project: each once, in registry order.
+func globalInstructionPaths() []string {
+	paths := []string{}
+	for _, spec := range providerRegistry {
+		if instructionPath(spec.Instructions) && !slices.Contains(paths, spec.Instructions) {
+			paths = append(paths, spec.Instructions)
+		}
+	}
+	return paths
 }
 
 // registeredKind is the provider whose kind is exactly kind, as setup,
