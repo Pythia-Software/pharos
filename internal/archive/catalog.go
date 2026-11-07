@@ -1288,20 +1288,12 @@ func suppressMirrorRows(rows, links []map[string]any) []map[string]any {
 		}
 		groups[root] = append(groups[root], byID[id])
 	}
-	priority := map[string]int{"tl1": 0, "tl1-export": 0, "codex": 1, "claude": 1, "chatgpt": 1, "claude-ai": 1, "copilot": 1, "cline": 1, "vscode-copilot": 1, "cursor": 1, "cursor-cli": 1, "zed": 1, "opencode": 1, "antigravity": 1, "conductor": 9}
 	output := []map[string]any{}
 	for _, root := range roots {
 		group := groups[root]
 		chosen := group[0]
 		for _, candidate := range group[1:] {
-			cp, ok := priority[firstString(candidate["source_kind"])]
-			if !ok {
-				cp = 5
-			}
-			bp, ok := priority[firstString(chosen["source_kind"])]
-			if !ok {
-				bp = 5
-			}
+			cp, bp := mirrorRank(firstString(candidate["source_kind"])), mirrorRank(firstString(chosen["source_kind"]))
 			if cp < bp || cp == bp && firstString(candidate["activity_at"]) > firstString(chosen["activity_at"]) {
 				chosen = candidate
 			}

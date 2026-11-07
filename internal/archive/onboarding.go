@@ -33,12 +33,10 @@ func selectedProbe(config Config, catalog *Catalog, selection ProbeSelection) (P
 	}
 	kinds := map[string]bool{}
 	for _, kind := range *selection.Kinds {
-		switch kind {
-		case "claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline", "vscode-copilot", "cursor", "cursor-cli", "zed":
-			kinds[kind] = true
-		default:
+		if spec, ok := registeredKind(kind); !ok || spec.Setup == 0 {
 			return ProbeReport{}, probeRequestError{fmt.Errorf("unsupported source kind %q", kind)}
 		}
+		kinds[kind] = true
 	}
 	if len(selection.Locations) > 20 {
 		return ProbeReport{}, probeRequestError{fmt.Errorf("choose at most 20 additional folders")}

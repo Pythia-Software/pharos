@@ -723,42 +723,13 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 	if unit.Reader != nil && captureViewOf(unit.Reader) != nil {
 		return readCapturedAuditRecord(ctx, unit)
 	}
-	if unit.Source.Kind == "conductor" {
-		adapter, err := MakeAdapter(unit.Source)
-		if err != nil {
-			return nil, nil, err
+	// A source whose sessions share one database (Conductor, OpenCode,
+	// Cursor, Zed), or are each one (the Cursor CLI), is read in place.
+	if adapter, err := MakeAdapter(unit.Source); err == nil {
+		if group, ok := adapter.(groupReader); ok {
+			setAdapterContext(adapter, ctx)
+			return group.readGroup(unit.Parts)
 		}
-		setAdapterContext(adapter, ctx)
-		part := unit.Parts[0]
-		separator := strings.LastIndex(part.item, ":sessions:")
-		if separator < 0 {
-			return nil, nil, errors.New("invalid session identity")
-		}
-		path := strings.TrimPrefix(part.item[:separator], "sqlite:")
-		var record *WorkspaceRecord
-		var read []sourcePart
-		err = adapter.(*conductorAdapter).database(path, map[string]bool{part.item[separator+len(":sessions:"):]: true}, func([]sourcePart) bool { return false }, func(value *WorkspaceRecord, parts []sourcePart) error { record, read = value, parts; return nil })
-		return record, read, err
-	}
-	if unit.Source.Kind == "opencode" {
-		// As Conductor: one database holds every session, read in place.
-		adapter := &opencodeAdapter{baseAdapter: baseAdapter{config: unit.Source, ctx: ctx}}
-		return adapter.readGroup(unit.Parts)
-	}
-	if unit.Source.Kind == "cursor" {
-		// As OpenCode: one database holds every composer.
-		adapter := &cursorAdapter{baseAdapter: baseAdapter{config: unit.Source, ctx: ctx}}
-		return adapter.readGroup(unit.Parts)
-	}
-	if unit.Source.Kind == "zed" {
-		// As OpenCode: one database holds every thread.
-		adapter := &zedAdapter{baseAdapter: baseAdapter{config: unit.Source, ctx: ctx}}
-		return adapter.readGroup(unit.Parts)
-	}
-	if unit.Source.Kind == "cursor-cli" {
-		// Each chat is a database, read in place.
-		adapter := &cursorCLIAdapter{baseAdapter: baseAdapter{config: unit.Source, ctx: ctx}}
-		return adapter.readGroup(unit.Parts)
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, nil, err

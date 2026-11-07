@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -186,6 +187,23 @@ func openReadOnlySQLite(path string) (*sql.DB, error) {
 // readsEveryIndex: Conductor keeps one database, which every plan reads to
 // list its sessions, and the generations' index diffs against it.
 func (a *conductorAdapter) readsEveryIndex(string) bool { return true }
+
+// readGroup reads, as indexing does, the session parts name; nothing when
+// that session is gone.
+func (a *conductorAdapter) readGroup(parts []sourcePart) (*WorkspaceRecord, []sourcePart, error) {
+	if len(parts) == 0 {
+		return nil, nil, nil
+	}
+	separator := strings.LastIndex(parts[0].item, ":sessions:")
+	if separator < 0 {
+		return nil, nil, errors.New("invalid session identity")
+	}
+	path := strings.TrimPrefix(parts[0].item[:separator], "sqlite:")
+	var record *WorkspaceRecord
+	var read []sourcePart
+	err := a.database(path, map[string]bool{parts[0].item[separator+len(":sessions:"):]: true}, func([]sourcePart) bool { return false }, func(value *WorkspaceRecord, parts []sourcePart) error { record, read = value, parts; return nil })
+	return record, read, err
+}
 
 func (a *conductorAdapter) database(path string, selected map[string]bool, unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
 	readable, err := a.files().Database(path)

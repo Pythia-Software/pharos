@@ -333,7 +333,9 @@ func TestClineIsSetUpAndFollowedLikeOtherTools(t *testing.T) {
 	home := probeHome(t)
 	useHost(t, "host-a")
 	probePut(t, filepath.Join(home, ".claude", "projects", "-r", probeID1+".jsonl"), "{}\n")
-	session := filepath.Join(home, ".cline", "data", "sessions", clineSessionID)
+	// CLINE_DATA_DIR moves Cline's folder.
+	t.Setenv("CLINE_DATA_DIR", filepath.Join(home, "cline"))
+	session := filepath.Join(home, "cline", "sessions", clineSessionID)
 	writeSourceFile(t, filepath.Join(session, clineSessionID+".json"), clineManifest)
 	writeSourceFile(t, filepath.Join(session, clineSessionID+".messages.json"), clineMessages)
 	path := probeLibrary(t, "")

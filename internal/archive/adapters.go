@@ -191,45 +191,16 @@ func (a baseAdapter) repository(location, remote string) map[string]any {
 	return repositoryFromLocation(location, remote)
 }
 
+// MakeAdapter makes the adapter of a configured source (providerSpec.New).
 func MakeAdapter(config SourceConfig) (Adapter, error) {
-	switch strings.ToLower(config.Kind) {
-	case "canonical", "tl1-export":
-		capability := "retrieval-only"
-		if strings.EqualFold(config.Kind, "tl1-export") {
-			capability = "tl1-release"
-		}
-		return &canonicalAdapter{baseAdapter{config: config, capability: capability}}, nil
-	case "codex":
-		return &jsonlAdapter{baseAdapter: baseAdapter{config: resolveRolloutSource(config), capability: "retrieval-only"}, provider: "codex"}, nil
-	case "claude":
-		return &jsonlAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}, provider: "claude"}, nil
-	case "chatgpt", "chatgpt-export":
-		return &chatGPTAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "claude-ai":
-		return &claudeAIAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "copilot":
-		return &copilotAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "cline":
-		return &clineAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "vscode-copilot":
-		return &vscodeCopilotAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "cursor":
-		return &cursorAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "cursor-cli":
-		return &cursorCLIAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "zed":
-		return &zedAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "opencode":
-		return &opencodeAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "conductor":
-		return &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "tl1":
-		return &tl1Adapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "antigravity":
-		return &antigravityAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	default:
+	spec, ok := providerFor(config.Kind)
+	if !ok {
 		return nil, fmt.Errorf("unsupported source kind: %s", config.Kind)
 	}
+	if spec.Resolve != nil {
+		config = spec.Resolve(config)
+	}
+	return spec.New(baseAdapter{config: config, capability: spec.Mutation}), nil
 }
 
 func pathFingerprint(root string, include func(string, os.DirEntry) bool) (string, error) {

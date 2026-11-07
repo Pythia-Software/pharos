@@ -301,23 +301,11 @@ func (c *sourceCapture) retain(sourcePath string, generations []capturedVersion)
 // named for), "" for each as it is; and the rows, "" for all of them.
 type captureTable struct{ columns, where string }
 
-// captureTables are the tables a capture of a source kind keeps, or nil to
-// keep them all. A kind whose database also holds credentials keeps only the
-// tables, or rows, its adapter reads.
+// captureTables are the tables a capture of a source kind keeps
+// (providerSpec.CaptureTables), or nil to keep them all.
 func captureTables(kind string) map[string]captureTable {
-	switch strings.ToLower(kind) {
-	case "opencode":
-		keep := map[string]captureTable{}
-		for table := range opencodeCaptureTables {
-			keep[table] = captureTable{}
-		}
-		return keep
-	case "cursor":
-		return cursorCaptureTables
-	case "cursor-cli":
-		return cursorCLICaptureTables
-	case "zed":
-		return zedCaptureTables
+	if spec, ok := providerFor(kind); ok {
+		return spec.CaptureTables
 	}
 	return nil
 }

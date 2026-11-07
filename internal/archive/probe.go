@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,8 +32,6 @@ const (
 	claudeCleanupDays   = 30 // Claude Code's cleanupPeriodDays default
 	probeSmallFileLimit = 32 << 20
 )
-
-var probeEnvNames = []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME", "XDG_DATA_HOME", "CLINE_DATA_DIR", "CLINE_DIR"}
 
 // tccFolders are home-relative folders whose contents macOS guards with a
 // privacy prompt (Files and Folders, App Data, iCloud, Mail, and the like).
@@ -186,64 +185,63 @@ func probeTools(home string, config Config) []ProbeTool {
 			found[kind] = ProbeTool{kind, tildeWithin(home, path), reason}
 		}
 	}
-	for kind, paths := range map[string][]string{
-		"claude": {".claude", ".config/claude"}, "codex": {".codex"},
-		"conductor": {"Library/Application Support/com.conductor.app"}, "tl1": {".tl1"},
-		"antigravity":    {".gemini/antigravity", ".gemini/antigravity-cli", ".gemini/antigravity-ide"},
-		"copilot":        {".copilot"},
-		"opencode":       {".local/share/opencode"},
-		"cline":          {".cline/data"},
-		"vscode-copilot": vscodeUserDirs,
-		"cursor":         {cursorUserDir},
-		"cursor-cli":     {".cursor/chats"}, // the editor's extensions are in .cursor too
-		"zed":            {zedUserDir + "/threads"},
-	} {
-		for _, path := range paths {
-			check(kind, filepath.Join(home, filepath.FromSlash(path)), "data folder")
+	for _, spec := range providerRegistry {
+		if spec.Probe != nil {
+			for _, path := range spec.Probe.Folders {
+				check(spec.Kind, filepath.Join(home, filepath.FromSlash(path)), "data folder")
+			}
 		}
 	}
 	// Alternate profiles need only a bounded listing of names, never a walk.
-	for _, root := range []struct{ dir, prefix, kind string }{{home, ".claude", "claude"}, {filepath.Join(home, ".gemini"), "antigravity", "antigravity"}} {
-		if _, exists := found[root.kind]; exists {
+	for _, spec := range providerRegistry {
+		if spec.Probe == nil || spec.Probe.Profiles == nil {
 			continue
 		}
-		resolved, err := resolveUnprotected(home, root.dir)
+		if _, exists := found[spec.Kind]; exists {
+			continue
+		}
+		dir := filepath.Join(home, spec.Probe.Profiles.Dir)
+		resolved, err := resolveUnprotected(home, dir)
 		if err != nil {
 			continue
 		}
-		dir, err := os.Open(resolved)
+		listing, err := os.Open(resolved)
 		if err != nil {
 			continue
 		}
-		entries, _ := dir.ReadDir(512)
-		dir.Close()
+		entries, _ := listing.ReadDir(512)
+		listing.Close()
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), root.prefix) && !antigravityBackup(entry.Name()) && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) {
-				check(root.kind, filepath.Join(root.dir, entry.Name()), "profile folder")
+			if strings.HasPrefix(entry.Name(), spec.Probe.Profiles.Prefix) && !antigravityBackup(entry.Name()) && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) {
+				check(spec.Kind, filepath.Join(dir, entry.Name()), "profile folder")
 			}
 		}
 	}
 	for _, root := range probeApplicationDirs(home) {
-		for kind, bundle := range map[string]string{"claude": "Claude Code.app", "codex": "Codex.app", "conductor": "Conductor.app", "tl1": "TL1.app", "antigravity": "Antigravity.app"} {
-			check(kind, filepath.Join(root, bundle), "application")
+		for _, spec := range providerRegistry {
+			if spec.Probe != nil {
+				for _, bundle := range spec.Probe.Applications {
+					check(spec.Kind, filepath.Join(root, bundle), "application")
+				}
+			}
 		}
 	}
-	for name, kind := range map[string]string{"CLAUDE_CONFIG_DIR": "claude", "CODEX_HOME": "codex", "COPILOT_HOME": "copilot", "XDG_DATA_HOME": "opencode", "CLINE_DATA_DIR": "cline", "CLINE_DIR": "cline"} {
-		if path := os.Getenv(name); path != "" {
-			if kind == "opencode" {
-				path = filepath.Join(path, "opencode")
-			} else if name == "CLINE_DIR" {
-				path = filepath.Join(path, "data")
+	for _, spec := range providerRegistry {
+		if spec.Probe == nil {
+			continue
+		}
+		for _, env := range spec.Probe.Env {
+			if path := os.Getenv(env.Name); path != "" {
+				check(spec.Kind, filepath.Join(resolvePath(home, path), env.Sub), env.Name)
 			}
-			check(kind, resolvePath(home, path), name)
 		}
 	}
 	for _, source := range config.Sources {
 		check(source.Kind, source.Path, "configured source")
 	}
 	tools := []ProbeTool{}
-	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline", "vscode-copilot", "cursor", "cursor-cli", "zed"} {
-		if tool, exists := found[kind]; exists {
+	for _, spec := range setupProviders() {
+		if tool, exists := found[spec.Kind]; exists {
 			tools = append(tools, tool)
 		}
 	}
@@ -260,16 +258,18 @@ var probeTempDirs = func() []string {
 	return dirs
 }
 
-// probeStatusDirs are where the status looks for a tool not yet chosen: its
-// default folder under home, and the one the variable name moves it to, when
-// Pharos was started with it set. The status runs on every page load, so it
-// reads its own environment rather than starting a login shell; a guided
+// probeFolderDirs are where the status looks for a tool not yet chosen: its
+// default folder under home, and those its variables move it to, when
+// Pharos was started with them set. The status runs on every page load, so
+// it reads its own environment rather than starting a login shell; a guided
 // probe reads the shell's too.
-func probeStatusDirs(home, name, sub, fallback string) []string {
-	dirs := []string{filepath.Join(home, fallback, sub)}
-	if value := os.Getenv(name); value != "" {
-		if dir := filepath.Join(resolvePath(home, value), sub); dir != dirs[0] {
-			dirs = append(dirs, dir)
+func probeFolderDirs(home, folder string, env []probeEnv) []string {
+	dirs := []string{filepath.Join(home, filepath.FromSlash(folder))}
+	for _, variable := range env {
+		if value := os.Getenv(variable.Name); value != "" {
+			if dir := filepath.Join(resolvePath(home, value), variable.Sub); !slices.Contains(dirs, dir) {
+				dirs = append(dirs, dir)
+			}
 		}
 	}
 	return dirs
@@ -295,72 +295,9 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 			status.SharedSources++
 		}
 	}
-	if status.HostFileExists && (kinds == nil || kinds["antigravity"]) {
-		for _, dir := range antigravityDirs(home) {
-			resolved, err := resolveUnprotected(home, dir)
-			if err == nil && configuredSource(config, home, "antigravity", resolved) == nil {
-				status.NewSources++
-			}
-		}
-	}
-	if status.HostFileExists && (kinds == nil || kinds["opencode"]) {
-		for _, dir := range probeStatusDirs(home, "XDG_DATA_HOME", "opencode", filepath.Join(".local", "share")) {
-			if databases, err := (&opencodeAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).databases(); err == nil && len(databases) > 0 {
-				if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "opencode", resolved) == nil {
-					status.NewSources++
-				}
-			}
-		}
-	}
-	if status.HostFileExists && (kinds == nil || kinds["zed"]) {
-		dir := filepath.Join(home, filepath.FromSlash(zedUserDir))
-		if stats, err := zedProbeStats(filepath.Join(dir, filepath.FromSlash(zedDatabase))); err == nil && stats.sessions > 0 {
-			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "zed", resolved) == nil {
-				status.NewSources++
-			}
-		}
-	}
-	if status.HostFileExists && (kinds == nil || kinds["cline"]) {
-		dir := filepath.Join(home, ".cline", "data")
-		if info, err := os.Stat(filepath.Join(dir, "sessions")); err == nil && info.IsDir() {
-			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "cline", resolved) == nil {
-				status.NewSources++
-			}
-		}
-	}
-	if status.HostFileExists && (kinds == nil || kinds["vscode-copilot"]) {
-		for _, user := range vscodeUserDirs {
-			dir := filepath.Join(home, filepath.FromSlash(user))
-			if sessions, _, err := (&vscodeCopilotAdapter{baseAdapter{config: SourceConfig{Path: dir}}}).sessions(); err == nil && len(sessions) > 0 {
-				if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "vscode-copilot", resolved) == nil {
-					status.NewSources++
-				}
-			}
-		}
-	}
-	if status.HostFileExists && (kinds == nil || kinds["cursor"]) {
-		dir := filepath.Join(home, filepath.FromSlash(cursorUserDir))
-		if cursorHasChats(filepath.Join(dir, "globalStorage", "state.vscdb")) {
-			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "cursor", resolved) == nil {
-				status.NewSources++
-			}
-		}
-	}
-	if status.HostFileExists && (kinds == nil || kinds["cursor-cli"]) {
-		dir := filepath.Join(home, ".cursor")
-		if chats, _ := (&cursorCLIAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).chats(); len(chats) > 0 {
-			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "cursor-cli", resolved) == nil {
-				status.NewSources++
-			}
-		}
-	}
-	if status.HostFileExists && (kinds == nil || kinds["copilot"]) {
-		for _, dir := range probeStatusDirs(home, "COPILOT_HOME", "", ".copilot") {
-			if info, err := os.Stat(filepath.Join(dir, "session-state")); err == nil && info.IsDir() {
-				if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "copilot", resolved) == nil {
-					status.NewSources++
-				}
-			}
+	for _, spec := range providerRegistry {
+		if status.HostFileExists && spec.Probe != nil && spec.Probe.NewSources != nil && (kinds == nil || kinds[spec.Kind]) {
+			status.NewSources += spec.Probe.NewSources(home, config)
 		}
 	}
 	if catalog != nil {
@@ -394,10 +331,23 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	// The login shell takes about half a second to start; read it while the
 	// default locations are walked.
 	shell := make(chan shellResult, 1)
-	envNames := []string{}
-	for _, name := range probeEnvNames {
-		if kinds == nil || (name == "CLAUDE_CONFIG_DIR" && kinds["claude"]) || (name == "CODEX_HOME" && kinds["codex"]) || (name == "COPILOT_HOME" && kinds["copilot"]) || (name == "XDG_DATA_HOME" && kinds["opencode"]) || (strings.HasPrefix(name, "CLINE_") && kinds["cline"]) {
-			envNames = append(envNames, name)
+	type variable struct {
+		spec *providerSpec
+		probeEnv
+	}
+	// Providers may share a variable (XDG_DATA_HOME); each reads its own
+	// folder below it.
+	envNames, variables := []string{}, map[string][]variable{}
+	for index := range providerRegistry {
+		spec := &providerRegistry[index]
+		if spec.Probe == nil || kinds != nil && !kinds[spec.Kind] {
+			continue
+		}
+		for _, env := range spec.Probe.Env {
+			if variables[env.Name] == nil {
+				envNames = append(envNames, env.Name)
+			}
+			variables[env.Name] = append(variables[env.Name], variable{spec, env})
 		}
 	}
 	go func() {
@@ -416,48 +366,11 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 		probe()
 		report.TimingsMS[name] += time.Since(begin).Milliseconds()
 	}
-	timed("claude", func() {
-		run.claude(filepath.Join(home, ".claude"), "default location", false)
-		run.claude(filepath.Join(home, ".config", "claude"), "default location", false)
-		// Alternate profiles such as ~/.claude-work are usually selected with
-		// CLAUDE_CONFIG_DIR from a shell alias, which no environment reveals.
-		if entries, err := os.ReadDir(home); err == nil {
-			for _, entry := range entries {
-				if strings.HasPrefix(entry.Name(), ".claude") && entry.Name() != ".claude" && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) {
-					run.claude(filepath.Join(home, entry.Name()), "~/.claude* directory", true)
-				}
-			}
+	for _, spec := range providerRegistry {
+		if spec.Probe != nil && spec.Probe.Defaults != nil {
+			timed(spec.Kind, func() { spec.Probe.Defaults(run, home) })
 		}
-	})
-	timed("codex", func() { run.codex(filepath.Join(home, ".codex"), "default location") })
-	timed("copilot", func() { run.copilot(filepath.Join(home, ".copilot"), "default location") })
-	timed("opencode", func() { run.opencode(filepath.Join(home, ".local", "share", "opencode"), "default location") })
-	timed("cline", func() { run.cline(filepath.Join(home, ".cline", "data"), "default location") })
-	timed("vscode-copilot", func() {
-		for _, user := range vscodeUserDirs {
-			run.vscodeCopilot(filepath.Join(home, filepath.FromSlash(user)), "default location")
-		}
-	})
-	timed("cursor", func() { run.cursor(filepath.Join(home, filepath.FromSlash(cursorUserDir)), "default location") })
-	timed("cursor-cli", func() { run.cursorCLI(filepath.Join(home, ".cursor"), "default location") })
-	timed("zed", func() { run.zed(filepath.Join(home, filepath.FromSlash(zedUserDir)), "default location") })
-	timed("antigravity", func() {
-		for _, dir := range antigravityDirs(home) {
-			foundBy := "~/.gemini/antigravity* directory"
-			if antigravityProducts[filepath.Base(dir)] != "" {
-				foundBy = "default location"
-			}
-			run.antigravity(dir, foundBy)
-		}
-	})
-	timed("conductor", func() {
-		run.conductor(filepath.Join(home, "Library", "Application Support", "com.conductor.app"), "default location")
-	})
-	timed("tl1", func() {
-		if !run.tl1(filepath.Join(home, ".tl1", tl1RegistryFile), "default location") {
-			run.tl1(filepath.Join(home, ".tl1", tl1LegacyRegistryFile), "default location (TL1 before registry.json)")
-		}
-	})
+	}
 	environment := func(values map[string]string, from string) {
 		for _, name := range envNames {
 			value := values[name]
@@ -466,19 +379,9 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 			}
 			report.Environment = append(report.Environment, ProbeVariable{Name: name, Value: value, From: from})
 			foundBy := name + " (" + from + ")"
-			path := resolvePath(home, value)
-			if name == "CLAUDE_CONFIG_DIR" {
-				timed("claude", func() { run.claude(path, foundBy, false) })
-			} else if name == "COPILOT_HOME" {
-				timed("copilot", func() { run.copilot(path, foundBy) })
-			} else if name == "XDG_DATA_HOME" {
-				timed("opencode", func() { run.opencode(filepath.Join(path, "opencode"), foundBy) })
-			} else if name == "CLINE_DATA_DIR" {
-				timed("cline", func() { run.cline(path, foundBy) })
-			} else if name == "CLINE_DIR" {
-				timed("cline", func() { run.cline(filepath.Join(path, "data"), foundBy) })
-			} else {
-				timed("codex", func() { run.codex(path, foundBy) })
+			for _, variable := range variables[name] {
+				path := filepath.Join(resolvePath(home, value), variable.Sub)
+				timed(variable.spec.Kind, func() { variable.spec.Probe.Folder(run, path, foundBy) })
 			}
 		}
 	}
@@ -502,36 +405,11 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	for _, location := range locations {
 		path := resolvePath(home, location.Path)
 		const foundBy = "chosen folder"
-		switch location.Kind {
-		case "claude":
-			if filepath.Base(path) == "projects" {
-				path = filepath.Dir(path)
+		if spec, ok := registeredKind(location.Kind); ok && spec.Probe != nil {
+			if spec.Probe.Chosen != nil {
+				path = spec.Probe.Chosen(path)
 			}
-			run.claude(path, foundBy, false)
-		case "codex":
-			run.codex(path, foundBy)
-		case "copilot":
-			run.copilot(path, foundBy)
-		case "opencode":
-			run.opencode(path, foundBy)
-		case "cline":
-			run.cline(path, foundBy)
-		case "vscode-copilot":
-			run.vscodeCopilot(path, foundBy)
-		case "cursor":
-			run.cursor(path, foundBy)
-		case "cursor-cli":
-			run.cursorCLI(path, foundBy)
-		case "zed":
-			run.zed(path, foundBy)
-		case "antigravity":
-			run.antigravity(path, foundBy)
-		case "conductor":
-			run.conductor(path, foundBy)
-		case "tl1":
-			if !run.tl1(filepath.Join(path, tl1RegistryFile), foundBy) {
-				run.tl1(filepath.Join(path, tl1LegacyRegistryFile), foundBy)
-			}
+			spec.Probe.Folder(run, path, foundBy)
 		}
 	}
 	run.name()

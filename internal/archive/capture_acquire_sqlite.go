@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -238,27 +237,9 @@ func preservationMode(source SourceConfig) string {
 	if !retainedAcquisitionEnabled(source) {
 		return "live-rollout-gap"
 	}
-	switch strings.ToLower(source.Kind) {
-	case "conductor":
-		if source.Options["sqlite_record_capture"] == true {
-			return "retained-sessions"
-		}
-		return "live-sqlite-rollout-gap"
-	case "cursor", "cursor-cli":
-		return "live-sqlite-rollout-gap"
-	case "tl1", "antigravity", "opencode", "zed":
-		if source.Options["sqlite_record_capture"] == true {
-			return "retained-sqlite-group"
-		}
-		return "live-sqlite-rollout-gap"
-	case "codex":
-		if source.Options["sqlite_record_capture"] != true {
-			return "filesystem-retained-sqlite-gated"
-		}
-		return "retained-inputs"
-	case "claude", "canonical", "tl1-export", "chatgpt", "chatgpt-export", "claude-ai", "copilot", "cline", "vscode-copilot":
-		return "retained-inputs"
-	default:
+	spec, ok := providerFor(source.Kind)
+	if !ok {
 		return fmt.Sprintf("unsupported:%s", source.Kind)
 	}
+	return spec.Preservation(source)
 }
