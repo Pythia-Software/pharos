@@ -79,8 +79,12 @@ type Catalog struct {
 	initialized *initializeRecord
 	// ops is the registry Catalog-level work registers with (the service's,
 	// or a CLI command's); nil registers nothing.
-	ops               *opRegistry
-	work              *workService
+	ops  *opRegistry
+	work *workService
+	// authority is a Terminal command's CPU authority under the scheduled
+	// engine (cliWorkAuthority), for the background work it starts; a
+	// service's catalog answers to work instead.
+	authority         *workAuthority
 	unowned           sync.WaitGroup
 	projectionBatches atomic.Int32
 	// ingestRuns counts this process's running ingests (see cacheVersion).

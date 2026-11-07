@@ -444,6 +444,17 @@ func TestOperationRetentionKeepsActiveDescendants(t *testing.T) {
 	if reg.find(requester.id) != nil || reg.find(child.id) != nil {
 		t.Fatal("drained tree did not retire")
 	}
+
+	// Classic views are unchanged: an ended root is listed only within the
+	// recent cut, whatever its children are doing.
+	classic := newOpRegistry("service")
+	_, requester = classic.begin(context.Background(), OperationSpec{Kind: "analysis.chain"})
+	_, child = requester.Child(OperationSpec{Kind: "analysis.labels"})
+	requester.Finish(context.Canceled)
+	if requester.view().ActiveDescendants {
+		t.Fatal("classic views gained the execution-root visibility rule")
+	}
+	child.Finish(nil)
 }
 
 func TestOperationBatchChildrenStayBounded(t *testing.T) {

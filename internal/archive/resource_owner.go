@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -44,13 +46,16 @@ var (
 )
 
 // resourceLeaseCache is the history collector's last lease probes, by
-// directory list. Only the collector's goroutine uses it.
+// directory list. Only the collector's goroutine uses it, apart from stale.
 type resourceLeaseCache struct {
 	probes  map[string][]leaseProbe
 	at      map[string]time.Time
 	active  bool              // the previous frame had running work
 	started map[string]uint64 // OS process identity observed with each lease
 	read    func(int) (processUsage, error)
+	// stale makes the next probe read the drive again: status's own fresh
+	// probe found a live lease the cached one lacks. Any goroutine sets it.
+	stale atomic.Bool
 }
 
 func (c *resourceLeaseCache) probe(dirs []string, at time.Time) []leaseProbe {
@@ -60,7 +65,7 @@ func (c *resourceLeaseCache) probe(dirs []string, at time.Time) []leaseProbe {
 		every = resourceLeaseActive
 	}
 	probed, known := c.at[key]
-	fresh := !known || at.Sub(probed) >= every || at.Before(probed)
+	fresh := c.stale.Swap(false) || !known || at.Sub(probed) >= every || at.Before(probed)
 	if fresh {
 		if c.probes == nil {
 			c.probes, c.at = map[string][]leaseProbe{}, map[string]time.Time{}
@@ -106,13 +111,6 @@ func (b *brokerOperations) collectResourceHistory(at time.Time) resourceHistoryF
 	unknown := []string{}
 	appLeases := b.leases.probe([]string{appLeaseDir()}, at)
 	omitted := []string{"Native UI helper ownership is not independently verified"}
-	// Memory-only task metadata from each service: never /status/freshness
-	// or a catalog query on the sampler path. One deadline covers every
-	// library, asked in turn, so a slow service delays the process readings
-	// by at most resourceTaskDeadline in all, not per library. A library not
-	// answered by then is unknown this tick: its tasks carry forward.
-	ctx, cancel := context.WithTimeout(context.Background(), resourceTaskDeadline)
-	defer cancel()
 	for _, library := range libraries {
 		processes := []resourceProcess{}
 		if library.Child != nil {
@@ -124,20 +122,44 @@ func (b *brokerOperations) collectResourceHistory(at time.Time) resourceHistoryF
 				processes = append(processes, leaseProcesses([]leaseProbe{lease}, library.ID, library.Name)...)
 			}
 		}
-		group := resourceGroup{Key: library.ID, Label: library.Name, Processes: processes}
+		groups = append(groups, resourceGroup{Key: library.ID, Label: library.Name, Processes: processes})
+	}
+	// Memory-only task metadata from each service: never /status/freshness
+	// or a catalog query on the sampler path. The services are asked at once,
+	// after the lease probes (drive I/O), under one deadline, so a slow
+	// service delays the process readings by at most resourceTaskDeadline
+	// in all and cannot use up another library's time. A library not
+	// answered by then is unknown this tick: its tasks carry forward, for at
+	// most resourceTaskCarry (observeTasks).
+	answers := make([][]resourceHistoryTask, len(libraries))
+	failed := make([]bool, len(libraries))
+	ctx, cancel := context.WithTimeout(context.Background(), resourceTaskDeadline)
+	var asking sync.WaitGroup
+	for i, library := range libraries {
 		if library.Child != nil {
-			active, err := b.resourceTasks(ctx, *library.Child)
-			if err != nil {
-				unknown = append(unknown, library.ID)
-				group.Omitted = append(group.Omitted, "Task markers could not be read for this library")
-			} else {
-				for i := range active {
-					active[i].Libraries, active[i].source = []string{library.ID}, library.ID
-				}
-				tasks = append(tasks, active...)
-			}
+			endpoint := *library.Child
+			asking.Go(func() {
+				var err error
+				answers[i], err = b.resourceTasks(ctx, endpoint)
+				failed[i] = err != nil
+			})
 		}
-		groups = append(groups, group)
+	}
+	asking.Wait()
+	cancel()
+	for i, library := range libraries {
+		if library.Child == nil {
+			continue
+		}
+		if failed[i] {
+			unknown = append(unknown, library.ID)
+			groups[i].Omitted = append(groups[i].Omitted, "Task markers could not be read for this library")
+			continue
+		}
+		for _, task := range answers[i] {
+			task.Libraries, task.source = []string{library.ID}, library.ID
+			tasks = append(tasks, task)
+		}
 	}
 	extra := []resourceProcess{{PID: os.Getpid(), Role: "broker"}}
 	extra = append(extra, leaseProcesses(appLeases, "", "")...)

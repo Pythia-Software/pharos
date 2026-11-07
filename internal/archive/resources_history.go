@@ -45,6 +45,11 @@ var (
 // between ticks (the Mac slept) starts a new segment.
 var resourceHistoryGap = 25 * time.Second
 
+// resourceTaskCarry bounds how long a library's known tasks carry forward
+// while its service does not answer: past it they end (observed), so a
+// wedged service neither keeps stale running tasks nor the active cadence.
+var resourceTaskCarry = time.Minute
+
 // resourceHistoryBusyCPU (percent of one core) keeps the active cadence for
 // load the owner's operations do not show, such as another library's
 // service or a Terminal command.
@@ -93,6 +98,9 @@ type resourceHistoryTask struct {
 	// source is the library whose service reported the task ("" for the
 	// collector's own registry).
 	source string
+	// seen is when the history last knew it running: the latest frame that
+	// listed it, or its start mark.
+	seen time.Time
 }
 
 // resourceHistoryFrame is what the owner's collect callback returns.
@@ -421,7 +429,8 @@ func coverageKey(covered []resourceCovered, omitted []string) string {
 // observeTasks turns the reported tasks into start and end markers. A task
 // starts when it is first seen running (queued work is not load) and, once
 // started, ends only when it is no longer reported. Tasks from a library
-// whose list could not be read are carried forward unchanged.
+// whose list could not be read are carried forward unchanged, for at most
+// resourceTaskCarry since they were last reported.
 func (h *resourceHistory) observeTasks(now time.Time, tasks []resourceHistoryTask, unknown []string) {
 	seen := make(map[string]resourceHistoryTask, len(tasks))
 	for _, task := range tasks {
@@ -436,6 +445,7 @@ func (h *resourceHistory) observeTasks(now time.Time, tasks []resourceHistoryTas
 		}) {
 			continue
 		}
+		task.seen = now
 		if _, known := h.tasks[task.ID]; known {
 			seen[task.ID] = task
 			continue
@@ -455,7 +465,13 @@ func (h *resourceHistory) observeTasks(now time.Time, tasks []resourceHistoryTas
 		if _, still := seen[id]; still {
 			continue
 		}
-		if task.source != "" && slices.Contains(unknown, task.source) {
+		// A start marked after this frame's collection began is newer than
+		// its task list, which could not include it.
+		if task.seen.After(now) {
+			seen[id] = task
+			continue
+		}
+		if task.source != "" && slices.Contains(unknown, task.source) && now.Sub(task.seen) < resourceTaskCarry {
 			seen[id] = task
 			continue
 		}
@@ -488,7 +504,7 @@ func (h *resourceHistory) mark(marker resourceHistoryMarker) {
 			return
 		}
 		h.tasks[marker.ID] = resourceHistoryTask{ID: marker.ID, Kind: marker.Kind, Variant: marker.Variant, Priority: marker.Priority,
-			Trigger: marker.Trigger, Libraries: marker.Libraries, State: opRunning, Started: marker.At, RunStarted: marker.At}
+			Trigger: marker.Trigger, Libraries: marker.Libraries, State: opRunning, Started: marker.At, RunStarted: marker.At, seen: h.now()}
 	}
 	h.appendMarker(marker)
 }
@@ -715,7 +731,7 @@ func (h *resourceHistory) document(key string, since time.Time) (resourceHistory
 	}
 	samples := &resourceHistorySamples{T: []int64{}, CPU: []*float64{}, Memory: []*uint64{}, Disk: []*float64{}, CPUPartial: []bool{}, DiskPartial: []bool{}, Processes: []int{}}
 	for _, point := range series.points {
-		if !point.at.After(since) {
+		if !afterMilli(point.at, since) {
 			continue
 		}
 		samples.T = append(samples.T, point.at.UnixMilli())
@@ -730,7 +746,7 @@ func (h *resourceHistory) document(key string, since time.Time) (resourceHistory
 	if series.gpuSeen {
 		gpu := &resourceHistoryGPUSamples{T: []int64{}, Value: []*float64{}, Partial: []bool{}}
 		for _, point := range series.gpu {
-			if point.at.After(since) {
+			if afterMilli(point.at, since) {
 				gpu.T = append(gpu.T, point.at.UnixMilli())
 				gpu.Value = append(gpu.Value, roundTo(point.percent, 10))
 				gpu.Partial = append(gpu.Partial, point.partial)
@@ -739,13 +755,13 @@ func (h *resourceHistory) document(key string, since time.Time) (resourceHistory
 		doc.GPU = gpu
 	}
 	for _, segment := range series.segments {
-		if segment.at.After(since) {
+		if afterMilli(segment.at, since) {
 			doc.Segments = append(doc.Segments, resourceHistorySegmentView{T: segment.at.UnixMilli(), Reason: segment.reason, Detail: segment.detail})
 		}
 	}
 	for i, coverage := range series.coverage {
 		// The last entry at or before since is the state since then.
-		if coverage.at.After(since) || i+1 == len(series.coverage) || series.coverage[i+1].at.After(since) {
+		if afterMilli(coverage.at, since) || i+1 == len(series.coverage) || afterMilli(series.coverage[i+1].at, since) {
 			doc.Coverage = append(doc.Coverage, resourceHistoryCoverageView{T: coverage.at.UnixMilli(), Covered: coverage.covered, Omitted: append([]string{}, coverage.omitted...)})
 		}
 	}
@@ -765,6 +781,12 @@ func (h *resourceHistory) document(key string, since time.Time) (resourceHistory
 		slices.SortFunc(doc.Scopes, func(a, b resourceHistoryScopeRef) int { return strings.Compare(a.Key, b.Key) })
 	}
 	return doc, true
+}
+
+// afterMilli compares at the document's resolution: a client passes back the
+// last t it received, in milliseconds, and must not get that entry again.
+func afterMilli(at, since time.Time) bool {
+	return since.IsZero() || at.UnixMilli() > since.UnixMilli()
 }
 
 // roundTo keeps a rate to 1/scale: exact enough for a chart, and compact.

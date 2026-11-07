@@ -3,7 +3,9 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -148,6 +150,15 @@ func TestResourceHistoryRecordsSegmentsAndGaps(t *testing.T) {
 	newer := h.doc(t, since)
 	if len(newer.Samples.T) != 1 || len(newer.Coverage) == 0 || newer.Coverage[0].T > newer.Samples.T[0] {
 		t.Fatalf("since keeps the state at since: %+v", newer)
+	}
+
+	// A client passes back the last millisecond t it received; a sample
+	// taken within that millisecond is not sent again.
+	h.advance(resourceHistoryIdle+700*time.Microsecond, 0.1)
+	doc = h.doc(t, time.Time{})
+	since = time.UnixMilli(doc.Samples.T[len(doc.Samples.T)-1])
+	if again := h.doc(t, since); len(again.Samples.T) != 0 || len(again.Segments) != 0 || len(again.Coverage) != 1 || again.Coverage[0].T > since.UnixMilli() {
+		t.Fatalf("the last received sample came back: %+v", again)
 	}
 
 	// The window is bounded by time, keeping the coverage in effect at its
@@ -372,5 +383,85 @@ func TestResourceHistoryTaskStatesAndUnknownLibraries(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("late learned start was omitted behind the sample cursor: %+v", delta.Markers)
+	}
+
+	// A start marked while a frame is collected is newer than the frame's
+	// task list: no observed end before it, and no second start.
+	during := func() {
+		clock = clock.Add(time.Millisecond)
+		h.mark(resourceHistoryMarker{At: clock, Event: "start", ID: "racing", Kind: "backup", Libraries: []string{"lib"}})
+	}
+	h.collect = func(time.Time) resourceHistoryFrame { during(); during = func() {}; return frame }
+	tick(nil)
+	racing := resourceHistoryTask{ID: "racing", Kind: "backup", State: opRunning, Libraries: []string{"lib"}}
+	tick(nil, racing)
+	doc, _ = h.document("", time.Time{})
+	events = []string{}
+	for _, marker := range doc.Markers {
+		if marker.ID == "racing" {
+			events = append(events, marker.Event)
+		}
+	}
+	if strings.Join(events, ",") != "start" {
+		t.Fatalf("a start marked during collection was ended or restarted: %v", events)
+	}
+
+	// A registry's start mark names its operation's libraries, which the
+	// broker's library scopes filter markers by.
+	reg := newOpRegistry("broker")
+	reg.resourceHistory = h
+	_, op := reg.begin(context.Background(), OperationSpec{Kind: "analysis.labels", Libraries: []string{"lib"}})
+	h.scopes["lib"] = &resourceSeries{label: "lib"}
+	if lib, _ := h.document("lib", time.Time{}); !slices.ContainsFunc(lib.Markers, func(m resourceHistoryMarkerView) bool { return m.ID == string(op.ID()) }) {
+		t.Fatalf("a top-level operation is missing from its library's history: %+v", lib.Markers)
+	}
+	op.Finish(nil)
+
+	// A service that stops answering carries its tasks for a bounded time,
+	// then they end, so the cadence can fall back to idle.
+	override(t, &resourceTaskCarry, 5*time.Second)
+	wedged := resourceHistoryTask{ID: "wedged", Kind: "backup", State: opRunning, Libraries: []string{"lib"}, source: "lib"}
+	tick(nil, wedged)
+	tick([]string{"lib"})
+	tick([]string{"lib"})
+	if _, carried := h.tasks["wedged"]; !carried {
+		t.Fatal("an unknown library's task ended within the carry bound")
+	}
+	tick([]string{"lib"})
+	if _, carried := h.tasks["wedged"]; carried || h.active {
+		t.Fatalf("an unanswered library kept its task past the carry bound: active %v", h.active)
+	}
+}
+
+// The broker asks every library's service at once under one deadline, after
+// the lease probes: a slow first library cannot leave the same later ones
+// unknown on every tick.
+func TestBrokerResourceTasksShareTheDeadline(t *testing.T) {
+	override(t, &resourceTaskDeadline, 200*time.Millisecond)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	defer slow.Close()
+	answering := func(id string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]any{"tasks": []resourceHistoryTask{{ID: id, Kind: "backup", State: opRunning}}}, http.StatusOK)
+		}))
+	}
+	b1, b2 := answering("b1"), answering("b2")
+	defer b1.Close()
+	defer b2.Close()
+	b := &brokerOperations{reg: newOpRegistry("broker"), client: &http.Client{}}
+	for _, server := range []*httptest.Server{slow, b1, b2} {
+		b.libraries = append(b.libraries, brokerLibrary{ID: server.URL, Name: server.URL, Child: &applicationEndpoint{URL: server.URL}})
+	}
+	frame := b.collectResourceHistory(time.Now())
+	if len(frame.UnknownLibraries) != 1 || frame.UnknownLibraries[0] != slow.URL {
+		t.Fatalf("only the slow library is unknown: %v", frame.UnknownLibraries)
+	}
+	ids := []string{}
+	for _, task := range frame.Tasks {
+		ids = append(ids, task.ID+"@"+task.source)
+	}
+	slices.Sort(ids)
+	if strings.Join(ids, ",") != "b1@"+b1.URL+",b2@"+b2.URL || !frame.Active {
+		t.Fatalf("each answering library's tasks, attributed to it: %v", ids)
 	}
 }

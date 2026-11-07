@@ -118,12 +118,13 @@ func (c *Catalog) beginOp(ctx context.Context, spec OperationSpec) (context.Cont
 
 // startBackground starts Catalog-level background work as an operation:
 // with the service's start when the catalog has a service, or in a goroutine
-// counted in unowned otherwise. It reports false if the service is stopping.
+// counted in unowned otherwise, under a Terminal command's CPU authority if
+// it has one. It reports false if the service is stopping.
 func (c *Catalog) startBackground(spec OperationSpec, work func(ctx context.Context, op *Op) error) bool {
 	if c.background != nil {
 		return c.background(spec, work)
 	}
-	ctx, op := c.beginOp(context.Background(), spec)
+	ctx, op := c.beginOp(withWorkAuthority(context.Background(), c.authority), spec)
 	c.unowned.Go(func() { runOperation(op, func(context.Context, *Op) error { return work(ctx, op) }) })
 	return true
 }

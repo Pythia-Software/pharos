@@ -523,15 +523,38 @@ func compactBytes(value uint64) string {
 // to read.
 //
 // While a history collector runs on this service's sampler, its latest
-// summary is the snapshot's, so the two never read the processes twice.
+// summary is the snapshot's, so the two never read the processes twice. The
+// leases are still status's own fresh probe: the collector rereads lease
+// files only every resourceLeaseIdle when idle, so a summary missing a live
+// lease (a command just started in Terminal) is not used, and the collector
+// is told to probe again.
 func (s *Server) serviceResources() *resourceSummary {
 	if s.resourceBrokerOwned {
 		return nil
 	}
+	processes := s.serviceResourceProcesses()
 	if latest, ok := s.resources.history.latest(""); ok {
-		return latest
+		if coversResourceRoots(latest, processes) {
+			return latest
+		}
+		s.historyLeases.stale.Store(true)
+		s.resources.history.poke()
 	}
-	return withProcessGPU(summarizeResources("Pharos", s.resources.sample(s.serviceResourceProcesses())))
+	return withProcessGPU(summarizeResources("Pharos", s.resources.sample(processes)))
+}
+
+// coversResourceRoots reports whether summary read every root besides this
+// process (a nil summary read none).
+func coversResourceRoots(summary *resourceSummary, roots []resourceProcess) bool {
+	for _, root := range roots {
+		if root.PID == os.Getpid() {
+			continue
+		}
+		if summary == nil || !slices.ContainsFunc(summary.Processes, func(reading resourceReading) bool { return reading.PID == root.PID }) {
+			return false
+		}
+	}
+	return true
 }
 
 // serviceResourceProcesses are the roots a service samples: itself and its
@@ -542,7 +565,8 @@ func (s *Server) serviceResourceProcesses() []resourceProcess {
 }
 
 // serviceHistoryProcesses uses the history collector's slower lease cache.
-// Status and lifecycle checks retain their existing fresh leaseWatch policy.
+// Status and lifecycle checks retain their existing fresh leaseWatch policy
+// (serviceResources).
 func (s *Server) serviceHistoryProcesses(at time.Time) []resourceProcess {
 	processes := []resourceProcess{{PID: os.Getpid(), Role: "service"}}
 	if s.leases.dirs != nil {

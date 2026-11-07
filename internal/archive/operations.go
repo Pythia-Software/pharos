@@ -393,7 +393,7 @@ func (r *opRegistry) changedLocked(op *Op, boundary bool) {
 				if opTerminal(op.state) {
 					event, at = "end", op.ended
 				}
-				r.resourceHistory.mark(resourceHistoryMarker{At: at, Event: event, ID: string(op.id), Kind: op.spec.Kind, Variant: op.spec.Variant, Priority: op.spec.Priority, Trigger: op.spec.Trigger})
+				r.resourceHistory.mark(resourceHistoryMarker{At: at, Event: event, ID: string(op.id), Kind: op.spec.Kind, Variant: op.spec.Variant, Priority: op.spec.Priority, Trigger: op.spec.Trigger, Libraries: op.spec.Libraries})
 			}
 		}
 	}
@@ -1240,7 +1240,9 @@ func (op *Op) viewLocked() opView {
 		Reason: op.reason, Detail: op.detail, Error: op.errText, Started: op.started, Updated: op.updated, Ended: op.ended, Plan: slices.Clone(op.plan),
 		Step: op.step, SafePoint: op.safePoint, SafePointSet: op.safePointKnown, Wrote: op.wrote, UserStop: op.userStop,
 		DuringRelease: op.duringRelease, Forecast: op.forecast, Version: op.version, Tentative: op.tentative, Sources: slices.Clone(op.sources)}
-	if opTerminal(op.state) {
+	// Only scheduled execution roots outlive their live descendants; classic
+	// views (and their 10-minute recent cut) are unchanged.
+	if op.reg.executorRoots && opTerminal(op.state) {
 		view.ActiveDescendants = op.activeDescendantsLocked()
 	}
 	if op.resourceSummary != nil {

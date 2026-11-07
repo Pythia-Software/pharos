@@ -59,13 +59,24 @@ func beginCLIOperations(config Config, catalog *Catalog, command string, kinds .
 	}
 	ops, err := beginCLIOperationsIn([]string{dir}, nil, catalog, command, kinds...)
 	if err == nil {
-		ops.authority = cliWorkAuthority(config)
-		if ops.authority != nil {
-			ops.reg.telemetry = true
-			ops.reg.resourceLedger = newTaskResourceLedger(20, 200)
-		}
+		ops.useAuthority(config, catalog)
 	}
 	return ops, err
+}
+
+// useAuthority attaches the process's CPU authority under the scheduled
+// engine (none under classic): to the command's operations, with their
+// resource telemetry, and to catalog, whose background work starts from
+// context.Background() rather than the command's ctx.
+func (o *cliOperations) useAuthority(config Config, catalog *Catalog) {
+	o.authority = cliWorkAuthority(config)
+	if o.authority != nil {
+		o.reg.telemetry = true
+		o.reg.resourceLedger = newTaskResourceLedger(20, 200)
+	}
+	if catalog != nil {
+		catalog.authority = o.authority
+	}
 }
 
 // beginCLIOperationsIn takes command's lease in each of dirs, naming the
@@ -310,7 +321,7 @@ func runLeasedCatalog(config Config, command string, spec OperationSpec, open fu
 	if err != nil {
 		return err
 	}
-	ops.authority = cliWorkAuthority(config)
+	ops.useAuthority(config, nil)
 	ctx, op := ops.begin(withWorkAuthority(context.Background(), ops.authority), spec)
 	initialize := op
 	if !read {
@@ -344,7 +355,7 @@ func runLeasedCatalog(config Config, command string, spec OperationSpec, open fu
 
 // attach starts journaling into catalog, once it is open.
 func (o *cliOperations) attach(catalog *Catalog) {
-	catalog.ops = o.reg
+	catalog.ops, catalog.authority = o.reg, o.authority
 	if o.journal = newJournalWriter(catalog, o.reg); o.journal == nil {
 		return
 	}

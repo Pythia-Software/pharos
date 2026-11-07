@@ -261,4 +261,22 @@ func TestResourceLeaseProbesAreReused(t *testing.T) {
 	if probes := service.historyLeases.probe([]string{servicePath}, at.Add(2*time.Second)); len(probes) != 0 {
 		t.Fatal("standalone history re-probed the drive within the idle interval")
 	}
+
+	// Status keeps its own fresh lease probe. A history summary that lacks
+	// a live lease's process (a Terminal command started since the
+	// collector's last probe) is not status's, and the collector probes
+	// again on its next tick.
+	self := resourceProcess{PID: os.Getpid(), Role: "service"}
+	terminal := resourceProcess{PID: os.Getpid() + 1, Role: "cli"}
+	summary := &resourceSummary{Processes: []resourceReading{{PID: self.PID, Role: "service"}}}
+	if !coversResourceRoots(summary, []resourceProcess{self}) || coversResourceRoots(summary, []resourceProcess{self, terminal}) || coversResourceRoots(nil, []resourceProcess{self, terminal}) {
+		t.Fatal("status reused a summary without every live lease")
+	}
+	service.historyLeases.stale.Store(true)
+	if probes := service.historyLeases.probe([]string{servicePath}, at.Add(3*time.Second)); len(probes) != 1 {
+		t.Fatal("a stale lease cache was not probed again")
+	}
+	if probes := service.historyLeases.probe([]string{servicePath}, at.Add(4*time.Second)); len(probes) != 1 || service.historyLeases.at[servicePath] != at.Add(3*time.Second) {
+		t.Fatal("one stale mark forced more than one probe")
+	}
 }

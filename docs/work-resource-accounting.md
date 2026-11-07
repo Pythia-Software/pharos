@@ -24,14 +24,20 @@ says, and the history routes answer `available: false`.
 The collector reads through the process's existing `resourceSampler` and the
 shared GPU sampler, so no process is read by two samplers. While it runs,
 status snapshots reuse its latest summary (`resourceHistory.latest`) instead
-of sampling again.
+of sampling again, as long as that summary read every process of status's own
+lease probe (the one-second `leaseWatch` policy). A summary missing a live
+lease, such as a command just started in Terminal, is not used: status samples
+the processes itself and marks the collector's lease cache stale, so its next
+tick probes the lease files again.
 
 The broker builds its process list from library children and lease files.
 Lease files are probed at most every 30 seconds while work runs and every
 30 minutes while idle, so the collector does not keep library drives awake.
 Processes already discovered are still sampled each tick, and their OS
 start identity is checked so PID reuse cannot inherit cached ownership. A newly started
-external CLI can therefore be absent until the next lease probe. It
+external CLI can therefore be absent from the history until the next lease
+probe; a standalone service's status probe shortens that (above), the
+broker's does not. It
 reads the OS process table once per tick, and descendants belong to their
 nearest known root, so a process is counted once. It never asks a service
 for readings: a service marked as broker-owned samples nothing itself. That
@@ -44,14 +50,17 @@ For task markers only, the broker asks each running library service
 registry's top-level operations that have not ended, with kind, priority,
 trigger, state, libraries and start times. It never runs a catalog query or
 `/status/freshness` for it, and the broker reads at most 128 KiB of the
-answer. The libraries are asked in turn under one 100 ms deadline for the
-whole tick, so N libraries delay the process readings by at most 100 ms, not
-N × 100 ms. A library that has not answered by then, or that answered with an
-error, is unknown for that tick: its scope lists "Task markers could not be
-read for this library", and its known tasks carry forward, neither ended nor
-restarted. When an early library is slow, later ones can miss the deadline
-on that tick too. With the scheduled engine this costs N local requests on
-every tick, every 2 to 10 s, even with the panel closed.
+answer. The lease files are probed first; then the libraries are asked at
+once under one 100 ms deadline for the whole tick, so N libraries delay the
+process readings by at most 100 ms, not N × 100 ms, and a slow library
+cannot use up another's time. A library that has not answered by then, or
+that answered with an error, is unknown for that tick: its scope lists "Task
+markers could not be read for this library", and its known tasks carry
+forward, neither ended nor restarted, for at most one minute since it last
+listed them. After that they end (observed), so a wedged service neither
+keeps stale running tasks nor holds the active cadence. With the scheduled
+engine this costs N local requests on every tick, every 2 to 10 s, even
+with the panel closed.
 
 The native app is included only when its ownership is verified, by the
 broker's parent PID plus its process start time. Until then the scope lists
@@ -111,8 +120,10 @@ it as not measured. Ownership never comes from matching a process name.
 `GET /api/app/resources/history[?library=ID][&since=]` (app).
 
 `since` is Unix milliseconds or RFC 3339. With `since`, the document carries
-the samples, segments and markers after that time, plus the coverage in
-effect at that time.
+the samples, segments and coverage after that time, compared at millisecond
+resolution, plus the coverage in effect at that time; passing back the last
+`t` received never returns that entry again. Markers are always the bounded
+complete set (`markers_complete`).
 
 ```json
 {
