@@ -39,10 +39,10 @@ again before it counts as evidence. Private paths/descriptors/reports remain
 gitignored.
 
 `TestWorkPreviousBinaryRecovery` passed against the actual retained binary
-with an earlier, weaker oracle (dirty marks cleared, message count kept). The
-strengthened oracle below has not yet been run against the retained binary.
-It is a small deterministic fake-model storage oracle, not model throughput
-evidence:
+with the strengthened oracle below. This prefix also passed the fast and
+full Go suites, the web checks and full JS matrix, and all eight isolated
+experiment harness tests. It is a small deterministic fake-model
+storage oracle, not model throughput evidence:
 
 - interrupt a bounded producer pass after a parent edit, so the fork stays
   enrolled, and close;
