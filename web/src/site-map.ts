@@ -649,7 +649,7 @@ export function buildSiteMap(inputs: SiteInputs) {
   const whereOption = (param: string, dataset: string, hostParams?: string[]): Option => ({ name: "filters", param, kind: "where", description: `Where terms on ${dataset}'s filterable fields (datasets.${dataset}.fields), encoded with encodeQuery as a where-only query. Browse <node>/filters/<field> for one field.`, ...(hostParams ? { host_params: hostParams } : {}) });
 
   for (const section of siteSections) {
-    const title = inputs.titles[section.route === "/" ? "" : section.path] ?? (section.path === "work" ? "Work" : sectionTitle(section.path)) ?? fail(`no title for ${section.path}`);
+    const title = inputs.titles[section.route === "/" ? "" : section.path] ?? (section.path === "work" ? "Workspace" : sectionTitle(section.path)) ?? fail(`no title for ${section.path}`);
     const node = add({ path: section.path, title, description: section.description, route: section.route, children: [] });
     const child = (page: SiteNode) => { node.children!.push(page.path); return add(page); };
     if (section.path === "cards") {
@@ -698,7 +698,7 @@ export function buildSiteMap(inputs: SiteInputs) {
       }
       for (const topic of topics.filter(topic => "catalog" in dashboardLinks[topic])) child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
         fixed: { analyze_mode: "dashboards", analyze_topic: topic, analyze_data: usageTopicDatasets[topic] }, dataset: usageTopicDatasets[topic], dashboard: topic,
-        ...topic === "carbon" ? { settings: "Carbon assumptions can be carried as view.carbon; saving defaults is separate." } : topic === "parallelism" ? { settings: "Ribbon and source-query counting assumptions travel as view.parallelism; the Provider and Model breakdowns need agent counting.", ribbon: { param: "analyze_parallelism", ...ribbonTemplate() } } : {},
+        ...topic === "carbon" ? { settings: "Carbon assumptions can be carried as view.carbon; saving defaults is separate." } : topic === "parallelism" ? { settings: "Ribbon and source-query counting assumptions travel as view.parallelism; the Provider and Model breakdowns require Count by Conversations.", ribbon: { param: "analyze_parallelism", ...ribbonTemplate() } } : {},
         options: [
           { name: "chart", param: "analyze_chart", kind: "dashboard_chart", description: `The chart: dashboards.${topic}.views lists each view's options and valid combinations.` },
           whereOption("analyze_filters", usageTopicDatasets[topic]),
@@ -742,11 +742,11 @@ export function buildSiteMap(inputs: SiteInputs) {
     if (section.path === "work") {
       node.builder = "conversationRowURL, then the delegation explorer's parameters (delegationRouteValues, empty ones left out), then explorer.";
       node.options = [
-        { name: "work_id", param: "{work_id}", kind: "id", id: "work_id", description: "The work item (workspace) in the path." },
+        { name: "work_id", param: "{work_id}", kind: "id", id: "work_id", description: "The workspace in the path." },
         ...readerParams.map(param => ({ name: param.name, param: param.name, kind: param.id ? "id" : param.name === "at" ? "datetime" : "text", ...param.id ? { id: param.id } : {},
           ..."requires" in param ? { requires: param.requires.map(name => needs(name)) } : {}, ..."conflicts" in param ? { conflicts: [...param.conflicts] } : {}, description: param.description })),
-        { name: "explorer", param: "explorer", kind: "enum", values: values(delegationTabs), default: delegationTabs[0], description: "How the delegation explorer shows sessions. Legacy explorer=parallel links open Timeline." },
-        { name: "mode", param: "delegation_mode", kind: "enum", values: values(delegationModes), default: delegationModes[0], description: "Sessions as a hierarchy, or ranked by one metric." },
+        { name: "explorer", param: "explorer", kind: "enum", values: values(delegationTabs), default: delegationTabs[0], description: "How the delegation explorer shows agent sessions. Legacy explorer=parallel links open Timeline." },
+        { name: "mode", param: "delegation_mode", kind: "enum", values: values(delegationModes), default: delegationModes[0], description: "Agent sessions as a hierarchy, or ranked by one metric." },
         { name: "sort", param: "delegation_sort", kind: "text", default: defaultDelegationSort, requires: [needs("mode", "rank")], description: "In rank mode, the metric id to rank by (the work's analysis lists them: tokens, cost, calls, errors …)." },
         { name: "scope", param: "delegation_scope", kind: "enum", values: values(delegationScopes), default: delegationScopes[0], description: "The hierarchy and ranking show the session's own metrics (self) or with everything below it (all)." },
         { name: "direction", param: "delegation_direction", kind: "enum", values: values(delegationDirections), default: delegationDirections[0], requires: [needs("mode", "rank")], description: "In rank mode." },

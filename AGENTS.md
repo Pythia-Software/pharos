@@ -38,6 +38,14 @@ Release-only tasks must never run release-machine setup or create/import signing
 keys. Missing deployment configuration or signing keys is a blocker to report;
 signing and publication belong on the separately configured deployment Mac.
 
+## User-facing vocabulary
+
+Use the Data Guide vocabulary in `web/src/data-taxonomy-model.ts` and the
+relationship/copy rules in [docs/ui-vocabulary.md](docs/ui-vocabulary.md).
+Name the actual counting unit: workspace, conversation, agent session, message
+or tool call. Work items are source-recorded tasks, not another name for
+workspace rows. Preserve source text, stored field keys and URL/API identities.
+
 ## Query Table dependency policy
 
 Do not add, extend, or reintroduce local Query Table patches. Required fixes
@@ -125,6 +133,7 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 | JS checks before a PR | `npm --prefix web run check` (typecheck, schemas, recipe snapshot, bundle, unit tests) |
 | Python tools | `python3 -m unittest discover -s tools` |
 | Frontend bundle | `npm --prefix web run build` after any `web/src` or `pricing/*.json` change; outputs are gitignored |
+| Provider golden records | `PHAROS_UPDATE_GOLDEN=1 go test -vet=off -run TestProviderConformance ./internal/archive` after changing what an adapter reads; it rewrites `testdata/ingestion/<kind>.json`, and refuses a change without a new index version (`same-version` overrides) |
 | Recipe snapshot | `npm --prefix web run generate-recipes` after changing card recipes; it rewrites `implemented_recipes` in `docs/homepage-query-cards.json`, which Go's `TestHomeQueryRecipesV2` executes |
 | Site map | `npm --prefix web run generate-site-map` after changing pages, routes, analysis catalogs, dashboard defaults, schemas or card recipes; it rewrites `internal/archive/assets/site-map.json`, `testdata/site-map-cases.json` and the Ask suggestion catalog `internal/archive/assets/ask-suggestions.json` ([docs/site-map.md](docs/site-map.md), [docs/ask-suggestions.md](docs/ask-suggestions.md)) |
 

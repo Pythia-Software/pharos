@@ -441,7 +441,7 @@ func (a *sqliteReplayAdapter) replay(r retainedSQLiteRevision, emit func(Workspa
 			return e
 		}
 	}
-	root, ok := view.captured(v.Source.Path)
+	root, ok := view.capturedSource(v.Source)
 	if !ok {
 		return errors.New("unmapped source root")
 	}

@@ -50,6 +50,20 @@ type ConversationRecord struct {
 	// Instructions are the instruction files and skills the transcript
 	// recorded as loaded (see instructions.go).
 	Instructions []InstructionRecord `json:"Instructions,omitempty"`
+	// Extractor, when set, versions the parser that read the conversation,
+	// so an unchanged record its current parser read need not be read
+	// again (recordUsesCurrentExtractor). Coverage stays a completeness word.
+	Extractor string `json:"Extractor,omitempty"`
+	// Unread, on a partial conversation, names the messages its source lists
+	// but could not read; what was indexed from them is kept (see
+	// keepStoredMessages). A partial conversation without it keeps every
+	// indexed message it lacks.
+	Unread []string `json:"Unread,omitempty"`
+	// Copy marks a conversation rebuilt from another's copy of it, as a
+	// Cursor fork holds its deleted parent's first messages: it only adds
+	// messages not yet indexed, never replacing what a read of the
+	// conversation itself wrote.
+	Copy bool `json:"Copy,omitempty"`
 	// Observed is the version of the source this copy was read from (see
 	// sourceVersion); not part of the record's digest.
 	Observed int64 `json:"-"`
@@ -92,7 +106,7 @@ func (a baseAdapter) databaseVersion(path string) int64 {
 	}
 	version := int64(0)
 	for _, file := range []string{path, path + "-wal"} {
-		if info, err := os.Stat(file); err == nil {
+		if info, err := a.files().Stat(file); err == nil {
 			version = max(version, info.ModTime().UnixNano())
 		}
 	}
@@ -138,6 +152,15 @@ func (a baseAdapter) context() context.Context {
 	return context.Background()
 }
 
+// shareSQLiteCopies makes the adapter's reads, until end runs, one pass that
+// reads a database it had to copy from that one copy (withSQLiteCopyShare).
+func (a *baseAdapter) shareSQLiteCopies() (end func()) {
+	previous := a.ctx
+	ctx, endShare := withSQLiteCopyShare(a.context())
+	a.ctx = ctx
+	return func() { a.ctx = previous; endShare() }
+}
+
 func setAdapterContext(adapter Adapter, ctx context.Context) {
 	if contextual, ok := adapter.(interface{ setContext(context.Context) }); ok {
 		contextual.setContext(ctx)
@@ -172,33 +195,16 @@ func (a baseAdapter) repository(location, remote string) map[string]any {
 	return repositoryFromLocation(location, remote)
 }
 
+// MakeAdapter makes the adapter of a configured source (providerSpec.New).
 func MakeAdapter(config SourceConfig) (Adapter, error) {
-	switch strings.ToLower(config.Kind) {
-	case "canonical", "tl1-export":
-		capability := "retrieval-only"
-		if strings.EqualFold(config.Kind, "tl1-export") {
-			capability = "tl1-release"
-		}
-		return &canonicalAdapter{baseAdapter{config: config, capability: capability}}, nil
-	case "codex":
-		return &jsonlAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}, provider: "codex"}, nil
-	case "claude":
-		return &jsonlAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}, provider: "claude"}, nil
-	case "chatgpt", "chatgpt-export":
-		return &chatGPTAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "conductor":
-		return &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "tl1":
-		return &tl1Adapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	case "antigravity":
-		return &antigravityAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
-	default:
+	spec, ok := providerFor(config.Kind)
+	if !ok {
 		return nil, fmt.Errorf("unsupported source kind: %s", config.Kind)
 	}
-}
-
-func pathFingerprint(root string, include func(string, os.DirEntry) bool) (string, error) {
-	return sourceFiles{}.pathFingerprint(root, include)
+	if spec.Resolve != nil {
+		config = spec.Resolve(config)
+	}
+	return spec.New(baseAdapter{config: config, capability: spec.Mutation}), nil
 }
 
 // pathFingerprint takes sizes through the capture view, so storing a captured
@@ -213,7 +219,7 @@ func (s sourceFiles) pathFingerprint(root string, include func(string, os.DirEnt
 	if !info.IsDir() {
 		rows = append(rows, fmt.Sprintf("%s:%d:%d", filepath.Base(root), info.Size(), info.ModTime().UnixNano()))
 	} else {
-		err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		err = s.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return nil
 			}
@@ -276,17 +282,8 @@ func iso(value any) string {
 	return asString(value)
 }
 
-func readJSON(path string) (any, error) {
-	value, _, err := readJSONVersion(path)
-	return value, err
-}
-
-// readJSONVersion also reports the version (mtime) of the file it read.
-func readJSONVersion(path string) (any, int64, error) {
-	return sourceFiles{}.ReadJSONVersion(path)
-}
-
-// ReadJSONVersion is readJSONVersion through the capture view.
+// ReadJSONVersion reads a JSON file through the capture view, and reports
+// the version (mtime) of the file it read.
 func (s sourceFiles) ReadJSONVersion(path string) (any, int64, error) {
 	file, err := s.Open(path)
 	if err != nil {
@@ -336,14 +333,14 @@ func (a *canonicalAdapter) Fingerprint() (string, error) {
 	return a.indexVersion() + ":" + fingerprint, err
 }
 func (a *canonicalAdapter) Discover(emit func(WorkspaceRecord) error) error {
-	info, err := os.Stat(a.config.Path)
+	info, err := a.files().Stat(a.config.Path)
 	if err != nil {
 		return err
 	}
 	files := []string{a.config.Path}
 	if info.IsDir() {
 		files = nil
-		_ = filepath.WalkDir(a.config.Path, func(path string, entry os.DirEntry, e error) error {
+		_ = a.files().WalkDir(a.config.Path, func(path string, entry os.DirEntry, e error) error {
 			if e == nil && !entry.IsDir() && strings.HasSuffix(strings.ToLower(path), ".json") {
 				files = append(files, path)
 			}
@@ -352,7 +349,7 @@ func (a *canonicalAdapter) Discover(emit func(WorkspaceRecord) error) error {
 		sort.Strings(files)
 	}
 	for _, file := range files {
-		raw, version, err := readJSONVersion(file)
+		raw, version, err := a.files().ReadJSONVersion(file)
 		if err != nil {
 			return fmt.Errorf("cannot read canonical export %s: %w", file, err)
 		}
@@ -502,11 +499,11 @@ type jsonlAdapter struct {
 	names         map[string]transcriptName
 }
 
-var codexForkFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$`)
+var codexForkFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl(?:\.zst)?$`)
 
 func (a *jsonlAdapter) Fingerprint() (string, error) {
 	fingerprint, err := a.files().pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
-		if strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl") && a.accept(path) {
+		if a.transcriptName(entry.Name()) && a.accept(path) {
 			return true
 		}
 		if a.provider == "claude" {
@@ -514,15 +511,23 @@ func (a *jsonlAdapter) Fingerprint() (string, error) {
 		}
 		return filepath.Dir(path) == a.config.Path && (entry.Name() == "session_index.jsonl" || codexStateName(strings.TrimSuffix(entry.Name(), "-wal")))
 	})
-	return jsonlExtractor + ":" + fingerprint, err
+	return a.extractorVersion() + ":" + fingerprint, err
 }
 
 // jsonlExtractor versions the Claude and Codex parsers; bump it when parsing
 // changes so every file is parsed again. v8 retains tool result metadata (exit
 // codes, durations, interruptions); v9 retains Codex hosted web searches; v10
 // skips Claude entries replayed under a uuid already seen; v11 retains Claude
-// invoked_skills attachments for skill_usages.
-const jsonlExtractor = "message-model-v18-inference-speed"
+// invoked_skills attachments for skill_usages; v18 records inference speed;
+// v19 keeps the session_meta of a Codex rollout that continues another thread,
+// so its inherited usage is not counted again.
+const jsonlExtractor = "message-model-v19-codex-continuations"
+
+// transcriptName reports whether a file name is a transcript's: a .jsonl,
+// or for Codex also a compressed rollout.
+func (a *jsonlAdapter) transcriptName(name string) bool {
+	return strings.HasSuffix(strings.ToLower(name), ".jsonl") || a.provider == "codex" && compressedRollout(name)
+}
 
 func (a *jsonlAdapter) accept(path string) bool {
 	relative, _ := filepath.Rel(a.config.Path, path)
@@ -544,7 +549,20 @@ func (a *jsonlAdapter) Discover(emit func(WorkspaceRecord) error) error {
 	})
 }
 
-func (a *jsonlAdapter) partExtractor() string { return a.provider + ":" + jsonlExtractor }
+func (a *jsonlAdapter) partExtractor() string { return a.provider + ":" + a.extractorVersion() }
+
+// claudeExtractor versions what changed in the Claude parser alone since
+// jsonlExtractor, so a change to it reads Claude Code's transcripts again and
+// not Codex's: v2 selects the active branch, counts once a reply several of a
+// session's transcripts hold, and counts advisor iterations.
+const claudeExtractor = "claude-v2-active-branch"
+
+func (a *jsonlAdapter) extractorVersion() string {
+	if a.provider == "claude" {
+		return jsonlExtractor + "+" + claudeExtractor
+	}
+	return jsonlExtractor
+}
 
 // readsEveryIndex: every Codex plan reads the naming databases (state_*.sqlite)
 // for thread names; Claude captures no database.
@@ -562,7 +580,7 @@ func (a *jsonlAdapter) transcriptInfo(path string, entry os.DirEntry, walkErr er
 		}
 		return nil, walkErr
 	}
-	if entry.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".jsonl") || !a.accept(path) {
+	if entry.IsDir() || !a.transcriptName(path) || !a.accept(path) {
 		return nil, nil
 	}
 	// Through the capture view: an encoded transcript plans at its original
@@ -586,7 +604,7 @@ func (a *jsonlAdapter) discoverParts(unchanged func([]sourcePart) bool, emit fun
 
 func (a *jsonlAdapter) planParts() (*sourceWorkPlan, error) {
 	groups, infos, roots := map[string][]string{}, map[string]fs.FileInfo{}, []string{}
-	if err := filepath.WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
+	if err := a.files().WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
 		info, err := a.transcriptInfo(path, entry, walkErr)
 		if err != nil {
 			return err
@@ -609,13 +627,17 @@ func (a *jsonlAdapter) planParts() (*sourceWorkPlan, error) {
 	}
 	if a.provider == "claude" {
 		sort.Strings(roots)
+	} else {
+		roots = a.preferRollouts(roots, infos)
 	}
 	names, err := a.transcriptNames(roots)
 	if err != nil {
 		return nil, err
 	}
 	a.names = names
-	plan := &sourceWorkPlan{}
+	// A transcript that cannot be read fails its own group; the others are
+	// still indexed, and the error is reported after them.
+	plan := &sourceWorkPlan{continueOnError: true}
 	for _, root := range roots {
 		paths := groups[root]
 		sort.Slice(paths, func(i, j int) bool {
@@ -626,8 +648,8 @@ func (a *jsonlAdapter) planParts() (*sourceWorkPlan, error) {
 		})
 		parts := make([]sourcePart, 0, len(paths))
 		for _, path := range paths {
-			info := infos[path]
-			part := sourcePart{item: a.original(path), size: info.Size(), version: info.ModTime().UnixNano()}
+			info := a.files().contentInfo(path, infos[path])
+			part := sourcePart{item: plainRollout(a.original(path)), size: info.Size(), version: info.ModTime().UnixNano()}
 			if name, ok := a.names[path]; ok {
 				part.signal = name.signal()
 			}
@@ -670,9 +692,34 @@ func (a *jsonlAdapter) readTranscriptGroup(paths []string) (*WorkspaceRecord, []
 	}
 	if combined != nil && a.provider == "claude" {
 		reconcileClaudeLineage(combined)
+		dedupeClaudeGroupUsage(combined)
 		combined.Metrics = reconciledTokenMetrics(*combined)
 	}
 	return combined, read, nil
+}
+
+// preferRollouts keeps one form of each rollout listed both plain and
+// compressed (preferRollout), in listing order.
+func (a *jsonlAdapter) preferRollouts(paths []string, infos map[string]fs.FileInfo) []string {
+	byPlain := map[string][]string{}
+	for _, path := range paths {
+		byPlain[plainRollout(path)] = append(byPlain[plainRollout(path)], path)
+	}
+	kept := paths[:0:0]
+	for _, path := range paths {
+		forms := byPlain[plainRollout(path)]
+		if len(forms) == 2 {
+			plain, compressed := forms[0], forms[1]
+			if compressedRollout(plain) {
+				plain, compressed = compressed, plain
+			}
+			if preferRollout(plain, compressed, infos[plain], infos[compressed]) != path {
+				continue
+			}
+		}
+		kept = append(kept, path)
+	}
+	return kept
 }
 
 func claudeRootPath(path string) string {
@@ -696,8 +743,11 @@ func (a *jsonlAdapter) parse(path string) (WorkspaceRecord, bool, error) {
 // present when it was opened, so a log appended meanwhile, or a capture
 // replaced meanwhile, is parsed again next time rather than taken as current.
 func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool, error) {
-	file, err := a.files().Open(path)
+	file, err := a.files().OpenContent(path)
 	if err != nil {
+		if compressedRollout(path) && !errors.Is(err, os.ErrNotExist) {
+			return WorkspaceRecord{}, sourcePart{}, false, fmt.Errorf("decode %s: %w", path, err)
+		}
 		return WorkspaceRecord{}, sourcePart{}, false, nil
 	}
 	defer file.Close()
@@ -705,11 +755,11 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 	if err != nil {
 		return WorkspaceRecord{}, sourcePart{}, false, nil
 	}
-	part := sourcePart{item: a.original(path), size: info.Size(), version: info.ModTime().UnixNano()}
+	part := sourcePart{item: plainRollout(a.original(path)), size: info.Size(), version: info.ModTime().UnixNano()}
 	if parseHook != nil {
 		parseHook(path)
 	}
-	events, err := readJSONLines(file, part.size)
+	events, err := readJSONLines(file, file.readLimit())
 	if err != nil {
 		return WorkspaceRecord{}, part, false, fmt.Errorf("read %s %w", path, err)
 	}
@@ -741,8 +791,8 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 }
 
 func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRecord, bool, error) {
-	origin := a.original(path)
-	meta := map[string]any{}
+	origin := plainRollout(a.original(path))
+	meta, metaLine := map[string]any{}, int64(0)
 	model, effort := "", a.initialEffort
 	currentInference := standardInference()
 	inferenceApplied := 0
@@ -804,6 +854,7 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 			}
 			if len(meta) == 0 {
 				meta = payload
+				metaLine = integer(event["_line"])
 			}
 			model = defaultString(payload["model"], model)
 			effort = updatedEffort(effort, payload)
@@ -948,7 +999,24 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 			messages[index].Text = jsonText(map[string]any{"tool": toolNames[callID], "content": resultContent[callID], "details": extra})
 		}
 	}
-	nativeID := defaultString(meta["id"], strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
+	if continuesHistory(meta) {
+		// Token accounting reads that this rollout's counters start at the
+		// thread it continues (conversationTokenReports). The note follows the
+		// transcript, so the messages before it keep their positions.
+		continuation := map[string]any{"id": meta["id"]}
+		for _, key := range []string{"forked_from_id", "forked_from_ordinal_exclusive", "history_base", "subagent_history_start_ordinal"} {
+			if value, ok := meta[key]; ok {
+				continuation[key] = value
+			}
+		}
+		text := jsonText(map[string]any{"type": "session_meta", "payload": continuation})
+		at := ""
+		if len(events) > 0 {
+			at = iso(events[len(events)-1]["timestamp"])
+		}
+		messages = append(messages, MessageRecord{RawText: text, NativeID: fmt.Sprintf("line-%d", metaLine), Role: "system", Kind: "metadata", Text: text, Model: model, Effort: effort, CreatedAt: at, EvidenceLocator: fmt.Sprintf("%s:%d", origin, metaLine), Selected: true})
+	}
+	nativeID := defaultString(meta["id"], rolloutStem(path))
 	spawn := mapValue(mapValue(mapValue(meta["source"])["subagent"])["thread_spawn"])
 	parentNativeID := firstString(meta["parent_thread_id"], spawn["parent_thread_id"])
 	agentDepth := int(integer(spawn["depth"]))
@@ -993,7 +1061,23 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	toolNames := map[string]string{}
 	resultCalls := map[string]string{}
 	replayed := map[string]bool{}
+	// Every record an entry makes is selected when the entry is on the
+	// conversation's active branch; an abandoned turn keeps its records, and
+	// its usage still counts, since it was sent.
+	onBranchIDs := claudeActiveBranch(events)
+	pending, pendingSelected := 0, true
+	settle := func() {
+		for i := pending; i < len(messages); i++ {
+			messages[i].Selected = messages[i].Selected && pendingSelected
+		}
+		pending = len(messages)
+	}
 	for _, event := range events {
+		settle()
+		pendingSelected = true
+		if id := firstString(event["uuid"]); id != "" {
+			pendingSelected = onBranchIDs[id]
+		}
 		// Claude Code can write a session's earlier entries into its file again
 		// under their original uuids, with tool results stripped. The first copy
 		// is the one that happened; parsing a replay would give a message two
@@ -1162,7 +1246,9 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 			}
 		}
 		if usage := mapValue(message["usage"]); usage != nil {
-			messages = append(messages, MessageRecord{RawText: jsonText(event), NativeID: baseID + ":usage", Role: "system", Kind: "metadata", Text: jsonText(map[string]any{"type": "token_usage", "usage": usage, "usage_message_id": firstString(message["id"])}), Model: model, Effort: effort, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
+			usageRecord := MessageRecord{RawText: jsonText(event), NativeID: baseID + ":usage", Role: "system", Kind: "metadata", Text: jsonText(map[string]any{"type": "token_usage", "usage": usage, "usage_message_id": firstString(message["id"])}), Model: model, Effort: effort, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
+			messages = append(messages, usageRecord)
+			messages = append(messages, claudeAdvisorUsage(usageRecord, event, usage)...)
 			for _, key := range []string{"input_tokens", "output_tokens"} {
 				if value, ok := number(usage[key]); ok {
 					tokens[key] += value
@@ -1175,6 +1261,7 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 			}
 		}
 	}
+	settle()
 	if rootID != "" {
 		subagentsDir := filepath.Join(strings.TrimSuffix(claudeRootPath(path), ".jsonl"), "subagents")
 		relative, _ := filepath.Rel(subagentsDir, path)
@@ -1182,7 +1269,13 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	}
 	repository := a.repository(cwd, "")
 	messages = normalizeHandbackMessages(messages)
-	purpose, outcome := agentPurposeOutcome(messages)
+	onBranch := make([]MessageRecord, 0, len(messages))
+	for _, message := range messages {
+		if message.Selected {
+			onBranch = append(onBranch, message)
+		}
+	}
+	purpose, outcome := agentPurposeOutcome(onBranch)
 	metrics := []map[string]any{}
 	for key, value := range tokens {
 		if value > 0 {

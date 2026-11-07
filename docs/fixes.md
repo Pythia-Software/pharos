@@ -59,7 +59,17 @@ lab's "v3" grouping:
 6. **Assign a scope.** An item is **global** when it spans two or more repositories
    and none holds 85% of its events; otherwise it belongs to its repository.
    Repository sharing decides where the prompt goes and is never an input to
-   grouping.
+   grouping. A global item's guidance is the global instructions of the
+   harness most of its events came from, as the provider registry declares
+   them (`Instructions` in `provider_registry.go`), with Claude Code winning a
+   tie. They are a file (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
+   `~/.copilot/copilot-instructions.md` for Copilot CLI and VS Code Copilot,
+   `~/.config/opencode/AGENTS.md`, `~/.config/zed/AGENTS.md`,
+   `~/.gemini/GEMINI.md`), a folder of rule files (Cline's
+   `~/Documents/Cline/Rules/`), or a place in the app's settings (Cursor's
+   User Rules, ChatGPT's custom instructions). A file or folder with no text
+   is named "(empty today)"; Pharos cannot read the settings, so it never
+   calls those empty.
 7. **Title it.** An item's title names the problem from its key term, kind and
    place, for example "`trimesh` missing from corpus's environment", "`gh pr edit`
    keeps failing for agents" or "Known failing check: …". Without a key term
@@ -97,7 +107,8 @@ lab's "v3" grouping:
    item's, cite a rule they are following ("per CLAUDE.md", "the guidance says
    never…"), the item is marked **Guidance already covers this (intended)** and left
    off Open whatever the bounds. Guides read include the repository's CLAUDE.md and
-   AGENTS.md and the Claude memory files for its clone.
+   AGENTS.md, the Claude memory files for its clone, and every global
+   instructions file and folder above.
 11. **Assign a status.**
    - *Still recurring* means it was seen in the last three days the pass read.
    - *Quiet* means its expected count since then is at least three, but none

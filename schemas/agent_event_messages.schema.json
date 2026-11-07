@@ -331,7 +331,7 @@
             },
             {
               "value": "canonical",
-              "label": "Canonical"
+              "label": "Canonical export"
             }
           ]
         }

@@ -382,7 +382,7 @@ func storedMessageRecords(messages []map[string]any) []MessageRecord {
 func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, total int)) (int, error) {
 	state := &c.tools
 	if !state.backfill.TryLock() {
-		return 0, fmt.Errorf("a tool ledger build is already running")
+		return 0, fmt.Errorf("a tool index build is already running")
 	}
 	defer state.backfill.Unlock()
 	pending, err := queryMapsContext(ctx, c.DB, `SELECT c.id,c.workspace_id,c.provider,c.model FROM conversations c

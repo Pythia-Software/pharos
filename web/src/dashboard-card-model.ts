@@ -147,7 +147,7 @@ export function dashboardCardMetadata(address: string, target: DashboardCardTarg
 function dashboardSettingsContext(topic: string, params: URLSearchParams): string[] {
   if (topic === "parallelism") {
     const settings = dashboardCardRibbon(`/analyze?${params}`);
-    return [`Count ${settings.counting === "agent" ? "top-level sessions" : "workspaces"}; join turns across gaps up to ${settings.gap} minutes`];
+    return [`Count ${settings.counting === "agent" ? "top-level conversations" : "workspaces"}; join turns across gaps up to ${settings.gap} minutes`];
   }
   if (topic === "carbon" && params.has("analyze_carbon")) {
     const settings = JSON.parse(params.get("analyze_carbon")!);

@@ -437,6 +437,14 @@ func TestInferenceSpeedIngestionAndReplay(t *testing.T) {
 			`{"type":"turn_context","payload":{"model":"gpt-test"}}`,
 			`{"type":"token_usage_record","timestamp":"2026-09-20T12:02:00Z","payload":{"response_id":"standard-request","usage":{"input_tokens":10,"output_tokens":1}}}`,
 		}, "\n"), inferenceSpeed{Speed: "fast", ServiceTier: "priority", Source: "service_tier"}},
+		// OpenAI's Ultrafast Processing is fast too.
+		{"codex", "rollout-ultrafast.jsonl", strings.Join([]string{
+			`{"type":"session_meta","payload":{"id":"ultrafast","model":"gpt-test"}}`,
+			`{"type":"turn_context","payload":{"model":"gpt-test","service_tier":"ultrafast"}}`,
+			`{"type":"token_usage_record","timestamp":"2026-09-20T12:01:00Z","payload":{"response_id":"ultrafast-request","usage":{"input_tokens":10,"output_tokens":1}}}`,
+			`{"type":"turn_context","payload":{"model":"gpt-test","service_tier":"flex"}}`,
+			`{"type":"token_usage_record","timestamp":"2026-09-20T12:02:00Z","payload":{"response_id":"flex-request","usage":{"input_tokens":10,"output_tokens":1}}}`,
+		}, "\n"), inferenceSpeed{Speed: "fast", ServiceTier: "ultrafast", Source: "service_tier"}},
 		{"canonical", "speed.json", `{"id":"speed","conversations":[{"id":"speed","provider":"codex","service_tier":"priority","messages":[{"id":"fast","role":"assistant","text":"first"},{"id":"standard","role":"assistant","service_tier":null,"text":"second"}]}]}`, inferenceSpeed{Speed: "fast", ServiceTier: "priority", Source: "service_tier"}},
 		{"canonical", "explicit-speed.json", `{"id":"speed","conversations":[{"id":"speed","provider":"claude","messages":[{"id":"fast","role":"assistant","speed":"fast","text":"first","raw_text":"{\"message\":{\"id\":\"request-fast\",\"usage\":{\"service_tier\":\"standard\",\"input_tokens\":10,\"output_tokens\":1}}}"},{"id":"standard","role":"assistant","speed":"standard","text":"second","raw_text":"{\"message\":{\"id\":\"request-standard\",\"usage\":{\"service_tier\":\"priority\",\"input_tokens\":10,\"output_tokens\":1}}}"}]}]}`, inferenceSpeed{Speed: "fast", ServiceTier: "standard", Source: "speed"}},
 		{"chatgpt", "conversations.json", `[{"id":"speed","mapping":{"a":{"message":{"id":"fast","author":{"role":"assistant"},"content":{"parts":["first"]},"create_time":1,"metadata":{"model_slug":"gpt-test","service_tier":"priority"}}},"b":{"message":{"id":"standard","author":{"role":"assistant"},"content":{"parts":["second"]},"create_time":2,"metadata":{"model_slug":"gpt-test"}}}}}]`, inferenceSpeed{Speed: "fast", ServiceTier: "priority", Source: "service_tier"}},
@@ -491,6 +499,27 @@ func TestInferenceSpeedIngestionAndReplay(t *testing.T) {
 				rebuilt, err := queryMaps(c.DB, "SELECT speed,service_tier,speed_source FROM model_requests ORDER BY sequence")
 				if err != nil || !reflect.DeepEqual(requests, rebuilt) {
 					t.Fatalf("request replay lost configuration: %+v %v", rebuilt, err)
+				}
+				if sample.first.ServiceTier != "ultrafast" {
+					return
+				}
+				// A catalog indexed when ultrafast counted as standard rebuilds
+				// just the conversations that recorded it, once.
+				if _, err := c.DB.Exec("UPDATE messages SET speed='standard' WHERE service_tier='ultrafast';UPDATE model_requests SET speed='standard' WHERE service_tier='ultrafast';UPDATE meta SET value='priority,fast' WHERE key='fast_service_tiers'"); err != nil {
+					t.Fatal(err)
+				}
+				for want := range 2 {
+					if err := c.ensureFastTiers(); err != nil {
+						t.Fatal(err)
+					}
+					if built, err := c.BackfillToolLedger(t.Context(), nil); err != nil || built != 1-want {
+						t.Fatalf("rebuilt %d conversations, want %d: %v", built, 1-want, err)
+					}
+				}
+				for _, table := range []string{"messages", "model_requests"} {
+					if speeds, err := queryMaps(c.DB, "SELECT DISTINCT speed FROM "+table+" WHERE service_tier='ultrafast'"); err != nil || len(speeds) != 1 || speeds[0]["speed"] != "fast" {
+						t.Fatalf("%s kept the old policy: %+v %v", table, speeds, err)
+					}
 				}
 			}
 		})

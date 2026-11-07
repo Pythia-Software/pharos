@@ -1,3 +1,5 @@
+import { DataReadinessIndicator } from "./data-readiness";
+import { cardReadinessSource } from "./data-readiness-card";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisState } from "./dashboard-analysis-model";
@@ -16,6 +18,17 @@ import "./home.css";
 // without a catalog chart (Thinking) is its own address.
 export type DashboardCardSource = { catalog: AnalysisCatalog; state: AnalysisState; where: WhereTerm[]; schema: FieldSchema } | { page: true; schema: FieldSchema };
 export const DashboardCardSourceContext = createContext<DashboardCardSource | null>(null);
+
+// One action group for bespoke dashboard results, using the same source and
+// title declaration as their saved-card preview. Card creation remains separate.
+export function DashboardResultActions({target}:{target:DashboardCardTarget}) {
+  const from=useContext(DashboardCardSourceContext);
+  if(!from)return null;
+  const address="page" in from?pageCardURL(location.href):dashboardCardURL(location.href,from.catalog,from.state,from.where);
+  const title=dashboardCardTargets(address,from.schema).find(item=>item.id===target)?.title??"This chart";
+  const {dataset}=cardReadinessSource(address);
+  return <span className="dashboard-card-actions"><DataReadinessIndicator id={`chart:${target}`} title={title} dataset={dataset} query={"page" in from?Object.fromEntries(new URLSearchParams(location.search)):{state:from.state,where:from.where}} /><CreateDashboardCard target={target}/></span>;
+}
 
 type Draft = { url: string; targets: ReturnType<typeof dashboardCardTargets>; target: DashboardCardTarget; title: string; description: string; action: string; category?: QueryCategory; renamed: boolean; groups: string; error: string };
 
@@ -60,6 +73,7 @@ export function CreateDashboardCard({ source, target = "chart" }: { source?: Das
   let windowLabel = "Saved", presentation: ReturnType<typeof dashboardCardPresentation> | undefined, countable: ReturnType<typeof dashboardCardGroups>;
   if (draft) try { windowLabel = dashboardCardWindow(draft.url, draft.target); presentation = dashboardCardPresentation(draft.url, draft.target, groups); countable = dashboardCardGroups(draft.url, draft.target); } catch { /* The preview reports the invalid definition. */ }
   return <span className="dashboard-card-actions">
+
     <button type="button" className="dashboard-card-create" aria-label="Create card" title="Create card" onClick={start}><Icon name="plus" /></button>
     {saved ? <span role="status">Added to <a href="/home" onClick={event => { event.preventDefault(); window.pharosNavigate?.("/home"); }}>Home</a></span> : null}
     <dialog ref={dialog} className="home-editor card-editor" aria-labelledby="createDashboardCardTitle" onClose={() => setDraft(null)}>{draft ? <form onSubmit={event => {

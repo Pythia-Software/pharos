@@ -1,0 +1,43 @@
+/* Reuse the header tool, Data Guide dialog, card status slot, shared icons and
+   operation progress track. These rules describe only freshness-specific ink. */
+.data-readiness-indicator{display:inline-flex;align-items:center;justify-content:center;flex:none;width:26px;height:26px;min-height:26px;padding:5px;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--muted);cursor:pointer;vertical-align:middle}
+.data-readiness-indicator .app-icon{width:15px;height:15px}
+.data-readiness-indicator:hover{background:var(--bg);border-color:var(--line)}
+.data-readiness-indicator:focus-visible{outline:2px solid var(--focus-ring,var(--accent));outline-offset:2px}
+:is(.data-readiness-indicator,#dataReadinessToggle)[data-tone=current]{color:var(--muted)}
+:is(.data-readiness-indicator,#dataReadinessToggle):is([data-tone=minutes],[data-tone=recent],[data-tone=unknown]){color:var(--muted)}
+:is(.data-readiness-indicator,#dataReadinessToggle)[data-tone=hours]{color:var(--gold)}
+:is(.data-readiness-indicator,#dataReadinessToggle)[data-tone=days]{color:var(--bad)}
+.query-card-readiness{position:absolute;z-index:2;right:7px;top:5px;width:22px;height:22px;min-height:22px;padding:4px}
+.query-card:has(>.query-card-readiness) .query-window{margin-right:22px}
+.query-card:has(>.query-card-readiness) .query-preview-refresh{display:none}
+.data-readiness-chart-controls{display:flex;align-items:flex-start;gap:8px}.data-readiness-chart-controls>.usage-tools-controls{flex:1;min-width:0}
+.data-guide.data-readiness-dialog{width:min(530px,calc(100vw - 24px));height:auto;max-height:calc(100dvh - 32px);overflow:hidden}
+.data-readiness-dialog[open]{display:flex;flex-direction:column}
+.data-readiness-dialog .data-guide-header{position:static;flex:none;padding:18px 22px}
+.data-readiness-dialog .data-guide-header small{display:block;color:var(--muted);font-size:11px;margin-bottom:7px}
+.data-readiness-dialog .data-guide-body{display:block;min-height:0;overflow:auto;padding:18px 22px}
+.data-readiness-dialog .data-guide-body>p:first-child{margin:0 0 18px;font-size:13px;line-height:1.5}
+.data-readiness-times{display:flex;flex-wrap:wrap;gap:16px 30px;margin:0 0 22px;font-size:11px}.data-readiness-times>div{display:flex;gap:6px}.data-readiness-times dt{color:var(--muted)}.data-readiness-times dd{margin:0}
+.data-readiness-stages{list-style:none;padding:0;margin:0 0 20px;display:grid;gap:17px}
+.data-readiness-stages>li>div:first-child{display:flex;align-items:baseline;justify-content:space-between;gap:12px;font-size:12px}
+.data-readiness-stages strong{font-weight:600}.data-readiness-stages>li>div:first-child>span{font-size:11px;color:var(--muted);text-align:right}
+.data-readiness-stages p{font-size:11px;line-height:1.5;color:var(--muted);margin:6px 0 0}
+.data-readiness-progress{margin:7px 0 0}.data-readiness-progress>div:first-child{display:flex;justify-content:space-between;gap:12px;font-size:11px;color:var(--muted)}
+.data-readiness-dialog p.data-readiness-evidence{font-size:10px;line-height:1.5;color:var(--muted);margin:15px 0 0}
+.data-readiness-footer{display:flex;flex:none;align-items:center;justify-content:space-between;gap:12px;padding:15px 22px;border-top:1px solid var(--line)}
+.data-readiness-footer a{display:inline-flex;align-items:center;gap:7px;margin-left:auto;font-size:12px}
+.data-readiness-footer button{display:flex;align-items:center;gap:6px;padding:0;border:0;background:none;font-size:11px;color:var(--muted)}
+.data-readiness-preview{display:flex;flex:none;align-items:center;justify-content:space-between;gap:12px;padding:10px 22px;background:var(--bg);font-size:11px;color:var(--muted)}
+.data-readiness-preview select{font-size:11px;max-width:70%;min-width:0}
+.data-readiness-workload{margin:0}.data-readiness-workload ul{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:12px}.data-readiness-workload li{font-size:12px}.data-readiness-workload li>span{display:block;color:var(--muted);font-size:11px;margin-top:3px}.data-readiness-workload .pharos-status-load{margin-top:14px}
+.library-empty-card.data-readiness-empty{width:min(560px,100%);margin:24px auto}.data-readiness-empty h3{font:500 22px/1.3 var(--serif);color:var(--ink);margin:0 0 8px}.data-readiness-empty>p{font-size:12px;margin:0 0 20px}.data-readiness-empty>button{display:inline-flex;align-items:center;gap:6px}.data-readiness-empty>button .app-icon{width:14px;height:14px}
+
+:is(.data-readiness-indicator,#dataReadinessToggle)[data-tone=orange]{color:light-dark(#b76020,#f0a064)}
+@media(max-width:600px){.data-readiness-dialog .data-guide-header,.data-readiness-dialog .data-guide-body,.data-readiness-footer{padding:16px}.data-readiness-preview{padding:10px 16px}.data-readiness-times{gap:10px;flex-direction:column}.data-readiness-footer{flex-wrap:wrap}}
+/* The table boundary stays visible with either collapsed or expanded controls. */
+.data-source-query{display:flex;align-items:flex-start;gap:6px}
+.data-source-query>:first-child{flex:1;min-width:0}
+.data-source-query>.data-readiness-indicator{margin-top:5px}
+:is(.mcp-metric,.thinking-stat-cards>div)>span:has(>.data-readiness-indicator){display:flex;align-items:center;justify-content:space-between;gap:6px}
+.data-readiness-region{position:relative}.data-readiness-region>.data-readiness-indicator{position:absolute;right:8px;top:8px;z-index:1}

@@ -16,17 +16,17 @@ import "./sidebar-toggle.css";
 type Layout = "wide" | "compact" | "phone";
 const readLayout = () => getComputedStyle(document.documentElement).getPropertyValue("--app-shell-layout").trim() as Layout || "wide";
 
-function NavigationItems({ pages, current, navigate, expanded, toggle, depth = 0 }: {
+export function NavigationItems({ pages, current, navigate, expanded, toggle, renderLeaf, depth = 0 }: {
   pages: readonly NestedPage[]; current: string; navigate: () => void; expanded: NavigationExpansion[string]; toggle: (id: string, defaultOpen: boolean) => void;
-  depth?: number;
+  depth?: number; renderLeaf?: (page: NestedPage, style: React.CSSProperties) => React.ReactNode;
 }) {
   const active = nestedPageTrail(pages, current)[0]?.id;
   // Keep rows full width, with a bounded inset so deeper trees leave room for labels.
   const style = { "--app-navigation-depth": Math.min(depth, 3) } as React.CSSProperties;
   return <>{pages.map(page => page.children ? <details key={page.id} open={isNavigationSectionExpanded(expanded, page.id, depth === 0 || page.id === active)}>
     <summary style={style} data-current-path={page.id === active || undefined} onClick={event => { event.preventDefault(); toggle(page.id, depth === 0 || page.id === active); }}><Icon name="chevron-down" className="app-navigation-chevron" /><span className="app-navigation-label">{page.label}</span><AttentionMark attention={page.attention} /></summary>
-    <div className="app-navigation-children"><NavigationItems pages={page.children} current={current} navigate={navigate} expanded={expanded} toggle={toggle} depth={depth + 1} /></div>
-  </details> : <NavigationLink key={page.id} className="app-navigation-page" style={style} href={page.href} current={page.id === current} navigate={navigate}><span className="app-navigation-label">{page.label}</span><AttentionMark attention={page.attention} /></NavigationLink>)}</>;
+    <div className="app-navigation-children"><NavigationItems pages={page.children} current={current} navigate={navigate} expanded={expanded} toggle={toggle} renderLeaf={renderLeaf} depth={depth + 1} /></div>
+  </details> : renderLeaf ? <React.Fragment key={page.id}>{renderLeaf(page, style)}</React.Fragment> : <NavigationLink key={page.id} className="app-navigation-page" style={style} href={page.href} current={page.id === current} navigate={navigate}><span className="app-navigation-label">{page.label}</span><AttentionMark attention={page.attention} /></NavigationLink>)}</>;
 }
 
 function AttentionMark({ attention }: { attention?: NestedPage["attention"] }) {

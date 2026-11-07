@@ -803,6 +803,9 @@ func providerLabel(provider string) string {
 	if provider == "" {
 		return "agents"
 	}
+	if spec, ok := providerFor(provider); ok {
+		return spec.DisplayName
+	}
 	return strings.ToUpper(provider[:1]) + provider[1:]
 }
 

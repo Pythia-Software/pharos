@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 )
 
@@ -21,13 +22,12 @@ type retainedInput struct {
 	Unavailable []captureError
 }
 
+// productionAdapter says whether adapter is the kind MakeAdapter makes for
+// its source. Synthetic record adapters are package/test inputs, never
+// MakeAdapter results.
 func productionAdapter(adapter Adapter) bool {
-	switch adapter.(type) {
-	case *jsonlAdapter, *canonicalAdapter, *chatGPTAdapter, *conductorAdapter, *tl1Adapter, *antigravityAdapter:
-		return true
-	}
-	// Synthetic record adapters are package/test inputs, never MakeAdapter results.
-	return false
+	spec, ok := providerFor(adapter.Config().Kind)
+	return ok && reflect.TypeOf(spec.New(baseAdapter{})) == reflect.TypeOf(adapter)
 }
 
 // Filesystem inventories currently retain every acquired revision. Keep that
@@ -38,7 +38,12 @@ func retainedAcquisitionEnabled(source SourceConfig) bool {
 }
 
 func (c *Catalog) acquireRetainedInput(ctx context.Context, adapter Adapter, progress ProgressFunc) (input retainedInput, failure error) {
-	acquired := captureViewOf(adapter) == nil && productionAdapter(adapter) && retainedAcquisitionEnabled(adapter.Config()) && !isConductorSource(adapter.Config().Kind) && (!strings.EqualFold(adapter.Config().Kind, "tl1") && !strings.EqualFold(adapter.Config().Kind, "antigravity") || adapter.Config().Options["sqlite_record_capture"] == true)
+	// Only a production adapter is acquired, so its kind has a provider.
+	spec, ok := providerFor(adapter.Config().Kind)
+	if !ok {
+		spec = &providerSpec{}
+	}
+	acquired := captureViewOf(adapter) == nil && productionAdapter(adapter) && retainedAcquisitionEnabled(adapter.Config()) && spec.Acquisition.acquires(adapter.Config())
 	defer func() {
 		if !acquired {
 			return
@@ -67,13 +72,10 @@ func (c *Catalog) acquireRetainedInput(ctx context.Context, adapter Adapter, pro
 	if !retainedAcquisitionEnabled(source) {
 		return result, nil
 	}
-	if isConductorSource(source.Kind) {
+	if !spec.Acquisition.acquires(source) {
 		return result, nil
-	} // session exporter; production-size gate remains opt-in
-	if strings.EqualFold(source.Kind, "tl1") || strings.EqualFold(source.Kind, "antigravity") {
-		if source.Options["sqlite_record_capture"] != true {
-			return result, nil
-		} // staged SQLite rollout, exposed in status
+	}
+	if spec.Acquisition == acquireSQLiteGroup {
 		return c.acquireLogicalGroup(ctx, source, progress)
 	}
 	if progress != nil {
@@ -90,7 +92,7 @@ func (c *Catalog) acquireRetainedInput(ctx context.Context, adapter Adapter, pro
 	// Codex naming databases are parsing dependencies, acquired through row
 	// export rather than a native backup on each timer tick.
 	if strings.EqualFold(source.Kind, "codex") {
-		plan, err := planCapture(source)
+		plan, err := planCapture(ctx, source)
 		if err != nil {
 			return result, err
 		}
@@ -305,7 +307,7 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 	}
 	// A frozen inventory's identity proves its closure; per-record identities
 	// below include only the transcript group and metadata that produced it.
-	root, ok := view.captured(frozen.Source.Path)
+	root, ok := view.capturedSource(frozen.Source)
 	if !ok {
 		return fail(errors.New("unmapped retained source root"))
 	}
@@ -463,19 +465,25 @@ func retainedRecordIdentity(view *captureView, record *WorkspaceRecord, parts []
 	if view == nil || view.evidenceRevision == "" || record == nil || record.EvidenceIdentity != "" {
 		return
 	}
-	selected := map[string]bool{}
+	selected, metadata := map[string]bool{}, map[string]bool{}
 	for _, p := range parts {
 		selected[p.item] = true
+		metadata[p.item] = p.metadata
 	}
 	for _, conversation := range record.Conversations {
 		selected[conversation.Origin] = true
 	}
+	// Metadata neither versions the record nor makes another input of the
+	// same version a conflicting one, so a rename alone is read.
 	values := []string{}
 	for _, part := range parts {
-		values = append(values, part.item, part.signal)
+		if !part.metadata {
+			values = append(values, part.item, part.signal)
+		}
 	}
 	for _, f := range view.manifest.Files {
-		if selected[f.Path] {
+		// A compressed rollout is selected by the plain path it stands for.
+		if (selected[f.Path] || selected[plainRollout(f.Path)]) && !metadata[f.Path] {
 			values = append(values, f.Path, f.SHA256)
 			if f.ObservedNS > record.Observed {
 				observe(record, f.ObservedNS)
@@ -500,7 +508,7 @@ func retainedRecordIdentity(view *captureView, record *WorkspaceRecord, parts []
 // evidence budget. SQLite-dependent groups use the logical rollout instead.
 func (c *Catalog) acquireAuditFilesystemGroup(ctx context.Context, unit syncUnit) (retainedInput, error) {
 	source := unit.Source
-	plan, err := planCapture(source)
+	plan, err := planCapture(ctx, source)
 	if err != nil {
 		return retainedInput{}, err
 	}
