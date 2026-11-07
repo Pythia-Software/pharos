@@ -189,7 +189,7 @@ export function conversationSelection(conversations: Row[], loaded: Record<strin
     if (findOutlineEntry(state.entries, entryID)) return { id, loadID: id, pending: false, error: "" };
   }
   const failed = roots.some(({ conversation }) => loaded[String(conversation.id)]?.error);
-  return { id: "", loadID: "", pending: false, error: failed ? "Could not load the session for this saved turn." : "This saved turn is no longer available." };
+  return { id: "", loadID: "", pending: false, error: failed ? "Could not load the conversation for this saved turn." : "This saved turn is no longer available." };
 }
 
 export function ResultConversationBrowser({ workspaceID, readJSON, target }: { workspaceID: string; readJSON: (path: string, signal?: AbortSignal) => Promise<Row>; target?: ResultTarget | null }) {
@@ -284,7 +284,7 @@ export function ResultConversationBrowser({ workspaceID, readJSON, target }: { w
       const id = String(conversation.id), data = loaded[id];
       const turnCount = data?.entries.filter(item => item.human).length ?? 0;
       return <li key={id}><ViewDisclosure viewKey={`search:${workspaceID}:conversation:${id}`} defaultOpen={id === String(forest[0]?.conversation.id) || id === currentID}
-        summary={<span title="A session contains a sequence of prompts and replies. Select a turn below to preview it.">{conversation.parent_id ? "Sub-agent session" : "Session"} · {conversation.provider || "Agent"}{data && !data.loading && !data.error ? ` · ${turnCount} turn${turnCount === 1 ? "" : "s"}` : ""}</span>}>
+        summary={<span title="A conversation contains a sequence of prompts and replies. Select a turn below to preview it.">{conversation.parent_id ? "Sub-agent conversation" : "Conversation"} · {conversation.provider || "Agent"}{data && !data.loading && !data.error ? ` · ${turnCount} turn${turnCount === 1 ? "" : "s"}` : ""}</span>}>
         <p className="conversation-outline-session" title={conversation.title || conversation.first_prompt || id}>{conversation.title || conversation.first_prompt || id}</p>
         {data?.loading ? <p role="status">Loading turns…</p> : data?.error ? <p role="alert">{data.error} <button type="button" onClick={() => void load(id)}>Retry</button></p> : data ? data.entries.length ? entryList(id, data.entries) : <p>No retained turns.</p> : null}
         {children.length ? branchList(children) : null}

@@ -27,7 +27,7 @@ declare global {
   }
 }
 
-const providers: Record<string, string> = { claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", antigravity: "Antigravity", canonical: "Canonical", tl1: "TL1" };
+const providers: Record<string, string> = { claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", antigravity: "Antigravity", canonical: "Canonical export", tl1: "TL1" };
 
 function CarbonFilter({ field, choices, where, onFilter }: { field: "repository_name" | "provider" | "channel" | "machine_id" | "execution_machine_id"; choices: string[]; where: WhereTerm[]; onFilter: FilterChange }) {
   const selected = readSlice(where, field), values = [...new Set([...choices, ...selected.values.map(value => value ?? "")])].sort();

@@ -142,7 +142,7 @@ Cmd/Ctrl+F opens one Find bar on every page, including the conversation reader (
 
 ## Attention colours
 
-Highlighter colours mean only "Find or a link is pointing here". `ui.py` defines them in `:root` (light and dark): `--attention-mark` (all matches, count badges), `--attention-current` (the current match, `reveal`, the Find trail), `--attention-ring` (`highlight` outlines, collapsed containers holding matches) and `--attention-ink`. Only `page-find.css`, `view-attention.css` and the reader's deep-link landing (`.authorship-target`) use them. `web/tests/unit/page/attention-colors.test.mjs` enforces this, and keeps the raw hex values out of every other source.
+Highlighter colours mean "Find, a link or a Data Guide explanation is pointing here". `ui.py` defines them in `:root` (light and dark): `--attention-mark` (all matches, count badges), `--attention-current` (the current match, `reveal`, the Find trail), `--attention-ring` (`highlight` outlines, collapsed containers holding matches) and `--attention-ink`. Only `page-find.css`, `view-attention.css` and the reader's deep-link landing (`.authorship-target`) use them. The guide's declarative `.pharos-guide-highlight` shares the linked-highlight style in `view-attention.css`; it marks the illustrated region described by the selected term, independently of keyboard focus and URL attention targets. `web/tests/unit/page/attention-colors.test.mjs` enforces colour ownership and keeps the raw hex values out of every other source.
 
 Other UI stays away from that look:
 

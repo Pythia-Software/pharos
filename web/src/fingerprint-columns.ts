@@ -8,7 +8,7 @@ export function withFingerprintColumn(schema: FieldSchema, dataset: string): Fie
     : schema.fields.some(field => field.name === "workspace_id") ? "workspace_id" : undefined;
   if (!identity) return schema;
   const fingerprint = (name: string, label: string, identity: string): FieldDef => ({
-    name, label, type: "text", group: "Work",
+    name, label, type: "text", group: "Workspace",
     source: { kind: "derived", dependencies: [identity], accessor: row => row[identity] },
     filter: { enabled: false }, sort: { enabled: false }, aggregate: { measure: false, groupable: false },
     render: identity === "conversation_id" ? "label_fingerprint" : "workspace_fingerprint",

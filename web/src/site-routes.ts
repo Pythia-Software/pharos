@@ -13,11 +13,11 @@
 export const siteSections = [
   { path: "home", route: "/", description: "The home page: recent activity and suggested cards." },
   { path: "cards", route: "/cards", description: "The card library: every prebuilt question, each opening a dashboard. Filter by text, data source, topic or kind." },
-  { path: "library", route: "/library", description: "Search conversations and work: text search across messages, or filter the work table." },
+  { path: "library", route: "/library", description: "Search conversations and workspaces: search message text or filter the workspace table." },
   { path: "analyze", route: "/analyze", description: "Dashboards per topic (tokens, tools, human words …) and query tables per dataset." },
   { path: "findings", route: "/findings", description: "Optimize: Efficiency findings with measured improvements, and Risky action notices, in separate prompt baskets." },
   { path: "ask", route: "/ask", description: "Ask Pharos full screen: a new chat on its own page, without the rest of the app." },
-  { path: "work", route: "/work/{work_id}", description: "One work item (a workspace) with its conversations, reader and delegation explorer." },
+  { path: "work", route: "/work/{work_id}", description: "One workspace with its conversations, reader and agent sessions." },
   { path: "settings", route: "/settings", description: "Library health and settings pages." },
 ] as const;
 

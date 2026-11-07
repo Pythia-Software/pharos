@@ -1,5 +1,9 @@
-/* Linked attention uses the reserved attention colours (see page-find.css). */
-.pharos-highlight { outline: 3px solid var(--attention-ring, #e0a800); outline-offset: 4px; box-shadow: 0 0 0 8px color-mix(in srgb, var(--attention-mark, #fff176) 22%, transparent); scroll-margin: 80px; }
+/* Linked targets and Data Guide explanations share one attention treatment. */
+.pharos-highlight, .pharos-guide-highlight::after { outline: 3px solid var(--attention-ring, #e0a800); outline-offset: 4px; box-shadow: 0 0 0 8px color-mix(in srgb, var(--attention-mark, #fff176) 22%, transparent); scroll-margin: 80px; }
+/* The guide owns these declarative marks. A separate layer preserves native
+   illustration borders and leaves keyboard focus independently visible. */
+.pharos-guide-highlight { position: relative; }
+.pharos-guide-highlight::after { content: ""; position: absolute; inset: 0; z-index: 1; border-radius: inherit; pointer-events: none; }
 .pharos-reveal { outline: 4px double var(--attention-current, #ff9f43); outline-offset: 5px; box-shadow: 0 0 0 10px color-mix(in srgb, var(--attention-mark, #fff176) 25%, transparent); scroll-margin: 80px; }
 :root[data-pharos-native-reveal="true"] .qt-attention-target { outline: 4px double var(--attention-current, #ff9f43); outline-offset: -2px; scroll-margin: 80px; }
 :root:not([data-pharos-native-reveal="true"]) .qt-attention-target { outline: none; }

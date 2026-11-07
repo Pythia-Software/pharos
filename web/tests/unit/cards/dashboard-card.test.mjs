@@ -222,7 +222,7 @@ test('bespoke card context follows saved assumptions and chart controls', t => {
   const ribbon = dashboardCardMetadata(ribbonURL, 'ribbon');
   assert.match(ribbon.title, /Concurrent sessions.*pharos/);
   assert.match(ribbon.description, /2026-10-01.*gaps up to 15 minutes/);
-  assert.match(dashboardCardDescription(ribbonURL), /Count top-level sessions.*15 minutes/);
+  assert.match(dashboardCardDescription(ribbonURL), /Count top-level conversations.*15 minutes/);
   const workspace = new URL(parallel({ counting: 'workspace' }), location.origin);
   workspace.searchParams.set('analyze_chart', JSON.stringify({ ...dashboardDefaults.parallelism, split: 'provider' }));
   assert.doesNotMatch(dashboardCardMetadata(workspace.href).title, /provider/i, 'counting controls normalize unavailable breakdowns as the chart does');
@@ -553,7 +553,7 @@ test('Waiting and Thinking charts are dashboard cards over their page population
   // Thinking's comparison follows its view and breakdown.
   const detail = (thinking) => pageCardURL(page('thinking-detail', thinking));
   const harness = detail({ view: 'wait-box', groupBy: 'harness', range: 'all' });
-  assert.deepEqual(dashboardCardTargets(harness).map(target => [target.id, target.title]), [['thinking-distributions', 'Wait by agent / harness · harness is codex']]);
+  assert.deepEqual(dashboardCardTargets(harness).map(target => [target.id, target.title]), [['thinking-distributions', 'Wait by agent app · harness is codex']]);
   assert.equal(dashboardCardWindow(harness, 'thinking-distributions'), 'All time');
   assert.deepEqual((await loadDashboardCardPreview(harness, schemas.model_requests, undefined, undefined, now, 'thinking-distributions', undefined, undefined, response)).metrics[0].clause.groupBy, ['harness']);
   const reasoning = detail({ view: 'reasoning', groupBy: 'repository' });
@@ -636,7 +636,7 @@ test('compaction card defaults follow trigger/service controls and filters', t =
   assert.match(triggers.title, /Compactions per day by trigger/);
   assert.equal(dashboardCardPresentation(address({})).category, 'thinking');
   const services = dashboardCardMetadata(address({ view: 'compare', split: 'provider' }, [{ field: 'trigger', op: '=', value: 'human' }]), 'chart', schemas.compactions);
-  assert.match(services.title, /Compactions by service/);
+  assert.match(services.title, /Compactions by provider/);
   assert.match(services.description, /human/);
   assert.notEqual(services.title, triggers.title);
 });

@@ -38,7 +38,7 @@ var (
 )
 
 // instructionHunt classifies one call: whether a provider's agent searched
-// for instruction files by name, or read another harness's instructions or
+// for instruction files by name, or read another agent app’s instructions or
 // skills by hand. Content searches (rg, grep) and files in home folders don't
 // count: they are work about those files, or global files.
 func instructionHunt(provider, category, toolName, program, command, filePath string) (kind, file string) {
@@ -255,12 +255,12 @@ func describeDrift(env *findingEnv, candidate *findingCandidate, provider string
 		"searches": searched, "hand_reads": readOther, "skill_reads": skills, "searched_for": nilIfEmpty(searchedFor), "read_by_hand": nilIfEmpty(readFile),
 		"loaded_instructions": map[string]any{"conversations": loaded.Conversations, "recorded": loaded.Recorded, "loaded_project_file": loaded.ProjectLoaded, "files": loaded.Files}}
 	steps := []findingStep{
-		{Lever: "repo-tooling", Label: "One shared instructions file", Change: fmt.Sprintf("Make one instructions file that every harness here reads (%s), with a symlink, an import line, or the harness's fallback-filename setting, whichever the harness versions in use support. Do the same for skills, and keep the shared file short.", strings.Join(present, " and "))},
+		{Lever: "repo-tooling", Label: "One shared instructions file", Change: fmt.Sprintf("Make one instructions file that every agent app here reads (%s), with a symlink, an import line, or the agent app’s fallback filename setting, whichever the agent app versions in use support. Do the same for skills, and keep the shared file short.", strings.Join(present, " and "))},
 		{Lever: "harness-settings", Label: "A fallback setting", Change: fmt.Sprintf("Point %s at the existing file in its own settings (for Codex, `project_doc_fallback_filenames` in `.codex/config.toml`), and check the result in a fresh session.", providerLabel(provider))},
 		{Lever: "repo-instructions", Label: "A pointer in " + native, Change: fmt.Sprintf("Add a short %s that tells %s where the instructions and skills are.", native, providerLabel(provider))},
 	}
 	if len(present) == 0 {
-		steps[0].Change = fmt.Sprintf("Write a short %s for this repository from what agents keep looking up, and make it the one file every harness here reads.", native)
+		steps[0].Change = fmt.Sprintf("Write a short %s for this repository from what agents keep looking up, and make it the one file every agent app here reads.", native)
 		steps[0].Label = "A shared instructions file"
 	}
 	actions := []string{}
@@ -268,10 +268,10 @@ func describeDrift(env *findingEnv, candidate *findingCandidate, provider string
 		actions = append(actions, "searching for "+defaultString(searchedFor, native))
 	}
 	if readOther > 0 {
-		actions = append(actions, "reading "+defaultString(readFile, "another harness's instructions")+" by hand")
+		actions = append(actions, "reading "+defaultString(readFile, "another agent app’s instructions")+" by hand")
 	}
 	if skills > 0 {
-		actions = append(actions, "reading another harness's skills by hand")
+		actions = append(actions, "reading another agent app’s skills by hand")
 	}
 	candidate.write = func(candidate *findingCandidate, stats findingStats) findingCard {
 		title := fmt.Sprintf("%s can't find %s's instructions", providerLabel(provider), repository)

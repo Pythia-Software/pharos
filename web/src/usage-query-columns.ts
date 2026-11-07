@@ -5,15 +5,15 @@ import type { UsageDataset } from "./usage-workspace-model";
 
 export type UsageDrilldown = "source" | "requested" | "result" | "body" | "tool" | "calls" | "messages" | "root";
 type DrilldownColumn = { kind: UsageDrilldown; label: string; dependencies: string[] };
-const source = (dependencies: string[]): DrilldownColumn => ({ kind: "source", label: "Source", dependencies });
+const source = (dependencies: string[]): DrilldownColumn => ({ kind: "source", label: "Evidence", dependencies });
 const conversation = ["workspace_id", "conversation_id"];
 export const usageDrilldownColumns: Record<UsageDataset, DrilldownColumn[]> = {
   message_labels:[source([...conversation,"message_id"])],
   compactions: [source([...conversation, "message_id"])],
   model_requests: [source([...conversation, "requested_at"])],
   tl1_attempts: [source(["workspace_id"])],
-  usage: [source([...conversation, "first_usage_at"]), { kind: "calls", label: "Calls", dependencies: ["conversation_id"] }, { kind: "root", label: "Root", dependencies: ["conversation_id", "root_conversation_id"] }],
-  conversation_activity: [source([...conversation, "message_id", "event_at"]), { kind: "root", label: "Root", dependencies: ["conversation_id", "root_conversation_id"] }],
+  usage: [source([...conversation, "first_usage_at"]), { kind: "calls", label: "Calls", dependencies: ["conversation_id"] }, { kind: "root", label: "Top-level conversation", dependencies: ["conversation_id", "root_conversation_id"] }],
+  conversation_activity: [source([...conversation, "message_id", "event_at"]), { kind: "root", label: "Top-level conversation", dependencies: ["conversation_id", "root_conversation_id"] }],
   writing: [source(["id"]), { kind: "messages", label: "Messages", dependencies: ["id"] }],
   writing_messages: [source([...conversation, "id"])],
   tool_calls: [source([...conversation, "call_message_id", "call_id", "started_at"]), { kind: "result", label: "Result", dependencies: [...conversation, "result_message_id", "call_id"] }],

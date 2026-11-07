@@ -11,20 +11,20 @@ function quickStatsMetrics(concurrency = false) {
     ['API cost', 'cost_usd', 'API-equivalent cost at list prices', '$', 'tokens', 'usd'],
   ];
   rows.push(
-    ['Conversations active', 'active_conversations', 'Distinct top-level conversations with recorded activity in this window. Continuations and delegated work belong to their root conversation.', '', 'conversations'],
+    ['Conversations active', 'active_conversations', 'Distinct top-level conversations with recorded activity in this window. Continuations and delegated work belong to their top-level conversation.', '', 'conversations'],
     ['Messages', 'message_count', 'User and assistant messages, including delegated work. Tool events and system instructions are excluded.', '', 'conversations'],
     ['Your messages', 'user_messages', 'User-role messages in top-level conversations, including pasted text. Delegated agents’ prompts are excluded.', '', 'writing'],
     ['Agent replies', 'assistant_messages', 'Assistant messages, including delegated agents. Tool events and system instructions are excluded.', '', 'conversations'],
     ['Tool calls', 'tool_calls', 'Individual recorded tool invocations, including delegated work. Mirrored transcripts count once.', '', 'tools'],
-    ['Estimated agent time', 'agent_time_ms', 'Estimated top-level session time, using the saved turn gap. Parallel sessions count separately; child work belongs to its root. Timing coverage is required for the full window.', '', 'parallelism', 'duration'],
-    ['Estimated active time', 'active_time_ms', 'Estimated wall-clock time with at least one top-level session active, using the saved turn gap. Overlapping sessions count once.', '', 'parallelism', 'duration'],
+    ['Estimated agent time', 'agent_time_ms', 'Estimated top-level conversation time, using the saved turn gap. Parallel conversations count separately; linked sub-agent activity belongs to its initiating conversation. Timing coverage is required for the full window.', '', 'parallelism', 'duration'],
+    ['Estimated active time', 'active_time_ms', 'Estimated wall-clock time with at least one top-level conversation active, using the saved turn gap. Overlapping conversations count once.', '', 'parallelism', 'duration'],
     ['Delegated runs', 'delegated_runs', 'Distinct delegated executions with recorded activity or a start in this window. Linked handles, child transcripts and continuations count once.', '', 'conversations'],
     ['Failed tool calls', 'failed_tool_calls', 'Tool calls marked as errors. A non-zero shell exit can be expected, such as a search with no matches.', '', 'tools'],
     ['Tool failure rate', 'tool_failure_rate', 'Failed tool calls divided by all tool calls in the window. No calls means no rate.', '', 'tools', 'percent'],
     ['Repositories active', 'active_repositories', 'Distinct known repositories with conversation or tool activity. Unknown repositories are excluded.', '', 'conversations'],
     ['Recorded tool time', 'tool_time_ms', 'Sum of recorded durations for calls started in the window. Durations can overlap and include approval waits. Untimed calls contribute no duration.', '', 'tools', 'duration'],
   );
-  if (concurrency) rows.push(['Parallelism', 'parallelism', 'Average concurrent workspaces or sessions over the full time window, including idle time, using the saved counting choice, turn gap and repository.', '', 'parallelism']);
+  if (concurrency) rows.push(['Parallelism', 'parallelism', 'Average concurrent workspaces or conversations over the full time window, including idle time, using the saved counting choice, turn gap and repository.', '', 'parallelism']);
   return rows;
 }
 function normalizeQuickStatsLayout(saved, metrics = quickStatsMetrics()) {

@@ -637,7 +637,7 @@
 
   function calculationLedger(factors, result, setup, terms) {
     const scroll = node('div', 'carbon-ledger-scroll'), table = node('table', 'carbon-ledger'), head = node('tr');
-    scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', 'Token category calculation ledger'); scroll.tabIndex = 0;
+    scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', 'Token category calculation details'); scroll.tabIndex = 0;
     const columns = node('colgroup'); for (let index = 0; index < 10; index++) columns.append(node('col'));
     const caption = node('caption', '', 'Contributions by token category · Each tier shows the full equation. Click a tier for precise math; dotted factors for assumptions.');
     table.append(caption, columns);

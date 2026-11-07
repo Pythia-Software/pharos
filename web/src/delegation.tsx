@@ -836,9 +836,9 @@ export function DelegationExplorer({
       {context}
       {headingHost && createPortal(heading, headingHost)}
       {statsHost && createPortal(totals, statsHost)}
-      <section className={`delegation-panel${single ? " delegation-single" : ""}`} aria-label={single ? "Conversation views" : "Workspace sessions"}>
+      <section className={`delegation-panel${single ? " delegation-single" : ""}`} aria-label={single ? "Conversation views" : "Agent sessions"}>
         <div className="delegation-controls delegation-toolbar">
-          {!single && <span className="delegation-heading">Workspace Sessions</span>}
+          {!single && <span className="delegation-heading">Agent sessions</span>}
           <div
             className="delegation-tabs"
             role="tablist"
@@ -941,7 +941,7 @@ export function DelegationExplorer({
                             <th rowSpan={2} className="delegation-label-cell">
                               <button
                                 onClick={showHierarchy}
-                                title="Show the session hierarchy"
+                                title="Show the agent session hierarchy"
                               >
                                 Session
                               </button>
@@ -1093,7 +1093,7 @@ export function DelegationExplorer({
                           })}
                         </tbody>
                       </table>
-                      {!rows.length && <p>No sessions match these filters.</p>}
+                      {!rows.length && <p>No agent sessions match these filters.</p>}
                     </div>
                   </div>
                 </>
@@ -1154,8 +1154,8 @@ export function DelegationExplorer({
               )}
               {!single && !compact && !splitReader && <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Metric definitions & evidence">
                 <p>
-                  Self is one execution. Self + children includes distinct
-                  ownership descendants. Workspace totals count each canonical
+                  Self counts one agent session. Self + children includes its
+                  delegated sub-agents. Workspace totals count each recorded
                   execution once. Unknown values are —; + denotes partial
                   coverage. Last evidence is not proof of completion. Source
                   coverage and lifecycle boundaries may be incomplete.
@@ -1174,7 +1174,7 @@ export function DelegationExplorer({
               </ViewDisclosure>}
             </>
           )}
-          {!data && !error && <p>Loading session analysis…</p>}
+          {!data && !error && <p>Loading agent session analysis…</p>}
         </div>
       </section>
     </>
@@ -1192,8 +1192,8 @@ function InboxSessions({ rows, data, shown, collapsed, toggle, openNode }: {
   const branches = timelineSessionBranches(rows);
   // Self usage keeps each session comparable; parallel children do not inflate its run time.
   const metrics = ["cost", "clock"].map(id => data.metrics.find(spec => spec.id === id)).filter((spec): spec is Spec => !!spec);
-  return <div className="delegation-inbox-list" role="table" aria-label="Session hierarchy and usage">
-    <div className="delegation-inbox-heading" role="row"><span role="columnheader">Session</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Time to run" : spec.label}</span>)}</div>
+  return <div className="delegation-inbox-list" role="table" aria-label="Agent session hierarchy and usage">
+    <div className="delegation-inbox-heading" role="row"><span role="columnheader">Agent session</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Time to run" : spec.label}</span>)}</div>
     {rows.map(n => <div key={n.id} role="row" data-session-id={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }}>
       <div role="cell" className="delegation-inbox-session">
         <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} outline={n.outline} metadata={<>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} title={`${n.outline} · ${n.label}\n${n.provider} · ${n.model} · ${n.effort || "unknown"}`} />
@@ -1204,7 +1204,7 @@ function InboxSessions({ rows, data, shown, collapsed, toggle, openNode }: {
         return <span key={spec.id} role="cell" className="delegation-inbox-metric" title={value ? cellTitle(value, spec) : "No retained evidence"}>{formatted(value?.value, spec.unit)}{value?.quality === "partial" ? "+" : ""}</span>;
       })}
     </div>)}
-    {!rows.length && <p>No retained sessions.</p>}
+    {!rows.length && <p>No saved agent sessions.</p>}
   </div>;
 }
 
@@ -1729,7 +1729,7 @@ export function ParallelActivity({
           {!hideEvents && <span className="lt-column-heading">Events{columns.handle('events')}</span>}
           <div ref={clock} className="lt-clock-heading" {...brushHandlers}>{ticks.map((tick,i)=>cutLabels.hiddenTicks.has(i)?null:<small key={i} style={{left:`${i/(ticks.length-1)*100}%`}}><span className="delegation-tick-date">{tick.date}</span><time dateTime={new Date(tick.at).toISOString()} title={localTime(tick.at)}>{tick.time}</time></small>)}{windowScale.cuts.map((cut,i)=><span key={cut.end} className="lt-idle-cut" style={{left:`${cut.fraction*100}%`}} title={`Nothing ran for ${duration(cut.end-cut.start)}; resumed ${localTime(cut.end)}`}>{cutLabels.labelled.has(i)?<time dateTime={new Date(cut.end).toISOString()}><b>{resumeTime.format(new Date(cut.end))}</b>+{idleDuration(cut.end-cut.start)}</time>:null}</span>)}</div>
         </div>:<div className="delegation-axis">
-          <span className={recursive?"lt-axis-names":undefined}>{recursive?<><span>Session</span><span>Events</span></>:"Session"}</span>
+          <span className={recursive?"lt-axis-names":undefined}>{recursive?<><span>Agent session</span><span>Events</span></>:"Agent session"}</span>
           <div ref={clock} {...brushHandlers}>
             {ticks.map((tick, i) => (
               <small key={i} style={{ left: `${i/(ticks.length-1)*100}%` }}>
@@ -1910,7 +1910,7 @@ export function ParallelActivity({
         />
       )}
       {selected && !previewOnly && (
-        <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Selected session · inferred evidence episodes">
+        <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Selected agent session · estimated activity periods">
           <p>
             Clusters use tool/request timestamps and the first and last session
             message timestamps. A gap over 30 minutes starts a new cluster;

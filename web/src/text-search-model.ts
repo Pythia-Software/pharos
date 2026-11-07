@@ -76,7 +76,7 @@ export const scopes = [
   { id: "quoted", label: "Quoted text", description: "Only spans classified as quotations.", surface: "quoted" },
   { id: "resent", label: "Resent text", description: "Only spans classified as repeated from an earlier message.", surface: "resent" },
   { id: "template", label: "Template text", description: "Only spans classified as template content.", surface: "template" },
-  { id: "harness", label: "Agent setup text", description: "Only spans classified as content inserted by the agent harness.", surface: "harness" },
+  { id: "harness", label: "Agent setup text", description: "Only spans classified as content inserted by the agent app.", surface: "harness" },
   { id: "automated", label: "Automatically inserted text", description: "Only spans classified as automated content.", surface: "automated" },
   { id: "attachment", label: "Attachment text", description: "Only spans classified as attachment content inside retained messages.", surface: "attachment" },
 ] as const;

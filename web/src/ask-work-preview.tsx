@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { askWorkPreviewAddress, workPreviewEndpoint, workPreviewView, type WorkPreview, type WorkPreviewAddress } from "./ask-work-model";
 import { PreviewBoundary, type AskLinkPreviews } from "./ask-link-previews";
 
-const unavailable = "Work preview unavailable. Open the linked work to explore it.";
+const unavailable = "Workspace preview unavailable. Open the linked workspace to explore it.";
 
 export function createAskWorkPreviews(): AskLinkPreviews {
   const openings = new EventTarget();
@@ -55,7 +55,7 @@ function AskWorkPreview({ address, title, openings }: { address: WorkPreviewAddr
   const view = preview && workPreviewView(preview);
   return <figure ref={host} className="pharos-work-preview" aria-label={`Work preview: ${title}`} aria-busy={!preview && !error}>
     {error ? <p className="pharos-work-preview-status" role="status">{unavailable}</p>
-      : !view ? <p className="pharos-work-preview-status" role="status">Loading work summary…</p>
+      : !view ? <p className="pharos-work-preview-status" role="status">Loading workspace summary…</p>
       : [view.where, view.what].map((parts, line) => parts.length ? <p key={line} className="pharos-work-preview-line">{parts.map((part, index) => <span key={index} title={part.title}>{part.text}</span>)}</p> : null)}
   </figure>;
 }

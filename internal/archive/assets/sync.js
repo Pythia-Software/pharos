@@ -128,7 +128,7 @@
     }
     dialog.append(node('p', mode === 'full'
       ? 'Freshly copy available source evidence on this Mac, then reindex selected captures from every Mac. This can take a long time. It is stoppable and resumable. Historical evidence and catalog-only user records are preserved. Other Macs are re-indexed from retained captures, not recaptured remotely.'
-      : 'Reindex search, conversation documents, sessions, usage and tool ledgers from the messages the library already stores. No original source is required. This cannot recreate missing transcripts or source-only metadata. Your findings, preferences, identity links and retained history are preserved.'));
+      : 'Rebuild search and analysis indexes, agent sessions, usage records and tool records from the messages the library already stores. No original source is required. This cannot recreate missing transcripts or source-only metadata. Your findings, preferences, identity links and retained history are preserved.'));
     if (sources?.length) dialog.append(node('p', `Scope: ${sources.join(', ')}`));
     const actions = node('div', '', 'sync-actions');
     actions.append(button('Cancel', () => dialog.close()), button('Begin repair', async () => {

@@ -28,7 +28,7 @@ export function usageRowRenderers(dataset: UsageDataset): RenderRegistry<Record<
     usage_conversation: ({ row, value }) => {
       const text = String(value || row.conversation_id || "Untitled conversation");
       const href = primaryUsageSource(dataset, row);
-      return <span className="usage-row-title">{href ? <UsageSourceLink link={{ href, label: dataset === "parallelism" ? href.startsWith("/library?") ? "Works at this checkout" : "Conversation near this hour" : "Open source conversation" }}>{text}</UsageSourceLink> : text}</span>;
+      return <span className="usage-row-title">{href ? <UsageSourceLink link={{ href, label: dataset === "parallelism" ? href.startsWith("/library?") ? "Workspaces at this checkout" : "Conversation near this hour" : "Open source conversation" }}>{text}</UsageSourceLink> : text}</span>;
     },
     usage_code_snippet: ({ value, presentation }) => presentation === "property" ? <pre className="usage-row-code">{String(value ?? "")}</pre> : <span className="usage-row-snippet" title={String(value ?? "")}>{String(value ?? "")}</span>,
     usage_authorship_sources: ({ row }) => {

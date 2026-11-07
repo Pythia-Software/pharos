@@ -108,7 +108,7 @@ test("captures, indexes, upgrades and an index's follow-up form the library upda
   const index = { kind: "index", label: "Indexing captures", work: { phase: "indexing", unit: "conversation group", done: 20, total: 100 } };
   const upgrading = { kind: "maintenance", label: "Upgrading the library", work: { phase: "Building tool ledger", unit: "conversation", done: 1, total: 50 } };
   const substring = { kind: "maintenance", label: "Building substring search", detail: "50 of 100 conversations", progress: 0.5 };
-  const tools = { kind: "maintenance", label: "Building the Tools ledger", detail: "10 of 20 conversations", progress: 0.5 };
+  const tools = { kind: "maintenance", label: "Building the tool index", detail: "10 of 20 conversations", progress: 0.5 };
   const libraryView = { kind: "maintenance", label: "Indexing the Library view", detail: "5 workspaces to index", progress: null };
   const firstScan = { kind: "git", label: "Looking up merges in Git", detail: "first scan of this catalog", progress: null };
   const lastIndex = { id: "recent-index", kind: "capture-index", state: "complete", started_at: new Date(now - 10_000).toISOString(), completed_at: new Date(now).toISOString() };
@@ -148,7 +148,7 @@ test("captures, indexes, upgrades and an index's follow-up form the library upda
 
   // The Tools ledger is part of a running upgrade only at its tools step.
   const upgrade = step => ({ running: true, step, steps: [{ id: "usage", label: "Correct token attribution" }, { id: "tools", label: "Build the Tools ledger" }] });
-  assert.deepEqual(labels(group([tools], { upgradeState: upgrade("tools") })), ["Building the Tools ledger"]);
+  assert.deepEqual(labels(group([tools], { upgradeState: upgrade("tools") })), ["Building the tool index"]);
   assert.equal(group([tools], { upgradeState: upgrade("usage") }), null);
   assert.equal(group([tools], { upgradeState: { ...upgrade("tools"), running: false } }), null);
   // An upgrade without a stage of its own is labelled by its current step.
@@ -159,10 +159,10 @@ test("captures, indexes, upgrades and an index's follow-up form the library upda
 
 test("the page's own upgrade status decides whether the Tools ledger is part of an update", () => {
   const { window } = loadClassicScript("library.js");
-  const tools = { kind: "maintenance", label: "Building the Tools ledger", progress: 0.5 };
+  const tools = { kind: "maintenance", label: "Building the tool index", progress: 0.5 };
   assert.equal(window.pharosLibrary.libraryUpdate([tools]), null);
   window.dispatchEvent(new window.CustomEvent("pharos:upgrade-status", { detail: { running: true, step: "tools", steps: [] } }));
-  assert.deepEqual(labels(window.pharosLibrary.libraryUpdate([tools])), ["Building the Tools ledger"]);
+  assert.deepEqual(labels(window.pharosLibrary.libraryUpdate([tools])), ["Building the tool index"]);
 });
 
 test("the overview groups background work under sync and keeps the current step's progress", () => {

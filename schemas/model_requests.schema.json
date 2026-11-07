@@ -176,7 +176,7 @@
     },
     {
       "name": "harness",
-      "label": "Harness",
+      "label": "Agent app",
       "type": "text",
       "group": "Request",
       "bindings": {

@@ -2,7 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSetFilter, loadSchema, readSetFilter, toServerQuery } from '@pythia-software/query-table-core';
 import writingMessages from '../../../../schemas/writing_messages.schema.json';
-import { toggleCategory } from '../../../src/authored';
+import { authorshipCategories, explainAuthorshipRule, toggleCategory } from '../../../src/authored';
+
+test('stored instruction-block rules keep their specific explanation', () => {
+  const generic = authorshipCategories.find(category => category.key === 'harness').description;
+  const instruction = explainAuthorshipRule('Conductor system instruction', 'harness');
+  assert.notEqual(instruction, generic);
+  for (const rule of ['Harness context', 'System reminder', 'Environment context', 'Project instructions', 'Plugin recommendations']) {
+    assert.equal(explainAuthorshipRule(rule, 'harness'), instruction, rule);
+  }
+  assert.equal(explainAuthorshipRule('Unrecognized rule', 'harness'), generic);
+});
 
 test('legend categories collect in one ALL set filter the query builder can edit', () => {
   const schema = loadSchema(writingMessages);

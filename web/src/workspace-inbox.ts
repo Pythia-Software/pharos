@@ -53,13 +53,13 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   navBar.className = "workspace-nav-bar";
   const libraryBack = page.querySelector<HTMLElement>("#back");
   const fullOverview = button("← Workspace overview", "Open workspace overview");
-  const close = button("×", "Close workspace sessions");
+  const close = button("×", "Close agent sessions");
   fullOverview.onclick = props.onOverview;
   navBar.append(fullOverview, close);
   if (libraryBack) overviewContent.append(libraryBack);
   overviewContent.append(navBar, ...props.overview);
   overview.append(overviewContent);
-  const divider = button("", "Resize workspace sessions sidebar");
+  const divider = button("", "Resize agent sessions sidebar");
   divider.className = "workspace-divider";divider.dataset.viewField="sidebar_width";
   divider.setAttribute("role", "separator");
   divider.setAttribute("aria-orientation", "vertical");
@@ -75,10 +75,10 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   breadcrumb.onclick = props.onOverview;
   const heading = document.createElement("div");
   heading.className = "workspace-reader-heading";
-  const sessions = button("Workspace Sessions", "Show workspace sessions");
+  const sessions = button("Agent sessions", "Show agent sessions");
   sessions.className = "workspace-sessions-button";
   sessions.setAttribute("aria-expanded", "false");
-  const backdrop = button("", "Close workspace sessions");
+  const backdrop = button("", "Close agent sessions");
   backdrop.className = "workspace-nav-backdrop";
   bar.append(breadcrumb, heading, sessions);
   reader.classList.add("workspace-reader-content");
@@ -120,15 +120,15 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
     if (split && mobile.matches && sheet) {
       overview.setAttribute("role", "dialog");
       overview.setAttribute("aria-modal", "true");
-      overview.setAttribute("aria-label", "Workspace sessions");
+      overview.setAttribute("aria-label", "Agent sessions");
     } else {
       overview.removeAttribute("role");
       overview.removeAttribute("aria-modal");
       overview.setAttribute("aria-label", "Workspace overview");
     }
     sessions.setAttribute("aria-expanded", String(visible));
-    sessions.setAttribute("aria-label", visible ? "Hide workspace sessions" : "Show workspace sessions");
-    sessions.textContent = visible ? "Hide sessions" : "Workspace Sessions";
+    sessions.setAttribute("aria-label", visible ? "Hide agent sessions" : "Show agent sessions");
+    sessions.textContent = visible ? "Hide agent sessions" : "Agent sessions";
     divider.setAttribute("aria-valuemin", "300");
     divider.setAttribute("aria-valuemax", String(Math.round(clamped(element.clientWidth))));
     divider.setAttribute("aria-valuenow", String(Math.round(clamped(width))));

@@ -169,7 +169,7 @@
     },
     {
       "name": "provider",
-      "label": "Service",
+      "label": "Provider",
       "type": "text",
       "group": "Origin",
       "bindings": {
@@ -187,7 +187,7 @@
     },
     {
       "name": "harness",
-      "label": "Agent / harness",
+      "label": "Agent app",
       "type": "text",
       "group": "Origin",
       "bindings": {
@@ -241,7 +241,7 @@
     },
     {
       "name": "title",
-      "label": "Work",
+      "label": "Workspace",
       "type": "text",
       "group": "Origin",
       "bindings": {
