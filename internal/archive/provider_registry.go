@@ -426,6 +426,38 @@ func init() {
 			},
 		},
 		{
+			Kind: "openclaw", DisplayName: "OpenClaw", Summary: "Conversations and agent sessions from OpenClaw.", FolderHint: "The OpenClaw state folder (usually ~/.openclaw), an agent folder, or a native transcript database.", Instructions: "~/.openclaw/workspace/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 13, MirrorRank: 2,
+			Content: contentCapabilities{Varies: "cwd model effort message_tokens tool_calls tool_results reasoning timestamps subagents title harness_version", Notes: map[string]string{"message_tokens": "Per model response when the transcript records usage.", "harness_version": "From the native database's schema metadata."}, VariesNote: "When the native history records it."},
+			New:     func(base baseAdapter) Adapter { base.config.Kind = "openclaw"; return &personalAgentAdapter{base} },
+			Plan:    (*capturePlan).personalAgents, Preservation: retainedInputs, CaptureTables: personalAgentKept("openclaw"),
+			Probe: &providerProbe{
+				Folders: []string{".openclaw"}, Env: []probeEnv{{Name: "OPENCLAW_STATE_DIR"}},
+				Defaults: func(r *probeRun, home string) {
+					r.personalAgent("openclaw", filepath.Join(home, ".openclaw"), "default location")
+				},
+				Folder: func(r *probeRun, path, foundBy string) { r.personalAgent("openclaw", path, foundBy) },
+				NewSources: func(home string, config Config) int {
+					return newPersonalAgentSources(home, config, "openclaw", ".openclaw", "OPENCLAW_STATE_DIR")
+				},
+			},
+		},
+		{
+			Kind: "hermes", DisplayName: "Hermes Agent", Summary: "Conversations and agent sessions from Hermes, including named profiles.", FolderHint: "The Hermes home folder (usually ~/.hermes), a profile folder, or its state.db.", Instructions: "~/.hermes/SOUL.md", Mutation: "retrieval-only", Automatic: true, Setup: 14, MirrorRank: 2,
+			Content: contentCapabilities{Varies: "cwd git_branch model effort tool_calls tool_results reasoning timestamps subagents title cost", Notes: map[string]string{"message_tokens": "Session and model totals, not per-request token counts; totals are attributed to their recorded reporting time.", "cost": "Actual reported cost only; estimates are not reported as charges."}, VariesNote: "When the native history records it."},
+			New:     func(base baseAdapter) Adapter { base.config.Kind = "hermes"; return &personalAgentAdapter{base} },
+			Plan:    (*capturePlan).personalAgents, Preservation: retainedInputs, CaptureTables: personalAgentKept("hermes"),
+			Probe: &providerProbe{
+				Folders: []string{".hermes"}, Env: []probeEnv{{Name: "HERMES_HOME"}},
+				Defaults: func(r *probeRun, home string) {
+					r.personalAgent("hermes", filepath.Join(home, ".hermes"), "default location")
+				},
+				Folder: func(r *probeRun, path, foundBy string) { r.personalAgent("hermes", path, foundBy) },
+				NewSources: func(home string, config Config) int {
+					return newPersonalAgentSources(home, config, "hermes", ".hermes", "HERMES_HOME")
+				},
+			},
+		},
+		{
 			Kind: "canonical", DisplayName: "Canonical export", Mutation: "retrieval-only", MirrorRank: 5,
 			Content: contentCapabilities{Varies: "cwd git_branch model effort speed message_tokens tool_calls tool_results reasoning timestamps subagents title harness_version cost", VariesNote: "When the export holds it."},
 			New:     func(base baseAdapter) Adapter { return &canonicalAdapter{base} },

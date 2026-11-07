@@ -1179,6 +1179,201 @@
       "when_found": true
     },
     {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "support": "unsupported"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "support": "unsupported"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "Per model response when the transcript records usage.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "note": "From the native database's schema metadata.",
+          "support": "varies"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "unsupported"
+        }
+      ],
+      "display_name": "OpenClaw",
+      "folder_hint": "The OpenClaw state folder (usually ~/.openclaw), an agent folder, or a native transcript database.",
+      "kind": "openclaw",
+      "locations": [
+        "~/.openclaw"
+      ],
+      "setup": true,
+      "summary": "Conversations and agent sessions from OpenClaw.",
+      "variables": [
+        "$OPENCLAW_STATE_DIR"
+      ]
+    },
+    {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "support": "unsupported"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "Session and model totals, not per-request token counts; totals are attributed to their recorded reporting time.",
+          "support": "unsupported"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the native history records it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "support": "unsupported"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "note": "Actual reported cost only; estimates are not reported as charges.",
+          "support": "varies"
+        }
+      ],
+      "display_name": "Hermes Agent",
+      "folder_hint": "The Hermes home folder (usually ~/.hermes), a profile folder, or its state.db.",
+      "kind": "hermes",
+      "locations": [
+        "~/.hermes"
+      ],
+      "setup": true,
+      "summary": "Conversations and agent sessions from Hermes, including named profiles.",
+      "variables": [
+        "$HERMES_HOME"
+      ]
+    },
+    {
       "automatic": false,
       "capabilities": [
         {

@@ -286,6 +286,11 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 			delete(active, stream)
 		}
 		r := tokenReport{counts: counts, usage: u, scope: "request", stream: stream}
+		// Native session/model totals contribute spend without inventing an
+		// individual model request or a per-request timestamp.
+		if typ == "token_usage" && m.Role == "system" && m.Kind == "metadata" && firstString(v["usage_scope"]) == "aggregate" {
+			r.scope = "aggregate"
+		}
 		if matchesFold(typ, "result", "turn.completed", "cost-state") {
 			if resultID := firstString(v["uuid"], v["id"], raw["uuid"]); resultID != "" {
 				key := stream + ":" + typ + ":" + resultID
