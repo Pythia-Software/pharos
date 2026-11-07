@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"testing"
@@ -14,34 +15,56 @@ func TestWorkTaskInventoryCoversRegisteredKinds(t *testing.T) {
 		t.Fatal(err)
 	}
 	var inventory struct {
-		Floor int `json:"catalog_compatibility_floor"`
-		Tasks []struct {
-			Kind     string `json:"kind"`
-			Class    string `json:"execution_class"`
+		Floor   int `json:"catalog_compatibility_floor"`
+		Classes map[string]struct {
 			Scope    string `json:"scope"`
 			Boundary string `json:"boundary"`
 			Inputs   string `json:"inputs"`
 			Quality  string `json:"accepted_quality"`
-		} `json:"tasks"`
+		} `json:"classes"`
+		Kinds json.RawMessage `json:"kinds"`
 	}
 	if err := json.Unmarshal(data, &inventory); err != nil {
 		t.Fatal(err)
 	}
-	if inventory.Floor != 23 {
-		t.Fatal("the execution refactor must preserve the retained version-23 binary's catalog compatibility")
+	if inventory.Floor != catalogSchemaVersion {
+		t.Fatalf("inventory floor %d, catalog schema %d: the execution refactor must keep the retained binary's catalog compatibility", inventory.Floor, catalogSchemaVersion)
 	}
-	classes := map[string]bool{"coordinator": true, "population": true, "partition": true, "global": true, "source": true, "maintenance": true, "essential": true, "specialized": true}
+	// Each class owns one contract; a kind names its class explicitly.
+	known := map[string]bool{"coordinator": true, "population": true, "partition": true, "global": true, "source": true, "maintenance": true, "essential": true, "specialized": true}
+	for class, contract := range inventory.Classes {
+		if !known[class] {
+			t.Errorf("unknown execution class %s", class)
+		}
+		if contract.Scope == "" || contract.Boundary == "" || contract.Inputs == "" || contract.Quality == "" {
+			t.Errorf("incomplete execution contract for class %s", class)
+		}
+	}
+	// Decoded as tokens: a map would silently keep the last of two entries.
+	decoder := json.NewDecoder(bytes.NewReader(inventory.Kinds))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		t.Fatalf("kinds must map each kind to its class: %v", err)
+	}
 	seen := map[string]bool{}
-	for _, row := range inventory.Tasks {
-		if seen[row.Kind] {
-			t.Errorf("duplicate classification: %s", row.Kind)
+	for decoder.More() {
+		var kind, class string
+		if token, err := decoder.Token(); err != nil {
+			t.Fatal(err)
+		} else {
+			kind, _ = token.(string)
 		}
-		seen[row.Kind] = true
-		if _, ok := lookupOperationKind(row.Kind); !ok {
-			t.Errorf("unregistered task %s", row.Kind)
+		if err := decoder.Decode(&class); err != nil {
+			t.Fatalf("%s: %v", kind, err)
 		}
-		if !classes[row.Class] || row.Scope == "" || row.Boundary == "" || row.Inputs == "" || row.Quality == "" {
-			t.Errorf("incomplete execution contract for %s", row.Kind)
+		if seen[kind] {
+			t.Errorf("duplicate classification: %s", kind)
+		}
+		seen[kind] = true
+		if _, ok := lookupOperationKind(kind); !ok {
+			t.Errorf("unregistered task %s", kind)
+		}
+		if _, ok := inventory.Classes[class]; !ok {
+			t.Errorf("%s names unknown execution class %q", kind, class)
 		}
 	}
 	for _, kind := range operationKinds {

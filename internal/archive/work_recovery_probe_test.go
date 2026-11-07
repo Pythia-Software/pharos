@@ -3,12 +3,19 @@
 package archive
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/gbdubs/pharos/internal/labeler/labelertest"
 )
 
 // Run against an actual retained binary, never an installed library:
@@ -42,7 +49,7 @@ func TestWorkPreviousBinaryRecovery(t *testing.T) {
 	// Classic discovery durably enrolls dependent work before producer output.
 	// The selected adapter must meet this same oracle in its own tests.
 	stats, err := c.RunLabels(t.Context(), settings, LabelsRunOptions{Limit: 1})
-	if err != nil || stats.Complete {
+	if err != nil || stats.Complete || stats.MessagesLabeled != 1 {
 		t.Fatalf("interrupted producer: %+v %v", stats, err)
 	}
 	var dirty int
@@ -57,17 +64,11 @@ func TestWorkPreviousBinaryRecovery(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
 	}
-	root := t.TempDir()
-	config := filepath.Join(root, "archive.toml")
-	text := fmt.Sprintf("catalog_path = %q\narchive_root = %q\ncapture_root = %q\nstaging_root = %q\nlabels_enabled = true\nlabels_model_dir = %q\nlabels_worker = %q\nlabels_variant = %q\nlabels_threads = 1\nlabels_workers = 1\n", path, filepath.Join(root, "preserved"), filepath.Join(root, "captures"), filepath.Join(root, "staging"), settings.ModelDir, settings.Worker, settings.Variant)
-	if err := os.WriteFile(config, []byte(text), 0600); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	output, err := exec.CommandContext(ctx, baseline, "--config", config, "labels", "run").CombinedOutput()
-	if err != nil {
-		t.Fatalf("retained binary could not recover current catalog: %v\n%s", err, output)
+
+	old := runRetainedLabels(t, baseline, path, settings)
+	// The old binary must itself rebuild the enrolled fork and finish.
+	if !old.Complete || old.Cut || old.ConversationsBuilt < 1 || old.ConversationsFailed != 0 || old.MessagesFailed != 0 {
+		t.Fatalf("retained binary did not recover the enrolled dependent: %+v", old)
 	}
 	reopened, err := OpenCatalog(path)
 	if err != nil {
@@ -81,12 +82,106 @@ func TestWorkPreviousBinaryRecovery(t *testing.T) {
 	if err := reopened.DB.QueryRow(`SELECT count(*) FROM messages`).Scan(&after); err != nil || after != before {
 		t.Fatalf("downgrade changed canonical count: before=%d after=%d err=%v", before, after, err)
 	}
+	recovered := storedLabels(t, reopened.DB)
+	if recovered["rollback-message"] == "" || recovered["rollback-new"] == "" {
+		t.Fatal("the old writer's state is missing a label for the fork or the parent's new message")
+	}
+	// A forced full classic rebuild relabels any message whose framed inputs
+	// differ from what is stored. Nothing to relabel means the old binary's
+	// output is the current classic result. (input_hash is the framing hash,
+	// not the message's content_hash, so the two are never compared.)
+	full, err := reopened.RunLabels(t.Context(), settings, LabelsRunOptions{Full: true})
+	if err != nil || !full.Complete || full.MessagesLabeled != 0 || full.MessagesRemoved != 0 || full.MessagesFailed != 0 {
+		t.Fatalf("old-writer labels differ from the forced full classic result: %+v %v", full, err)
+	}
+	if labels := storedLabels(t, reopened.DB); !maps.Equal(labels, recovered) {
+		t.Fatal("a forced full classic rebuild changed the old writer's labels")
+	}
+
 	execTx(t, reopened.DB, `UPDATE messages SET text='An edit made after the old binary ran',content_hash='rollback-edited' WHERE id='rollback-new'`)
 	final, err := reopened.RunLabels(t.Context(), settings, LabelsRunOptions{})
-	if err != nil || !final.Complete {
-		t.Fatalf("new process did not reconstruct old-writer work: %+v %v", final, err)
+	if err != nil || !final.Complete || final.MessagesLabeled < 1 {
+		t.Fatalf("new process did not process the subsequent edit: %+v %v", final, err)
 	}
-	if len(output) == 0 {
-		t.Fatal("retained binary produced no run report")
+	if edited := storedLabels(t, reopened.DB)["rollback-new"]; edited == "" || edited == recovered["rollback-new"] {
+		t.Fatal("the edited message was not relabeled from its new inputs")
 	}
+}
+
+// runRetainedLabels runs the retained binary's `labels run --json` on the
+// closed catalog with a private config, HOME and temporary directory. Only
+// the fake worker's settings pass through from this test's environment.
+func runRetainedLabels(t *testing.T, binary, catalog string, settings LabelerSettings) LabelsRunStats {
+	t.Helper()
+	root := t.TempDir()
+	for _, name := range []string{"home", "tmp", "preserved", "captures", "staging"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The fake worker loads no runtime; naming a stand-in keeps the old
+	// binary from looking for a downloaded one under a real HOME.
+	runtime := filepath.Join(root, "fake-runtime.dylib")
+	if err := os.WriteFile(runtime, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, "archive.toml")
+	text := fmt.Sprintf("library = false\ncatalog_path = %q\narchive_root = %q\ncapture_root = %q\nstaging_root = %q\n"+
+		"enable_reclamation = false\ngithub_token = \"\"\ntl1_token = \"\"\n"+
+		"labels_enabled = true\nlabels_model_dir = %q\nlabels_worker = %q\nlabels_variant = %q\nlabels_runtime = %q\nlabels_threads = 1\nlabels_workers = 1\n",
+		catalog, filepath.Join(root, "preserved"), filepath.Join(root, "captures"), filepath.Join(root, "staging"),
+		settings.ModelDir, settings.Worker, settings.Variant, runtime)
+	if err := os.WriteFile(config, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// An allowlist, not the test's environment: no user HOME, tokens,
+	// PHAROS_* settings or git configuration reach the old binary.
+	env := []string{"PATH=/usr/bin:/bin", "HOME=" + filepath.Join(root, "home"), "TMPDIR=" + filepath.Join(root, "tmp"),
+		"TZ=UTC", "LANG=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "PHAROS_LABELER_FAKE_") {
+			env = append(env, entry)
+		}
+	}
+	if os.Getenv(labelertest.FakeWorkerEnv) == "" {
+		t.Fatal("the fake worker's mode is not set")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, "--config", config, "labels", "run", "--json")
+	command.Env, command.Dir = env, root
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("retained binary could not recover current catalog: %v\n%s", err, stderr.Bytes())
+	}
+	var stats LabelsRunStats
+	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&stats); err != nil || decoder.More() {
+		t.Fatalf("retained binary's run report is not one LabelsRunStats object: %v", err)
+	}
+	return stats
+}
+
+// storedLabels is each stored label's content, without its timestamp.
+func storedLabels(t *testing.T, db *sql.DB) map[string]string {
+	t.Helper()
+	rows, err := db.Query(`SELECT message_id, segment || '|' || labels || '|' || hex(probs) || '|' || input_hash || '|' || model || '|' || contract FROM message_labels`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	result := map[string]string{}
+	for rows.Next() {
+		var id, value string
+		if err := rows.Scan(&id, &value); err != nil {
+			t.Fatal(err)
+		}
+		result[id] = value
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return result
 }
