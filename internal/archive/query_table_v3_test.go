@@ -27,6 +27,59 @@ func groupRequest(key string, summaries ...qt.SummaryColumn) qt.QueryRequestV3 {
 		Result:   qt.WireQuery{Select: selects, Limit: 50}}
 }
 
+func TestQueryV3LibraryDefersDisplayFieldsUntilAfterPaging(t *testing.T) {
+	c, config := libraryFixture(t)
+	s := testServer(t, config, c)
+	q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true,
+		Result: qt.WireQuery{Select: []string{"id", "title", "tool_error_count", "compaction_count"}, OrderBy: []qt.OrderBy{{Field: "id", Dir: "desc"}}, Limit: 1}}
+	read := func() qt.QueryResultV3 {
+		t.Helper()
+		got, _, err := s.executeQueryV3(t.Context(), "library", url.Values{}, PharosLibrarySchema(), q)
+		if err != nil || len(got.Rows) != 1 || got.Rows[0]["id"] != "c" {
+			t.Fatalf("paged Library: %+v %v", got, err)
+		}
+		return got
+	}
+	got := read()
+	if got.Total != 2 || got.Rows[0]["title"] != "Charlie" || integer(got.Rows[0]["tool_error_count"]) != 1 || integer(got.Rows[0]["compaction_count"]) != 2 {
+		t.Fatalf("display fields were not filled for the page: %+v", got)
+	}
+	for _, row := range c.library.rows {
+		for _, field := range []string{"title", "tool_error_count", "compaction_count"} {
+			if _, ok := row[field]; ok {
+				t.Fatalf("display-only %s was derived for every workspace", field)
+			}
+		}
+	}
+	// Host keyword restrictions still need their native source field before
+	// paging, even if it is otherwise used only for display.
+	record, _ := json.Marshal(recordSearchSpec{Field: "title", Query: "Charlie"})
+	matched, _, err := s.executeQueryV3(t.Context(), "library", url.Values{"record_search": {string(record)}}, PharosLibrarySchema(), q)
+	if err != nil || matched.Total != 1 || len(matched.Rows) != 1 || matched.Rows[0]["id"] != "c" {
+		t.Fatalf("record keyword lost its source field: %+v %v", matched, err)
+	}
+	// A displayed formula still needs its base inputs before execution.
+	column, err := (qt.SQLiteComputedColumnStore{DB: c.DB}).Save(t.Context(), queryTableScope, "pharos_library", qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{
+		ID: "tokens", Label: "Tokens", Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: "[token_count]"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Result.Select = []string{"id", "@computed/tokens"}
+	q.ExpectedRevisions = map[string]string{column.ID: column.Revision}
+	if row := read().Rows[0]; integer(row["@computed/tokens"]) != 500 {
+		t.Fatalf("displayed formula lost its dependency: %+v", row)
+	}
+	// Native filters, sorts and metrics also need their complete population.
+	q.Result.Where = []qt.WhereTerm{{Field: "tool_error_count", Op: ">", Value: "0"}}
+	q.Result.OrderBy = []qt.OrderBy{{Field: "compaction_count", Dir: "desc"}}
+	q.Metrics = []qt.AggSpec{{ID: "errors", Op: "sum", Field: "tool_error_count"}}
+	got = read()
+	if got.Total != 1 || integer(got.Metrics[0].Buckets[0].Value) != 1 {
+		t.Fatalf("deferring display fields changed query membership or totals: %+v", got)
+	}
+}
+
 func TestQueryV3LargeSourceHavingMetricsAndPaging(t *testing.T) {
 	override(t, &queryV3MaxRows, 100)
 	// A source larger than the row budget.

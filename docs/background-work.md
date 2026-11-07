@@ -1501,6 +1501,15 @@ non-test files and fails on any `spawn(`, `runBackground(` or `go func`
 that is not inside `start`/`begin`, not a registered daemon, and not on an
 allowlist with a reason (request handling, subprocess pipes, timers).
 
+Shared query-cache builds are read-only preparation, not structural background
+work. Each requesting page can cancel its own wait. Builds retain their own
+budgets (Thinking allows two minutes); the cache adds no shorter deadline and
+keeps completed values after a request leaves. The catalog tracks these workers,
+cancels them on close, and joins them before closing SQLite connections. Each
+worker enables mapped-memory fault protection and uses the service's clean exit
+or direct MCP's disconnected-library recovery. Large session-statistics backfills
+belong to `maintenance.session-shape`, never to this cache preparation.
+
 ## 10. Resources
 
 Phase 4 measures, and the snapshots report, per process (`resources.go`):

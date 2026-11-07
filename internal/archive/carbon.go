@@ -435,11 +435,15 @@ func (doc carbonDocument) energy(window *carbonWindow) {
 // category for all time and the last 30 days, their estimated energy and
 // emissions, the factors behind them, and which models took the default tier.
 func (c *Catalog) carbonHealth() (map[string]any, error) {
+	return c.carbonHealthContext(context.Background())
+}
+
+func (c *Catalog) carbonHealthContext(ctx context.Context) (map[string]any, error) {
 	doc, err := loadCarbonDocument()
 	if err != nil {
 		return nil, err
 	}
-	rows, err := c.localUsageBaseRows(context.Background(), false)
+	rows, err := c.localUsageBaseRows(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -480,9 +484,7 @@ func (c *Catalog) carbonHealth() (map[string]any, error) {
 
 // CarbonHealth provides cached whole-library totals for the CO₂ calculator.
 func (c *Catalog) CarbonHealth(ctx context.Context) (map[string]any, error) {
-	return cachedValue(ctx, c, "health:carbon", func(context.Context) (map[string]any, error) {
-		return c.carbonHealth()
-	})
+	return cachedValue(ctx, c, "health:carbon", c.carbonHealthContext)
 }
 
 // carbonSeriesRequest uses the Usage dataset's filters, but its view state is

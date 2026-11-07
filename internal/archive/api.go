@@ -111,6 +111,9 @@ func NewServer(config Config, catalog *Catalog) *Server {
 	server.ops.releasing = server.releasing
 	server.resources = newResourceSampler()
 	if catalog != nil {
+		catalog.derived.mu.Lock()
+		catalog.derived.onFault = server.exitIfFault
+		catalog.derived.mu.Unlock()
 		server.ingestMu.path = catalog.Path
 		catalog.background = server.start
 		catalog.ops = server.ops

@@ -146,6 +146,7 @@ func filepathDir(path string) string {
 
 func (c *Catalog) Close() error {
 	cliWriteCheck("close")
+	c.closeDerivedCache()
 	if c.labelers != nil {
 		c.labelers.Close()
 	}
@@ -153,9 +154,6 @@ func (c *Catalog) Close() error {
 	c.library.mu.Lock()
 	c.library.close()
 	c.library.mu.Unlock()
-	c.derived.mu.Lock()
-	c.derived.close()
-	c.derived.mu.Unlock()
 	// Readers' snapshots would keep the checkpoint below from truncating.
 	if c.reads != nil {
 		_ = c.reads.Close()
@@ -1180,7 +1178,10 @@ func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields)
 	if len(evidence) > 0 {
 		sort.SliceStable(rows, func(i, j int) bool { return rows[i]["score"].(float64) > rows[j]["score"].(float64) })
 	}
-	rows = c.suppressMirrors(rows)
+	rows, err = c.suppressMirrorsContext(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
 	// Costs take a ledger scan; a page without them gets them in libraryPage.
 	if fields.hasAny(libraryCostFields) {
 		if err := c.attachWorkspaceCosts(ctx, rows); err != nil {
@@ -1317,10 +1318,21 @@ const identityLinkWorkspacesSQL = `SELECT a.workspace_id left_workspace,b.worksp
 	JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id`
 
 func (c *Catalog) suppressMirrors(rows []map[string]any) []map[string]any {
-	links, _ := cachedValue(context.Background(), c, "identity-links", func(context.Context) ([]map[string]any, error) {
-		return queryMaps(c.reader(), identityLinkWorkspacesSQL)
+	result, err := c.suppressMirrorsContext(context.Background(), rows)
+	if err != nil {
+		return suppressMirrorRows(rows, nil)
+	}
+	return result
+}
+
+func (c *Catalog) suppressMirrorsContext(ctx context.Context, rows []map[string]any) ([]map[string]any, error) {
+	links, err := cachedValue(ctx, c, "identity-links", func(ctx context.Context) ([]map[string]any, error) {
+		return queryMapsContext(ctx, c.reader(), identityLinkWorkspacesSQL)
 	})
-	return suppressMirrorRows(rows, links)
+	if err != nil {
+		return nil, err
+	}
+	return suppressMirrorRows(rows, links), nil
 }
 
 func suppressMirrorRows(rows, links []map[string]any) []map[string]any {
