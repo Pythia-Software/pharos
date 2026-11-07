@@ -103,7 +103,7 @@ def live_roots():
 
 
 def config_data_roots(config):
-    """Read only root-level path scalars; never initialize a library.
+    """Read only config path scalars; never initialize a library.
 
     Match Pharos's small config format without requiring Python 3.11 tomllib.
     Unrecognized path syntax refuses instead of guessing a live data location.
@@ -112,13 +112,18 @@ def config_data_roots(config):
         return set()
     try:
         text = config.read_text()
-        values = {}
+        values, section, source = {}, "", False
         for line in text.splitlines():
             line = line.strip()
             if line.startswith("["):
-                break  # paths belong to the root table
+                header = line.split("#", 1)[0].strip()
+                source = header == "[[sources]]"
+                section = header.strip("[]")
+                continue
+            if source or section in ("repositories.aliases", "repositories.separate"):
+                continue
             key, sep, raw = line.partition("=")
-            if not sep or key.strip() not in ("data_dir", "catalog_path", "capture_root"):
+            if not sep or key.strip() not in ("data_dir", "catalog_path", "capture_root", "archive_root", "staging_root"):
                 continue
             raw = raw.strip()
             if raw.startswith('"'):
@@ -130,7 +135,8 @@ def config_data_roots(config):
                 raise ValueError("a library path must be a quoted string")
             if not isinstance(value, str) or (raw[end:].strip() and not raw[end:].strip().startswith("#")):
                 raise ValueError("unsupported library path syntax")
-            values[key.strip()] = (config.parent / value).resolve()
+            path = Path.home() / value[2:] if value.startswith("~/") else Path.home() if value == "~" else Path(value)
+            values[key.strip()] = (config.parent / path).resolve()
         roots = set(values.values())
         if "catalog_path" in values:
             roots.add(values["catalog_path"].parent)

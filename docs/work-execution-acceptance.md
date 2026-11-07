@@ -311,6 +311,11 @@ against the same gates, startup included. It makes no release claim.
   the product poll measures recent readiness in both. Window-only labels are
   refused: the restricted classic method forces rebuilds and omits durable
   dependent marking, so the earlier two-window workload is diagnostic only.
+  On the never-labeled master this is cold whole-corpus labeling and also
+  supplies the labels portion of the full-settlement gate below: run and count
+  that pair once. A separate short incremental pair needs a master with all
+  history labeled and only bounded recent inputs dirty; that preparation and
+  paired measurement remain unmet.
 - Full settlement: the recent 48 hours plus all history, every kind. Because
   the corpus has never been labeled, this labels every conversation and takes
   hours. It is the release gate for derived settlement and stays explicitly

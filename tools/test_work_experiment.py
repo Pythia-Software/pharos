@@ -164,6 +164,21 @@ class WorkExperimentTests(Fixture):
         with self.assertRaisesRegex(ValueError, "registry"):
             work.prepare(backup, self.root / "m3")
 
+    def test_config_paths_follow_go_expansion_and_sections(self):
+        config = self.root / "library/archive.toml"
+        config.parent.mkdir()
+        home = self.root / "home"
+        config.write_text('data_dir = "~/PharosData"\narchive_root = "~/kept"\nstaging_root = "~/pending"\n[other]\ncapture_root = "~/raw"\ncatalog_path = "~/catalog/catalog.sqlite3"\n')
+        with mock.patch.object(work.Path, "home", return_value=home):
+            roots = work.config_data_roots(config)
+        for name in ("PharosData", "kept", "pending", "raw", "catalog"):
+            self.assertIn(home / name, roots)
+        config.write_text('[[sources]]\ncatalog_path = "ignored-source-path"\n[repositories.aliases]\ncapture_root = "ignored-alias"\n[repositories.separate]\narchive_root = "ignored-separate"\n')
+        self.assertFalse(work.config_data_roots(config))
+        config.write_text('data_dir = "~"\n')
+        with mock.patch.object(work.Path, "home", return_value=home):
+            self.assertEqual(work.config_data_roots(config), {home})
+
     def test_backup_catalog_symlink_is_refused_before_copy(self):
         backup, _ = self.backup()
         external = self.root / "escaped"
