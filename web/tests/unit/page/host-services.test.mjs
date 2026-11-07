@@ -3,6 +3,7 @@ import {test} from 'node:test';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import vm from 'node:vm';
+import {transformSync} from 'esbuild';
 import {assets, loadClassicScript, plain} from '../helpers/classic-script.mjs';
 
 const load = globals => loadClassicScript('host-services.js', globals).window;
@@ -129,6 +130,21 @@ test('public copy compatibility wrappers delegate once without recursion', async
   await window.pharosCopyText('public wrapper');
   window.navigator.clipboard.writeText = async () => {throw new Error('Copy failed');};
   await assert.rejects(window.pharosCopyText('failure'), rejected('native-failure', 'Copy failed'));
+});
+
+test('query table copies use their shell owner and propagate its failure', async () => {
+  const source=readFileSync(join(assets,'../../../web/src/index.tsx'),'utf8');
+  const helper=source.slice(source.indexOf('async function copyText('),source.indexOf('\nfunction compactNumber('));
+  const code=transformSync(helper+';copyText;', {loader:'ts'}).code;
+  for(const fail of [false,true]){
+    const transfer=Promise.withResolvers(),writes=[];
+    const copy=vm.runInNewContext(code,{window:{pharosCopyText:text=>{writes.push(text);return transfer.promise;}},
+      navigator:{clipboard:{writeText:()=>assert.fail('the bundle must use its shell clipboard owner')}}});
+    const operation=copy('reference');
+    if(fail)transfer.reject(Error('Copy failed'));else transfer.resolve();
+    if(fail)await assert.rejects(operation,/Copy failed/);else await operation;
+    assert.deepEqual(writes,['reference']);
+  }
 });
 
 test('textarea fallback copies inside an active modal instead of its inert background', async () => {

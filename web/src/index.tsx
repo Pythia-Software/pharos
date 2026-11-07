@@ -934,18 +934,8 @@ function LibrarySearchClause({ api }: { api: QueryTableApi<Row> }) {
 }
 
 async function copyText(text: string) {
-  // The app shell's copy uses the native clipboard in the Mac app, where the web clipboard may be denied.
-  if (window.pharosCopyText) return window.pharosCopyText(text);
-  try { await navigator.clipboard.writeText(text); return; } catch { /* WKWebView may deny the async clipboard; fall back below. */ }
-  const area = document.createElement("textarea");
-  area.value = text;
-  area.style.position = "fixed";
-  area.style.opacity = "0";
-  document.body.append(area);
-  area.select();
-  const copied = document.execCommand("copy");
-  area.remove();
-  if (!copied) throw new Error("Clipboard unavailable");
+  // query-tables.js loads after ui.py installs the shell clipboard wrapper.
+  return window.pharosCopyText!(text);
 }
 
 function compactNumber(value: number): string {

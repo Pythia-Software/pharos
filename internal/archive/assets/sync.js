@@ -238,7 +238,13 @@
         const data = await call('/api/sync/issues');
         const details = data.issues.find(item => item.id === issue.id);
         const dialog = node('dialog', '', 'sync-dialog');
-        dialog.append(node('h2', 'Index integrity issue'), node('pre', JSON.stringify(details, null, 2)), button('Copy diagnostics', () => navigator.clipboard.writeText(JSON.stringify(details, null, 2))), button('Close', () => dialog.close()));
+        const copyStatus = node('p'); copyStatus.setAttribute('role', 'status');
+        const copy = button('Copy diagnostics', async () => {
+          copyStatus.textContent = '';
+          try { await window.pharosHost.clipboard.writeText(JSON.stringify(details, null, 2)); copyStatus.textContent = 'Diagnostics copied.'; }
+          catch { copyStatus.textContent = 'Could not copy diagnostics. Select and copy the details above.'; }
+        });
+        dialog.append(node('h2', 'Index integrity issue'), node('pre', JSON.stringify(details, null, 2)), copy, copyStatus, button('Close', () => dialog.close()));
         dialog.addEventListener('close', () => dialog.remove()); document.body.append(dialog); dialog.showModal();
       }), button('Full recapture & reindex…', () => recovery('full', [issue.source_name])));
       for (const action of issueActions.children) action.disabled = Boolean(status.busy);
