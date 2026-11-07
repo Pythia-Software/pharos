@@ -230,6 +230,7 @@ func (c *Catalog) recordInitialize(reg *opRegistry, trigger string) {
 // checkpointed. SQLite still checkpoints when the last connection of any
 // process closes, which leaves nothing to replay if the drive is then pulled.
 func (c *Catalog) closeQuery() error {
+	c.closeDerivedCache()
 	if !c.readOnly {
 		c.closeMCPHistory()
 	}
@@ -242,8 +243,5 @@ func (c *Catalog) closeQuery() error {
 	c.library.mu.Lock()
 	c.library.close()
 	c.library.mu.Unlock()
-	c.derived.mu.Lock()
-	c.derived.close()
-	c.derived.mu.Unlock()
 	return c.DB.Close()
 }
