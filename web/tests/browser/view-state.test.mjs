@@ -181,6 +181,7 @@ for(const width of [1440,390])test(`hierarchy metric scope and session timeline 
  await row.getByRole('button',{name:/^Open session /}).click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
  assert.equal(await page.locator('.workspace-reader').isVisible(),true);
  if(width<960)await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();
+ await page.getByRole('button',{name:'Open workspace overview',exact:true}).first().click();await app.settled();
  await page.getByRole('button',{name:`View timeline for ${child.label}`,exact:true}).click();
  const expanded=page.locator('[data-pharos-target="section:delegation-labels:s-child:session"]');
  await expanded.waitFor();await page.waitForFunction(()=>document.querySelector('[data-pharos-target="section:delegation-labels:s-child:session"]').open);await app.settled();
@@ -232,9 +233,21 @@ for(const width of [1280,390])test(`session hierarchy sidebar retains navigation
  assert.equal(await table.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'session names leave space for both usage columns');
  const current=table.locator('[aria-current="true"]');await current.click();await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
- await table.getByRole('button',{name:/Open session 1\.1 ·/}).click();
+ await table.getByRole('button',{name:'Open session Review implementation',exact:true}).click();
  await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
  await show();await app.shot('hierarchy-sidebar');
+ await table.getByRole('button',{name:'Collapse Review implementation',exact:true}).click();await app.settled();
+ await table.getByRole('button',{name:'Expand Review implementation',exact:true}).waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),'conv-child','folding the selected session leaves its reader open');
+ await table.getByRole('button',{name:'Expand Review implementation',exact:true}).click();await app.settled();
+ await table.getByRole('button',{name:'Open session Review timing',exact:true}).waitFor();
+ if(width>=960){
+  await page.getByRole('separator',{name:'Resize workspace sessions sidebar',exact:true}).press('End');
+  await page.locator('.workspace-inbox:not(.compact)').waitFor();await app.settled();
+  await page.locator('.delegation-table').getByRole('button',{name:'Open session Review timing',exact:true}).click();
+  await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-nested');await app.settled();
+  await app.shot('hierarchy-wide-sidebar');
+ }
  await page.getByRole('button',{name:'Open workspace overview',exact:true}).first().click();await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('delegation_mode'),'rank','the fixed sidebar presentation preserves the full-width ranking');
  await app.shot('hierarchy-full-width');

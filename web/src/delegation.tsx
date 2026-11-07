@@ -787,7 +787,6 @@ export function DelegationExplorer({
     >
       <h2>{shownSession.label}</h2>
       <small>
-        Session {shownSession.outline} ·{" "}
         {shownSession.provider} ·{" "}
         {shownSession.model || "model unknown"} ·{" "}
         {shownSession.effort || "unknown"}
@@ -971,7 +970,6 @@ export function DelegationExplorer({
                   collapsed={collapsed}
                   toggle={toggle}
                   openNode={openNode}
-                  openTimeline={openTimeline}
                 />
               ) : !single && tab === "table" ? (
                 <>
@@ -993,7 +991,7 @@ export function DelegationExplorer({
                                 </button>
                               </th>
                             ))}
-                            <th>Timeline</th>
+                            {!splitReader && <th>Timeline</th>}
                           </tr>
                         </thead>
                         <tbody>
@@ -1021,7 +1019,6 @@ export function DelegationExplorer({
                                   <div className="delegation-node">
                                     <SessionIdentity
                                       name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`}
-                                      outline={n.outline}
                                       metadata={<>{n.provider} · {n.model || "model unknown"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}<SessionAge start={n.start} prefix=" · " /></>}
                                       title={`${n.id} · ${n.coverage} coverage · ${n.parent_evidence || "root"}`}
                                       depth={mode === "hierarchy" ? n.depth : 0}
@@ -1076,9 +1073,9 @@ export function DelegationExplorer({
                                       </td>
                                     );
                                   })}
-                                <td>
+                                {!splitReader && <td>
                                   <button type="button" className="delegation-timeline-button" aria-label={`View timeline for ${n.label}`} disabled={!sessionTimelineState(n, {})} onClick={() => openTimeline(n)} title="Show this session’s time span with its event rows expanded">View</button>
-                                </td>
+                                </td>}
                               </tr>
                             );
                           })}
@@ -1172,30 +1169,28 @@ export function DelegationExplorer({
   );
 }
 
-function InboxSessions({ rows, data, shown, collapsed, toggle, openNode, openTimeline }: {
+function InboxSessions({ rows, data, shown, collapsed, toggle, openNode }: {
   rows: Session[];
   data: Analysis;
   shown: string;
   collapsed: Set<string>;
   toggle: (node: Session) => void;
   openNode: (node: Session) => void;
-  openTimeline: (node: Session) => void;
 }) {
   const branches = timelineSessionBranches(rows);
   // Self usage keeps each session comparable; parallel children do not inflate its run time.
   const metrics = ["cost", "clock"].map(id => data.metrics.find(spec => spec.id === id)).filter((spec): spec is Spec => !!spec);
   return <div className="delegation-inbox-list" role="table" aria-label="Session hierarchy and usage">
-    <div className="delegation-inbox-heading" role="row"><span role="columnheader">Session</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Time to run" : spec.label}</span>)}<span role="columnheader">Timeline</span></div>
+    <div className="delegation-inbox-heading" role="row"><span role="columnheader">Session</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Run time" : spec.label}</span>)}</div>
     {rows.map(n => <div key={n.id} role="row" data-session-id={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }}>
       <div role="cell" className="delegation-inbox-session">
-        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} outline={n.outline} metadata={<>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
+        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
         {!!n.child_count && <button className="delegation-chevron session-fold" style={{left: sessionBranchX(n.depth) - 10}} aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} aria-expanded={!collapsed.has(n.id)} onClick={() => toggle(n)}><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
       </div>
       {metrics.map(spec => {
         const value = n.self[spec.id];
         return <span key={spec.id} role="cell" className="delegation-inbox-metric" title={value ? cellTitle(value, spec) : "No retained evidence"}>{formatted(value?.value, spec.unit)}{value?.quality === "partial" ? "+" : ""}</span>;
       })}
-      <span role="cell"><button type="button" className="delegation-timeline-button" aria-label={`View timeline for ${n.label}`} disabled={!sessionTimelineState(n, {})} onClick={() => openTimeline(n)}>View</button></span>
     </div>)}
     {!rows.length && <p>No retained sessions.</p>}
   </div>;
@@ -1753,7 +1748,7 @@ export function ParallelActivity({
             n.start <= range[1] &&
             n.end >= range[0];
           if(recursive&&labelData)return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
-            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} outline={n.outline} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
+            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
               openSession={timeline?()=>openNode(n):undefined}
               sourceHref={timeline?item=>sourceHref(n,item):undefined}
               events={timeline?nativeLabels.events.get(n.id):undefined} eventCounts={eventCounts} eventHref={timeline?e=>eventHref(n,e):undefined}
@@ -1798,7 +1793,7 @@ export function ParallelActivity({
                   onClick={() => openNode(n)}
                 >
                   <strong>
-                    {n.outline} · {n.label}
+                    {n.label}
                   </strong>
                   <small>
                     {n.provider} · {n.model || "unknown model"}
@@ -2012,7 +2007,7 @@ function ActivityPopover({
           <Icon name="close" />
         </button>
       </div>
-      <small>Session {node.outline} · {node.label}</small>
+      <small>Session {node.label}</small>
       <button ref={action} className="primary delegation-event-jump" onClick={jump}>
         {mark.count > 1 ? "Jump to first tool call" : "Jump to tool call"} ↗
       </button>

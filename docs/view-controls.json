@@ -5028,15 +5028,6 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "91f945dc32916f3b:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "InboxSessions",
-      "tag": "button",
-      "control": "aria-label={`View timeline for ${n.label}`} onClick={() => openTimeline(n)}",
-      "contract": "delegation",
-      "reason": "Opens the full-width session timeline from the compact navigator, preserving the selected session range and one-level event disclosures in its URL."
-    },
-    {
       "key": "3531eb64a70fc13d:0",
       "file": "web/src/delegation.tsx",
       "owner": "ParallelActivity",
@@ -7430,11 +7421,11 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "99295ff8758bf7a1:0",
+      "key": "ddd1928c7e12ab89:0",
       "file": "web/src/session-identity.tsx",
       "owner": "SessionIdentity",
       "tag": "button",
-      "control": "aria-label={`Open session ${[outline, name].filter(Boolean).join(\" · \")}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}",
+      "control": "aria-label={`Open session ${name}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}",
       "contract": "delegation",
       "reason": "Session navigation writes the canonical conversation route and delegation_session through the shared explorer openNode handler; the current session has no navigation control."
     },
