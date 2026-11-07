@@ -311,16 +311,6 @@ var agentEventsChunkRows = 512
 // row in one transaction. Preparation, inference and persistence overlap.
 // Cancellation keeps committed conversations; the next run resumes the rest.
 func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, settings AgentEventSettings, opts AgentEventsRunOptions) (*AgentEventsRunStats, error) {
-	if authority := workAuthorityFor(ctx, c); authority != nil {
-		if _, admitted := workAllocationFrom(ctx); !admitted {
-			var stats *AgentEventsRunStats
-			err := admitWorkCPU(ctx, c, 1, min(authority.cap(), max(1, labels.Threads)+min(4, max(1, labels.Threads))), func(ctx context.Context, _ workAllocation) (err error) {
-				stats, err = c.RunAgentEvents(ctx, labels, settings, opts)
-				return err
-			})
-			return stats, err
-		}
-	}
 	started := time.Now()
 	stats := &AgentEventsRunStats{}
 	defer func() { stats.Total = time.Since(started) }()
@@ -342,6 +332,12 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 	if labels.Worker == "" && !opts.DryRun {
 		return stats, fmt.Errorf("%w: set labels_worker (or PHAROS_LABELS_WORKER)", labelrt.ErrModelUnavailable)
 	}
+	discovery, err := acquireWorkCPU(ctx, c, 1, 1)
+	if err != nil {
+		return stats, err
+	}
+	defer discovery.Release()
+	dctx := discovery.Ctx
 	unlock, err := c.agentEventsInvocation()
 	if err != nil {
 		return stats, err
@@ -351,28 +347,39 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 	if err != nil {
 		return stats, err
 	}
+	if err := c.ensureAgentEventsLedger(dctx); err != nil {
+		return stats, err
+	}
+	builder, err := newLabelsItemBuilder(dctx, c.reader())
+	if err != nil {
+		return stats, err
+	}
+	jobs, err := c.agentEventsWork(dctx, builder, verifier.identity, opts, stats)
+	if err != nil {
+		return stats, err
+	}
+	discovery.Release()
+	progress("agent events: %d conversations to look at of %d", len(jobs), stats.Conversations)
+	// Discovery is serial; only the scoring pipeline takes its wider grant.
+	// The invocation locks are tried by contenders, never waited on.
+	gpuOnly := labelsGPUOnly(verifier.model, labels)
+	grant, err := acquireLabelerCPU(ctx, c, labels.Threads, gpuOnly)
+	if err != nil {
+		return stats, err
+	}
+	defer grant.Release() // runner cleanup below happens before this release
+	ctx = grant.Ctx
 	prep := 0
 	gate := &labelsRun{}
-	if allocation, admitted := workAllocationFrom(ctx); admitted {
+	if _, admitted := workAllocationFrom(ctx); admitted {
 		var serial bool
-		prep, labels.Threads, serial = labelsSplit(allocation.CPUs, labels.Threads, labelsGPUOnly(verifier.model, labels))
+		labels = admittedLabeler(ctx, labels)
+		prep, labels.Threads, serial = labelsSplit(grant.Allocation.CPUs, labels.Threads, gpuOnly)
 		labels.Workers, opts.ThreadTarget = 1, nil
 		if serial {
 			gate.serial = make(chan struct{}, 1)
 		}
 	}
-	if err := c.ensureAgentEventsLedger(ctx); err != nil {
-		return stats, err
-	}
-	builder, err := newLabelsItemBuilder(ctx, c.reader())
-	if err != nil {
-		return stats, err
-	}
-	jobs, err := c.agentEventsWork(ctx, builder, verifier.identity, opts, stats)
-	if err != nil {
-		return stats, err
-	}
-	progress("agent events: %d conversations to look at of %d", len(jobs), stats.Conversations)
 	status := newAgentEventsProgress(ctx, opts.progressBase, started, len(jobs), opts.DryRun)
 
 	var runner *labelrt.Runner

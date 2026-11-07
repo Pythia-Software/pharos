@@ -151,6 +151,31 @@ func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 	if !stats.Complete || stats.MessagesScored == 0 || stats.Candidates == 0 {
 		t.Fatalf("first run: %+v", stats)
 	}
+	t.Run("shared CPU authority", func(t *testing.T) {
+		c := agentEventsCatalog(t)
+		labels, verifier := agentEventsTestSettings(t)
+		labels.Threads, labels.ThreadBudget = 2, 1
+		hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
+		t.Setenv(labelertest.FakeHelloEnv, hellos)
+		authority := newWorkAuthority(4)
+		var discovered atomic.Int32
+		discovered.Store(-1)
+		progress := labelsProgressFunc(func(line string) {
+			if strings.Contains(line, "conversations to look at") {
+				discovered.Store(int32(authority.facts().CPUAllocated))
+			}
+		})
+		stats, err := c.RunAgentEvents(withWorkAuthority(t.Context(), authority), labels, verifier, AgentEventsRunOptions{Progress: progress})
+		if err != nil || !stats.Complete || stats.Candidates == 0 {
+			t.Fatalf("admitted verifier pass: %+v %v", stats, err)
+		}
+		if discovered.Load() != 0 || authority.facts().CPUAllocated != 0 {
+			t.Fatalf("slots held after discovery %d, after pass %d", discovered.Load(), authority.facts().CPUAllocated)
+		}
+		if threads := labelerHelloThreads(t, hellos); !slices.Equal(threads, []int{2}) {
+			t.Fatalf("admitted verifier threads: %v", threads)
+		}
+	})
 	// Every candidate at or above the floor is stored with the verifier's
 	// probability; the fenced log's sentence is never a candidate.
 	for id, source := range map[string]string{"m-ev-reply": "reply", "m-ev-think": "thinking"} {
