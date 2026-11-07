@@ -95,6 +95,127 @@ func conversationMessages(t *testing.T, catalog *Catalog, nativeID string) int {
 	return countRows(t, catalog, "SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id=?", nativeID)
 }
 
+func TestCaptureViewTranslatesLegacyPaths(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name, root, destination, input, captured, original string
+	}{
+		{"directory", "/Users/alice/logs", "files", "/Users/alice/logs/p/a.jsonl", "files/p/a.jsonl", "/Users/alice/logs/p/a.jsonl"},
+		{"directory exact", "/logs", "files", "/logs", "files", "/logs"},
+		{"empty exact source", "", "files", "", "files", ""},
+		{"single file exact", "/logs/a.jsonl", "files/a.jsonl", "/logs/a.jsonl", "files/a.jsonl", "/logs/a.jsonl"},
+		{"trailing root separator", "/logs/", "files", "/logs/a", "files/a", "/logs/a"},
+		{"trailing input separator", "/logs", "files", "/logs/a/", "files/a", "/logs/a"},
+		{"repeated input separators", "/logs", "files", "/logs///p//a", "files/p/a", "/logs/p/a"},
+		{"repeated root separators", "/logs//", "files", "/logs//p/a", "files/p/a", "/logs/p/a"},
+		{"unclean exact root", "/logs//", "files", "/logs//", "files", "/logs"},
+		{"dot suffix", "/logs", "files", "/logs/.", "files", "/logs"},
+		{"local suffix cleanup", "/logs", "files", "/logs/a/../b", "files/b", "/logs/b"},
+		{"relative source", "relative/logs", "files", "relative/logs/a", "files/a", "relative/logs/a"},
+		{"home stays literal", "~/logs", "files", "~/logs/a", "files/a", "~/logs/a"},
+		{"slash root", "/", "files", "//a", "files/a", "/a"},
+		{"unicode", "/Users/Élodie", "files", "/Users/Élodie/e\u0301", "files/e\u0301", "/Users/Élodie/e\u0301"},
+		{"case preserved", "/Users/Alice", "files", "/Users/Alice/Upper", "files/Upper", "/Users/Alice/Upper"},
+		{"backslash source", `C:\Users\alice`, "files", `C:\Users\alice/a`, "files/a", `C:\Users\alice/a`},
+		{"colon source", "C:/Users/alice", "files", "C:/Users/alice/a", "files/a", "C:/Users/alice/a"},
+		{"UNC-looking source", `\\server\share`, "files", `\\server\share/a`, "files/a", `\\server\share/a`},
+		{"TL1 database", "/tl1/project.db", "files/installations/old/project.db", "/tl1/project.db", "files/installations/old/project.db", "/tl1/project.db"},
+		{"TL1 transcripts", "/tl1/transcripts", "files/installations/old/transcripts", "/tl1/transcripts/task/a.jsonl", "files/installations/old/transcripts/task/a.jsonl", "/tl1/transcripts/task/a.jsonl"},
+		{"temporary source", "/logs", "source", "/logs/p/a", "source/p/a", "/logs/p/a"},
+		{"historical snapshot", "/logs/db", "history/old/db", "/logs/db", "history/old/db", "/logs/db"},
+		{"local mapped root", "/logs", ".", "/logs/p/a", "p/a", "/logs/p/a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := &captureManifest{PathMap: []capturePathMapping{{Original: tc.root, Captured: tc.destination}}}
+			view := newCaptureView(Host{ID: "recorded-host"}, dir, manifest)
+			want := filepath.Join(dir, filepath.FromSlash(tc.captured))
+			if got, ok := view.captured(tc.input); !ok || got != want {
+				t.Fatalf("captured(%q) = (%q, %v), want %q", tc.input, got, ok, want)
+			}
+			if got := view.original(want); got != tc.original {
+				t.Fatalf("original(%q) = %q, want %q", want, got, tc.original)
+			}
+		})
+	}
+	// Older SQLite replay readers supply native paths directly, including a
+	// whole temporary directory and single retained generations.
+	for _, destination := range []string{dir, filepath.Join(dir, "history", "old.db")} {
+		view := &captureView{dir: dir, mappings: []capturePathMapping{{Original: "/old/source", Captured: destination}}}
+		if got, ok := view.captured("/old/source"); !ok || got != destination {
+			t.Fatalf("direct retained mapping = (%q, %v), want %q", got, ok, destination)
+		}
+		if got := view.original(destination); got != "/old/source" {
+			t.Fatalf("direct retained original = %q", got)
+		}
+	}
+}
+
+func TestCaptureViewSelectsLongestPrefixBeforeResolvingSuffix(t *testing.T) {
+	dir := t.TempDir()
+	view := newCaptureView(Host{}, dir, &captureManifest{PathMap: []capturePathMapping{
+		{Original: "/src", Captured: "files"},
+		{Original: "/src/nested", Captured: "files/special"},
+		{Original: "/src", Captured: "files/second"}, // equal original prefix: first wins
+		{Original: "/other", Captured: "files"},      // equal captured prefix: first wins
+		{Original: "/rollouts", Captured: "files/naming"},
+		{Original: "/rollouts/a.jsonl", Captured: "files/single/a.jsonl"},
+		{Original: "/Users/Alice", Captured: "source/Alice"},
+		{Original: "/é", Captured: "source/unicode"},
+		{Original: `C:\logs`, Captured: "source/windows-looking"},
+	}})
+	for _, tc := range []struct{ source, captured string }{
+		{"/src/nested/a", filepath.Join(dir, "files", "special", "a")},
+		{"/src/a", filepath.Join(dir, "files", "a")},
+		{"/rollouts/a.jsonl", filepath.Join(dir, "files", "single", "a.jsonl")},
+		{"/rollouts/sessions-index.json", filepath.Join(dir, "files", "naming", "sessions-index.json")},
+	} {
+		if got, ok := view.captured(tc.source); !ok || got != tc.captured {
+			t.Errorf("captured(%q) = (%q, %v), want %q", tc.source, got, ok, tc.captured)
+		}
+		if got := view.original(tc.captured); got != tc.source {
+			t.Errorf("original(%q) = %q, want %q", tc.captured, got, tc.source)
+		}
+	}
+	for _, name := range []string{"/src-other/a", "/Users/alice/a", "/e\u0301/a", `C:\logs\a`} {
+		if got, ok := view.captured(name); ok || got != "" {
+			t.Errorf("source boundary/identity %q matched: (%q, %v)", name, got, ok)
+		}
+	}
+	for _, name := range []string{filepath.Join(dir, "files-sibling", "a"), filepath.Join(dir+"-sibling", "files", "a")} {
+		if got := view.original(name); got != name {
+			t.Errorf("captured sibling %q matched as %q", name, got)
+		}
+	}
+	if got, ok := view.captured("/src/nested/../outside"); ok || got != "" {
+		t.Errorf("unsafe winning source suffix fell back to parent: (%q, %v)", got, ok)
+	}
+	unsafe := filepath.Join(dir, "files", "special") + string(filepath.Separator) + "../outside"
+	if got := view.original(unsafe); got != unsafe {
+		t.Errorf("unsafe winning captured suffix fell back to parent: %q", got)
+	}
+	// Native separators and repeated separators must match without cleaning
+	// the input before prefix selection.
+	repeated := filepath.Join(dir, "files") + strings.Repeat(string(filepath.Separator), 3) + "a"
+	if got := view.original(repeated); got != "/src/a" {
+		t.Errorf("repeated native separators: %q", got)
+	}
+	// Raw prefix length decides between roots with the same cut boundary.
+	view = newCaptureView(Host{}, dir, &captureManifest{PathMap: []capturePathMapping{
+		{Original: "/src", Captured: "files"},
+		{Original: "/src/", Captured: "source"},
+	}})
+	if got, ok := view.captured("/src/a"); !ok || got != filepath.Join(dir, "source", "a") {
+		t.Errorf("trailing separator lost original prefix length: (%q, %v)", got, ok)
+	}
+	view = &captureView{dir: dir, mappings: []capturePathMapping{
+		{Original: "/src", Captured: filepath.Join(dir, "files")},
+		{Original: "/longer", Captured: filepath.Join(dir, "files") + string(filepath.Separator)},
+	}}
+	if got := view.original(filepath.Join(dir, "files", "a")); got != "/longer/a" {
+		t.Errorf("trailing separator lost captured prefix length: %q", got)
+	}
+}
+
 func TestIndexAttributesCapturesToTheCapturingHost(t *testing.T) {
 	root := t.TempDir()
 	catalog, config := testCatalog(t)

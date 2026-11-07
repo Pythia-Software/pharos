@@ -13,7 +13,7 @@
   {
    "id": "message-labels",
    "label": "Conversation functions",
-   "pages": ["analyze/labels","analyze/query/message_labels"],
+   "pages": ["analyze/labels","analyze/query/message_labels","analyze/query/people_message_labels"],
    "signals": ["labels.coverage"]
   },
   {
@@ -25,7 +25,7 @@
   {
    "id": "tool-failures",
    "label": "Failing tool calls",
-   "pages": ["analyze/calls","analyze/tools","analyze/query/tool_calls","analyze/query/tools"],
+   "pages": ["analyze/calls","analyze/tools","analyze/query/tool_calls","analyze/query/tools","analyze/session_shape","analyze/query/session_shape"],
    "signals": ["tools.failures"]
   },
   {
@@ -43,7 +43,7 @@
   {
    "id": "context",
    "label": "Context pressure",
-   "pages": ["analyze/tools","analyze/thinking-detail","analyze/query/model_requests"],
+   "pages": ["analyze/compaction","analyze/query/compactions","analyze/tools","analyze/thinking-detail","analyze/query/model_requests"],
    "signals": ["context.compaction","context.output"]
   },
   {
@@ -66,7 +66,7 @@
   },
   {
    "id": "delegation",
-   "label": "Subagents and delegation",
+   "label": "Sub-agents and delegation",
    "pages": ["work","analyze/tokens"],
    "signals": ["delegation.agents"]
   },
@@ -91,7 +91,7 @@
   {
    "id": "writing",
    "label": "My writing and steering",
-   "pages": ["analyze/human","analyze/query/writing","analyze/query/writing_messages"],
+   "pages": ["analyze/human","analyze/query/writing","analyze/query/writing_messages","analyze/session_shape"],
    "signals": ["writing.volume","writing.back_and_forth"]
   },
   {
@@ -103,7 +103,7 @@
   {
    "id": "agent-experience",
    "label": "What agents run into",
-   "pages": ["analyze/agent_experience","analyze/query/agent_events","analyze/query/agent_event_messages"],
+   "pages": ["analyze/agent_experience","analyze/query/agent_events","analyze/query/agent_event_messages","findings/fixes","findings/fixes/table","findings/fixes/settings"],
    "signals": ["agent.friction","agent.reactions"]
   },
   {
@@ -289,7 +289,7 @@
    "area": "delegation",
    "form": "understand",
    "prior": 0.9,
-   "variants": ["How much of my work do subagents do, and does it help?","When do my agents delegate, and what does it cost?"]
+   "variants": ["How much of my work do sub-agents do, and does it help?","When do my agents delegate, and what does it cost?"]
   },
   {
    "id": "parallel-pattern",
@@ -464,7 +464,7 @@
  "excluded": {
   "ask": "Ask Pharos full screen: the chat itself, not a subject of its questions.",
   "settings/layout": "Header and navigation layout preferences.",
-  "settings/preferences": "Display preferences.",
+  "settings/preferences": "Display preferences, including agent event markers and arcs in fingerprints.",
   "analyze/query/tl1_attempts": "TL1 is mothballed; its attempts stay queryable without being promoted."
  }
 }

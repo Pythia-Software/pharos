@@ -37,10 +37,11 @@ func (c *Catalog) indexToolSearchBatch(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	var cursor, last sql.NullInt64
+	var count int
 	if err := tx.QueryRowContext(ctx, "SELECT CAST(value AS INTEGER) FROM meta WHERE key='tool_command_fts_cursor'").Scan(&cursor); err != nil && err != sql.ErrNoRows {
 		return false, err
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT MAX(rowid) FROM (SELECT rowid FROM tool_calls WHERE rowid>? ORDER BY rowid LIMIT ?)`, cursor.Int64, toolSearchBatch).Scan(&last); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT MAX(rowid),COUNT(*) FROM (SELECT rowid FROM tool_calls WHERE rowid>? ORDER BY rowid LIMIT ?)`, cursor.Int64, toolSearchBatch).Scan(&last, &count); err != nil {
 		return false, err
 	}
 	if !last.Valid {
@@ -49,6 +50,8 @@ func (c *Catalog) indexToolSearchBatch(ctx context.Context) (bool, error) {
 		}
 		return false, tx.Commit()
 	}
+	completed := maintenanceBatch(ctx, tx, "Building tool search", "tool call", count,
+		"SELECT count(*) FROM tool_calls WHERE rowid>?", cursor.Int64)
 	if _, err := tx.ExecContext(ctx, "DELETE FROM tool_command_fts WHERE rowid>? AND rowid<=?", cursor.Int64, last.Int64); err != nil {
 		return false, err
 	}
@@ -60,7 +63,9 @@ func (c *Catalog) indexToolSearchBatch(ctx context.Context) (bool, error) {
 	if _, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES('tool_command_fts_cursor',?)", fmt.Sprint(last.Int64)); err != nil {
 		return false, err
 	}
-	return true, tx.Commit()
+	err = tx.Commit()
+	completed(err)
+	return true, err
 }
 
 func (c *Catalog) maintainToolSearch(ctx context.Context) {
@@ -69,7 +74,7 @@ func (c *Catalog) maintainToolSearch(ctx context.Context) {
 	var pass *daemonPass
 	defer func() { pass.end(nil) }()
 	for {
-		if schedule.wait(ctx, c, &pass) != nil || c.queries.wait(ctx) != nil {
+		if schedule.wait(ctx, c, &pass) != nil || c.queries.wait(pass.context(ctx)) != nil {
 			return
 		}
 		if pass == nil {
@@ -77,8 +82,8 @@ func (c *Catalog) maintainToolSearch(ctx context.Context) {
 		}
 		var more bool
 		var err error
-		pass.runIO(func() { more, err = c.indexToolSearchBatch(ctx) })
-		if more {
+		pass.runIO(ctx, func(ctx context.Context) { more, err = c.indexToolSearchBatch(ctx) })
+		if more && err == nil {
 			pass.worked(1)
 		}
 		wait := 20 * time.Millisecond

@@ -15,6 +15,7 @@ func (s *Server) labelsSettings() map[string]any {
 	config := s.Config()
 	settings := config.Labels.withAssets()
 	status := "Off. Turn on to label messages in this library."
+	notice := ""
 	if settings.Enabled {
 		status = "On. Message labels follow the background update schedule."
 		waiting := settings.labelsWaiting()
@@ -27,9 +28,14 @@ func (s *Server) labelsSettings() map[string]any {
 		} else if waiting != "" {
 			status = "On, " + waiting + "."
 		}
+		if waiting != "" || settings.labelerProblem() != "" {
+			notice = status
+		}
 	}
-	return map[string]any{"enabled": settings.Enabled, "can_change": config.Path != "", "status": status,
-		"threads": max(1, settings.Threads), "thread_choices": labelerThreadChoices()}
+	document := map[string]any{"enabled": settings.Enabled, "can_change": config.Path != "", "status": status, "notice": notice,
+		"threads": max(1, settings.Threads)}
+	s.addLabelerDevice(document, settings, config.Path != "")
+	return document
 }
 
 // labelerThreadChoices are the threads per worker Settings offers each
@@ -50,6 +56,7 @@ func (s *Server) agentEventsSettings(ctx context.Context) map[string]any {
 	configured := config.AgentEvents.Enabled
 	enabled := configured || s.Catalog.featureFlag(ctx, agentEventsFlag)
 	status := "Off. Turn on to find agent events in this library."
+	notice := ""
 	if enabled {
 		status = "On. Agent events follow the background update schedule."
 		if configured {
@@ -64,9 +71,17 @@ func (s *Server) agentEventsSettings(ctx context.Context) map[string]any {
 		} else if waiting != "" {
 			status = "On, " + waiting + "."
 		}
+		if configured || waiting != "" || config.Labels.withAssets().labelerProblem() != "" {
+			notice = status
+		}
 	}
-	return map[string]any{"enabled": enabled, "can_change": !configured, "status": status,
-		"threads": max(1, config.AgentEvents.threads(config.Labels)), "threads_can_change": config.Path != "", "thread_choices": labelerThreadChoices()}
+	document := map[string]any{"enabled": enabled, "can_change": !configured, "status": status, "notice": notice,
+		"threads": max(1, config.AgentEvents.threads(config.Labels))}
+	settings := config.AgentEvents.labeler(config.Labels.withAssets())
+	model := config.AgentEvents.withAssets()
+	settings.ModelDir, settings.Variant = model.ModelDir, model.Variant
+	s.addLabelerDevice(document, settings, config.Path != "")
+	return document
 }
 
 // labelerProblem is why no labeling can run on this Mac, however long it

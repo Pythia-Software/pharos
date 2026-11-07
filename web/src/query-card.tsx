@@ -1,3 +1,6 @@
+import { DataReadinessIndicator } from "./data-readiness";
+import { cardReadinessSource, type CardReadinessSource } from "./data-readiness-card";
+import { formatUSD } from "./currency";
 import { cardNavigationURL } from "./card-exploration";
 import React, { useRef } from "react";
 import { CompactColumns } from "./column-marks";
@@ -35,11 +38,11 @@ export function CardVisualization({ preview }: { preview: QueryPreview }) {
       <span className="query-result-summary is-headline query-stat-line"><strong className="query-headline-value">{headlineMetric.value}</strong>{headlineMetric.unit ? <> <span className="query-headline-unit">{headlineMetric.unit}</span></> : null}
       {headlineMetric.label ? <span className="query-headline-label">{headlineMetric.label}</span> : null}</span>
     </span> : null}
-    {preview.study ? <HumanStudyCover study={preview.study} /> : preview.habits ? <HabitsCoverChart cover={preview.habits} /> : preview.grid ? <CompactGrid cover={preview.grid} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} {...preview.timeline} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={columnUnit(coverMetric?.field)} {...preview.dashboardTrend} />
+    {preview.study ? <HumanStudyCover study={preview.study} /> : preview.habits ? <HabitsCoverChart cover={preview.habits} /> : preview.grid ? <CompactGrid cover={preview.grid} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} {...preview.timeline} display={preview.timeline?.display === "heatmap" ? undefined : preview.timeline?.display} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={columnUnit(coverMetric?.field)} {...preview.dashboardTrend} />
       : preview.metrics ? <CompactMetric preview={preview} />
       : preview.insights ? <span className="query-findings">
       <span className="query-finding-heading">{preview.headline}</span>
-      {preview.insights.map((item, i) => <span className="query-finding" key={i} data-chart-tooltip={`${item.label}\n${item.value}${item.context ? `\n${item.context}` : ""}`} title="">
+      {preview.insights.map((item, i) => <span className="query-finding" key={i}>
         <span className="query-finding-label">{item.label}</span><strong>{item.value}</strong>
         {item.context ? <small>{item.context}</small> : null}
       </span>)}
@@ -53,9 +56,9 @@ export function CardVisualization({ preview }: { preview: QueryPreview }) {
 // With editing, the card is its own editor: its title and description (and,
 // when offered, its category and call to action) are fields in place, and it
 // neither opens nor carries tools.
-export function QueryCard({ id, title, description, actionLabel, url, windowLabel, category, preview, loadingSpec, error, discovery, xray, editing, lean = 0, onOpen, onReveal, onKeep, onEdit, onRemove, onMove, onReload, onDragStart, onDragEnd, onDrop, before }: {
+export function QueryCard({ id, title, description, actionLabel, url, windowLabel, category, readinessSource, preview, loadingSpec, error, discovery, xray, editing, lean = 0, onOpen, onReveal, onKeep, onEdit, onRemove, onMove, onReload, onDragStart, onDragEnd, onDrop, before }: {
   id: string; title: string; description: string; actionLabel?: string; url: string; windowLabel: string; category: QueryCategory;
-  preview?: QueryPreview; error?: string; discovery?: boolean; xray?: boolean; lean?: number; before?: boolean;
+  readinessSource?: CardReadinessSource; preview?: QueryPreview; error?: string; discovery?: boolean; xray?: boolean; lean?: number; before?: boolean;
   loadingSpec?: CardLoadingSpec; editing?: { onTitle: (title: string) => void; onDescription: (description: string) => void; onAction?: (action: string) => void; onCategory?: (category: QueryCategory) => void };
   onOpen: (url: string) => void; onReveal?: () => void; onKeep?: () => void; onEdit?: () => void; onRemove?: () => void; onMove?: (direction: -1 | 1) => void; onReload?: () => void;
   onDragStart?: (event: React.DragEvent) => void; onDragEnd?: () => void; onDrop?: (event: React.DragEvent) => void;
@@ -73,7 +76,8 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
   const ranked = presentation?.ranked || Boolean(!presentation && (preview?.insights || preview?.ranking || preview?.groupSummary));
   const summary = ranked || preview?.study ? undefined : preview && (presentation ? presentation.summary : preview.summary);
   const headlineMetric = preview && (presentation ? presentation.headlineMetric : ranked ? undefined : preview.headlineMetric);
-  const coverLabel = preview?.study ? `${preview.study.value === undefined ? "" : preview.study.value.toLocaleString(undefined, { ...(preview.study.format === "USD" ? { style: "currency" as const, currency: "USD" } : {}), ...(preview.study.format === "percent" || preview.study.kind === "composition" ? { style: "percent" as const } : {}), maximumFractionDigits: 1 })} ${preview.study.valueLabel}. ${preview.study.sampleLabel}` : headlineMetric ? [headlineMetric.value, headlineMetric.unit, headlineMetric.label].filter(Boolean).join(" ") : summary ?? (presentation?.scalar ? [presentation.metric.clause.label, presentation.metric.result.buckets[0].value, presentation.groupLabel].filter(value => value !== undefined).join(": ") : presentation?.metric.clause.label ?? preview?.headline ?? title);
+  const coverLabel = preview?.study ? `${preview.study.value === undefined ? "" : preview.study.format === "USD" ? formatUSD(preview.study.value) : preview.study.value.toLocaleString(undefined, { ...(preview.study.format === "percent" || preview.study.kind === "composition" ? { style: "percent" as const } : {}), maximumFractionDigits: 1 })} ${preview.study.valueLabel}. ${preview.study.sampleLabel}` : headlineMetric ? [headlineMetric.value, headlineMetric.unit, headlineMetric.label].filter(Boolean).join(" ") : summary ?? (presentation?.scalar ? [presentation.metric.clause.label, presentation.metric.result.buckets[0].value, presentation.groupLabel].filter(value => value !== undefined).join(": ") : presentation?.metric.clause.label ?? preview?.headline ?? title);
+  const readiness = cardReadinessSource(url,readinessSource);
   const destination = cardNavigationURL(url);
   const linkProps: React.AnchorHTMLAttributes<HTMLAnchorElement> = {
     href: destination, "aria-hidden": xray || undefined, tabIndex: xray ? -1 : undefined, draggable: false,
@@ -110,6 +114,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
   return <article ref={card} className={`query-card${discovery ? " discovery" : ""}${before ? " insert-before" : ""}`} data-card-id={id} data-pharos-target={`card:${id.split(":")[0]}`} data-category={category} data-xray={xray ? "" : undefined} data-revealable={xray && onReveal ? "" : undefined} aria-hidden={xray && !onReveal || undefined}
     style={{ "--query-tone": style.tone, "--query-lean": `${lean}deg` } as React.CSSProperties}
     draggable={!xray && Boolean(onDragStart)} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={onDrop ? event => event.preventDefault() : undefined} onDrop={onDrop}>
+    {!editing && !xray ? <DataReadinessIndicator id={`card:${id}`} title={title} dataset={readiness.dataset} query={readiness.query} empty={preview?.state==="empty"} updatedAt={preview?.updatedAt} refreshing={preview?.refreshing} refreshError={preview?.refreshError} className="query-card-readiness" /> : null}
     {editing ? <div className="query-card-open query-card-editing">{cover}{caption}</div> : null}
     {editing ? null : discovery && !xray ? <span className="query-drag-tip"><Icon name="arrow-up" /> Drag up to collect</span> : null}
     {editing ? null : error ? <div className="query-card-unavailable">{cover}<a className="query-card-open" {...linkProps}>{caption}</a></div>

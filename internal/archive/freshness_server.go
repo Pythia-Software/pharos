@@ -65,11 +65,12 @@ func freshnessOps(views []opView) []freshnessOp {
 // takes what the cache has, or leaves them unknown.
 func (s *Server) freshness(ctx context.Context, views []opView, cachedOnly bool) []freshnessRow {
 	config := s.Config()
-	in := freshnessInput{host: currentHost().ID, now: time.Now(), sources: []string{}, ops: freshnessOps(views),
+	in := freshnessInput{host: currentHost().ID, now: time.Now(), sources: []string{}, sourceKinds: map[string]string{}, ops: freshnessOps(views),
 		viewStopped: s.Catalog.libraryRefreshStopped(), files: s.freshnessFiles(config, views, cachedOnly)}
 	for _, source := range config.Sources {
 		if source.Enabled {
 			in.sources = append(in.sources, source.Name)
+			in.sourceKinds[source.Name] = source.Kind
 		}
 	}
 	// The latest finished index left these sources to a running capture.

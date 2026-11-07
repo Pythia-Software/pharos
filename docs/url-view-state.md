@@ -53,7 +53,7 @@ The audit reviewed 178 disclosure/expansion source sites, including 41 previousl
 | Surface | Portable state |
 |---|---|
 | Layout settings | `menuBarPreferences`, `headerSettings`, `quickStatsSettings` |
-| Capture/index settings | `sync:separate`, `sync:repairs`, `sync:diagnostics`, `sync:forecast:<run ID>` |
+| Capture/index settings | `sync:history`, `sync:sources`, `sync:repairs`, `sync:diagnostics`, `sync:forecast:<run ID>` |
 | Background schedule items | `background:<item ID>`; several rows may open together |
 | Connected cloud schedules | `cloud:schedule:<destination ID>`; IDs survive renaming and reordering |
 | Library health and app location | `library:drive-health`, `library:application` |
@@ -68,7 +68,26 @@ Draft controls are explicitly classified as editing: source/library onboarding; 
 
 `check-view-controls` now rejects native accordions, summaries, and `aria-expanded` controls classified only as `settings`. JSX expansion attributes and classic `setAttribute("aria-expanded", ...)` sites are included in the inventory. Static HTML `data-view-field` bindings are discovered directly, so settings values cannot accidentally hide a missing view binding in the review ledger. New controls still require individual review.
 
+## Timeline Key
+
+The timeline Key uses the dashboard legend menu: show only a value or category,
+add/remove values, show everything except a value or category, or reset that
+section. Hidden values stay in the Key with muted, desaturated swatches so they
+can be restored. Sender, Receiver and message-mode families apply to all of
+their displayed labels, with mixed selection indicated on the parent.
+
+`timeline_visibility` stores independent `modes`, `events`, `tools` and `origins`
+selections. Each optional section has `{values: string[], excluded: boolean}`;
+an absent section or empty values shows everything in that section. Values use
+stable message-label IDs (`?` for uncategorized), event-group keys, tool-category
+IDs (`error` for failed calls), or caller-source IDs. The selection filters
+ribbon spans, event arcs and markers, counts and inspection targets together.
+Original timing, zoom, idle compression and retained records remain unchanged.
+Caller-source filtering preserves each run's original portion of the message.
+
 ## Agent interface
+
+On work pages, **Hierarchy & usage** uses `delegation_scope=self|all` for both its visible metrics and sorting (`all`, or **Self + children**, is the default). The selection survives returning from a ranking to the hierarchy. Each session's **Timeline** button sets `explorer=timeline`, `delegation_session`, `delegation_start`/`delegation_end` to that session's own evidence span, and `delegation_page` to its hierarchy page. It opens `disclosures["delegation-labels:<session ID>:session"]` and resets deeper event disclosures for that session, showing one event level. Session names continue to open the conversation reader.
 
 Ask Pharos uses the existing MCP CLI-style interface:
 
@@ -92,6 +111,8 @@ For example:
 A native `query` includes its filters/time predicates; give it without `filters`, `days` or `card`. It carries ordered columns/widths, sort, grouping, summaries, metrics, page size/offset, item properties and host search. Host-state parameter mirrors must agree. Advanced Search uses `view.search_state` with a complete `TextSearchDraft`; Analyze record search uses `view.record_keyword`.
 
 Home card links open full dashboards directly with `analyze_chart` and `analyze_filters`. Collected-card source queries and cover metadata remain in storage for previews and editing, and are removed from navigation links. There is no expanded-card page. Dashboard Today links may pin an IANA zone with `analyze_timezone`. **Create card** saves that canonical dashboard URL to the Home collection, including chart, filters, Today/timezone, Carbon assumptions and Parallelism counting/gap settings. Card names, descriptions, categories and calls to action, and the creation dialog, are authoring data/drafts; they do not add view parameters. One dashboard URL can hold several charts (Parallelism draws its ribbon above its catalog chart): each chart has its own **Create card** button, the dialog chooses among them, and the card stores its choice as `dashboardTarget` beside the URL rather than in it. Custom card previews resolve the saved URL and run the dashboard’s analysis/trend models again.
+
+A catalog dashboard's `analyze_filters` terms other than its range are its **population**: every view, breakdown and panel counts only those records. A catalog with `population` (Session Shape) shows them as removable chips in a Population control beside Range, edits them as a draft with the query filter editor, and lets a legend value's menu add one: "Count only this value" writes `{field, op: "=", value}` on the breakdown's field, "Leave this value out" `{any: [{field, op: "!=", value}, {field, op: "is_null"}]}`. A legend selection stays in `analyze_chart` and only chooses what is drawn; "Make this the population" moves it into the filters. The chart title names a partial population ("· excluding antigravity-cli"). There is no separate parameter: site_link's `filters` are these terms, as in `{"page": "analyze/session_shape", "filters": [{"field": "agent_kind", "op": "=", "value": "root"}]}`.
 
 Analyze query pages accept `options.return_topic` (`analyze_topic`) independently of their dataset so a supporting query returns to the dashboard that opened it.
 
@@ -125,7 +146,7 @@ Cmd/Ctrl+F opens one Find bar on every page, including the conversation reader (
 
 ## Attention colours
 
-Highlighter colours mean only "Find or a link is pointing here". `ui.py` defines them in `:root` (light and dark): `--attention-mark` (all matches, count badges), `--attention-current` (the current match, `reveal`, the Find trail), `--attention-ring` (`highlight` outlines, collapsed containers holding matches) and `--attention-ink`. Only `page-find.css`, `view-attention.css` and the reader's deep-link landing (`.authorship-target`) use them. `web/tests/unit/page/attention-colors.test.mjs` enforces this, and keeps the raw hex values out of every other source.
+Highlighter colours mean "Find, a link or a Data Guide explanation is pointing here". `ui.py` defines them in `:root` (light and dark): `--attention-mark` (all matches, count badges), `--attention-current` (the current match, `reveal`, the Find trail), `--attention-ring` (`highlight` outlines, collapsed containers holding matches) and `--attention-ink`. Only `page-find.css`, `view-attention.css` and the reader's deep-link landing (`.authorship-target`) use them. The guide's declarative `.pharos-guide-highlight` shares the linked-highlight style in `view-attention.css`; it marks the illustrated region described by the selected term, independently of keyboard focus and URL attention targets. `web/tests/unit/page/attention-colors.test.mjs` enforces colour ownership and keeps the raw hex values out of every other source.
 
 Other UI stays away from that look:
 

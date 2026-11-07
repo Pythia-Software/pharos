@@ -1266,7 +1266,7 @@ func (c *Catalog) refreshAuthorshipInContext(parent context.Context) bool {
 // messages changed since the ledger was built.
 func (c *Catalog) ensureAuthorship() (stale bool) {
 	want, built, err := c.authorshipEstimateGenerations()
-	if err != nil || want == built {
+	if err != nil || want == built && !c.authorshipQuickPending() {
 		return false
 	}
 	c.authorship.mu.Lock()
@@ -1414,7 +1414,15 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, forc
 					return err
 				}
 			}
-			for key, value := range map[string]string{"authorship_generation": generation, "authorship_state_generation": generation, "authorship_built_at": now(), "authorship_quick_generation": generation, "authorship_quick_at": now(), "authorship_quick_version": authorshipQuickVersion} {
+			metadata := map[string]string{"authorship_generation": generation, "authorship_state_generation": generation, "authorship_built_at": now(), "authorship_quick_generation": generation, "authorship_quick_at": now(), "authorship_quick_version": authorshipQuickVersion}
+			var pending bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM authorship_pending)`).Scan(&pending); err != nil {
+				return err
+			}
+			if !pending {
+				metadata["authorship_complete_at"] = now()
+			}
+			for key, value := range metadata {
 				if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 					return err
 				}
@@ -1428,6 +1436,7 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, forc
 	}
 	full := run.classifier == nil
 	if full {
+		run.refinementKey = authorshipRefinementKey(run.checkpoint.revision)
 		run.inputs, run.launches, err = c.authorshipInputs(ctx)
 		if err != nil {
 			return err
@@ -1768,25 +1777,31 @@ func (c *Catalog) AuthorshipStats(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	want, refined, err := c.authorshipGenerations()
+	refinementPending, err := c.authorshipRefinementPending(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var provisional, pending, deferred int
-	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM authorship_message_state WHERE provisional=1").Scan(&provisional); err != nil {
+	var provisional, deferred int
+	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM authorship_message_state WHERE provisional=1 AND disposition='counted'").Scan(&provisional); err != nil {
 		return nil, err
 	}
-	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM authorship_message_state WHERE provisional=1 AND version=?", authorshipVersion+"/deferred").Scan(&deferred); err != nil {
+	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM authorship_message_state WHERE disposition='deferred'").Scan(&deferred); err != nil {
 		return nil, err
 	}
-	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM authorship_pending").Scan(&pending); err != nil {
+	backlog, err := c.authorshipBacklog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	completeAt, err := c.metaValue(ctx, "authorship_complete_at")
+	if err != nil {
 		return nil, err
 	}
 	state := &c.authorship
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return map[string]any{
-		"refined_at": nilIfEmpty(refinedAt), "refinement_pending": want != refined || provisional > 0, "provisional_messages": provisional - deferred, "deferred_messages": deferred, "pending_messages": pending, "refining": state.refining,
+		"refined_at": nilIfEmpty(refinedAt), "refinement_pending": refinementPending, "provisional_messages": provisional, "deferred_messages": deferred, "pending_messages": backlog.Pending,
+		"pending_recent_messages": backlog.Recent, "pending_historical_messages": backlog.Historical, "oldest_pending_sent_at": nilIfEmpty(backlog.OldestSent), "oldest_pending_queued_at": nilIfEmpty(backlog.OldestQueued), "complete_at": nilIfEmpty(completeAt), "refining": state.refining,
 		"version": authorshipVersion, "built_at": nilIfEmpty(builtAt), "running": state.running, "stale": stale, "error": nilIfEmpty(state.lastError),
 		"window_hours": int(authorshipWindow.Hours()), "totals": totals[0], "last_30_days": recent[0], "daily": daily,
 	}, nil

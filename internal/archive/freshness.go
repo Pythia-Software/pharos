@@ -55,6 +55,13 @@ type freshnessRow struct {
 	// Next says what catches it up when nothing is running.
 	Next   *string `json:"next"`
 	NextAt *string `json:"next_at,omitempty"`
+	// PendingSince is observed queued input, never the age of published output.
+	PendingSince *string `json:"pending_since,omitempty"`
+	// OutputMissing is independent of the current operation/reason. It means a
+	// required first output has not been published; partial results may still exist.
+	OutputMissing bool `json:"output_missing,omitempty"`
+	// TaskID identifies the source's owning background task, when known.
+	TaskID string `json:"task_id,omitempty"`
 	// short is the summary's words for a scheduled row ("updates
 	// tomorrow").
 	short string
@@ -184,6 +191,9 @@ type freshnessInput struct {
 	// sources are this Mac's enabled live sources; nil takes every source
 	// the state tables know for this host.
 	sources []string
+	// sourceKinds comes from enabled source configuration when available;
+	// catalog-only callers fall back to the last recorded source kind.
+	sourceKinds map[string]string
 	// ops are this Mac's queued and running operations.
 	ops []freshnessOp
 	// deferredToCapture are sources the latest index left to a running
@@ -224,7 +234,7 @@ type freshnessCapture struct {
 var freshnessMetaKeys = []string{"message_trigram_version", toolOutputMergedKey, "text_search_documents_version", "text_search_documents_cursor", "tool_command_fts_version",
 	"human_query_text_fts_ready", "tool_query_text_fts_ready", "tool_query_facts_ready", "workspace_library_version",
 	"tool_ledger_generation", "tool_rollup_generation", "tool_rollup_day", "tool_rollup_timezone", "tool_rollup_full_revision", "tool_rollup_built_full_revision",
-	"authorship_inputs_generation", "authorship_generation", "authorship_built_at", "authorship_quick_generation", "authorship_quick_at", "authorship_refined_at", "findings_generation", "findings_built_at",
+	"authorship_inputs_generation", "authorship_generation", "authorship_built_at", "authorship_quick_generation", "authorship_quick_at", "authorship_complete_at", "authorship_refined_at", "findings_generation", "findings_built_at",
 	"findings_inputs_generation", "analysis_inputs:identities", "analysis_inputs:git", upgradeCountKey, initializedBuildKey}
 
 // libraryVersionOnce is libraryVersion, which hashes the projection's
@@ -301,6 +311,11 @@ func (l *ledger) itemCadence(id string) string {
 // within the cadence's window, late past it, and behind for the manual
 // index when the schedule will not run it.
 func (l *ledger) scheduledFor(entry *domainEntry, item, pendingSince string) {
+	if since, ok := parseTime(pendingSince); ok {
+		if previous, known := parseTime(entry.pendingSince); !known || since.Before(previous) {
+			entry.pendingSince = pendingSince
+		}
+	}
 	cadence := l.itemCadence(item)
 	if cadence == cadenceManual {
 		entry.state, entry.reason, entry.next = freshBehind, "deferred-by-schedule", nextManualIndex
@@ -340,6 +355,9 @@ type domainEntry struct {
 	unit                 string
 	reason, detail       string
 	next, nextAt         string
+	pendingSince         string
+	outputMissing        bool
+	taskID               string
 	// running is the code used when an operation is catching it up.
 	running string
 	// short is the Data row's muted words while scheduled.
@@ -351,7 +369,7 @@ type domainEntry struct {
 // first, §5).
 func (l *ledger) add(entry domainEntry) {
 	row := freshnessRow{Domain: entry.domain, Group: entry.group, Label: entry.label, AsOf: optional(entry.asOf),
-		Behind: freshnessBehind{State: entry.state}}
+		Behind: freshnessBehind{State: entry.state}, OutputMissing: entry.outputMissing, TaskID: entry.taskID}
 	if entry.countKnown && entry.state != freshCurrent {
 		count := entry.count
 		row.Behind.Count = &count
@@ -375,6 +393,9 @@ func (l *ledger) add(entry domainEntry) {
 	}
 	if entry.state != freshCurrent && row.CatchingUp == nil {
 		row.Next, row.NextAt = optional(entry.next), optional(entry.nextAt)
+	}
+	if entry.state != freshCurrent {
+		row.PendingSince = optional(entry.pendingSince)
 	}
 	row.StateLabel = freshnessStateLabels[entry.state]
 	row.short = entry.short
@@ -558,10 +579,20 @@ func (l *ledger) conversations(ctx context.Context, c *Catalog) {
 	for _, name := range sources {
 		entry := domainEntry{domain: "conv:" + name, group: "conversations", label: "Conversations (" + name + ")", running: "indexing"}
 		state := states[name]
+		kind := l.in.sourceKinds[name]
+		if kind == "" && state != nil {
+			kind = state.kind
+		}
 		// Scheduled indexing reads only automaticProvider's kinds
 		// (autoSources); the others are read in full by the other-sources
 		// background item, on its cadence.
-		wholeSource := state != nil && state.kind != "" && !automaticProvider(state.kind)
+		wholeSource := kind != "" && !automaticProvider(kind)
+		if kind != "" {
+			entry.taskID = "conversations"
+			if wholeSource {
+				entry.taskID = "other-sources"
+			}
+		}
 		cadence := l.itemCadence("conversations")
 		if wholeSource {
 			cadence = l.itemCadence("other-sources")
@@ -579,6 +610,7 @@ func (l *ledger) conversations(ctx context.Context, c *Catalog) {
 			entry.asOf = latestTime(state.success, state.automaticSuccess, state.automaticIndexed)
 		}
 		asOf, indexed := parseTime(entry.asOf)
+		entry.outputMissing = known && settingsErr == nil && !indexed
 		switch {
 		case !known || settingsErr != nil:
 			entry.state = freshUnknown
@@ -728,7 +760,7 @@ func libraryInputs(meta map[string]string) string {
 // stops at the first that fails.
 var chainStages = []struct{ kind, domain, label string }{
 	{"analysis.github", "", "GitHub check"}, {"analysis.identities", "an.identities", "Identity links"}, {"analysis.git", "an.git", "Merges from Git"},
-	{"analysis.tools", "an.tools", "Tools rollup"}, {"analysis.authorship", "an.authorship", "Writing classification"}, {"analysis.findings", "findings", "Findings"}}
+	{"analysis.tools", "an.tools", "Tool summaries"}, {"analysis.authorship", "an.authorship", "Writing classification"}, {"analysis.findings", "findings", "Findings"}}
 
 // chainFailure applies failure precedence (§5) to a domain that is not
 // current: its own stage failed after its last completion (and after the
@@ -794,7 +826,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 
 	// The Tools rollup: built for the ledger's generation, this layout and
 	// this timezone, with no dirty workspaces.
-	tools := domainEntry{domain: "an.tools", group: "analyses", label: "Tools rollup", state: freshCurrent,
+	tools := domainEntry{domain: "an.tools", group: "analyses", label: "Tool summaries", state: freshCurrent,
 		asOf: latestTime(deferred["tools"].completedAt, ends["analysis.tools"].succeeded)}
 	var dirty int64
 	dirtyErr := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM (SELECT 1 FROM tool_rollup_dirty LIMIT ?)", freshnessCap).Scan(&dirty)
@@ -821,16 +853,22 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 			tools.count, tools.countKnown, tools.unit = dirty, true, "workspace"
 		}
 	}
+	tools.outputMissing = metaErr == nil && deferredErr == nil && dirtyErr == nil && built == "" && tools.asOf == "" && tools.state != freshCurrent
 	l.add(tools)
 
 	// Writing classification: built for the ledger and record generations.
-	authorship := domainEntry{domain: "an.authorship", group: "analyses", label: "Writing estimates", asOf: latestTime(meta["authorship_built_at"], meta["authorship_quick_at"]), state: freshCurrent}
+	authorship := domainEntry{domain: "an.authorship", group: "analyses", label: "Writing estimates", asOf: meta["authorship_complete_at"], state: freshCurrent}
+	backlog, backlogErr := c.authorshipBacklog(ctx)
+	if backlog.Pending > 0 {
+		authorship.count, authorship.countKnown, authorship.unit = int64(backlog.Pending), true, "message"
+		authorship.pendingSince = backlog.OldestQueued
+	}
 	want := inputs + "/" + authorshipVersion
 	changedAt, isDeferred = pendingDeferral("authorship")
 	switch {
-	case metaErr != nil || deferredErr != nil:
+	case metaErr != nil || deferredErr != nil || backlogErr != nil:
 		authorship.state = freshUnknown
-	case (meta["authorship_generation"] == want || meta["authorship_quick_generation"] == want) && !isDeferred && !c.authorshipQuickPending():
+	case (meta["authorship_generation"] == want || meta["authorship_quick_generation"] == want) && !isDeferred && backlog.Pending == 0:
 	case l.nothingToDo(&authorship):
 	case chainFailure(&authorship, ends, changedAt):
 	case isDeferred:
@@ -840,13 +878,18 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	default:
 		authorship.state, authorship.reason, authorship.next = freshBehind, "changed", nextManualIndex
 	}
+	if backlog.Pending > 0 {
+		authorship.detail = backlog.note(l.in.now)
+	}
+	authorship.outputMissing = metaErr == nil && deferredErr == nil && backlogErr == nil && authorship.asOf == "" && meta["authorship_generation"] == "" && meta["authorship_quick_generation"] == "" && authorship.state != freshCurrent
 	l.add(authorship)
+	refinementPending, refinementErr := c.authorshipRefinementPending(ctx)
 	refinement := domainEntry{domain: "an.authorship.refined", group: "analyses", label: "Writing refinement", asOf: meta["authorship_refined_at"], state: freshCurrent}
 	switch {
-	case metaErr != nil:
+	case metaErr != nil || refinementErr != nil:
 		refinement.state = freshUnknown
 	case l.nothingToDo(&refinement):
-	case meta["authorship_generation"] != want:
+	case refinementPending:
 		l.scheduledFor(&refinement, "writing-refine", meta["authorship_built_at"])
 	}
 	l.add(refinement)
@@ -855,7 +898,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	// Counting them reads every conversation, so the ledger takes the count
 	// from the last time anything asked for the upgrade's steps, and only
 	// while the library has not changed since.
-	ledgerEntry := domainEntry{domain: "an.ledger", group: "analyses", label: "Tools ledger", unit: "conversation", next: nextUpgrade}
+	ledgerEntry := domainEntry{domain: "an.ledger", group: "analyses", label: "Tool index", unit: "conversation", next: nextUpgrade}
 	if steps, ok := l.countedSteps(meta, metaErr, &ledgerEntry); ok {
 		pending := int64(0)
 		for _, step := range steps {
@@ -942,6 +985,7 @@ func (l *ledger) findings(c *Catalog, meta map[string]string, metaErr error, def
 			entry.short = "updates with manual index"
 		}
 	}
+	entry.outputMissing = metaErr == nil && deferredErr == nil && entry.asOf == "" && meta["findings_generation"] == "" && entry.state != freshCurrent
 	l.add(entry)
 }
 

@@ -1,4 +1,6 @@
+import {dataEntities,dataEntityGroups,dataSources,describeDataSource,resolveGuideEntity} from '../../../src/data-taxonomy-model';
 import searchCases from '../../../../testdata/search-draft-cases.json';
+import timelineVisibilityCases from '../../../../testdata/timeline-visibility-cases.json';
 import inspectionCases from '../../../../testdata/json-inspection-cases.json';
 import {parseDetailTarget,detailReference,revealQueryDetail} from '../../../src/query-attention';
 import {findingsRank} from '../../../src/findings-route';
@@ -41,11 +43,21 @@ test('semantic detail targets preserve typed identities, reject ambiguous paths,
 });
 
 test('host view codecs preserve explicit false, empty values, ordered IDs and relative intent',()=>{
- const values={card_window:'today',card_filters:false,search_cards:{},delegation_columns:['cost','tokens'],reader_expanded:['message:m'],disclosures:{'row:r:input':true},findings_rank:'tokens'};
+ const values={card_window:'today',card_filters:false,search_cards:{},delegation_columns:['cost','tokens'],reader_expanded:['message:m'],disclosures:{'row:r:input':true},findings_rank:'tokens',timeline_visibility:{modes:{values:['C.report.finding','?'],excluded:false},events:{values:['friction'],excluded:true},tools:{values:['error'],excluded:true},origins:{values:['typed'],excluded:false}}};
  for(const [key,value]of Object.entries(values))assert.deepEqual(parseViewValue(viewFields[key],encodeViewValue(viewFields[key],value)),value,key);
  assert.equal(fieldsForPage('findings/settings').findings_rank,undefined);
  assert.equal(fieldsForPage('analyze/query/tool_calls','tool_calls').record_keyword.param,'record_tool_calls');
  for(const [key,raw]of [['card_filters','false'],['card_window','forever'],['delegation_columns','[1]'],['search_state','{}']])assert.throws(()=>parseViewValue(viewFields[key],raw),key);
+ for(const sample of timelineVisibilityCases){
+  if(sample.valid)assert.deepEqual(parseViewValue(viewFields.timeline_visibility,encodeViewValue(viewFields.timeline_visibility,sample.state)),sample.state,sample.name);
+  else assert.throws(()=>encodeViewValue(viewFields.timeline_visibility,sample.state),undefined,sample.name);
+ }
+ for(const count of [1000,1001]){
+  const state={modes:{values:Array(count).fill('?'),excluded:false}};
+  if(count===1000)assert.doesNotThrow(()=>encodeViewValue(viewFields.timeline_visibility,state));
+  else assert.throws(()=>encodeViewValue(viewFields.timeline_visibility,state));
+ }
+ assert.deepEqual(parseViewValue(viewFields.timeline_visibility,'{}'),{});
 });
 
 test('Safety links restore their own section, lifecycle, case and evidence disclosures',()=>{
@@ -425,4 +437,22 @@ test('a linked Findings rank applies without saving; a manual choice saves the d
  assert.deepEqual(findingsRank('','tokens'),{rank:'tokens'},'an unlinked view shows the saved default');
  assert.deepEqual(findingsRank('',undefined),{rank:'usd'});
  assert.deepEqual(findingsRank('minutes','usd','tokens'),{rank:'tokens',save:{rank:'tokens'}});
+});
+
+
+test('every guide term and dataset round-trips through the shared view contract',()=>{
+ const grouped=dataEntityGroups.flatMap(group=>group.entities);
+ assert.equal(new Set(grouped).size,grouped.length);
+ assert.deepEqual([...grouped].sort(),Object.keys(dataEntities).sort());
+ for(const term of grouped)assert.equal(parseViewValue(viewFields.guide_entity,encodeViewValue(viewFields.guide_entity,term)),term);
+ for(const [dataset,source]of Object.entries(dataSources)){
+  assert.ok(dataEntities[source.entity],dataset);
+  assert.equal(parseViewValue(viewFields.guide_dataset,encodeViewValue(viewFields.guide_dataset,dataset)),dataset);
+ }
+ for(const [oldTerm,noun]of [['datasets','conversations'],['labels','messages'],['findings','conversations'],['model_requests','tokens'],['execution_machines','machines']]){
+  const linked=parseViewValue(viewFields.guide_entity,oldTerm);
+  assert.equal(resolveGuideEntity(linked),noun,'older guide links still open the related history');
+ }
+ assert.equal(describeDataSource('parallelism','workspace').entity,'workspaces');
+ assert.equal(describeDataSource('parallelism','agent').entity,'conversations');
 });

@@ -32,27 +32,29 @@ type delegationMetricSpec struct {
 }
 
 var delegationMetrics = []delegationMetricSpec{
-	{"start", "First evidence", "date", "Earliest retained timestamp, not a lifecycle start."},
-	{"tokens", "Tokens", "tokens", "Reconciled session usage. Cache is a subset of input; reasoning is a subset of output."},
+	{"start", "First evidence", "date", "Earliest saved timestamp; the agent may have started earlier."},
+	{"tokens", "Tokens", "tokens", "Self shows usage attributed to this agent session. ≥ marks a reported minimum. Self + children includes unallocated branch usage and reconciles overlapping observations; cached input is included."},
 	{"cost", "API cost", "usd", "API-rate estimate on the date of use, not billing. Partial values are lower bounds."},
 	{"calls", "Tool calls", "count", "Distinct retained tool invocations."}, {"errors", "Errors", "count", "Reported tool failures; not the outcome of the agent."},
+	{"events", "Agent events", "count", "Retained agent events at the display probability threshold, attributed through session message membership. Unprocessed messages may contain additional events."},
 	{"files", "Files Edited", "count", "Distinct file paths recorded by successful edit/write tools, including adds/deletes. Repeated edits count once; Self + children deduplicates across sessions. Shell edits and extra paths in multi-file patches may be unavailable."},
-	{"messages", "Messages", "count", "Retained session message membership."}, {"requests", "Requests", "count", "Distinct retained model requests."}, {"turns", "User turns", "count", "Retained user message starts; injected agent assignments do not count as user turns."},
+	{"filesRead", "Files read", "count", "Distinct file paths recorded by successful read tools. Repeated reads count once; Self + children deduplicates across sessions. Reads without retained paths are incomplete; search/list tools do not count as file reads."},
+	{"messages", "Messages", "count", "Messages recorded in the agent session."}, {"requests", "Model requests", "count", "Distinct recorded model requests."}, {"turns", "User turns", "count", "Retained user message starts; injected agent assignments do not count as user turns."},
 	{"clock", "Clock span", "ms", "Earliest to latest evidence across included sessions, including unclassified time."},
-	{"total", "Session spans", "ms", "Sum of session evidence envelopes. Parallel and inactive time accumulate."},
-	{"toolTime", "Tool elapsed", "ms", "Union of call-to-result intervals across included sessions. Does not measure CPU time."},
-	{"toolAgent", "Agent tool time", "ms", "Sum of each session's tool interval union; parallel agents accumulate."},
+	{"total", "Agent session spans", "ms", "Sum of the time from each agent session’s first to last recorded activity. Overlapping sessions and gaps both add to this total."},
+	{"toolTime", "Tool elapsed", "ms", "Clock time covered by tool calls across included agent sessions. Overlap counts once; this does not measure CPU time."},
+	{"toolAgent", "Agent tool time", "ms", "Sum of each agent session’s tool time, counting overlap once within each session. Parallel sessions add to the total."},
 	{"toolSum", "Tool duration sum", "ms", "Sum of recorded call durations; overlapping calls accumulate."},
 	{"wait", "Blocking wait", "ms", "Requires explicit blocking boundaries. Launch acknowledgements and polling are excluded."},
 	{"modelTime", "Model processing", "ms", "Requires measured model start/end boundaries. Inferred timeline backgrounds are excluded."},
 	{"backgroundTime", "Background process", "ms", "Requires process lifecycle boundaries. A background launch is insufficient."},
-	{"episodes", "Evidence episodes", "count", "Clusters of tool/request timestamps and message-envelope endpoints separated by more than 30 minutes; inferred, not completed runs."},
-	{"children", "Children", "count", "Self counts direct ownership children; Self + children counts all distinct descendants."},
-	{"leaves", "Leaves", "count", "Included sessions with no known ownership children."}, {"depth", "Depth", "count", "Maximum ownership depth of included sessions."},
+	{"episodes", "Activity periods", "count", "Groups of tool calls, model requests and first/last message timestamps separated by more than 30 minutes. These are estimated activity periods; they do not establish when an agent finished."},
+	{"children", "Children", "count", "Self counts directly delegated agent sessions; Self + children counts all delegated descendants once."},
+	{"leaves", "Agents without children", "count", "Included agent sessions with no known delegated children."}, {"depth", "Depth", "count", "Greatest number of delegation levels below the main agent among included agent sessions."},
 	{"input", "Input", "tokens", "Input including cached input."}, {"uncached", "Uncached input", "tokens", "Input excluding cache read and creation."},
 	{"cacheRead", "Cache read", "tokens", "Subset of input."}, {"cacheWrite", "Cache creation", "tokens", "Subset of input."},
 	{"output", "Output", "tokens", "Output including reported reasoning."}, {"reasoning", "Reasoning", "tokens", "Subset of output."},
-	{"remainder", "Unallocated usage", "tokens", "Session total beyond retained request usage. Remains at session level."},
+	{"remainder", "Unallocated usage", "tokens", "Aggregate usage recorded here whose consuming agent session is unknown within this branch. It is included once in Self + children, and may overlap reported child minima."},
 }
 
 type delegationReference struct {
@@ -63,41 +65,48 @@ type delegationReference struct {
 	MessageID      string `json:"message_id,omitempty"`
 }
 type delegationNode struct {
-	ID             string                      `json:"id"`
-	ConversationID string                      `json:"conversation_id"`
-	WorkspaceID    string                      `json:"workspace_id"`
-	ParentID       string                      `json:"parent_id,omitempty"`
-	ParentEvidence string                      `json:"parent_evidence,omitempty"`
-	ExternalParent *delegationReference        `json:"external_parent,omitempty"`
-	ExternalChild  *delegationReference        `json:"external_child,omitempty"`
-	Navigation     *delegationReference        `json:"navigation,omitempty"`
-	ContextOnly    bool                        `json:"context_only,omitempty"`
-	MessageID      string                      `json:"message_id,omitempty"`
-	Label          string                      `json:"label"`
-	Provider       string                      `json:"provider"`
-	Model          string                      `json:"model"`
-	Effort         string                      `json:"effort"`
-	Coverage       string                      `json:"coverage"`
-	Usage          string                      `json:"usage_status"`
-	Depth          int                         `json:"depth"`
-	Outline        string                      `json:"outline"`
-	Order          int                         `json:"order"`
-	ChildCount     int                         `json:"child_count"`
-	Start          *float64                    `json:"start"`
-	End            *float64                    `json:"end"`
-	SubtreeStart   *float64                    `json:"subtree_start"`
-	SubtreeEnd     *float64                    `json:"subtree_end"`
-	Self           map[string]delegationMetric `json:"self"`
-	All            map[string]delegationMetric `json:"all"`
-	children       []*delegationNode
-	tools          []delegationTool
-	requests       []float64
-	points         []float64
-	episodes       []delegationSpan
-	editedFiles    map[string]bool
-	fileCalls      int
-	fileKnown      int
-	filesPartial   bool
+	ID                string                   `json:"id"`
+	ConversationID    string                   `json:"conversation_id"`
+	WorkspaceID       string                   `json:"workspace_id"`
+	ParentID          string                   `json:"parent_id,omitempty"`
+	ParentEvidence    string                   `json:"parent_evidence,omitempty"`
+	ExternalParent    *delegationReference     `json:"external_parent,omitempty"`
+	ExternalChild     *delegationReference     `json:"external_child,omitempty"`
+	Navigation        *delegationReference     `json:"navigation,omitempty"`
+	ContextOnly       bool                     `json:"context_only,omitempty"`
+	MessageID         string                   `json:"message_id,omitempty"`
+	Label             string                   `json:"label"`
+	Provider          string                   `json:"provider"`
+	Model             string                   `json:"model"`
+	Effort            string                   `json:"effort"`
+	Coverage          string                   `json:"coverage"`
+	Usage             string                   `json:"usage_status"`
+	Depth             int                      `json:"depth"`
+	Outline           string                   `json:"outline"`
+	Order             int                      `json:"order"`
+	ChildCount        int                      `json:"child_count"`
+	Start             *float64                 `json:"start"`
+	End               *float64                 `json:"end"`
+	SubtreeStart      *float64                 `json:"subtree_start"`
+	SubtreeEnd        *float64                 `json:"subtree_end"`
+	TokenAttribution  *sessionTokenAttribution `json:"token_attribution,omitempty"`
+	accountedTokens   map[string]delegationMetric
+	unallocatedTokens tokenCounts
+	unallocatedCost   float64
+	Self              map[string]delegationMetric `json:"self"`
+	All               map[string]delegationMetric `json:"all"`
+	children          []*delegationNode
+	tools             []delegationTool
+	requests          []float64
+	points            []float64
+	episodes          []delegationSpan
+	editedFiles       map[string]bool
+	fileCalls         int
+	fileKnown         int
+	filesPartial      bool
+	readFiles         map[string]bool
+	readCalls         int
+	readKnown         int
 }
 type delegationSpan struct {
 	Start float64 `json:"start"`
@@ -227,7 +236,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		return nil, err
 	}
 	if len(sessions) > 10000 || len(conversations) > 10000 {
-		return nil, fmt.Errorf("workspace exceeds the 10,000-session analysis limit")
+		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
 	}
 	s := &delegationSnapshot{ByID: map[string]*delegationNode{}, Aliases: map[string]string{}, Maxima: map[string]map[string]float64{"self": {}, "all": {}}, Density: make([]int, 120), Warnings: []string{}}
 	conv := map[string]map[string]any{}
@@ -264,7 +273,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		raw[firstString(row["id"])] = row
 	}
 	if len(sessions) > 10000 {
-		return nil, fmt.Errorf("workspace exceeds the 10,000-session analysis limit")
+		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
 	}
 	external := map[string]*delegationReference{}
 	reference := func(id string) (*delegationReference, error) {
@@ -353,7 +362,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 				}
 			}
 		}
-		for _, key := range []string{"calls", "errors", "messages", "requests", "turns", "toolSum"} {
+		for _, key := range []string{"calls", "errors", "messages", "events", "requests", "turns", "toolSum"} {
 			n.Self[key] = delegationNumber(0, "observed", 0, 0)
 		}
 		s.Nodes = append(s.Nodes, n)
@@ -406,7 +415,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		child.MessageID = firstString(row["delegation_message_id"])
 		child.ParentEvidence = "exact-delegation-handle"
 		if s.Aliases[id] == "" {
-			s.Warnings = append(s.Warnings, "A linked delegation retains independent usage; both source sessions are shown.")
+			s.Warnings = append(s.Warnings, "A linked helper has separate usage in its source; both agent sessions are shown.")
 		}
 	}
 	launches, err := queryMapsContext(ctx, tx, `SELECT l.child_id,l.parent_id,t.call_message_id FROM conversation_launches l JOIN conversations c ON c.id=l.child_id LEFT JOIN tool_calls t ON t.id=l.tool_call_id WHERE c.workspace_id=?`, workspace)
@@ -527,6 +536,24 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			bump(n, "toolSum", v)
 		}
 		category, _ := toolCategory(name, "tool_call")
+		// Listing tools share the read category and retain directory paths.
+		// Exclude them from both path counts and read-coverage accounting.
+		listing := command.String == "list"
+		switch strings.ToLower(name) {
+		case "ls", "list_dir", "list_directory":
+			listing = true
+		}
+		if !listing && (cat == "read" || category == "read" || command.String == "read") && status != "error" {
+			n.readCalls++
+			key := delegationFileKey(file.String, absolute.String, repoPath.String, repoID.String, cid)
+			if status == "ok" && key != "" {
+				if n.readFiles == nil {
+					n.readFiles = map[string]bool{}
+				}
+				n.readFiles[key] = true
+				n.readKnown++
+			}
+		}
 		if (cat == "edit" || cat == "write" || category == "edit") && status != "error" {
 			n.fileCalls++
 			key := delegationFileKey(file.String, absolute.String, repoPath.String, repoID.String, cid)
@@ -616,6 +643,45 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		point(n, delegationTime(start.String))
 		point(n, delegationTime(end.String))
 	}
+	// Count the same retained events shown by the reader and timeline. Stream
+	// only identities; alias memberships must not count an event twice.
+	events, err := tx.QueryContext(ctx, `SELECT e.id,e.conversation_id,am.agent_session_id
+ FROM conversations c JOIN agent_events e ON e.conversation_id=c.id
+ JOIN messages m ON m.id=e.message_id
+ LEFT JOIN agent_session_messages am ON am.message_id=m.id
+ WHERE c.workspace_id=? AND e.probability>=?`, workspace, agentEventThreshold)
+	if err != nil {
+		return nil, err
+	}
+	seenEvents := map[string]map[int64]bool{}
+	for events.Next() {
+		eventCount++
+		if eventCount > 500000 {
+			events.Close()
+			return nil, fmt.Errorf("workspace exceeds the 500,000-event analysis limit")
+		}
+		var id int64
+		var cid string
+		var sid sql.NullString
+		if err = events.Scan(&id, &cid, &sid); err != nil {
+			events.Close()
+			return nil, err
+		}
+		if n := owner(sid.String, cid); n != nil {
+			if seenEvents[n.ID] == nil {
+				seenEvents[n.ID] = map[int64]bool{}
+			}
+			if !seenEvents[n.ID][id] {
+				bump(n, "events", 1)
+				seenEvents[n.ID][id] = true
+			}
+		}
+	}
+	err = events.Err()
+	events.Close()
+	if err != nil {
+		return nil, err
+	}
 	book, err := c.loadPriceBookFrom(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -624,11 +690,55 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	if err != nil {
 		return nil, err
 	}
+	evidence, err := queryMapsContext(ctx, tx, `SELECT e.*,m.conversation_id,a.workspace_id FROM agent_session_token_evidence e JOIN agent_sessions a ON a.id=e.agent_session_id JOIN messages m ON m.id=e.message_id WHERE a.workspace_id=? ORDER BY e.agent_session_id,e.message_id`, workspace)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range evidence {
+		if n := owner(firstString(row["agent_session_id"]), ""); n != nil {
+			// The launch is a navigation placeholder for usage held in another
+			// workspace. Keep its source observation in storage, but do not
+			// turn it into a second workspace's consumed-token total.
+			if n.ExternalChild != nil && n.Usage == "unavailable" {
+				continue
+			}
+			if n.TokenAttribution == nil {
+				n.TokenAttribution = &sessionTokenAttribution{}
+			}
+			e := sessionTokenEvidence{Scope: firstString(row["scope"]), TotalTokens: integer(row["total_tokens"]), MessageID: firstString(row["message_id"]), ConversationID: firstString(row["conversation_id"]), WorkspaceID: firstString(row["workspace_id"])}
+			n.TokenAttribution.Evidence = append(n.TokenAttribution.Evidence, e)
+			n.TokenAttribution.Observed = max(n.TokenAttribution.Observed, float64(e.TotalTokens))
+		}
+	}
+	var attributionVersion string
+	if err := tx.QueryRowContext(ctx, "SELECT version FROM usage_attribution_state WHERE workspace_id=?", workspace).Scan(&attributionVersion); err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	// Version 6 introduced scoped remainder provenance. Older ledgers used
+	// request for both requests and remainders, so retain their previous view.
+	scopedLedger := integer(attributionVersion) >= 6
+	scopedNodes := map[string]bool{}
 	priceStatus := map[string]string{}
 	for _, row := range ledger {
 		n := owner(firstString(row["agent_session_id"]), "")
 		if n == nil {
 			continue
+		}
+		remainder := strings.HasSuffix(firstString(row["attribution"]), "-remainder")
+		if scopedLedger || remainder {
+			scopedNodes[n.ID] = true
+			if n.TokenAttribution == nil {
+				n.TokenAttribution = &sessionTokenAttribution{}
+			}
+		}
+		sharedRemainder := remainder && (len(n.children) > 0 || n.ExternalChild != nil)
+		if sharedRemainder {
+			if n.unallocatedTokens == nil {
+				n.unallocatedTokens = tokenCounts{}
+			}
+			for key, field := range tokenFields {
+				n.unallocatedTokens[key] += float64(integer(row[field]))
+			}
 		}
 		day := firstString(row["usage_hour"])
 		if len(day) > 10 {
@@ -638,6 +748,9 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		priceStatus[n.ID] = worsePriceStatus(priceStatus[n.ID], cost.status)
 		if cost.cost != nil {
 			bump(n, "cost", *cost.cost)
+			if sharedRemainder {
+				n.unallocatedCost += *cost.cost
+			}
 		}
 	}
 	for _, n := range s.Nodes {
@@ -652,8 +765,61 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			}
 			n.Self["cost"] = v
 		}
-		if t := n.Self["tokens"]; t.Value != nil {
-			n.Self["remainder"] = delegationNumber(max(0, *t.Value-requestTokens[n.ID]), t.Quality, 1, 1)
+		if a := n.TokenAttribution; a != nil {
+			n.accountedTokens = map[string]delegationMetric{}
+			for key := range tokenFields {
+				m := n.Self[key]
+				n.accountedTokens[key] = m
+				if m.Value != nil {
+					n.Self[key] = delegationNumber(max(0, *m.Value-n.unallocatedTokens[key]), m.Quality, m.Known, m.Total)
+				}
+			}
+			if m := n.accountedTokens["tokens"]; m.Value != nil {
+				a.Accounted = *m.Value
+				a.Unallocated = min(a.Accounted, n.unallocatedTokens["tokens"])
+				a.Direct = max(0, a.Accounted-a.Unallocated)
+				n.Self["remainder"] = delegationNumber(a.Unallocated, "reported", 1, 1)
+			}
+			if m := n.Self["cost"]; m.Value != nil {
+				n.accountedTokens["cost"] = m
+				if a.Direct > 0 {
+					n.Self["cost"] = delegationNumber(max(0, *m.Value-n.unallocatedCost), m.Quality, m.Known, m.Total)
+				} else {
+					n.Self["cost"] = delegationUnknown()
+				}
+			}
+			if a.Unallocated > 0 {
+				if m := n.Self["cost"]; m.Value != nil {
+					m.Quality = "partial"
+					n.Self["cost"] = m
+				}
+				for key := range tokenFields {
+					m := n.Self[key]
+					if a.Direct == 0 {
+						n.Self[key] = delegationUnknown()
+					} else if m.Value != nil {
+						m.Quality = "partial"
+						n.Self[key] = m
+					}
+				}
+			}
+			if a.Observed > a.Direct {
+				n.Self["tokens"] = delegationNumber(a.Observed, "reported-minimum", 1, 1)
+				if n.Usage == "unavailable" {
+					n.Usage = "reported-minimum"
+				}
+			}
+		}
+		if !scopedNodes[n.ID] {
+			t := n.Self["tokens"]
+			if n.TokenAttribution != nil {
+				t = n.accountedTokens["tokens"]
+			}
+			// Legacy rows without ledger provenance keep their previous view
+			// until the stored-message repair supplies attribution.
+			if t.Value != nil {
+				n.Self["remainder"] = delegationNumber(max(0, *t.Value-requestTokens[n.ID]), t.Quality, 1, 1)
+			}
 		}
 		if n.Start != nil && n.End != nil {
 			span := max(0, *n.End-*n.Start)
@@ -710,6 +876,15 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			n.Self["files"] = delegationNumber(float64(len(n.editedFiles)), quality, n.fileKnown, n.fileCalls)
 		} else {
 			n.Self["files"] = delegationMetric{Quality: "unknown", Total: n.fileCalls}
+		}
+		if n.readCalls == 0 || n.readKnown > 0 {
+			quality := "observed"
+			if n.readKnown < n.readCalls {
+				quality = "partial"
+			}
+			n.Self["filesRead"] = delegationNumber(float64(len(n.readFiles)), quality, n.readKnown, n.readCalls)
+		} else {
+			n.Self["filesRead"] = delegationMetric{Quality: "unknown", Total: n.readCalls}
 		}
 		n.Self["episodes"] = delegationNumber(float64(len(n.episodes)), "inferred", len(n.episodes), len(n.episodes))
 		if n.ExternalChild != nil && n.Self["tokens"].Value == nil && len(n.tools) == 0 && *n.Self["messages"].Value == 0 && *n.Self["requests"].Value == 0 {
@@ -858,6 +1033,9 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 		quality := "observed"
 		for _, n := range nodes {
 			m := n.Self[spec.ID]
+			if accounted, ok := n.accountedTokens[spec.ID]; ok {
+				m = accounted
+			}
 			if m.Value == nil {
 				continue
 			}
@@ -886,10 +1064,14 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 			quality = "partial"
 		}
 		switch spec.ID {
-		case "files":
+		case "files", "filesRead":
 			files := map[string]bool{}
 			for _, n := range nodes {
-				for key := range n.editedFiles {
+				paths := n.editedFiles
+				if spec.ID == "filesRead" {
+					paths = n.readFiles
+				}
+				for key := range paths {
 					files[key] = true
 				}
 			}
@@ -922,6 +1104,7 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 		}
 		result[spec.ID] = delegationNumber(value, quality, known, len(nodes))
 	}
+	result["tokens"] = delegationTokenTotal(nodes)
 	return result
 }
 

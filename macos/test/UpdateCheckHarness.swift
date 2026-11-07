@@ -57,7 +57,208 @@ func refuses(_ work: () throws -> Void, _ message: String) {
     do { try work(); fatalError(message) } catch { }
 }
 
+/// Records WebKit's native sender metadata and forwards the real messages to
+/// the production entry points. The pages request no successful clipboard write,
+/// file picker, update installation, eject or real window movement.
+@MainActor final class BridgeMessages: NSObject, WKScriptMessageHandler, WKScriptMessageHandlerWithReply {
+    let coordinator: ArchiveWebView.Coordinator
+    var results: [Bool: [String: String]] = [:]
+    var senders: [(String, URL?, Bool)] = []
+    var replies: [Bool: Int] = [:]
+
+    init(_ coordinator: ArchiveWebView.Coordinator) { self.coordinator = coordinator }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "bridgeTestResults" {
+            results[message.frameInfo.isMainFrame] = message.body as? [String: String]
+            return
+        }
+        senders.append((message.name, message.frameInfo.request.url, message.frameInfo.isMainFrame))
+        coordinator.userContentController(controller, didReceive: message)
+    }
+
+    func userContentController(
+        _ controller: WKUserContentController, didReceive message: WKScriptMessage,
+        replyHandler: @escaping (Any?, String?) -> Void
+    ) {
+        let mainFrame = message.frameInfo.isMainFrame
+        senders.append((message.name, message.frameInfo.request.url, mainFrame))
+        coordinator.userContentController(controller, didReceive: message) { value, error in
+            self.replies[mainFrame, default: 0] += 1
+            replyHandler(value, error)
+        }
+    }
+}
+
 @main struct UpdateCheckHarness {
+    static func nativeSenderTests() {
+        let origin = URL(string: "http://localhost:18765/")!
+        let cases: [(String, URL?, Bool, Bool)] = [
+            ("exact origin", origin, true, true),
+            ("path/query/fragment", URL(string: "http://localhost:18765/library?q=test#row"), true, true),
+            ("different port", URL(string: "http://localhost:18766/"), true, false),
+            ("missing explicit port", URL(string: "http://localhost/"), true, false),
+            ("invalid port", URL(string: "http://localhost:65536/"), true, false),
+            ("different hostname", URL(string: "http://127.0.0.1:18765/"), true, false),
+            ("different scheme", URL(string: "https://localhost:18765/"), true, false),
+            ("missing URL", nil, true, false),
+            ("invalid URL", URL(string: "http://[invalid"), true, false),
+            ("relative URL", URL(string: "/library"), true, false),
+            ("missing host", URL(string: "http:/library"), true, false),
+            ("same-origin subframe", origin, false, false),
+            ("about document", URL(string: "about:blank"), true, false),
+            ("blob document", URL(string: "blob:http://localhost:18765/id"), true, false),
+            ("data document", URL(string: "data:text/html,hello"), true, false),
+            ("file document", URL(fileURLWithPath: "/tmp/bridge-test.html"), true, false),
+        ]
+        for (label, sender, mainFrame, allowed) in cases {
+            expect(NativeBridgeSender.allows(expectedOrigin: origin, senderURL: sender, isMainFrame: mainFrame) == allowed, label)
+            for handler in NativeBridgeSender.Handler.allCases {
+                for replying in [false, true] {
+                    var actions: [NativeBridgeSender.Handler] = []
+                    var errors: [String] = []
+                    NativeBridgeSender.dispatch(
+                        name: handler.rawValue, expectedOrigin: origin, senderURL: sender, isMainFrame: mainFrame,
+                        replying: replying, reject: { errors.append($0) }, receive: { actions.append($0) }
+                    )
+                    let dispatched = allowed && replying == handler.replies
+                    expect(actions == (dispatched ? [handler] : []), "\(label): only the registered delivery reaches \(handler)")
+                    expect(errors.count == (dispatched ? 0 : 1) && errors.allSatisfy { !$0.isEmpty }, "\(label): a rejection finishes once with a clear error")
+                }
+            }
+        }
+        for url in ["about:blank", "blob:http://localhost:18765/id", "data:text/html,hello", "file:///tmp/page"] {
+            let special = URL(string: url)!
+            expect(!NativeBridgeSender.allows(expectedOrigin: special, senderURL: special, isMainFrame: true), "non-application schemes cannot authorize themselves")
+        }
+        let invalidPort = URL(string: "http://localhost:65536/")!
+        expect(!NativeBridgeSender.allows(expectedOrigin: invalidPort, senderURL: invalidPort, isMainFrame: true), "an invalid application port cannot authorize itself")
+        let https = URL(string: "https://localhost:18765/")!
+        expect(NativeBridgeSender.allows(expectedOrigin: https, senderURL: https, isMainFrame: true), "an HTTPS application origin is allowed")
+        let defaultPort = URL(string: "http://localhost/")!
+        expect(!NativeBridgeSender.allows(expectedOrigin: defaultPort, senderURL: URL(string: "http://localhost:80/"), isMainFrame: true), "an explicit default port remains distinct")
+        for replying in [false, true] {
+            var errors = 0
+            NativeBridgeSender.dispatch(name: "unknown", expectedOrigin: origin, senderURL: origin, isMainFrame: true, replying: replying, reject: { _ in errors += 1 }) { _ in
+                fatalError("an unknown name reached native effects")
+            }
+            expect(errors == 1, "unknown handlers are rejected once")
+        }
+        // Deferred actions retain their reply after dispatch returns. Rejected
+        // folder/eject calls never acquire a callback or begin a native action.
+        for mainFrame in [false, true] {
+            for action in ["chooseFolder", "eject"] {
+                var completion: (() -> Void)?
+                var replies = 0
+                NativeBridgeSender.dispatch(
+                    name: "pharosLibrary", expectedOrigin: origin, senderURL: origin, isMainFrame: mainFrame,
+                    replying: true, reject: { _ in replies += 1 }
+                ) { handler in
+                    expect(handler == .library, "deferred \(action) routes to the library")
+                    completion = { replies += 1 }
+                }
+                expect((completion != nil) == mainFrame, "only an allowed \(action) begins")
+                expect(replies == (mainFrame ? 0 : 1), "rejected \(action) replies immediately")
+                completion?()
+                expect(replies == 1, "\(action) completes exactly once")
+            }
+        }
+        print("Native sender predicate and recorded dispatch checks passed")
+    }
+
+    @MainActor static func nativeWebKitSenderTests(root: URL) throws {
+        _ = NSApplication.shared
+        let pages = root.appendingPathComponent("bridge-pages")
+        try FileManager.default.createDirectory(at: pages, withIntermediateDirectories: true)
+        let portFile = pages.appendingPathComponent("port")
+        // Serve only disposable fixtures on an OS-assigned loopback port.
+        let server = Process()
+        server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        server.arguments = ["-c", """
+        import http.server, pathlib, signal, sys
+        signal.alarm(45)
+        class Handler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=sys.argv[1], **kwargs)
+            def log_message(self, *args): pass
+        server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+        pathlib.Path(sys.argv[2]).write_text(str(server.server_port))
+        server.serve_forever()
+        """, pages.path, portFile.path]
+        try server.run()
+        defer { if server.isRunning { server.terminate() }; server.waitUntilExit() }
+        until("native bridge fixture server did not start") { FileManager.default.fileExists(atPath: portFile.path) || !server.isRunning }
+        let port = try String(contentsOf: portFile, encoding: .utf8)
+        let origin = URL(string: "http://127.0.0.1:\(port)/")!
+        let script = """
+        <script>
+        (async () => {
+          const main = window === window.top, handlers = window.webkit.messageHandlers;
+          const result = {};
+          const post = async (name, body, key = name) => {
+            try { await handlers[name].postMessage(body); result[key] = 'ok'; }
+            catch (error) { result[key] = String(error); }
+          };
+          handlers.pharosWindow.postMessage({contextTarget: {reference: main ? 'main' : 'iframe'}, contextFile: {path: main ? '/tmp/main' : '/tmp/iframe'}, pageActions: main});
+          handlers.pharosWindow.postMessage({headerCenter: main ? 26 : 200});
+          handlers.pharosWindow.postMessage({background: main ? 'rgb(10, 20, 30)' : 'rgb(200, 200, 200)'});
+          handlers.pharosMenuBar.postMessage(null);
+          await post('pharosUpdates', {action: 'status'});
+          await post('pharosLibrary', {action: 'invalid'});
+          // Invalid payloads keep this integration fixture harmless even if
+          // sender validation regresses; iframe errors must precede parsing.
+          await post('pharosClipboard', {});
+          if (!main) {
+            handlers.pharosWindow.postMessage('drag');
+            handlers.pharosWindow.postMessage('doubleClick');
+          }
+          handlers.bridgeTestResults.postMessage(result);
+        })();
+        </script>
+        """
+        try ("<!doctype html>" + script + "<iframe src='/frame.html'></iframe>").write(to: pages.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try ("<!doctype html>" + script).write(to: pages.appendingPathComponent("frame.html"), atomically: true, encoding: .utf8)
+        let coordinator = ArchiveWebView.Coordinator(origin: origin)
+        let updates = UpdateNotice()
+        coordinator.updates = updates
+        let recorder = BridgeMessages(coordinator)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let controller = configuration.userContentController
+        for handler in NativeBridgeSender.Handler.allCases {
+            if handler.replies {
+                controller.addScriptMessageHandler(recorder, contentWorld: .page, name: handler.rawValue)
+            } else {
+                controller.add(recorder, name: handler.rawValue)
+            }
+        }
+        controller.add(recorder, name: "bridgeTestResults")
+        defer {
+            for handler in NativeBridgeSender.Handler.allCases { controller.removeScriptMessageHandler(forName: handler.rawValue) }
+            controller.removeScriptMessageHandler(forName: "bridgeTestResults")
+        }
+        let page = ArchiveWKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480), configuration: configuration)
+        coordinator.webView = page
+        page.load(URLRequest(url: origin))
+        until("real WKWebView main/iframe bridge messages did not complete", timeout: 20) { recorder.results.count == 2 }
+        expect(recorder.results[true]?["pharosUpdates"] == "ok", "the main document reaches update status")
+        expect(recorder.results[true]?["pharosLibrary"] == "Error: Unknown library action.", "the main document keeps library payload validation")
+        expect(recorder.results[true]?["pharosClipboard"] == "Error: Clipboard content must be text.", "the main document keeps clipboard payload validation without writing")
+        for error in recorder.results[false]!.values {
+            expect(error.contains("main window document"), "every iframe reply reports a native sender rejection: \(error)")
+        }
+        expect(recorder.replies[true] == 3 && recorder.replies[false] == 3, "each real WebKit reply finishes once")
+        for mainFrame in [true, false] {
+            let senders = recorder.senders.filter { $0.2 == mainFrame }
+            expect(Set(senders.map { $0.0 }) == Set(NativeBridgeSender.Handler.allCases.map(\.rawValue)), "both frames exercise every registered name")
+            expect(senders.allSatisfy { $0.1?.host == origin.host && $0.1?.port == origin.port }, "sender URLs are extracted from actual same-origin WebKit requests")
+        }
+        expect(page.contextTarget?.reference == "main" && page.contextFile?.url.path == "/tmp/main" && page.pageActions, "iframe messages cannot change main-document context state")
+        expect(page.underPageBackgroundColor == ArchiveWebView.Coordinator.color(css: "rgb(10, 20, 30)"), "iframe messages cannot change the page background")
+        page.stopLoading()
+        print("Real WKWebView main-document and same-origin iframe sender checks passed")
+    }
+
     @MainActor static func preparedHandoffFailureTests(service: ArchiveService, updater: SPUUpdater, item: SUAppcastItem) throws {
         let lease = AppUpdateLock.current()
         let marker = lease.base.appendingPathExtension("pending")
@@ -385,6 +586,8 @@ func refuses(_ work: () throws -> Void, _ message: String) {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         setenv("PHAROS_SUPPORT_DIR", root.appendingPathComponent("support").path, 1)
+        nativeSenderTests()
+        try nativeWebKitSenderTests(root: root)
         try applicationLifecycleTests(root: root)
         let app = root.appendingPathComponent("Library with spaces/Pharos.app")
         let cli = canonicalPath(app.appendingPathComponent("Contents/MacOS/pharos"))

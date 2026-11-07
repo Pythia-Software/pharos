@@ -1,3 +1,4 @@
+import { formatUSD } from "./currency";
 import { isOriginDimension, originLabel, loadOriginMetadata } from "./origin-dimensions";
 import { apiCostTrendQuery, apiCostTrendFacts, buildApiCostTrend, usesApiCostTrend, type CostTimeBucket } from "./api-cost-trend";
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
@@ -18,7 +19,9 @@ import { usesWeekdayCover, weekdayMetric } from "./weekday-cover";
 import { loadDashboardCardPreview } from "./dashboard-card-preview";
 import type { DashboardCardTarget } from "./dashboard-card-model";
 import type { HabitsCover } from "./habits-card";
-import type { GridCover } from "./grid-cover";
+import { gridCoverHeight, type GridCover } from "./grid-cover";
+import { heatmapGrid, trendHeatmap } from "./dashboard-heatmap-model";
+import { binnedFields } from "./session-shape-bands";
 import { invalidateConcurrencyData } from "./concurrency-store";
 import type { CompactTimelineOptions } from "./column-marks";
 
@@ -53,7 +56,7 @@ export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); inv
 export function formatPreviewValue(value: number, unit: string): string {
   if (unit === "bytes") return value >= 1048576 ? `${(value / 1048576).toFixed(1)} MiB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value} B`;
   if (unit === "percent") return `${(value * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
-  if (unit === "USD") return value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: value >= 100 ? 0 : 2 });
+  if (unit === "USD") return formatUSD(value);
   if (unit === "ms") return value >= 3_600_000 ? `${(value / 3_600_000).toFixed(1)}h` : value >= 60_000 ? `${(value / 60_000).toFixed(1)}m` : value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}ms`;
   return Intl.NumberFormat(undefined, { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
 }
@@ -128,7 +131,7 @@ function keyLabel(schema: FieldSchema, field: string): ((key: unknown) => string
   return key => { const option = values.options.find(option => typeof option === "object" && option.value === key); return typeof option === "object" ? option.label : String(key ?? "Unspecified"); };
 }
 
-const dailyColumns = (clause: AggregationClause) => !clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && clause.op === "sum";
+const dailyColumns = (clause: AggregationClause) => !clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && (clause.op === "sum" || clause.op === "count" && !clause.field);
 function smoothingPeriods(job: PreviewJob, query: QueryState): number {
   const options = job.options, clause = query.aggregations?.find(metric => metric.id === options?.coverMetricId) ?? query.aggregations?.[0];
   const periods = (options?.cover ?? options?.recipe?.cover)?.timeline?.rollingPeriods;
@@ -257,7 +260,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   const preview: QueryPreview = { density: (options.cover ?? recipe?.cover)?.density, stackBy: (options.cover ?? recipe?.cover)?.stackBy, coverHeight: (options.cover ?? recipe?.cover)?.height, legendColumns: (options.cover ?? recipe?.cover)?.legendColumns, state: ready ? "ready" : "empty", total, summary, note: notes.filter(Boolean).join(" · ") || undefined, metrics, fields: schema.fields, coverMetricId: clause.id };
   const minimum = (options.cover ?? recipe?.cover)?.minSamples;
   if (!ready && recipe?.emptyLabel) preview.emptyLabel = recipe.emptyLabel;
-  if (!ready && minimum && (clause.distribution?.kind === "box" || clause.expressionY)) preview.emptyLabel = `No cohorts with at least ${minimum} ${(options.cover ?? recipe?.cover)?.sampleUnit ?? (!query.grouping && ["tool_calls", "mcp_calls"].includes(job.dataset) ? "calls" : "conversations")}`;
+  if (!ready && minimum && (clause.distribution?.kind === "box" || clause.expressionY)) preview.emptyLabel = `No groups with at least ${minimum} ${(options.cover ?? recipe?.cover)?.sampleUnit ?? (!query.grouping && ["tool_calls", "mcp_calls"].includes(job.dataset) ? "calls" : "conversations")}`;
   if (query.grouping && recipe?.exploration?.context && payload.rows?.length) {
     preview.groupEvidence = Object.fromEntries(payload.rows.map(row => [JSON.stringify(groupKeyFields(query.grouping!.keys).map(key => row[key] ?? null)), recipe.exploration!.context!.map(item => typeof row[item.field] === "number" ? `${formatPreviewValue(row[item.field] as number, item.unit ?? "")} ${item.label}` : "").filter(Boolean).join(" · ")]));
   }
@@ -321,6 +324,23 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     if (clause.display?.showOther === false) preview.series = preview.series.filter(item => !item.hiddenCount);
     if (clause.groupBy.length === 1 && preview.series[0]) preview.series[0].color = tone;
     if (!ready && eligible && periods && rollingAverageBuckets(chart, periods, { period: "day" }).some(bucket => !bucket.history && Object.values(bucket.values).some(value => value > 0))) preview.state = "ready";
+    // A heatmap cover draws the day's sessions by their value's fine bin, as
+    // the dashboard's heatmap does: every bin, none folded into Other.
+    const bins = preview.timeline?.display === "heatmap" ? binnedFields[clause.groupBy.at(-1) ?? ""] : undefined;
+    if (bins) {
+      const days = chart.map(bucket => ({ ...bucket, values: {} as Record<string, number> })), byDay = new Map(days.map(bucket => [bucket.key, bucket])), edges = new Set<number>();
+      for (const bucket of chartValues) {
+        const day = byDay.get(String(bucket.keys[0])), edge = Number(bucket.keys[1]);
+        if (!day || bucket.keys[1] === null || !Number.isFinite(edge)) continue;
+        day.values[`b:${edge}`] = (day.values[`b:${edge}`] ?? 0) + Number(bucket.value);
+        edges.add(edge);
+      }
+      const drawn = periods ? rollingAverageBuckets(days, periods, { period: "day" }).filter(bucket => !bucket.history) : days;
+      const value = (amount: number) => formatMetricOutput(amount, bins.format).text;
+      preview.grid = heatmapGrid(trendHeatmap(drawn, [...edges].map(edge => ({ key: `b:${edge}`, label: String(edge), value: String(edge), color: "" })), bins.scheme),
+        { period: "day", noun: recipe?.unit ?? countUnit, label: bins.label, format: value, rollingPeriods: periods ?? 0 });
+      preview.coverHeight = gridCoverHeight(preview.grid);
+    }
   }
   if (query.grouping && recipe?.exploration && !clause.distribution && !clause.expressionY && (!additive || !recipe.exploration.coverMetric)) {
     const count = result.groupCount ?? result.processedRows ?? values.length;

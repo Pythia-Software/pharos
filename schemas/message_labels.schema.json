@@ -414,7 +414,7 @@
     },
     {
       "name": "subagent",
-      "label": "Subagent",
+      "label": "Sub-agent",
       "type": "bool",
       "group": "Context",
       "bindings": {

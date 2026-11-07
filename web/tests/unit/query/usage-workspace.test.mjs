@@ -1,9 +1,11 @@
 import { queryCapabilities } from '../../support/query-server.mjs';
 import messageLabels from "../../../../schemas/message_labels.schema.json";
+import peopleMessageLabels from "../../../../schemas/people_message_labels.schema.json";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EMPTY_QUERY, applyQuery, applyAggregations, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, toQueryRequestV3 } from "@pythia-software/query-table-core";
 import { queryCases, dashboardCases, dashboardControlCases } from "../../../../tools/usage-audit-cases.ts";
+import compactions from "../../../../schemas/compactions.schema.json";
 import modelRequests from "../../../../schemas/model_requests.schema.json";
 import tl1Attempts from "../../../../schemas/tl1_attempts.schema.json";
 import usage from "../../../../schemas/usage.schema.json";
@@ -17,13 +19,16 @@ import parallelism from "../../../../schemas/parallelism.schema.json";
 import rhythm from "../../../../schemas/rhythm.schema.json";
 import mcpCalls from "../../../../schemas/mcp_calls.schema.json";
 import agentEvents from "../../../../schemas/agent_events.schema.json";
+import sessionShape from "../../../../schemas/session_shape.schema.json";
 import agentEventMessages from "../../../../schemas/agent_event_messages.schema.json";
 import { queryURL, queryFromURL, readRollingWindow, resolveRollingQuery } from "../../../src/query-links";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
 import { toolSummaryCallFilters } from "../../../src/tools-dashboard-model.ts";
-import { readDashboardLink, readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
+import { authorshipStatusText, readDashboardLink, readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
 import { trendQuery } from "../../../src/dashboard-trend-model.ts";
 import { analysisQuery } from "../../../src/dashboard-analysis-model.ts";
+import { analysisCatalogFor, analysisCatalogs } from "../../../src/analysis-catalogs";
+import { dashboardDefaults } from "../../../src/dashboard-defaults";
 import { mcpAnalysisCatalog } from "../../../src/mcp-analysis-catalog.ts";
 import { toolsAnalysisCatalog } from "../../../src/tools-analysis-catalog.ts";
 import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../../src/record-analysis-catalogs.ts";
@@ -186,7 +191,7 @@ test("dashboard previews distinguish source and group filters and retain custom 
 });
 
 test("all eight dashboards offer four distinct native queries that retain source scope", () => {
-  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, writing, tools, tool_calls: toolCalls, skill_usages: skillUsages, parallelism, rhythm, mcp_calls: mcpCalls };
+  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, writing, tools, tool_calls: toolCalls, skill_usages: skillUsages, parallelism, rhythm, mcp_calls: mcpCalls };
   const configs = [
     ["tokens", "usage", { op: "sum", field: "total_tokens", groupBy: ["day", "model_family"], label: "Tokens" }],
     ["carbon", "usage", { op: "sum", field: "co2e_g", groupBy: ["day", "carbon_tier"], label: "Estimated CO₂e" }],
@@ -242,7 +247,7 @@ test("focused dashboard queries execute group thresholds and weighted measures",
 });
 
 test("the live audit provides 25 valid, distinct queries per dataset and dashboard", () => {
-  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
+  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, session_shape: sessionShape };
   const capabilities = { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), cases = queryCases(dataset, document, []);
@@ -272,7 +277,7 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
   const originalLocation = globalThis.location;
   globalThis.location = new URL("http://localhost/");
   t.after(() => { globalThis.location = originalLocation; });
-  const schemas = {message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
+  const schemas = {people_message_labels:peopleMessageLabels, compactions, message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, session_shape: sessionShape };
   for (const [dataset, target] of Object.entries(usageDatasets)) assert.ok(schemas[dataset].fields.some(field => field.name === target.field), `${dataset}'s search entry point belongs to its own schema`);
   for (const dataset of Object.keys(usageDatasets)) for (const mode of ["query", "search"]) {
     const url = new URL(usageWorkspaceURL({ mode, dataset }), "http://localhost");
@@ -362,6 +367,35 @@ test("dashboard returns retain edited source filters and disclose incompatible r
   assert.equal(returned.has("analyze_window"), false, "an edited range must not be promoted back to Today");
   assert.equal(returned.has("window_mode"), false);
   assert.deepEqual(decodeQueryStrict(returned.get("analyze_filters")).where, edited);
+});
+
+test('People label query returns retain the dashboard population and its own date fields',()=>{
+ const now=Date.parse('2026-10-20T12:00:00Z');
+ for(const topic of ['human','activity','habits'])for(const split of ['message_family','message_label'])for(const view of ['trend','compare'])for(const window of ['today','30d','custom']){
+  const source=analysisCatalogs[topic],state={...dashboardDefaults[topic],metric:'messages',split,view};
+  const catalog=analysisCatalogFor(topic,{},state),field=source.time.first;
+  assert.equal(catalog.dataset,'people_message_labels');
+  const dates=[{field,op:'>=',value:window==='today'?'2026-10-20T00:00:00Z':'2026-10-01T00:00:00Z'},{field,op:'<',value:window==='today'?'+0s':'2026-10-21T00:00:00Z'}];
+  const where=[{field:'repository_name',op:'=',value:'importer'},...dates];
+  const dashboard=new URLSearchParams({analyze_mode:'dashboards',analyze_topic:topic,analyze_data:source.dataset,analyze_chart:JSON.stringify(state),analyze_filters:encodeQuery({...EMPTY_QUERY,where}),analyze_window:window,analyze_timezone:'UTC'});
+  const query=(view==='trend'?trendQuery(catalog,state,where,{now}):analysisQuery(catalog,state,where,{now})).supporting;
+  const opened=new URL(usageWorkspaceURL({mode:'query',dataset:catalog.dataset,query},dashboard),'http://localhost').searchParams;
+  const back=usageDashboardReturn(opened),returned=new URL(back.href,'http://localhost').searchParams;
+  assert.equal(back.resetsFilters,false,`${topic} ${split} ${view} ${window}`);
+  assert.deepEqual(decodeQueryStrict(returned.get('analyze_filters')).where,where);
+  assert.equal(returned.get('analyze_window'),window);
+  assert.equal(returned.get('analyze_chart'),JSON.stringify(state));
+  // Edited query dates replace the dashboard's prior date range. In
+  // Conversations and Habits these are event_at and started_at, not sent_at.
+  const editedDates=[{field,op:'>=',value:'2026-09-01T00:00:00Z'},{field,op:'<',value:'2026-09-02T00:00:00Z'}];
+  const sourceQuery=query.grouping?.source??query;
+  const editedWhere=[...sourceQuery.where.filter(term=>term.field!==field),...editedDates];
+  const edited=query.grouping?{...query,grouping:{...query.grouping,source:{...sourceQuery,where:editedWhere}}}:{...query,where:editedWhere};
+  opened.set('q_people_message_labels',encodeQuery(edited));
+  const changed=new URL(usageDashboardReturn(opened).href,'http://localhost').searchParams;
+  assert.equal(changed.has('analyze_window'),false);
+  assert.deepEqual(decodeQueryStrict(changed.get('analyze_filters')).where,[where[0],...editedDates]);
+ }
 });
 
 test("changing records drops stale table context while switching modes keeps the current query window", () => {
@@ -526,7 +560,7 @@ import { authoredRenderers } from "../../../src/authored.tsx";
 import { renderToStaticMarkup } from "react-dom/server";
 
 test("Analyze defaults and Details cover every dataset without changing explicit saved projections", () => {
-  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), details = usageDetailsSchema(schema, dataset);
     assert.ok(details);
@@ -544,7 +578,7 @@ test("Analyze defaults and Details cover every dataset without changing explicit
 });
 
 test("Analyze keeps every drilldown after the selected data and before native Detail", () => {
-  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
   for (const [dataset, document] of Object.entries(documents)) {
     const original = loadSchema(document), schema = usageQuerySchema(original, dataset);
     const saved = { ...EMPTY_QUERY, select: [{ field: ITEM_DETAILS_COLUMN }, { field: "id", width: 175 }] };
@@ -649,7 +683,7 @@ test("Aggregate time and cross-query links express their source scope", () => {
   const calls = new URL(links.find(link => link.label.includes("Tool calls")).href, "http://localhost");
   assert.equal(calls.searchParams.get("analyze_carbon"), "custom-assumptions");
   assert.deepEqual(decodeQueryStrict(calls.searchParams.get("q_tool_calls")).where, [{ field: "conversation_id", op: "=", value: "child" }]);
-  assert.equal(links.find(link => link.label === "Root conversation").href, "/conversation/root");
+  assert.equal(links.find(link => link.kind === "root").href, "/conversation/root");
   const human = usageRowLinks("writing", row, current).find(link => link.label.startsWith("Messages"));
   assert.deepEqual(decodeQueryStrict(new URL(human.href, "http://localhost").searchParams.get("q_writing_messages")).where, [{ field: "work_id", op: "=", value: "work" }]);
 });
@@ -675,7 +709,7 @@ test("MCP Details links use explicit request targets while workspace units link 
   assert.deepEqual(usageRowLinks("mcp_calls", { arguments_json: "invalid" }), []);
   assert.deepEqual(usageRowLinks("mcp_calls", { arguments_json: '{"query":"search terms"}' }), []);
   const [checkout] = usageRowLinks("parallelism", { counting: "workspace", location: "/worktree /+" });
-  assert.equal(checkout.label, "Works at this checkout");
+  assert.equal(checkout.label, "Workspaces at this checkout");
   const url = new URL(checkout.href, "http://localhost");
   assert.equal(url.pathname, "/library");
   assert.deepEqual(decodeQueryStrict(url.searchParams.get("q_library")).where, [{ field: "location", op: "=", value: "/worktree /+" }]);
@@ -764,4 +798,21 @@ test("dashboard Today uses its pinned timezone and reports an invalid zone", () 
   assert.equal(returned.get("analyze_timezone"), "Asia/Tokyo");
   params.set("analyze_timezone", "Invalid/Timezone");
   assert.match(read().error, /timezone/);
+});
+
+
+test("writing freshness distinguishes a partial turn from caught up", () => {
+  const status = {built_at: "2026-11-05T17:00:00Z", complete_at: "2026-11-05T10:00:00Z", running: false, stale: true, error: null,
+    pending_messages: 12, pending_recent_messages: 2, pending_historical_messages: 10,
+    oldest_pending_sent_at: "2026-07-01T12:00:00Z", oldest_pending_queued_at: "2026-11-05T13:00:00Z"};
+  const text = authorshipStatusText(status);
+  assert.match(text, /catching up/);
+  assert.match(text, /2 recent; 10 historical/);
+  assert.match(text, /Oldest pending work queued/);
+  assert.match(text, /Oldest pending message sent/);
+  assert.doesNotMatch(text, /current as of/);
+  assert.match(authorshipStatusText({...status, pending_messages: 0, stale: false}), /current as of/);
+  assert.doesNotMatch(authorshipStatusText({...status, pending_messages: 0, stale: false, complete_at: null}), /current as of/);
+  assert.match(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 1}), /await overnight refinement/);
+  assert.doesNotMatch(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 1}), /current as of/);
 });

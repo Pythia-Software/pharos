@@ -60,6 +60,24 @@ test("label and agent event settings remain available when no labeling work is s
   }
 });
 
+test("labeling offers thread choices only for CPU execution, independently for each model", () => {
+  const saved = {threads: 4, thread_choices: [1, 2, 4], threads_can_change: true};
+  for (const device of ['cpu', 'gpu', 'unknown', 'unavailable']) {
+    const execution = {device, status: device, detail: 'From the worker'};
+    const controls = plain(background.labelingControls({...saved, execution}));
+    assert.deepEqual(controls.execution, execution);
+    assert.deepEqual(controls.threadChoices, device === 'cpu' ? saved.thread_choices : []);
+    assert.equal(controls.threadsCanChange, device === 'cpu');
+  }
+  assert.deepEqual(plain(background.labelingControls(saved)).threadChoices, []);
+  assert.equal(background.labelingControls({...saved, execution: {device:'cpu'}, threads_can_change: false}).threadsCanChange, false);
+  assert.equal(background.labelingControls({...saved, enabled:true, status:'Routine status', execution:{device:'gpu'}}).notice, '');
+  const notice = 'A model download needs attention';
+  assert.equal(background.labelingControls({...saved, notice, execution:{device:'unknown'}}).notice, notice);
+  assert.ok(background.labelingControls({...saved, enabled:true, execution:{device:'unavailable'}}).notice);
+  assert.equal(background.labelingControls({...saved, enabled:false, execution:{device:'unavailable'}}).notice, '');
+});
+
 test("an item carries its cost class, its choices and its state line", () => {
   const writing = plain(background.scheduleModel(document, at)).columns[1].items[0];
   assert.deepEqual(writing.cost, { class: "heavy", text: "Cost B" });
@@ -120,6 +138,83 @@ test("every cadence keeps a column, an empty one too, to drag to", () => {
   assert.deepEqual(model.columns[1].items, []);
 });
 
+test("pending moves appear immediately in scheduled and manual columns without changing the saved document", () => {
+  const saved = structuredClone(document);
+  const model = plain(background.scheduleModel(document, at, {writing: 'manual', backup: 'hourly', conversations: 'daily'}));
+  assert.deepEqual(model.columns.map(column => [column.id, column.empty, column.items.map(item => item.id)]),
+    [['frequent', true, []], ['hourly', false, ['backup']], ['daily', false, ['preserve', 'conversations']]]);
+  assert.deepEqual(model.unscheduled.map(item => item.id), ['writing']);
+  const moved = model.unscheduled[0];
+  assert.equal(moved.column, 'manual');
+  assert.deepEqual(moved.temporary, {cadence: 'manual'});
+  assert.deepEqual(document, saved);
+  const restored = plain(background.scheduleModel(document, at));
+  assert.deepEqual(restored.columns[1].items.map(item => item.id), ['writing']);
+});
+
+test("returning a pending move to its usual cadence ends the temporary schedule", () => {
+  const view = {...document.view, items: document.view.items.map(item => item.id === 'writing'
+    ? {...item, cadence: 'hourly', usual_cadence: 'daily', temporary_cadence: {cadence: 'hourly', expires_at: minutesAgo(-60)}} : item)};
+  const moved = background.scheduleModel({...document, view}, at, {writing: 'manual'}).unscheduled.find(item => item.id === 'writing');
+  assert.equal(background.dropCadence(moved, 'daily'), '');
+  const restored = background.scheduleModel({...document, view}, at, {writing: ''}).columns[2].items.find(item => item.id === 'writing');
+  assert.equal(restored.column, 'daily');
+  assert.equal(restored.temporary, null);
+});
+
+test("settings saves run in order and retain newer moves while earlier responses arrive", async () => {
+  const requests = [], snapshots = [];
+  const queue = background.createSettingsQueue(body => {
+    const request = {...Promise.withResolvers(), body: plain(body)};
+    requests.push(request);
+    return request.promise;
+  }, next => snapshots.push(next), () => {});
+  const before = queue.revision;
+  const first = queue.save({temporary_cadences: {writing: 'daily'}});
+  const second = queue.save({temporary_cadences: {writing: 'manual', backup: 'hourly'}});
+  assert.equal(queue.busy, true);
+  assert.ok(queue.revision > before, 'a refresh started before saving is stale');
+  assert.deepEqual(plain(queue.cadences), {writing: 'manual', backup: 'hourly'});
+  await Promise.resolve();
+  assert.equal(requests.length, 1, 'only one settings request can run at a time');
+  requests[0].resolve('first snapshot');
+  await first;
+  assert.deepEqual(snapshots, ['first snapshot']);
+  assert.deepEqual(plain(queue.cadences), {writing: 'manual', backup: 'hourly'});
+  await Promise.resolve();
+  assert.equal(requests.length, 2);
+  requests[1].resolve('second snapshot');
+  await second;
+  assert.deepEqual(snapshots, ['first snapshot', 'second snapshot']);
+  assert.equal(queue.busy, false);
+  assert.deepEqual(plain(queue.cadences), {});
+  assert.ok(queue.revision > before, 'a pre-save refresh remains stale after all saves finish');
+});
+
+test("a failed settings save rolls back only its move and subsequent saves still run", async () => {
+  const requests = [], snapshots = [];
+  let updates = 0;
+  const queue = background.createSettingsQueue(() => {
+    const request = Promise.withResolvers();
+    requests.push(request);
+    return request.promise;
+  }, next => snapshots.push(next), () => updates++);
+  const first = queue.save({temporary_cadences: {writing: 'daily'}});
+  const failed = assert.rejects(first, /Could not save/);
+  const second = queue.save({temporary_cadences: {backup: 'frequent'}});
+  await Promise.resolve();
+  requests[0].reject(new Error('Could not save'));
+  await failed;
+  assert.deepEqual(plain(queue.cadences), {backup: 'frequent'});
+  assert.deepEqual(snapshots, [], 'the last saved document remains the rollback state');
+  await Promise.resolve();
+  assert.equal(requests.length, 2);
+  requests[1].resolve('saved');
+  await second;
+  assert.equal(queue.busy, false);
+  assert.equal(updates, 4, 'each move and each settlement redraws');
+});
+
 test("a pause is the hour's or the day's by when it ends", () => {
   assert.equal(background.pauseLength(minutesAgo(-45), at), "hour");
   assert.equal(background.pauseLength(minutesAgo(-23 * 60), at), "day");
@@ -137,6 +232,14 @@ test("a column's run button waits while it runs; Only when you ask's while one o
   const next = plain(background.scheduleModel(running, at));
   assert.equal(next.columns[1].running, true);
   assert.equal(next.unscheduledRunnable, false);
+  const disabled = { ...document, view: { ...document.view, unscheduled: ['backup', 'labels'], items: [
+    ...document.view.items.map(item => item.id === 'backup' ? { ...item, state: 'unavailable' } : item),
+    {id: 'labels', label: 'Message labels', state: 'disabled', state_label: 'Off'},
+  ] } };
+  const off = plain(background.scheduleModel(disabled, at));
+  assert.equal(off.unscheduledRunnable, false);
+  assert.equal(off.unscheduled.find(item => item.id === 'labels').text, 'Off');
+  assert.equal(off.unscheduled.find(item => item.id === 'labels').dot, 'paused');
 });
 
 test("state lines: an age and the next time when current, the retry when failed, the run when missed", () => {

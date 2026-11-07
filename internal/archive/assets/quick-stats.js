@@ -8,23 +8,23 @@ function quickStatsMetrics(concurrency = false) {
     ['Human words', 'human_words', 'Words you typed yourself: not pasted, quoted, templated, or sent by a tool', '', 'writing'],
     ['Tokens', 'tokens', 'All tokens, cache reads and writes included', '', 'tokens'],
     ['CO₂e', 'co2e_g', 'Estimated inference emissions using the settings in Analyze → Carbon Impact', '', 'carbon'],
-    ['API cost', 'cost_usd', 'API-equivalent cost at list prices', '$', 'tokens'],
+    ['API cost', 'cost_usd', 'API-equivalent cost at list prices', '$', 'tokens', 'usd'],
   ];
   rows.push(
-    ['Conversations active', 'active_conversations', 'Distinct top-level conversations with recorded activity in this window. Continuations and delegated work belong to their root conversation.', '', 'conversations'],
+    ['Conversations active', 'active_conversations', 'Distinct top-level conversations with recorded activity in this window. Continuations and delegated work belong to their top-level conversation.', '', 'conversations'],
     ['Messages', 'message_count', 'User and assistant messages, including delegated work. Tool events and system instructions are excluded.', '', 'conversations'],
     ['Your messages', 'user_messages', 'User-role messages in top-level conversations, including pasted text. Delegated agents’ prompts are excluded.', '', 'writing'],
     ['Agent replies', 'assistant_messages', 'Assistant messages, including delegated agents. Tool events and system instructions are excluded.', '', 'conversations'],
     ['Tool calls', 'tool_calls', 'Individual recorded tool invocations, including delegated work. Mirrored transcripts count once.', '', 'tools'],
-    ['Estimated agent time', 'agent_time_ms', 'Estimated top-level session time, using the saved turn gap. Parallel sessions count separately; child work belongs to its root. Timing coverage is required for the full window.', '', 'parallelism', 'duration'],
-    ['Estimated active time', 'active_time_ms', 'Estimated wall-clock time with at least one top-level session active, using the saved turn gap. Overlapping sessions count once.', '', 'parallelism', 'duration'],
+    ['Estimated agent time', 'agent_time_ms', 'Estimated top-level conversation time, using the saved turn gap. Parallel conversations count separately; linked sub-agent activity belongs to its initiating conversation. Timing coverage is required for the full window.', '', 'parallelism', 'duration'],
+    ['Estimated active time', 'active_time_ms', 'Estimated wall-clock time with at least one top-level conversation active, using the saved turn gap. Overlapping conversations count once.', '', 'parallelism', 'duration'],
     ['Delegated runs', 'delegated_runs', 'Distinct delegated executions with recorded activity or a start in this window. Linked handles, child transcripts and continuations count once.', '', 'conversations'],
     ['Failed tool calls', 'failed_tool_calls', 'Tool calls marked as errors. A non-zero shell exit can be expected, such as a search with no matches.', '', 'tools'],
     ['Tool failure rate', 'tool_failure_rate', 'Failed tool calls divided by all tool calls in the window. No calls means no rate.', '', 'tools', 'percent'],
     ['Repositories active', 'active_repositories', 'Distinct known repositories with conversation or tool activity. Unknown repositories are excluded.', '', 'conversations'],
     ['Recorded tool time', 'tool_time_ms', 'Sum of recorded durations for calls started in the window. Durations can overlap and include approval waits. Untimed calls contribute no duration.', '', 'tools', 'duration'],
   );
-  if (concurrency) rows.push(['Parallelism', 'parallelism', 'Average concurrent workspaces or sessions over the full time window, including idle time, using the saved counting choice, turn gap and repository.', '', 'parallelism']);
+  if (concurrency) rows.push(['Parallelism', 'parallelism', 'Average concurrent workspaces or conversations over the full time window, including idle time, using the saved counting choice, turn gap and repository.', '', 'parallelism']);
   return rows;
 }
 function normalizeQuickStatsLayout(saved, metrics = quickStatsMetrics()) {
@@ -40,9 +40,76 @@ function normalizeQuickStatsLayout(saved, metrics = quickStatsMetrics()) {
 }
 // The detail request is opt-in; ordinary token/cost summaries stay small.
 const QUICK_STATS_DETAIL_METRICS = quickStatsMetrics().map(row => row[1]).filter(id => !QUICK_STATS_DEFAULT_METRICS.includes(id) && !['agent_time_ms', 'active_time_ms'].includes(id));
+
+// Like homepage covers, show the last snapshot while revalidating and reuse
+// results for one minute in this page. These two small responses are local to
+// the browser and library, never synced preferences. A new page revalidates.
+function createQuickStatsCache({scope = '', storage, now = () => Date.now(), context = () => {
+  const date = new Date(now());
+  return JSON.stringify([Intl.DateTimeFormat().resolvedOptions().timeZone, date.getFullYear(), date.getMonth(), date.getDate()]);
+}} = {}) {
+  const entries = new Map(), pending = new Map(), lifetime = 7 * 86400000, key = 'pharos-quick-stats-cache-v1:' + scope;
+  let generation = 1;
+  if (storage === undefined) { try { storage = globalThis.localStorage; } catch {} }
+  const valid = entry => entry && typeof entry.details === 'boolean' && typeof entry.context === 'string'
+    && Number.isFinite(entry.at) && entry.at <= now() && now() - entry.at <= lifetime
+    && typeof entry.data?.generated_at === 'string' && Number.isFinite(Date.parse(entry.data.generated_at))
+    && Array.isArray(entry.data.windows) && entry.data.windows.every(bucket => bucket && typeof bucket.key === 'string');
+  if (scope) try {
+    const saved = JSON.parse(storage?.getItem(key) || '[]');
+    if (Array.isArray(saved)) for (const entry of saved) if (valid(entry)) entries.set(entry.details, {...entry, generation: 0});
+  } catch {}
+  const cache = {
+    get(details) {
+      const entry = entries.get(details);
+      if (!valid(entry) || entry.context !== context()) return null;
+      return {...entry, fresh: entry.generation === generation && now() - entry.at < 60000};
+    },
+    put(details, data, expectedGeneration = generation) {
+      // An invalidated request cannot replace a newer snapshot or be saved.
+      if (expectedGeneration !== generation) return;
+      const entry = {details, data, at: now(), context: context(), generation};
+      if (!valid(entry)) return;
+      entries.set(details, entry);
+      if (scope) try { storage?.setItem(key, JSON.stringify([...entries.values()].filter(valid).map(({generation, ...saved}) => saved))); } catch {}
+    },
+    invalidate() { generation++; },
+    generation: () => generation,
+    async load(details, request, publish, refresh = false) {
+      const saved = cache.get(details);
+      if (saved) publish(saved);
+      if (saved?.fresh && !refresh) return;
+      const version = generation, calendar = context(), requestKey = JSON.stringify([details, version, calendar]);
+      if (!pending.has(requestKey)) {
+        const result = Promise.resolve().then(request).then(data => {
+          if (version !== generation || calendar !== context()) return null;
+          cache.put(details, data, version);
+          return cache.get(details);
+        }).finally(() => pending.delete(requestKey));
+        pending.set(requestKey, result);
+      }
+      const result = await pending.get(requestKey);
+      if (result) publish(result);
+    },
+  };
+  return cache;
+}
+
+// The day clock can announce a calendar change and a usage refresh together.
+// Apply every invalidation before starting their single replacement request.
+function createQuickStatsRefreshQueue(refresh) {
+  let queued = false;
+  return () => {
+    if (queued) return;
+    queued = true;
+    queueMicrotask(() => { queued = false; refresh(); });
+  };
+}
+
 function formatQuickStatsValue(value, format) {
   if (value == null || !Number.isFinite(Number(value))) return '—';
   const number = Number(value);
+  if (format === 'usd') return pharosCurrency.formatUSD(number);
   if (format === 'percent') return `${Number(number.toFixed(1))}%`;
   if (format === 'duration') {
     if (number > 0 && number < 1000) return `${Math.round(number)}ms`;
@@ -244,6 +311,7 @@ function initQuickStatsEditor(metrics, initial, changed, buildTable) {
       for (const cell of table.querySelectorAll('td[data-quick-stats-metric]')) {
         const source = [...fresh.querySelectorAll('td')].find(other => other.dataset.quickStatsMetric === cell.dataset.quickStatsMetric && other.dataset.quickStatsWindow === cell.dataset.quickStatsWindow);
         cell.replaceChildren(...source.childNodes); cell.title = source.title;
+        cell.classList.toggle('usage-summary-pending', source.classList.contains('usage-summary-pending'));
       }
     }
   }

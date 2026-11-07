@@ -143,7 +143,7 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 		return nil, err
 	}
 	// Agent events (agent_events.go).
-	attachEvents, eventsSummary, err := c.agentEventsAttacher(conversationID)
+	attachEvents, eventsSummary, linkEvents, err := c.agentEventsAttacher(conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +151,14 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 	// and clipping a row. Do that before retaining it, rather than keeping every
 	// original output alive until the entire conversation has been read.
 	previewRows := len(sessions) > 0
+	childCalls, err := storedChildUsageCalls(c.reader(), conversationID)
+	if err != nil {
+		return nil, err
+	}
 	prepare := func(message map[string]any) {
+		if firstString(message["kind"]) == "delegation_result" && childCalls[firstString(message["call_id"])] {
+			message["usage_in_child_conversation"] = true
+		}
 		attach(message)
 		attachLabels(message)
 		attachEvents(message)
@@ -184,6 +191,7 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 	for _, message := range messages {
 		delete(message, "source_order")
 	}
+	linkEvents(messages)
 	if labels, err := labelsSummary(); err != nil {
 		return nil, err
 	} else if labels != nil {

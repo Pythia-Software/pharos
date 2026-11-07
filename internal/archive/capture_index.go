@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
+
+	"github.com/gbdubs/pharos/internal/sourcepath"
 )
 
 // Indexing parses a host's captures (see capture.go) into the catalog, on any
@@ -53,7 +56,23 @@ func (v *captureView) planSignature() string {
 func newCaptureView(host Host, dir string, manifest *captureManifest) *captureView {
 	view := &captureView{host: host, dir: dir, manifest: manifest}
 	for _, mapping := range manifest.PathMap {
-		view.mappings = append(view.mappings, capturePathMapping{Original: mapping.Original, Captured: filepath.Join(dir, filepath.FromSlash(mapping.Captured))})
+		// Views also serve temporary source/ and retained history/ readers.
+		// Validate archive names here without imposing persisted files/-only
+		// policy or changing the recorded manifest. Drive prefixes are invalid
+		// archive roots even on a host that could store a literal colon.
+		name := mapping.Captured
+		drive := len(name) >= 2 && name[1] == ':' && (name[0] >= 'A' && name[0] <= 'Z' || name[0] >= 'a' && name[0] <= 'z')
+		if drive || strings.ContainsAny(name, "\\\x00") {
+			continue
+		}
+		local, err := filepath.Localize(name)
+		if err != nil {
+			continue
+		}
+		captured := filepath.Join(dir, local)
+		if capturePathIsWithin(captured, dir) {
+			view.mappings = append(view.mappings, capturePathMapping{Original: mapping.Original, Captured: captured})
+		}
 	}
 	return view
 }
@@ -71,29 +90,66 @@ func (v *captureView) captured(original string) (string, bool) {
 	return v.translate(original, true)
 }
 
-// translate maps path through the mapping with the longest matching prefix.
-func (v *captureView) translate(path string, forward bool) (string, bool) {
-	best, length := "", -1
-	for _, mapping := range v.mappings {
-		from, to := mapping.Captured, mapping.Original
-		if forward {
-			from, to = to, from
-		}
-		if rest, ok := pathUnder(path, from); ok && len(from) > length {
-			best, length = filepath.Join(to, rest), len(from)
-		}
+// capturedSource maps a manifest's source root to its capture. A single Codex
+// rollout is recorded under its plain path in either form (capturedRollout).
+func (v *captureView) capturedSource(source captureSourceInfo) (string, bool) {
+	if isCodexSource(source.Kind) {
+		return v.capturedRollout(source.Path)
 	}
-	return best, length >= 0
+	return v.captured(source.Path)
 }
 
-func pathUnder(path, root string) (string, bool) {
-	if path == root {
-		return "", true
+// translate maps path through the mapping with the longest matching prefix.
+func (v *captureView) translate(name string, forward bool) (string, bool) {
+	var best capturePathMapping
+	suffix, length := "", -1
+	if !forward {
+		name = filepath.ToSlash(name)
 	}
-	if root != "" && strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/") {
-		return path[len(strings.TrimSuffix(root, "/"))+1:], true
+	for _, mapping := range v.mappings {
+		from := mapping.Original
+		if !forward {
+			from = filepath.ToSlash(mapping.Captured)
+		}
+		if rest, ok := sourcepath.CutLegacyPOSIX(name, from); ok && len(from) > length {
+			best, suffix, length = mapping, rest, len(from)
+		}
 	}
-	return "", false
+	if length < 0 {
+		return "", false
+	}
+	// Choose the longest prefix before resolving its suffix: an unsafe match
+	// must fail, never fall back to a shorter mapping. Repeated slash separators
+	// after the cut retain legacy behavior; only the suffix is cleaned.
+	if strings.ContainsRune(suffix, 0) {
+		return "", false
+	}
+	suffix = path.Clean(strings.TrimLeft(suffix, "/"))
+	if suffix == ".." || strings.HasPrefix(suffix, "../") {
+		return "", false
+	}
+	local, err := filepath.Localize(suffix)
+	if err != nil {
+		return "", false
+	}
+	captured := filepath.Join(best.Captured, local)
+	if !capturePathIsWithin(captured, best.Captured) || !capturePathIsWithin(captured, v.dir) {
+		return "", false
+	}
+	if forward {
+		return captured, true
+	}
+	if suffix == "." {
+		suffix = ""
+	}
+	return sourcepath.JoinLegacyPOSIX(best.Original, suffix), true
+}
+
+// capturePathIsWithin establishes lexical bounds only. It does not resolve
+// symlinks or protect I/O from symlink races.
+func capturePathIsWithin(name, root string) bool {
+	rel, err := filepath.Rel(root, name)
+	return err == nil && filepath.IsLocal(rel)
 }
 
 // databaseVersion is a captured database's version: the source state the
@@ -239,7 +295,7 @@ func openCaptureAdapter(target captureTarget) (Adapter, *captureManifest, *captu
 	// retained it. Both records describe this same validated capturing host.
 	target.Host.MachineID = defaultString(target.Host.MachineID, manifest.Host.MachineID)
 	view := newCaptureView(target.Host, target.Dir, manifest)
-	root, ok := view.captured(manifest.Source.Path)
+	root, ok := view.capturedSource(manifest.Source)
 	if !ok {
 		return nil, nil, nil, fmt.Errorf("capture manifest %s does not map its source path", target.Dir)
 	}
@@ -457,18 +513,40 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 	return result
 }
 
-// indexGenerations takes from each superseded Conductor snapshot not yet
-// indexed the sessions no newer snapshot has: sessions deleted at the source
-// survive only there. Sessions still present are indexed from the newest
-// snapshot holding them, so an older copy never rolls one back. Other kinds
-// cannot index only what is missing, so their generations are merely recorded.
+// generationReader is an adapter whose database snapshots it can index in
+// part: from a superseded snapshot, only the sessions no newer one holds.
+type generationReader interface {
+	// snapshotSessions lists the sessions a snapshot holds, as the reader
+	// selects them.
+	snapshotSessions(ctx context.Context, file string) (map[string]bool, error)
+	// olderReader reads only the selected sessions of the snapshot file,
+	// through view.
+	olderReader(file string, view *captureView, selected map[string]bool) Adapter
+}
+
+func (a *conductorAdapter) snapshotSessions(ctx context.Context, file string) (map[string]bool, error) {
+	return conductorSessionIDsContext(ctx, file)
+}
+
+func (a *conductorAdapter) olderReader(file string, view *captureView, selected map[string]bool) Adapter {
+	config := a.config
+	config.Path = file
+	return &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: a.capability, view: view}, selected: selected}
+}
+
+// indexGenerations takes from each superseded snapshot not yet indexed the
+// sessions no newer snapshot has: sessions deleted at the source survive
+// only there. Sessions still present are indexed from the newest snapshot
+// holding them, so an older copy never rolls one back. Kinds that cannot
+// index only what is missing (not a generationReader) merely record their
+// generations.
 func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *captureView, marker *indexMarker, result *IngestResult) error {
 	// A current-transcript plan must never be reused for an older snapshot.
 	mode := modeOf(ctx)
 	mode.plan, mode.planned, mode.processed = nil, nil, nil
 	ctx = withIngestMode(ctx, mode)
 
-	conductor, ok := adapter.(*conductorAdapter)
+	generations, ok := adapter.(generationReader)
 	force := modeOf(ctx).force
 	for _, snapshot := range view.manifest.Snapshots {
 		pending := false
@@ -491,7 +569,7 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 			if err != nil {
 				return err
 			}
-			if handled, err = conductorSessionIDs(readable); err != nil {
+			if handled, err = generations.snapshotSessions(ctx, readable); err != nil {
 				return err
 			}
 		}
@@ -517,7 +595,7 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 			if err != nil {
 				return err
 			}
-			ids, err := conductorSessionIDs(file)
+			ids, err := generations.snapshotSessions(ctx, file)
 			if err != nil {
 				return err
 			}
@@ -534,9 +612,7 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 				continue
 			}
 			older := &captureView{host: view.host, dir: view.dir, manifest: view.manifest, lease: view.lease, decoded: view.decoded, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
-			config := conductor.config
-			config.Path = file
-			reader := &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: conductor.capability, view: older}, selected: missing}
+			reader := generations.olderReader(file, older, missing)
 			setAdapterContext(reader, ctx)
 			baseProcessed := result.Processed
 			reportWork(ctx, "indexing retained sessions", "session", 0, len(missing))
@@ -550,10 +626,6 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 		}
 	}
 	return nil
-}
-
-func conductorSessionIDs(file string) (map[string]bool, error) {
-	return conductorSessionIDsContext(context.Background(), file)
 }
 
 func conductorSessionIDsContext(ctx context.Context, file string) (map[string]bool, error) {

@@ -137,11 +137,11 @@ describe("library drive, end to end", { skip }, () => {
     const page = await openPage(t, { onboarding: true });
     const dialog = page.locator("#pharosOnboarding");
     await dialog.waitFor();
-    await dialog.getByRole('group',{name:'Detected tools',exact:true}).waitFor();
-    await dialog.getByRole('checkbox',{name:/Claude Code/}).check();
-    await dialog.getByRole('checkbox',{name:/Codex/}).check();
+    // Looking in the usual places finds both tools' folders.
+    await dialog.getByRole('radio',{name:/Look in the usual places/}).check();
     await dialog.getByRole('button',{name:'Continue',exact:true}).click();
     await dialog.getByText("~/.claude/projects",{exact:true}).waitFor();
+    await dialog.getByRole('checkbox',{name:/Codex/}).waitFor();
     await dialog.getByRole('button',{name:'Continue',exact:true}).click();
     await dialog.getByRole("button", { name: 'Add and capture',exact:true }).click();
     await dialog.getByRole("button", { name: "Index now" }).waitFor({ timeout: 60000 });
@@ -163,9 +163,11 @@ describe("library drive, end to end", { skip }, () => {
     assert.match(await air.textContent(), /needs index/);
     await shoot(page.locator("#sourceGrid"), "hosts-needs-index");
     await page.goto(`${base}/settings/sync`);
-    await page.locator("#syncOperations summary").click();
-    await page.locator("#syncRunActions").getByRole("button", { name: "Index captured files" }).click();
-    // The index runs in the service; the page shows it finish.
+    const requested = page.waitForResponse(response => new URL(response.url()).pathname === '/api/background/run'
+      && response.request().method() === 'POST' && response.request().postDataJSON()?.item === 'preserve');
+    await page.getByRole("button", { name: "Run Preserve originals now", exact: true }).click();
+    assert.equal((await requested).status(), 202);
+    // Preserve originals captures this Mac and indexes retained captures from every Mac.
     await eventually(async () => (await api("/api/index")).hosts.find(host => host.id === hostB.id)?.sources.every(source => !source.needs_index), 300000);
     await page.goto(`${base}/settings/sources`);
     await air.waitFor();

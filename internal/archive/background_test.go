@@ -11,7 +11,99 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	labelrt "github.com/gbdubs/pharos/internal/labeler"
 )
+
+func TestLabelerDeviceSettings(t *testing.T) {
+	catalog, config := testCatalog(t)
+	workerDir := t.TempDir()
+	worker := filepath.Join(workerDir, "worker")
+	probeCount := filepath.Join(workerDir, "probes")
+	writeWorker := func(reply string) {
+		t.Helper()
+		// A capability probe must not load a model or start the framed worker.
+		script := "#!/bin/sh\ncase \" $* \" in *' --probe-mlx '*) ;; *) exit 1;; esac\necho probe >> '" + probeCount + "'\nprintf '%s\\n' '" + reply + "'\n"
+		if err := os.WriteFile(worker, []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeWorker(`{"available":true}`)
+	model := func() string {
+		dir := t.TempDir()
+		for _, name := range []string{"model.fp32.onnx", "model.int8.onnx", "weights.safetensors"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("stand-in"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		man := labelrt.Manifest{Files: map[string]string{"onnx_fp32": "model.fp32.onnx", "onnx_int8": "model.int8.onnx"}, MLX: &labelrt.MLXArtifact{Weights: "weights.safetensors"}}
+		raw, _ := json.Marshal(man)
+		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	config.Labels = LabelerSettings{Worker: worker, Backend: "auto", ModelDir: model(), Variant: "fp32", Threads: 4}
+	config.AgentEvents = AgentEventSettings{ModelDir: model(), Variant: "int8", Threads: 2}
+	server := testServer(t, config, catalog)
+	check := func(document map[string]any, device string, confirmed, threads bool) {
+		t.Helper()
+		execution := document["execution"].(labelerDevice)
+		choices, _ := document["thread_choices"].([]int)
+		if execution.Device != device || execution.Confirmed != confirmed || document["threads_can_change"] != threads || (len(choices) > 0) != (device == "cpu") {
+			t.Fatalf("device=%s confirmed=%t threads=%t: %+v", device, confirmed, threads, document)
+		}
+		if execution.Status == "" || execution.Detail == "" {
+			t.Fatalf("unexplained device: %+v", execution)
+		}
+	}
+	check(server.labelsSettings(), "gpu", false, false)
+	if server.labelsSettings()["notice"] != "" {
+		t.Fatal("routine off status became a notice")
+	}
+	check(server.agentEventsSettings(t.Context()), "cpu", false, true)
+	check(server.labelsSettings(), "gpu", false, false)
+	probes, err := os.ReadFile(probeCount)
+	if err != nil || strings.Count(string(probes), "probe") != 1 {
+		t.Fatalf("uncached GPU probes: %s %v", probes, err)
+	}
+	settings := server.Config().Labels
+	path := filepath.Join(settings.ModelDir, "model.fp32.onnx")
+	storeDevice := func(device string) {
+		catalog.labelerWorkers.Store(path, labelerWorkerObservation{labelerDeviceKey(settings, path), func() labelrt.WorkerInfo { return labelrt.WorkerInfo{Device: device} }})
+	}
+	// Confirmed CPU fallback overrides a successful preflight GPU check.
+	storeDevice("cpu")
+	check(server.labelsSettings(), "cpu", true, true)
+	storeDevice("gpu")
+	check(server.labelsSettings(), "gpu", true, false)
+	// Replacing the worker invalidates observations and cached capability checks.
+	writeWorker(`{"available":false,"reason":"unsupported OS"}`)
+	check(server.labelsSettings(), "cpu", false, true)
+	setBackend := func(backend string) {
+		server.configMu.Lock()
+		server.config.Labels.Backend = backend
+		server.configMu.Unlock()
+	}
+	setBackend("mlx")
+	check(server.labelsSettings(), "unavailable", false, false)
+	setBackend("auto")
+	writeWorker(`{"available":null,"reason":"older engine"}`)
+	check(server.labelsSettings(), "unknown", false, false)
+	setBackend("cpu")
+	check(server.labelsSettings(), "cpu", false, true)
+	server.configMu.Lock()
+	server.config.Labels.ModelDir = ""
+	server.config.Labels.Enabled = true
+	server.configMu.Unlock()
+	check(server.labelsSettings(), "unknown", false, false)
+	if server.labelsSettings()["notice"] == "" {
+		t.Fatal("a pending download lost its notice")
+	}
+	if catalog.hasLabelsLedger() {
+		t.Fatal("reading device settings ran labeling")
+	}
+}
 
 // Background Processing (docs/background-work.md §11): where measured cost
 // places an item, when each cadence's work is due, the pass that runs it,
@@ -110,6 +202,33 @@ func TestBackgroundPlanRunsEachCadenceWhenDue(t *testing.T) {
 	}
 	if got := plan(settings(), stage("authorship", pending(15*time.Minute, 30*time.Minute)), "writing"); got.Due || !got.Next.Equal(at.Add(30*time.Minute)) {
 		t.Fatalf("hourly work runs at most once an hour: %+v", got)
+	}
+	// A bounded stage can finish a pass while its deferred generation stays
+	// pending. Its recent successful run still starts the cadence's clock.
+	for _, id := range []string{"labels", "agent_events", "repositories"} {
+		item, _ := backgroundItemByID(id)
+		in := backgroundInputs{labels: true, agentEvents: true, deferred: map[string]deferredRow{}}
+		for _, name := range item.Stages {
+			in.deferred[name] = pending(15*time.Minute, 48*time.Hour)
+		}
+		for _, cadence := range []string{cadenceHourly, cadenceDaily} {
+			setting := settings()
+			setting.Overrides[id] = cadence
+			in.runs = map[string]backgroundRunRow{id: {succeeded: ago(5 * time.Minute)}}
+			got := plan(setting, in, id)
+			if !got.LastDone.Equal(at.Add(-5*time.Minute)) || !got.Pending || got.Due || !got.Next.After(at) || got.Missed || got.Overdue {
+				t.Fatalf("%s on %s lost its recent pass with work pending: %+v", id, cadence, got)
+			}
+		}
+		// A chain run outside the schedule can be newer than its record.
+		in.runs[id] = backgroundRunRow{succeeded: ago(72 * time.Hour)}
+		if got := plan(settings(), in, id); !got.LastDone.Equal(at.Add(-48 * time.Hour)) {
+			t.Fatalf("%s ignored the newer deferred completion: %+v", id, got)
+		}
+		in.runs[id] = backgroundRunRow{finished: ago(time.Minute), err: "boom"}
+		if got := plan(settings(), in, id); !got.Failed || !got.LastDone.Equal(at.Add(-48*time.Hour)) {
+			t.Fatalf("%s counted a failed pass as a success: %+v", id, got)
+		}
 	}
 
 	daily := func(succeeded time.Duration) backgroundInputs {
@@ -215,7 +334,7 @@ func TestBackgroundPlanMovesEveryItem(t *testing.T) {
 	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
 	ago := formatTime(at.Add(-48 * time.Hour))
 	in := backgroundInputs{otherSources: []string{"tl1"}, backupDestination: "/backup", lastBackup: ago,
-		upgradePending: true, verificationNext: at.Add(-time.Hour), labels: true, agentEvents: true, ask: true, suggestionsStale: true,
+		upgradePending: true, writingRefinementPending: true, verificationNext: at.Add(-time.Hour), labels: true, agentEvents: true, ask: true, suggestionsStale: true,
 		runs: map[string]backgroundRunRow{}, deferred: map[string]deferredRow{}}
 	for _, item := range backgroundItems {
 		in.runs[item.ID] = backgroundRunRow{succeeded: ago}
@@ -522,6 +641,11 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	if completed("tools") != 2 || completed("authorship") != 1 {
 		t.Fatalf("the pass caught up tools only: tools %d, authorship %d", completed("tools"), completed("authorship"))
 	}
+	if !slices.ContainsFunc(server.ops.views(), func(view opView) bool {
+		return view.Spec.Kind == "analysis.tools" && view.Step.Name != ""
+	}) {
+		t.Fatal("scheduled analysis lost its worker progress before reaching the operation registry")
+	}
 	runs := catalog.backgroundRuns(ctx)
 	if runs["tools"].succeeded == "" || runs["tools"].err != "" {
 		t.Fatalf("the pass records each item it ran: %+v", runs["tools"])
@@ -552,6 +676,54 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	server.auto.mu.Unlock()
 }
 
+func TestBackgroundLabelRunTimesWhileDeferred(t *testing.T) {
+	useSupportDir(t)
+	catalog, config := testCatalog(t)
+	// No worker: both stages leave their generation pending, as they do
+	// after handing remaining work to a backlog worker.
+	config.Labels = LabelerSettings{Enabled: true}
+	config.AgentEvents = AgentEventSettings{Enabled: true}
+	server := testServer(t, config, catalog)
+	ctx := t.Context()
+	old := formatTime(time.Now().Add(-72 * time.Hour))
+	execTx(t, catalog.DB, "DELETE FROM sync_deferred",
+		"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at) VALUES('labels',2,1,"+sqlQuote(old)+","+sqlQuote(old)+"),('agent_events',2,1,"+sqlQuote(old)+","+sqlQuote(old)+")",
+		"INSERT INTO background_settings(host_id,overrides_json) VALUES("+sqlQuote(currentHost().ID)+",'{\"labels\":\"manual\",\"agent_events\":\"manual\"}')")
+	server.requestBackground("labels", "agent_events")
+	if !server.backgroundPass(ctx, time.Now()) {
+		t.Fatal("Run now did not run the requested stages")
+	}
+	runs := catalog.backgroundRuns(ctx)
+	deferred, err := catalog.freshnessDeferred(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := apiCall(t, server, config.APIToken, http.MethodGet, "/api/background", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("read background: %d %s", response.Code, response.Body.String())
+	}
+	type itemStatus struct {
+		ID, State string
+		AsOf      string `json:"as_of"`
+	}
+	var document struct {
+		View struct{ Items []itemStatus }
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"labels", "agent_events"} {
+		run, row := runs[id], deferred[id]
+		if run.succeeded == "" || run.err != "" || row.generation <= row.completed || row.completedAt != old {
+			t.Fatalf("%s should have a successful pass with deferred work: run=%+v deferred=%+v", id, run, row)
+		}
+		index := slices.IndexFunc(document.View.Items, func(item itemStatus) bool { return item.ID == id })
+		if index < 0 || document.View.Items[index].State != "manual" || document.View.Items[index].AsOf != run.succeeded {
+			t.Fatalf("%s last run should be %s despite deferred work: %+v", id, run.succeeded, document.View.Items)
+		}
+	}
+}
+
 // The settings API: modes, the daily time, the interval, overrides within
 // the allowed choices, and Run now; the status snapshot carries the
 // schedule.
@@ -578,9 +750,28 @@ func TestMessageLabelsSettings(t *testing.T) {
 	if labels := read()["labels"].(map[string]any); labels["enabled"] != false || labels["can_change"] != true {
 		t.Fatalf("disabled settings must remain visible: %v", labels)
 	}
-	// Agent events sit beside labels; their switch is a preference.
+	// Agent events have their own step; their switch is a preference.
 	if events := read()["agent_events"].(map[string]any); events["enabled"] != false || events["can_change"] != true {
 		t.Fatalf("agent events settings must remain visible while off: %v", events)
+	}
+	for _, id := range []string{"labels", "agent_events"} {
+		view := read()["view"].(map[string]any)
+		found := false
+		for _, value := range view["items"].([]any) {
+			item := value.(map[string]any)
+			if item["id"] == id {
+				found = true
+				if item["state"] != "disabled" || item["cadence"] != cadenceManual || item["next_at"] != nil {
+					t.Fatalf("disabled model must be accessible without being scheduled: %v", item)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("disabled model %s has no step for its settings", id)
+		}
+		if !slices.ContainsFunc(view["unscheduled"].([]any), func(value any) bool { return value == id }) {
+			t.Fatalf("disabled model %s is not reachable in the unscheduled column", id)
+		}
 	}
 	if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/preferences", map[string]any{"set": map[string]any{agentEventsFlag: true}}); response.Code != http.StatusOK {
 		t.Fatalf("turn agent events on: %d %s", response.Code, response.Body.String())
@@ -613,12 +804,14 @@ func TestMessageLabelsSettings(t *testing.T) {
 		if enabled && (!strings.Contains(firstString(labels["status"]), "download") || !strings.Contains(firstString(labels["status"]), "worker")) {
 			t.Fatalf("missing runtime assets are not explained: %v", labels)
 		}
-		listed := false
+		var step map[string]any
 		for _, item := range document["view"].(map[string]any)["items"].([]any) {
-			listed = listed || item.(map[string]any)["id"] == "labels"
+			if item.(map[string]any)["id"] == "labels" {
+				step = item.(map[string]any)
+			}
 		}
-		if listed != enabled {
-			t.Fatalf("scheduled labels listed = %t, enabled = %t", listed, enabled)
+		if step == nil || (step["state"] != "disabled") != enabled {
+			t.Fatalf("labels step must remain reachable and reflect enabled = %t: %v", enabled, step)
 		}
 	}
 	// Each model's threads: saved to the configuration and read back, and
@@ -874,6 +1067,14 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 			t.Fatalf("after the pass, the saved manual cadence resumes: %s", got)
 		}
 		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": ""}}, http.StatusOK)
+		// A successful bounded pass can leave messages waiting until its next
+		// interval. That backlog must not be presented as updated.
+		catalog.recordBackgroundRun(ctx, "writing", time.Now(), true, nil)
+		execSQL(t, catalog.DB, `INSERT INTO authorship_pending(message_id,revision) VALUES('waiting','revision')`)
+		if got := state(); got != "queued" {
+			t.Fatalf("remaining writing backlog after a successful pass: %s", got)
+		}
+		execSQL(t, catalog.DB, `DELETE FROM authorship_pending WHERE message_id='waiting'`)
 	})
 	post("/api/background/run", map[string]any{"item": "conversations"}, http.StatusAccepted)
 	if !server.indexRequested() {
@@ -1221,7 +1422,7 @@ func TestBackgroundDayCostCountsFrequentPasses(t *testing.T) {
 func TestBackgroundWritingEstimatesAndRefinementHaveIndependentSchedules(t *testing.T) {
 	at := time.Date(2026, 11, 5, 4, 0, 0, 0, time.Local)
 	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{}, Placements: map[string]string{"writing": cadenceDaily}}
-	in := backgroundInputs{writingPending: true, writingRefinedAt: formatTime(at.Add(-24 * time.Hour)), runs: map[string]backgroundRunRow{"writing": {succeeded: formatTime(at.Add(-time.Minute))}}}
+	in := backgroundInputs{writingPending: true, writingRefinementPending: true, writingRefinedAt: formatTime(at.Add(-24 * time.Hour)), runs: map[string]backgroundRunRow{"writing": {succeeded: formatTime(at.Add(-time.Minute))}}}
 	plans := func() map[string]itemPlan {
 		out := map[string]itemPlan{}
 		for _, plan := range backgroundPlan(settings, in, at) {
@@ -1239,5 +1440,64 @@ func TestBackgroundWritingEstimatesAndRefinementHaveIndependentSchedules(t *test
 	in.writingRefinedAt = formatTime(at.Add(-30 * time.Minute))
 	if daily := plans()["writing-refine"]; daily.Due || daily.Pending == false || !daily.Next.After(at) {
 		t.Fatalf("completed daily work ran again: %+v", daily)
+	}
+	in.writingRefinementPending = false
+	in.writingRefinedAt = formatTime(at.Add(-48 * time.Hour))
+	if daily := plans()["writing-refine"]; daily.Pending || daily.Due || !daily.Next.IsZero() {
+		t.Fatalf("elapsed days manufactured refinement work: %+v", daily)
+	}
+
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	execTx(t, catalog.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,started_at) VALUES('c','w','codex','local','c','codex','2026-09-01T12:00:00.000Z')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('m','c','m','user','message','Please fix the parser','2026-09-01T12:01:00.000Z','m')`)
+	run := func() int {
+		t.Helper()
+		classified := 0
+		ctx := withWorkProgress(t.Context(), func(w activityWork) {
+			if strings.HasPrefix(w.Phase, "authorship mode:") {
+				classified++
+			}
+		})
+		err := catalog.refineAuthorship(ctx, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return classified
+	}
+	if run() == 0 {
+		t.Fatal("initial refinement did not classify")
+	}
+	refined, _ := catalog.metaValue(t.Context(), "authorship_refined_at")
+	execSQL(t, catalog.DB, "UPDATE sync_deferred SET completed_generation=generation WHERE name IN ('labels','findings')")
+	catalog.now = func() time.Time { return at.Add(48 * time.Hour) }
+	for range 2 {
+		if run() != 0 {
+			t.Fatal("unchanged scheduled refinement classified again")
+		}
+	}
+	if got, _ := catalog.metaValue(t.Context(), "authorship_refined_at"); got != refined {
+		t.Fatal("a skipped refinement changed its completion")
+	}
+	if pending := catalog.readBackgroundInputs(t.Context()).writingRefinementPending; pending {
+		t.Fatal("completed refinement remains pending")
+	}
+	// An explicit full replay with identical outputs must also leave its
+	// consumers current; their invalidation belongs to changed output writes.
+	execSQL(t, catalog.DB, "DELETE FROM meta WHERE key='authorship_refinement_inputs'")
+	if err := server.runBackgroundItem(t.Context(), nil, "writing-refine"); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := catalog.authorshipRefinementPending(t.Context()); err != nil || pending {
+		t.Fatalf("missing completion evidence did not trigger refinement: %v %v", pending, err)
+	}
+	if n := countRows(t, catalog, "SELECT count(*) FROM sync_deferred WHERE name IN ('labels','findings') AND generation>completed_generation"); n != 0 {
+		t.Fatal("identical refinement rescheduled its consumers")
+	}
+	reopened := reopenCatalog(t, catalog.Path)
+	if pending, err := reopened.authorshipRefinementPending(t.Context()); err != nil || pending {
+		t.Fatalf("refinement completion did not survive reopening: %v %v", pending, err)
 	}
 }

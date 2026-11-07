@@ -16,22 +16,25 @@ import (
 // and MCP resource-API attribution and structured MCP errors. v9 marks a call
 // backgrounded when a subshell launches it, as in "(server &)". v10 reads the
 // script of `zsh -lc "..."`, and classifies file-writing cat, runners (npx,
-// "pnpm exec", "uv run") by what they run, formatters, and checks.
-const toolLedgerVersion = "tools-v10-command-categories"
+// "pnpm exec", "uv run") by what they run, formatters, and checks. v11
+// retains explicit request speed from accounting envelopes.
+const toolLedgerVersion = "tools-v12-inference-speed-policy"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the
 // same agent stream, net of that request's own output; it is what tool
 // results (and any user turns) added to the context.
 type modelRequest struct {
-	Key, NativeID, Stream, Model, Effort, RequestedAt string
-	FirstIndex, Sequence                              int
-	Counts                                            tokenCounts
-	ContextGrowth                                     *int64
-	CompactedBefore                                   bool
-	ToolCalls                                         int
+	Key, NativeID, Stream, Model, Effort, Speed, RequestedAt string
+	FirstIndex, Sequence                                     int
+	Counts                                                   tokenCounts
+	ContextGrowth                                            *int64
+	CompactedBefore                                          bool
+	ToolCalls                                                int
 
-	aliases []string // keys of events merged into this request
+	aliases                  []string // keys of events merged into this request
+	ServiceTier, SpeedSource string
+	inference                inferenceSpeed // field presence for streamed updates and resets
 }
 
 type toolCommand struct {
@@ -91,18 +94,18 @@ var (
 	harnessBlockedPattern = regexp.MustCompile(`(?s)<tool_use_error>\s*blocked:`)
 	blockSuffixPattern    = regexp.MustCompile(`(:(reasoning-)?block:\d+|:usage)$`)
 	benignExitPrograms    = map[string]bool{"grep": true, "rg": true, "ag": true, "egrep": true, "fgrep": true, "diff": true, "cmp": true, "test": true, "[": true, "[[": true}
-	shellToolNames        = map[string]bool{"bash": true, "shell": true, "exec_command": true, "exec": true, "local_shell": true, "run": true, "container.exec": true, "run_command": true, "execute_command": true}
+	shellToolNames        = map[string]bool{"bash": true, "shell": true, "exec_command": true, "exec": true, "local_shell": true, "run": true, "container.exec": true, "run_command": true, "execute_command": true, "run_commands": true, "run_in_terminal": true, "run_terminal_cmd": true, "run_terminal_command_v2": true, "terminal": true}
 	toolCategoryByName    = map[string]string{}
 	toolCategoryEntries   = map[string][]string{
-		"command": {"bash", "shell", "exec_command", "exec", "local_shell", "run", "write_stdin", "bashoutput", "killshell", "killbash", "run_command", "execute_command", "container.exec"},
-		"read":    {"read", "view_image", "notebookread", "ls", "view", "read_file", "open_file", "list_dir", "list_directory", "view_file", "view_file_outline", "view_code_item"},
-		"search":  {"grep", "glob", "search", "find", "codebase_search", "file_search", "grep_search", "find_by_name"},
-		"edit":    {"edit", "write", "multiedit", "notebookedit", "apply_patch", "applypatch", "str_replace_editor", "create_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content"},
-		"web":     {"webfetch", "websearch", "web_search", "web__run", "fetch", "browser", "web.run", "js", "js_reset", "search_web", "read_url_content"},
-		"agent":   {"task", "agent", "spawn_agent", "delegate", "workflow", "explore", "send_message", "wait", "wait_agent", "list_agents", "followup_task", "interrupt_agent", "close_agent", "sendmessage", "taskoutput", "invoke_subagent", "define_subagent", "manage_subagents"},
-		"plan":    {"todowrite", "todoread", "taskcreate", "taskupdate", "tasklist", "taskget", "taskstop", "update_plan", "enterplanmode", "exitplanmode", "enterworktree", "exitworktree", "manage_task"},
+		"command": {"bash", "shell", "exec_command", "exec", "local_shell", "run", "write_stdin", "bashoutput", "killshell", "killbash", "run_command", "execute_command", "container.exec", "run_commands", "run_in_terminal", "run_terminal_cmd", "run_terminal_command_v2", "terminal"},
+		"read":    {"read", "view_image", "notebookread", "ls", "view", "read_file", "open_file", "list_dir", "list_directory", "view_file", "view_file_outline", "view_code_item", "copilot_readfile", "copilot_listdirectory", "read_file_v2", "read_files"},
+		"search":  {"grep", "glob", "search", "find", "codebase_search", "file_search", "grep_search", "find_by_name", "search_codebase", "copilot_findfiles", "copilot_findtextinfiles", "copilot_searchcodebase", "glob_file_search", "ripgrep_raw_search", "ripgrep_search", "find_path"},
+		"edit":    {"edit", "write", "multiedit", "notebookedit", "apply_patch", "applypatch", "str_replace_editor", "create_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content", "editor", "copilot_createfile", "copilot_replacestring", "copilot_multireplacestring", "copilot_insertedit", "copilot_applypatch", "vscode_renamesymbol", "edit_file_v2", "search_replace", "delete_file", "strreplace", "copy_path", "move_path", "delete_path", "create_directory"},
+		"web":     {"webfetch", "websearch", "web_search", "web__run", "fetch", "browser", "web.run", "js", "js_reset", "search_web", "read_url_content", "copilot_fetchwebpage", "vscode_fetchwebpage_internal", "fetch_web_content"},
+		"agent":   {"task", "agent", "spawn_agent", "delegate", "workflow", "explore", "send_message", "wait", "wait_agent", "list_agents", "followup_task", "interrupt_agent", "close_agent", "sendmessage", "taskoutput", "invoke_subagent", "define_subagent", "manage_subagents", "runsubagent", "task_v2"},
+		"plan":    {"todowrite", "todoread", "taskcreate", "taskupdate", "tasklist", "taskget", "taskstop", "update_plan", "enterplanmode", "exitplanmode", "enterworktree", "exitworktree", "manage_task", "todo_write"},
 		"user":    {"askuserquestion", "request_user_input", "request_user_input_async", "ask_question"},
-		"meta":    {"toolsearch", "skill", "get_skill", "request_plugin_install", "slashcommand"},
+		"meta":    {"toolsearch", "skill", "get_skill", "request_plugin_install", "slashcommand", "get_mcp_tools", "skills"},
 	}
 )
 
@@ -166,11 +169,17 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 	}
 	// Map each usage-bearing event to its request so tool calls in the same
 	// provider event resolve to the request that produced them.
+	// A copy of another session's reply (wrapUsageCopy) is no request here;
+	// its usage follows its lines, so a call before it is that reply's, not a
+	// later request's.
+	copies := map[string][]int{}
 	for index, message := range messages {
 		if key, _ := requestKeyAt(messages, index, streams); key != "" && byKey[key] != nil {
 			if base := blockSuffixPattern.ReplaceAllString(message.NativeID, ""); base != "" && byBase[base] == "" {
 				byBase[base] = key
 			}
+		} else if _, copy := unwrapUsageCopy(message.RawText); copy && claudeUsageRecord(message) {
+			copies[streams[index]] = append(copies[streams[index]], index)
 		}
 	}
 	compactions := map[string][]int{}
@@ -180,7 +189,11 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		}
 	}
 
-	results := map[string]int{}
+	// A call's result is its first. A later result that names the result
+	// before it as the one it continues (each page a ChatGPT browser click
+	// quotes) is more of its output; any other repeats it, or is an
+	// alternative to it.
+	results, later := map[string]int{}, map[string][]int{}
 	for index, message := range messages {
 		if message.Kind != "tool_result" && message.Kind != "delegation_result" {
 			continue
@@ -188,6 +201,8 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		key := defaultString(nilIfEmpty(message.CallID), message.NativeID)
 		if _, seen := results[key]; !seen {
 			results[key] = index
+		} else if message.CallID != "" {
+			later[key] = append(later[key], index)
 		}
 	}
 	calls := []toolCall{}
@@ -253,6 +268,17 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 				isError = payload["is_error"] == true || ((call.MCPServer != "" || call.Category == "mcp") && mcpResultError(payload["content"]))
 				details = mapValue(payload["details"])
 			}
+			last := result.NativeID
+			for _, index := range later[key] {
+				var payload map[string]any
+				if json.Unmarshal([]byte(messages[index].Text), &payload) != nil || firstString(payload["continues"]) != last {
+					continue
+				}
+				last = messages[index].NativeID
+				text, count := toolResultText(payload["content"])
+				content, images, isError = content+"\n"+text, images+count, isError || payload["is_error"] == true
+				call.EndedAt = defaultString(nilIfEmpty(messages[index].CreatedAt), call.EndedAt)
+			}
 			call.ResultBytes = int64(len(content))
 			call.estimateTokens = int64(math.Ceil(float64(len(content))/4)) + int64(images)*1500
 		}
@@ -266,13 +292,18 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		applyLineCounts(&call, input, details)
 		applyToolURLs(&call, input, content)
 		// Emitting request: the usage in the same provider event, otherwise the
-		// first usage reported at or after the call in its stream.
+		// first usage reported at or after the call in its stream, before the
+		// next prompt and not across a compaction that copied the call. A call
+		// the person ran themselves took no request.
 		base := blockSuffixPattern.ReplaceAllString(message.NativeID, "")
 		call.RequestKey = byBase[base]
-		if call.RequestKey == "" {
+		if call.RequestKey == "" && message.Role != "user" {
 			for _, request := range perStream[call.Stream] {
-				if request.FirstIndex >= index {
-					call.RequestKey = request.Key
+				// An advisor makes no calls, wherever its record is stored.
+				if request.FirstIndex >= index && !claudeAdvisorRequest(messages[request.FirstIndex]) {
+					if !compactedBetween(copies[call.Stream], index-1, request.FirstIndex) && !promptBetween(messages, streams, call.Stream, index, request.FirstIndex) {
+						call.RequestKey = request.Key
+					}
 					break
 				}
 			}
@@ -344,6 +375,7 @@ func ledgerRequests(messages []MessageRecord, streams []string, conversationMode
 	first := map[string]int{}
 	final := map[string]int{}
 	nativeIDs := map[string]string{}
+	speeds := map[string]inferenceSpeed{}
 	identified := map[string]bool{}
 	for index := range messages {
 		key, nativeID := requestKeyAt(messages, index, streams)
@@ -351,9 +383,18 @@ func ledgerRequests(messages []MessageRecord, streams []string, conversationMode
 			continue
 		}
 		nativeIDs[key] = nativeID
+		if speed, recorded := messageInference(messages[index]); recorded {
+			speeds[key] = mergeInference(speeds[key], speed)
+		}
 		identified[streams[index]] = true
 		if _, ok := first[key]; !ok {
 			first[key] = index
+		}
+		// Token accounting has already folded anonymous content blocks into
+		// the last event. Retain the earlier events here until our merge below
+		// has combined their configuration evidence and request aliases too.
+		if nativeID == "" && reports[index].scope == "request" && reports[index].counts == nil {
+			reports[index].counts = normalizeTokenCounts(reports[index].usage)
 		}
 		if reports[index].counts != nil && reports[index].scope == "request" {
 			final[key] = index
@@ -366,7 +407,11 @@ func ledgerRequests(messages []MessageRecord, streams []string, conversationMode
 			return
 		}
 		model := strings.TrimSpace(messages[finalIndex].Model)
-		requests = append(requests, modelRequest{Key: key, NativeID: nativeID, Stream: streams[firstIndex], Model: defaultString(nilIfEmpty(model), conversationModel), Effort: messages[finalIndex].Effort, RequestedAt: messages[firstIndex].CreatedAt, FirstIndex: firstIndex, Counts: counts})
+		speed, known := speeds[key]
+		if !known {
+			speed, _ = messageInference(messages[finalIndex])
+		}
+		requests = append(requests, modelRequest{Key: key, NativeID: nativeID, Stream: streams[firstIndex], Model: defaultString(nilIfEmpty(model), conversationModel), Effort: messages[finalIndex].Effort, Speed: speed.Speed, ServiceTier: speed.ServiceTier, SpeedSource: speed.Source, inference: speed, RequestedAt: messages[firstIndex].CreatedAt, FirstIndex: firstIndex, Counts: counts})
 	}
 	for key, finalIndex := range final {
 		add(key, nativeIDs[key], first[key], finalIndex)
@@ -390,6 +435,10 @@ func ledgerRequests(messages []MessageRecord, streams []string, conversationMode
 	for index := range requests {
 		request := &requests[index]
 		request.Sequence = index
+		// An advisor's request has a context of its own.
+		if claudeAdvisorRequest(messages[request.FirstIndex]) {
+			continue
+		}
 		if prior := previous[request.Stream]; prior != nil {
 			request.CompactedBefore = compactedBetween(compactions[request.Stream], prior.FirstIndex, request.FirstIndex)
 			if !request.CompactedBefore {
@@ -415,6 +464,8 @@ func mergeAnonymousRequests(messages []MessageRecord, streams []string, requests
 		if seen && request.NativeID == "" && merged[position].NativeID == "" && strings.Contains(request.Key, ":event:") &&
 			merged[position].Counts["input_tokens"] == request.Counts["input_tokens"] && !turnBetween(messages, streams, request.Stream, merged[position].FirstIndex, request.FirstIndex) {
 			target := &merged[position]
+			target.inference = mergeInference(target.inference, request.inference)
+			target.Speed, target.ServiceTier, target.SpeedSource = target.inference.Speed, target.inference.ServiceTier, target.inference.Source
 			if request.Counts["output_tokens"] > target.Counts["output_tokens"] {
 				target.Counts = request.Counts
 			}
@@ -437,6 +488,16 @@ func mergeAnonymousRequests(messages []MessageRecord, streams []string, requests
 		}
 	}
 	return merged
+}
+
+// promptBetween reports whether a prompt in stream comes between from and to.
+func promptBetween(messages []MessageRecord, streams []string, stream string, from, to int) bool {
+	for index := from + 1; index < to && index < len(messages); index++ {
+		if message := messages[index]; streams[index] == stream && message.Kind == "message" && (message.Role == "user" || message.Role == agentRole) {
+			return true
+		}
+	}
+	return false
 }
 
 func turnBetween(messages []MessageRecord, streams []string, stream string, from, to int) bool {
@@ -591,7 +652,8 @@ func toolResultText(content any) (string, int) {
 
 func toolFilePath(name string, input any) string {
 	if fields := mapValue(input); fields != nil {
-		if path := firstString(fields["file_path"], fields["notebook_path"], fields["path"], fields["filePath"], fields["AbsolutePath"], fields["TargetFile"]); path != "" {
+		if path := firstString(fields["file_path"], fields["notebook_path"], fields["path"], fields["filePath"], fields["AbsolutePath"], fields["TargetFile"],
+			fields["targetFile"], fields["relativeWorkspacePath"]); path != "" {
 			return clipText(path, 500)
 		}
 	}
@@ -662,6 +724,32 @@ func applyToolCommands(call *toolCall, input any, details map[string]any) {
 		}
 	}
 	lowerName := strings.ToLower(call.ToolName)
+	if len(lines) == 0 && shellToolNames[lowerName] {
+		// Cline runs a list of command lines in one call; an entry may be
+		// a program and its arguments, run without a shell.
+		listed, _ := mapValueDefault(input)["commands"].([]any)
+		for _, command := range listed {
+			text := ""
+			if entry := mapValue(command); entry != nil {
+				if program := firstString(entry["command"]); program != "" {
+					words := []string{shellQuote(program)}
+					arguments, _ := entry["args"].([]any)
+					for _, argument := range arguments {
+						words = append(words, shellQuote(asString(argument)))
+					}
+					text = strings.Join(words, " ")
+				}
+			} else {
+				text = firstString(command)
+			}
+			if text != "" {
+				lines = append(lines, struct {
+					text               string
+					exitCode, duration *int64
+				}{text: text})
+			}
+		}
+	}
 	if len(lines) == 0 && shellToolNames[lowerName] {
 		if text := shellCommandText(input); text != "" {
 			lines = append(lines, struct {
@@ -828,9 +916,11 @@ func classifyToolOutcome(call *toolCall, content string, isError bool, details m
 	call.Truncated = persisted || details["truncated"] == true || strings.Contains(content, "<persisted-output>") ||
 		strings.Contains(content, "Output truncated") || strings.Contains(content, "tokens truncated") || strings.Contains(content, "[... truncated")
 	benign := call.ExitCode != nil && *call.ExitCode == 1 && benignExitPrograms[call.Program] && len(call.Commands) <= 1
-	failed := isError || failedCommand || call.Interrupted || call.ErrorType != "" || status == "failed" || status == "declined" || status == "error" ||
+	// An adapter names the harness policy (a hook) that turned a call down.
+	blocked := firstString(details["blocked_by"]) != ""
+	failed := isError || failedCommand || call.Interrupted || blocked || call.ErrorType != "" || status == "failed" || status == "declined" || status == "error" ||
 		(call.ExitCode != nil && *call.ExitCode != 0 && !benign)
-	if benign && !failedCommand && call.ErrorType == "" && !call.Interrupted {
+	if benign && !failedCommand && call.ErrorType == "" && !call.Interrupted && !blocked {
 		failed = false
 	}
 	if !failed {
@@ -842,6 +932,10 @@ func classifyToolOutcome(call *toolCall, content string, isError bool, details m
 	}
 	if call.Interrupted {
 		call.ErrorType = "interrupted"
+		return
+	}
+	if blocked {
+		call.ErrorType = "hook_blocked"
 		return
 	}
 	head := strings.ToLower(clipText(content, 2000))

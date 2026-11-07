@@ -214,7 +214,7 @@ func legacyUpgradeCatalog(t *testing.T) *Catalog {
 func TestLibraryUpgrade(t *testing.T) {
 	catalog := legacyUpgradeCatalog(t)
 	pending := upgradePending(t, catalog)
-	if pending["repositories"] == 0 || pending["usage"] != 1 || pending["harness"] == 0 || pending["instructions"] == 0 || pending["reasoning"] == 0 || pending["message-search"] != 2 || pending["tools"] != 2 {
+	if pending["repositories"] == 0 || pending["usage"] != 2 || pending["harness"] == 0 || pending["instructions"] == 0 || pending["reasoning"] == 0 || pending["message-search"] != 2 || pending["tools"] != 2 {
 		t.Fatalf("legacy library pending: %v", pending)
 	}
 	preview, err := catalog.RepositoryMergePreview(context.Background())
@@ -278,8 +278,21 @@ func TestLibraryUpgrade(t *testing.T) {
 		t.Fatalf("rename-only merge left %d rows, %v", rows, err)
 	}
 	// Running it again finds nothing to do.
-	if err := catalog.RunUpgrade(context.Background(), nil); err != nil {
+	catalog.ops = newOpRegistry("service")
+	ctx, op := catalog.beginOp(t.Context(), OperationSpec{Kind: "library.upgrade"})
+	defer op.Finish(nil)
+	ctx = withWorkProgress(ctx, func(work activityWork) {
+		view := op.view()
+		if len(view.Plan) > 0 && view.Step.Index > len(view.Plan) {
+			t.Fatalf("worker phase %q advanced the upgrade beyond its plan: %+v", work.Phase, operationStep(view))
+		}
+	})
+	if err := catalog.RunUpgrade(ctx, nil); err != nil {
 		t.Fatal(err)
+	}
+	step := operationStep(op.view())
+	if step == nil || step["index"] != 1 || step["count"] != 1 {
+		t.Fatalf("a single-step upgrade must remain step 1 of 1 through rollup phases and final inventory: %+v", step)
 	}
 }
 

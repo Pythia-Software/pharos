@@ -1,3 +1,5 @@
+import { DataReadinessIndicator } from "./data-readiness";
+import { cardReadinessSource } from "./data-readiness-card";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisState } from "./dashboard-analysis-model";
@@ -16,6 +18,17 @@ import "./home.css";
 // without a catalog chart (Thinking) is its own address.
 export type DashboardCardSource = { catalog: AnalysisCatalog; state: AnalysisState; where: WhereTerm[]; schema: FieldSchema } | { page: true; schema: FieldSchema };
 export const DashboardCardSourceContext = createContext<DashboardCardSource | null>(null);
+
+// One action group for bespoke dashboard results, using the same source and
+// title declaration as their saved-card preview. Card creation remains separate.
+export function DashboardResultActions({target}:{target:DashboardCardTarget}) {
+  const from=useContext(DashboardCardSourceContext);
+  if(!from)return null;
+  const address="page" in from?pageCardURL(location.href):dashboardCardURL(location.href,from.catalog,from.state,from.where);
+  const title=dashboardCardTargets(address,from.schema).find(item=>item.id===target)?.title??"This chart";
+  const {dataset}=cardReadinessSource(address);
+  return <span className="dashboard-card-actions"><DataReadinessIndicator id={`chart:${target}`} title={title} dataset={dataset} query={"page" in from?Object.fromEntries(new URLSearchParams(location.search)):{state:from.state,where:from.where}} /><CreateDashboardCard target={target}/></span>;
+}
 
 type Draft = { url: string; targets: ReturnType<typeof dashboardCardTargets>; target: DashboardCardTarget; title: string; description: string; action: string; category?: QueryCategory; renamed: boolean; groups: string; error: string };
 
@@ -47,19 +60,20 @@ export function CreateDashboardCard({ source, target = "chart" }: { source?: Das
   }, [opened]);
   if (!from) return null;
   const start = () => {
-    const url = "page" in from ? pageCardURL(location.href) : dashboardCardURL(location.href, from.catalog, from.state, from.where), targets = dashboardCardTargets(url);
+    const url = "page" in from ? pageCardURL(location.href) : dashboardCardURL(location.href, from.catalog, from.state, from.where), targets = dashboardCardTargets(url, from.schema);
     const chosen = targets.find(item => item.id === target) ?? targets[0];
-    setDraft({ url, targets, target: chosen.id, title: chosen.title, description: dashboardCardDescription(url, chosen.id), action: DASHBOARD_CARD_ACTION, renamed: false, groups: "", error: "" });
+    setDraft({ url, targets, target: chosen.id, title: chosen.title, description: dashboardCardDescription(url, chosen.id, from.schema), action: DASHBOARD_CARD_ACTION, renamed: false, groups: "", error: "" });
     setSaved(false);
   };
   const update = (change: Partial<Draft>) => setDraft(current => current && { ...current, ...change });
   // An unedited title or description follows the chosen chart.
   const choose = (id: DashboardCardTarget) => setDraft(current => current && { ...current, target: id, title: current.renamed ? current.title : current.targets.find(item => item.id === id)!.title,
-    description: current.description === dashboardCardDescription(current.url, current.target) ? dashboardCardDescription(current.url, id) : current.description });
+    description: current.description === dashboardCardDescription(current.url, current.target, from.schema, groups) ? dashboardCardDescription(current.url, id, from.schema, groups) : current.description });
   const current: { preview?: QueryPreview; error?: string } = preview.key === key ? preview : {};
   let windowLabel = "Saved", presentation: ReturnType<typeof dashboardCardPresentation> | undefined, countable: ReturnType<typeof dashboardCardGroups>;
   if (draft) try { windowLabel = dashboardCardWindow(draft.url, draft.target); presentation = dashboardCardPresentation(draft.url, draft.target, groups); countable = dashboardCardGroups(draft.url, draft.target); } catch { /* The preview reports the invalid definition. */ }
   return <span className="dashboard-card-actions">
+
     <button type="button" className="dashboard-card-create" aria-label="Create card" title="Create card" onClick={start}><Icon name="plus" /></button>
     {saved ? <span role="status">Added to <a href="/home" onClick={event => { event.preventDefault(); window.pharosNavigate?.("/home"); }}>Home</a></span> : null}
     <dialog ref={dialog} className="home-editor card-editor" aria-labelledby="createDashboardCardTitle" onClose={() => setDraft(null)}>{draft ? <form onSubmit={event => {
@@ -76,7 +90,11 @@ export function CreateDashboardCard({ source, target = "chart" }: { source?: Das
           loadingSpec={presentation?.loading} preview={current.preview} error={current.error} onOpen={() => {}}
           editing={{ onTitle: title => update({ title, renamed: true }), onDescription: description => update({ description }), onAction: action => update({ action }), onCategory: category => update({ category }) }} />
       </div>
-      {countable ? <CardGroupsField groups={countable} value={draft.groups} onChange={groups => update({ groups })} /> : null}
+      {countable ? <CardGroupsField groups={countable} value={draft.groups} onChange={value => {
+        const count = value.trim() ? Number(value) : undefined;
+        update({ groups: value, description: draft.description === dashboardCardDescription(draft.url, draft.target, from.schema, groups)
+          ? dashboardCardDescription(draft.url, draft.target, from.schema, validCardGroups(count) ? count : undefined) : draft.description });
+      }} /> : null}
       <p className="home-editor-window-note">Name the card, describe it and choose its category and call to action in place. It keeps this chart’s current filters and time range; relative ranges keep moving as new data arrives.</p>
       {draft.error ? <p role="alert">{draft.error}</p> : null}
       <div className="home-editor-actions"><button type="button" onClick={() => dialog.current?.close()}>Cancel</button><button type="submit">Create card</button></div>

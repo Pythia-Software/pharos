@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fixtures from '../../../../testdata/menu-bar-layout.json';
-import { loadClassicScript, plain } from '../helpers/classic-script.mjs';
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import vm from 'node:vm';
+import { assets, loadClassicScript, plain } from '../helpers/classic-script.mjs';
 
 for (const fixture of fixtures) test(`Mac menu preferences: ${fixture.name}`, () => {
   const menu = loadClassicScript('menu-bar.js');
@@ -84,4 +87,17 @@ test('Mac menu preview includes the current stage and remaining estimate in stat
     'Indexing · about 1 min for this stage');
   assert.equal(detail({label: 'Indexing', estimated_completion_at: '2026-10-22T13:21:00Z'}, now), 'Indexing');
   assert.equal(detail({estimated_completion_at: 'invalid'}, now), 'Working');
+});
+
+test('menu preferences notify the host only when available and tolerate a dispatch failure', () => {
+  const source=readFileSync(join(assets,'menu-bar.js'),'utf8');
+  const notify=source.match(/  const notify = .*;/)[0];
+  for(const available of [false,true]) {
+    const sent=[],settings={enabled:true,order:['open','quit']};
+    const window={pharosHost:{capabilities:{menu:{available}},menu:{applyPreferences:value=>{sent.push(plain(value));}}}};
+    const run=vm.runInNewContext(notify+';notify',{window,settings});
+    run();assert.deepEqual(sent,available?[settings]:[]);
+    window.pharosHost.menu.applyPreferences=()=>{throw new Error('Host unavailable');};
+    assert.doesNotThrow(run);
+  }
 });

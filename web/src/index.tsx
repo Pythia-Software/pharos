@@ -1,3 +1,9 @@
+import { DataReadinessModal, HeaderDataReadiness, BackgroundProcessingWorkload, DataReadinessEmpty, DataReadinessIndicator } from "./data-readiness";
+import { startReadiness } from "./data-readiness-store";
+import {peopleMessageLabelCatalog} from "./people-message-labels";
+import peopleMessageLabelsDocument from "../../schemas/people_message_labels.schema.json";
+import { formatUSD } from "./currency";
+import { installOverflowTitles } from "./overflow-tooltip";
 import { fitQueryToScreen } from "./query-fit";
 import { queryRow } from "./query-transport";
 import {messageLabelLegacyURL} from "./message-label-legacy";
@@ -16,7 +22,8 @@ import { startDayClock } from "./day-window";
 import "./visit-history";
 import { originLabel, originRenderers, useOriginMetadata, isOriginDimension } from "./origin-dimensions";
 import "./uifeedback/pharos-client";
-import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
+import { dataSources } from "./data-taxonomy-model";
+import { DataTaxonomyModal, openDataTaxonomy, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary, openableProps, type ResultTarget } from "./conversation-results";
@@ -46,6 +53,8 @@ import { withComputedCapabilityRefresh } from "./computed-column-store";
 import { postMetrics, type MetricResult } from "./metric-request";
 import { tokenSummaryMetrics } from "./token-chart-request";
 import messageLabelsDocument from "../../schemas/message_labels.schema.json";
+import compactionsDocument from "../../schemas/compactions.schema.json";
+import { compactionAnalysisCatalog } from "./compaction-analysis-catalog";
 import modelRequestsDocument from "../../schemas/model_requests.schema.json";
 import { ThinkingDashboard } from "./thinking-dashboard";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -92,15 +101,22 @@ import safetyDocument from "../../schemas/safety.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
 import agentEventsDocument from "../../schemas/agent_events.schema.json";
 import agentEventMessagesDocument from "../../schemas/agent_event_messages.schema.json";
+import sessionShapeDocument from "../../schemas/session_shape.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { safetyDetailURL, safetyStateLabels } from "./safety-route";
 import { SafetySelectionBar, SafetyTableContext } from "./safety";
+import { FixesSelectionBar, FixesTableContext } from "./fixes";
+import { fixDetailURL } from "./fixes-route";
+import fixesDocument from "../../schemas/fixes.schema.json";
 import { createQueryHistory } from "./query-history";
 import { Icon } from "./icons";
-import {  CategoryPill, MessageMix, authoredRenderers } from "./authored";
+import {  CategoryPill, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { startConcurrencySummary } from "./concurrency-store";
-import { HabitsPanel } from "./habits";
+import { HabitsPanels } from "./habits";
+import { sessionShapeAnalysisCatalog } from "./session-shape-analysis-catalog";
+import { SessionShapeDefinitions, SessionsToRead, SignalTable, revealDefinitions } from "./session-shape-panels";
+import { formatSeconds } from "./session-shape-model";
 import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
@@ -111,10 +127,10 @@ import { agentEventReadWhere, daySpan, eventRates, ratePeriod } from "./agent-ev
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink, useDashboardHeadline } from "./usage-workspace";
-import { CreateDashboardCard, DashboardCardSourceContext } from "./create-dashboard-card";
+import { DashboardResultActions, CreateDashboardCard, DashboardCardSourceContext } from "./create-dashboard-card";
 import { ribbonCardTitle } from "./parallelism-ribbon-card";
 import { UsageQueryIdeas } from "./usage-query-ideas";
-import { readDashboardLink, parallelismSelectionQuery } from "./usage-dashboard-model";
+import { readDashboardLink, parallelismSelectionQuery, authorshipStatusText, type AuthorshipStatus } from "./usage-dashboard-model";
 import { conversationAnalysisCatalog } from "./conversation-analysis-catalog";
 import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
@@ -133,19 +149,12 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages";
+type Dataset = "people_message_labels" | "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages" | "session_shape";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
   return merge.url ? <a className="qt-pr-link" href={merge.url} target="_blank" rel="noopener noreferrer" title={merge.commit} onClick={event => event.stopPropagation()}>{merge.label}</a>
     : <span title={merge.commit}>{merge.label}</span>;
-}
-
-function formatUSD(amount: number): string {
-  if (!Number.isFinite(amount)) return "";
-  if (Math.abs(amount) >= 1e6) return `$${compactNumber(amount)}`;
-  const digits = Math.abs(amount) >= 100 ? 0 : Math.abs(amount) >= 1 ? 2 : 4;
-  return amount.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: Math.min(digits, 2), maximumFractionDigits: digits });
 }
 
 function usdCost(value: unknown, row: Row): React.ReactNode {
@@ -164,7 +173,8 @@ function datasetIsVisible(dataset: Dataset) {
     return workspace.mode !== "dashboards" && workspace.dataset === dataset;
   }
   if (dataset === "library") return path === "/library";
-  return (dataset === "findings" || dataset === "safety") && path === "/findings" && params.get("view") === "table" && (params.get("optimize_area") === "safety") === (dataset === "safety");
+  const area = params.get("optimize_area");
+  return (dataset === "findings" || dataset === "safety" || dataset === "fixes") && path === "/findings" && params.get("view") === "table" && (dataset === "findings" ? area !== "safety" && area !== "fixes" : area === dataset);
 }
 
 function updateURI(name: string, value: string) {
@@ -192,7 +202,9 @@ declare global {
 }
 
 const schemas: Record<Dataset, FieldSchema<Row>> = {
+  people_message_labels:loadSchema<Row>(peopleMessageLabelsDocument),
   message_labels:loadSchema<Row>(messageLabelsDocument),
+  compactions: loadSchema<Row>(compactionsDocument),
   model_requests: loadSchema<Row>(modelRequestsDocument),
   conversation_activity: loadSchema<Row>(conversationActivityDocument),
   library: loadSchema<Row>(libraryDocument),
@@ -208,8 +220,10 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   rhythm: loadSchema<Row>(rhythmDocument),
   findings: loadSchema<Row>(findingsDocument),
   safety: loadSchema<Row>(safetyDocument),
+  fixes: loadSchema<Row>(fixesDocument),
   agent_events: loadSchema<Row>(agentEventsDocument),
   agent_event_messages: loadSchema<Row>(agentEventMessagesDocument),
+  session_shape: loadSchema<Row>(sessionShapeDocument),
 };
 
 const tableApis = new Map<Dataset, QueryTableApi<Row>>();
@@ -292,11 +306,11 @@ const renderers: RenderRegistry<Row> = {
     // ID is one of its keys; otherwise its identity is the group's.
     const keys = query?.grouping ? groupKeyFields(query.grouping.keys) : null;
     const work = row.workspace_id ?? (!keys || keys.includes("id") ? row.id : undefined);
-    if (work == null || work === "") return String(value ?? "Untitled work");
-    return <button className="qt-work-link" title={String(value ?? "")} onClick={(event) => {
+    if (work == null || work === "") return String(value ?? "Untitled workspace");
+    return <button className="qt-work-link" data-overflow-title="" onClick={(event) => {
       event.stopPropagation();
       window.pharosOpenDetail?.(String(work));
-    }}>{String(value ?? "Untitled work")}</button>;
+    }}>{String(value ?? "Untitled workspace")}</button>;
   },
   pull_requests({ value, row }: CellContext<Row>) {
     const prs = pullRequests(row);
@@ -304,14 +318,14 @@ const renderers: RenderRegistry<Row> = {
     return <span className="qt-pr-list">{prs.map((pr, index) => {
       const label = pullRequestLabel(pr);
       const url = pullRequestURL(pr, row.canonical_remote);
-      return url ? <a key={`${pr.host}:${pr.number}:${index}`} className="qt-pr-link" href={url} target="_blank" rel="noopener noreferrer" title={label} onClick={event => event.stopPropagation()}>{label}</a>
-        : <span key={`${pr.host}:${pr.number}:${index}`} title={label}>{label}</span>;
+      return url ? <a key={`${pr.host}:${pr.number}:${index}`} className="qt-pr-link" href={url} target="_blank" rel="noopener noreferrer" onClick={event => event.stopPropagation()}>{label}</a>
+        : <span key={`${pr.host}:${pr.number}:${index}`}>{label}</span>;
     })}</span>;
   },
   conversation_link(context: CellContext<Row>) {
     const id = String(context.value ?? "");
     if (!id) return defaultRenderers.text(context);
-    return <a className="qt-conversation-link" href={`/conversation/${encodeURIComponent(id)}`} title={`Open conversation ${id}`} onClick={event => {
+    return <a className="qt-conversation-link" data-overflow-title="" href={`/conversation/${encodeURIComponent(id)}`} onClick={event => {
       event.stopPropagation();
       if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
@@ -371,24 +385,28 @@ const filterPresentations = Object.fromEntries(Object.entries(schemas).map(([dat
 const failedMessage = "No results: the query failed (see the error above).";
 
 const emptyMessages: Record<Dataset, string> = {
+  people_message_labels:"No messages match these labels and filters.",
   message_labels:"No messages match these labels and filters.",
+  compactions: "No compactions match this query.",
   model_requests: "No model requests match this query.",
-  library: "No work matches this query.",
+  library: "No workspaces match this query.",
   usage: "No token usage matches this query.",
   conversation_activity: "No recorded conversation activity matches this query.",
-  writing: "No conversations with user messages match this query.",
+  writing: "No workspaces with user messages match this query.",
   writing_messages: "No classified user messages match this query.",
-  mcp_calls: "No MCP calls match this query.",
-  tools: "No tool use matches this query.",
+  mcp_calls: "No Pharos MCP requests match this query.",
+  tools: "No tool summaries match this query.",
   tool_calls: "No tool calls match this query.",
   skill_usages: "No skill usage evidence matches this query.",
-  tl1_attempts: "No TL1 runs match this query.",
+  tl1_attempts: "No TL1 attempts match this query.",
   parallelism: "No agent activity matches this query.",
   rhythm: "No activity matches this query.",
   findings: "No findings match this query.",
   safety: "No risky action notices match this query.",
+  fixes: "No fixes match this query.",
   agent_events: "No agent events match this query.",
-  agent_event_messages: "No agent messages read for events match this query.",
+  agent_event_messages: "No messages checked for agent events match this query.",
+  session_shape: "No sessions match this query.",
 };
 
 // Query Table 1.0.0 still formats numeric metrics with a field renderer only for
@@ -445,7 +463,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   }, [dataset, usageActions]);
   const locationRevision = useLocationRevision();
   const usageRenderers = useMemo(() => Object.hasOwn(usageDatasets, dataset) ? { ...renderers, ...usageRowRenderers(dataset as UsageDataset) } : renderers, [dataset]);
-  const tableRenderers = useUsageTableRenderers(dataset==="message_labels"?{...usageRenderers,...messageLabelRenderers}:usageRenderers);
+  const tableRenderers = useUsageTableRenderers(["message_labels","people_message_labels"].includes(dataset)?{...usageRenderers,...messageLabelRenderers}:usageRenderers);
   const detailSchema = useMemo(() => usageDetailsSchema(schema, dataset), [schema, dataset]);
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
@@ -682,7 +700,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
     {selectionBar && !api.query.grouping ? selectionBar(api) : null}
-    {dataset==="message_labels"&&resultsView==="cards"?<MessageLabelCards api={api}/>:dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
+    <DataReadinessEmpty id={`query:${dataset}`} title={dataSources[dataset].label} dataset={dataset} query={api.query} empty={api.execution?.rows==="succeeded"&&!api.loading&&!api.error&&api.rows.length===0}>{dataset==="message_labels"&&resultsView==="cards"?<MessageLabelCards api={api}/>:dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
 
       : <DataTable
       maxHeight={100000}
@@ -699,7 +717,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
       onNavigate={navigateLink}
       total={api.total}
       loading={api.loading}
-      emptyMessage={api.loading ? "Loading results…" : failed ? failedMessage : searching ? "No work matches this search and these filters." : emptyMessages[dataset]}
+      emptyMessage={api.loading ? "Loading results…" : failed ? failedMessage : searching ? "No workspaces match this search and these filters." : emptyMessages[dataset]}
       classNames={{ empty: api.loading ? "pharos-table-loading" : undefined }}
       {...(api.query.grouping ? { trailing: (row: Row) => {
         const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, groupKeyField(key)));
@@ -707,7 +725,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
         return <><span data-pharos-target={`row:${api.rowId(row)}`} aria-hidden="true" /><button type="button" className="mcp-detail-button" disabled={!records} title={records ? "Open the source records for this group, keeping source filters" : complete ? "These group keys cannot be matched exactly in the source records" : "Include all group key columns to inspect the source records"} onClick={() => { if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }}>Records</button></>;
       }, trailingLabel: usageActions ? "Drill in" : "Inspect" }
         : trailing ? { trailing: (row: Row) => <><span data-pharos-target={`row:${api.rowId(row)}`} aria-hidden="true" />{trailing(row, api)}</>, trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" || dataset === "writing" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : [...new URLSearchParams(location.search).getAll("highlight"),new URLSearchParams(location.search).get("reveal")??""].some(target=>target.startsWith("row:")) ? {trailing:(row:Row)=><span data-pharos-target={`row:${api.rowId(row)}`} aria-hidden="true" />} : {})}
-    />}
+    />}</DataReadinessEmpty>
   </FilterValueProvider>;
 }
 
@@ -765,7 +783,7 @@ function ConversationResultCard({ row, api, renderers, find }: { row: Row; api: 
   return <article className="conversation-result-card" data-pharos-target={`row:${row.id}`}>
     <div className="conversation-result-head">
       <div className="conversation-result-summary">
-        <button className="conversation-result-title" type="button" onClick={() => window.pharosOpenDetail?.(String(row.id))}>{String(row.title ?? "Untitled work")}</button>
+        <button className="conversation-result-title" type="button" onClick={() => window.pharosOpenDetail?.(String(row.id))}>{String(row.title ?? "Untitled workspace")}</button>
         <ConversationFacts row={row} fields={api.visibleFields} query={api.query} renderers={renderers} />
       </div>
       <div className="conversation-result-actions">
@@ -794,7 +812,7 @@ function ConversationResultCard({ row, api, renderers, find }: { row: Row; api: 
 
 function ConversationResults({ api, searching, failed, renderers }: { api: QueryTableApi<Row>; searching: boolean; failed: boolean; renderers: RenderRegistry<Row> }) {
   const find = libraryFind(api.query.hostState);
-  if (!api.loading && !api.rows.length) return <div className="conversation-results-empty no-results">{failed ? failedMessage : searching ? "No work matches this search and these filters." : "No work matches this query."}</div>;
+  if (!api.loading && !api.rows.length) return <div className="conversation-results-empty no-results">{failed ? failedMessage : searching ? "No workspaces match this search and these filters." : "No workspaces match this query."}</div>;
   return <div className={`conversation-results ${api.loading ? "loading" : ""}`} aria-busy={api.loading}>
     {api.loading && !api.rows.length ? <div className="conversation-results-empty">Loading conversations…</div> : null}
     {api.rows.map((row) => <ConversationResultCard key={String(api.rowId(row) ?? row.id)} row={row} api={api} renderers={renderers} find={find} />)}
@@ -830,7 +848,7 @@ async function openConversation(id: string) {
 
 function findHitLabel(hit: FindHit): string {
   if (hit.url) return `Open tool call${hit.tool_name ? ` · ${hit.tool_name}` : ""}`;
-  if (hit.path) return hit.attribution === "workspace" ? "Open work · conversation unknown" : "Open conversation";
+  if (hit.path) return hit.attribution === "workspace" ? "Open workspace · conversation unknown" : "Open conversation";
   if (hit.role === "user") return "Open message from a person";
   if (["thinking", "reasoning", "analysis"].includes(hit.message_kind ?? "")) return "Open saved agent reasoning";
   if (hit.role === "assistant" && hit.message_kind === "message") return "Open agent reply";
@@ -871,7 +889,7 @@ function LibraryPage() {
   const [found, setFound] = useState<FindSummary | null>(null);
   useEffect(() => { setFound(null); }, [find]);
   return <div className={`pharos-query-page${find ? " library-searching" : ""}`}>
-    <div className="view-heading"><div><h1>Search</h1><p className="muted">Find past work. Follow a conversation, compare projects, or build a view of your own.</p></div></div>
+    <div className="view-heading"><div><h1>Search</h1><p className="muted">Find past work. Follow a conversation, compare repositories, or build a view of your own.</p></div><button data-view-field="guide_open" type="button" onClick={event => openDataTaxonomy(undefined, event.currentTarget)}><Icon name="info" />Data Guide</button></div>
     <QuerySurface dataset="library" host={host} resultPresentation={api => <SearchResultsDisplay view={searchResultsView(api.query, readLibraryHost(api.query.hostState).view)}
       onChange={next => api.setDefinition?.(previous => ({ query: queryForSearchResultsView(previous.query, next), hostState: libraryHostState({ ...readLibraryHost(previous.hostState), view: next }) }))} />}
       onFind={setFound} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} queryContent={api => <LibrarySearchClause api={api} />} controls={() => <>
@@ -969,7 +987,7 @@ function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationCl
   return { ...state, metrics: state.key === key ? state.metrics : [], loading: state.key !== key || state.refresh !== refresh || state.loading, error: state.key === key ? state.error : "" };
 }
 
-const costTick = (value: number) => Math.abs(value) >= 1e4 ? `$${compactNumber(value)}` : `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const costTick = formatUSD;
 // Tokens and Cost amounts; shares and ratios are formatted by the trend.
 const tokenAmount: AmountFormat = (value, measure) => measure.unit === "USD" ? formatUSD(value) : compactNumber(value);
 const tokenTick: AmountFormat = (value, measure) => measure.unit === "USD" ? costTick(value) : compactNumber(value);
@@ -982,13 +1000,13 @@ function TokenSummary({ where }: { where: WhereTerm[] }) {
   const hasCost = result.metrics.find(metric => metric.id === "cost_usd:")?.buckets[0]?.value != null;
   const reads = value("cache_read_input_tokens"), output = value("output_tokens"), sessions = values.get("agent_sessions") ?? 0;
   const cacheHit = uncached + reads > 0 ? `${Math.round(reads / (uncached + reads) * 100)}%` : "—";
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:usage:${label}`} title={label} dataset="usage" query={{where}} /></span><strong>{amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics usage-cards token-summary" aria-label="Machine token summary" aria-busy={result.loading}>
     {card("Total tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(tokens), "all reported input and output")}
     {card("API price equivalent", result.loading ? "Loading…" : result.error ? "Unavailable" : tokens && !hasCost ? "Unpriced" : formatUSD(cost), "list prices · may include assumed/partial prices; unpriced usage excluded")}
     {card("Cache hit rate", result.loading ? "Loading…" : result.error ? "Unavailable" : cacheHit, `${compactNumber(reads)} cached input tokens read`)}
     {card("Output tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(output), "including reported reasoning output")}
-    {card("Agent sessions", result.loading ? "Loading…" : result.error ? "Unavailable" : sessions.toLocaleString(), "distinct sessions in the current filters")}
+    {card("Agent sessions", result.loading ? "Loading…" : result.error ? "Unavailable" : sessions.toLocaleString(), "distinct agent sessions in the current filters")}
   </div>;
 }
 
@@ -1003,7 +1021,7 @@ function ToolTimeSummary({ where, selected = false }: { where: WhereTerm[]; sele
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const duration = value("duration"), calls = value("calls"), timed = value("timed");
   const time = (ms: number) => ms >= 3600000 ? `${(ms / 3600000).toLocaleString(undefined, { maximumFractionDigits: 1 })} h` : ms >= 60000 ? `${(ms / 60000).toLocaleString(undefined, { maximumFractionDigits: 1 })} min` : `${(ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} s`;
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:tool_calls:${label}`} title={label} dataset="tool_calls" query={{where}} /></span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Tool Time summary" aria-busy={result.loading}>
     {card("Total recorded tool time", timed ? time(duration) : "—", `all activities in range${selected ? ", not only the legend selection" : ""} · concurrent calls can overlap`)}
     {card("Call volume", calls.toLocaleString(), "all matching calls, including those without timing")}
@@ -1012,7 +1030,6 @@ function ToolTimeSummary({ where, selected = false }: { where: WhereTerm[]; sele
   </div>;
 }
 
-type AuthorshipStatus = { built_at: string | null; running: boolean; stale: boolean; error: string | null; refined_at?: string | null; refinement_pending?: boolean; provisional_messages?: number; pending_messages?: number; deferred_messages?: number; refining?: boolean };
 
 // Tracks the background classification, polling while it runs, and reports
 // each finished build so the page can reload.
@@ -1083,6 +1100,7 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
 
 function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if(topic==="labels")return <CatalogDashboard catalog={messageLabelsCatalog} dataset="message_labels" name="labels" defaults={dashboardDefaults.labels}/>;
+  if (topic === "compaction") return <CompactionDashboard />;
   if(topic==="thinking-overview"||topic==="thinking-detail") return <ThinkingDashboard detail={topic==="thinking-detail"}/>;
   if (topic === "calls") return <CatalogDashboard catalog={toolTimeAnalysisCatalog} dataset="tool_calls" name="calls" defaults={dashboardDefaults.calls} />;
   if (topic === "activity") return <CatalogDashboard catalog={conversationAnalysisCatalog} dataset="conversation_activity" name="activity" defaults={dashboardDefaults.activity} summary={where => <ConversationsSummary where={where} />} />;
@@ -1095,6 +1113,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "carbon") return <CarbonDashboard />;
   if (topic === "time") return <ToolTimeDashboard />;
   if (topic === "agent_experience") return <AgentExperienceDashboard />;
+  if (topic === "session_shape") return <SessionShapeDashboard />;
   return <SkillsDashboard />;
 }
 
@@ -1110,14 +1129,15 @@ function CarbonDashboard() {
     frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonImpact>} />;
 }
 
-// Habits: the panel titles the page; the catalog chart below keeps its own title.
+// Habits: summary panels surround the standard catalog dashboard, as the
+// Parallelism ribbon does. The chart keeps its own title below the panels.
 function HabitsDashboard() {
   const headline = useDashboardHeadline();
-  return <CatalogDashboard catalog={habitsAnalysisCatalog} dataset="rhythm" name="habits" defaults={dashboardDefaults.habits} chartHeadline={false}
-    frame={views => <>
+  return <HabitsPanels>{(before, after) => <CatalogDashboard catalog={habitsAnalysisCatalog} dataset="rhythm" name="habits" defaults={dashboardDefaults.habits} chartHeadline={false}
+    before={<>
       {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>Habits</h2></div>, headline) : null}
-      <HabitsPanel analysis={views(habitsAnalysisCatalog)} />
-    </>} />;
+      {before}
+    </>} after={after} />}</HabitsPanels>;
 }
 
 // Parallelism's views follow the saved counting and gap, with which the
@@ -1133,7 +1153,7 @@ function ParallelismUsageDashboard() {
   return <CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={dashboardDefaults.parallelism} chartHeadline={false}
     summary={where => <ParallelismSettingsNote where={where} believed={settings} />}
     before={<>
-      {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{ribbonCardTitle(selection?.settings ?? readConcurrencySettings())}</h2><CreateDashboardCard target="ribbon" /></div>, headline) : null}
+      {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{ribbonCardTitle(selection?.settings ?? readConcurrencySettings())}</h2><DashboardResultActions target="ribbon" /></div>, headline) : null}
       <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
       {selection ? <UsageDashboardLinks schema={schemas.parallelism} dataset="parallelism" query={parallelismSelectionQuery(selection)} /> : null}
       <p className="usage-dashboard-note">The query view contains the hourly occupancy records touching the selected range, with the same repository, counting, gap, and ribbon selection. Those records describe threaded activity; model-only timing remains in the chart.</p>
@@ -1170,15 +1190,11 @@ function TokenUsageDashboard() {
 // classification runs in the background; each finished build reruns the
 // dashboard's queries, and the note says where it stands.
 function HumanUsageDashboard() {
-  const [reload, setReload] = useState(0);
-  // Refresh, or a finished classification, reloads the message mix too.
-  useEffect(() => onDatasetRefresh("writing_messages", () => setReload(value => value + 1)), []);
   const status = useAuthorshipStatus(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
   return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={dashboardDefaults.human} readWhere={readHumanWhere}
     summary={where => <HumanWordsSummary where={where} status={status} />}
-    panels={(where, onFilter) => <>
-      <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, copied agent output, templates, attachments, harness instructions and automated prompts. Select a column, bar or box to open its messages; each message is highlighted by where its text came from.</p>
-      <MessageMix where={where} reload={reload} onFilter={onFilter} />
+    panels={() => <>
+      <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, copied agent output, templates, attachments, app instructions and automated prompts. Select a column, bar or box to open its messages; each message is highlighted by where its text came from.</p>
     </>} />;
 }
 
@@ -1189,7 +1205,7 @@ const readHumanWhere: ReadWhere = (where, state) => {
   const read = readHumanLink(where, state.v === analysisVersion);
   if (!read.unsupported.length) return read;
   const selection = (term: WhereTerm) => predicatesOf(term).some(clause => clause.field === state.split);
-  return { where: read.where, notice: <>This older link’s {read.unsupported.some(selection) ? "legend selection and filters" : "filters"} on whole works cannot keep their meaning for messages, so they are left out: {read.unsupported.map(describeTerm).join("; ")}.</> };
+  return { where: read.where, notice: <>This older link’s {read.unsupported.some(selection) ? "legend selection and filters" : "filters"} on whole workspaces cannot keep their meaning for messages, so they are left out: {read.unsupported.map(describeTerm).join("; ")}.</> };
 };
 
 // The dashboard's population, whatever the chart draws.
@@ -1204,7 +1220,7 @@ function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: Auth
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const typed = value("typed"), words = value("words"), typedMessages = value("typed_messages");
   const building = status !== null && !status.built_at;
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{building ? "Building…" : result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:writing_messages:${label}`} title={label} dataset="writing_messages" query={{where}} /></span><strong>{building ? "Building…" : result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <>
     <div className="mcp-metrics dashboard-stats" aria-label="Human Words summary" aria-busy={result.loading}>
       {card("Words you wrote", compactNumber(typed), "typed or dictated in the selected period")}
@@ -1212,7 +1228,7 @@ function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: Auth
       {card("Words per message", typedMessages ? Math.round(typed / typedMessages).toLocaleString() : "—", "average over messages containing your writing")}
       {card("Typed share", words ? `${Math.round(typed / words * 100)}%` : "—", `of ${compactNumber(words)} words in your messages`)}
     </div>
-    {status ? <p className="usage-dashboard-note" role="status">{status.error ? `Writing update failed: ${status.error}` : status.refining ? "Refining writing history… Recent estimates may change." : status.running ? "Updating writing estimates…" : status.built_at ? `Writing updated ${new Date(status.built_at).toLocaleString()}.` : "Waiting for writing estimates."}{status.pending_messages ? ` ${status.pending_messages.toLocaleString()} messages await an estimate.` : ""}{status.provisional_messages ? ` ${status.provisional_messages.toLocaleString()} messages have provisional estimates.` : ""}{status.deferred_messages ? ` ${status.deferred_messages.toLocaleString()} large messages await overnight refinement.` : ""}{status.refined_at ? ` History refined ${new Date(status.refined_at).toLocaleString()}.` : ""}{status.refinement_pending ? " Historical refinement is scheduled overnight." : ""}</p> : null}
+    {status ? <p className="usage-dashboard-note" role="status">{authorshipStatusText(status)}</p> : null}
   </>;
 }
 
@@ -1228,7 +1244,7 @@ function ConversationsSummary({ where }: { where: WhereTerm[] }) {
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const conversations = value("conversations"), messages = value("messages"), output = value("output");
   const per = (amount: number) => { const mean = amount / conversations; return conversations ? `${mean < 10 ? mean.toLocaleString(undefined, { maximumFractionDigits: 1 }) : compactNumber(mean)} per conversation` : "none in this range"; };
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:conversation_activity:${label}`} title={label} dataset="conversation_activity" query={{where}} /></span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Conversations summary" aria-busy={result.loading}>
     {card("Conversations", conversations.toLocaleString(), "top-level, with their delegated work")}
     {card("Your messages", messages.toLocaleString(), per(messages))}
@@ -1272,22 +1288,29 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
     return readAnalysisLink(linkCatalog, canonicalState(linkCatalog, view), read ? read.where : where);
   });
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
-  const schema = schemas[dataset];
+  const resolved=peopleMessageLabelCatalog(catalog,state.view), resolvedDataset=resolved.dataset as UsageDataset;
+  const schema = schemas[resolvedDataset];
   const views: CatalogViews = (drawn, amount = format) => {
-    const choose = (next: AnalysisView) => state.update(switchView(drawn, state.view, next));
+    const choose = (next: AnalysisView) => state.update(switchView(isTrendView(next)||next==="compare"?drawn:catalog, state.view, next));
     return <>
       {!isTrendView(state.view.view)
-        ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
-        : <AnalysisTrend catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount} headline={chartHeadline}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
+        ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={resolvedDataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
+        : <AnalysisTrend catalog={drawn} schema={schema} dataset={resolvedDataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount} headline={chartHeadline}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
       {panels?.(state.where, state.onFilter)}
     </>;
   };
-  return <DashboardCardSourceContext.Provider value={{ catalog, state: state.view, where: state.where, schema }}><section className={`usage-catalog-dashboard usage-${name}-dashboard`}>
+  return <DashboardCardSourceContext.Provider value={{ catalog:resolved, state: state.view, where: state.where, schema }}><section className={`usage-catalog-dashboard usage-${name}-dashboard`}>
     {notice.current ? <p className="usage-dashboard-note" role="status">{notice.current}</p> : null}
     {before}
-    {frame ? frame(views, state.where, state.onFilter) : views(catalog)}
+    {frame ? frame(views, state.where, state.onFilter) : views(resolved)}
     {after}
   </section></DashboardCardSourceContext.Provider>;
+}
+
+// Compaction counts use the same chart, filters and card definition as other catalogs.
+function CompactionDashboard() {
+  return <CatalogDashboard catalog={compactionAnalysisCatalog} dataset="compactions" name="compaction" defaults={dashboardDefaults.compaction}
+    before={<p className="usage-dashboard-note">Count recorded context compactions over time, or compare their triggers and services. Human means manual; machine means automatic. Claude records the trigger; Codex attribution is inferred from turn position. Unknown triggers stay visible. Boundaries without a timestamp appear in unbounded comparisons but cannot be placed on a time chart.</p>} />;
 }
 
 // Agent Experience: events found in agents' replies and thinking (agent_events),
@@ -1313,7 +1336,7 @@ function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
   const value = (result: typeof events, id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const loading = events.loading || read.loading, error = events.error || read.error;
   const messages = value(events, "messages"), scanned = value(read, "read"), total = value(events, "events");
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{loading ? "Loading…" : error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:agent_events:${label}`} title={label} dataset="agent_events" query={{where}} /></span><strong>{loading ? "Loading…" : error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   if (!loading && !error && !scanned) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. They are read in the background once agent events are turned on in Settings → Background Processing; the first run downloads a small model.</p>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Agent Experience summary" aria-busy={loading}>
     {card("Events", total.toLocaleString(), "matching sentences in agents' replies and thinking")}
@@ -1341,6 +1364,22 @@ function AgentExperienceDashboard() {
       <AgentExperienceRates where={where} />
       <p className="usage-dashboard-note">Events are sentences a small model judged to express one kind of event, found from keyword candidates in agents' visible replies and thinking. It is model output, not review: expect some misses and false alarms, and compare rates rather than reading single counts. Confidence threshold 0.5.</p>
       <AgentEventExamples where={where} queryURL={usageWorkspaceURL({ mode: "query", dataset: "agent_events", query: { ...EMPTY_QUERY, where } })} />
+    </>} />;
+}
+
+// Session Shape: the engine chart opens on sessions by length band as weekly
+// shares; below it, the forensic panels the chart cannot draw. Its fixed
+// views are Card Library cards that open this chart. Durations in seconds
+// read as durations.
+const sessionShapeAmount: AmountFormat = (value, measure) => measure.format.kind === "duration" && measure.format.sourceUnit === "seconds" ? formatSeconds(value) : catalogAmount(value, measure);
+function SessionShapeDashboard() {
+  return <CatalogDashboard catalog={sessionShapeAnalysisCatalog} dataset="session_shape" name="session-shape" defaults={dashboardDefaults.session_shape} format={sessionShapeAmount}
+    panels={where => <>
+      <p className="usage-dashboard-note">Separate signals, each against your own history; there is no score. Every rate counts only sessions with the evidence it needs and says how many. <button type="button" className="usage-preset-clear" onClick={revealDefinitions}>Definitions</button></p>
+      <h2 className="session-shape-heading">Forensics</h2>
+      <SignalTable where={where} schema={schemas.session_shape} />
+      <SessionsToRead where={where} />
+      <SessionShapeDefinitions />
     </>} />;
 }
 
@@ -1469,7 +1508,7 @@ function MCPSettingsPage() {
     <div className="mcp-setup-grid">
       <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Connection</h2><p className="muted">Add this stdio server in an agent client’s MCP settings. The client launches Pharos locally.</p></div><button type="button" disabled={!status} onClick={() => void copy("connection", connection)}>{copied === "connection" ? "Copied" : "Copy JSON"}</button></div><pre className="mcp-code"><code>{connection || (readErrors.status ? "Connection settings unavailable. Use Refresh to try again." : "Loading…")}</code></pre><p className="mcp-fineprint">Client settings formats vary. Use the command and args shown here if your client does not accept this JSON shape.</p></section>
       <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Prompt for an agent</h2><p className="muted">Paste this when asking an agent to add Pharos and use it efficiently.</p></div><button type="button" disabled={!status} onClick={() => void copy("prompt", prompt)}>{copied === "prompt" ? "Copied" : "Copy prompt"}</button></div><pre className="mcp-prompt">{prompt || (readErrors.status ? "Connection settings unavailable. Use Refresh to try again." : "Loading…")}</pre></section>
-      {status?.skill?.text ? <section className="mcp-card mcp-skill-card"><div className="mcp-card-heading"><div><h2>Skill for agents</h2><p className="muted">A short skill that teaches an agent to search prior coding sessions with Pharos, and to ask you to turn on MCP when it isn’t available. Save it as:</p></div><button type="button" onClick={() => void copy("skill", status.skill?.text ?? "")}>{copied === "skill" ? "Copied" : "Copy skill"}</button></div>
+      {status?.skill?.text ? <section className="mcp-card mcp-skill-card"><div className="mcp-card-heading"><div><h2>Skill for agents</h2><p className="muted">A short skill that teaches an agent to search past coding conversations with Pharos, and to ask you to turn on MCP when it isn’t available. Save it as:</p></div><button type="button" onClick={() => void copy("skill", status.skill?.text ?? "")}>{copied === "skill" ? "Copied" : "Copy skill"}</button></div>
         <ul className="mcp-skill-paths">{Object.entries(status.skill.paths ?? {}).map(([harness, where]) => <li key={harness}><span>{harness === "claude" ? "Claude Code" : harness === "codex" ? "Codex" : harness}</span><code>{where}</code></li>)}</ul>
         <pre className="mcp-prompt">{status.skill.text}</pre></section> : null}
     </div>
@@ -1514,13 +1553,19 @@ function ToolLedgerBanner() {
   if (!status || (!running && status.pending_conversations === 0 && !status.backfill.error)) return null;
   const percent = status.backfill.total ? Math.round(status.backfill.done / status.backfill.total * 100) : 0;
   return <div className="tool-ledger-banner" role="status">
-    {running ? <span>Building the tool ledger from retained transcripts: {status.backfill.done.toLocaleString()} of {status.backfill.total.toLocaleString()} conversations ({percent}%).</span>
-      : <span>{status.pending_conversations.toLocaleString()} of {status.conversations.toLocaleString()} conversations need a tool ledger rebuild. Building it re-reads their retained messages; no source files are needed.{status.backfill.error ? ` Last attempt failed: ${status.backfill.error}` : ""}</span>}
-    {running ? null : <button type="button" onClick={() => void build()}>Build tool ledger</button>}
+    {running ? <span>Building the tool index from saved transcripts: {status.backfill.done.toLocaleString()} of {status.backfill.total.toLocaleString()} conversations ({percent}%).</span>
+      : <span>{status.pending_conversations.toLocaleString()} of {status.conversations.toLocaleString()} conversations need their tool index rebuilt. Building it reads their saved messages; no source files are needed.{status.backfill.error ? ` Last attempt failed: ${status.backfill.error}` : ""}</span>}
+    {running ? null : <button type="button" onClick={() => void build()}>Build tool index</button>}
   </div>;
 }
 
+installOverflowTitles(document);
 installAppNavigation();
+startReadiness();
+const readinessHost = document.createElement("div");
+readinessHost.id = "dataReadinessHost";
+document.body.append(readinessHost);
+createRoot(readinessHost).render(<><HeaderDataReadiness /><DataReadinessModal /></>);
 
 const dataGuideHost = document.createElement("div");
 dataGuideHost.id = "dataGuideHost";
@@ -1538,13 +1583,15 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["homePage", <HomePage schemas={schemas} />],
   ["cardLibraryPage", <CardLibraryPage schemas={schemas} />],
   ["syncHistoryTables", <SyncTables />],
+  ["backgroundProcessingWorkload", <BackgroundProcessingWorkload />],
   ["askSettingsPage", <AskPharosSettings />],
   ["settingsPage", <SettingsWorkspace content={document.getElementById("settingsContent")!} />],
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],
   ["mcpSettingsPage", <MCPSettings />],
   ["logsPage", <LogsPage copy={copyText} />],
-  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" queryHistory presets={api => <SafetyTableContext query={api.query} total={api.total} />} selectionBar={api => <SafetySelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open notice</a>} />} />],
+  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" queryHistory presets={api => <SafetyTableContext query={api.query} total={api.total} />} selectionBar={api => <SafetySelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open notice</a>} />}
+    fixesTable={<QuerySurface dataset="fixes" queryHistory presets={api => <FixesTableContext query={api.query} total={api.total} />} selectionBar={api => <FixesSelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={fixDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(fixDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open fix</a>} />} />],
 ];
 
 // Mount a page on its first visit. Hidden pages used to load capabilities,
@@ -1554,7 +1601,7 @@ const mounts: Array<[string, React.ReactNode]> = [
 function LazyPage({ host, children }: { host: HTMLElement; children: React.ReactNode }) {
   useLocationRevision();
   const visited = useRef(false);
-  visited.current ||= Boolean(host.id === "searchComposerDialog" || host.closest(".view.active"));
+  visited.current ||= Boolean(["searchComposerDialog", "backgroundProcessingWorkload"].includes(host.id) || host.closest(".view.active"));
   if (!visited.current) return null;
   const libraryPage = ["queryTableLibrary", "queryTableUsage", "findingsPage"].includes(host.id);
   const settings = host.id === "findingsPage" && new URLSearchParams(location.search).get("view") === "settings";

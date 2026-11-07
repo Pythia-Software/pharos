@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -14,7 +15,7 @@ import (
 // never invalidate the classifier's probabilities or start the encoder.
 const messageLabelFactsAlgorithm = "1"
 
-var messageLabelFactsBatch = 20 // conversations, committed atomically
+var messageLabelFactsBatch = 128 // maximum conversations; also bounded by eligible messages
 
 func messageLabelFactsVersion() string {
 	// day is local, as on the other message dashboards. Timezone/rule changes
@@ -250,70 +251,255 @@ func messageLabelFactTriggers(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-// One bounded batch; no inference, network, message text or probability blobs.
-// Queue reads, replacement and removal share one writer transaction, so source
-// changes cannot race publication. Rollback leaves the whole batch pending.
+// Preparation uses a read snapshot on a retained connection. Only TEMP tables
+// are written here, so inference and ingestion can keep using the catalog writer.
+// The shared source generation is checked after acquiring the writer; stale
+// preparations are discarded without clearing any dirty marks.
+type messageLabelFactsBuild struct {
+	generation                           int64
+	conversations, messages, memberships int
+	ready                                bool
+	completed                            func(error)
+}
+
+type messageLabelFactsTiming struct {
+	prepare, wait, facts, memberships, commit, hold time.Duration
+	changedFacts, changedMemberships                int64
+}
+
+var messageLabelFactsMessages = 500 // soft limit: one conversation remains atomic
+var messageLabelFactsTarget = 250 * time.Millisecond
+
+var errMessageLabelFactsStale = errors.New("message label query inputs changed during preparation")
+
+func messageLabelFactsSource(selector string, ledger bool) sqlDataset {
+	live := messageLabelLiveDataset(selector)
+	// These indexes are installed on writable catalogs. Keep the ordinary live
+	// dataset compatible with older read-only snapshots that do not have them.
+	live.from = strings.Replace(live.from, "INDEXED BY messages_conversation_idx", "INDEXED BY messages_label_conversation_idx", 1)
+	if !ledger {
+		return messageLabelWithoutLedger(live)
+	}
+	live.from = strings.Replace(live.from, " LEFT JOIN message_labels l ON", " LEFT JOIN message_labels l INDEXED BY message_labels_query_idx ON", 1)
+	live.from = strings.Replace(live.from, "SELECT DISTINCT model,labels FROM message_labels WHERE", "SELECT DISTINCT model,labels FROM message_labels INDEXED BY message_labels_masks_idx WHERE", 1)
+	return live
+}
+
+func prepareMessageLabelFacts(ctx context.Context, tx *sql.Tx, messages int) (build messageLabelFactsBuild, err error) {
+	if err = tx.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&build.generation); err != nil {
+		return build, err
+	}
+	// Drop only this connection's prior preparation, including after a stale
+	// snapshot or cancellation. A failed transaction rolls its TEMP changes back.
+	for _, table := range []string{"message_label_batch", "message_label_build", "message_label_old", "message_label_removed", "message_label_new_memberships"} {
+		if _, err = tx.ExecContext(ctx, "DROP TABLE IF EXISTS temp."+table); err != nil {
+			return build, err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `CREATE TEMP TABLE message_label_batch(conversation_id TEXT PRIMARY KEY) WITHOUT ROWID;
+ INSERT INTO message_label_batch
+ WITH candidates AS MATERIALIZED (
+ SELECT conversation_id,(SELECT count(*) FROM messages m INDEXED BY messages_label_conversation_idx
+ WHERE m.conversation_id=dirty.conversation_id AND `+messageLabelMessagePredicate+`) messages
+ FROM message_label_facts_dirty dirty ORDER BY conversation_id LIMIT ?
+ ), budget AS (
+ SELECT conversation_id,COALESCE(sum(messages) OVER (ORDER BY conversation_id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) previous
+ FROM candidates
+ ) SELECT conversation_id FROM budget WHERE previous<?`, messageLabelFactsBatch, max(1, messages)); err != nil {
+		return build, err
+	}
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM message_label_batch").Scan(&build.conversations); err != nil {
+		return build, err
+	}
+	if build.conversations == 0 {
+		var version string
+		err = tx.QueryRowContext(ctx, "SELECT COALESCE((SELECT value FROM meta WHERE key='message_label_facts_ready'),'')").Scan(&version)
+		build.ready = version == messageLabelFactsVersion()
+		return build, err
+	}
+	build.completed = maintenanceBatch(ctx, tx, "Indexing message labels", "conversation", build.conversations,
+		"SELECT count(*) FROM message_label_facts_dirty")
+	const selector = "SELECT conversation_id FROM message_label_batch"
+	var ledger bool
+	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_labels')").Scan(&ledger); err != nil {
+		return build, err
+	}
+	fields := append(slices.Clone(messageLabelFactFields), messageLabelNameFields...)
+	// Preserve moved-message cleanup regardless of queue order, and stage its
+	// old identities once, outside the writer, for both facts and memberships.
+	replaced := "conversation_id IN (" + selector + ") OR message_id IN (SELECT id FROM messages WHERE conversation_id IN (" + selector + "))"
+	for _, statement := range []string{
+		"CREATE TEMP TABLE message_label_build AS " + messageLabelSelect(messageLabelFactsSource(selector, ledger), fields),
+		"CREATE INDEX temp.message_label_build_identity ON message_label_build(message_id,label)",
+		"CREATE TEMP TABLE message_label_old AS SELECT rowid,message_id FROM message_label_facts WHERE " + replaced,
+		"CREATE TEMP TABLE message_label_removed AS SELECT rowid FROM message_label_old old WHERE NOT EXISTS(SELECT 1 FROM message_label_build new WHERE new.message_id=old.message_id)",
+	} {
+		if _, err = tx.ExecContext(ctx, statement); err != nil {
+			return build, err
+		}
+	}
+	err = tx.QueryRowContext(ctx, "SELECT count(DISTINCT message_id),count(*) FROM message_label_build").Scan(&build.messages, &build.memberships)
+	return build, err
+}
+
+// Publish a valid preparation atomically. Surviving facts keep their rowids;
+// unchanged facts and memberships cause no persistent row/index rewrites.
+func publishMessageLabelFacts(ctx context.Context, tx *sql.Tx, build messageLabelFactsBuild, timing *messageLabelFactsTiming) error {
+	var generation int64
+	if err := tx.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&generation); err != nil {
+		return err
+	}
+	if generation != build.generation {
+		return errMessageLabelFactsStale
+	}
+	if build.conversations == 0 {
+		result, err := tx.ExecContext(ctx, "INSERT INTO meta(key,value) VALUES('message_label_facts_ready',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", messageLabelFactsVersion())
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err == nil && n > 0 {
+			_, err = tx.ExecContext(ctx, "UPDATE query_cache_generation SET value=value+1 WHERE id=1")
+		}
+		return err
+	}
+	exec := func(statement string, changed *int64) error {
+		result, err := tx.ExecContext(ctx, statement)
+		if err == nil && changed != nil {
+			n, e := result.RowsAffected()
+			*changed += n
+			err = e
+		}
+		return err
+	}
+	started := time.Now()
+	if err := exec("DELETE FROM message_label_memberships WHERE message_rowid IN (SELECT rowid FROM message_label_removed)", &timing.changedMemberships); err != nil {
+		return err
+	}
+	if err := exec("DELETE FROM message_label_facts WHERE rowid IN (SELECT rowid FROM message_label_removed)", &timing.changedFacts); err != nil {
+		return err
+	}
+	updates, changes := []string{}, []string{}
+	for _, field := range messageLabelFactFields[1:] {
+		updates = append(updates, field+"=excluded."+field)
+		changes = append(changes, "message_label_facts."+field+" IS NOT excluded."+field)
+	}
+	if err := exec("INSERT INTO message_label_facts("+strings.Join(messageLabelFactFields, ",")+") SELECT DISTINCT "+strings.Join(messageLabelFactFields, ",")+" FROM message_label_build WHERE 1 ON CONFLICT(message_id) DO UPDATE SET "+strings.Join(updates, ",")+" WHERE "+strings.Join(changes, " OR "), &timing.changedFacts); err != nil {
+		return err
+	}
+	timing.facts = time.Since(started)
+	started = time.Now()
+	for _, statement := range []string{
+		"INSERT OR IGNORE INTO message_label_names(" + strings.Join(messageLabelNameFields, ",") + ") SELECT DISTINCT " + strings.Join(messageLabelNameFields, ",") + " FROM message_label_build",
+		"CREATE TEMP TABLE message_label_new_memberships(message_rowid INTEGER,label_id INTEGER,PRIMARY KEY(message_rowid,label_id)) WITHOUT ROWID",
+		"INSERT INTO message_label_new_memberships SELECT facts.rowid,name.id FROM message_label_build observations JOIN message_label_names name ON name.label=observations.label JOIN message_label_facts facts ON facts.message_id=observations.message_id",
+	} {
+		if err := exec(statement, nil); err != nil {
+			return err
+		}
+	}
+	if err := exec(`DELETE FROM message_label_memberships WHERE message_rowid IN (SELECT rowid FROM message_label_old)
+ AND NOT EXISTS(SELECT 1 FROM message_label_new_memberships new WHERE new.message_rowid=message_label_memberships.message_rowid AND new.label_id=message_label_memberships.label_id)`, &timing.changedMemberships); err != nil {
+		return err
+	}
+	if err := exec("INSERT OR IGNORE INTO message_label_memberships SELECT message_rowid,label_id FROM message_label_new_memberships", &timing.changedMemberships); err != nil {
+		return err
+	}
+	timing.memberships = time.Since(started)
+	return exec("DELETE FROM message_label_facts_dirty WHERE conversation_id IN (SELECT conversation_id FROM message_label_batch)", nil)
+}
+
 func (c *Catalog) refreshMessageLabelFacts(ctx context.Context) (int, error) {
-	tx, finish, err := c.beginTrackedWrite(ctx, "message-label-query-facts")
+	count, _, err := c.refreshMessageLabelFactsBudget(ctx, messageLabelFactsMessages)
+	return count, err
+}
+
+func (c *Catalog) refreshMessageLabelFactsBudget(ctx context.Context, messages int) (int, messageLabelFactsTiming, error) {
+	var timing messageLabelFactsTiming
+	conn, err := c.DB.Conn(ctx)
 	if err != nil {
-		return 0, err
+		return 0, timing, err
 	}
-	defer func() { _ = tx.Rollback(); finish() }()
-	selector := fmt.Sprintf("SELECT conversation_id FROM message_label_facts_dirty ORDER BY conversation_id LIMIT %d", messageLabelFactsBatch)
-	var pending int
-	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM ("+selector+")").Scan(&pending); err != nil {
-		return 0, err
-	}
-	if pending == 0 {
-		// Publishing a new projection version also invalidates cached query results.
-		result, e := tx.ExecContext(ctx, "INSERT INTO meta(key,value) VALUES('message_label_facts_ready',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", messageLabelFactsVersion())
-		if e != nil {
-			return 0, e
+	defer conn.Close()
+	// TEMP tables survive a committed read preparation. Clean them even when
+	// publication fails, before returning the connection to the shared pool.
+	defer func() {
+		for _, table := range []string{"message_label_batch", "message_label_build", "message_label_old", "message_label_removed", "message_label_new_memberships"} {
+			_, _ = conn.ExecContext(context.Background(), "DROP TABLE IF EXISTS temp."+table)
 		}
-		n, e := result.RowsAffected()
-		if e != nil {
-			return 0, e
+	}()
+	for attempt := 0; ; attempt++ {
+		started := time.Now()
+		read, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return 0, timing, err
 		}
-		if n > 0 {
-			if _, e = tx.ExecContext(ctx, "UPDATE query_cache_generation SET value=value+1 WHERE id=1"); e != nil {
-				return 0, e
+		build, err := prepareMessageLabelFacts(ctx, read, messages)
+		if err != nil {
+			_ = read.Rollback()
+			return 0, timing, err
+		}
+		err = read.Commit()
+		timing.prepare += time.Since(started)
+		if err != nil || build.conversations == 0 && build.ready {
+			return 0, timing, err
+		}
+		started = time.Now()
+		tx, finish, err := c.beginTrackedWriteUsing(ctx, "message-label-query-facts", conn)
+		timing.wait += time.Since(started)
+		if err != nil {
+			return 0, timing, err
+		}
+		started = time.Now()
+		if attempt >= 2 {
+			var generation int64
+			err = tx.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&generation)
+			// Sustained source writes must not starve maintenance. After two
+			// stale snapshots, prepare this bounded batch under the writer.
+			if err == nil && generation != build.generation {
+				build, err = prepareMessageLabelFacts(ctx, tx, messages)
 			}
 		}
-		return 0, tx.Commit()
-	}
-	live := messageLabelLiveDataset(selector)
-	var ledger int
-	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='message_labels'").Scan(&ledger); err != nil {
-		return 0, err
-	}
-	if ledger == 0 {
-		live = messageLabelWithoutLedger(live)
-	}
-	// A message can move between conversations before either queued refresh
-	// runs. Remove its former fact too, regardless of queue order.
-	replaced := "conversation_id IN (" + selector + ") OR message_id IN (SELECT id FROM messages WHERE conversation_id IN (" + selector + "))"
-	fields := append(slices.Clone(messageLabelFactFields), messageLabelNameFields...)
-	statements := []string{
-		// Decode the batch once, in small connection-local staging; its text and
-		// probability blobs are never read or copied. Rollback removes it too.
-		"CREATE TEMP TABLE message_label_build AS " + messageLabelSelect(live, fields),
-		"DELETE FROM message_label_memberships WHERE message_rowid IN (SELECT rowid FROM message_label_facts WHERE " + replaced + ")",
-		"DELETE FROM message_label_facts WHERE " + replaced,
-		"INSERT INTO message_label_facts(" + strings.Join(messageLabelFactFields, ",") + ") SELECT DISTINCT " + strings.Join(messageLabelFactFields, ",") + " FROM message_label_build",
-		"INSERT OR IGNORE INTO message_label_names(" + strings.Join(messageLabelNameFields, ",") + ") SELECT DISTINCT " + strings.Join(messageLabelNameFields, ",") + " FROM message_label_build",
-		"INSERT INTO message_label_memberships(message_rowid,label_id) SELECT facts.rowid,name.id FROM message_label_build observations JOIN message_label_names name ON name.label=observations.label JOIN message_label_facts facts ON facts.message_id=observations.message_id",
-		"DROP TABLE message_label_build",
-		"DELETE FROM message_label_facts_dirty WHERE conversation_id IN (" + selector + ")",
-	}
-	for _, statement := range statements {
-		if _, err = tx.ExecContext(ctx, statement); err != nil {
-			return 0, err
+		if err == nil {
+			err = publishMessageLabelFacts(ctx, tx, build, &timing)
 		}
+		if errors.Is(err, errMessageLabelFactsStale) {
+			_ = tx.Rollback()
+			finish()
+			continue
+		}
+		if err == nil {
+			committing := time.Now()
+			err = tx.Commit()
+			timing.commit = time.Since(committing)
+		}
+		_ = tx.Rollback()
+		timing.hold = time.Since(started)
+		finish()
+		if build.completed != nil {
+			build.completed(err)
+		}
+		if timing.hold >= time.Second || timing.prepare >= time.Second {
+			fmt.Fprintf(os.Stderr, "Message label query facts: conversations=%d messages=%d memberships=%d changed_facts=%d changed_memberships=%d prepare=%s writer_wait=%s facts=%s memberships=%s commit=%s writer_hold=%s error=%v\n",
+				build.conversations, build.messages, build.memberships, timing.changedFacts, timing.changedMemberships,
+				timing.prepare.Round(time.Millisecond), timing.wait.Round(time.Millisecond), timing.facts.Round(time.Millisecond), timing.memberships.Round(time.Millisecond), timing.commit.Round(time.Millisecond), timing.hold.Round(time.Millisecond), err)
+		}
+		return build.conversations, timing, err
 	}
-	return pending, tx.Commit()
+}
+
+// A message budget adapts to the actual publication cost. Conversations stay
+// atomic, so a single unusually large one can exceed this soft target.
+func messageLabelFactsNextBudget(messages int, hold time.Duration) int {
+	if hold <= 0 {
+		return messages
+	}
+	next := int(float64(messages) * float64(messageLabelFactsTarget) / float64(hold))
+	return max(1, min(next, messages*2, messageLabelFactsMessages*4))
 }
 
 func (c *Catalog) maintainMessageLabelFacts(ctx context.Context) {
+	budget := messageLabelFactsMessages
 	var pass *daemonPass
 	defer func() {
 		if pass != nil {
@@ -321,17 +507,32 @@ func (c *Catalog) maintainMessageLabelFacts(ctx context.Context) {
 		}
 	}()
 	for {
-		if c.queries.wait(ctx) != nil {
+		if c.queries.wait(pass.context(ctx)) != nil {
 			return
 		}
 		if pass == nil {
+			// Coalesce an idle-to-busy burst before preparing its first batch.
+			// No transaction or writer gate is held during this window.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(250 * time.Millisecond):
+			}
 			pass = c.beginPass(ctx, "maintenance.labels.query", triggerChained)
 		}
 		var count int
 		var err error
-		pass.runIO(func() { count, err = c.refreshMessageLabelFacts(ctx) })
-		pass.worked(count)
-		delay := 20 * time.Millisecond
+		var timing messageLabelFactsTiming
+		pass.runIO(ctx, func(ctx context.Context) { count, timing, err = c.refreshMessageLabelFactsBudget(ctx, budget) })
+		if err == nil {
+			pass.worked(count, "conversation")
+			if count > 0 {
+				budget = messageLabelFactsNextBudget(budget, timing.hold)
+			}
+		}
+		// The writer gate is FIFO: waiting label saves run before the next
+		// batch. An idle writer needs no fixed pause for every small commit.
+		delay := time.Duration(0)
 		if count == 0 || err != nil {
 			pass.end(err)
 			pass = nil

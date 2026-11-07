@@ -1,5 +1,6 @@
 import { nestedPageTrail, type NestedPage } from "./nested-pages-model";
 import { safetyURL } from "./safety-route";
+import { fixesURL } from "./fixes-route";
 import { logsRoute, logSourceFromParams, logSourceNavigationID } from "./logs-model";
 import { agentEventDatasets, agentEventTopics, agentEventsEnabled } from "./agent-events-flag";
 import { canonicalAnalyzeURL, readUsageWorkspace, usageDatasets, usageDatasetTopics, usageTopics, usageWorkspaceURL, type UsageTopic } from "./usage-workspace-model";
@@ -15,18 +16,25 @@ export const safetyPages: readonly NestedPage[] = [
   { id: "safety:settings", label: "Settings", href: safetyURL("settings") },
 ];
 
+export const fixesPages: readonly NestedPage[] = [
+  { id: "fixes:dashboard", label: "Dashboard", href: fixesURL() },
+  { id: "fixes:table", label: "Table", href: fixesURL("table") },
+  { id: "fixes:settings", label: "Settings", href: fixesURL("settings") },
+];
+
 export function optimizePages(): NestedPage[] {
   return [
     { id: "findings", label: "Efficiency", children: findingsPages },
     { id: "safety", label: "Risky actions", children: safetyPages },
+    { id: "fixes", label: "Fixes", children: fixesPages },
   ];
 }
 
 // Every dashboard has one home; adding a topic requires choosing its section.
 const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   activity: "People", human: "People", habits: "People",
-  skills: "Agents", calls: "Agents", tools: "Agents", time: "Agents",
-  parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents",
+  compaction: "Agents", skills: "Agents", calls: "Agents", tools: "Agents", time: "Agents",
+  parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents", session_shape: "Agents",
   "thinking-overview": "Agents", "thinking-detail": "Agents",
   tokens: "Outcomes", carbon: "Outcomes",
 };
@@ -82,7 +90,7 @@ export function appLocation(path: string, params: URLSearchParams) {
   if (path === "/cards") return { section: "home", current: "/cards" };
   if (path === "/settings/optimization") return { section: "findings", current: "findings:settings" };
   if (path === logsRoute) return { section: "settings", current: logSourceNavigationID(logSourceFromParams(params)) };
-  if (path.startsWith("/findings")) return { section: "findings", current: `${params.get("optimize_area") === "safety" ? "safety" : "findings"}:${params.get("view") === "settings" ? "settings" : params.get("view") === "table" ? "table" : "dashboard"}` };
+  if (path.startsWith("/findings")) return { section: "findings", current: `${["safety", "fixes"].includes(params.get("optimize_area") ?? "") ? params.get("optimize_area") : "findings"}:${params.get("view") === "settings" ? "settings" : params.get("view") === "table" ? "table" : "dashboard"}` };
   if (path.startsWith("/settings")) return { section: "settings", current: path };
   if (path === "/mcp") return { section: "analyze", current: "dashboards:mcp" };
   if (path === "/analyze" || path === "/tools") {

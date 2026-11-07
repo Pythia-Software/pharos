@@ -643,3 +643,8 @@ test('retained Ask charts revalidate on reopening and their own data or calendar
   data.dispatchEvent(new Event('pharos:usage-refresh'));
   assert.equal(refreshes.length,3,'switching or clearing chats removes every refresh subscription');
 });
+
+ test('retry with another model retains the feedback proposal as an unsent draft',()=>{
+  const draft=model.askRetryDraft({turns:[{prompt:'Request export',status:'feedback',feedback:{kind:'feature',comment:'Export selected conversations to Markdown.'}}]});
+  assert.match(draft,/Feedback draft \(feature\):\nExport selected conversations/);
+ });

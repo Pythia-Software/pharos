@@ -132,7 +132,7 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 	spans := authorshipTable{name: "message_authorship_spans", keys: 2, columns: []string{"message_id", "position", "category", "rule", "reason", "start_byte", "end_byte", "chars", "words", "source_conversation_id", "source_message_id"}}
 	launchTable := authorshipTable{name: "conversation_launches", keys: 1, columns: []string{"child_id", "parent_id", "tool_call_id", "program"}}
 	names := authorshipTable{name: "workspace_names", keys: 1, columns: []string{"workspace_id", "authored_title", "authored_message_id", "authored_hash", "authored_at", "authored_version"}}
-	state := authorshipTable{name: "authorship_message_state", keys: 1, columns: []string{"message_id", "source_hash", "version", "provisional"}}
+	state := authorshipTable{name: "authorship_message_state", keys: 1, columns: []string{"message_id", "source_hash", "version", "provisional", "disposition", "representative_id"}}
 	named := map[string][]any{}
 	for _, launch := range launches {
 		launchTable.rows = append(launchTable.rows, []any{launch.child, launch.parent, launch.toolCall, launch.program})
@@ -147,7 +147,7 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 		if provisional != 0 {
 			version = authorshipQuickVersion
 		}
-		state.rows = append(state.rows, []any{input.ID, authorshipSourceHash(input), version, provisional})
+		state.rows = append(state.rows, []any{input.ID, authorshipSourceHash(input), version, provisional, authorshipCounted, ""})
 		counts := countSpans(input.Text, result.Spans)
 		encoded, _ := json.Marshal(result.Spans)
 		values := []any{input.ID, input.ConversationID, input.WorkspaceID, formatTime(input.SentAt), input.SentAt.Local().Format("2006-01-02"), utf8.RuneCountInString(strings.TrimSpace(input.Text))}
@@ -217,6 +217,10 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 			values = []any{id, nil, nil, nil, nil, workspaceNamesVersion}
 		}
 		names.rows = append(names.rows, values)
+	}
+	// Retained exclusions are completion evidence, even without counting rows.
+	if since == nil {
+		state.filter = " WHERE disposition IN ('counted','deferred') OR NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=authorship_message_state.message_id)"
 	}
 	tables := []authorshipTable{launchTable, messages, spans, state, names}
 	if since != nil {

@@ -24,10 +24,8 @@
 .app-shell .app-location-separator{opacity:.6}
 .app-shell .app-location-switcher{display:flex;align-items:center;gap:12px;min-height:var(--app-control-height);padding:6px 8px;max-width:100%;color:var(--mast-ink)}
 .app-shell .app-location-switcher:hover{background:var(--mast-field)}
-.app-sidebar-toggle{position:fixed;z-index:11;top:calc(var(--app-header-height) + 24px);left:calc(var(--app-rail-width) - 48px);display:grid;place-items:center;padding:0;width:36px;height:36px;color:var(--muted);border:1px solid transparent;background:transparent;border-radius:5px}
-.app-sidebar-toggle:hover{color:var(--ink);background:var(--panel);border-color:var(--line)}
-.app-sidebar-toggle .app-icon{width:18px;height:18px}
-.app-sidebar-toggle[aria-expanded=false]{left:12px;background:var(--panel);border-color:var(--line)}
+.app-sidebar-toggle{position:fixed;z-index:11;top:calc(var(--app-header-height) + 24px);left:calc(var(--app-rail-width) - 48px)}
+.app-sidebar-toggle[aria-expanded=false]{left:12px}
 .app-shell .app-icon{flex:none}.app-shell #appLocation .app-icon,.app-shell .app-navigation-list .app-icon,.app-shell .app-navigation-dialog .app-icon{width:16px;height:16px}
 .app-shell main{margin-left:0}
 /* focusPageContent moves focus to the landmark; ringing the whole page would
@@ -40,15 +38,15 @@ main[tabindex="-1"]:focus{outline:none}
 .app-navigation-rail[hidden]{display:none}
 .app-navigation-rail-head{display:flex;align-items:center;min-height:68px;flex:none;padding:16px 54px 0 26px}
 .app-navigation-rail-title{margin:0;font-size:var(--fs-md);font-family:var(--sans);font-weight:600;color:var(--ink)}
-.app-navigation-rail>nav{flex:1;min-height:0;padding:0 12px 12px;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.app-navigation-rail>nav{flex:1;min-height:0;padding:0 0 12px;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
 .app-navigation-list{display:flex;flex-direction:column;gap:2px;min-width:0}
-.app-navigation-list a,.app-navigation-list>button{display:flex;align-items:center;gap:8px;min-height:38px;padding:8px 12px;border-left:2px solid transparent;border-radius:0 4px 4px 0;color:var(--muted);font-size:var(--fs-md);line-height:1.5;text-decoration:none;text-align:left;overflow-wrap:anywhere}
-.app-navigation-list a:hover,.app-navigation-list>button:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,transparent);text-decoration:none}
+.app-navigation-list a,.app-navigation-list button.app-navigation-page,.app-navigation-list>button{display:flex;align-items:center;gap:8px;min-height:38px;padding:8px 12px;border-left:2px solid transparent;border-radius:0;color:var(--muted);font-size:var(--fs-md);line-height:1.5;text-decoration:none;text-align:left;overflow-wrap:anywhere}
+.app-navigation-list a:hover,.app-navigation-list button.app-navigation-page:hover,.app-navigation-list>button:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,transparent);text-decoration:none}
 .app-navigation-list [aria-current=page]{color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,transparent);border-left-color:var(--accent);font-weight:600}
 .app-navigation-list a>.app-icon,.app-navigation-list>button>.app-icon{margin-left:auto}
 .app-navigation-list details{min-width:0;margin:0}
 .app-navigation-list>details+details{margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
-.app-navigation-list summary{display:flex;align-items:center;gap:8px;min-height:38px;padding:8px 12px;border-radius:4px;list-style:none;cursor:pointer;font-size:var(--fs-md);font-weight:600;color:var(--ink)}
+.app-navigation-list summary{display:flex;align-items:center;gap:8px;min-height:38px;padding:8px 12px;border-radius:0;list-style:none;cursor:pointer;font-size:var(--fs-md);font-weight:600;color:var(--ink)}
 .app-navigation-list summary:hover{background:color-mix(in srgb,var(--ink) 6%,transparent)}
 .app-navigation-list summary>.app-navigation-chevron{color:var(--muted);transition:transform .12s ease}
 .app-navigation-list summary::-webkit-details-marker{display:none}
@@ -56,12 +54,12 @@ main[tabindex="-1"]:focus{outline:none}
 .app-navigation-children{display:flex;flex-direction:column;gap:2px;min-width:0;margin-top:2px}
 .app-navigation-children summary{font-weight:500}
 .app-navigation-list summary{padding-left:calc(12px + var(--app-navigation-depth,0)*12px)}
-.app-navigation-list a.app-navigation-page{padding-left:calc(34px + var(--app-navigation-depth,0)*12px)}
-.app-navigation-list>a.app-navigation-page{padding-left:12px}
+.app-navigation-list .app-navigation-page{padding-left:calc(34px + var(--app-navigation-depth,0)*12px)}
+.app-navigation-list>.app-navigation-page{padding-left:12px}
 .app-navigation-label{min-width:0;overflow-wrap:anywhere}
 .app-navigation-list summary[data-current-path]{color:var(--accent)}
 .app-navigation-list details:not([open])>summary[data-current-path]::after{content:"";flex:none;width:6px;height:6px;margin-left:auto;border-radius:50%;background:var(--accent)}
-.app-navigation-list :is(a,summary):focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+.app-navigation-list :is(a,button,summary):focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
 @media(prefers-reduced-motion:reduce){.app-navigation-list summary>.app-navigation-chevron{transition:none}}
 .app-navigation-badge{margin-left:auto;min-width:20px;padding:0 5px;border-radius:10px;background:color-mix(in srgb,var(--accent) 15%,var(--panel));color:var(--accent);font-size:var(--fs-xs);text-align:center}
 .app-navigation-dialog{position:fixed;inset:calc(var(--app-header-height) + 8px) auto auto 24px;margin:0;width:min(570px,calc(100vw - 48px));max-width:none;max-height:calc(100dvh - var(--app-header-height) - 20px);padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);box-shadow:0 18px 50px #0004;overscroll-behavior:contain;overflow:auto;scroll-padding-block:calc(var(--app-control-height) + 24px) 12px}
@@ -112,7 +110,7 @@ main[tabindex="-1"]:focus{outline:none}
   .app-navigation-dialog .app-navigation-all{display:flex;align-items:center;gap:8px;min-height:var(--app-control-height);padding:0 12px}
   .app-navigation-dialog-head{top:-8px;padding:0 0 8px}
   .app-navigation-dialog-head strong{display:none}
-  .app-navigation-list a,.app-navigation-list>button,.app-navigation-list summary{min-height:41px}
+  .app-navigation-list a,.app-navigation-list button.app-navigation-page,.app-navigation-list>button,.app-navigation-list summary{min-height:41px}
   .app-navigation-dialog.app-navigation-root{width:calc(100vw - 16px);position:fixed}
   .app-navigation-root-close{position:absolute;top:8px;right:8px}
   .app-navigation-sections{border-right:0}

@@ -40,12 +40,12 @@ export const toolTimeAnalysisCatalog: AnalysisCatalog = {
   breakdowns: {
     activity: { label: "Activity", fields: ["activity"] },
     ...single([["tool_category", "Tool category"], ["tool_name", "Tool"], ["operation_name", "Operation"], ["command_name", "Command"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["repository_name", "Repository"]]),
-    ...single([["error_signature", "Error signature"], ["error_type", "Failure kind"], ["repo_path", "Repository path"], ["host", "Research host"], ["url", "Source URL"], ["search_query", "Search query"], ["mcp_server", "MCP server"], ["mcp_method", "MCP method"], ["source_kind", "App"]]),
+    ...single([["error_signature", "Error signature"], ["error_type", "Failure kind"], ["repo_path", "Repository path"], ["host", "Research host"], ["url", "Source URL"], ["search_query", "Search query"], ["mcp_server", "MCP server"], ["mcp_method", "MCP method"], ["source_kind", "Source"]]),
     repository_path: { label: "Repository + path", fields: ["repository_name", "repo_path"] },
     repository_error: { label: "Repository + error", fields: ["repository_name", "error_signature"] },
     repository_command: { label: "Repository + command", fields: ["repository_name", "command_name"] },
     mcp_server_method: { label: "MCP server + method", fields: ["mcp_server", "mcp_method"] },
-    app_provider: { label: "App + provider", fields: ["source_kind", "provider"] },
+    app_provider: { label: "Source + provider", fields: ["source_kind", "provider"] },
     // Cards keep evidence sources apart: a reported duration and one derived
     // from timestamps, or a measured and an estimated result size.
     command_source: { label: "Command + timing source", fields: ["command_name", "duration_source"] },
@@ -55,7 +55,7 @@ export const toolTimeAnalysisCatalog: AnalysisCatalog = {
   records: { label: "Tool call", plural: "Tool calls", note: "Calls are placed by their start time and keep their full recorded duration." },
   units: {
     conversation: { label: "Agent conversation", plural: "Agent conversations", key: "conversation_id", where: present("conversation_id"), breakdowns: conversationSplits,
-      note: "An agent conversation is one recorded agent transcript; delegated subagents are conversations of their own. Calls without a conversation are left out." },
+      note: "An agent conversation is one recorded agent transcript; delegated sub-agents are conversations of their own. Calls without a conversation are left out." },
     path_conversation: { label: "Path in a conversation", plural: "Conversation/path pairs", key: ["conversation_id", "repository_name", "repo_path"], where: [...present("conversation_id"), ...present("repo_path")],
       breakdowns: { repository_path: ["repository_name", "repo_path"], ...conversationSplits }, note: "Calls to one repository path in one agent conversation form one observation." },
     tool_conversation: { label: "Tool in a conversation", plural: "Tool/conversation pairs", key: ["conversation_id", "tool_name"], where: present("conversation_id"),
@@ -75,8 +75,8 @@ toolTimeAnalysisCatalog.breakdowns.repository_name.empty = "No repository";
 // ----- Skills: skill_usages, one record per piece of evidence ----------------
 
 const skillMeasures: Record<string, AnalysisMeasure> = {
-  records: { label: "Evidence records", unit: "records", format: count, op: "count", additive: true, note: "Observed invocations, file loads and harness-reported loads. A load does not prove a skill was followed." },
-  body: { label: "Retained body volume", unit: "bytes", format: count, op: "sum", field: "content_bytes", value: "content_bytes", additive: true, where: [{ field: "content_bytes", op: ">", value: "0" }],
+  records: { label: "Evidence records", unit: "records", format: count, op: "count", additive: true, note: "Observed invocations, file loads and app-reported loads. A load does not prove a skill was followed." },
+  body: { label: "Saved instruction size", unit: "bytes", format: count, op: "sum", field: "content_bytes", value: "content_bytes", additive: true, where: [{ field: "content_bytes", op: ">", value: "0" }],
     note: "Body volume sums known positive recorded sizes, including repeated loads; evidence without a recorded size is left out." },
   conversations: { label: "Conversations reached", unit: "conversations", format: count, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct conversations with skill evidence. A conversation with several skills counts once in each, so groups do not add up to the total." },
   repositories: { label: "Repositories reached", unit: "repositories", format: count, op: "count_distinct", field: "repository_name", additive: false, note: "Distinct repositories holding matching skill evidence; a repository can appear under several skills." },
@@ -89,7 +89,7 @@ export const skillsAnalysisCatalog: AnalysisCatalog = {
     skill_evidence: { label: "Skill + evidence type", fields: ["skill_name", "evidence_type"] },
     ...single([["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["repository_name", "Repository"], ["status", "Status"]]),
   },
-  records: { label: "Evidence record", plural: "Evidence records", note: "One record is one observed invocation, file load or harness-reported load of a skill." },
+  records: { label: "Evidence record", plural: "Evidence records", note: "One record is one observed invocation, file load or app-reported load of a skill." },
   units: {
     conversation: { label: "Conversation", plural: "Conversations", key: "conversation_id", where: present("conversation_id"), breakdowns: { provider: ["provider"], repository_name: ["repository_name"], ...origin },
       note: "A conversation is one recorded agent conversation with skill evidence; evidence without a conversation is left out." },

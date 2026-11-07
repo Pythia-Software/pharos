@@ -12,6 +12,12 @@ import (
 
 var errMLXModel = errors.New("invalid MLX model")
 
+// nil availability means an older engine cannot report its capabilities.
+type labelerProbe struct {
+	Available *bool  `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 func resolveMLXRuntime(value string) string {
 	if value != "" {
 		return value

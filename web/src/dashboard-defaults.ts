@@ -14,6 +14,7 @@ export const defaultTokenChart: TokenChartView = { metric: "cost", split: "model
 // would otherwise fill most of a sparse month with empty columns.
 const daily = { period: "day", nonzero: true } as const;
 export const dashboardDefaults: Record<string, AnalysisState> = {
+  compaction: { metric: "compactions", split: "trigger", ...daily },
   labels:{metric:"messages",split:"family",period:"day",view:"trend_line",share:true},
   calls: { metric: "calls", split: "tool_name", view: "compare" },
   activity: { metric: "conversations", split: "provider_model", ...daily },
@@ -27,4 +28,7 @@ export const dashboardDefaults: Record<string, AnalysisState> = {
   time: { metric: "time", split: "activity", ...daily },
   skills: { metric: "records", split: "skill_name", ...daily },
   agent_experience: { metric: "events", split: "family_group", ...daily },
+  // Session Shape chooses each chart itself (its catalog's present); a
+  // day with a trailing week's smoothing reads its bands best.
+  session_shape: { metric: "sessions", split: "length_band", period: "day", rollingPeriods: 7 },
 } satisfies Record<keyof typeof engineUsageTopics, AnalysisState>;

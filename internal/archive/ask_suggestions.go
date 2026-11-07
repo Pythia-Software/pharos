@@ -970,7 +970,8 @@ func computeAskSignals(ctx context.Context, c *Catalog, server *Server, now time
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, name := range names {
+	reportWork(ctx, "Checking Ask suggestion signals", "check", 0, len(names))
+	for index, name := range names {
 		if ctx.Err() != nil {
 			break
 		}
@@ -979,6 +980,7 @@ func computeAskSignals(ctx context.Context, c *Catalog, server *Server, now time
 		signal, err := askSignalFuncs[name](signalCtx, run)
 		cancel()
 		state.Timings[name] = time.Since(at).Milliseconds()
+		reportWork(ctx, "Checking Ask suggestion signals", "check", index+1, len(names))
 		if err != nil {
 			if state.Errors == nil {
 				state.Errors = map[string]string{}
@@ -1004,6 +1006,7 @@ func (s *Server) refreshAskSuggestions(ctx context.Context) error {
 		return err
 	}
 	state.BuiltAt, state.Inputs = now.UTC().Format(timeLayout), inputs
+	reportWork(ctx, "Saving Ask suggestion signals", "", 0, -1)
 	return s.Catalog.writeTransaction(ctx, "ask-suggestions", func(tx *sql.Tx) error { return setMeta(tx, askSuggestionsKey, jsonText(state)) })
 }
 

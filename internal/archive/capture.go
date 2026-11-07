@@ -246,10 +246,13 @@ type captureRunRecord struct {
 
 // CaptureSourceResult is one source's progress and outcome.
 type CaptureSourceResult struct {
-	Name  string `json:"name"`
-	Kind  string `json:"kind"`
-	State string `json:"state"`
-	Dir   string `json:"dir,omitempty"`
+	// The successful observation, including an input already delivered. Kept
+	// private so broker progress receipts need no second manifest/source read.
+	inputFingerprint string
+	Name             string `json:"name"`
+	Kind             string `json:"kind"`
+	State            string `json:"state"`
+	Dir              string `json:"dir,omitempty"`
 	captureRunRecord
 }
 
@@ -477,6 +480,11 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 // A bounded verification may acquire only one filesystem dependency group.
 // The private plan controls acquisition, never bypasses durable publication.
 func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig, progress func(CaptureSourceResult), selected *capturePlan) CaptureSourceResult {
+	if isCodexSource(source.Kind) {
+		// A single rollout is recorded under its plain path, which compression
+		// and resume leave alone; planning copies whichever form is there.
+		source.Path = plainRollout(source.Path)
+	}
 	c := &sourceCapture{session: s, ctx: ctx, source: source, progress: progress, checkpoint: time.Now(),
 		result:         CaptureSourceResult{Name: source.Name, Kind: source.Kind, State: "running", captureRunRecord: captureRunRecord{StartedAt: now(), Errors: []captureError{}}},
 		verifyDelivery: s.preserveUnindexed || s.deliveryTarget != ""}
@@ -508,7 +516,7 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 	if selected != nil {
 		plan = *selected
 	} else {
-		plan, err = planCapture(source)
+		plan, err = planCapture(ctx, source)
 	}
 	if err == nil && isConductorSource(source.Kind) {
 		includeKnownCaptureDatabases(&plan, manifest, source)
@@ -530,6 +538,7 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 			return c.finish(err)
 		}
 		if delivered.Fingerprint == fingerprint {
+			c.result.inputFingerprint = fingerprint
 			c.result.Phase = "Already delivered; source is unchanged"
 			return c.finish(nil)
 		}
@@ -581,6 +590,7 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 	}
 	err = c.commit(true)
 	if err == nil {
+		c.result.inputFingerprint = c.manifest.DeliveredFingerprint
 		c.removePruned(true)
 	}
 	return c.finish(err)
@@ -1324,7 +1334,7 @@ func writeFileDurably(file string, data []byte) error {
 	if err == nil {
 		// os.File.Sync is F_FULLFSYNC on macOS: it flushes the drive's cache,
 		// including every file fsynced earlier, before the rename commits.
-		err = out.Sync()
+		err = syncToDrive(out)
 	}
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
@@ -1337,7 +1347,7 @@ func writeFileDurably(file string, data []byte) error {
 		return err
 	}
 	if dir, err := os.Open(filepath.Dir(file)); err == nil {
-		_ = dir.Sync()
+		_ = syncToDrive(dir)
 		dir.Close()
 	}
 	return nil

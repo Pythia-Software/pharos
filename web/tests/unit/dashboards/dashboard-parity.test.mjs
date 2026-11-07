@@ -204,7 +204,7 @@ for (const [name, filter, selected] of [["all usage", [], false], ["one provider
   close(Object.fromEntries(built.buckets.map(bucket => [bucket.key, drawn(bucket)])), Object.fromEntries(ends.slice(2).map((end, index) => [end, card.points[index + 2]])), "points");
   assert.ok(card.points.some(point => point > 0));
   assert.equal(built.normPoints, 30);
-  assert.ok(Math.abs(built.norm - card.baseline) < 1e-9, `norm ${built.norm} != baseline ${card.baseline}`);
+  assert.ok(Math.abs(built.references?.[0]?.value - card.baseline) < 1e-9, `norm ${built.references?.[0]?.value} != baseline ${card.baseline}`);
 });
 
 

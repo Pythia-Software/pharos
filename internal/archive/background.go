@@ -83,7 +83,7 @@ type backgroundItem struct {
 	Kinds             []string
 	continuous        bool
 	readsWholeSources bool
-	// requiresLabels items exist only where labels_enabled is on;
+	// requiresLabels items run only where labels_enabled is on;
 	// requiresAgentEvents ones only where agent_events_enabled is.
 	requiresLabels      bool
 	requiresAgentEvents bool
@@ -490,7 +490,9 @@ type backgroundInputs struct {
 	// findingsBuilt whether any did.
 	findingsToday, findingsBuilt bool
 	writingPending               bool
+	writingBacklog               authorshipBacklog
 	writingRefinedAt             string
+	writingRefinementPending     bool
 	upgradePending               bool
 	otherSources                 []string
 	backupDestination            string
@@ -518,8 +520,12 @@ func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
 	in := backgroundInputs{runs: c.backgroundRuns(ctx)}
 	in.verificationNext = c.queuedVerificationNext(ctx)
 	want, built, err := c.authorshipEstimateGenerations()
-	in.writingPending = err != nil || want != built || c.authorshipQuickPending()
+	var backlogErr error
+	in.writingBacklog, backlogErr = c.authorshipBacklog(ctx)
+	in.writingPending = err != nil || backlogErr != nil || want != built || in.writingBacklog.Pending > 0
 	in.writingRefinedAt, _ = c.metaValue(ctx, "authorship_refined_at")
+	in.writingRefinementPending, err = c.authorshipRefinementPending(ctx)
+	in.writingRefinementPending = in.writingRefinementPending || err != nil
 	in.deferred, _ = c.freshnessDeferred(ctx)
 	generation, _ := c.metaValue(ctx, "findings_generation")
 	in.findingsBuilt, in.findingsToday = generation != "", generation == c.findingsGeneration()
@@ -621,20 +627,26 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			if refined, ok := parseTime(in.writingRefinedAt); ok {
 				plan.LastDone = maxTime(plan.LastDone, refined)
 			}
-			plan.Pending = true
-			standaloneNext(&plan, settings, quiet, at)
+			plan.Pending = in.writingRefinementPending
+			if plan.Pending {
+				standaloneNext(&plan, settings, quiet, at)
+			}
 		case len(item.Stages) > 0:
-			plan.LastDone = time.Time{}
+			completed := time.Time{}
 			first := true
 			for _, stage := range item.Stages {
 				row := in.deferred[stage]
 				plan.Pending = plan.Pending || row.generation > row.completed
 				done, _ := parseTime(row.completedAt)
-				if first || done.Before(plan.LastDone) {
-					plan.LastDone = done
+				if first || done.Before(completed) {
+					completed = done
 				}
 				first = false
 			}
+			// A bounded pass can succeed while its backlog stays deferred.
+			// Keep that run's time for Last run and the cadence's clock;
+			// Pending still follows the deferred generations.
+			plan.LastDone = maxTime(plan.LastDone, completed)
 			switch {
 			case !plan.Pending:
 				if plan.Cadence == cadenceDaily {

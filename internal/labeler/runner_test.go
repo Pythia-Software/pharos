@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -49,9 +50,16 @@ func TestRunnerRunsRowsInOrderByName(t *testing.T) {
 		}
 		rows = append(rows, Framed{IDs: append(ids, SepID)})
 	}
-	outputs, err := runner.Run(t.Context(), rows, []string{"probs"}, 64)
+	var completed, batches atomic.Int64
+	outputs, err := runner.RunWithProgress(t.Context(), rows, []string{"probs"}, 64, func(n int) {
+		completed.Add(int64(n))
+		batches.Add(1)
+	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if completed.Load() != int64(len(rows)) || batches.Load() < 3 {
+		t.Fatalf("batch progress: %d rows in %d batches", completed.Load(), batches.Load())
 	}
 	for i, row := range rows {
 		if got := outputs[i]["probs"]; len(got) != 3 || got[2] != fakeRowProb(row.IDs, 2) {
@@ -144,6 +152,8 @@ func TestManagerSetBudget(t *testing.T) {
 }
 
 func TestManagerGPUAdmission(t *testing.T) {
+	// Auto can reserve the GPU before startup and still select CPU fallback.
+	t.Setenv("PHAROS_LABELER_FAKE_DEVICE", "cpu")
 	first, err := LoadModel(writeModelDir(t, nil), "int8")
 	if err != nil {
 		t.Fatal(err)
@@ -163,6 +173,9 @@ func TestManagerGPUAdmission(t *testing.T) {
 	}
 	if threads, memory, runners := manager.Usage(); threads != 1 || memory != 3072 || runners != 1 {
 		t.Fatalf("GPU reservation: %d threads %d MB %d runners", threads, memory, runners)
+	}
+	if !a.UsesCPUThreads() {
+		t.Fatal("GPU reservation hid the actual CPU fallback thread control")
 	}
 	if _, _, err := manager.Runner(t.Context(), second, cfg); !errors.Is(err, ErrBudget) {
 		t.Fatalf("competing GPU worker admitted: %v", err)

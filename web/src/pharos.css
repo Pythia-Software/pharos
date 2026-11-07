@@ -177,7 +177,7 @@
 .usage-source-status { margin: 0 0 12px; }
 .usage-chart { position: relative; margin: 14px 0 16px; padding: 14px 16px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 .usage-chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 10px 16px; margin-bottom: 8px; }
-.usage-chart-head h3, .writing-mix h3 { margin: 2px 0 0; font-size: var(--fs-base); }
+.usage-chart-head h3 { margin: 2px 0 0; font-size: var(--fs-base); }
 .usage-chart-average-label { display: inline-block; margin-left: 10px; color: var(--muted); font-size: var(--fs-sm); font-weight: 400; }
 /* Keep dashboard controls at their natural width and wrap whole fields. */
 :is(.usage-chart-controls, .usage-tools-controls, .concurrency-controls) { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
@@ -203,6 +203,7 @@
 .usage-legend-menu [role="menuitem"] small { margin-top: 2px; color: var(--muted); font-size: var(--fs-xs); }
 .usage-legend-menu .usage-legend-menu-reset { margin-top: 4px; border-top: 1px solid var(--line); border-radius: 0; }
 .usage-legend-menu [role="menuitem"]:disabled { opacity: .5; }
+.usage-legend-menu .usage-legend-menu-population { margin-top: 4px; border-top: 1px solid var(--line); border-radius: 0; }
 .usage-legend-item { display: inline-flex; align-items: center; height: auto; min-height: 0; margin: 0; padding: 1px 6px; border: 1px solid transparent; border-radius: 4px; background: none; color: inherit; font: inherit; line-height: 18px; }
 button.usage-legend-item { cursor: pointer; }
 button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
@@ -252,12 +253,6 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 .usage-chart-tip-total { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); font-weight: 600; }
 .usage-cards { grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 4px 0 0; }
 .usage-cards small { display: block; margin-top: 3px; color: var(--muted); font-size: var(--fs-xs); line-height: 1.35; }
-.writing-mix { margin: 0 0 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
-.writing-mix h3 { margin-bottom: 10px; }
-.writing-stack { display: flex; gap: 2px; height: 14px; margin-bottom: 10px; }
-.writing-stack > i { display: block; height: 100%; min-width: 2px; }
-.writing-stack > i:first-child { border-radius: 4px 0 0 4px; }
-.writing-stack > i:last-child { border-radius: 0 4px 4px 0; }
 .writing-table-scroll { overflow-x: auto; }
 .writing-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
 .writing-table td, .writing-table th { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
@@ -465,7 +460,7 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 [data-category="template"], [data-category="attachment"] { --span: var(--heat-2); }
 [data-category="harness"], [data-category="automated"] { --span: var(--muted); }
 .authored-swatch { display: inline-block; flex: none; width: 10px; height: 10px; margin-right: 6px; border-radius: 3px; background: var(--span); vertical-align: -1px; }
-:is(.authored-swatch, .authored-bar > i, .authored-mix .writing-stack > i):is([data-category="resent"], [data-category="attachment"], [data-category="automated"]) {
+:is(.authored-swatch, .authored-bar > i):is([data-category="resent"], [data-category="attachment"], [data-category="automated"]) {
   background: repeating-linear-gradient(135deg, var(--span) 0 3px, color-mix(in srgb, var(--span) 45%, var(--panel)) 3px 6px);
 }
 .authored-span { padding: 1px 0; border-bottom: 2px solid var(--span); border-radius: 2px; background: color-mix(in srgb, var(--span) 16%, transparent); color: inherit; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
@@ -480,13 +475,6 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 
 .writing-rows-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 10px; }
 .writing-rows-bar .usage-presets { margin: 0; }
-.authored-mix h3 { margin-bottom: 10px; }
-.authored-legend { display: flex; flex-wrap: wrap; gap: 6px; }
-.authored-legend button { display: inline-flex; align-items: center; gap: 0; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--ink); font-size: var(--fs-sm); }
-.authored-legend button strong { margin-left: 7px; color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; }
-.authored-legend button:hover { border-color: var(--span); }
-.authored-legend button[aria-pressed="true"] { border-color: var(--span); background: color-mix(in srgb, var(--span) 16%, var(--panel)); }
-.authored-mix-note { margin: 10px 0 0; font-size: var(--fs-sm); }
 
 .authored-card { padding: 16px 18px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 4px 18px #34230d0b; }
 .authored-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
@@ -523,6 +511,20 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 
 .usage-chart-field { display: flex; flex-direction: column; align-items: stretch; gap: 5px; min-width: 0; }
 .usage-chart-field .usage-preset-label { color: var(--muted); font-size: var(--fs-2xs); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+/* The population: chips beside Range, and its editor on a row of its own. */
+.dashboard-population { max-width: 100%; }
+.dashboard-population-terms { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 30px; min-width: 0; }
+.dashboard-population-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; min-width: 0; height: 26px; padding: 0 2px 0 8px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, var(--panel)); font-size: var(--fs-sm); }
+.dashboard-population-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-population-chip button { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); }
+.dashboard-population-chip button:hover { color: var(--ink); }
+.dashboard-population-chip svg { width: 12px; height: 12px; }
+.dashboard-population-all { color: var(--muted); font-size: var(--fs-sm); }
+.dashboard-population-edit { height: 26px; padding: 0 8px; border: 1px dashed var(--line); border-radius: 999px; background: transparent; color: var(--ink); font-size: var(--fs-sm); }
+:is(.usage-chart-controls, .usage-tools-controls) > .dashboard-population-editor { flex: 1 0 100%; width: 100%; }
+.dashboard-population-editor { box-sizing: border-box; max-width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.dashboard-population-editor .usage-dashboard-note { margin-top: 0; }
+.dashboard-population-actions { display: flex; gap: 8px; margin: 10px 0 0; }
 .dashboard-select { position: relative; display: inline-grid; grid-template-columns: minmax(0, 1fr); width: max-content; min-width: 0; max-width: 100%; }
 .dashboard-select-caret { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
 .dashboard-select select, .dashboard-select-measure, .usage-period-custom input { box-sizing: border-box; height: 30px; margin: 0; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px; background-color: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-sm); }
@@ -557,9 +559,24 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .usage-chart-bars:has(> .usage-chart-lines) > button { position: relative; }
 /* The trend wraps its parts only to report loading; they lay out as before. */
 .usage-analysis-trend { display: contents; }
-/* A norm or other reference level, above the columns and lines. */
+/* A reference level (the %ile control), above the columns and lines. */
 .usage-chart-reference { position: absolute; left: 0; right: 0; height: 0; border-top: 2px dashed var(--ink); opacity: .55; pointer-events: none; z-index: 1; }
 .usage-reference-swatch { height: 0; border-top: 2px dashed var(--ink); border-radius: 0; opacity: .55; vertical-align: 3px; }
+/* Each reference level draws its own line: the median solid, the mean and
+   the 75th percentile dashed, the upper percentiles dotted and fainter. */
+.usage-chart-reference[data-level="p50"], .usage-reference-swatch[data-level="p50"] { border-top-style: solid; }
+.usage-chart-reference[data-level^="p9"], .usage-reference-swatch[data-level^="p9"] { border-top-style: dotted; opacity: .5; }
+.usage-chart-reference[data-level="p99"], .usage-reference-swatch[data-level="p99"] { opacity: .4; }
+/* The %ile control: a trigger like a dashboard select, opening a small menu
+   of reference levels to tick. */
+.percentile-control { position: relative; }
+.percentile-control-trigger { position: relative; box-sizing: border-box; height: 30px; min-width: 88px; max-width: 100%; margin: 0; padding: 3px 28px 3px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-sm); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.percentile-control-trigger:hover { border-color: var(--accent); }
+.percentile-control-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; display: grid; gap: 2px; min-width: 160px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 6px 20px rgb(0 0 0 / .12); font-size: var(--fs-sm); }
+.percentile-control-option { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
+.percentile-control-option:hover { background: var(--hover, rgb(127 127 127 / .08)); }
+.percentile-control-option:has(input:disabled) { color: var(--muted); cursor: not-allowed; }
+.percentile-control-clear { justify-self: start; margin-top: 2px; padding: 3px 6px; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
 .usage-chart-line-focus { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .usage-chart-line-focus::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; border-left: 1px dashed var(--muted); }
 /* Position markers in chart coordinates, but size them independently of the

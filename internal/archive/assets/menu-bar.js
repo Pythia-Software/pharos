@@ -87,8 +87,7 @@ function editMenuBarSettings(saved, id, destination) {
   const active = get('menuBarActive'), toolbox = get('menuBarToolbox'), menu = get('menuBarToolMenu');
   let settings = normalizeMenuBarSettings(window.pharosPrefs.get(MENU_BAR_KEY, {})), dragId = null;
   let snapshot = null, usage = null, loading = false, lastUsage = 0, previewError = false;
-  const native = () => window.webkit?.messageHandlers?.pharosMenuBar;
-  const notify = () => { try { native()?.postMessage({...settings}); } catch {} };
+  const notify = () => { try { window.pharosHost.capabilities.menu.available && window.pharosHost.menu.applyPreferences({...settings}); } catch {} };
   const element = (tag, className = '', text = '') => {
     const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
   };
@@ -115,7 +114,7 @@ function editMenuBarSettings(saved, id, destination) {
       case 'indexed': return [snapshot ? (ago(snapshot.indexed_at) ? `Indexed ${ago(snapshot.indexed_at)}` : 'Not indexed yet') : 'Checking last index…'];
       case 'words': return metric('Words typed', usage?.human_words?.toLocaleString());
       case 'tokens': return metric('Tokens used', usage && new Intl.NumberFormat(undefined, {notation: 'compact', maximumFractionDigits: 1}).format(usage.tokens));
-      case 'cost': return metric('Estimated API cost', usage && new Intl.NumberFormat(undefined, {style: 'currency', currency: 'USD'}).format(usage.cost_usd));
+      case 'cost': return metric('Estimated API cost', usage && pharosCurrency.formatUSD(usage.cost_usd));
       case 'carbon': return metric('Estimated CO₂e', usage && `${new Intl.NumberFormat(undefined, {maximumSignificantDigits: 3}).format(usage.co2e_g >= 1000 ? usage.co2e_g / 1000 : usage.co2e_g)} ${usage.co2e_g >= 1000 ? 'kg' : 'g'}`);
       case 'streak': return metric('Your streak', usage?.streaks?.you);
       case 'agent_streak': return metric('Agent streak', usage?.streaks?.agents);
@@ -299,7 +298,7 @@ function editMenuBarSettings(saved, id, destination) {
     if (event.detail?.set?.[MENU_BAR_KEY]) { notify(); refreshPreview(); }
     if (event.detail?.set?.['pharos-carbon-v1']) {
       lastUsage = 0; refreshPreview();
-      try { native()?.postMessage({refreshUsage: true}); } catch {}
+      try { window.pharosHost.capabilities.menu.available && window.pharosHost.menu.refreshUsage(); } catch {}
     }
   });
   new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) refreshPreview(); }).observe(root);

@@ -766,3 +766,35 @@ func activeStatisticsSnapshots(c *Catalog) int {
 	}
 	return count
 }
+
+func TestStatisticsAggregateUsageKeepsConsumingLayerUnknown(t *testing.T) {
+	c := statisticsFixture(t)
+	if _, err := c.DB.Exec(`UPDATE agent_session_usage SET attribution='run-remainder' WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE native_id='main');
+ INSERT INTO metrics(workspace_id,conversation_id,name,value,unit,status,extractor_version) VALUES('w','c1','total_tokens',9999999,'tokens','complete','legacy')`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	fresh, err := c.currentMetrics(t.Context(), tx, []string{"w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := fresh["conversation"]["c1"]
+	if values == nil {
+		t.Fatal("conversation projection was not computed")
+	}
+	if got := values["total_tokens"]; got.Value != nil || got.Status != "unattributable" {
+		t.Fatalf("aggregate fallback became own usage: %+v", got)
+	}
+	leaf := fresh["conversation"]["c2"]
+	if got := leaf["total_tokens"]; got.Value == nil || *got.Value != 200000 || got.Status != "complete" {
+		t.Fatalf("leaf aggregate lost its own tokens: %+v", got)
+	}
+	if got := leaf["cost_usd"]; got.Value == nil || *got.Value <= 0 || got.Status == "unattributable" {
+		t.Fatalf("leaf aggregate lost its own cost: %+v", got)
+	}
+
+}

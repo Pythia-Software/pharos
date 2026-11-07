@@ -46,12 +46,19 @@
 .pharos-status-position-track>i.active{background:color-mix(in srgb,var(--accent,#d8ae5e) 35%,transparent);box-shadow:inset 0 0 0 1px var(--accent,#d8ae5e)}
 .pharos-status-bar{height:5px;border-radius:3px;background:color-mix(in srgb,var(--ink,#000) 10%,transparent);margin:5px 0 3px;overflow:hidden}
 .pharos-status-bar>i{display:block;height:100%;background:var(--accent,#d8ae5e)}
-.pharos-status-load{display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));margin-top:10px;padding-top:8px;border-top:1px solid var(--line,#ddd);font-size:11px;color:var(--muted,#666)}
-.pharos-status-load>span{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:0;padding:0 4px;white-space:nowrap}
+.pharos-status-bar.indeterminate>i{width:30%;animation:pharos-status-progress 1.8s ease-in-out infinite}
+.pharos-status-bar.waiting>i{animation:none;opacity:.5}
+@keyframes pharos-status-progress{from{transform:translateX(-100%)}to{transform:translateX(340%)}}
+@media(prefers-reduced-motion:reduce){.pharos-status-bar.indeterminate>i{animation:none;opacity:.5}}
+.pharos-status-load{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);margin-top:10px;padding-top:8px;border-top:1px solid var(--line,#ddd);font-size:11px;color:var(--muted,#666)}
+.pharos-status-load>span{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:0;padding:0 2px;white-space:nowrap}
+.pharos-status-load>span:first-child{padding-left:0}
+.pharos-status-load>span:last-child{padding-right:0}
 .pharos-status-load>span+span{border-left:1px solid var(--line,#ddd)}
 .pharos-status-load>span>span{display:inline-flex;align-items:center;gap:4px}
 .pharos-status-load .app-icon{width:13px;height:13px;flex:none}
 .pharos-status-load b{font-size:13px;font-weight:600;color:var(--ink,#000);font-variant-numeric:tabular-nums}
+@media(max-width:480px){.pharos-status-load{font-size:10px}.pharos-status-load b{font-size:11px}.pharos-status-load .app-icon{display:none}.pharos-status-load>span{padding:0 1px}.pharos-status-load:has(>span:nth-child(6)){font-size:9px}.pharos-status-load:has(>span:nth-child(6)) b{font-size:9px}}
 /* Opacity only, with the ring on ::after: see .pharos-drive .pharos-dot.busy. */
 .pharos-status-panel .pharos-dot.pulse{position:relative;animation:pharos-status-pulse 1.6s ease-in-out infinite}
 .pharos-status-panel .pharos-dot.pulse::after{content:'';position:absolute;inset:0;border-radius:50%;box-shadow:0 0 0 5px color-mix(in srgb,var(--mast-brass,#d4a857) 10%,transparent);opacity:0;animation:pharos-status-ring 1.6s ease-in-out infinite}
@@ -125,7 +132,7 @@
     return `${amount.toFixed(amount < 10 && power ? 1 : 0)} ${units[power]}`;
   };
   const count = value => Math.round(Number(value) || 0).toLocaleString('en-US');
-  const unitName = (unit, amount) => amount === 1 ? unit : /(s|x|ch|sh)$/.test(unit) ? `${unit}es` : `${unit}s`;
+  const unitName = (unit, amount) => amount === 1 ? unit : /[^aeiou]y$/.test(unit) ? `${unit.slice(0, -1)}ies` : /(s|x|ch|sh)$/.test(unit) ? `${unit}es` : `${unit}s`;
   // How long ago a time was: "just now", "4 min ago", "3 h ago", "2 d ago".
   function ago(value, now = Date.now()) {
     const seconds = Math.max(0, (now - Date.parse(value)) / 1000);
@@ -190,7 +197,7 @@
     });
     // Ad hoc: the items set to only when you ask (Back up, unless chosen),
     // on no schedule, as one more row, run as the manual cadence.
-    const adhoc = (background.unscheduled || []).map(id => items[id]).filter(Boolean);
+    const adhoc = (background.unscheduled || []).map(id => items[id]).filter(item => item && item.state !== 'disabled');
     if (adhoc.length) {
       const running = adhoc.some(item => item.state === 'running'), failed = adhoc.some(item => item.state === 'failed');
       rows.push({id: 'manual', label: 'Ad hoc', icon: CADENCE_ICONS.manual, dot: running ? SCHEDULE_DOTS.running : failed ? 'bad' : 'paused',
@@ -214,7 +221,9 @@
 
   // A step's measured progress: "812 MB of 2 GB", "42 of 100 conversations".
   function stepAmount(step) {
-    if (!step?.unit || !(step.total > 0)) return '';
+    if (!step?.unit) return '';
+    if (!(typeof step.total === 'number' && step.total >= 0)) return step.unit === 'byte' ? `${size(step.done)} processed`
+      : `${count(step.done)} ${unitName(step.unit, step.done)} processed`;
     return step.unit === 'byte' ? `${size(step.done)} of ${size(step.total)}`
       : `${count(step.done)} of ${count(step.total)} ${unitName(step.unit, step.total)}`;
   }
@@ -232,39 +241,55 @@
   // measured amount · a time range when the server gives one (only while
   // estimating, or early and marked so). A background pass instead leads
   // with its current task and shows its position among the planned tasks.
-  function operationLine(operation) {
+  function operationLine(operation, now = Date.now()) {
     const primary = [], secondary = [];
     const pass = operation.kind === 'background.update';
-    if (operation.state !== 'running' && operation.state_label && operation.state_label !== operation.label) primary.push(operation.state_label);
     // A pass may be inside a chain stage, and authorship has its own child
     // rebuild. Its current work and measured amount belong on the Now row.
     let current = operation;
-    if (pass) {
-      for (let child; (child = current.children?.find(running));) current = child;
+    const path = [current];
+    for (let child; (child = current.children?.find(running));) {
+      current = child;
+      path.push(current);
     }
+    // Measurements belong to the active child. A stop or wait anywhere on
+    // its path still governs the operation, even when that child is running.
+    const state = path.find(entry => entry.state === 'stopping')
+      || path.find(entry => entry.state === 'blocked')
+      || path.find(entry => entry.state === 'queued') || current;
+    if (state.state !== 'running' && state.state_label && state.state_label !== state.label) primary.push(state.state_label);
     const step = current.step;
     const planned = operation.step;
     const position = pass && Number.isInteger(planned?.index) && Number.isInteger(planned?.count) && planned.index > 0 && planned.index <= planned.count
       ? {index: planned.index, count: planned.count} : null;
-    if (!pass && step?.count > 0 && step.index > 0) primary.push(`step ${step.index} of ${step.count}`);
+    const positionStep = planned?.count > 0 ? planned : step;
+    if (!pass && positionStep?.count > 0 && positionStep.index > 0) primary.push(`step ${positionStep.index} of ${positionStep.count}`);
     const amount = stepAmount(step);
     if (amount) primary.push(amount);
     const origin = operationOrigin(operation);
     if (origin) secondary.push(origin);
-    const name = step?.name && step.name !== operation.label ? step.name : '';
-    if (name && !pass) secondary.push(name);
+    if (!pass && current !== operation) secondary.push(current.label);
+    const name = step?.name && step.name !== operation.label && step.name !== current.label ? step.name : '';
+    if (name && (!pass || current !== operation)) secondary.push(name);
     if (step?.source && step.source !== name) secondary.push(step.source);
-    const tooltip = [operation.detail, operation.on_eject].filter(Boolean).join('\n');
+    if (step?.detail) secondary.push(step.detail);
+    if (state.state !== 'running' && state.detail) secondary.push(state.detail);
+    if (current.started_at) secondary.push(`${span(current.started_at, now)} elapsed`);
+    const fraction = Number.isFinite(step?.fraction) ? step.fraction : null;
+    const progressLabel = amount || name || current.verb || current.state_label || 'Working…';
+    if (!step && !(state.state !== 'running' && state.detail)) secondary.push(current.verb || 'Preparing…');
+    const tooltip = [...new Set(path.map(entry => entry.detail).filter(Boolean)), operation.on_eject].filter(Boolean).join('\n');
     return {id: operation.id, label: pass ? (current !== operation ? current.label : name || operation.label) : operation.label, cadence: pass ? CADENCE_NAMES[operation.variant] || '' : '',
-      position, primary, secondary, time: operation.time?.label || '', tooltip,
-      fraction: Number.isFinite(step?.fraction) ? step.fraction : null, state: operation.state, background: operation.priority === 'background'};
+      position, primary, secondary, time: state.state === 'running' ? operation.time?.label || '' : '', tooltip,
+      fraction, progressLabel, currentLabel: current.label, waiting: state.state !== 'running',
+      state: state.state, background: operation.priority === 'background'};
   }
   // The schedule cadence is shown beside a background pass's current task;
   // other work says who started it.
   const CADENCE_NAMES = {frequent: 'Frequently', hourly: 'Hourly', daily: 'Daily'};
   function operationOrigin(operation) {
     if (operation.kind === 'background.update') return '';
-    return {user: 'Started by you', schedule: 'Scheduled', chained: 'Follows other work'}[operation.trigger] || '';
+    return {user: 'Started by you', schedule: 'Scheduled'}[operation.trigger] || '';
   }
 
   // A line as one string, for tooltips and the other libraries' rows.
@@ -285,6 +310,10 @@
   // What runs for the selected library: the app's operations that touch it
   // (a transfer, a delivery), then its own.
   const currentOperations = view => [...(view?.appOperations || []), ...(view?.library?.operations || [])].filter(running);
+  const operationStartTime = operation => {
+    const time = Date.parse(operation.started_at);
+    return Number.isFinite(time) ? time : Infinity;
+  };
 
   // The panel's content, from the store's view. options.ejectState is the
   // panel's eject flow; options.verdict overrides the snapshot's verdict
@@ -293,11 +322,11 @@
   function panelModel(view, {ejectState = null, verdict = null, unavailable = null, nativeEject = false, stopRequested = new Set(), now = Date.now()} = {}) {
     const library = view?.library || null;
     const operations = currentOperations(view);
-    // Now: the foreground work, else the first background work; the
-    // schedule's rows say what else is under way.
-    const foreground = operations.filter(operation => operation.priority !== 'background');
-    const shown = foreground.length ? foreground : operations.slice(0, 1);
-    const common = {lines: shown.map(operationLine), attention: (view?.attention || []).map(attentionModel)};
+    // Oldest first, so new work joins the end and child stages do not move
+    // their parent's row. IDs break ties consistently across snapshots;
+    // operations without a known start follow those with one.
+    const shown = operations.slice().sort((a, b) => operationStartTime(a) - operationStartTime(b) || a.id.localeCompare(b.id));
+    const common = {lines: shown.map(operation => operationLine(operation, now)), attention: (view?.attention || []).map(attentionModel)};
     if (!library) {
       return {available: false, title: PANEL_TITLE, library: view?.service?.name ? {name: view.service.name, drive: '', path: ''} : null, ...common, stateLabel: view?.service?.stateLabel || null,
         load: loadModel(view?.resources ?? view?.service?.resources, view?.lastLibrarySizes?.storage, view?.lastLibrarySizes?.wal, Boolean(view?.lastLibrarySizes)),
@@ -335,29 +364,34 @@
     };
   }
 
-  // The Load row (docs/background-work.md §10): CPU, memory and disk in
-  // one row (in the app, every Pharos process on this Mac), with the
-  // server's line and each process's in the tooltip. CPU is % of one core,
+  // The Load row (docs/background-work.md §10): CPU, GPU, memory and disk in
+  // one row (in the app, every Pharos process on this Mac). CPU is % of one core,
   // as Activity Monitor shows it; I/O is what the processes read and write
   // per second, and Storage what the library keeps on its drive (from the
   // last drive check). A figure not measured yet is a dash, and I/O stays
-  // out for a service that does not measure it.
+  // out for a service that does not measure it. GPU uses counters from
+  // the same Pharos process tree; WAL is shown only above 1 GB.
   function loadModel(resources, storage = null, wal = null, sizesStale = false) {
     if (!resources || typeof resources !== 'object') return null;
     const known = Number.isFinite(resources.cpu_percent) || Number.isFinite(resources.memory_bytes) || resources.label;
     if (!known) return null;
     const metrics = [
       {id: 'cpu', label: 'CPU', value: Number.isFinite(resources.cpu_percent) ? `${Math.round(resources.cpu_percent)}%` : '—'},
-      {id: 'memory', label: 'RAM', value: Number.isFinite(resources.memory_bytes) ? size(resources.memory_bytes) : '—'},
     ];
+    const gpu = resources.gpu;
+    if (gpu) metrics.push({id: 'gpu', icon: 'cpu', label: 'GPU', value: Number.isFinite(gpu.utilization_percent) ? `${Math.round(gpu.utilization_percent)}%` : '—'});
+    metrics.push({id: 'memory', label: 'RAM', value: Number.isFinite(resources.memory_bytes) ? size(resources.memory_bytes) : '—'});
     if ('disk_bytes_per_second' in resources) metrics.push({id: 'io', label: 'I/O', value: Number.isFinite(resources.disk_bytes_per_second) ? `${size(resources.disk_bytes_per_second)}/s` : '—'});
     metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? `${sizesStale ? 'last ' : ''}${size(storage)}` : '—'});
-    metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: Number.isFinite(wal) ? `${sizesStale ? 'last ' : ''}${size(wal)}` : '—'});
-    const processes = (Array.isArray(resources.processes) ? resources.processes : []).map(process => process.text).filter(Boolean);
-    const partial = [resources.cpu_partial ? 'CPU' : '', resources.disk_partial ? 'I/O' : ''].filter(Boolean);
-    return {metrics, tooltip: [resources.label || '', partial.length ? `${partial.join(' and ')} omit processes without a rate and may temporarily undercount usage.` : '',
-      sizesStale ? 'Storage and WAL were last reported before the service stopped answering.' : 'Storage is the last drive measurement; WAL is the current catalog log size.',
-      ...processes].filter(Boolean).join('\n')};
+    if (Number.isFinite(wal) && wal > 1e9) metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: `${sizesStale ? 'last ' : ''}${size(wal)}`});
+    for (const metric of metrics) {
+      const partial = metric.id === 'cpu' ? resources.cpu_partial : metric.id === 'gpu' ? gpu?.partial : metric.id === 'io' ? resources.disk_partial : false;
+      if (partial && metric.value !== '—') {
+        metric.value = '≥' + metric.value;
+        metric.warning = 'Some processes or clients are still waiting for another sample; this reading may undercount usage.';
+      }
+    }
+    return {metrics};
   }
 
   function attentionModel(item) {
@@ -431,7 +465,7 @@
   const live = (target, content) => window.pharosLibrary?.updateLiveChildren ? window.pharosLibrary.updateLiveChildren(target, content) : target.replaceChildren(...content.childNodes);
   const chip = () => window.pharosLibrary?.ensureChip?.() || document.getElementById('pharosDrive');
   const anchor = () => window.headerToolAnchor?.(chip()) ?? chip();
-  const nativeLibrary = () => window.webkit?.messageHandlers?.pharosLibrary;
+  const nativeEjectAvailable = () => window.pharosHost.capabilities.eject.available;
   const toast = message => { if (typeof window.feedbackToast === 'function') window.feedbackToast(message); };
   const storeState = () => window.pharosStatusStore?.current() || null;
 
@@ -576,12 +610,10 @@
   }
 
   async function eject() {
-    const handler = nativeLibrary();
-    if (!handler) return;
     ejectState = {phase: 'ejecting', message: 'Releasing…'};
     render();
     try {
-      await handler.postMessage({action: 'eject'});
+      await window.pharosHost.lifecycle.requestEject();
       ejectState = {phase: 'ejecting', message: 'Ejecting…'};
     } catch (error) {
       ejectState = {phase: 'error', message: error?.message || String(error)};
@@ -593,7 +625,7 @@
     if (!panel) return;
     const state = storeState();
     for (const id of [...stopRequested]) if (!currentOperations(state?.view).some(operation => operation.id === id && operation.state !== 'stopping')) stopRequested.delete(id);
-    const model = panelModel(state?.view, {ejectState, verdict: currentVerdict(), nativeEject: Boolean(nativeLibrary()), stopRequested,
+    const model = panelModel(state?.view, {ejectState, verdict: currentVerdict(), nativeEject: Boolean(nativeEjectAvailable()), stopRequested,
       unavailable: state?.error ? (state.error.status === 503 ? 'Pharos is stopping; it has released or is releasing the library.' : `Could not read the library's status: ${state.error.message}`) : null});
     const scrollTop = panel.scrollTop;
     const content = node('div');
@@ -710,12 +742,12 @@
     for (const metric of load.metrics) {
       const cell = node('span');
       cell.dataset.key = `load:${metric.id}`;
+      if (metric.warning) cell.title = metric.warning;
       const label = node('span');
       label.append(svgIcon(metric.icon || metric.id), metric.label);
       cell.append(label, node('b', '', metric.value));
       row.append(cell);
     }
-    if (load.tooltip) row.title = load.tooltip;
     return row;
   }
 
@@ -753,14 +785,20 @@
         progress.append(track);
         item.append(progress);
       }
+      const bar = node('div', `pharos-status-bar${line.fraction == null ? ' indeterminate' : ''}${line.waiting ? ' waiting' : ''}`), fill = node('i');
+      bar.dataset.key = 'progress';
+      bar.setAttribute('role', 'progressbar');
+      bar.setAttribute('aria-label', `${line.currentLabel} progress`);
+      bar.setAttribute('aria-valuetext', line.progressLabel);
       if (line.fraction != null) {
-        const bar = node('div', 'pharos-status-bar'), fill = node('i');
-        fill.style.width = `${Math.round(Math.max(0, Math.min(1, line.fraction)) * 100)}%`;
-        bar.append(fill);
-        bar.setAttribute('aria-hidden', 'true');
-        item.append(bar);
-        item.setAttribute('aria-description', `${Math.floor(line.fraction * 100)}% of this step`);
+        const percent = Math.round(Math.max(0, Math.min(1, line.fraction)) * 100);
+        fill.style.width = `${percent}%`;
+        bar.setAttribute('aria-valuemin', '0');
+        bar.setAttribute('aria-valuemax', '100');
+        bar.setAttribute('aria-valuenow', String(percent));
       }
+      bar.append(fill);
+      item.append(bar);
       if (line.secondary.length) item.append(node('span', 'pharos-sub pharos-status-step', line.secondary.join(' · ')));
       if (line.tooltip) item.title = line.tooltip;
       now.append(item);

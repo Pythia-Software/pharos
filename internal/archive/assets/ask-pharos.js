@@ -398,7 +398,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
       const first=session.conversation[0],last=session.conversation.at(-1),title=first?.prompt||session.draft||'Untitled chat';
       const button=document.createElement('a');button.href=askHistoryURL(location.href,session.id);button.className='pharos-history-entry cursor-interaction';
       button.setAttribute('aria-label','Open chat: '+title);button.setAttribute('aria-current',String(session.id===activeSessionId));button.dataset.sessionId=session.id;
-      const heading=document.createElement('span');heading.className='pharos-history-title';heading.textContent=title;heading.dataset.tooltip=title;
+      const heading=document.createElement('span');heading.className='pharos-history-title';heading.textContent=title;heading.dataset.overflowTitle='';
       const meta=document.createElement('span');meta.className='pharos-history-meta';
       const count=session.questionCount??session.conversation.length;
       meta.textContent=[historyDate(session.updatedAt),last?.cli??session.selection.provider,count?count+' question'+(count===1?'':'s'):'Draft',session.id===activeSessionId?'Current':null].filter(Boolean).join(' \u00b7 ');
@@ -681,6 +681,13 @@ window.initPharosAsk = function(root, {previews} = {}) {
       link.querySelector('span:last-of-type').textContent=card.description;
     });
     get('.pharos-answer').hidden=!turn.reply||hasResults;get('.pharos-answer').textContent=turn.reply;
+    get('.pharos-feedback').hidden=turn.status!=='feedback'||!turn.feedback;
+    const feedback=turn.status==='feedback'&&turn.feedback;
+    const feedbackKey=feedback?JSON.stringify([activeSessionId,turn.id,feedback]):'';
+    if(view.feedbackKey!==feedbackKey){
+      view.disposeFeedback?.();view.disposeFeedback=null;view.feedbackKey=feedbackKey;
+      if(feedback)view.disposeFeedback=window.pharosMountAskFeedback?.(get('.pharos-feedback-slot'),{id:JSON.stringify([activeSessionId,turn.id]),...feedback});
+    }
     get('.pharos-recovery').hidden=!(turn===turns.at(-1)&&['error','canceled'].includes(turn.status));
     scheduleThreadLayout();drawEdge();
     syncClarification(turn);updateSurface();
@@ -728,7 +735,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const actions=askClarificationActions({latest:turn===turns.at(-1),status:turn.status,pending:!!pending,enabled:accessEnabled,opening:openingSession!==null,draft:text});
     if(actions.sendOther){submitQuestion(text,true);question.focus({preventScroll:true});}
   }
-  function disposePreviews(){turnViews.forEach(view=>view.previews.forEach(preview=>preview.dispose()));}
+  function disposePreviews(){turnViews.forEach(view=>{view.disposeFeedback?.();view.previews.forEach(preview=>preview.dispose());});}
   function renderThread(){disposePreviews();thread.replaceChildren();turnViews.clear();turns.forEach(appendTurn);syncComposer();}
   function answerFor(turn){return {intro:'',cards:turn.cards||[]};}
   function drawEdge(){composerGlow.draw();}
@@ -1070,7 +1077,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   async function startRequest(turn,retry=true){
     stop();flushDraft();const request=++serial;
     announcement.textContent='';
-    turn.status='loading';turn.reply='';turn.cards=[];delete turn.omitted;delete turn.clarification;turn.elapsedMs=0;turn.activity=[];
+    turn.status='loading';turn.reply='';turn.cards=[];delete turn.omitted;delete turn.clarification;delete turn.feedback;turn.elapsedMs=0;turn.activity=[];
     turn.message='Starting '+turn.cli+'…';
     const browseHintStart=askStartBrowseHint(window.pharosPrefs?.get(browseHintKey,0));window.pharosPrefs?.set(browseHintKey,browseHintStart.snoozed);
     const controller=new AbortController();pending={request,turnId:turn.id,started:Date.now(),controller,edited:false,browsing:presentation==='floating'||presentation==='dismissed',hint:browseHintStart.hint};

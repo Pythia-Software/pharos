@@ -1,8 +1,9 @@
 # Thinking dashboards
 
-Analyze → Dashboards includes **Waiting and Compaction** and **Thinking**:
+Analyze → Dashboards includes **Waiting**, **Compaction** and **Thinking**:
 
 - `/analyze?analyze_topic=thinking-overview&analyze_data=model_requests`
+- `/analyze?analyze_topic=compaction&analyze_data=compactions`
 - `/analyze?analyze_topic=thinking-detail&analyze_data=model_requests`
 
 These pages read the current library, with no study snapshot or backup embedded.
@@ -13,18 +14,19 @@ neither verified request-send-to-first-token latency nor complete turn duration.
 ## Page layout and navigation
 
 Overview contains coverage and quantile summaries, per-model cumulative wait
-curves, a compact adjusted factor table, and paired compaction comparisons.
+curves and a compact adjusted factor table. A supporting disclosure compares
+waits around compaction; compaction counts have their own dashboard.
 Compaction ratios pair a plot with summary cards for waits, context, output
 and event counts, alongside a worked median-wait example.
 Model/harness coverage, conversation traces, validation and methodology use
 URL-addressable `ViewDisclosure` accordions and the shared dashboard disclosure
 style. Detail links to Overview and opens
 the methodology accordion through semantic reveal. Tokens and Cost, Tool Time
-and Parallelism link to Waiting and Compaction.
+and Parallelism link to Waiting.
 
 Detail has six views: distributions over time, comparison heatmap, histograms,
 positive reported reasoning boxes, wait boxes and time-of-day calendar. Controls
-include model, effort, ten breakdowns (including model + effort), share/count,
+include model, effort, thirteen breakdowns (including speed, model + speed and model + effort + speed), share/count,
 median/p95/volume ordering, range and custom time buckets. Range presets choose
 the same readable buckets as other dashboards (90 days uses days). Charts expand
 with the page so scrolling over them scrolls the page.
@@ -52,8 +54,8 @@ from an edited query uses its edited population rather than reapplying removed
 model/date controls.
 
 The Card Library's **Waiting and Thinking** topic has six recipes. Wait
-distribution, context compactions and timing coverage open Waiting and
-Compaction (timing coverage with its coverage accordion open); wait by
+distribution and timing coverage open Waiting (timing coverage with its
+coverage accordion open); context compactions open Compaction; wait by
 model/effort, wait by preceding tool and reasoning by effort open Thinking in
 their view and breakdown. Their editable
 native source query remains available for collection and preview. Native compact
@@ -64,6 +66,24 @@ budget), and each card with a distribution is its own request, because Query
 Table evaluates each distribution in a separate pass. A 7-day preview takes
 about 1–2 seconds per card. Windows of 180 days or more are bound by Query
 Table's distribution executor.
+
+Speed breakdowns are available on both Waiting and Thinking, and saved cards
+retain the selected breakdown. Ingestion stores normalized `speed` (`fast` or
+`standard`), the original normalized `service_tier`, and `speed_source` on
+messages and model requests. Explicit `usage.speed` wins (including Claude fast
+mode with a standard service tier). Otherwise priority, fast and ultrafast
+tiers are fast (`fastTiers` in `request_speed.go`), and all other, null or
+missing tiers count as standard. A change to that list re-derives, once, only
+the conversations whose stored requests took their speed from a tier it now
+judges otherwise. `speed_source` distinguishes
+`speed`, `service_tier`, and the `assumed_standard` fallback policy.
+
+Codex turn configuration is retained per message and resets each turn. ChatGPT
+metadata and canonical exports use the same normalization. Existing accounting
+and typed settings are replayed by the versioned tool ledger. Older discarded
+turn settings cannot be reconstructed; those requests follow the standard-speed
+fallback. Model Requests exposes all three fields for filters, grouping, counts,
+token sums and distributions, independent of these dashboard views.
 
 ## Data and execution
 
@@ -178,3 +198,32 @@ state validation, all view/breakdown combinations, moving card windows and evide
 navigation. Browser tests use **synthetic numeric fixtures**, not user measurements,
 for real control restoration, brushing, disclosures, Back/Forward and responsive
 layout at desktop/phone sizes.
+
+## Compaction counts
+
+Compaction uses the shared catalog chart for time trends, line/bar displays,
+group comparisons, shares and calendar cycles. Its default is compactions per
+day by human, machine or unknown trigger. Optional breakdowns include service,
+trigger + service, agent/harness, model, repository, channel, initiating machine,
+execution machine and trigger evidence. Filters, range and presentation use the
+shared `analyze_chart` / `analyze_filters` URL contract; chart selections open
+the matching boundary records and their source messages. Create card uses the
+same controls and naming functions as the chart.
+
+`compactions` reads retained metadata boundary messages directly. Consecutive
+boundaries and boundaries with no later model request count separately. Claude's
+`compactMetadata.trigger` records manual or automatic; Codex's attributed
+`compaction_trigger` is inferred by the adapter from turn position. Unknown
+triggers stay separate. Unattributed replayed Codex events and inactive
+conversation-group versions are excluded. Each explicit native-alias family
+contributes one active transcript with boundary evidence, preferring native
+sources, then the most recorded boundaries, then a stable conversation ID.
+This selection precedes chart filters and does not depend on tool calls or
+model requests; unrelated conversations in a mirrored workspace remain visible.
+Missing timestamps remain available in unbounded comparisons but cannot appear on a time chart. Service
+means the recorded provider, while harness and channel are separate dimensions.
+
+The Card Library offers `compactions-by-trigger` on this event population.
+The retired `thinking-compactions` recipe and previously saved cards remain
+readable as the legacy request-based proxy; Waiting offers only its wait card.
+The existing `thinking-overview` route now displays Waiting, preserving links.

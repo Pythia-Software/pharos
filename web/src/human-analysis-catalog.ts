@@ -1,5 +1,7 @@
+import {peopleLabelBreakdowns} from "./people-message-labels";
 import {  branchesOf, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { mapTermPredicates } from "./where-terms";
+import { authorshipCategories } from "./authorship-categories";
 import writing from "../../schemas/writing.schema.json";
 import writingMessages from "../../schemas/writing_messages.schema.json";
 import type { AnalysisCatalog, AnalysisMeasure, AnalysisState } from "./dashboard-analysis-model";
@@ -17,7 +19,7 @@ export const writingGroups = [
   { key: "pasted", label: "Likely pasted", description: "Code, logs, tables, agent-style formatting, or sent faster than typing", categories: ["pasted"], field: "pasted_words", color: "var(--heat-1)" },
   { key: "copied", label: "Copied or re-sent", description: "Matches agent output from the previous 48 hours, or anything you sent before", categories: ["quoted", "resent"], field: "copied_words", color: "var(--gold)" },
   { key: "prompts", label: "Templates and attachments", description: "Repeated one-click prompts, slash commands, attachment references", categories: ["template", "attachment"], field: "prompt_words", color: "var(--heat-2)" },
-  { key: "machine", label: "Harness and automation", description: "Harness instructions and prompts sent by scripts or other agents", categories: ["harness", "automated"], field: "machine_words", color: "var(--muted)" },
+  { key: "machine", label: "App instructions and automation", description: "App instructions and prompts sent by scripts or other agents", categories: ["harness", "automated"], field: "machine_words", color: "var(--muted)" },
 ];
 
 const count = { kind: "number", decimals: 0 } as const, mean = { kind: "number", decimals: 1 } as const, percent = { kind: "percent", decimals: 1 } as const;
@@ -27,7 +29,7 @@ const typed: WhereTerm[] = [{ field: "typed_words", op: ">", value: "0" }];
 const messages = { op: "count" as const, field: "id", label: "messages" };
 const cue = (field: string, label: string) => ({ op: "sum" as const, expression: `IF([${field}],1,0)`, label });
 const measures: Record<string, AnalysisMeasure> = {
-  typed: { label: "Typed words", unit: "words", format: count, op: "sum", field: "typed_words", value: "typed_words", additive: true, note: "Typed words are text you typed or dictated; pastes, copied agent output, templates, attachments, harness instructions and automated prompts are counted separately." },
+  typed: { label: "Typed words", unit: "words", format: count, op: "sum", field: "typed_words", value: "typed_words", additive: true, note: "Typed words are text you typed or dictated; pastes, copied agent output, templates, attachments, app instructions and automated prompts are counted separately." },
   words: { label: "All user words", unit: "words", format: count, op: "sum", field: "words", value: "words", additive: true, note: "All user words count every word of each classified user message, whatever its source; Text source splits them." },
   typed_messages: { label: "Messages with typed text", unit: "messages", format: count, op: "count", additive: true, where: typed, note: "Messages holding at least one typed or dictated word." },
   messages: { label: "User messages", unit: "messages", format: count, op: "count", additive: true, note: "Every classified user message, including those holding only supplied text." },
@@ -58,17 +60,19 @@ function legacy(state: AnalysisState): AnalysisState {
 export const humanAnalysisCatalog: AnalysisCatalog = {
   dataset: "writing_messages", time: { first: "sent_at", last: "sent_at" }, measures,
   breakdowns: {
+    ...peopleLabelBreakdowns("writing_messages"),
     repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
-    ...single([["source_kind", "App"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["main_category", "Mostly"]]),
+    ...single([["source_kind", "Source"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["main_category", "Mostly"]]),
   },
-  components: { kind: { label: "Text source", measures: ["words"], fallback: "none", parts: writingGroups.map(group => ({ key: group.key, label: group.label, field: group.field, color: group.color })) } },
+  components: { kind: { label: "Text source", measures: ["words"], fallback: "none", parts: writingGroups.map(group => ({ key: group.key, label: group.label, field: group.field, color: group.color })) },
+    category: { label: "Text category", measures: ["words"], fallback: "none", parts: authorshipCategories.map(category => ({ key: category.key, label: category.label, field: `${category.key}_words`, color: category.color })) } },
   records: { label: "Message", plural: "Messages", note: "A message is one classified user message, placed at the time it was sent." },
   units: {
     conversation: { label: "Conversation", plural: "Conversations", key: "conversation_id", where: present("conversation_id"),
       breakdowns: { repository_name: ["repository_name"], source_kind: ["source_kind"], provider: ["provider"], ...origin },
-      note: "A conversation is one recorded agent conversation; a delegated subagent's conversation is its own. Only its messages in the range count." },
-    work: { label: "Work", plural: "Works", key: "work_id", where: present("work_id"), breakdowns: { repository_name: ["repository_name"], source_kind: ["source_kind"] },
-      note: "A work is one workspace's conversations with the delegated work folded into it (work_id), as Human words by workspace counts them; it is not a working directory. Only its messages in the range count." },
+      note: "A conversation is one recorded agent conversation; a delegated sub-agent's conversation is its own. Only its messages in the range count." },
+    work: { label: "Workspace", plural: "Workspaces", key: "work_id", where: present("work_id"), breakdowns: { repository_name: ["repository_name"], source_kind: ["source_kind"] },
+      note: "Groups messages by workspace, including linked delegated activity, as Human words by workspace does. Only messages in the selected range count." },
   },
   cycle: { hour: { kind: "timestamp", field: "sent_at" }, weekday: { kind: "timestamp", field: "sent_at" } },
   periods: { day: "day", week: "week", month: "month" }, timestamp: "sent_at",

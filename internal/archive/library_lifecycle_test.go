@@ -687,6 +687,19 @@ func TestApplicationRemembersLibrarySummaries(t *testing.T) {
 }
 
 func TestApplicationSetupWithoutLibrary(t *testing.T) {
+	t.Run("both shells load shared host services before their callers", func(t *testing.T) {
+		for name, page := range map[string]string{"library": appHTML(), "startup": applicationHTML()} {
+			include := `<script src="/assets/host-services.js"></script>`
+			adapter := strings.Index(page, include)
+			caller := strings.Index(page, `<script src="/assets/onboarding.js"`)
+			if strings.Count(page, include) != 1 || adapter < 0 || caller < adapter {
+				t.Fatalf("%s shell must load shared host services once before callers", name)
+			}
+		}
+		if data, err := assets.ReadFile("assets/host-services.js"); err != nil || len(data) == 0 {
+			t.Fatal("host services are not embedded", err)
+		}
+	})
 	t.Run("switch, open, create and rename move MCP with the selection", func(t *testing.T) {
 		a, b := lifecycleLibraries(t)
 		application := filepath.Join(t.TempDir(), "Pharos.app")
@@ -945,7 +958,7 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/app", "/assets/query-tables.css", "/assets/ask-pharos.css", "/assets/managed-library.js", "/assets/managed-library.css"} {
+	for _, path := range []string{"/app", "/assets/host-services.js", "/assets/query-tables.css", "/assets/ask-pharos.css", "/assets/managed-library.js", "/assets/managed-library.css"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
 		m.ServeHTTP(response, request)
@@ -966,8 +979,10 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 		calls := 0
 		chosen := "/Volumes/My SSD/quoted \"folder\"\nname"
 		var pickerError error
-		override(t, &applicationFolderPicker, func(ctx context.Context) (string, error) {
+		purposes := []string{}
+		override(t, &applicationFolderPicker, func(ctx context.Context, purpose string) (string, error) {
 			calls++
+			purposes = append(purposes, purpose)
 			return chosen, pickerError
 		})
 		request := func(method, origin, token string) *httptest.ResponseRecorder {
@@ -994,6 +1009,13 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != http.StatusOK || result["path"] != path {
 				t.Fatal("selection or cancellation was not preserved", w.Body.String(), err)
 			}
+		}
+		// Setup opens it to choose a source folder or an export file.
+		r := httptest.NewRequest(http.MethodPost, "/api/app/choose-folder", strings.NewReader(`{"purpose":"export"}`))
+		r.Header.Set("Authorization", "Bearer "+m.token)
+		m.ServeHTTP(httptest.NewRecorder(), r)
+		if purposes[len(purposes)-1] != "export" || purposes[0] != "" || !pickerPurposes["export"].File || pickerPurposes["source"].File {
+			t.Fatal("the picker is opened for what it chooses", purposes)
 		}
 		pickerError = fmt.Errorf("picker unavailable")
 		if w := request(http.MethodPost, "", m.token); w.Code != http.StatusInternalServerError {
@@ -1268,11 +1290,11 @@ func remapLifecycleIdentities(t *testing.T, config Config, prefix string) {
 	for _, item := range []struct{ table, column string }{
 		{"messages", "id"}, {"workspace_names", "authored_message_id"},
 		{"conversation_documents", "initiation_message_id"}, {"conversation_documents", "outcome_message_id"},
-		{"agent_sessions", "delegation_message_id"}, {"agent_session_messages", "message_id"},
+		{"agent_sessions", "delegation_message_id"}, {"agent_session_messages", "message_id"}, {"agent_session_token_evidence", "message_id"},
 		{"tool_calls", "call_message_id"}, {"tool_calls", "result_message_id"},
 		{"skill_usages", "evidence_message_id"}, {"skill_usages", "body_message_id"},
 		{"agent_sessions", "id"}, {"agent_sessions", "parent_id"},
-		{"agent_session_messages", "agent_session_id"}, {"agent_session_usage", "agent_session_id"},
+		{"agent_session_messages", "agent_session_id"}, {"agent_session_usage", "agent_session_id"}, {"agent_session_token_evidence", "agent_session_id"},
 		{"model_requests", "agent_session_id"}, {"tool_calls", "agent_session_id"}, {"skill_usages", "agent_session_id"},
 	} {
 		if _, err = tx.Exec("UPDATE "+item.table+" SET "+item.column+"=?||"+item.column+" WHERE "+item.column+" IS NOT NULL", prefix); err != nil {
@@ -1287,14 +1309,26 @@ func remapLifecycleIdentities(t *testing.T, config Config, prefix string) {
 func TestLibraryTransferPreservesNewerWriterAndMapsNativeIdentity(t *testing.T) {
 	t.Run("accepted session facts replace prior revision", func(t *testing.T) {
 		a, b := lifecycleLibraries(t)
+		c := reopenCatalog(t, a.CatalogPath)
+		_, err := c.DB.Exec(`INSERT INTO agent_session_token_evidence(agent_session_id,message_id,scope,total_tokens)
+ SELECT a.id,m.id,'last-request',12 FROM agent_sessions a JOIN messages m ON m.conversation_id=a.conversation_id WHERE a.native_id='main' LIMIT 1`)
+		c.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := TransferLibrary(t.Context(), a, b, false, nil); err != nil {
 			t.Fatal(err)
 		}
-		c := reopenCatalog(t, b.CatalogPath)
-		_, err := c.DB.Exec(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider)
+		if catalogCount(t, b, "agent_session_token_evidence") != 1 {
+			t.Fatal("scoped evidence was not transferred")
+		}
+		c = reopenCatalog(t, b.CatalogPath)
+		_, err = c.DB.Exec(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider)
  SELECT 'obsolete',workspace_id,id,'obsolete','subagent',provider FROM conversations;
  INSERT INTO agent_session_usage(agent_session_id,usage_hour,attribution,total_tokens)
- SELECT id,'2026-01-01T00:00:00Z','request',999 FROM agent_sessions WHERE native_id='main';`)
+ SELECT id,'2026-01-01T00:00:00Z','request',999 FROM agent_sessions WHERE native_id='main';
+ INSERT OR REPLACE INTO agent_session_token_evidence(agent_session_id,message_id,scope,total_tokens)
+ SELECT a.id,m.id,'last-request',999 FROM agent_sessions a JOIN messages m ON m.conversation_id=a.conversation_id WHERE a.native_id='main' LIMIT 1;`)
 		c.Close()
 		if err != nil {
 			t.Fatal(err)
@@ -1308,7 +1342,7 @@ func TestLibraryTransferPreservesNewerWriterAndMapsNativeIdentity(t *testing.T) 
 		if _, err = TransferLibrary(t.Context(), a, b, false, nil); err != nil {
 			t.Fatal(err)
 		}
-		if catalogCount(t, b, "agent_sessions") != catalogCount(t, a, "agent_sessions") || catalogCount(t, b, "agent_session_usage") != catalogCount(t, a, "agent_session_usage") {
+		if catalogCount(t, b, "agent_sessions") != catalogCount(t, a, "agent_sessions") || catalogCount(t, b, "agent_session_usage") != catalogCount(t, a, "agent_session_usage") || catalogCount(t, b, "agent_session_token_evidence") != catalogCount(t, a, "agent_session_token_evidence") {
 			t.Fatal("accepted session facts retained an obsolete revision")
 		}
 	})
@@ -1346,6 +1380,63 @@ func TestLibraryTransferPreservesNewerWriterAndMapsNativeIdentity(t *testing.T) 
 			if err != nil || links != want {
 				t.Fatal("import lost stored message/session references", links, want, err)
 			}
+		}
+	})
+	t.Run("Claude replies copied across sessions", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		r1, r2 := claudeUsageMessage("a1", "msg_1", "req_1", 100, 10), claudeUsageMessage("b1", "msg_2", "req_2", 200, 20)
+		ingest := func(config Config, records ...WorkspaceRecord) {
+			c := reopenCatalog(t, config.CatalogPath)
+			defer c.Close()
+			for _, record := range records {
+				tx, err := c.DB.Begin()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err = ingestWorkspace(tx, record, false); err != nil {
+					tx.Rollback()
+					t.Fatal(err)
+				}
+				if err = tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		// This library knows the original session; the other only the one
+		// that resumed it, which counts the copied reply there.
+		resumed := claudeSessionRecord("claude", "s2", "2026-09-20T11:00:00Z", "/a/s2.jsonl", r1, r2)
+		ingest(b, claudeSessionRecord("claude", "s1", "2026-09-20T10:00:00Z", "/a/s1.jsonl", r1), resumed)
+		// It also holds a TL1 run stored before advisor records were.
+		run := claudeUsageMessage("t1", "msg_7", "req_7", 100, 10)
+		run.RawText = jsonText(map[string]any{"type": "assistant", "uuid": "t1", "requestId": "req_7", "message": map[string]any{"id": "msg_7", "model": "claude-test",
+			"usage": map[string]any{"input_tokens": 100, "output_tokens": 10, "iterations": []any{map[string]any{"type": "advisor_message", "model": "claude-advisor", "input_tokens": 50, "output_tokens": 5}}}}})
+		ingest(a, resumed, claudeSessionRecord("tl1", "tl1-run", "2026-09-20T12:00:00Z", "/a/run.jsonl", run))
+		if _, err := TransferLibrary(t.Context(), a, b, false, nil); err != nil {
+			t.Fatal(err)
+		}
+		c := reopenCatalog(t, b.CatalogPath)
+		defer c.Close()
+		var tokens int64
+		if err := c.DB.QueryRow(`SELECT COALESCE(SUM(total_tokens),0) FROM agent_sessions WHERE provider='claude'`).Scan(&tokens); err != nil || tokens != 330+165 {
+			t.Fatalf("Claude tokens = %d, %v; want %d", tokens, err, 330+165)
+		}
+		// Its requests are those of a library that indexed both sessions.
+		requests := func(c *Catalog) string {
+			rows, err := queryMaps(c.DB, `SELECT c.native_id conversation,r.native_id,r.sequence,r.total_tokens,r.context_growth_tokens
+				FROM model_requests r JOIN conversations c ON c.id=r.conversation_id WHERE c.native_id IN ('s1','s2') ORDER BY 1,2`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return jsonText(rows)
+		}
+		indexed, _ := testCatalog(t)
+		for _, record := range []WorkspaceRecord{claudeSessionRecord("claude", "s1", "2026-09-20T10:00:00Z", "/a/s1.jsonl", r1), resumed} {
+			if result := indexed.Ingest(newCopyFixture(t, record), nil); result.Error != nil {
+				t.Fatal(result)
+			}
+		}
+		if got, want := requests(c), requests(indexed); got != want {
+			t.Fatalf("imported requests %s, want %s", got, want)
 		}
 	})
 	t.Run("Claude group delegation", func(t *testing.T) {
@@ -1612,6 +1703,219 @@ func TestLibraryMoveKeepsChangedSource(t *testing.T) {
 }
 
 func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		changed     bool
+		unavailable bool
+	}{
+		{name: "disconnect during preflight with backlog"},
+		{name: "disconnect during preflight with new activity", changed: true},
+		{name: "archive unavailable after preflight", unavailable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := lifecycleLibraries(t)
+			file := filepath.Join(t.TempDir(), "pending.json")
+			canonicalExport(t, file, "Pending", "before")
+			writeSourceFile(t, hostConfigPath(a), fmt.Sprintf("[[sources]]\nname = \"pending\"\nkind = \"canonical\"\naccount = \"local\"\npath = %q\nenabled = true\n", file))
+			var err error
+			a, err = LoadConfig(a.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			destination, err := readLibraryDescriptor(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.DeliveryTargetInstance = destination.Instance
+			if err := capturePendingLibrary(t.Context(), a); err != nil {
+				t.Fatal(err)
+			}
+			app, err := newApplicationManager(t.Context(), filepath.Join(t.TempDir(), "Pharos.app"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, err := app.registry.register(a, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := app.registry.register(b, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceChild, targetChild := lifecycleChild(t), lifecycleChild(t)
+			app.children[first], app.children[second] = sourceChild, targetChild
+			targetMessages := catalogCount(t, b, "messages")
+			if tc.changed {
+				canonicalExport(t, file, "Pending", "after!")
+			}
+			observed := false
+			override(t, &captureFault, func(stage, _ string) error {
+				if stage != "delivery-read" || observed {
+					return nil
+				}
+				observed = true
+				if tc.unavailable {
+					if err := os.Rename(b.Path, b.Path+".unavailable"); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() {
+						if err := os.Rename(b.Path+".unavailable", b.Path); err != nil {
+							t.Error(err)
+						}
+					})
+				} else {
+					response := httptest.NewRecorder()
+					app.api(response, httptest.NewRequest(http.MethodPost, "/api/app/disconnect", strings.NewReader(fmt.Sprintf(`{"id":%q}`, second))))
+					if response.Code != http.StatusOK {
+						t.Fatalf("disconnect during preflight: %s", response.Body.String())
+					}
+				}
+				return nil
+			})
+			app.deliveryCycle(first, second)
+			if !observed || catalogCount(t, a, "messages") == 0 || catalogCount(t, b, "messages") != targetMessages {
+				t.Fatal("preflight availability change lost pending history or wrote the archive")
+			}
+			if app.job == nil || app.job["state"] != "paused" {
+				t.Fatal("unavailable archive was not reported as paused", app.job)
+			}
+			if !tc.changed {
+				select {
+				case <-sourceChild.done:
+					t.Fatal("unchanged backlog stopped the source service")
+				default:
+				}
+				if len(app.operations.reg.views()) != 0 {
+					t.Fatal("unchanged backlog registered delivery work")
+				}
+			} else {
+				db, err := openReadOnlySQLite(a.CatalogPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				var captured int
+				if err := db.QueryRow("SELECT COUNT(*) FROM messages WHERE text='after!'").Scan(&captured); err != nil || captured != 1 {
+					t.Fatalf("new activity was not captured locally: %d %v", captured, err)
+				}
+			}
+		})
+	}
+	t.Run("broker probes before stopping services", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		file := filepath.Join(t.TempDir(), "pending.json")
+		canonicalExport(t, file, "Pending", "before")
+		writeSourceFile(t, hostConfigPath(a), fmt.Sprintf("[[sources]]\nname = \"pending\"\nkind = \"canonical\"\naccount = \"local\"\npath = %q\nenabled = true\n", file))
+		appPath := filepath.Join(t.TempDir(), "Pharos.app")
+		app, err := newApplicationManager(t.Context(), appPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, err := app.registry.register(a, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := app.registry.register(b, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := app.registry.save(); err != nil {
+			t.Fatal(err)
+		}
+		sourceChild, targetChild := lifecycleChild(t), lifecycleChild(t)
+		app.children[first], app.children[second] = sourceChild, targetChild
+		alive := func(child *applicationChild) bool {
+			select {
+			case <-child.done:
+				return false
+			default:
+				return true
+			}
+		}
+		copied := false
+		override(t, &captureFault, func(stage, _ string) error {
+			if stage == "copy" {
+				copied = true
+				if !alive(targetChild) || alive(sourceChild) {
+					t.Fatal("capture stopped the destination or failed to stop its source")
+				}
+				return fmt.Errorf("injected capture failure")
+			}
+			return nil
+		})
+		app.deliveryCycle(first, second)
+		if !copied || !alive(targetChild) || catalogCount(t, a, "messages") == 0 {
+			t.Fatal("failed capture interrupted the archive or lost pending history")
+		}
+		captureFault = nil
+		// Stop after catalog cleanup to exercise receipt-first recovery with
+		// an empty source. It must never recapture during resumed cleanup.
+		override(t, &libraryTransferFault, func(stage string) error {
+			if stage == "source-catalog-emptied" {
+				return fmt.Errorf("injected delivery interruption")
+			}
+			return nil
+		})
+		app.deliveryCycle(first, second)
+		if catalogCount(t, a, "messages") != 0 || alive(targetChild) {
+			t.Fatal("delivery did not reach its interrupted cleanup boundary")
+		}
+		libraryTransferFault = nil
+		captureFault = func(stage, _ string) error {
+			if stage == "copy" || stage == "snapshot" {
+				t.Fatal("resumed delivery recaptured source inputs")
+			}
+			return nil
+		}
+		app.deliveryCycle(first, second)
+		if _, err := os.Stat(pendingDeliveryPath(a)); !os.IsNotExist(err) {
+			t.Fatal("broker did not resume the delivery receipt", err)
+		}
+		captureFault = nil
+		app, err = newApplicationManager(t.Context(), appPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sourceChild, targetChild = lifecycleChild(t), lifecycleChild(t)
+		app.children[first], app.children[second] = sourceChild, targetChild
+		for range 2 {
+			app.deliveryCycle(first, second)
+		}
+		if !alive(sourceChild) || !alive(targetChild) || app.generation != 0 || app.job != nil || len(app.operations.reg.views()) != 0 {
+			t.Fatal("idle delivery after restart registered work or interrupted services")
+		}
+		// While the archive is held, new activity is captured once; the next
+		// tick retains the same payload and leaves both services alone.
+		canonicalExport(t, file, "Pending", "after!")
+		app.suspended[second] = true
+		app.deliveryCycle(first, second)
+		if alive(sourceChild) || !alive(targetChild) || catalogCount(t, a, "messages") == 0 {
+			t.Fatal("disconnected delivery failed to retain new activity locally")
+		}
+		sourceChild = lifecycleChild(t)
+		app.children[first] = sourceChild
+		generation := app.generation
+		app.deliveryCycle(first, second)
+		if !alive(sourceChild) || !alive(targetChild) || app.generation != generation {
+			t.Fatal("disconnected retry repeated an unchanged capture")
+		}
+		// Returning to already-delivered bytes is also a completed observation;
+		// it must not repeatedly recapture while another revision waits locally.
+		canonicalExport(t, file, "Pending", "before")
+		app.deliveryCycle(first, second)
+		sourceChild = lifecycleChild(t)
+		app.children[first] = sourceChild
+		generation = app.generation
+		app.deliveryCycle(first, second)
+		if !alive(sourceChild) || !alive(targetChild) || app.generation != generation {
+			t.Fatal("already-delivered source reversion repeated capture")
+		}
+		delete(app.suspended, second)
+		app.deliveryCycle(first, second)
+		if catalogCount(t, a, "messages") != 0 || alive(targetChild) {
+			t.Fatal("reconnected archive did not accept retained history")
+		}
+	})
 	t.Run("workspace reassignment", func(t *testing.T) {
 		a, b := lifecycleLibraries(t)
 		file := filepath.Join(t.TempDir(), "workspace.json")
@@ -1696,20 +2000,90 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 			t.Fatal("delivered rewrite returned to pending")
 		}
 	})
+	t.Run("Claude replies another session claimed", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		useHost(t, currentHost().ID)
+		original := []string{
+			claudeTurn("s1", "p1", "", "user", "Investigate", nil),
+			claudeReply("s1", "a1", "p1", "msg_1", "req_1", text("Looking"), usage(100, 10)),
+		}
+		resumed := []string{
+			strings.Replace(strings.ReplaceAll(original[0], `"sessionId":"s1"`, `"sessionId":"s2"`), "2026-09-24T17:00:00Z", "2026-09-24T18:00:00Z", 1),
+			strings.ReplaceAll(original[1], `"sessionId":"s1"`, `"sessionId":"s2"`),
+		}
+		source := claudeSessionFiles(t, map[string][]string{"s1.jsonl": original, "s2.jsonl": resumed})
+		a.Sources = []SourceConfig{source}
+		if err := capturePendingLibrary(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := TransferLibrary(t.Context(), a, b, true, nil); err != nil {
+			t.Fatal(err)
+		}
+		// s2's copy of s1's reply counted nothing in the library it reached.
+		writeSourceFile(t, filepath.Join(source.Path, "-p", "s2", "subagents", "agent-x.jsonl"),
+			strings.Join(withSidechain([]string{claudeReply("s2", "x1", "", "msg_9", "req_9", text("Checked"), usage(50, 5))}), "\n")+"\n")
+		if err := capturePendingLibrary(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+		if n := catalogCount(t, a, "conversations"); n != 1 {
+			t.Fatalf("%d conversations pending, want the new subagent alone", n)
+		}
+	})
 	a, b := lifecycleLibraries(t)
 	path := filepath.Join(t.TempDir(), "history.json")
 	writeSourceFile(t, path, `{"workspaces":[{"id":"pending-session","title":"Pending","conversations":[{"id":"pending-chat","provider":"codex","messages":[{"id":"q","role":"user","text":"pending text"}]},{"id":"unchanged-chat","provider":"codex","messages":[{"id":"q2","role":"user","text":"already delivered sibling"}]}]}]}`)
 	source := SourceConfig{Name: "pending", Kind: "canonical", Path: path, Account: "local", Enabled: true}
 	a.Sources = []SourceConfig{source}
+	destination, err := readLibraryDescriptor(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.DeliveryTargetInstance = destination.Instance
+	checkPlan := func(capture, transfer bool) {
+		t.Helper()
+		plan, err := planPendingDelivery(t.Context(), a)
+		if err != nil || plan.Capture != capture || plan.Transfer != transfer || plan.Resume {
+			t.Fatalf("pending delivery plan: %+v %v; want capture=%v transfer=%v", plan, err, capture, transfer)
+		}
+	}
 	if err := capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
+	checkPlan(false, true)
 	if _, err := TransferLibrary(context.Background(), a, b, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if catalogCount(t, a, "messages") != 0 {
 		t.Fatal("pending history retained after delivery")
 	}
+	checkPlan(false, false)
+	// Standalone retained evidence must be delivered even without any
+	// conversation rows; unreadable receipts must never establish idleness.
+	for _, extra := range []string{
+		filepath.Join(a.ArchiveRoot, "package", "extra.json"),
+		filepath.Join(a.ArchiveRoot, "package", captureHostName),
+		filepath.Join(a.CaptureRoot, "retained-evidence", "files", captureHostName),
+	} {
+		writeSourceFile(t, extra, "{}")
+		checkPlan(false, true)
+		if err := os.Remove(extra); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkPlan(false, false)
+	func() {
+		previous := captureFault
+		defer func() { captureFault = previous }()
+		captureFault = func(stage, _ string) error {
+			if stage == "delivery-read" {
+				return fmt.Errorf("injected unreadable source")
+			}
+			return nil
+		}
+		if _, err := planPendingDelivery(t.Context(), a); err == nil {
+			t.Fatal("unreadable input was acknowledged as unchanged")
+		}
+	}()
 	summary, err := Capture(context.Background(), a, []SourceConfig{source}, nil)
 	if err != nil || !summary.OK {
 		t.Fatal("unchanged capture failed", err)
@@ -1738,12 +2112,14 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 	if err = os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
 		t.Fatal(err)
 	}
+	checkPlan(true, false)
 	if err = capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	if catalogCount(t, a, "messages") != 1 {
 		t.Fatal("changed source must keep only its changed conversation pending")
 	}
+	checkPlan(false, true)
 	if _, err = TransferLibrary(context.Background(), a, b, true, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1763,12 +2139,14 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 	// bringing unchanged conversations back into the local pending library.
 	contents = strings.Replace(readText(t, path), `"title":"Pending"`, `"title":"Renamed workspace","outcome":"complete","metadata":{"branch":"updated-branch"}`, 1)
 	writeSourceFile(t, path, contents)
+	checkPlan(true, false)
 	if err = capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	if catalogCount(t, a, "messages") != 0 {
 		t.Fatal("workspace metadata update repopulated delivered conversations")
 	}
+	checkPlan(false, true)
 	c = reopenCatalog(t, a.CatalogPath)
 	if got := workspaceTitle(t, c, "pending-session"); got != "Renamed workspace" {
 		t.Fatal("workspace-only change did not become pending", got)
@@ -1788,6 +2166,7 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 		t.Fatal("workspace-only delivery changed conversation storage or failed to empty the pending workspace")
 	}
 	a.DeliveryTargetInstance = randomToken()
+	checkPlan(true, false)
 	if err = capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}

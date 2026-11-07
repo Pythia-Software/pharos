@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS message_labels_models (
   model TEXT PRIMARY KEY,
   labels_json TEXT NOT NULL
 );
-` + messageLabelLedgerIndexSQL + ";"
+` + messageLabelLedgerIndexSQL + ";" + messageLabelMaskIndexSQL + ";"
 
 // labelsDirtyTriggers mark a conversation dirty when anything its items are
 // built from changes: its messages, their classification, reasoning
@@ -497,7 +497,7 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 			return stats, err
 		}
 	}
-	builder, err := newLabelsItemBuilder(ctx, c.DB)
+	builder, err := newLabelsItemBuilder(ctx, c.reader())
 	if err != nil {
 		return stats, err
 	}
@@ -705,7 +705,7 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 	return jobs, nil
 }
 
-// labelsRun is one run's pipeline: a producer builds conversations' items;
+// labelsRun is one run's pipeline: preparation workers build conversations' items;
 // the run packs their sequences into batches, keeps a bounded number in
 // flight at the workers, merges results per message and hands finished
 // conversations to a writer that stores them in batched transactions.
@@ -775,7 +775,7 @@ func (r *labelsRun) startPool(ctx context.Context) error {
 	if r.opts.OneAtATime {
 		cfg.Workers, cfg.InFlight, cfg.MaxBatch = 1, 1, 1
 	}
-	runner, release, err := r.c.labelerManager(r.settings).Runner(ctx, r.model, cfg)
+	runner, release, err := r.c.labelerRunner(ctx, r.settings, r.model, cfg)
 	r.stats.WorkerStart += time.Since(started)
 	if err != nil {
 		return err
@@ -826,7 +826,8 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 	defer func() { r.releasePool(parent.Err() != nil) }()
 	built := make(chan *labelsJob, 2)
 	produced := make(chan error, 1)
-	go func() { produced <- r.produce(ctx, builder, jobs, built) }()
+	workers := labelerPreparationWorkers(r.settings, r.opts.Limit, r.opts.OneAtATime || r.opts.Export != nil)
+	go func() { produced <- r.produce(ctx, builder, jobs, built, workers) }()
 	writes := make(chan *labelsJob, 64)
 	written := make(chan error, 1)
 	r.cancel = cancel
@@ -913,12 +914,12 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 			if !r.opts.DryRun {
 				nextSettings = target.settings(nextSettings)
 			}
-			retuning := nextSettings.Threads != r.settings.Threads
+			retuning := r.runner != nil && r.runner.UsesCPUThreads() && nextSettings.Threads != r.runner.Threads()
 			if retuning && inflight == 0 {
 				// No request still holds the old runner. Free its budget before
 				// starting workers at the latest target, keeping queued work.
 				r.releasePool(true)
-				r.progress("labels: changing cores per worker to %d", nextSettings.Threads)
+				r.progress("labels: changing CPU threads per worker to %d", nextSettings.Threads)
 				retuning = false
 			}
 			if !retuning {
@@ -1102,104 +1103,149 @@ func (r *labelsRun) messageDone(message *labelsMessage, finish func(*labelsJob))
 	}
 }
 
-// produce builds each job's items, frames them and compares them with the
-// stored labels, handing jobs over in order.
-func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, jobs []*labelsJob, out chan<- *labelsJob) error {
+type labelsPrepared struct {
+	job          *labelsJob
+	stats        LabelsRunStats
+	cut, skipped bool
+	err          error
+}
+
+// produce prepares conversations in parallel, publishing in work-list order.
+// Stats are private until delivery; only the coordinator updates run counts.
+func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, jobs []*labelsJob, out chan<- *labelsJob, workers int) error {
 	defer close(out)
+	builders := make([]*labelsItemBuilder, workers)
 	limited := 0
-	for index, job := range jobs {
-		if err := ctx.Err(); err != nil {
-			return err
+	var failure error
+	err := prepareConversations(ctx, len(jobs), workers, func(ctx context.Context, worker, index int) (result labelsPrepared) {
+		if builders[worker] == nil {
+			builders[worker] = builder.fork(ctx)
 		}
-		if r.opts.Limit > 0 && limited >= r.opts.Limit {
-			r.cut = true
-			break
+		limit := r.opts.Limit
+		if limit > 0 {
+			limit -= limited // Limited runs have exactly one preparation worker.
 		}
-		building := time.Now()
-		units, err := r.buildConversation(ctx, builder, job.conversation)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+		opFrom(ctx).RunIO(func() {
+			result = r.prepareConversation(ctx, builders[worker], jobs[index], limit)
+		})
+		return result
+	}, func(index int, result labelsPrepared) bool {
+		if result.err != nil {
+			if result.skipped && ctx.Err() == nil {
+				// A damaged conversation keeps its dirty mark for the next run.
+				r.progress("labels: conversation %s skipped: %v", jobs[index].conversation, result.err)
+				r.stats.ConversationsFailed++
+				return true
 			}
-			// One conversation that cannot be built (a damaged row) keeps its
-			// dirty mark and is retried by the next run; the rest go on.
-			r.progress("labels: conversation %s skipped: %v", job.conversation, err)
-			r.stats.ConversationsFailed++
-			continue
+			failure = result.err
+			return false
 		}
-		stored := map[string][3]string{}
-		rows, err := queryMapsContext(ctx, r.c.DB, `SELECT message_id,input_hash,model,contract FROM message_labels WHERE conversation_id=?`, job.conversation)
-		if err != nil {
-			return err
-		}
-		for _, row := range rows {
-			stored[firstString(row["message_id"])] = [3]string{firstString(row["input_hash"]), firstString(row["model"]), firstString(row["contract"])}
-		}
-		job.units, job.complete = len(units), true
-		r.stats.ConversationsBuilt++
-		r.stats.Units += len(units)
-		for _, unit := range units {
-			items := unit.items()
-			r.stats.Items += len(items)
-			hash := labelsInputHash(items)
-			if r.opts.DryRun && r.opts.Export != nil {
-				// A dry run's export lists every item it built.
-				for _, item := range items {
-					seq, spans := r.model.Tokenizer.FrameWithSpans(labelrt.FrameInput{Segment: item.Segment, Cohort: item.Cohort, Sender: item.SenderRole, Context: item.Context, Text: item.Text})
-					r.export(item, seq, spans, nil, 0)
-				}
-			}
-			previous, had := stored[unit.messageID]
-			delete(stored, unit.messageID)
-			if had && previous == [3]string{hash, r.identity, labelsContract} {
-				r.stats.MessagesUnchanged++
-				continue
-			}
-			if r.opts.Limit > 0 && limited >= r.opts.Limit {
-				job.complete, r.cut = false, true
-				continue
-			}
-			limited++
-			message := &labelsMessage{id: unit.messageID, conversation: job.conversation, hash: hash, segment: items[0].Segment}
-			if r.opts.Export != nil {
-				message.items = items
-			}
-			empty := false
-			for _, item := range items {
-				seq, spans, ok := labelsFrame(r.model, item)
-				empty = empty || !ok
-				message.spans = append(message.spans, spans)
-				message.seqs = append(message.seqs, seq)
-				message.segments = append(message.segments, item.Segment)
-				message.tokens += len(seq)
-			}
-			if empty {
-				// A pooling model has nothing to pool for a text with no
-				// tokens: the message cannot be labeled (status empty_target)
-				// and does not count among the conversation's labeled units.
-				r.stats.MessagesEmptyTarget++
-				job.units--
-				continue
-			}
-			job.messages = append(job.messages, message)
-		}
-		for id := range stored {
-			job.stale = append(job.stale, id)
-		}
-		sort.Strings(job.stale)
-		job.remaining = len(job.messages)
-		for _, message := range job.messages {
-			message.job = job
-		}
-		r.stats.Build += time.Since(building)
+		r.stats.ConversationsBuilt += result.stats.ConversationsBuilt
+		r.stats.Units += result.stats.Units
+		r.stats.Items += result.stats.Items
+		r.stats.MessagesUnchanged += result.stats.MessagesUnchanged
+		r.stats.MessagesEmptyTarget += result.stats.MessagesEmptyTarget
+		r.stats.Build += result.stats.Build
+		limited += len(result.job.messages) + result.stats.MessagesEmptyTarget
+		r.cut = r.cut || result.cut
 		select {
-		case out <- job:
+		case out <- result.job:
 		case <-ctx.Done():
-			return ctx.Err()
+			return false
 		}
 		reportWork(ctx, "labeling messages", "conversation", index+1, len(jobs))
+		if r.opts.Limit > 0 && limited >= r.opts.Limit && index+1 < len(jobs) {
+			r.cut = true
+			return false
+		}
+		return true
+	})
+	if failure != nil {
+		return failure
 	}
-	return nil
+	return err
+}
+
+// prepareConversation owns the job's text and token arrays until ordered
+// delivery. Its builder and statistics are private to this worker.
+func (r *labelsRun) prepareConversation(ctx context.Context, builder *labelsItemBuilder, input *labelsJob, limit int) (result labelsPrepared) {
+	work := *input
+	job := &work
+	result.job = job
+	limited := 0
+	building := time.Now()
+	defer func() { result.stats.Build = time.Since(building) }()
+	units, err := r.buildConversation(ctx, builder, job.conversation)
+	if err != nil {
+		result.err, result.skipped = err, true
+		return result
+	}
+	stored := map[string][3]string{}
+	rows, err := queryMapsContext(ctx, r.c.reader(), `SELECT message_id,input_hash,model,contract FROM message_labels WHERE conversation_id=?`, job.conversation)
+	if err != nil {
+		result.err = err
+		return result
+	}
+	for _, row := range rows {
+		stored[firstString(row["message_id"])] = [3]string{firstString(row["input_hash"]), firstString(row["model"]), firstString(row["contract"])}
+	}
+	job.units, job.complete = len(units), true
+	result.stats.ConversationsBuilt++
+	result.stats.Units += len(units)
+	for _, unit := range units {
+		items := unit.items()
+		result.stats.Items += len(items)
+		hash := labelsInputHash(items)
+		if r.opts.DryRun && r.opts.Export != nil {
+			// A dry run's export lists every item it built.
+			for _, item := range items {
+				seq, spans := r.model.Tokenizer.FrameWithSpans(labelrt.FrameInput{Segment: item.Segment, Cohort: item.Cohort, Sender: item.SenderRole, Context: item.Context, Text: item.Text})
+				r.export(item, seq, spans, nil, 0)
+			}
+		}
+		previous, had := stored[unit.messageID]
+		delete(stored, unit.messageID)
+		if had && previous == [3]string{hash, r.identity, labelsContract} {
+			result.stats.MessagesUnchanged++
+			continue
+		}
+		if limit > 0 && limited >= limit {
+			job.complete, result.cut = false, true
+			continue
+		}
+		limited++
+		message := &labelsMessage{id: unit.messageID, conversation: job.conversation, hash: hash, segment: items[0].Segment}
+		if r.opts.Export != nil {
+			message.items = items
+		}
+		empty := false
+		for _, item := range items {
+			seq, spans, ok := labelsFrame(r.model, item)
+			empty = empty || !ok
+			message.spans = append(message.spans, spans)
+			message.seqs = append(message.seqs, seq)
+			message.segments = append(message.segments, item.Segment)
+			message.tokens += len(seq)
+		}
+		if empty {
+			// A pooling model has nothing to pool for a text with no
+			// tokens: the message cannot be labeled (status empty_target)
+			// and does not count among the conversation's labeled units.
+			result.stats.MessagesEmptyTarget++
+			job.units--
+			continue
+		}
+		job.messages = append(job.messages, message)
+	}
+	for id := range stored {
+		job.stale = append(job.stale, id)
+	}
+	sort.Strings(job.stale)
+	job.remaining = len(job.messages)
+	for _, message := range job.messages {
+		message.job = job
+	}
+	return result
 }
 
 // buildConversation is builder.conversation with a panic turned into an

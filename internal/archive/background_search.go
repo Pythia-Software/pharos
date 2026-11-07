@@ -46,7 +46,7 @@ func (gate *searchScheduleGate) wait(ctx context.Context, c *Catalog, passes ...
 
 type searchBatch struct {
 	kind string
-	run  func() (bool, error)
+	run  func(context.Context) (bool, error)
 }
 
 // backgroundSearch catches up the same projections and index backfills the
@@ -64,13 +64,13 @@ func (c *Catalog) backgroundSearch(ctx context.Context) error {
 	}
 	migration := newToolOutputMigration()
 	batches := []searchBatch{
-		{"maintenance.search.substring", func() (bool, error) { return c.indexSubstringBatch(ctx) }},
-		{"maintenance.search.tool-output", func() (bool, error) { return migration.step(ctx, c) }},
-		{"maintenance.search.text", func() (bool, error) { return c.indexTextSearchBatch(ctx) }},
-		{"maintenance.search.tools", func() (bool, error) { return c.indexToolSearchBatch(ctx) }},
+		{"maintenance.search.substring", func(ctx context.Context) (bool, error) { return c.indexSubstringBatch(ctx) }},
+		{"maintenance.search.tool-output", func(ctx context.Context) (bool, error) { return migration.step(ctx, c) }},
+		{"maintenance.search.text", func(ctx context.Context) (bool, error) { return c.indexTextSearchBatch(ctx) }},
+		{"maintenance.search.tools", func(ctx context.Context) (bool, error) { return c.indexToolSearchBatch(ctx) }},
 	}
 	for _, index := range []queryTextIndex{humanQueryText, toolQueryText, toolQueryFacts} {
-		batches = append(batches, searchBatch{"maintenance.search.query", func() (bool, error) { return c.indexQueryTextBatch(ctx, index) }})
+		batches = append(batches, searchBatch{"maintenance.search.query", func(ctx context.Context) (bool, error) { return c.indexQueryTextBatch(ctx, index) }})
 	}
 	return c.runSearchBatches(ctx, batches)
 }
@@ -78,18 +78,18 @@ func (c *Catalog) backgroundSearch(ctx context.Context) error {
 // backgroundSearchView uses the cancellable libraryPass context for every
 // projection batch, including previews and parallelism derived from the view.
 func (c *Catalog) backgroundSearchView(ctx context.Context) error {
-	countBatch := func(fn func() (int, error)) func() (bool, error) {
-		return func() (bool, error) { count, err := fn(); return count > 0, err }
+	countBatch := func(fn func(context.Context) (int, error)) func(ctx context.Context) (bool, error) {
+		return func(ctx context.Context) (bool, error) { count, err := fn(ctx); return count > 0, err }
 	}
 	return c.runSearchBatches(ctx, []searchBatch{
-		{"maintenance.origins", func() (bool, error) { return c.publishOrigins(ctx) }},
-		{"maintenance.library-view", countBatch(func() (int, error) {
+		{"maintenance.origins", func(ctx context.Context) (bool, error) { return c.publishOrigins(ctx) }},
+		{"maintenance.library-view", countBatch(func(ctx context.Context) (int, error) {
 			count, err := c.RefreshLibrary(ctx, 10)
 			c.noteLibraryRefresh(count, err)
 			return count, err
 		})},
-		{"maintenance.previews", countBatch(func() (int, error) { return c.refreshPreviews(ctx, 25) })},
-		{"maintenance.parallelism", countBatch(func() (int, error) { return c.refreshParallelism(ctx, parallelismBatch, false) })},
+		{"maintenance.previews", countBatch(func(ctx context.Context) (int, error) { return c.refreshPreviews(ctx, 25) })},
+		{"maintenance.parallelism", countBatch(func(ctx context.Context) (int, error) { return c.refreshParallelism(ctx, parallelismBatch, false) })},
 	})
 }
 
@@ -97,14 +97,14 @@ func (c *Catalog) runSearchBatches(ctx context.Context, batches []searchBatch) e
 	for _, batch := range batches {
 		pass := c.beginPass(ctx, batch.kind, triggerChained)
 		for {
-			if err := c.queries.wait(ctx); err != nil {
+			if err := c.queries.wait(pass.context(ctx)); err != nil {
 				pass.end(err)
 				return err
 			}
 			var more bool
 			var err error
-			pass.runIO(func() { more, err = batch.run() })
-			if more {
+			pass.runIO(ctx, func(ctx context.Context) { more, err = batch.run(ctx) })
+			if more && err == nil {
 				pass.worked(1)
 			}
 			if !more || err != nil {

@@ -352,34 +352,9 @@ func randomToken() string {
 }
 
 func SetSourceEnabled(path, name string, enabled bool) error {
-	data, err := os.ReadFile(path)
+	lines, start, end, err := sourceBlockLines(path, name)
 	if err != nil {
 		return err
-	}
-	lines := strings.SplitAfter(string(data), "\n")
-	start, end := -1, len(lines)
-	for index, line := range lines {
-		trimmed := stripTOMLComment(strings.TrimSpace(line))
-		if trimmed == "[[sources]]" {
-			if start >= 0 {
-				end = index
-				break
-			}
-			candidateEnd := len(lines)
-			for check := index + 1; check < len(lines); check++ {
-				if strings.HasPrefix(strings.TrimSpace(lines[check]), "[") {
-					candidateEnd = check
-					break
-				}
-			}
-			block := strings.Join(lines[index:candidateEnd], "")
-			if regexpAssignment(block, "name") == name {
-				start, end = index, candidateEnd
-			}
-		}
-	}
-	if start < 0 {
-		return fmt.Errorf("configured source not found: %s", name)
 	}
 	replacement := fmt.Sprintf("enabled = %t\n", enabled)
 	found := false
@@ -400,6 +375,53 @@ func SetSourceEnabled(path, name string, enabled bool) error {
 		return err
 	}
 	return os.Rename(temporary, path)
+}
+
+// sourceBlockLines reads path as lines, and finds the [[sources]] block
+// named name: from its header up to the next table.
+func sourceBlockLines(path, name string) (lines []string, start, end int, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	lines = strings.SplitAfter(string(data), "\n")
+	start, end = -1, len(lines)
+	for index, line := range lines {
+		trimmed := stripTOMLComment(strings.TrimSpace(line))
+		if trimmed == "[[sources]]" {
+			candidateEnd := len(lines)
+			for check := index + 1; check < len(lines); check++ {
+				if strings.HasPrefix(strings.TrimSpace(lines[check]), "[") {
+					candidateEnd = check
+					break
+				}
+			}
+			block := strings.Join(lines[index:candidateEnd], "")
+			if regexpAssignment(block, "name") == name {
+				// The block ends at the next table of any kind, so a table
+				// between two sources stays where it is.
+				start, end = index, candidateEnd
+				break
+			}
+		}
+	}
+	if start < 0 {
+		return nil, 0, 0, fmt.Errorf("configured source not found: %s", name)
+	}
+	return lines, start, end, nil
+}
+
+// RemoveSource deletes the [[sources]] block named name from path, and the
+// blank line before it, keeping everything else as written.
+func RemoveSource(path, name string) error {
+	lines, start, end, err := sourceBlockLines(path, name)
+	if err != nil {
+		return err
+	}
+	if start > 0 && strings.TrimSpace(lines[start-1]) == "" {
+		start--
+	}
+	return writeFileAtomic(path, []byte(strings.Join(append(lines[:start:start], lines[end:]...), "")), 0o600)
 }
 
 // SetRootString updates one top-level string without rewriting comments or
