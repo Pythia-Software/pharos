@@ -2,24 +2,24 @@
   "version": 1,
   "dependencies": {
     "@pythia-software/query-table-core": {
-      "version": "1.0.0",
+      "version": "1.0.1",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.1: the published npm files are identical to 1.0.0 apart from package.json versions; the release only changes the Go SQLite executor. 1.0.0 review: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-react": {
-      "version": "1.0.0",
+      "version": "1.0.1",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.1: the published npm files are identical to 1.0.0 apart from package.json versions; the release only changes the Go SQLite executor. 1.0.0 review: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-ui": {
-      "version": "1.0.0",
+      "version": "1.0.1",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.1: the published npm files are identical to 1.0.0 apart from package.json versions; the release only changes the Go SQLite executor. 1.0.0 review: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-codegen": {
-      "version": "1.0.0",
+      "version": "1.0.1",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.1: the published npm files are identical to 1.0.0 apart from package.json versions; the release only changes the Go SQLite executor. 1.0.0 review: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     }
   },
   "bindings": [
