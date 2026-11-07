@@ -334,7 +334,7 @@ func TestBackgroundPlanMovesEveryItem(t *testing.T) {
 	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
 	ago := formatTime(at.Add(-48 * time.Hour))
 	in := backgroundInputs{otherSources: []string{"tl1"}, backupDestination: "/backup", lastBackup: ago,
-		upgradePending: true, verificationNext: at.Add(-time.Hour), labels: true, agentEvents: true, ask: true, suggestionsStale: true,
+		upgradePending: true, writingRefinementPending: true, verificationNext: at.Add(-time.Hour), labels: true, agentEvents: true, ask: true, suggestionsStale: true,
 		runs: map[string]backgroundRunRow{}, deferred: map[string]deferredRow{}}
 	for _, item := range backgroundItems {
 		in.runs[item.ID] = backgroundRunRow{succeeded: ago}
@@ -1422,7 +1422,7 @@ func TestBackgroundDayCostCountsFrequentPasses(t *testing.T) {
 func TestBackgroundWritingEstimatesAndRefinementHaveIndependentSchedules(t *testing.T) {
 	at := time.Date(2026, 11, 5, 4, 0, 0, 0, time.Local)
 	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{}, Placements: map[string]string{"writing": cadenceDaily}}
-	in := backgroundInputs{writingPending: true, writingRefinedAt: formatTime(at.Add(-24 * time.Hour)), runs: map[string]backgroundRunRow{"writing": {succeeded: formatTime(at.Add(-time.Minute))}}}
+	in := backgroundInputs{writingPending: true, writingRefinementPending: true, writingRefinedAt: formatTime(at.Add(-24 * time.Hour)), runs: map[string]backgroundRunRow{"writing": {succeeded: formatTime(at.Add(-time.Minute))}}}
 	plans := func() map[string]itemPlan {
 		out := map[string]itemPlan{}
 		for _, plan := range backgroundPlan(settings, in, at) {
@@ -1440,5 +1440,64 @@ func TestBackgroundWritingEstimatesAndRefinementHaveIndependentSchedules(t *test
 	in.writingRefinedAt = formatTime(at.Add(-30 * time.Minute))
 	if daily := plans()["writing-refine"]; daily.Due || daily.Pending == false || !daily.Next.After(at) {
 		t.Fatalf("completed daily work ran again: %+v", daily)
+	}
+	in.writingRefinementPending = false
+	in.writingRefinedAt = formatTime(at.Add(-48 * time.Hour))
+	if daily := plans()["writing-refine"]; daily.Pending || daily.Due || !daily.Next.IsZero() {
+		t.Fatalf("elapsed days manufactured refinement work: %+v", daily)
+	}
+
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	execTx(t, catalog.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,started_at) VALUES('c','w','codex','local','c','codex','2026-09-01T12:00:00.000Z')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('m','c','m','user','message','Please fix the parser','2026-09-01T12:01:00.000Z','m')`)
+	run := func() int {
+		t.Helper()
+		classified := 0
+		ctx := withWorkProgress(t.Context(), func(w activityWork) {
+			if strings.HasPrefix(w.Phase, "authorship mode:") {
+				classified++
+			}
+		})
+		err := catalog.refineAuthorship(ctx, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return classified
+	}
+	if run() == 0 {
+		t.Fatal("initial refinement did not classify")
+	}
+	refined, _ := catalog.metaValue(t.Context(), "authorship_refined_at")
+	execSQL(t, catalog.DB, "UPDATE sync_deferred SET completed_generation=generation WHERE name IN ('labels','findings')")
+	catalog.now = func() time.Time { return at.Add(48 * time.Hour) }
+	for range 2 {
+		if run() != 0 {
+			t.Fatal("unchanged scheduled refinement classified again")
+		}
+	}
+	if got, _ := catalog.metaValue(t.Context(), "authorship_refined_at"); got != refined {
+		t.Fatal("a skipped refinement changed its completion")
+	}
+	if pending := catalog.readBackgroundInputs(t.Context()).writingRefinementPending; pending {
+		t.Fatal("completed refinement remains pending")
+	}
+	// An explicit full replay with identical outputs must also leave its
+	// consumers current; their invalidation belongs to changed output writes.
+	execSQL(t, catalog.DB, "DELETE FROM meta WHERE key='authorship_refinement_inputs'")
+	if err := server.runBackgroundItem(t.Context(), nil, "writing-refine"); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := catalog.authorshipRefinementPending(t.Context()); err != nil || pending {
+		t.Fatalf("missing completion evidence did not trigger refinement: %v %v", pending, err)
+	}
+	if n := countRows(t, catalog, "SELECT count(*) FROM sync_deferred WHERE name IN ('labels','findings') AND generation>completed_generation"); n != 0 {
+		t.Fatal("identical refinement rescheduled its consumers")
+	}
+	reopened := reopenCatalog(t, catalog.Path)
+	if pending, err := reopened.authorshipRefinementPending(t.Context()); err != nil || pending {
+		t.Fatalf("refinement completion did not survive reopening: %v %v", pending, err)
 	}
 }

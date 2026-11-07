@@ -155,7 +155,7 @@ func (c *sourceCapture) restorePlainSnapshot(s *capturedSnapshot) error {
 	}
 	out, err := os.Open(temporary)
 	if err == nil {
-		err = out.Sync() // F_FULLFSYNC before the original encoding is replaced
+		err = syncToDrive(out) // F_FULLFSYNC before the original encoding is replaced
 		out.Close()
 	}
 	if err == nil {
@@ -458,18 +458,25 @@ func copySQLiteTable(ctx context.Context, read, write *sql.Tx, table string, spe
 // measured faster and lighter than VACUUM INTO, which also needs a connection
 // that is not query-only.
 func snapshotSQLite(ctx context.Context, src, dst string) error {
-	return snapshotSQLiteWith(ctx, func(_ context.Context, path string) (*sql.DB, error) { return openReadOnlySQLite(path) }, src, dst)
+	return snapshotSQLiteWith(ctx, func(_ context.Context, path string) (*sql.DB, error) { return openReadOnlySQLite(path) }, src, dst, nil)
 }
 
 // snapshotSourceSQLite is snapshotSQLite of a harness's database, which it
 // opens with openSourceSQLite.
 func snapshotSourceSQLite(ctx context.Context, src, dst string) error {
-	return snapshotSQLiteWith(ctx, openSourceSQLite, src, dst)
+	return snapshotSQLiteWith(ctx, openSourceSQLite, src, dst, nil)
 }
 
-func snapshotSQLiteWith(ctx context.Context, open func(context.Context, string) (*sql.DB, error), src, dst string) error {
+// snapshotSQLiteWithProgress reports bytes copied from the pinned read
+// transaction, including an initial inventory and each completed page batch.
+// A retry starts a new copy, so its counters start over too.
+func snapshotSQLiteWithProgress(ctx context.Context, src, dst string, progress func(done, total int64)) error {
+	return snapshotSQLiteWith(ctx, func(_ context.Context, path string) (*sql.DB, error) { return openReadOnlySQLite(path) }, src, dst, progress)
+}
+
+func snapshotSQLiteWith(ctx context.Context, open func(context.Context, string) (*sql.DB, error), src, dst string, progress func(done, total int64)) error {
 	for attempt := 0; ; attempt++ {
-		err := backupSQLite(ctx, open, src, dst)
+		err := backupSQLite(ctx, open, src, dst, progress)
 		if err == nil || attempt >= 3 || !strings.Contains(err.Error(), "locked") && !strings.Contains(err.Error(), "busy") {
 			return err
 		}
@@ -482,7 +489,7 @@ func snapshotSQLiteWith(ctx context.Context, open func(context.Context, string) 
 // its context has ended: 4096 pages is 16 MB at SQLite's default page size.
 var backupStepPages int32 = 4096
 
-func backupSQLite(ctx context.Context, open func(context.Context, string) (*sql.DB, error), src, dst string) error {
+func backupSQLite(ctx context.Context, open func(context.Context, string) (*sql.DB, error), src, dst string, progress func(done, total int64)) error {
 	db, err := open(ctx, src)
 	if err != nil {
 		return err
@@ -504,6 +511,16 @@ func backupSQLite(ctx context.Context, open func(context.Context, string) (*sql.
 	var tables int
 	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_schema").Scan(&tables); err != nil {
 		return err
+	}
+	var pageSize, pages int64
+	if progress != nil {
+		if err := conn.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+			return err
+		}
+		if err := conn.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pages); err != nil {
+			return err
+		}
+		progress(0, pages*pageSize)
 	}
 	// The snapshot is a temporary file until it is fsynced and renamed, so
 	// SQLite need not journal or sync it.
@@ -529,6 +546,10 @@ func backupSQLite(ctx context.Context, open func(context.Context, string) (*sql.
 			if more, err = backup.Step(backupStepPages); err != nil {
 				backup.Finish()
 				return err
+			}
+			if progress != nil {
+				pages := int64(backup.PageCount())
+				progress((pages-int64(backup.Remaining()))*pageSize, pages*pageSize)
 			}
 		}
 		snapshot, err := backup.Commit()
