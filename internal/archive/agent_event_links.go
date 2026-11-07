@@ -278,11 +278,19 @@ var agentEventLinkKinds = map[string]bool{"message": true, "reasoning": true, "t
 // findAgentEventTargets returns each event's target (nil for none), keyed by
 // event ID. messages are the conversation's messages in reading order.
 func findAgentEventTargets(messages []eventLinkMessage, events []eventLinkEvent) map[string]*agentEventTarget {
+	targets, _ := findAgentEventTargetsContext(context.Background(), messages, events)
+	return targets
+}
+
+func findAgentEventTargetsContext(ctx context.Context, messages []eventLinkMessage, events []eventLinkEvent) (map[string]*agentEventTarget, error) {
 	index := map[string]int{}
 	lower := make([]string, len(messages))
 	prompt := make([]int, len(messages)) // the prompt that started each message's turn, -1 for none
 	last := -1
 	for i, m := range messages {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		index[m.ID] = i
 		if m.Role == "user" && m.Kind == "message" {
 			last = i
@@ -293,6 +301,9 @@ func findAgentEventTargets(messages []eventLinkMessage, events []eventLinkEvent)
 	// words specific to it.
 	df, n := map[string]int{}, 0
 	for _, m := range messages {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if m.Role != "user" || m.Kind != "message" {
 			continue
 		}
@@ -308,6 +319,9 @@ func findAgentEventTargets(messages []eventLinkMessage, events []eventLinkEvent)
 	idf := func(w string) float64 { return math.Log(float64(1+n) / float64(1+df[w])) }
 	out := map[string]*agentEventTarget{}
 	for _, e := range events {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		pos, placed := index[e.MessageID]
 		var target *agentEventTarget
 		about := e.Sentence + " " + agentEventSubject(e)
@@ -318,6 +332,9 @@ func findAgentEventTargets(messages []eventLinkMessage, events []eventLinkEvent)
 				type hit struct{ message, at int }
 				var first, user *hit
 				for j := pos - 1; j >= 0 && user == nil; j-- {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
 					m := messages[j]
 					if !agentEventLinkKinds[m.Kind] || (q.code && m.Role != "user") {
 						continue
@@ -402,7 +419,7 @@ func findAgentEventTargets(messages []eventLinkMessage, events []eventLinkEvent)
 		}
 		out[e.ID] = target
 	}
-	return out
+	return out, ctx.Err()
 }
 
 // agentEventTargetJSON is a target as the views read it: offsets in UTF-16
@@ -475,7 +492,7 @@ func (c *Catalog) agentEventLinksForMessages(ctx context.Context, conversationID
 			messages = append(messages, eventLinkMessage{ID: firstString(m["id"]), Role: firstString(m["role"]), Kind: firstString(m["kind"]), Text: firstString(m["text"]), At: m["created_at"], Bytes: int(integer(m["bytes"]))})
 		}
 	}
-	return agentEventLinkRows(rows, messages, events), nil
+	return agentEventLinkRows(ctx, rows, messages, events)
 }
 
 // agentEventPosition is how far into its message a byte offset sits, in
@@ -489,14 +506,20 @@ func agentEventPosition(offset, size int) (float64, bool) {
 }
 
 // agentEventLinkRows joins events with their targets for the views.
-func agentEventLinkRows(rows []map[string]any, messages []eventLinkMessage, events []eventLinkEvent) []map[string]any {
-	targets := findAgentEventTargets(messages, events)
+func agentEventLinkRows(ctx context.Context, rows []map[string]any, messages []eventLinkMessage, events []eventLinkEvent) ([]map[string]any, error) {
+	targets, err := findAgentEventTargetsContext(ctx, messages, events)
+	if err != nil {
+		return nil, err
+	}
 	texts, times, sizes := make(map[string]string, len(messages)), make(map[string]any, len(messages)), make(map[string]int, len(messages))
 	for _, m := range messages {
 		texts[m.ID], times[m.ID], sizes[m.ID] = m.Text, m.At, m.Bytes
 	}
 	out := make([]map[string]any, 0, len(rows))
 	for i, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		family, known := agentEventFamilyByKey(events[i].Family)
 		if !known {
 			continue
@@ -527,5 +550,5 @@ func agentEventLinkRows(rows []map[string]any, messages []eventLinkMessage, even
 		}
 		out = append(out, item)
 	}
-	return out
+	return out, ctx.Err()
 }

@@ -354,7 +354,7 @@ Notes:
 
 The loops started in `Serve` (`maintainLibrary`, `maintainSubstringIndex`,
 `maintainToolOutputIndex`, `maintainTextSearch`, `maintainToolSearch`, `maintainQueryTextIndexes`,
-`keepWALSmall`, `automaticLoop`, `cloudScheduleLoop`, `compressCaptures`, and the broker's
+`maintainMessageLabelFacts`, `maintainFingerprintImages`, `maintainFingerprintImagesSecondary`, `keepWALSmall`, `automaticLoop`, `cloudScheduleLoop`, `compressCaptures`, and the broker's
 `maintain`) are **daemons**, not operations: they are registered by name so
 the unregistered-work test can account for them, but they have no state,
 hold nothing, and are never shown. Each pass that does real work starts an
@@ -362,6 +362,7 @@ operation.
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
+| `maintenance.fingerprints` | Render fingerprints · Rendering fingerprints | schedule, user, read | svc | D:w W:w | — | — | Stops during rendering; unfinished images stay queued and resume next time. | record | >10 s | bg |
 | `maintenance.library-view` | Index the Search view · Indexing the Search view | chained (dirty workspaces), version | svc | D:w W:w | view | view | Stops; the batch in progress is abandoned, and it carries on when Pharos next opens the library or on Resume. | record | >15 s (today's `libraryCatchUpShown`) | bg |
 | `maintenance.previews` | Fill in previews · Filling in previews | daemon pass | svc | D:w W:w | view | — | Stops; it carries on later. | record | never | bg |
 | `maintenance.parallelism` | Measure parallel work · Measuring parallel work | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |

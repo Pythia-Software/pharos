@@ -125,6 +125,48 @@ const settingsLocal={id:'local',name:'Pending history',config:'/Libraries/Pendin
 const settingsArchive={id:'archive',name:'My archive',config:'/Volumes/Archive/library.toml',available:true};
 const settingsState={selected:settingsLocal.id,mcp:settingsLocal.id,busy:false,libraries:[settingsLocal,settingsArchive],local_library_parent:'/Users/test/Libraries'};
 
+for(const embedded of [false,true])test(`Obsolete folder pickers leave focus in the replacement source form (${embedded?'startup':'normal shell'})`,{skip},async t=>{
+  let releaseBroker,brokerStarted;
+  const brokerReady=new Promise(resolve=>{brokerStarted=resolve});
+  const {page}=await open(t,{url:embedded?'/app':'/settings/sources',ready:embedded?'#application-setup[open]':'#pharosAddSource',api:{
+    'POST /api/app/choose-folder':()=>new Promise(resolve=>{releaseBroker=resolve;brokerStarted()}),
+  }});
+  if(!embedded)await page.evaluate(()=>{
+    window.webkit={messageHandlers:{pharosLibrary:{postMessage:()=>new Promise((resolve,reject)=>{window.finishFolder=(fail)=>fail?reject(Error('Obsolete chooser error')):resolve('/obsolete')})}}};
+  });
+  const guide=page.locator('#pharosOnboarding');
+  for(const purpose of (embedded?['source']:['source','export'])){
+    await page.evaluate(({purpose})=>window.pharosOnboarding.open({mode:purpose==='source'?'manual':'import',kind:'claude'}),{purpose});
+    const field=guide.getByRole('textbox',{name:purpose==='source'?'Claude Code folder':'Export',exact:true});
+    await field.waitFor();
+    const picker=guide.getByRole('button',{name:purpose==='source'?'Choose folder… Claude Code folder':'Choose file… Export',exact:true});
+    await picker.evaluate(button=>{window.originalFolderButton=button});
+    await picker.click();
+    await page.waitForFunction(()=>window.originalFolderButton.disabled);
+    if(embedded)await brokerReady;
+    await guide.getByRole('button',{name:'Back',exact:true}).click();
+    if(!embedded&&purpose==='source'){
+      await guide.getByRole('button',{name:'Cancel',exact:true}).click();
+      await page.evaluate(()=>window.pharosOnboarding.open({mode:'manual',kind:'claude'}));
+    }else if(purpose==='source'){
+      await guide.getByRole('radio',{name:/I’ll tell Pharos where to look/}).check();
+      await guide.getByRole('button',{name:'Continue',exact:true}).click();
+    }else await guide.getByRole('button',{name:'Import an export',exact:true}).click();
+    const replacement=guide.getByRole('textbox',{name:purpose==='source'?'Claude Code folder':'Export',exact:true});
+    await replacement.fill('/replacement');
+    assert.ok(await replacement.evaluate(element=>document.activeElement===element));
+    if(embedded){
+      assert.ok(releaseBroker,'the startup broker chooser was not requested');
+      releaseBroker({path:'/obsolete'});releaseBroker=null;
+    }else await page.evaluate(fail=>window.finishFolder(fail),purpose==='export');
+    await page.waitForFunction(()=>!window.originalFolderButton.disabled);
+    assert.ok(await replacement.evaluate(element=>document.activeElement===element),'an obsolete picker moved focus out of the replacement form');
+    // Return to the start screen for the next purpose.
+    await guide.getByRole('button',{name:'Back',exact:true}).click();
+    if(!embedded)await guide.getByRole('button',{name:'Cancel',exact:true}).click();
+  }
+});
+
 test('Library settings opens inline forms and returns focus when cancelled', {skip}, async t => {
   const {page,shot}=await open(t,{url:'/settings',ready:'#healthCards .panel',managedLibrary:settingsLocal,api:{
     'GET /api/app/state':settingsState,
@@ -324,12 +366,12 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
   await page.getByLabel('Google Cloud project ID',{exact:true}).fill('pharos-example');
   await page.getByLabel('Require a password to restore',{exact:true}).selectOption('true');
   await page.getByRole('button',{name:'Review configuration & commands',exact:true}).click();
-  await page.evaluate(()=>{window.cloudCopies=0;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{window.cloudCopies++;}}});});
   for(const [index,label]of ['Copy preparation commands','Copy password setup command','Copy final commands'].entries()){
-    const button=page.getByRole('button',{name:label,exact:true});await button.focus();await page.keyboard.press('Enter');
-    await page.waitForFunction(count=>window.cloudCopies===count,index+1);
-    assert.ok(await button.evaluate(element=>element===document.activeElement));
+    const button=page.getByRole('button',{name:label,exact:true});
+    await deferredCopyKeepsFocus(page,button,{fail:index===1});
+    if(index===1)await deferredCopyKeepsFocus(page,button);
   }
+  await deferredCopyKeepsFocus(page,page.getByRole('button',{name:'Copy final commands',exact:true}),{moveFocusTo:page.getByRole('button',{name:'Reset cloud backup options',exact:true})});
   // Reset focuses the calculator; closing returns to Explore.
   await page.getByRole('button',{name:'Reset cloud backup options',exact:true}).click();
   assert.ok(await page.locator('#cloud-step-0').evaluate(panel=>panel===document.activeElement));
@@ -337,6 +379,40 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
   assert.ok(await page.getByLabel('Cloud provider',{exact:true}).evaluate(input=>input===document.activeElement));
   await page.getByRole('button',{name:'Close cloud backup options',exact:true}).click();
   assert.ok(await explore.evaluate(input=>input===document.activeElement));
+});
+
+async function deferredCopyKeepsFocus(page,button,{fail=false,moveFocusTo=null}={}){
+  await page.evaluate(()=>{
+    delete window.finishClipboardWrite;
+    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>new Promise((resolve,reject)=>{
+      window.finishClipboardWrite=fail=>fail?reject(new Error('Clipboard denied')):resolve();
+    })}});
+  });
+  await button.focus();await page.keyboard.press('Enter');
+  await page.waitForFunction(()=>typeof window.finishClipboardWrite==='function');
+  // Cross a rendering frame while the clipboard promise is still pending.
+  await page.evaluate(()=>new Promise(requestAnimationFrame));
+  assert.ok(await button.evaluate(element=>element===document.activeElement),'a pending clipboard write keeps keyboard focus');
+  if(moveFocusTo)await moveFocusTo.focus();
+  await page.evaluate(async fail=>{window.finishClipboardWrite(fail);await new Promise(requestAnimationFrame);},fail);
+  assert.ok(await (moveFocusTo??button).evaluate(element=>element===document.activeElement),'clipboard completion preserves the current keyboard focus');
+}
+
+test('Reader file copying keeps keyboard focus through delayed success, failure and retry', {skip},async t=>{
+  const {page}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.file-copy',api:{
+    'GET /api/work/:id/conversations/:conversation':call=>{
+      const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
+      const message=(id,role,kind,text,extra={})=>({id,native_id:id,role,kind,text:JSON.stringify(text),created_at:'2026-10-01T00:00:00Z',...extra});
+      return {...body,messages:[message('prompt','user','message','Read this file'),
+        message('read','assistant','tool_call',{name:'Read',input:{file_path:'/repo/notes.txt'}},{call_id:'read'}),
+        message('result','tool','tool_result',{content:'Notes'},{call_id:'read'})]};
+    },
+  }});
+  const button=page.getByRole('button',{name:'Copy path /repo/notes.txt',exact:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{fail:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{moveFocusTo:page.locator('#settingsToggle')});
 });
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {

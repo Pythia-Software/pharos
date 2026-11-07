@@ -358,7 +358,14 @@ function pharosCapabilityRows(providers,kinds) {
     input.oninput=()=>onchange(input.value);
     row.append(input);
     if(pickerAvailable()){
-      const pick=button(purpose==='export'?'Choose file…':'Choose folder…',false,async()=>{pick.disabled=true;try{const chosen=await choosePath(purpose);if(chosen){input.value=chosen;onchange(chosen)}}catch(failure){fail(failure)}finally{pick.disabled=false;pick.focus()}});
+      const pick=button(purpose==='export'?'Choose file…':'Choose folder…',false,async()=>{
+        // Closing setup replaces active; rerendering a step disconnects its fields.
+        const view=active,current=()=>view&&active===view&&input.isConnected&&pick.isConnected;
+        pick.disabled=true;
+        try{const chosen=await choosePath(purpose);if(current()&&chosen){input.value=chosen;onchange(chosen)}}
+        catch(failure){if(current())fail(failure)}
+        finally{pick.disabled=false;if(current())pick.focus()}
+      });
       pick.setAttribute('aria-label',`${pick.textContent} ${labelText}`);
       row.append(pick);
     }

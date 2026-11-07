@@ -6507,15 +6507,6 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "40b4c7c5f5fca240:0",
-      "file": "web/src/index.tsx",
-      "owner": "copyText",
-      "tag": "textarea",
-      "control": "\"textarea\"",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
       "key": "76e16212a3862ee5:0",
       "file": "web/src/index.tsx",
       "owner": "FindMatchCell",
@@ -8511,20 +8502,20 @@
       "reason": "Bound directly to the registered view field."
     },
     {
+      "key": "3260239a1c720390:0",
+      "file": "web/src/uifeedback/inbox.tsx",
+      "owner": "Inbox",
+      "tag": "button",
+      "control": "onClick={() => void copyReport()}",
+      "contract": "action",
+      "reason": "Copies the selected feedback report to the clipboard; this action has no durable view state."
+    },
+    {
       "key": "3ab624bb21fc766b:0",
       "file": "web/src/uifeedback/inbox.tsx",
       "owner": "Inbox",
       "tag": "button",
       "control": "onClick={() => { const blob = new Blob([JSON.stringify(detail, null, 2)], { type: \"application/json\" }); const url = URL.createObjectURL(blob); const a = document.createElement(\"a\"); a.href = url; a.download = `${detail.id}.json`; a.click(); URL.revokeObjectURL(url); }}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "44c4137fa652ca1f:0",
-      "file": "web/src/uifeedback/inbox.tsx",
-      "owner": "Inbox",
-      "tag": "button",
-      "control": "onClick={() => void navigator.clipboard.writeText(JSON.stringify(detail, null, 2)).then(() => setNotice(\"Report copied.\"), () => setError(\"Could not copy. Download the report instead.\"))}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
