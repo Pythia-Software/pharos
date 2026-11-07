@@ -106,18 +106,21 @@ settings. Re-register agent commands after moving an app to another location.
 
 ## Sources and preferences
 
-After creating a library, Pharos checks common application and data-folder
-locations on this Mac. Detected tools appear selected in the guide; remaining
-tools are available under **Other tools**. This initial presence check uses
-metadata only, without parsing conversations, opening databases, or running a
-shell. Continue to inspect the selected tools' history locations, including
-their relevant environment overrides. Review discovered
-folders, exclude individual profiles, or check an additional folder for a
-selected tool. The final review lists the approved locations and estimated
-source-file size before **Add and capture** saves the choices and copies history.
-Indexing is a separate next step. **Set up later** saves an empty host choice
-without discovering or capturing sources. Settings → Sources reopens this same
-guide. Conductor and TL1 do not implicitly select Claude Code or Codex.
+After creating a library, the guide asks how to find your conversations:
+**Look in the usual places** (recommended), or **I'll tell Pharos where to
+look**, which checks only the folders you name for the tools you choose. A
+ChatGPT or Claude.ai export is added with **Import an export**. The initial
+presence check uses metadata only, without parsing conversations, opening
+databases, or running a shell; TL1 and Conductor appear only when found (or
+under **More tools**). Review the folders found, exclude individual profiles,
+or add one Pharos didn't find. The final review lists the approved locations,
+their estimated source-file size and what each tool doesn't record before
+**Add and capture** saves the choices and copies history. Indexing is a
+separate next step. **Set up later** saves an empty host choice without
+discovering or capturing sources. Settings → Sources offers **Look for
+sources…**, **Add a folder…** and **Import an export…**, says when a tool has
+new history no source reads, and removes this Mac's sources. See
+[Adding a Mac](configuration.md#adding-a-mac) for details.
 
 Source
 bindings remain inside `hosts/<host-id>.toml`; carrying the library to another

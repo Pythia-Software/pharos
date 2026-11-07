@@ -352,12 +352,40 @@ func randomToken() string {
 }
 
 func SetSourceEnabled(path, name string, enabled bool) error {
-	data, err := os.ReadFile(path)
+	lines, start, end, err := sourceBlockLines(path, name)
 	if err != nil {
 		return err
 	}
-	lines := strings.SplitAfter(string(data), "\n")
-	start, end := -1, len(lines)
+	replacement := fmt.Sprintf("enabled = %t\n", enabled)
+	found := false
+	for index := start + 1; index < end; index++ {
+		trimmed := strings.TrimSpace(lines[index])
+		if strings.HasPrefix(trimmed, "enabled") && strings.Contains(trimmed, "=") {
+			indent := lines[index][:len(lines[index])-len(strings.TrimLeft(lines[index], " \t"))]
+			lines[index] = indent + replacement
+			found = true
+			break
+		}
+	}
+	if !found {
+		lines = append(lines[:end], append([]string{replacement}, lines[end:]...)...)
+	}
+	temporary := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".pharos.tmp")
+	if err := os.WriteFile(temporary, []byte(strings.Join(lines, "")), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
+}
+
+// sourceBlockLines reads path as lines, and finds the [[sources]] block
+// named name: from its header up to the next table.
+func sourceBlockLines(path, name string) (lines []string, start, end int, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	lines = strings.SplitAfter(string(data), "\n")
+	start, end = -1, len(lines)
 	for index, line := range lines {
 		trimmed := stripTOMLComment(strings.TrimSpace(line))
 		if trimmed == "[[sources]]" {
@@ -379,27 +407,22 @@ func SetSourceEnabled(path, name string, enabled bool) error {
 		}
 	}
 	if start < 0 {
-		return fmt.Errorf("configured source not found: %s", name)
+		return nil, 0, 0, fmt.Errorf("configured source not found: %s", name)
 	}
-	replacement := fmt.Sprintf("enabled = %t\n", enabled)
-	found := false
-	for index := start + 1; index < end; index++ {
-		trimmed := strings.TrimSpace(lines[index])
-		if strings.HasPrefix(trimmed, "enabled") && strings.Contains(trimmed, "=") {
-			indent := lines[index][:len(lines[index])-len(strings.TrimLeft(lines[index], " \t"))]
-			lines[index] = indent + replacement
-			found = true
-			break
-		}
-	}
-	if !found {
-		lines = append(lines[:end], append([]string{replacement}, lines[end:]...)...)
-	}
-	temporary := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".pharos.tmp")
-	if err := os.WriteFile(temporary, []byte(strings.Join(lines, "")), 0o600); err != nil {
+	return lines, start, end, nil
+}
+
+// RemoveSource deletes the [[sources]] block named name from path, and the
+// blank line before it, keeping everything else as written.
+func RemoveSource(path, name string) error {
+	lines, start, end, err := sourceBlockLines(path, name)
+	if err != nil {
 		return err
 	}
-	return os.Rename(temporary, path)
+	if start > 0 && strings.TrimSpace(lines[start-1]) == "" {
+		start--
+	}
+	return writeFileAtomic(path, []byte(strings.Join(append(lines[:start:start], lines[end:]...), "")), 0o600)
 }
 
 // SetRootString updates one top-level string without rewriting comments or

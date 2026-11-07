@@ -36,7 +36,7 @@ APP_HTML = r'''<!doctype html>
     .feedback-toast{display:flex;align-items:center;gap:8px;max-width:calc(100vw - 16px);visibility:hidden;transition:opacity .18s,visibility .18s}.feedback-toast.visible{visibility:visible;pointer-events:auto}.feedback-toast .feedback-drag-handle{color:inherit}
     .feedback-positioned{position:fixed!important;right:auto!important;bottom:auto!important;margin:0!important;transform:none!important}
     .optional-behavior{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:16px 0;border-bottom:1px solid var(--line)}.optional-behavior:last-child{border-bottom:0}.optional-behavior>div{min-width:0}.optional-behavior h3{margin:0;font-size:var(--fs-base)}.optional-behavior p{margin:4px 0 0}.optional-behavior .toggle{flex:none}.optional-behavior input[type=email]{flex:0 1 260px;min-width:0;height:32px;box-sizing:border-box;padding:5px 8px;border:1px solid var(--line);border-radius:4px;background:var(--bg);color:var(--ink);font:inherit;font-size:var(--fs-base)}.optional-behavior .toggle:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}
-    .settings-content{min-width:0}.settings-content .settings-section{padding:0;border:0}.settings-content .settings-section[hidden]{display:none}.settings-content .health{margin-top:0}.settings-content .source-card-head h3{margin-bottom:5px;font-size:var(--fs-xl)}.settings-content .findings-settings{max-width:none}.settings-content .findings-setting{margin-bottom:14px}
+    .settings-content{min-width:0}.settings-content .settings-section{padding:0;border:0}.settings-content .settings-section[hidden]{display:none}.settings-content .health{margin-top:0}.settings-content .source-card-head h3{margin-bottom:5px;font-size:var(--fs-xl)}.settings-content .findings-settings{max-width:none}.source-group-heading{grid-column:1/-1;margin:12px 0 0;font:600 var(--fs-lg)/1.3 var(--serif)}.source-new-notice{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px;margin-bottom:16px;padding:12px 14px;border:1px solid var(--gold);border-radius:6px;background:color-mix(in srgb,var(--gold) 8%,var(--panel))}.source-new-notice>span{flex:1 1 260px}.source-new-notice button{border:1px solid var(--line);background:var(--bg);color:var(--ink)}.source-new-notice button.primary{border-color:var(--accent);background:var(--accent);color:var(--panel)}.source-removal{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}.source-removal>p{flex:1 1 100%;margin:0}.source-remove{border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:var(--fs-sm)}.source-remove.danger{border-color:var(--bad);color:var(--bad)}.settings-content .findings-setting{margin-bottom:14px}
     @media(max-width:760px){.source-toolbar #sourceRunActions{margin-left:0}}
     :root{--header-control-gap:6px}.header-editor{margin-top:24px}.header-editor h3{margin:0 0 12px;font-size:var(--fs-base)}.header-preview{overflow:hidden;border:1px solid var(--line);border-radius:8px;background:linear-gradient(180deg,var(--mast-top),var(--mast-bottom));box-shadow:0 4px 20px #0001}.header-preview-bar.bar{max-width:none;margin:0;padding-bottom:20px;row-gap:25px}.header-preview-brand{flex:none;opacity:.65}.header-preview-context.tabs{opacity:.55}.header-tool-list{display:flex;align-items:start;flex-wrap:wrap;gap:var(--header-control-gap);list-style:none;min-width:0;min-height:50px;margin:0;padding:0}.header-preview .header-tool-list{min-height:32px;margin-left:8px;row-gap:23px}.header-preview .header-tool{height:32px}.header-preview .header-drag-handle{position:absolute;top:35px;left:50%;transform:translateX(-50%)}.header-tool{position:relative;display:flex;flex-direction:column;align-items:center;gap:3px;flex:none;min-width:0;max-width:100%;border-radius:4px}.header-tool-face{display:flex;align-items:center;justify-content:center;height:32px;padding:0;cursor:grab;outline-offset:2px}.header-tool-face:focus-visible{outline:2px solid var(--focus-ring, var(--accent));border-radius:4px}.header-tool-face>*{pointer-events:none}.header-tool-face .header-icon svg{width:18px;height:18px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}.header-tool-face .header-icon[hidden]{display:grid}.header-tool .header-drag-handle{display:flex;align-items:center;justify-content:center;width:24px;height:14px;min-height:0;padding:0;border:1px solid color-mix(in srgb,var(--mast-border) 70%,transparent);border-radius:3px;background:var(--mast-field);color:var(--mast-muted);cursor:grab;touch-action:none}.header-drag-handle svg{width:14px;height:12px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round;transform:rotate(90deg)}.header-tool .header-drag-handle:hover{border-color:var(--mast-brass);color:var(--mast-hover)}.header-drag-handle:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:2px}.header-tool.dragging{opacity:.7}.header-tool.drop-before::before,.header-tool.drop-after::after{content:"";position:absolute;top:0;height:32px;width:3px;border-radius:2px;background:var(--accent);box-shadow:0 0 0 2px var(--panel)}.header-tool.drop-before::before{left:-4px}.header-tool.drop-after::after{right:-4px}.header-tool-list.drop-target{background:color-mix(in srgb,var(--accent) 8%,transparent);border-radius:4px}.header-toolbox-section{margin-top:26px}.header-toolbox-section>p{margin:0 0 12px}.header-toolbox-section .header-tool-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,140px),1fr));align-items:stretch;gap:12px;min-height:100px;padding:14px;border:1px dashed var(--line);border-radius:8px;background:var(--panel)}.header-toolbox-section .header-tool{padding:8px 12px 4px;border:1px dotted var(--line);border-radius:6px;background:transparent}.header-toolbox-section .header-tool:hover,.header-toolbox-section .header-tool:focus-within{border-color:var(--accent)}.header-toolbox-section .header-tool-face{width:100%;min-width:0}.header-toolbox-section .header-tool-face>*,.header-toolbox-section .combo-button{min-width:0;max-width:100%}.header-toolbox-section .header-tool-list>.muted{grid-column:1 / -1}.header-tool-caption{width:100%;margin-top:4px;font-size:var(--fs-sm);line-height:1.3;color:var(--muted);text-align:center;white-space:normal;overflow-wrap:anywhere}.header-tool-list>.muted{padding:8px;font-size:var(--fs-sm)}.header-tool-menu{position:fixed;inset:auto;margin:0;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);box-shadow:0 8px 24px #0004}.header-tool-menu:popover-open{display:flex;gap:6px}.header-tool-menu button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:30px;padding:4px 8px;border:1px solid var(--line)}.header-tool-menu svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
     .layout-preference-card{margin-bottom:16px;border:1px solid var(--line);border-radius:8px;background:var(--panel);box-shadow:0 4px 18px #34230d0b}.layout-preference-card>.optional-behavior{padding:16px 20px;border-bottom:0}
@@ -409,7 +409,7 @@ APP_HTML = r'''<!doctype html>
     <div id="settingsContent" class="settings-content">
     <section id="health" class="settings-section" data-settings-route="/settings" data-page-title="Library health" data-page-description="Check your library’s usage, storage, and recent activity." aria-labelledby="settingsPageHeading"><div id="healthCards" class="health"></div><div id="storageBreakdown"></div></section>
     <section id="backupSettings" class="settings-section" data-settings-route="/settings/backups" data-page-title="Backups" data-page-description="Back up to another drive, and plan a private cloud copy." aria-labelledby="settingsPageHeading" hidden><div id="backupSettingsLocal"></div><div id="cloudBackupPlanner"></div></section>
-    <section id="sources" class="settings-section" data-settings-route="/settings/sources" data-page-title="Sources" data-page-description="Choose which conversation files Pharos reads on this Mac. Pharos keeps them current on the Background Processing page." aria-labelledby="settingsPageHeading" hidden><div class="source-toolbar" id="sourceToolbar" aria-label="Source actions"><div id="sourceSetupAction"></div><a href="/settings/sync">Open Background Processing →</a></div><div class="source-summary" id="sourceSummary"></div><div class="source-grid" id="sourceGrid"></div></section>
+    <section id="sources" class="settings-section" data-settings-route="/settings/sources" data-page-title="Sources" data-page-description="The AI tools whose history Pharos reads on this Mac. Pharos keeps them current on the Background Processing page." aria-labelledby="settingsPageHeading" hidden><div class="source-toolbar" id="sourceToolbar" aria-label="Source actions"><div id="sourceSetupAction"></div><a href="/settings/sync">Open Background Processing →</a></div><div id="sourceNewNotice"></div><div class="source-summary" id="sourceSummary"></div><div class="source-grid" id="sourceGrid"></div></section>
     <section id="syncSettings" class="settings-section" data-settings-route="/settings/sync" data-page-title="Background Processing" data-page-description="Pharos keeps your library current on its own. Each kind of work runs as often as its cost allows: quick work every few minutes, heavier work hourly, the heaviest overnight." aria-labelledby="settingsPageHeading" hidden><div id="syncDashboard">
       <div id="backgroundSchedule"></div>
       <div id="syncHistoryTables"></div>
@@ -1638,35 +1638,59 @@ async function loadSources(){
   const data=await api('/api/sources'),summary=$('#sourceSummary'),root=$('#sourceGrid');
   summary.replaceChildren(node('span','chip',`${data.configured} configured on this Mac`),node('span','chip',`${data.enabled} enabled on this Mac`));
   root.querySelectorAll('.source-card:not(.remote),.empty').forEach(card=>card.remove());
-  if(!data.items.length){root.prepend(empty('No sources are configured on this Mac. Use Find sources on this Mac if available, or add a source to the configuration file.'));return}
-  const localCards=[];
-  data.items.forEach(source=>{
-    const severity=sourceSeverity(source),card=node('article','source-card '+(severity?'attention':'')),head=node('div','source-card-head'),title=node('div');
-    title.append(node('h3','',source.name));
-    title.append(node('span','source-host','this Mac'));
-    const switchWrap=node('div','source-switch'),toggle=node('button','toggle '+(source.enabled?'on':''));
-    toggle.setAttribute('role','switch');
-    toggle.setAttribute('aria-checked',String(source.enabled));
-    toggle.setAttribute('aria-label',`${source.enabled?'Disable':'Enable'} ${source.name}`);
-    toggle.onclick=()=>toggleSource(source,toggle);
-    switchWrap.append(node('span','',source.enabled?'Enabled':'Paused'),toggle);
-    head.append(title,switchWrap);
-    const path=node('div','source-path',source.path||'No path configured'),facts=node('dl','source-facts');
-    sourceFact(facts,'Last indexed',sourceTime(source.last_success_at));
-    sourceFact(facts,'Last index attempt',sourceTime(source.last_attempt_at));
-    sourceFact(facts,'Coverage',source.coverage);
-    sourceFact(facts,'Account',source.account);
-    // What this kind of source never records, or only sometimes (its provider's capabilities).
-    if(source.not_recorded?.length)sourceFact(facts,'Not recorded',source.not_recorded.join(', '));
-    if(source.sometimes_recorded?.length)sourceFact(facts,'Sometimes recorded',source.sometimes_recorded.join(', '));
-    card.append(head,path,facts);
-    if(source.error)card.append(node('div','sync-note badtext',source.error));
-    else if(source.path_status==='missing')card.append(node('div','sync-note badtext','The configured path is unavailable.'));
-    const read=source.sqlite_reads?.[0];
-    if(read)card.append(node('div',read.via==='failed'?'sync-note badtext':'sync-note',sqliteReadNote(read)));
-    localCards.push(card);
-  });
-  root.prepend(...localCards);
+  if(!data.items.length){root.prepend(empty('No sources on this Mac yet. Use Look for sources to check the usual places, or Add a folder to name one.'));return}
+  // A tool's sources sit together, in the order each tool first appears.
+  const tools=[...new Set(data.items.map(source=>source.tool||source.kind))];
+  root.prepend(...tools.flatMap(tool=>data.items.filter(source=>(source.tool||source.kind)===tool).map(sourceCard)));
+}
+function sourceCard(source){
+  const severity=sourceSeverity(source),card=node('article','source-card '+(severity?'attention':'')),head=node('div','source-card-head'),title=node('div');
+  card.dataset.source=source.name;
+  title.append(node('h3','',source.name));
+  title.append(node('span','source-host',[source.tool,source.scope==='host'?'this Mac':'every Mac (library.toml)'].filter(Boolean).join(' · ')));
+  const switchWrap=node('div','source-switch'),toggle=node('button','toggle '+(source.enabled?'on':''));
+  toggle.setAttribute('role','switch');
+  toggle.setAttribute('aria-checked',String(source.enabled));
+  toggle.setAttribute('aria-label',`${source.enabled?'Disable':'Enable'} ${source.name}`);
+  toggle.onclick=()=>toggleSource(source,toggle);
+  switchWrap.append(node('span','',source.enabled?'Enabled':'Paused'),toggle);
+  head.append(title,switchWrap);
+  const path=node('div','source-path',source.path||'No path configured'),facts=node('dl','source-facts');
+  sourceFact(facts,'Last indexed',sourceTime(source.last_success_at));
+  sourceFact(facts,'Last index attempt',sourceTime(source.last_attempt_at));
+  sourceFact(facts,'Coverage',source.coverage);
+  sourceFact(facts,'Account',source.account);
+  // What this kind of source never records, or only sometimes (its provider's capabilities).
+  if(source.not_recorded?.length)sourceFact(facts,'Not recorded',source.not_recorded.join(', '));
+  if(source.sometimes_recorded?.length)sourceFact(facts,'Sometimes recorded',source.sometimes_recorded.join(', '));
+  card.append(head,path,facts);
+  if(source.error)card.append(node('div','sync-note badtext',source.error));
+  else if(source.path_status==='missing')card.append(node('div','sync-note badtext','The configured path is unavailable.'));
+  const read=source.sqlite_reads?.[0];
+  if(read)card.append(node('div',read.via==='failed'?'sync-note badtext':'sync-note',sqliteReadNote(read)));
+  if(source.scope==='host')card.append(sourceRemoval(source));
+  return card;
+}
+// Removing stops Pharos reading the source; what it already captured and
+// indexed stays in the library. It asks in place (the app's web view has no
+// confirm dialog).
+function sourceRemoval(source){
+  const box=node('div','source-removal'),start=node('button','source-remove','Remove…');
+  start.type='button';start.setAttribute('aria-label',`Remove ${source.name}`);
+  start.onclick=()=>{
+    const question=node('p','sync-note',`Stop reading ${source.path||source.name} on this Mac? Conversations already in the library stay.`),yes=node('button','source-remove danger','Remove'),no=node('button','source-remove','Cancel');
+    yes.type=no.type='button';
+    no.onclick=()=>{box.replaceChildren(start);start.focus()};
+    yes.onclick=async()=>{
+      yes.disabled=no.disabled=true;
+      try{await api(`/api/sources/${encodeURIComponent(source.name)}/remove`,{method:'POST',body:'{}'});feedbackToast(`${source.name} removed`)}
+      catch(error){feedbackToast(error.message)}
+      finally{await loadSources();void window.pharosLibrary?.refreshSettings?.()}
+    };
+    box.replaceChildren(question,yes,no);no.focus();
+  };
+  box.append(start);
+  return box;
 }
 async function toggleSource(source,button){button.disabled=true;try{await api(`/api/sources/${encodeURIComponent(source.name)}/enabled`,{method:'POST',body:JSON.stringify({enabled:!source.enabled})});feedbackToast(`${source.name} ${source.enabled?'paused':'enabled'}`)}catch(error){feedbackToast(error.message)}finally{await loadSources();void window.pharosLibrary?.refreshSettings?.()}}
 // The lighthouse turns while sources are indexed (4s a turn) or a page loads (1.5s a turn). It changes pace or stops only between turns, when the beam is back at rest, so it never jumps.

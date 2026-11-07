@@ -188,7 +188,7 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   for(let step=0;step<4;step++)await page.locator('#submit').click();
   await page.locator('#configure-sources').click();
   const guide=page.locator('#pharosOnboarding');
-  await guide.getByRole('group',{name:'Detected tools',exact:true}).waitFor();
+  await guide.getByRole('radio',{name:/Look in the usual places/}).waitFor();
   assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
   assert.ok(!calls.some(call=>call.path==='/api/probe'),'presence detection parsed source history');
   await shot('source-tools');
@@ -202,6 +202,7 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   await shot('source-review');
   await page.keyboard.press('Escape');
   assert.ok(await guide.getByRole('button',{name:'Continue',exact:true}).isVisible(),'Escape left the review');
+  assert.ok(!await guide.getByRole('checkbox',{name:/claude-work\/projects/}).isChecked(),'going back forgot a folder left out');
   await guide.getByRole('button',{name:'Continue',exact:true}).click();
   assert.ok(!calls.some(call=>['/api/probe/accept','/api/capture','/api/index'].includes(call.path)),'history was read or capture approved before final consent');
   await guide.getByRole('button',{name:'Add and capture',exact:true}).click();

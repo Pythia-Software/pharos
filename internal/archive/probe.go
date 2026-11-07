@@ -64,6 +64,9 @@ type ProbeStatus struct {
 	// file predates: Antigravity's, when no source covers them yet. Declined
 	// ones are written as paused sources, so they are not counted again.
 	NewSources int `json:"new_sources"`
+	// NewSourceKinds are the kinds those folders belong to, in setup order,
+	// so Sources can say which tools have history to add.
+	NewSourceKinds []string `json:"new_source_kinds"`
 }
 
 type ProbeReport struct {
@@ -268,9 +271,13 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 			status.SharedSources++
 		}
 	}
-	for _, spec := range providerRegistry {
+	status.NewSourceKinds = []string{}
+	for _, spec := range append(setupProviders(), otherProviders()...) {
 		if status.HostFileExists && spec.Probe != nil && spec.Probe.NewSources != nil && (kinds == nil || kinds[spec.Kind]) {
-			status.NewSources += spec.Probe.NewSources(home, config)
+			if count := spec.Probe.NewSources(home, config); count > 0 {
+				status.NewSources += count
+				status.NewSourceKinds = append(status.NewSourceKinds, spec.Kind)
+			}
 		}
 	}
 	if catalog != nil {
@@ -287,12 +294,14 @@ func ProbeSources(config Config, catalog *Catalog) ProbeReport {
 }
 
 func probeSources(home string, config Config, catalog *Catalog) ProbeReport {
-	return probeSelectedSources(home, config, catalog, nil, nil)
+	return probeSelectedSources(home, config, catalog, nil, nil, false)
 }
 
 // A nil kinds map preserves the CLI's full probe. A non-nil map, including an
 // empty one, limits all discovery and environment reads to explicit choices.
-func probeSelectedSources(home string, config Config, catalog *Catalog, kinds map[string]bool, locations []ProbeLocation) ProbeReport {
+// onlyLocations goes further: it reads no usual places and no variables,
+// only the folders the person named.
+func probeSelectedSources(home string, config Config, catalog *Catalog, kinds map[string]bool, locations []ProbeLocation, onlyLocations bool) ProbeReport {
 	started := time.Now()
 	report := ProbeReport{ProbeStatus: probeStatusForKinds(home, config, catalog, kinds), Home: home, Environment: []ProbeVariable{},
 		Candidates: []ProbeCandidate{}, Checked: []ProbeLocation{}, TimingsMS: map[string]int64{}}
@@ -313,7 +322,7 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	envNames, variables := []string{}, map[string][]variable{}
 	for index := range providerRegistry {
 		spec := &providerRegistry[index]
-		if spec.Probe == nil || kinds != nil && !kinds[spec.Kind] {
+		if spec.Probe == nil || kinds != nil && !kinds[spec.Kind] || onlyLocations {
 			continue
 		}
 		for _, env := range spec.Probe.Env {
@@ -340,7 +349,7 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 		report.TimingsMS[name] += time.Since(begin).Milliseconds()
 	}
 	for _, spec := range providerRegistry {
-		if spec.Probe != nil && spec.Probe.Defaults != nil {
+		if spec.Probe != nil && spec.Probe.Defaults != nil && !onlyLocations {
 			timed(spec.Kind, func() { spec.Probe.Defaults(run, home) })
 		}
 	}

@@ -2041,6 +2041,24 @@
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
+      "key": "6d145e032336655c:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "exportsLink",
+      "tag": "button",
+      "control": "'button', 'pharos-link', 'Import an export'",
+      "contract": "settings",
+      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+    },
+    {
+      "key": "c84bd88c016dc842:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "option",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+    },
+    {
       "key": "72f7e973d26732d2:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "optionalBackup",
@@ -2059,56 +2077,65 @@
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
-      "key": "4f6bab0bc2995df2:0",
+      "key": "03e68dcabacffc50:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "options",
-      "tag": "input",
-      "control": "'input'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "owner": "otherFolder",
+      "tag": "summary",
+      "control": "'summary', '', 'Add a folder Pharos didn’t find'",
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
-      "key": "1a894b236e272d81:0",
+      "key": "5319c4b09932f927:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "refreshNote",
-      "tag": "button",
-      "control": "'button', '', 'Configure sources on this Mac…'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "owner": "otherFolder",
+      "tag": "details",
+      "control": "'details', 'pharos-custom-source'",
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
-      "key": "098e824e7397257b:0",
+      "key": "a410657f3f11d284:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderLocations",
+      "owner": "otherFolder",
       "tag": "select",
       "control": "'select'",
       "contract": "settings",
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
-      "key": "2fc6562e36e1cf59:0",
+      "key": "7288e007f9c65211:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderLocations",
+      "owner": "pathField",
       "tag": "input",
       "control": "'input'",
       "contract": "settings",
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
-      "key": "692c43bc6d0109f2:0",
+      "key": "8165dad42aa683a0:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderLocations",
-      "tag": "summary",
-      "control": "'summary', '', 'Use a different folder'",
+      "owner": "renderImport",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+    },
+    {
+      "key": "72c2a75797c778e2:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderManual",
+      "tag": "details",
+      "control": "'details', 'pharos-other-tools'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
-      "key": "7bca15e95ff0d0c0:0",
+      "key": "7757818f24da7ae8:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderLocations",
-      "tag": "details",
-      "control": "'details', 'pharos-custom-source'",
+      "owner": "renderManual",
+      "tag": "summary",
+      "control": "'summary', '', 'More tools'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
@@ -2122,40 +2149,49 @@
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
-      "key": "7ab7117ddedd4ea1:0",
+      "key": "7cbf75e2f3d166b3:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderTools",
-      "tag": "details",
-      "control": "'details', 'pharos-other-tools'",
-      "contract": "editing",
-      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
-    },
-    {
-      "key": "82f3cefa074105b9:0",
-      "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderTools",
-      "tag": "details",
-      "control": "'details', 'pharos-other-sources'",
-      "contract": "editing",
-      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
-    },
-    {
-      "key": "be92617a24c50042:0",
-      "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderTools",
+      "owner": "renderStart",
       "tag": "summary",
-      "control": "'summary', '', 'Other tools'",
+      "control": "'summary', '', 'Which places?'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
-      "key": "ed773e6cf3b10cfb:0",
+      "key": "dc64d7d2d7976701:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderTools",
-      "tag": "summary",
-      "control": "'summary', '', 'ChatGPT exports and other formats'",
+      "owner": "renderStart",
+      "tag": "details",
+      "control": "'details', 'pharos-places'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
+    },
+    {
+      "key": "55ae55f0b2b93911:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "review",
+      "tag": "details",
+      "control": "'details', 'pharos-tool-contents'",
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
+    },
+    {
+      "key": "e43f1e69fa53b869:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "review",
+      "tag": "summary",
+      "control": "'summary', '', 'What each tool records'",
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
+    },
+    {
+      "key": "419f51bddce9c1c1:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "toolChip",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
       "key": "02a9d1cd32a4c315:0",
@@ -3156,15 +3192,6 @@
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
     },
     {
-      "key": "5ffa23fdcb464b1a:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "loadSources",
-      "tag": "button",
-      "control": "'button', 'toggle '+(source.enabled?'on':'')",
-      "contract": "settings",
-      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
-    },
-    {
       "key": "1ac1d20bf5578b50:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "messageBody",
@@ -3586,6 +3613,42 @@
       "disclosure": true,
       "contract": "reader",
       "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
+    },
+    {
+      "key": "9f105ee1c05bf3e6:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "sourceCard",
+      "tag": "button",
+      "control": "'button', 'toggle '+(source.enabled?'on':'')",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
+      "key": "9d9e2fb4316a3327:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "sourceRemoval",
+      "tag": "button",
+      "control": "'button', 'source-remove danger', 'Remove'",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
+      "key": "b3832c1805d18b96:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "sourceRemoval",
+      "tag": "button",
+      "control": "'button', 'source-remove', 'Remove…'",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
+      "key": "e2dd12e5918906b4:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "sourceRemoval",
+      "tag": "button",
+      "control": "'button', 'source-remove', 'Cancel'",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
       "key": "aa5a6fe4f81bf10b:0",

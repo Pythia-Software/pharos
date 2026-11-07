@@ -20,6 +20,9 @@ type ProbeSelection struct {
 	All       bool              `json:"all"`
 	Kinds     *[]string         `json:"kinds,omitempty"`
 	Locations []ProbeLocation   `json:"locations,omitempty"`
+	// OnlyLocations checks just Locations: not the tools' usual places, nor
+	// the variables that move them.
+	OnlyLocations bool `json:"only_locations,omitempty"`
 }
 
 // Keep omitted selections backward compatible with the CLI and older clients.
@@ -47,7 +50,7 @@ func selectedProbe(config Config, catalog *Catalog, selection ProbeSelection) (P
 		}
 	}
 	home, _ := os.UserHomeDir()
-	return probeSelectedSources(home, config, catalog, kinds, selection.Locations), nil
+	return probeSelectedSources(home, config, catalog, kinds, selection.Locations, selection.OnlyLocations), nil
 }
 
 func (s *Server) probeSelected(w http.ResponseWriter, body map[string]any) {

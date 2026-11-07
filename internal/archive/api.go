@@ -842,6 +842,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"enabled": enabled}, http.StatusOK)
 	case path == "/api/probe/accept":
 		s.acceptProbe(w, body)
+	case path == "/api/sources/import":
+		s.importSource(w, body)
 	case path == "/api/probe":
 		s.probeSelected(w, body)
 	case path == "/api/sources/sync":
@@ -861,6 +863,17 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.syncSources(w, []SourceConfig{source})
+	case strings.HasPrefix(path, "/api/sources/") && strings.HasSuffix(path, "/remove"):
+		name, _ := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(path, "/api/sources/"), "/remove"))
+		name = strings.TrimSuffix(name, "/")
+		var request probeRequestError
+		if err := s.removeSource(name); errors.As(err, &request) {
+			writeError(w, err, http.StatusBadRequest)
+		} else if err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+		} else {
+			writeJSON(w, map[string]any{"ok": true, "source": name, "removed": true}, http.StatusOK)
+		}
 	case strings.HasPrefix(path, "/api/sources/") && strings.HasSuffix(path, "/enabled"):
 		name, _ := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(path, "/api/sources/"), "/enabled"))
 		name = strings.TrimSuffix(name, "/")
@@ -973,6 +986,28 @@ func (s *Server) setSourceEnabled(name string, enabled bool) error {
 	return nil
 }
 
+// removeSource deletes one of this Mac's sources from its host file, then
+// reloads the sources, so a same-named source in library.toml that it
+// replaced applies again. What was captured and indexed from it stays in
+// the library.
+func (s *Server) removeSource(name string) error {
+	config := s.Config()
+	index := slices.IndexFunc(config.Sources, func(source SourceConfig) bool { return source.Name == name })
+	if index < 0 {
+		return probeRequestError{fmt.Errorf("configured source not found: %s", name)}
+	}
+	if file := config.Sources[index].File; file == "" || file != hostConfigPath(config) {
+		return probeRequestError{fmt.Errorf("%s is set up for every Mac in %s; remove it there", name, defaultString(file, config.Path))}
+	}
+	hostFileMu.Lock()
+	err := RemoveSource(config.Sources[index].File, name)
+	hostFileMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.reloadSources()
+}
+
 func (s *Server) sourceInventory() (map[string]any, error) {
 	var ingestedDocuments, totalConversations int
 	if err := s.Catalog.reader().QueryRow(`SELECT
@@ -1021,7 +1056,13 @@ func (s *Server) sourceInventory() (map[string]any, error) {
 		}
 		item := map[string]any{"name": source.Name, "kind": source.Kind, "account": source.Account, "path": nilIfEmpty(source.Path), "path_status": pathStatus, "enabled": source.Enabled, "capability": capability, "coverage": coverage, "last_attempt_at": state["last_attempt_at"], "last_success_at": state["last_success_at"], "pending_count": integer(state["pending_count"]), "error": state["error"], "stale": stale, "host_id": host.ID, "host_label": host.Label}
 		item["preservation_mode"] = preservationMode(source)
+		// Only this Mac's own sources can be removed from Settings.
+		item["scope"] = "library"
+		if source.File != "" && source.File == hostConfigPath(config) {
+			item["scope"] = "host"
+		}
 		if spec, ok := providerFor(source.Kind); ok {
+			item["tool"] = spec.DisplayName
 			item["not_recorded"], item["sometimes_recorded"] = spec.contentLimits()
 		}
 		item["preservation"] = s.Catalog.inputPreservationStatus(context.Background(), host.ID, source.Name)

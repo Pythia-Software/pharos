@@ -1663,12 +1663,21 @@ struct ArchiveWebView: NSViewRepresentable {
 
         private func library(_ body: Any, replyHandler: @escaping (Any?, String?) -> Void) {
             if let object = body as? [String: Any], object["action"] as? String == "chooseFolder" {
+                // The purposes and messages match pickerPurposes in application.go.
+                let purpose = object["purpose"] as? String ?? "library"
                 let picker = NSOpenPanel()
                 picker.canChooseDirectories = true
-                picker.canChooseFiles = false
+                picker.canChooseFiles = purpose == "export"
                 picker.allowsMultipleSelection = false
-                picker.canCreateDirectories = true
-                picker.message = "Choose a Pharos library or a parent folder for a new library."
+                picker.canCreateDirectories = purpose == "library"
+                switch purpose {
+                case "source":
+                    picker.message = "Choose the folder that holds this tool’s conversations."
+                case "export":
+                    picker.message = "Choose the export you downloaded: its ZIP, its conversations.json, or the folder it unzips to."
+                default:
+                    picker.message = "Choose a Pharos library or a parent folder for a new library."
+                }
                 picker.begin { response in replyHandler(response == .OK ? picker.url?.path : nil, nil) }
                 return
             }

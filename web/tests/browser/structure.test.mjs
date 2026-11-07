@@ -202,24 +202,30 @@ const ROUTES = [
     }));
     assert.ok(widths.copy>widths.available*.8,'the library introduction leaves an unused artwork column');
   }},
-  ...['tools','other','none','locations','custom','review','empty'].map(step=>({name:`Application sources ${step}`,url:'/app',ready:'#application-setup[open]',api:{
+  // One route per screen of source setup: how to find, what the usual
+  // places hold (or that they hold nothing), the folders named by hand, the
+  // review (with and without anything to add) and importing an export.
+  ...['start','found','nothing','manual','review','empty','import'].map(step=>({name:`Application sources ${step}`,url:'/app',ready:'#application-setup[open]',api:{
     'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[]},
     'POST /api/app/create':{saved:true},
-    ...(step==='none'?{'GET /api/probe/tools':{tools:[]}}:{}),
+    ...(step==='nothing'?{'GET /api/probe/tools':{tools:[]}}:{}),
   },open:async page=>{
     await page.locator('#meet-pharos').click();await page.locator('#start-setup').click();
     for(let i=0;i<4;i++)await page.locator('#submit').click();
     await page.locator('#configure-sources').click();
-    const guide=page.locator('#pharosOnboarding');
-    await guide.locator('.pharos-other-tools>summary').waitFor();
-    if(['tools','none'].includes(step))return;
-    if(step==='other'){await guide.locator('.pharos-other-tools>summary').click();return}
-    if(step==='empty'){await guide.getByRole('checkbox',{name:/Claude Code/}).uncheck();await guide.locator('.pharos-other-tools>summary').click()}
-    await guide.getByRole('checkbox',{name:step==='empty'?/Antigravity/:/Claude Code/}).check();
-    await guide.getByRole('button',{name:'Continue',exact:true}).click();
-    await guide.getByRole('button',{name:'Back',exact:true}).waitFor();
-    if(step==='custom')await guide.locator('.pharos-custom-source summary').click();
-    if(step==='review')await guide.getByRole('button',{name:'Continue',exact:true}).click();
+    const guide=page.locator('#pharosOnboarding'),next=guide.getByRole('button',{name:'Continue',exact:true});
+    await guide.locator('.pharos-places>summary').waitFor();
+    if(step==='start'){await guide.locator('.pharos-places>summary').click();return}
+    if(step==='import'){await guide.getByRole('button',{name:'Import an export',exact:true}).click();return}
+    if(step==='manual'){
+      await guide.getByRole('radio',{name:/tell Pharos where to look/}).check();await next.click();
+      await guide.getByRole('checkbox',{name:/Cursor/}).check();return;
+    }
+    await next.click();
+    if(step==='nothing')return guide.getByRole('button',{name:'Choose tools and folders',exact:true}).waitFor();
+    await guide.locator('.pharos-candidate').first().waitFor();
+    if(step==='empty')for(const box of await guide.locator('.pharos-candidate input[type=checkbox]').all())await box.uncheck();
+    if(step!=='found')await next.click();
   },shown:'#pharosOnboarding'})),
   {name:'Source settings guide',url:'/settings/sources',ready:'#pharosFindSources',open:page=>page.locator('#pharosFindSources').click(),shown:'#pharosOnboarding'},
   ...["create","open","recover"].map(flow=>({name:`Application library ${flow}`,url:"/app",ready:"#library-list .card",open:page=>page.locator(`#library-actions [data-flow="${flow}"]`).click(),shown:"#setup:not([hidden])"})),
@@ -529,7 +535,9 @@ const ROUTES = [
       await page.getByRole('button',{name:`Step ${step}: ${label}`,exact:true}).click();
     },shown:`#cloud-step-${step-1}`
   })),
-  { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
+  { name: "Sources", url: "/settings/sources", ready: "#sourceNewNotice .source-new-notice", api: {
+    "GET /api/probe/status": { library: true, needs_onboarding: false, host_file_exists: true, new_source_kinds: ["zed", "cursor"], host: { id: "test-mac", label: "This Mac" } },
+  } },
   { name: "Background Processing", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
   { name: "Background Processing integrity warning", url: "/settings/sync", ready: ".sync-warning", api: {
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], issues: [{ id: "mismatch", source_name: "codex", unit: `/sessions/${"long-workspace-name/".repeat(12)}rollout.jsonl` }] },
