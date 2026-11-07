@@ -420,7 +420,7 @@ func TestResourceHistoryTaskStatesAndUnknownLibraries(t *testing.T) {
 	// A service that stops answering carries its tasks for a bounded time,
 	// then they end, so the cadence can fall back to idle.
 	override(t, &resourceTaskCarry, 5*time.Second)
-	wedged := resourceHistoryTask{ID: "wedged", Kind: "backup", State: opRunning, Libraries: []string{"lib"}, source: "lib"}
+	wedged := resourceHistoryTask{ID: "wedged", Kind: "backup", State: opRunning, RunStarted: clock, Libraries: []string{"lib"}, source: "lib"}
 	tick(nil, wedged)
 	tick([]string{"lib"})
 	tick([]string{"lib"})
@@ -430,6 +430,18 @@ func TestResourceHistoryTaskStatesAndUnknownLibraries(t *testing.T) {
 	tick([]string{"lib"})
 	if _, carried := h.tasks["wedged"]; carried || h.active {
 		t.Fatalf("an unanswered library kept its task past the carry bound: active %v", h.active)
+	}
+	// Recovery disproves the inferred end; retain the original start.
+	tick(nil, wedged)
+	doc, _ = h.document("", time.Time{})
+	var recovered []resourceHistoryMarkerView
+	for _, marker := range doc.Markers {
+		if marker.ID == wedged.ID {
+			recovered = append(recovered, marker)
+		}
+	}
+	if len(recovered) != 1 || recovered[0].Event != "start" || recovered[0].Observed || recovered[0].T != wedged.RunStarted.UnixMilli() {
+		t.Fatalf("recovery must keep the original start and retract the inferred end: %+v", recovered)
 	}
 }
 

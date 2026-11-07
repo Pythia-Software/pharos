@@ -458,6 +458,22 @@ func (h *resourceHistory) observeTasks(now time.Time, tasks []resourceHistoryTas
 		if at.IsZero() || at.After(now) {
 			at, observed = now, true
 		}
+		// A recovered report of the same task disproves its inferred end.
+		// Keep its original start, rather than inventing a second start at
+		// RunStarted. Exact ends were already excluded above.
+		if slices.ContainsFunc(h.markers, func(marker resourceHistoryMarker) bool {
+			return marker.ID == task.ID && marker.Event == "end" && marker.Observed
+		}) {
+			h.markers = slices.DeleteFunc(h.markers, func(marker resourceHistoryMarker) bool {
+				return marker.ID == task.ID && marker.Event == "end" && marker.Observed
+			})
+			if slices.ContainsFunc(h.markers, func(marker resourceHistoryMarker) bool {
+				return marker.ID == task.ID && marker.Event == "start"
+			}) {
+				continue
+			}
+			at, observed = now, true // the original start aged out of retention
+		}
 		h.appendMarker(resourceHistoryMarker{At: at, Event: "start", ID: task.ID, Kind: task.Kind, Variant: task.Variant,
 			Priority: task.Priority, Trigger: task.Trigger, Libraries: task.Libraries, Observed: observed})
 	}
