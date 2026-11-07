@@ -77,7 +77,7 @@ prompts only), main agent or subagent, model, model and effort, effort, provider
 pairs of these. Compare hides groups under 200 messages read by default. A bar opens the messages behind it that
 have an event of its kind, each linking into the reader with its events marked (`reader_events=1`). The rates
 describe what agents wrote; nothing scores a person, a prompt or a model. The first view answers "where are my
-agents struggling?": friction per 1,000 messages by repository and kind, with links to the Fixes kinds that turn
+agents struggling?": friction per 1,000 messages by repository and kind, without plain obstacles (most of every repository's friction; Friction kind shows them), with links to the Fixes kinds that turn
 recurring friction into a change (`agentEventFixLinks`). Breakdowns whose differences come from the text read rather
 than the work (reply or thinking, model, provider, harness, main agent or subagent) carry a note saying so: thinking
 narrates far more than a reply, nearly all thinking read is from Claude models, and a subagent's messages read are
