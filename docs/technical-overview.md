@@ -160,6 +160,27 @@ A conversation's `coverage` is a completeness word (`complete`, or `partial` whe
 | `claude-ai` | User-provided Claude.ai export: the ZIP, its `conversations.json`, or the folder holding it. Each chat message's blocks become messages (text, thinking summaries as reasoning, tool calls and results, attachments); the date, memory and tool notes Claude.ai adds to a person's turn are context, not human text. Only the branch ending at the current leaf (or, when the export names none, the newest leaf) is selected. The export names no model and records no token usage | None |
 | `canonical` | Documented interchange JSON | None |
 
+### Provider conformance
+
+`TestProviderConformance` (`conformance_test.go`) reads each provider as production does. For each provider, it:
+1. builds a synthetic source;
+2. captures it;
+3. deletes the source;
+4. reads the records back from the capture alone.
+
+It fails on any of these:
+- **A capture that reads differently from the live source:** after paths are normalized, the two reads must match.
+- **A credential the capture holds:** each case lists the secrets its fixture writes. The scan finds a secret as written, as hex or base64, inside a zstd or gzip stream, or in a database value.
+- **Records that differ from the golden file**, `testdata/ingestion/<kind>.json`.
+- **A record the index does not write.**
+- **What the records hold against what the provider declares:**
+  - something it records but declares unsupported or not applicable;
+  - something it declares supported or varying that the fixture never shows.
+
+A second read of the same capture must give identical records. Each fixture is also read in a second new folder. Between the two folders, only the fields `conformancePathHashes` names, each with the reason its hash includes the fixture's path, may differ; the golden file shows them as `$PATH_HASH`. Any other difference fails as a read that is not deterministic. A declared capability a fixture cannot show is listed with its reason in `conformanceGaps`, and an entry the fixture comes to show fails.
+
+`PHAROS_UPDATE_GOLDEN=1` rewrites the golden files. It refuses to change a provider's records while the provider's index version stays the same, because libraries would keep the records they already hold. `PHAROS_UPDATE_GOLDEN=same-version` writes them anyway, for a change stored records need not pick up.
+
 Each conversation records its agent harness and first and last observed harness versions. Claude Code takes `entrypoint` and `version` from JSONL events; Codex takes `originator` and `cli_version` from every `session_meta`, including resumed sessions. Conductor keeps its own harness identity and inherits a linked native conversation’s version with source `alias`. For Antigravity on this Mac, Pharos records when it first observes each installed app or CLI version and attributes that version only to later conversation activity. Older conversations and captures from another Mac keep the version empty when the transcript cannot establish it. Version sources distinguish transcript evidence, native aliases, and the installed app. Existing catalogs fill these fields during the next identity reconciliation, using retained Claude messages and Codex source or captured files.
 
 Each Claude Code and Codex conversation also records the instruction files and skills its harness loaded, in `conversation_instructions` (`conversation_id`, `harness`, `path`, `kind`, `bytes`, `hash`, `repo_path`, `first_seen_at`, `last_seen_at`). Claude Code's `instructions` attachment lists each loaded file with its type and content: `Project`, `User`, `Local`, `AutoMem`, and `Managed` become the lowercased kind, a `nested_memory` attachment (a subdirectory's `CLAUDE.md`) is `nested`, `invoked_skills` is `skill`, and each name in a `skill_listing` is `skill_listing`. Codex's `# AGENTS.md instructions for <dir>` message and `world_state.agents_md` become `agents_md` rows for `<dir>/AGENTS.md`, and each entry of its `<skills_instructions>` listing is a `skill_listing` row for the skill's `SKILL.md`. `bytes` and `hash` (SHA-256) are of the content last loaded, empty when the transcript names a file without it; `repo_path` is the path relative to the repository checkout, empty for agent-home files such as memory and bundled skills. Ingest replaces a conversation's rows whenever it writes the conversation; Conductor wrappers carry none (the native conversation does), and TL1 runs get theirs from the Claude or Codex transcript. Antigravity transcripts record nothing about loaded rules. Libraries indexed before the record existed fill it in the library upgrade, from source files or captures. The record is what instruction drift and the context an instruction change adds are measured from ([`docs/auto-optimization-design.md`](auto-optimization-design.md), G7).

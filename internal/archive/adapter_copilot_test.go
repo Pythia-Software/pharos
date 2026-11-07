@@ -15,6 +15,9 @@ import (
 // writes: a turn with reasoning and two tool calls, one failing; a subagent
 // whose events sit in the same log; a receipt per request; and a shutdown
 // that totals them all again.
+// copilotSecret stands for the token Copilot keeps in its config.
+const copilotSecret = "copilot-secret-do-not-capture"
+
 const copilotSessionEvents = `{"type":"session.start","data":{"sessionId":"sess-1","copilotVersion":"1.0.105","context":{"cwd":"/work/app","branch":"main"}},"id":"e1","timestamp":"2026-11-03T15:00:00.000Z"}
 {"type":"session.model_change","data":{"newModel":"auto","reasoningEffort":null},"id":"e2","timestamp":"2026-11-03T15:00:01.000Z"}
 {"type":"user.message","data":{"content":"Add a word counter","transformedContent":"<current_datetime>x</current_datetime>\n\nAdd a word counter","messageId":"u1","responsesReasoning":{"model":"gpt-6-luna","effort":"medium"}},"id":"e3","timestamp":"2026-11-03T15:00:02.000Z"}
@@ -74,7 +77,7 @@ func copilotFixture(t *testing.T) string {
 	writeSourceFile(t, filepath.Join(sessions, "sess-1.jsonl"), strings.Join(strings.SplitAfter(copilotSessionEvents, "\n")[:3], ""))
 	// A session started and left before anything was said has no log.
 	writeSourceFile(t, filepath.Join(sessions, "sess-2", "workspace.yaml"), "id: sess-2\n")
-	writeSourceFile(t, filepath.Join(root, "config.json"), `{"token":"secret"}`)
+	writeSourceFile(t, filepath.Join(root, "config.json"), `{"token":"`+copilotSecret+`"}`)
 	return root
 }
 
