@@ -306,7 +306,7 @@ func (s *recordStore) put(r io.Reader) (recordObject, error) {
 		e = closeErr
 	}
 	if e == nil {
-		e = f.Sync()
+		e = syncToDrive(f)
 	}
 	if closeErr := f.Close(); e == nil {
 		e = closeErr

@@ -848,12 +848,13 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 		authorship.detail = backlog.note(l.in.now)
 	}
 	l.add(authorship)
+	refinementPending, refinementErr := c.authorshipRefinementPending(ctx)
 	refinement := domainEntry{domain: "an.authorship.refined", group: "analyses", label: "Writing refinement", asOf: meta["authorship_refined_at"], state: freshCurrent}
 	switch {
-	case metaErr != nil:
+	case metaErr != nil || refinementErr != nil:
 		refinement.state = freshUnknown
 	case l.nothingToDo(&refinement):
-	case meta["authorship_generation"] != want:
+	case refinementPending:
 		l.scheduledFor(&refinement, "writing-refine", meta["authorship_built_at"])
 	}
 	l.add(refinement)

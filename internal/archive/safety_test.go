@@ -348,18 +348,11 @@ func safetyTestCall(t *testing.T, c *Catalog, id, command, at string, completed 
 }
 
 func TestSafetyHandoffLifecycle(t *testing.T) {
+	// The command/option matrix belongs to TestSafetyIdentityAndExecution.
+	// Exercise persistence for a resolved identity and a call-scoped one.
 	for _, commands := range [][2]string{
 		{`git clean -fdx -- data`, `git clean -fdx`},
-		{`git clean -fdX`, `git clean -fdx`},
-		{`git clean -fdx`, `git clean -ffdx`},
 		{`git -C "$CHECKOUT" push --force origin HEAD`, `git -C "$CHECKOUT" push --force origin HEAD`},
-		{`git push --force origin "$REF"`, `git push --force origin "$REF"`},
-		{`cd /other/a && gh release delete v1`, `cd /other/b && gh release delete v1`},
-		{`git push --force --tags origin`, `git push --mirror origin`},
-		{`pkill -u 501 -x worker`, `pkill -f worker`},
-		{`rsync --delete --exclude keep source/ /outside/`, `rsync --delete-excluded source/ /outside/`},
-		{`rsync --delete --exclude-from filters source/ /outside/`, `rsync --delete --exclude-from filters source/ /outside/`},
-		{`cd /outside && rm -rf .git`, `cd /outside || rm -rf .git`},
 	} {
 		t.Run("separate handoff for "+commands[0], func(t *testing.T) {
 			now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)

@@ -604,7 +604,7 @@ func compressEntry(ctx context.Context, target captureTarget, manifest *captureM
 	if err == nil {
 		// F_FULLFSYNC: the encoded bytes are on the drive before the rename
 		// can replace the only copy of the original.
-		err = out.Sync()
+		err = syncToDrive(out)
 	}
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
