@@ -27,8 +27,9 @@ var (
 	// workRetryDelays are the waits after the first and second failed
 	// attempts of a unit revision; the third failure exhausts it.
 	workRetryDelays = []time.Duration{5 * time.Second, 30 * time.Second}
-	// workFailureLimit bounds remembered failures across kinds. A kind that
-	// would exceed it is held rather than forgetting failures.
+	// workFailureLimit bounds each kind's remembered failures. A kind that
+	// would exceed it is held rather than forgetting failures; other kinds
+	// keep running.
 	workFailureLimit = 256
 	// workDecisionLimit bounds the recent decision trace.
 	workDecisionLimit = 64
@@ -49,6 +50,10 @@ var (
 	workReconcileInterval = 30 * time.Second
 	// workSlowSelect flags a Next that is not a cheap lookup.
 	workSlowSelect = 50 * time.Millisecond
+	// workSelectTimeout bounds one Next. A pass asks kinds in turn, so a
+	// Next stuck on a busy read would hold admission for every kind; past
+	// this it yields with a visible metadata wait, without failing a unit.
+	workSelectTimeout = 5 * time.Second
 )
 
 // workBlockedReserved is admitLocked's refusal when only another kind's
@@ -90,6 +95,12 @@ type workHooks struct {
 	// (running or blocked) or blocker. Ignore it once that request's
 	// RequestEnded was delivered.
 	RequestChanged func(workRequestFacts)
+	// Paused (optional) reads the stored pause policy at now: whether new
+	// batches wait, and until when (zero: until the policy changes). Run
+	// reads it when it starts, on every reconcile tick and when a timed
+	// pause ends, outside the runner's lock, so a pause that expires, or one
+	// another process or setting changed, needs no push.
+	Paused func(ctx context.Context, now time.Time) (paused bool, until time.Time, err error)
 }
 
 // Every hook runs outside the runner's lock, so it may call back into the
@@ -110,6 +121,8 @@ type workDemand struct {
 	Execution uint64   `json:"execution"`
 	Batch     uint64   `json:"batch"`
 	Demanders []uint64 `json:"demanders"`
+	// Triggers are the demanders' triggers, by request ID.
+	Triggers map[uint64]string `json:"-"`
 }
 
 // workJob identifies admitted work for the registry. Request is set for a
@@ -130,6 +143,9 @@ type workJob struct {
 	Coarse    bool         `json:"coarse,omitempty"`
 	Priority  workPriority `json:"-"`
 	Demanders []uint64     `json:"demanders,omitempty"`
+	// Triggers are the triggers of Request and Demanders, by request ID, so
+	// the first hook to name a request records its origin.
+	Triggers map[uint64]string `json:"-"`
 }
 
 type workExecutionEnd struct {
@@ -150,14 +166,24 @@ type workExecutionEnd struct {
 // intent is refused with errWorkKeyConflict rather than silently merged.
 // Callers derive keys from what they request, so a different window or
 // class is a different Key.
+//
+// Mode is an immutable adapter mode for the requested Kinds only (their
+// dependencies see none): Next reads it from workPopulation.Mode and names
+// the mode it selected in workSelection.Mode; a batch selected in a mode is
+// shared only with requests in that mode. Unpausable demand is not held by
+// the library pause, without becoming safety priority; its dependencies
+// run unpaused too, so a declaration that should not drag its producers
+// along chooses none for that mode (DependenciesForRequest).
 type workRequestSpec struct {
-	Key      string
-	Scope    string // diagnostic: recent, backfill, selection or automatic
-	Kinds    []string
-	Priority workPriority
-	Explicit bool
-	Trigger  string
-	Build    func(context.Context, *workInventoryBuilder) error
+	Key        string
+	Scope      string // diagnostic: recent, backfill, selection or automatic
+	Kinds      []string
+	Priority   workPriority
+	Explicit   bool
+	Mode       string
+	Unpausable bool
+	Trigger    string
+	Build      func(context.Context, *workInventoryBuilder) error
 }
 
 type workRunner struct {
@@ -179,6 +205,7 @@ type workRunner struct {
 	nextID         uint64
 	explicit       int
 	paused         bool
+	pausedUntil    time.Time
 	closed         bool
 	reconsider     bool
 	liveRun        time.Duration
@@ -201,6 +228,7 @@ type workKindState struct {
 	index     int
 	running   *workBatch
 	held      bool
+	resume    bool // Resume came while a stopped batch drained
 	full      bool // the failure table had no room
 	wait      workBlocker
 	waitUntil time.Time
@@ -266,13 +294,18 @@ type workRequest struct {
 }
 
 type workRequestTask struct {
-	kind     *workKindState
-	prereqs  []*workRequestTask // direct prerequisites in this request
-	covered  workBits
-	done     bool
-	failed   string // the failed kind: itself or a prerequisite
-	blocker  workBlocker
-	reported workBlocker
+	kind    *workKindState
+	prereqs []*workRequestTask // direct prerequisites in this request
+	covered workBits
+	// failedUnits are the members this task's kind settled as failed (in
+	// q.failed); libraryFailed counts its failed units in a library
+	// request. Retry of this kind reopens exactly these.
+	failedUnits   workBits
+	libraryFailed int
+	done          bool
+	failed        string // the failed kind: itself or a prerequisite
+	blocker       workBlocker
+	reported      workBlocker
 }
 
 // workFailure is one remembered failure of a unit revision (or of a
@@ -399,7 +432,7 @@ func (r *workRunner) Submit(spec workRequestSpec) (uint64, error) {
 	for index, kind := range r.kinds {
 		dependencies[index] = kind.def.Dependencies
 		if kind.def.DependenciesForRequest != nil {
-			dependencies[index] = slices.Clone(kind.def.DependenciesForRequest())
+			dependencies[index] = slices.Clone(kind.def.DependenciesForRequest(spec))
 			for _, dependency := range dependencies[index] {
 				if !slices.Contains(kind.def.Dependencies, dependency) {
 					return 0, fmt.Errorf("%s selected an undeclared prerequisite %s", kind.def.Kind, dependency)
@@ -436,6 +469,11 @@ func (r *workRunner) Submit(spec workRequestSpec) (uint64, error) {
 			if !q.spec.sameIntent(spec) {
 				return 0, fmt.Errorf("%w: %s", errWorkKeyConflict, spec.Key)
 			}
+			// Repeated demand is news for the existing request: blockers
+			// without an event (a writer's lock, a refused start) are
+			// reconsidered now. Stop holds and failure backoff stay.
+			r.reconsider = true
+			r.signal()
 			return q.id, nil
 		}
 		if !q.admitted {
@@ -469,7 +507,7 @@ func (r *workRunner) Submit(spec workRequestSpec) (uint64, error) {
 // sameIntent reports whether two specs describe the same request apart
 // from Trigger (see workRequestSpec.Key).
 func (s workRequestSpec) sameIntent(o workRequestSpec) bool {
-	return s.Scope == o.Scope && s.Priority == o.Priority && s.Explicit == o.Explicit && (s.Build == nil) == (o.Build == nil) &&
+	return s.Scope == o.Scope && s.Priority == o.Priority && s.Explicit == o.Explicit && s.Mode == o.Mode && s.Unpausable == o.Unpausable && (s.Build == nil) == (o.Build == nil) &&
 		slices.Equal(slices.Sorted(slices.Values(s.Kinds)), slices.Sorted(slices.Values(o.Kinds)))
 }
 
@@ -490,6 +528,22 @@ func (r *workRunner) Pump() int {
 		if !r.again {
 			break
 		}
+	}
+	// Only a pass starts batches, so an idle kind stays idle until Idle
+	// returns.
+	idle := []workIdleTask{}
+	for _, ks := range r.kinds {
+		if task, ok := ks.def.Task.(workIdleTask); ok && ks.execution == 0 && ks.running == nil && ks.draining == 0 {
+			idle = append(idle, task)
+		}
+	}
+	if len(idle) > 0 {
+		now := r.clock.Now()
+		r.mu.Unlock()
+		for _, task := range idle {
+			task.Idle(now)
+		}
+		r.mu.Lock()
 	}
 	r.pumping = false
 	r.unlock()
@@ -548,7 +602,7 @@ func (r *workRunner) passLocked() int {
 		}
 		foreground := q.spec.Priority <= workPriorityForeground
 		switch {
-		case r.paused && q.spec.Priority != workPrioritySafety && !q.spec.Explicit:
+		case r.paused && q.spec.Priority != workPrioritySafety && !q.spec.Explicit && !q.spec.Unpausable:
 			r.blockRequestLocked(q, workBlocker{Reason: workBlockedPaused})
 			continue
 		case q.spec.Priority >= workPriorityBackfill && foregroundBusy:
@@ -597,7 +651,10 @@ func (r *workRunner) passLocked() int {
 			pop := r.populationLocked(q, t, now)
 			r.mu.Unlock()
 			began := r.clock.Now()
-			sel, err := ks.def.Task.Next(r.ctx, pop)
+			selectCtx, cancelSelect := context.WithTimeout(r.ctx, workSelectTimeout)
+			sel, err := ks.def.Task.Next(selectCtx, pop)
+			sel.Mode = pop.Mode()
+			cancelSelect()
 			elapsed := r.clock.Now().Sub(began)
 			r.mu.Lock()
 			ks.selectTime += elapsed
@@ -608,6 +665,14 @@ func (r *workRunner) passLocked() int {
 				continue
 			}
 			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) && r.ctx.Err() == nil {
+					// No unit has been attempted. A cold or contended read
+					// yields admission without exhausting the requested work.
+					ks.wait = workBlocker{Reason: workBlockedExternal, Detail: "metadata selection exceeded its time allowance"}
+					ks.waitUntil = now.Add(workReconcileInterval)
+					t.blocker = ks.wait
+					continue
+				}
 				t.blocker = workBlocker{Reason: workBlockedBackoff, Detail: err.Error()}
 				r.failLocked(ks, workMember{ID: "phase:select"}, true, err, false, now)
 				continue
@@ -747,7 +812,10 @@ func (r *workRunner) markAdmittedLocked(q *workRequest, now time.Time) {
 // request selects that work again itself.
 func (r *workRunner) joinRunningLocked(q *workRequest) {
 	for _, t := range q.tasks {
-		if b := t.kind.running; b != nil && b.cause == nil && r.demandsLocked(q, t.kind, b.sel) && !slices.Contains(b.demanders, q.id) {
+		// A coarse pass that started before this request may have read its
+		// inputs before them, and its completion covers its demanders: the
+		// request waits for a pass of its own.
+		if b := t.kind.running; b != nil && b.cause == nil && !t.kind.def.Coarse && r.demandsLocked(q, t.kind, b.sel) && !slices.Contains(b.demanders, q.id) {
 			b.demanders = append(b.demanders, q.id)
 			r.demandChangedLocked(b)
 		}
@@ -760,13 +828,22 @@ func (r *workRunner) demandsLocked(q *workRequest, ks *workKindState, sel workSe
 		return false
 	}
 	t := q.task(ks)
-	if t == nil || t.done || t.failed != "" {
+	if t == nil || t.done || t.failed != "" || q.mode(ks) != sel.Mode {
 		return false
 	}
 	if q.inv == nil || ks.def.Coarse || len(sel.Units) == 0 {
 		return true
 	}
 	return slices.ContainsFunc(sel.Units, func(m workMember) bool { _, ok := q.inv.index(m.ID); return ok })
+}
+
+// mode is the request's mode for ks: its Mode for a kind it named, none for
+// a dependency.
+func (q *workRequest) mode(ks *workKindState) string {
+	if slices.Contains(q.spec.Kinds, ks.def.Kind) {
+		return q.spec.Mode
+	}
+	return ""
 }
 
 func (q *workRequest) task(ks *workKindState) *workRequestTask {
@@ -896,7 +973,7 @@ func (r *workRunner) eligibleLocked(q *workRequest, t *workRequestTask, now time
 // unlocked, and passes run one at a time.
 func (r *workRunner) populationLocked(q *workRequest, t *workRequestTask, now time.Time) *workPopulation {
 	ks := t.kind
-	pop := &workPopulation{}
+	pop := &workPopulation{mode: q.mode(ks)}
 	for _, f := range ks.failures {
 		if !f.phase {
 			if pop.failures == nil {
@@ -1001,7 +1078,8 @@ func (r *workRunner) startLocked(ks *workKindState, q *workRequest, sel workSele
 // launchLocked hands a job to the registry. The lock is released around
 // Start so a hook may run the job before returning.
 func (r *workRunner) launchLocked(b *workBatch) {
-	job := workJob{Batch: b.id, Phase: b.sel.Phase, Units: len(b.sel.Units), CPUs: b.cpus, Coarse: b.sel.Coarse, Priority: b.priority, Demanders: slices.Clone(b.demanders)}
+	job := workJob{Batch: b.id, Phase: b.sel.Phase, Units: len(b.sel.Units), CPUs: b.cpus, Coarse: b.sel.Coarse, Priority: b.priority, Demanders: slices.Clone(b.demanders),
+		Triggers: r.triggersLocked(b.demanders, b.request)}
 	var run func(context.Context)
 	if b.request != nil {
 		job.Kind, job.Request = workMembershipKind, b.request.id
@@ -1038,6 +1116,18 @@ func (r *workRunner) launchLocked(b *workBatch) {
 	r.closeExecutionsLocked()
 }
 
+// triggersLocked maps the named live requests (and request, if any) to
+// their triggers.
+func (r *workRunner) triggersLocked(ids []uint64, request *workRequest) map[uint64]string {
+	triggers := map[uint64]string{}
+	for _, q := range r.requests {
+		if q == request || slices.Contains(ids, q.id) {
+			triggers[q.id] = q.spec.Trigger
+		}
+	}
+	return triggers
+}
+
 // kindEventLocked queues a hook call about ks. Its execution cannot end
 // until the call is delivered, so ExecutionEnded follows every BatchEnded
 // and DemandChanged of the execution.
@@ -1058,7 +1148,7 @@ func (r *workRunner) demandChangedLocked(b *workBatch) {
 	if r.hooks.DemandChanged == nil || b.kind == nil {
 		return
 	}
-	demand := workDemand{Kind: b.kind.def.Kind, Execution: b.job.Execution, Batch: b.id, Demanders: slices.Clone(b.demanders)}
+	demand := workDemand{Kind: b.kind.def.Kind, Execution: b.job.Execution, Batch: b.id, Demanders: slices.Clone(b.demanders), Triggers: r.triggersLocked(b.demanders, nil)}
 	r.kindEventLocked(b.kind, func() { r.hooks.DemandChanged(demand) })
 }
 
@@ -1155,9 +1245,9 @@ func (r *workRunner) finishBuild(b *workBatch, inv *workInventory, err error) {
 		return
 	}
 	n := len(inv.members)
-	// Coverage per task, sealed, failed, exhausted, replaced and the
-	// eligibility scratch, charged before they are allocated.
-	used := inv.bytes + workBitsBytes(n, len(q.tasks)+5)
+	// Coverage and failures per task, sealed, failed, exhausted, replaced
+	// and the eligibility scratch, charged before they are allocated.
+	used := inv.bytes + workBitsBytes(n, 2*len(q.tasks)+5)
 	if used > workRequestMemoryLimit {
 		err := &workInventoryTooLarge{Members: n, Bytes: used, Limit: workRequestMemoryLimit}
 		r.batchEndedLocked(b, opFailed, workMembershipUnavailable, err)
@@ -1168,7 +1258,7 @@ func (r *workRunner) finishBuild(b *workBatch, inv *workInventory, err error) {
 	q.inv = inv
 	q.sealed, q.failed, q.exhausted, q.replaced, q.mask = newWorkBits(n), newWorkBits(n), newWorkBits(n), newWorkBits(n), newWorkBits(n)
 	for _, t := range q.tasks {
-		t.covered = newWorkBits(n)
+		t.covered, t.failedUnits = newWorkBits(n), newWorkBits(n)
 	}
 	r.authority.releaseMemory(q.reserved - used)
 	q.reserved = used
@@ -1268,6 +1358,17 @@ func (r *workRunner) finishBatch(b *workBatch, result workBatchResult, err error
 	default:
 		r.clearFailureLocked(ks, "phase:"+b.sel.Phase)
 		r.decideLocked("finished", ks.def.Kind, 0, b.id, "", fmt.Sprintf("%d committed, %d superseded", len(result.Committed), len(result.Superseded)))
+		if ks.def.Coarse && !result.Remaining {
+			// A completed coarse pass covers the requests it ran for: they
+			// existed before it read its inputs (none joins a running coarse
+			// pass). Inputs that changed since stay dirty for later demand,
+			// so a pass never waits for the library to be quiet.
+			for _, q := range slices.Clone(r.requests) {
+				if t := q.task(ks); t != nil && slices.Contains(b.demanders, q.id) && q.admitted && q.build == nil && !opTerminal(q.state) && !t.done && t.failed == "" {
+					r.coverTaskLocked(q, t, now)
+				}
+			}
+		}
 	}
 	ks.lastState = state
 	r.batchEndedLocked(b, state, reason, err)
@@ -1422,6 +1523,7 @@ func (r *workRunner) coverTaskLocked(q *workRequest, t *workRequestTask, now tim
 			libraryFailed++
 		default:
 			q.failed.set(i)
+			t.failedUnits.set(i)
 			q.nFailed++
 		}
 	}
@@ -1475,6 +1577,7 @@ func (r *workRunner) coverTaskLocked(q *workRequest, t *workRequestTask, now tim
 		// Counted once, when the task is done: a backoff that keeps the
 		// task open must not count the same exhausted unit again.
 		q.libraryFail += libraryFailed
+		t.libraryFailed += libraryFailed
 		t.done, t.blocker = true, workBlocker{}
 		r.decideLocked("covered", ks.def.Kind, q.id, 0, "", "")
 	}
@@ -1487,7 +1590,7 @@ func (r *workRunner) failLocked(ks *workKindState, m workMember, phase bool, err
 	key := m.ID + "\x00" + m.Revision
 	f := ks.failures[key]
 	if f == nil {
-		if r.failureCount >= workFailureLimit {
+		if len(ks.failures) >= workFailureLimit {
 			ks.full = true
 			r.decideLocked("held", ks.def.Kind, 0, 0, workBlockedFailuresFull, err.Error())
 			return
@@ -1525,6 +1628,7 @@ func (r *workRunner) failLocked(ks *workKindState, m workMember, phase bool, err
 		}
 		if i, ok := q.inv.index(m.ID); ok && !q.settled(i) && q.target(i) == m.Revision {
 			q.failed.set(i)
+			t.failedUnits.set(i)
 			q.nFailed++
 		}
 	}
@@ -1695,6 +1799,12 @@ func (r *workRunner) closeExecutionsLocked() {
 		if r.hooks.ExecutionEnded != nil {
 			r.events = append(r.events, func() { r.hooks.ExecutionEnded(end) })
 		}
+		if ks.resume {
+			ks.held, ks.resume, ks.wait = false, false, workBlocker{}
+			r.decideLocked("resumed", ks.def.Kind, 0, 0, "", "")
+			r.reconsider = true
+			r.signal()
+		}
 	}
 }
 
@@ -1745,7 +1855,7 @@ func (r *workRunner) Stop(kind string) bool {
 	if ks == nil {
 		return false
 	}
-	ks.held = true
+	ks.held, ks.resume = true, false
 	if ks.running != nil {
 		r.cancelBatchLocked(ks.running, errWorkStopped)
 	}
@@ -1762,7 +1872,14 @@ func (r *workRunner) Resume(kind string) bool {
 	if ks == nil {
 		return false
 	}
-	ks.held = false
+	if ks.held && ks.execution != 0 {
+		// The stopped execution is still draining: it ends as stopped, and
+		// work resumes in a new one, never under the stopping operation.
+		ks.resume = true
+		r.decideLocked("resume-pending", kind, 0, 0, "", "")
+		return true
+	}
+	ks.held, ks.resume = false, false
 	ks.wait = workBlocker{}
 	r.decideLocked("resumed", kind, 0, 0, "", "")
 	r.signal()
@@ -1770,7 +1887,10 @@ func (r *workRunner) Resume(kind string) bool {
 }
 
 // Retry forgets a kind's failures (an explicit user retry) so live requests
-// attempt the failed units and phases again.
+// attempt the failed units and phases again. Only what this kind failed is
+// reopened: another kind's failure of the same unit stays. Every task of the
+// request that had not covered a reopened unit (this kind's task and its
+// dependents) is asked again, since it may have finished around the unit.
 func (r *workRunner) Retry(kind string) bool {
 	r.mu.Lock()
 	defer r.unlock()
@@ -1784,13 +1904,26 @@ func (r *workRunner) Retry(kind string) bool {
 				t.failed, t.blocker = "", workBlocker{}
 			}
 		}
-		if q.inv == nil {
+		t := q.task(ks)
+		if t == nil {
 			continue
 		}
-		for _, f := range ks.failures {
-			if i, ok := q.inv.index(f.Unit.ID); ok && f.Exhausted && q.failed.has(i) {
+		reopened := []int{}
+		if t.failedUnits != nil {
+			for i := t.failedUnits.next(0); i >= 0; i = t.failedUnits.next(i + 1) {
+				t.failedUnits.unset(i)
 				q.failed.unset(i)
 				q.nFailed--
+				reopened = append(reopened, i)
+			}
+		}
+		library := t.libraryFailed > 0
+		q.libraryFail -= t.libraryFailed
+		t.libraryFailed = 0
+		for _, other := range q.tasks {
+			if other.done && (library && (other == t || other.dependsOn(t)) ||
+				slices.ContainsFunc(reopened, func(i int) bool { return !other.covered.has(i) })) {
+				other.done, other.blocker = false, workBlocker{}
 			}
 		}
 	}
@@ -1800,6 +1933,11 @@ func (r *workRunner) Retry(kind string) bool {
 	r.decideLocked("retry-requested", kind, 0, 0, "", "")
 	r.signal()
 	return true
+}
+
+// dependsOn reports whether t depends on p, directly or transitively.
+func (t *workRequestTask) dependsOn(p *workRequestTask) bool {
+	return slices.ContainsFunc(t.prereqs, func(direct *workRequestTask) bool { return direct == p || direct.dependsOn(p) })
 }
 
 // SetPaused applies the library pause to new batches; safety work still
@@ -1836,13 +1974,28 @@ func (r *workRunner) Run(ctx context.Context) {
 		}
 		r.unlock()
 	}()
+	r.readPause(ctx)
+	reconcileAt := r.clock.Now().Add(workReconcileInterval)
 	for ctx.Err() == nil {
+		// Batch completions and repeated demand must not keep moving the
+		// policy check into the future. A busy runner still notices a
+		// pause changed by another process within one reconcile interval.
+		if !r.clock.Now().Before(reconcileAt) {
+			r.readPause(ctx)
+			reconcileAt = r.clock.Now().Add(workReconcileInterval)
+			r.mu.Lock()
+			r.reconsider = true
+			r.mu.Unlock()
+		}
 		r.Pump()
+		wait := min(r.nextDeadline(), max(0, reconcileAt.Sub(r.clock.Now())))
 		select {
 		case <-ctx.Done():
 			return
 		case <-r.wake:
-		case <-r.clock.After(r.nextDeadline()):
+		case <-r.clock.After(wait):
+			r.readPause(ctx)
+			reconcileAt = r.clock.Now().Add(workReconcileInterval)
 			r.mu.Lock()
 			r.reconsider = true
 			r.mu.Unlock()
@@ -1850,11 +2003,30 @@ func (r *workRunner) Run(ctx context.Context) {
 	}
 }
 
+// readPause applies the stored pause policy, if the service supplies one. A
+// failed read keeps the current state.
+func (r *workRunner) readPause(ctx context.Context) {
+	if r.hooks.Paused == nil {
+		return
+	}
+	paused, until, err := r.hooks.Paused(ctx, r.clock.Now())
+	if err != nil {
+		return
+	}
+	r.mu.Lock()
+	r.pausedUntil = until
+	r.mu.Unlock()
+	r.SetPaused(paused)
+}
+
 func (r *workRunner) nextDeadline() time.Duration {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.clock.Now()
 	wait := workReconcileInterval
+	if r.paused && r.pausedUntil.After(now) {
+		wait = min(wait, r.pausedUntil.Sub(now))
+	}
 	// Only future deadlines: a failure whose delay passed but whose unit is
 	// not selected again must not spin the loop.
 	for _, ks := range r.kinds {
@@ -1892,6 +2064,8 @@ type workRequestFacts struct {
 	Expanded    []string               `json:"expanded,omitempty"`
 	Priority    string                 `json:"priority"`
 	Explicit    bool                   `json:"explicit,omitempty"`
+	Mode        string                 `json:"mode,omitempty"`
+	Unpausable  bool                   `json:"unpausable,omitempty"`
 	State       string                 `json:"state"`
 	Reason      string                 `json:"reason,omitempty"`
 	Detail      string                 `json:"detail,omitempty"`
@@ -1941,7 +2115,7 @@ func blockerFact(b workBlocker) *workBlocker {
 
 func (r *workRunner) requestFactsLocked(q *workRequest) workRequestFacts {
 	f := workRequestFacts{ID: q.id, Key: q.spec.Key, Scope: q.spec.Scope, Trigger: q.spec.Trigger, Kinds: q.spec.Kinds, Expanded: q.expanded,
-		Priority: q.spec.Priority.String(), Explicit: q.spec.Explicit, State: q.state, Reason: q.reason, Detail: q.detail,
+		Priority: q.spec.Priority.String(), Explicit: q.spec.Explicit, Mode: q.spec.Mode, Unpausable: q.spec.Unpausable, State: q.state, Reason: q.reason, Detail: q.detail,
 		Blocker: blockerFact(q.blocker), Library: q.spec.Build == nil, RequestedAt: q.requestedAt, Bytes: q.reserved,
 		Sealed: q.nSealed, Failed: q.nFailed + q.libraryFail, Exhausted: q.nExhausted}
 	if q.inv != nil {

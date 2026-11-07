@@ -405,6 +405,7 @@ func TestCloudReconcilePassIsForgottenWhenNothingChanged(t *testing.T) {
 // against a legacy caller finishing a parent before its child has drained.
 func TestOperationRetentionKeepsActiveDescendants(t *testing.T) {
 	reg := newOpRegistry("service")
+	reg.executorRoots = true
 	at := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
 	reg.now = func() time.Time { return at }
 	reg.keepEnded = time.Minute
@@ -446,9 +447,23 @@ func TestOperationRetentionKeepsActiveDescendants(t *testing.T) {
 }
 
 func TestOperationBatchChildrenStayBounded(t *testing.T) {
-	reg := newOpRegistry("service")
 	override(t, &maxEndedChildren, 4)
-	_, root := reg.begin(context.Background(), OperationSpec{Kind: "analysis.labels"})
+	// Classic pruning is unchanged: a root keeps every child's detail.
+	classic := newOpRegistry("service")
+	_, root := classic.begin(context.Background(), OperationSpec{Kind: "analysis.labels"})
+	for range 20 {
+		_, child := root.Child(OperationSpec{Kind: "analysis.labels"})
+		child.Finish(nil)
+	}
+	classic.mu.Lock()
+	classic.pruneLocked()
+	classic.mu.Unlock()
+	if len(root.view().Children) != 20 {
+		t.Fatalf("classic pruning dropped child detail: %d children", len(root.view().Children))
+	}
+	reg := newOpRegistry("service")
+	reg.executorRoots = true
+	_, root = reg.begin(context.Background(), OperationSpec{Kind: "analysis.labels"})
 	_, active := root.Child(OperationSpec{Kind: "analysis.labels"})
 	for range 20 {
 		_, child := root.Child(OperationSpec{Kind: "analysis.labels"})

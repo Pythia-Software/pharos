@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,69 @@ func (b *brokerOperations) configureResourceHistory() {
 	b.reg.resourceHistory = b.history
 }
 
+// Lease files live on each library's drive. Opening them every history
+// tick kept every drive awake, so a probe is reused for resourceLeaseActive
+// while work runs and resourceLeaseIdle otherwise; a Terminal command's
+// lease is long-lived, and its process is sampled every tick once known.
+var (
+	resourceLeaseActive = 30 * time.Second
+	resourceLeaseIdle   = 30 * time.Minute
+)
+
+// resourceLeaseCache is the history collector's last lease probes, by
+// directory list. Only the collector's goroutine uses it.
+type resourceLeaseCache struct {
+	probes  map[string][]leaseProbe
+	at      map[string]time.Time
+	active  bool              // the previous frame had running work
+	started map[string]uint64 // OS process identity observed with each lease
+	read    func(int) (processUsage, error)
+}
+
+func (c *resourceLeaseCache) probe(dirs []string, at time.Time) []leaseProbe {
+	key := strings.Join(dirs, "\x00")
+	every := resourceLeaseIdle
+	if c.active {
+		every = resourceLeaseActive
+	}
+	probed, known := c.at[key]
+	fresh := !known || at.Sub(probed) >= every || at.Before(probed)
+	if fresh {
+		if c.probes == nil {
+			c.probes, c.at = map[string][]leaseProbe{}, map[string]time.Time{}
+		}
+		for _, old := range c.probes[key] {
+			delete(c.started, old.Path)
+		}
+		c.probes[key], c.at[key] = probeLeases(dirs), at
+	}
+	if c.started == nil {
+		c.started = map[string]uint64{}
+	}
+	read := c.read
+	if read == nil {
+		read = processUsageOf
+	}
+	probes := c.probes[key]
+	for i := range probes {
+		probe := &probes[i]
+		if !probe.Live || probe.Info == nil || probe.Info.HostID != currentHost().ID {
+			continue
+		}
+		usage, err := read(probe.Info.PID)
+		if fresh && err == nil {
+			c.started[probe.Path] = usage.Started
+		}
+		// A cached flock says nothing about a replacement process with the
+		// same PID. Once its observed OS identity ends, forget this lease
+		// until the next real probe instead of attributing unrelated load.
+		if err != nil || usage.Started == 0 || c.started[probe.Path] != usage.Started {
+			probe.Live = false
+		}
+	}
+	return probes
+}
+
 func (b *brokerOperations) collectResourceHistory(at time.Time) resourceHistoryFrame {
 	b.mu.Lock()
 	libraries := slices.Clone(b.libraries)
@@ -40,7 +104,7 @@ func (b *brokerOperations) collectResourceHistory(at time.Time) resourceHistoryF
 	groups := []resourceGroup{}
 	tasks := resourceHistoryTasks(b.reg.running())
 	unknown := []string{}
-	appLeases := probeLeases([]string{appLeaseDir()})
+	appLeases := b.leases.probe([]string{appLeaseDir()}, at)
 	omitted := []string{"Native UI helper ownership is not independently verified"}
 	// Memory-only task metadata from each service: never /status/freshness
 	// or a catalog query on the sampler path. One deadline covers every
@@ -54,7 +118,7 @@ func (b *brokerOperations) collectResourceHistory(at time.Time) resourceHistoryF
 		if library.Child != nil {
 			processes = append(processes, resourceProcess{PID: library.Child.PID, Role: "service", Library: library.ID, LibraryName: library.Name})
 		}
-		processes = append(processes, leaseProcesses(probeLeases(library.LeaseDirs), library.ID, library.Name)...)
+		processes = append(processes, leaseProcesses(b.leases.probe(library.LeaseDirs, at), library.ID, library.Name)...)
 		for _, lease := range appLeases {
 			if lease.Info != nil && slices.ContainsFunc(lease.Info.Libraries, func(path string) bool { return sameConfig(path, library) }) {
 				processes = append(processes, leaseProcesses([]leaseProbe{lease}, library.ID, library.Name)...)
@@ -87,6 +151,7 @@ func (b *brokerOperations) collectResourceHistory(at time.Time) resourceHistoryF
 		omitted = append(omitted, resourceOmitNativeApp)
 	}
 	active := slices.ContainsFunc(tasks, func(task resourceHistoryTask) bool { return task.State == opRunning })
+	b.leases.active = active
 	return resourceHistoryFrame{Active: active, Tasks: tasks, UnknownLibraries: unknown, Scopes: collectResourceGroups(b.resources, processGPU, resourceScopeApp, groups, extra, omitted)}
 }
 

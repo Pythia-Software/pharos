@@ -613,7 +613,10 @@ type resourceHistoryDocument struct {
 	Segments      []resourceHistorySegmentView  `json:"segments"`
 	Coverage      []resourceHistoryCoverageView `json:"coverage"`
 	Markers       []resourceHistoryMarkerView   `json:"markers"`
-	Scopes        []resourceHistoryScopeRef     `json:"scopes,omitempty"`
+	// Markers are a bounded authoritative snapshot, even when samples use
+	// since. Exact start/end times may be learned after newer samples.
+	MarkersComplete bool                      `json:"markers_complete"`
+	Scopes          []resourceHistoryScopeRef `json:"scopes,omitempty"`
 }
 
 type resourceSeriesInfo struct {
@@ -696,6 +699,7 @@ func (h *resourceHistory) document(key string, since time.Time) (resourceHistory
 	}
 	doc := unavailableResourceHistory("", now)
 	doc.Available, doc.Scope, doc.Library, doc.Instance, doc.Active = true, series.label, key, h.instance, h.active
+	doc.MarkersComplete = true
 	if !since.IsZero() {
 		doc.Since = new(since.UnixMilli())
 	}
@@ -746,7 +750,7 @@ func (h *resourceHistory) document(key string, since time.Time) (resourceHistory
 		}
 	}
 	for _, marker := range h.markers {
-		if !marker.At.After(since) || (key != "" && !slices.Contains(marker.Libraries, key)) {
+		if key != "" && !slices.Contains(marker.Libraries, key) {
 			continue
 		}
 		doc.Markers = append(doc.Markers, resourceHistoryMarkerView{T: marker.At.UnixMilli(), Event: marker.Event, ID: marker.ID, Kind: marker.Kind,

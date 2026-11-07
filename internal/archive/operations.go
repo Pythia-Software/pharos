@@ -341,7 +341,12 @@ type opRegistry struct {
 	// establish freshness or add a journal write for a counter update.
 	telemetry       bool
 	resourceHistory *resourceHistory
-	resourceLedger  *taskResourceLedger
+	// executorRoots is set under the scheduled engine, whose execution roots
+	// live for hours and outlive the requests that share them: an ended root
+	// keeps its live descendants, and its ended child detail is bounded.
+	// Classic pruning is unchanged without it.
+	executorRoots  bool
+	resourceLedger *taskResourceLedger
 }
 
 func newOpRegistry(process string) *opRegistry {
@@ -566,10 +571,10 @@ func (op *Op) discard() {
 func (r *opRegistry) pruneLocked() {
 	ended := []*Op{}
 	for _, op := range r.ops {
-		if op.parent == nil {
+		if op.parent == nil && r.executorRoots {
 			r.pruneChildrenLocked(op)
 		}
-		if op.parent == nil && opTerminal(op.state) && !op.activeDescendantsLocked() {
+		if op.parent == nil && opTerminal(op.state) && (!r.executorRoots || !op.activeDescendantsLocked()) {
 			ended = append(ended, op)
 		}
 	}

@@ -353,4 +353,24 @@ func TestResourceHistoryTaskStatesAndUnknownLibraries(t *testing.T) {
 	if doc.GPU != nil || doc.Series["gpu"].Available {
 		t.Fatalf("no GPU value was ever read, so no GPU row: %+v %+v", doc.GPU, doc.Series["gpu"])
 	}
+	// A task can first be reported blocked, then running with an earlier
+	// exact start. An event-time sample cursor must not hide that start.
+	late := resourceHistoryTask{ID: "late", Kind: "analysis.labels", State: opBlocked, RunStarted: t0.Add(time.Second)}
+	tick(nil, late)
+	since := clock
+	late.State = opRunning
+	tick(nil, late)
+	delta, _ := h.document("", since)
+	if !delta.MarkersComplete {
+		t.Fatal("incremental readings need an authoritative bounded marker snapshot")
+	}
+	found := false
+	for _, marker := range delta.Markers {
+		if marker.ID == late.ID && marker.Event == "start" {
+			found = marker.T == late.RunStarted.UnixMilli() && marker.T < since.UnixMilli()
+		}
+	}
+	if !found {
+		t.Fatalf("late learned start was omitted behind the sample cursor: %+v", delta.Markers)
+	}
 }

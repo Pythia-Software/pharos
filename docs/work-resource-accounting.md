@@ -18,7 +18,7 @@ says, and the history routes answer `available: false`.
 | --- | --- | --- |
 | The app's broker | One, over the broker, the verified native app, every library service and lease, and their descendants. Each library is a subset scope. | `Pharos app (covered processes)`, or the library's name |
 | A standalone `pharos serve` | One, over itself, its library's leases and their descendants | `this library service` |
-| A service the broker manages | None. The broker measures it | — |
+| A service whose broker collects | None. The broker measures it | — |
 | CLI commands | None. Their owner measures them through their lease | — |
 
 The collector reads through the process's existing `resourceSampler` and the
@@ -26,10 +26,18 @@ shared GPU sampler, so no process is read by two samplers. While it runs,
 status snapshots reuse its latest summary (`resourceHistory.latest`) instead
 of sampling again.
 
-The broker builds its process list from library children and lease files. It
+The broker builds its process list from library children and lease files.
+Lease files are probed at most every 30 seconds while work runs and every
+30 minutes while idle, so the collector does not keep library drives awake.
+Processes already discovered are still sampled each tick, and their OS
+start identity is checked so PID reuse cannot inherit cached ownership. A newly started
+external CLI can therefore be absent until the next lease probe. It
 reads the OS process table once per tick, and descendants belong to their
 nearest known root, so a process is counted once. It never asks a service
-for readings: a service the broker manages samples nothing itself.
+for readings: a service marked as broker-owned samples nothing itself. That
+mark is passed only when the broker actually collects; otherwise the
+service owns its readings. Classic app startup does not inspect every
+library configuration to discover an engine choice.
 
 For task markers only, the broker asks each running library service
 `GET /api/resources/active` every tick. The service answers from memory: its
@@ -244,3 +252,19 @@ its basis word ("shared", "not measured").
   as if they were separate.
 - The history is disposable diagnostic state. It is never evidence that work
   is ready.
+
+## Work inspection contract
+
+During the comparison window, `GET /api/work` exposes bounded request/task
+facts and CPU allowances; `POST /api/work` uses an explicit `action` plus
+that action's arguments. IDs, states, kinds, scopes, modes, blockers,
+counts and allocation fields drive the controls. Member identities use
+`id` and `revision`. Decision traces and `*_ns` timings are diagnostics;
+clients should tolerate additional fields and unknown decision types.
+Requests and all inspection state are disposable across process restarts.
+
+Model preparation sessions close when disabled or after ten idle minutes.
+Their retained Go context is currently included in shared process memory,
+not a measured per-task buffer figure or an enforced context-memory grant.
+Quantifying and bounding that residency alongside model memory is still an
+activation gate; the CPU allowance does not imply a memory cap.

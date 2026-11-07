@@ -13,6 +13,8 @@ func TestWorkPopulationUsesActivityAndFreezesMembership(t *testing.T) {
 	from := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
 	until := from.Add(48 * time.Hour)
 	execTx(t, c.DB, `UPDATE messages SET created_at='2026-11-06T12:00:00.000Z' WHERE id='m-a1'`)
+	// Several short read transactions build the same membership as one.
+	override(t, &workPopulationPage, 1)
 	b := &workInventoryBuilder{limit: 1 << 20}
 	if err := c.freezeWorkPopulation(t.Context(), b, from, until, nil); err != nil {
 		t.Fatal(err)
@@ -122,17 +124,13 @@ func TestWorkRevisionTrustsStoredDigestAcrossDerivedOutput(t *testing.T) {
 	if !storedInputDigest(t, c, id) {
 		t.Fatal("ingest did not store its input digest")
 	}
-	rows, err := workConversationRevision(t.Context(), c.reader(), id)
-	if err != nil {
-		t.Fatal(err)
-	}
 	b := &workInventoryBuilder{limit: 1 << 20}
 	report, err := c.freezeWorkPopulationReport(t.Context(), b, time.Time{}, time.Time{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.Trusted || report.Fallbacks != 0 || report.Members == 0 {
-		t.Fatalf("membership read message rows or distrusted digests: %+v", report)
+	if report.Fallbacks != 0 || report.Members == 0 {
+		t.Fatalf("membership read message rows despite a stored digest: %+v", report)
 	}
 	inv, err := b.freeze(time.Now())
 	if err != nil {
@@ -145,9 +143,6 @@ func TestWorkRevisionTrustsStoredDigestAcrossDerivedOutput(t *testing.T) {
 	revision := workRevisionFor(t, c, id)
 	if inv.members[member].Revision != revision {
 		t.Fatal("membership and batch revisions disagree")
-	}
-	if revision == rows {
-		t.Fatal("revision did not use the stored digest once triggers were installed")
 	}
 	// Derived output, and source fields the revision does not cover, keep both
 	// the digest and the revision: publishing cannot supersede its own request.
@@ -166,37 +161,33 @@ func TestWorkRevisionTrustsStoredDigestAcrossDerivedOutput(t *testing.T) {
 	}
 }
 
-func TestWorkRevisionDirectCanonicalEditsDropStoredDigest(t *testing.T) {
+// The scheduler never writes ingest's digest table. Row inserts and deletes,
+// session links and the conversation row move the revision even while a
+// digest is kept; repairs that rewrite rows in place delete the digest, and
+// the row hash then sees their edit.
+func TestWorkRevisionSeesCanonicalEditsWithoutTouchingDigests(t *testing.T) {
 	c, _ := testCatalog(t)
 	record, id := ingestRevisionFixture(t, c)
-	if err := c.ensureWorkRevisionInputs(t.Context()); err != nil {
-		t.Fatal(err)
-	}
 	var member string
 	if err := c.DB.QueryRow(`SELECT am.message_id FROM agent_session_messages am JOIN agent_sessions a ON a.id=am.agent_session_id
  WHERE a.conversation_id=? ORDER BY am.message_id LIMIT 1`, id).Scan(&member); err != nil {
 		t.Fatalf("fixture has no session membership: %v", err)
 	}
 	seen := map[string]bool{workRevisionFor(t, c, id): true}
-	for i, edit := range []struct {
-		name, sql string
-		drops     bool
-	}{
-		{"message input", `UPDATE messages SET text='edited',content_hash='edited-hash' WHERE id='%[2]s'`, true},
-		{"session membership", `DELETE FROM agent_session_messages WHERE message_id='%[2]s'`, true},
-		{"message delete", `DELETE FROM messages WHERE id='%[2]s'`, true},
+	for _, edit := range []struct{ name, sql string }{
+		{"session membership", `DELETE FROM agent_session_messages WHERE message_id='%[2]s'`},
+		{"message delete", `DELETE FROM messages WHERE id='%[2]s'`},
 		{"message insert", `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order)
- VALUES('direct-insert','%[1]s','direct-insert','user','message','direct','direct-hash','2026-09-20T13:00:00Z',99)`, true},
-		{"message order", `UPDATE messages SET source_order=source_order+100 WHERE id='direct-insert'`, true},
-		// Sessions and the conversation row are hashed directly.
-		{"session link", `UPDATE agent_sessions SET kind='edited' WHERE conversation_id='%[1]s'`, false},
-		{"conversation row", `UPDATE conversations SET ended_at='2030-01-01T00:00:00Z' WHERE id='%[1]s'`, false},
+ VALUES('direct-insert','%[1]s','direct-insert','user','message','direct','direct-hash','2026-09-20T13:00:00Z',99)`},
+		{"session link", `UPDATE agent_sessions SET kind='edited' WHERE conversation_id='%[1]s'`},
+		{"conversation row", `UPDATE conversations SET ended_at='2030-01-01T00:00:00Z' WHERE id='%[1]s'`},
+		{"repair in place", `UPDATE messages SET text='repaired',content_hash='repaired-hash' WHERE id='direct-insert';
+ DELETE FROM conversation_derivation_inputs WHERE conversation_id='%[1]s'`},
 	} {
-		execTx(t, c.DB, fmt.Sprintf(`INSERT OR REPLACE INTO conversation_derivation_inputs(conversation_id,fingerprint) VALUES('%s','prior-%d')`, id, i))
 		before := workRevisionFor(t, c, id)
 		execTx(t, c.DB, strings.NewReplacer("%[1]s", id, "%[2]s", member).Replace(edit.sql))
-		if dropped := !storedInputDigest(t, c, id); dropped != edit.drops {
-			t.Fatalf("%s: digest dropped=%v, want %v", edit.name, dropped, edit.drops)
+		if edit.name != "repair in place" && !storedInputDigest(t, c, id) {
+			t.Fatalf("%s: a canonical edit removed ingest's digest", edit.name)
 		}
 		after := workRevisionFor(t, c, id)
 		if after == before || seen[after] {
@@ -225,61 +216,29 @@ func TestWorkRevisionDirectCanonicalEditsDropStoredDigest(t *testing.T) {
 	}
 }
 
-func TestWorkRevisionTriggersSurviveRestartAndDistrustMissingTriggers(t *testing.T) {
+// Development builds installed triggers that deleted ingest's digests on
+// every message write. Initialize removes them, so classic and older writes
+// keep their digests afterwards.
+func TestWorkRevisionInitializeDropsRetiredTriggers(t *testing.T) {
 	c, _ := testCatalog(t)
 	_, id := ingestRevisionFixture(t, c)
-	revision := workRevisionFor(t, c, id)
-	// A restart runs Initialize; it must keep the triggers and the revision.
+	statements := []string{}
+	for _, name := range retiredWorkRevisionTriggers {
+		statements = append(statements, "CREATE TRIGGER "+name+" AFTER INSERT ON messages BEGIN DELETE FROM conversation_derivation_inputs WHERE conversation_id=NEW.conversation_id; END")
+	}
+	execTx(t, c.DB, statements...)
 	reopened := reopenCatalog(t, c.Path)
 	closeAtEnd(t, reopened)
-	if got := workRevisionFor(t, reopened, id); got != revision {
-		t.Fatal("revision changed across an ordinary reopen")
-	}
 	if err := reopened.Initialize(); err != nil {
 		t.Fatal(err)
 	}
-	if present, err := workRevisionTriggersPresent(t.Context(), reopened.reader()); err != nil || !present {
-		t.Fatalf("Initialize removed the revision triggers: %v", err)
+	var n int
+	if err := reopened.DB.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'work_revision_%'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("Initialize kept %d retired revision triggers: %v", n, err)
 	}
-	// Explicit Initialize may repair derivation/search checkpoints, dropping
-	// their digest. Scheduler memory is disposable across that boundary; the
-	// revision must be stable within the newly initialized epoch.
-	revision = workRevisionFor(t, reopened, id)
-	if got := workRevisionFor(t, reopened, id); got != revision {
-		t.Fatal("revision did not stabilize after explicit initialization")
-	}
-	// A writer that predates the digest contract edits rows directly.
-	execTx(t, reopened.DB, fmt.Sprintf(`UPDATE messages SET text='old writer',content_hash='old-writer-hash' WHERE conversation_id='%s' AND native_id='q1'`, id))
-	if storedInputDigest(t, reopened, id) {
-		t.Fatal("an old writer's canonical edit kept the input digest")
-	}
-	edited := workRevisionFor(t, reopened, id)
-	if edited == revision {
-		t.Fatal("an old writer's canonical edit kept the revision")
-	}
-	// Without the triggers a stored digest is never trusted: the row hash
-	// ignores it and still sees edits.
-	statements := []string{fmt.Sprintf(`INSERT OR REPLACE INTO conversation_derivation_inputs(conversation_id,fingerprint) VALUES('%s','restored')`, id)}
-	for _, trigger := range workRevisionTriggers {
-		statements = append(statements, "DROP TRIGGER "+trigger.name)
-	}
-	execTx(t, reopened.DB, statements...)
-	untrusted, err := workConversationRevision(t.Context(), reopened.reader(), id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	execTx(t, reopened.DB, fmt.Sprintf(`UPDATE conversation_derivation_inputs SET fingerprint='stale' WHERE conversation_id='%s'`, id))
-	if got, err := workConversationRevision(t.Context(), reopened.reader(), id); err != nil || got != untrusted {
-		t.Fatalf("a digest was trusted without its triggers: %v", err)
-	}
-	execTx(t, reopened.DB, fmt.Sprintf(`UPDATE messages SET text='untracked',content_hash='untracked-hash' WHERE conversation_id='%s' AND native_id='q1'`, id))
-	if got, err := workConversationRevision(t.Context(), reopened.reader(), id); err != nil || got == untrusted {
-		t.Fatalf("the row hash missed an edit made without triggers: %v", err)
-	}
-	if err := reopened.ensureWorkRevisionInputs(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if present, err := workRevisionTriggersPresent(t.Context(), reopened.reader()); err != nil || !present {
-		t.Fatalf("admission did not reinstall the triggers: %v", err)
+	execTx(t, reopened.DB, fmt.Sprintf(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order)
+ VALUES('classic-insert','%s','classic-insert','user','message','classic','classic-hash','2026-09-20T13:00:00Z',99)`, id))
+	if !storedInputDigest(t, reopened, id) {
+		t.Fatal("a classic message write still removed ingest's digest")
 	}
 }

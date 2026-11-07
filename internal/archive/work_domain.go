@@ -32,6 +32,11 @@ type workDomainStep struct {
 	Failed []string
 	// Rediscover asks for the labels session's discovery before more steps.
 	Rediscover bool
+	// Progress: the step durably advanced a Remaining unit (stored part of a
+	// conversation its bound cut). A step that leaves units Remaining and
+	// publishes nothing without it made no progress, and its units are
+	// charged as failed rather than retried at once.
+	Progress bool
 }
 
 // errWorkDomainBusy is a step whose domain lock another run holds. The

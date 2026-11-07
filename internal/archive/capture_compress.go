@@ -563,9 +563,11 @@ func compressEntry(ctx context.Context, target captureTarget, manifest *captureM
 	if !original.Mode().IsRegular() || original.Size() != generation.Size {
 		return 0, nil // not what the manifest says; validation reports that
 	}
-	// Encoding and verification are the CPU leaf: admitted before the lease,
-	// released (the encoder's goroutines joined by its Close) before the
-	// capture lock, so a pass never holds slots while a capture runs.
+	// Encoding and verification are the CPU leaves: encoding is admitted
+	// before the lease and released once its Close joined the encoder's
+	// goroutines, before the durable sync (seconds on a hard disk), which
+	// holds no slots; verification takes one slot. Neither is held while
+	// waiting for a capture's lock.
 	grant, err := acquireWorkCPU(ctx, nil, 1, captureCompressThreads)
 	if err != nil {
 		return 0, err
@@ -605,6 +607,7 @@ func compressEntry(ctx context.Context, target captureTarget, manifest *captureM
 	} else {
 		encoder.Close()
 	}
+	grant.Release()
 	if err == nil && n != generation.Size {
 		err = errors.New("generation changed while it was compressed")
 	}
@@ -626,6 +629,11 @@ func compressEntry(ctx context.Context, target captureTarget, manifest *captureM
 	if err != nil {
 		return abandon(err)
 	}
+	verify, err := acquireWorkCPU(ctx, nil, 1, 1)
+	if err != nil {
+		return abandon(err)
+	}
+	defer verify.Release()
 	if err = fault("compress-verify"); err != nil {
 		return abandon(err)
 	}
@@ -651,7 +659,7 @@ func compressEntry(ctx context.Context, target captureTarget, manifest *captureM
 	if err != nil {
 		return abandon(err)
 	}
-	grant.Release()
+	verify.Release()
 
 	// A running capture holds the lock for its whole run: wait for it rather
 	// than discard the encoding.

@@ -174,11 +174,11 @@ func (q *workDomainQueue) page(after string, limit int, enrolled, excluded func(
 // workDomainPage is a bounded page of a session's library queue.
 type workDomainPage struct {
 	// Units are the next candidates in the session's order, each at the
-	// token the session holds for it (a step's refresh may adopt a newer one).
+	// token the session holds for it (a step's refresh may adopt a newer one),
+	// then conversations marked after discovery at their marks' tokens.
 	Units []workMember
-	// Rediscover: the queue holds no candidate, but the domain has pending
-	// work it does not hold (a change after discovery). It is never a
-	// readiness claim.
+	// Rediscover: the session has no inventory yet. It is never a readiness
+	// claim.
 	Rediscover bool
 }
 
@@ -193,9 +193,11 @@ func (page workDomainPage) IDs() []string {
 
 // pendingPage is PendingPage for a session's queue; token is an enrolled
 // conversation's token (ok false when it is not enrolled). Once the queue
-// holds no candidate it reads the dirty table in primary-key order and stops
-// at the first conversation the session does not hold: every row before it
-// is enrolled and excluded, which the caller bounds.
+// holds no candidate it reads the dirty table in primary-key order for
+// conversations marked after discovery: a step's refresh enrolls them as it
+// does any change (marking their followers first), so an ingest does not
+// send a draining session back to discovery. Enrolled rows are skipped;
+// excluded ones are bounded by the caller.
 func pendingPage(ctx context.Context, q queryer, dirty string, inventory *sync.Mutex, queue *workDomainQueue, token func(string) (string, bool), after string, limit int, excluded func(workMember) bool) (workDomainPage, error) {
 	enrolled := func(id string) bool { _, ok := token(id); return ok }
 	member := func(id string) workMember { revision, _ := token(id); return workMember{ID: id, Revision: revision} }
@@ -209,25 +211,25 @@ func pendingPage(ctx context.Context, q queryer, dirty string, inventory *sync.M
 	if !exhausted {
 		return page, nil
 	}
-	for cursor := ""; ; {
-		rows, err := queryMapsContext(ctx, q, `SELECT conversation_id id FROM `+dirty+` WHERE conversation_id>? ORDER BY conversation_id LIMIT 256`, cursor)
+	for cursor := ""; len(page.Units) < max(1, limit); {
+		rows, err := queryMapsContext(ctx, q, `SELECT conversation_id id,token FROM `+dirty+` WHERE conversation_id>? ORDER BY conversation_id LIMIT 256`, cursor)
 		if err != nil {
 			return workDomainPage{}, err
 		}
 		inventory.Lock()
-		late := false
 		for _, row := range rows {
 			cursor = firstString(row["id"])
-			late = late || !enrolled(cursor)
+			late := workMember{ID: cursor, Revision: firstString(row["token"])}
+			if !enrolled(late.ID) && (excluded == nil || !excluded(late)) && len(page.Units) < max(1, limit) {
+				page.Units = append(page.Units, late)
+			}
 		}
 		inventory.Unlock()
-		if late {
-			return workDomainPage{Rediscover: true}, nil
-		}
 		if len(rows) < 256 {
-			return workDomainPage{}, nil
+			break
 		}
 	}
+	return page, nil
 }
 
 // newLabelsSession checks that labeling can run; it reads nothing from the
@@ -514,6 +516,9 @@ func (s *labelsSession) Run(ctx context.Context, ids []string, limit int) (workD
 	rediscover := watermark != s.watermark
 	if !rediscover {
 		if rediscover, err = s.refresh(ctx, ids); err != nil {
+			// refresh may have adopted tokens and structures whose followers
+			// it did not get to mark: only discovery restores that guarantee.
+			s.discovered.Store(false)
 			return step, err
 		}
 	}
@@ -537,7 +542,7 @@ func (s *labelsSession) Run(ctx context.Context, ids []string, limit int) (workD
 			jobs = append(jobs, job)
 		}
 	}
-	stored := map[string]bool{}
+	stored, failed := map[string]bool{}, map[string]bool{}
 	var storedMu sync.Mutex
 	stats := &LabelsRunStats{}
 	run := &labelsRun{c: c, settings: admittedLabeler(ctx, s.settings), opts: LabelsRunOptions{Limit: limit, Conversations: ids}, model: s.model, identity: s.identity,
@@ -546,6 +551,11 @@ func (s *labelsSession) Run(ctx context.Context, ids []string, limit int) (workD
 			storedMu.Lock()
 			defer storedMu.Unlock()
 			stored[job.conversation] = complete
+		},
+		failed: func(job *labelsJob) {
+			storedMu.Lock()
+			defer storedMu.Unlock()
+			failed[job.conversation] = true
 		}}
 	if s.serial {
 		run.serial = make(chan struct{}, 1)
@@ -580,9 +590,11 @@ func (s *labelsSession) Run(ctx context.Context, ids []string, limit int) (workD
 		case wrote && complete && current[id]:
 			s.setJob(id, nil)
 			step.Done = append(step.Done, id)
-		case wrote && complete:
+		case wrote && complete, failed[id]:
 			// Stored, yet the ledger does not show it current (a label or
-			// its conversation went missing): never a false Done.
+			// its conversation went missing): never a false Done. Or the run
+			// gave up on it (unbuildable, or a message the worker could not
+			// label), whether or not a limit applied.
 			step.Failed = append(step.Failed, id)
 		case !attempted[id]:
 			// Current at refresh: nothing was wanted.
@@ -596,7 +608,10 @@ func (s *labelsSession) Run(ctx context.Context, ids []string, limit int) (workD
 			// message, or could not build it: the domain keeps it pending.
 			step.Failed = append(step.Failed, id)
 		default:
+			// Cut by the limit (or the run ended early): pending, and progress
+			// when part of it was stored.
 			step.Remaining = append(step.Remaining, id)
+			step.Progress = step.Progress || wrote
 		}
 	}
 	if ctx.Err() != nil {
@@ -615,70 +630,60 @@ func labelsDirtyTokens(ctx context.Context, q queryer, ids []string) (map[string
 	return tokens, err
 }
 
-// labelingLive is what refreshLabelingContext read of the selected
-// conversations: their rows, and when each ended (” when unknown).
-type labelingLive struct {
-	conversations map[string]*labelingConversation
-	ended         map[string]string
-}
-
-// refreshLabelingContext reads ids' agent sessions and reasoning state into
-// a session's item context, in place: no preparation worker shares it
-// between steps. It returns their conversation rows for the caller to
+// refreshLabelingContext reads ids' conversation rows, agent sessions and
+// reasoning state into a session's item context, in place, with the queries
+// loadLabelingPass runs for the whole library: no preparation worker shares
+// it between steps. It returns their conversation rows for the caller to
 // compare with the context's before replacing them. stale reports a mirror
 // representative change, after which any structure may differ: the context
 // must be rebuilt.
-func (c *Catalog) refreshLabelingContext(ctx context.Context, builder *labelsItemBuilder, ids []string) (live labelingLive, stale bool, err error) {
+func (c *Catalog) refreshLabelingContext(ctx context.Context, builder *labelsItemBuilder, ids []string) (live map[string]*labelingConversation, stale bool, err error) {
 	p := builder.p
 	representative, err := c.authorshipRepresentatives(ctx)
 	if err != nil || !maps.Equal(representative, p.representative) {
-		return live, err == nil, err
+		return nil, err == nil, err
 	}
+	selected := ` WHERE id IN (SELECT value FROM json_each(?))`
 	encoded := jsonText(ids)
-	live = labelingLive{conversations: map[string]*labelingConversation{}, ended: map[string]string{}}
-	rows, err := c.reader().QueryContext(ctx, `SELECT id,workspace_id,provider,COALESCE(started_at,''),COALESCE(parent_id,''),agent_depth,COALESCE(ended_at,'') FROM conversations WHERE id IN (SELECT value FROM json_each(?))`, encoded)
+	live = map[string]*labelingConversation{}
+	rows, err := c.reader().QueryContext(ctx, labelingConversationsSQL+selected, encoded)
 	if err != nil {
-		return live, false, err
+		return nil, false, err
 	}
 	for rows.Next() {
-		info := &labelingConversation{}
-		var ended string
-		if err := rows.Scan(&info.id, &info.workspace, &info.provider, &info.started, &info.parent, &info.depth, &ended); err != nil {
+		info, err := scanLabelingConversation(rows)
+		if err != nil {
 			rows.Close()
-			return live, false, err
+			return nil, false, err
 		}
-		live.conversations[info.id], live.ended[info.id] = info, ended
+		live[info.id] = info
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return live, false, err
+		return nil, false, err
 	}
-	sessions, err := queryMapsContext(ctx, c.reader(), `SELECT id,conversation_id,native_id,kind,COALESCE(child_conversation_id,'') child,COALESCE(delegation_message_id,'') delegation FROM agent_sessions WHERE conversation_id IN (SELECT value FROM json_each(?))`, encoded)
+	sessions, err := queryMapsContext(ctx, c.reader(), labelingSessionsSQL+` WHERE conversation_id IN (SELECT value FROM json_each(?))`, encoded)
 	if err != nil {
-		return live, false, err
+		return nil, false, err
 	}
 	current := map[string]bool{}
-	reasoning, err := queryMapsContext(ctx, c.reader(), `SELECT conversation_id FROM reasoning_extraction_state WHERE conversation_id IN (SELECT value FROM json_each(?)) AND version=?`, encoded, reasoningExtractionVersion)
+	reasoning, err := queryMapsContext(ctx, c.reader(), labelingReasoningSQL+` AND conversation_id IN (SELECT value FROM json_each(?))`, reasoningExtractionVersion, encoded)
 	if err != nil {
-		return live, false, err
+		return nil, false, err
 	}
 	for _, row := range reasoning {
 		current[firstString(row["conversation_id"])] = true
 	}
 	bySession := map[string][]string{}
-	for id := range live.conversations {
+	for id := range live {
 		delete(p.mainSession, id)
 	}
 	for _, row := range sessions {
 		conversation := firstString(row["conversation_id"])
 		bySession[conversation] = append(bySession[conversation], labelsSessionEntry(row))
-		id := firstString(row["id"])
-		p.sessionKind[id] = firstString(row["kind"])
-		if row["native_id"] == "main" {
-			p.mainSession[conversation] = id
-		}
+		p.addSession(row)
 	}
-	for id := range live.conversations {
+	for id := range live {
 		list := bySession[id]
 		sort.Strings(list)
 		builder.sessions[id] = list
@@ -729,7 +734,7 @@ func (s *labelsSession) refresh(ctx context.Context, ids []string) (bool, error)
 	changes := []string{}
 	for _, row := range ledger {
 		id := firstString(row["id"])
-		info := live.conversations[id]
+		info := live[id]
 		if info == nil {
 			if p.conversations[id] != nil || integer(row["built"]) != 0 || integer(row["n"]) != 0 || firstString(row["token"]) != "" {
 				return true, nil
@@ -741,15 +746,18 @@ func (s *labelsSession) refresh(ctx context.Context, ids []string) (bool, error)
 		}
 		p.conversations[id] = info
 		structure := labelsStructure(p, s.builder.sessions, id)
-		token, built := firstString(row["token"]), integer(row["built"]) != 0
-		changed := token != "" || built && firstString(row["structure"]) != structure
+		token := firstString(row["token"])
+		// Discovery's rule, with this conversation's own labels by another
+		// model or contract standing for discovery's library-wide one.
+		changed, want := labelsWant(labelsLedger{built: integer(row["built"]) != 0, structure: firstString(row["structure"]), token: token,
+			labels: integer(row["n"]), units: integer(row["units"])}, structure, integer(row["other"]) != 0)
 		job := s.jobs[id]
 		if changed && (job == nil || job.token != token || job.structure != structure) {
 			changes = append(changes, id)
 		}
 		// Every conversation discovery wanted for a model or contract change
 		// stays wanted until stored; a later step needs its own reason.
-		if changed || !built || integer(row["n"]) != integer(row["units"]) || integer(row["other"]) != 0 || s.all && job != nil {
+		if want || s.all && job != nil {
 			s.setJob(id, &labelsJob{conversation: id, token: token, structure: structure})
 		} else {
 			s.setJob(id, nil)

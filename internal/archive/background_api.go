@@ -847,8 +847,7 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if s.work != nil {
-		until, _ := parseTime(paused)
-		s.work.runner.SetPaused(!indexing.Enabled || at.Before(until))
+		s.work.runner.readPause(context.WithoutCancel(r.Context()))
 	}
 	s.wakeBackground()
 	s.getBackground(w, r)

@@ -783,6 +783,28 @@ func TestLabelsIsolateAnItemThatCrashesTheWorker(t *testing.T) {
 	if err != nil || stats.MessagesFailed != 1 || stats.Complete || labelCount(t, catalog, "WHERE message_id='m-think'") != 0 || labelCount(t, catalog, "") < 20 {
 		t.Fatalf("run with a poison item: %+v %v", stats, err)
 	}
+	// A session step under a message limit reports the poisoned conversation
+	// failed, not cut by the limit, so the scheduler backs off instead of
+	// reselecting it forever.
+	var poisoned string
+	if err := catalog.DB.QueryRow(`SELECT conversation_id FROM messages WHERE id='m-think'`).Scan(&poisoned); err != nil {
+		t.Fatal(err)
+	}
+	session, err := catalog.newLabelsSession(settings, workAllocation{CPUs: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	step, err := session.Run(t.Context(), []string{poisoned}, labelsChainLimit)
+	session.Close()
+	// Its crashes count against the warm pool's restarts; start the
+	// stage below from fresh workers.
+	catalog.labelerManager(settings).Retire()
+	if err != nil || !slices.Equal(step.Failed, []string{poisoned}) || len(step.Remaining) != 0 {
+		t.Fatalf("a limited step over a poison item: %+v %v", step, err)
+	}
 	// The background stage keeps a failed message pending, so the schedule
 	// retries it rather than completing the stage around it.
 	config.Labels = settings
@@ -1979,8 +2001,17 @@ func TestLabelsSessionFollowsLaterChangesWithItsWarmContext(t *testing.T) {
 	}
 
 	// A change after discovery: the followers are marked before the source's
-	// new token is taken.
-	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-s2','c-root','m-s2','assistant','message','Merged it.','hash-m-s2','2026-09-01T15:00:00.000Z',1200)`)
+	// new token is taken. When marking them fails, the session forgets what
+	// it adopted and discovers again, so the change is never taken unmarked.
+	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-s2','c-root','m-s2','assistant','message','Merged it.','hash-m-s2','2026-09-01T15:00:00.000Z',1200)`,
+		`CREATE TRIGGER fail_follower_mark BEFORE INSERT ON message_labels_dirty WHEN NEW.conversation_id='c-fork' BEGIN SELECT RAISE(ABORT,'test mark failure'); END`)
+	if _, err := session.Run(t.Context(), []string{"c-root"}, 0); err == nil || session.Discovered() {
+		t.Fatalf("a failed follower mark kept the session's adopted change: %v", err)
+	}
+	execTx(t, catalog.DB, `DROP TRIGGER fail_follower_mark`)
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if step, err := session.Run(t.Context(), []string{"c-root"}, 0); err != nil || !slices.Equal(step.Done, []string{"c-root"}) {
 		t.Fatalf("a later change: %+v %v", step, err)
 	}
@@ -2008,7 +2039,7 @@ func TestLabelsSessionFollowsLaterChangesWithItsWarmContext(t *testing.T) {
 	if step, err := session.Run(t.Context(), []string{"c-session-new"}, 0); err != nil || !slices.Equal(step.Done, []string{"c-session-new"}) {
 		t.Fatalf("after the newer revision: %+v %v", step, err)
 	}
-	if session.contexts != 1 || session.discoveries != 1 {
+	if session.contexts != 2 || session.discoveries != 2 {
 		t.Fatalf("small steps rebuilt the context %d times, discovered %d times", session.contexts, session.discoveries)
 	}
 	if threads := labelerHelloThreads(t, hellos); len(threads) != 1 {
@@ -2073,7 +2104,7 @@ func TestLabelsSessionAllocations(t *testing.T) {
 		all = append(all, firstString(row["id"]))
 	}
 	cut, err := session.Run(t.Context(), all, 2)
-	if err != nil || session.last.MessagesLabeled != 2 || len(cut.Remaining) == 0 || len(cut.Failed) != 0 {
+	if err != nil || session.last.MessagesLabeled != 2 || len(cut.Remaining) == 0 || len(cut.Failed) != 0 || !cut.Progress {
 		t.Fatalf("a limited step: %+v %v (%+v)", cut, err, session.last)
 	}
 	done, err := session.Run(t.Context(), all, 0)
@@ -2374,10 +2405,14 @@ func TestLabelsSessionPendingPage(t *testing.T) {
 	if got := page("", 3); len(got.IDs()) != 0 || got.Rediscover {
 		t.Fatalf("a current library: %+v", got)
 	}
-	// A change after discovery: the queue does not hold it.
+	// A change after discovery: the queue does not hold it, so the page
+	// offers its mark for a step's refresh to enroll, without rediscovery.
 	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-page','c-new','m-page','assistant','message','Done.','hash-m-page','2026-10-20T14:00:00.000Z',1700)`)
-	if got := page("", 3); len(got.IDs()) != 0 || !got.Rediscover {
+	if got := page("", 3); !slices.Equal(got.IDs(), []string{"c-new"}) || got.Units[0].Revision != labelsDirtyToken(t, catalog, "c-new") || got.Rediscover {
 		t.Fatalf("a change the queue lacks: %+v", got)
+	}
+	if got := page("", 3, "c-new"); len(got.IDs()) != 0 || got.Rediscover {
+		t.Fatalf("an excluded late change: %+v", got)
 	}
 	// A step's refresh enrolls it again, in its place, though interrupted.
 	ctx, cancel := context.WithCancel(t.Context())

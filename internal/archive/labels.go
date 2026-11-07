@@ -622,6 +622,26 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 // labelsDiscover is labelsWork. With graph it always reads who re-sends
 // whose messages, so a later change can be followed without this scan, and
 // gives every wanted conversation a dirty mark of its own before returning.
+// labelsLedger is what the ledger holds for one conversation: whether it was
+// built, at which structure and unit count, its dirty token, and how many
+// labels it has.
+type labelsLedger struct {
+	built         bool
+	structure     string
+	token         string
+	labels, units int64
+}
+
+// labelsWant is the rule that decides one conversation, for discovery and a
+// session step's refresh alike: whether its inputs changed (its forks, which
+// copy its history, and its re-senders follow it), and whether it needs
+// labels (changed, never built, or labels lost or stray). all is a model or
+// contract change that relabels it.
+func labelsWant(ledger labelsLedger, structure string, all bool) (changed, want bool) {
+	changed = all || ledger.built && ledger.structure != structure || ledger.token != ""
+	return changed, changed || !ledger.built || ledger.labels != ledger.units
+}
+
 func (c *Catalog) labelsDiscover(ctx context.Context, builder *labelsItemBuilder, identity string, opts LabelsRunOptions, stats *LabelsRunStats, graph bool) (*labelsDiscovery, error) {
 	p := builder.p
 	stored := map[string]string{}
@@ -676,11 +696,7 @@ func (c *Catalog) labelsDiscover(ctx context.Context, builder *labelsItemBuilder
 	for _, id := range ids {
 		structures[id] = labelsStructure(p, builder.sessions, id)
 		previous, built := stored[id]
-		// Its inputs changed: its forks, which copy its history, follow.
-		changed[id] = all || built && previous != structures[id] || tokens[id] != ""
-		if changed[id] || !built || counts[id] != units[id] {
-			want[id] = true
-		}
+		changed[id], want[id] = labelsWant(labelsLedger{built: built, structure: previous, token: tokens[id], labels: counts[id], units: units[id]}, structures[id], all)
 	}
 	// Forks copy their parent's history, and a re-sent message's target
 	// text is resolved against its source's classification, so both follow
@@ -831,6 +847,10 @@ type labelsRun struct {
 	// stored, when set, receives each job after its transaction commits,
 	// with whether the job's conversation was completed.
 	stored func(job *labelsJob, complete bool)
+	// failed, when set, receives each job the run gave up on: its items could
+	// not be built, or the worker could not label one of its messages. A job
+	// cut by Limit is not failed.
+	failed func(job *labelsJob)
 }
 
 // hold takes the serial gate, if any, until the returned release.
@@ -1267,6 +1287,9 @@ func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, job
 				// A damaged conversation keeps its dirty mark for the next run.
 				r.progress("labels: conversation %s skipped: %v", jobs[index].conversation, result.err)
 				r.stats.ConversationsFailed++
+				if r.failed != nil {
+					r.failed(jobs[index])
+				}
 				return true
 			}
 			failure = result.err
@@ -1475,16 +1498,20 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 		for _, job := range pending {
 			r.stats.MessagesRemoved += len(job.stale)
 			complete := job.complete
+			failed := false
 			for _, message := range job.messages {
 				if message.failed {
 					r.stats.MessagesFailed++
-					complete = false
+					complete, failed = false, true
 				} else {
 					r.stats.MessagesLabeled++
 				}
 			}
 			if r.stored != nil {
 				r.stored(job, complete)
+			}
+			if failed && r.failed != nil {
+				r.failed(job)
 			}
 		}
 		pending, rows = nil, 0

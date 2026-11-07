@@ -57,12 +57,13 @@ func (s *Server) configureWork() error {
 	if err != nil {
 		return err
 	}
-	w.runner, err = newWorkRunner(s.life.ctx, workSystemClock{}, w.authority, workHooks{Start: w.start, ExecutionEnded: w.executionEnded, RequestEnded: w.requestEnded, RequestChanged: w.requestChanged, BatchEnded: w.batchEnded, DemandChanged: w.demandChanged}, defs)
+	w.runner, err = newWorkRunner(s.life.ctx, workSystemClock{}, w.authority, workHooks{Start: w.start, ExecutionEnded: w.executionEnded, RequestEnded: w.requestEnded, RequestChanged: w.requestChanged, BatchEnded: w.batchEnded, DemandChanged: w.demandChanged,
+		Paused: s.Catalog.workPaused}, defs)
 	if err != nil {
 		return err
 	}
 	s.Catalog.work = w
-	s.ops.telemetry = true
+	s.ops.telemetry, s.ops.executorRoots = true, true
 	s.ops.resourceLedger = newTaskResourceLedger(20, 200)
 	// The broker advertises collection explicitly. Merely having a parent
 	// process does not establish that somebody else is sampling this service.
@@ -75,9 +76,6 @@ func (s *Server) configureWork() error {
 
 func (w *workService) startLoop() error {
 	w.once.Do(func() {
-		if settings, err := w.server.Catalog.backgroundSettings(w.server.life.ctx, time.Now()); err == nil {
-			w.runner.SetPaused(settings.Mode != "on")
-		}
 		if history := w.server.resources.history; history != nil {
 			w.server.daemon("resourceHistory", history.run)
 		}
@@ -89,6 +87,17 @@ func (w *workService) startLoop() error {
 		return errServiceStopping
 	}
 	return w.startErr
+}
+
+// workPaused is the runner's pause policy: this Mac's background schedule
+// paused (until its time) or set to manual indexing (until changed).
+func (c *Catalog) workPaused(ctx context.Context, now time.Time) (bool, time.Time, error) {
+	settings, err := c.backgroundSettings(ctx, now)
+	if err != nil {
+		return false, time.Time{}, err
+	}
+	until, _ := parseTime(settings.PausedUntil)
+	return settings.Mode != "on", until, nil
 }
 
 func workOpPriority(priority workPriority) string {
@@ -114,7 +123,7 @@ func (w *workService) start(job workJob, run func(context.Context)) error {
 	w.mu.Lock()
 	var record *workOperation
 	if job.Request != 0 {
-		record = w.requestLocked(job.Request, triggerChained)
+		record = w.requestLocked(job.Request, job.Triggers[job.Request])
 	} else {
 		record = w.executions[job.Execution]
 		if record == nil {
@@ -133,7 +142,7 @@ func (w *workService) start(job workJob, run func(context.Context)) error {
 		if id == job.Request {
 			continue // membership belongs to this request; it is not shared work
 		}
-		request := w.requestLocked(id, triggerChained)
+		request := w.requestLocked(id, job.Triggers[id])
 		demanders = append(demanders, request.op.id)
 		request.op.linkWork(record.op.id)
 	}
@@ -220,7 +229,7 @@ func (w *workService) demandChanged(demand workDemand) {
 	}
 	ids := make([]OpID, 0, len(demand.Demanders))
 	for _, id := range demand.Demanders {
-		request := w.requestLocked(id, triggerChained)
+		request := w.requestLocked(id, demand.Triggers[id])
 		ids = append(ids, request.op.id)
 		request.op.linkWork(batch.owner.op.id)
 	}

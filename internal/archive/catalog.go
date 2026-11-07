@@ -253,6 +253,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureOriginSchema(); err != nil {
 		return err
 	}
+	if err := c.dropRetiredWorkRevisionTriggers(); err != nil {
+		return err
+	}
 	if err := c.ensureAnalysisPartitions(); err != nil {
 		return fmt.Errorf("initialize analysis partitions: %w", err)
 	}

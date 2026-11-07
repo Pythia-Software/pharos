@@ -100,6 +100,7 @@ type brokerOperations struct {
 	// Terminal commands writing them, for /api/app/status (§10).
 	resources     *resourceSampler
 	history       *resourceHistory
+	leases        resourceLeaseCache
 	nativePID     int
 	nativeStarted uint64
 }

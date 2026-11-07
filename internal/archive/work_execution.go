@@ -30,7 +30,8 @@ type workAllocation struct {
 // a request reports the same revision token for a unit, so a producer and a
 // consumer at different revisions never combine into covered work.
 type workMember struct {
-	ID, Revision string
+	ID       string `json:"id"`
+	Revision string `json:"revision"`
 }
 
 // workMemberSize is a member's slice slot; its strings are charged separately.
@@ -69,6 +70,16 @@ type workPopulation struct {
 	// target returns a replaced member's revision; nil when the request had
 	// no replacement when the snapshot was taken.
 	target func(i int) (string, bool)
+	mode   string
+}
+
+// Mode is the requesting demand's adapter mode (workRequestSpec.Mode): set
+// only for a kind the request named, never for its dependencies.
+func (p *workPopulation) Mode() string {
+	if p == nil {
+		return ""
+	}
+	return p.mode
 }
 
 // Library reports whole-library demand: the domain pages its own dirty
@@ -264,6 +275,9 @@ type workSelection struct {
 	// Coarse marks an indivisible unit that runs to its own safe boundary.
 	Coarse  bool
 	Blocker workBlocker
+	// Mode is copied by the runner from the requesting population. Adapters
+	// read population.Mode to choose behavior; only the same mode shares it.
+	Mode string
 }
 
 func (s workSelection) ready() bool {
@@ -287,8 +301,8 @@ type workBatchResult struct {
 	// Work counts domain work (messages, rows): progress for unit-less phases.
 	Work int64
 	// Remaining reports that relevant pending work remains for the task.
-	// Informational (inspection and adapters): the runner asks Next again
-	// after every batch regardless.
+	// A successful coarse pass completes attached demand when false; other
+	// tasks ask Next again after the batch.
 	Remaining bool
 	// Blocker is a concrete reason the task cannot continue now. It waits
 	// for Wake or the reconcile tick and consumes no retry attempt.
@@ -366,6 +380,14 @@ type workTask interface {
 	RunBatch(context.Context, workSelection, workAllocation) (workBatchResult, error)
 }
 
+// workIdleTask is a task that keeps state between batches (a warm model
+// session). The runner calls Idle during a scheduling pass, outside its
+// lock, while the kind has neither demand nor a batch, so never at the same
+// time as the task's Next or RunBatch; the task may release what it keeps.
+type workIdleTask interface {
+	Idle(now time.Time)
+}
+
 // workDefinition is one row of the static task table: a registered
 // operation kind, its real prerequisites and its adapter. A Coarse task is
 // a global/library-scope algorithm: it always receives the library
@@ -374,9 +396,10 @@ type workDefinition struct {
 	Kind         string
 	Dependencies []string
 	// DependenciesForRequest may choose a subset of the declared edges for
-	// optional analyses. It is evaluated once at Submit, so a request's
-	// accepted input policy stays fixed. Policy changes interrupt old demand.
-	DependenciesForRequest func() []string
+	// optional analyses, or for a request's mode. It is evaluated once at
+	// Submit with the request's immutable spec, so a request's accepted
+	// input policy stays fixed. Policy changes interrupt old demand.
+	DependenciesForRequest func(workRequestSpec) []string
 	Coarse                 bool
 	Task                   workTask
 }

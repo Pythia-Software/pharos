@@ -57,7 +57,13 @@ func (s *Server) workDefinitions(authority *workAuthority) ([]workDefinition, er
 		{Kind: writing.kind, Task: writing},
 		{Kind: "analysis.labels", Dependencies: []string{writing.kind}, Task: labels},
 		{Kind: facts.kind, Dependencies: []string{writing.kind, "analysis.labels"}, Task: facts,
-			DependenciesForRequest: func() []string {
+			// Projection publishes stored labels as they are: an unpausable
+			// projection request must not drag inference or authorship
+			// along with it.
+			DependenciesForRequest: func(spec workRequestSpec) []string {
+				if spec.Mode == "projection" {
+					return nil
+				}
 				if s.Config().Labels.Enabled {
 					return []string{writing.kind, "analysis.labels"}
 				}
@@ -265,8 +271,21 @@ func runConversationWork(ctx context.Context, c *Catalog, selection workSelectio
 		return out, workUnitFailed(fmt.Errorf("%d conversations could not be processed; their domain work remains pending", len(failed)), failed...)
 	}
 	// Domain-limited progress may leave a conversation pending without changing
-	// its revision. It is work, not a transient error and not supersession.
+	// its revision. It is work, not a transient error and not supersession,
+	// but only when the domain reports it: a step that leaves its selection
+	// pending and stores nothing would otherwise be reselected forever, so its
+	// units are charged as failed and take the runner's backoff.
 	if len(out.Committed) == 0 && len(out.Superseded) == 0 && (len(result.Remaining) > 0 || result.Rediscover) {
+		if !result.Progress && !result.Rediscover {
+			stalled := []workMember{}
+			for _, member := range canonicalMembers(selection.Units, before) {
+				if slices.Contains(result.Remaining, member.ID) {
+					stalled = append(stalled, member)
+				}
+			}
+			out.Superseded = append(out.Superseded, workRetargetedFailures(selection.Units, before, result.Remaining...).Superseded...)
+			return out, workUnitFailed(fmt.Errorf("%d conversations made no progress; their domain work remains pending", len(stalled)), stalled...)
+		}
 		out.Work = 1
 	}
 	return out, nil
@@ -463,6 +482,30 @@ type modelWorkTask struct {
 	// for; discoveredAt is the input generation its discovery read first.
 	signature, discoveredAt string
 	failed                  workFailedRevisions
+	// used is when the runner last asked for the session's work; Idle
+	// closes a session unused for workModelSessionIdle.
+	used time.Time
+}
+
+// workModelSessionIdle is how long an idle model session keeps its
+// library-sized item context and inventory. The model's workers have their
+// own, shorter idle period in the labeler manager.
+var workModelSessionIdle = 10 * time.Minute
+
+// closeSession drops the session and everything it keeps.
+func (t *modelWorkTask) closeSession() {
+	if t.session != nil {
+		t.session.Close()
+		t.session = nil
+	}
+}
+
+// Idle closes a session nobody has asked for work recently, so a finished
+// backlog or a quiet library does not keep the item context resident.
+func (t *modelWorkTask) Idle(now time.Time) {
+	if t.session != nil && now.Sub(t.used) >= workModelSessionIdle {
+		t.closeSession()
+	}
 }
 
 // modelWorkPending bounds the conversations one finite model batch may send
@@ -500,9 +543,11 @@ func modelWorkWindow(members []workMember, pending []string, most int) []workMem
 }
 
 func (t *modelWorkTask) Next(ctx context.Context, pop *workPopulation) (workSelection, error) {
+	t.used = workRevisionNow(t.server.Catalog)
 	power, fresh := t.server.workPowerSnapshot()
 	config := t.config(ctx, power)
 	if !config.enabled {
+		t.closeSession()
 		return workSelection{Blocker: workBlocker{Reason: workBlockedPolicy, Detail: "this analysis is disabled"}}, nil
 	}
 	if !fresh {
@@ -536,16 +581,6 @@ func (t *modelWorkTask) Next(ctx context.Context, pop *workPopulation) (workSele
 		}
 		return workSelection{Units: modelWorkWindow(members, workDomainIDs(pending), modelWorkPending), CPUs: compute}, nil
 	}
-	// A library page is a coverage claim when empty: the inventory must
-	// have been discovered at the current input generation (H1). One meta
-	// read; a rediscovery happens once per generation, not per batch.
-	inputs, err := t.inputGeneration(ctx)
-	if err != nil {
-		return workSelection{}, err
-	}
-	if inputs != t.discoveredAt {
-		return discover, nil
-	}
 	t.failed.begin(pop)
 	now := workRevisionNow(t.server.Catalog)
 	page, err := t.session.PendingPage(ctx, "", modelWorkPending, func(m workMember) bool {
@@ -560,6 +595,21 @@ func (t *modelWorkTask) Next(ctx context.Context, pop *workPopulation) (workSele
 	}
 	if page.Rediscover {
 		return discover, nil
+	}
+	// A library page is a coverage claim when empty: the inventory must
+	// have been discovered at the current input generation (H1). A page with
+	// units is not a claim, and each step's refresh reads its own
+	// conversations' live state, so a generation that moved while work
+	// remains is checked only once the session runs out of it: an ingest
+	// does not rediscover a draining session. One meta read.
+	if len(page.Units) == 0 {
+		inputs, err := t.inputGeneration(ctx)
+		if err != nil {
+			return workSelection{}, err
+		}
+		if inputs != t.discoveredAt {
+			return discover, nil
+		}
 	}
 	for i, m := range page.Units {
 		page.Units[i], _ = t.failed.member(pop, m, now)
@@ -583,9 +633,7 @@ func (t *modelWorkTask) RunBatch(ctx context.Context, selection workSelection, a
 		if err != nil {
 			return workBatchResult{}, err
 		}
-		if t.session != nil {
-			t.session.Close()
-		}
+		t.closeSession()
 		// The session's envelope is computed, not this one-CPU grant.
 		session, err := t.create(config.settings, workAllocation{CPUs: envelope})
 		if err != nil {
@@ -607,8 +655,7 @@ func (t *modelWorkTask) RunBatch(ctx context.Context, selection workSelection, a
 	})
 	t.failed.charged(selection, err, workRevisionNow(t.server.Catalog))
 	if errors.Is(err, errLabelsSessionStale) {
-		t.session.Close()
-		t.session = nil
+		t.closeSession()
 		t.server.work.runner.InterruptKinds([]string{t.kind}, "the analysis model changed; reissue the request for its new input policy")
 		return workBatchResult{Work: 1, Remaining: true}, nil
 	}

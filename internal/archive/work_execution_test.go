@@ -2,10 +2,10 @@ package archive
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -204,7 +204,7 @@ func TestWorkOptionalPrerequisitesAreFrozenForEachRequest(t *testing.T) {
 	enabled := false
 	writing, labels, facts := newFakeWorkDomain("u@1"), newFakeWorkDomain("u@1"), newFakeWorkDomain("u@1")
 	definition := workDefinition{Kind: "maintenance.labels.query", Task: facts, Dependencies: []string{"analysis.authorship", "analysis.labels"},
-		DependenciesForRequest: func() []string {
+		DependenciesForRequest: func(workRequestSpec) []string {
 			if enabled {
 				return []string{"analysis.authorship", "analysis.labels"}
 			}
@@ -241,7 +241,7 @@ func TestWorkOptionalPrerequisitesAreFrozenForEachRequest(t *testing.T) {
 		t.Fatalf("changed policy: %+v", result)
 	}
 	h.complete("maintenance.labels.query")
-	definition.DependenciesForRequest = func() []string { return []string{"not.declared"} }
+	definition.DependenciesForRequest = func(workRequestSpec) []string { return []string{"not.declared"} }
 	h.runner.byKind[definition.Kind].def = definition
 	if _, err := h.runner.Submit(workRequestSpec{Kinds: []string{definition.Kind}, Priority: workPriorityLive}); err == nil {
 		t.Fatal("a dynamic edge escaped the static dependency graph")
@@ -676,15 +676,45 @@ func TestWorkStopHoldsTheTaskUntilResume(t *testing.T) {
 	if q := h.request(id); q.State != opSucceeded || len(domain.dirty) != 0 {
 		t.Fatalf("after resume %+v", q)
 	}
+	// A Resume while the stopped batch drains waits for its execution to end
+	// as stopped; work resumes in a new execution, never the stopping one.
+	domain.during = nil
+	domain.set("u3", "1")
+	later := h.submit(workRequestSpec{Kinds: []string{"maintenance.parallelism"}, Priority: workPriorityLive})
+	h.runner.Pump()
+	draining := h.take("maintenance.parallelism", 0)
+	h.runner.Stop("maintenance.parallelism")
+	h.runner.Resume("maintenance.parallelism")
+	if h.runner.Pump() != 0 {
+		t.Fatal("work started under a stopping execution")
+	}
+	draining.run(context.Background())
+	h.runner.Pump()
+	if last := h.ended[len(h.ended)-1]; last.State != opCancelled || last.Execution != draining.job.Execution {
+		t.Fatalf("the stopped execution did not end first: %+v", h.ended)
+	}
+	if next := h.take("maintenance.parallelism", 0); next.job.Execution == draining.job.Execution {
+		t.Fatal("resumed work reused the stopped execution")
+	} else {
+		next.run(context.Background())
+		h.runner.Pump()
+	}
+	if q := h.request(later); q.State != opSucceeded {
+		t.Fatalf("after a resume during the drain %+v", q)
+	}
 }
 
 func TestWorkFailingFirstUnitBacksOffWithoutStarvingOthers(t *testing.T) {
 	domain := newFakeWorkDomain("u1@1", "u2@1", "u3@1")
 	domain.fail["u1"] = 99
 	h := newWorkHarness(t, 1, workDefinition{Kind: "maintenance.parallelism", Task: domain})
-	id := h.submit(workRequestSpec{Kinds: []string{"maintenance.parallelism"}, Priority: workPriorityForeground,
+	id := h.submit(workRequestSpec{Kinds: []string{"maintenance.parallelism"}, Priority: workPriorityForeground, Trigger: triggerUser,
 		Build: workMembers(workMember{"u1", "1"}, workMember{"u2", "1"}, workMember{"u3", "1"})})
 	h.runner.Pump()
+	// The first hook to name a request carries its origin.
+	if len(h.jobs) != 1 || h.jobs[0].job.Triggers[id] != triggerUser {
+		t.Fatalf("membership job %+v", h.jobs)
+	}
 	h.build(id)
 	h.complete("maintenance.parallelism") // u1 fails
 	h.complete("maintenance.parallelism") // u2
@@ -718,6 +748,10 @@ func TestWorkFailingFirstUnitBacksOffWithoutStarvingOthers(t *testing.T) {
 	}
 	if task := h.task("maintenance.parallelism"); task.Failures != 1 || !task.Examples[0].Exhausted || task.Examples[0].Attempts != 3 {
 		t.Fatalf("task %+v", task)
+	}
+	// GET /api/work names a failed unit with the API's lower-case keys.
+	if unit, _ := json.Marshal(h.task("maintenance.parallelism").Examples[0].Unit); string(unit) != `{"id":"u1","revision":"1"}` {
+		t.Fatalf("failed unit JSON %s", unit)
 	}
 
 	// A later request does not retry the exhausted revision; an explicit
@@ -849,9 +883,7 @@ func TestWorkInlineCallsShareTheAllowanceInOrder(t *testing.T) {
 				return nil
 			})
 		}()
-		for a.facts().CPUWaiters != 1 {
-			runtime.Gosched()
-		}
+		waitUntil(t, 5*time.Second, "the inline caller to wait", func() bool { return a.facts().CPUWaiters == 1 })
 		// One CPU is free, but the waiter came first.
 		if _, ok, _ := a.tryCPUs(1, 1, 0, false); ok {
 			t.Error("the runner overtook a waiting inline caller")
@@ -869,9 +901,7 @@ func TestWorkInlineCallsShareTheAllowanceInOrder(t *testing.T) {
 	if inner := <-waited; inner.CPUs != 2 {
 		t.Fatalf("waiter %+v", inner)
 	}
-	for a.facts().CPUAllocated != 0 {
-		runtime.Gosched()
-	}
+	waitUntil(t, 5*time.Second, "the waiter's release", func() bool { return a.facts().CPUAllocated == 0 })
 	if facts := a.facts(); facts.CPUWaiters != 0 {
 		t.Fatalf("authority %+v", facts)
 	}
@@ -1019,7 +1049,9 @@ func TestWorkFullFailureTableHoldsTheKind(t *testing.T) {
 	domain := newFakeWorkDomain("u1@1", "u2@1")
 	domain.batch = 2
 	domain.fail["u1"], domain.fail["u2"] = 9, 9
-	h := newWorkHarness(t, 1, workDefinition{Kind: "maintenance.parallelism", Task: domain})
+	other := newFakeWorkDomain("v1@1")
+	other.fail["v1"] = 1
+	h := newWorkHarness(t, 1, workDefinition{Kind: "maintenance.parallelism", Task: domain}, workDefinition{Kind: "analysis.authorship", Task: other})
 	h.submit(workRequestSpec{Kinds: []string{"maintenance.parallelism"}, Priority: workPriorityLive})
 	h.runner.Pump()
 	h.complete("maintenance.parallelism")
@@ -1030,9 +1062,75 @@ func TestWorkFullFailureTableHoldsTheKind(t *testing.T) {
 	if task := h.task("maintenance.parallelism"); task.Blocker == nil || task.Blocker.Reason != workBlockedFailuresFull {
 		t.Fatalf("task %+v", task)
 	}
+	// The limit is each kind's: another kind still records its own failure
+	// and retries it.
+	authorship := h.submit(workRequestSpec{Kinds: []string{"analysis.authorship"}, Priority: workPriorityLive, Build: workMembers(workMember{"v1", "1"})})
+	h.runner.Pump()
+	h.build(authorship)
+	h.complete("analysis.authorship")
+	if task := h.task("analysis.authorship"); task.Failures != 1 || task.Blocker != nil && task.Blocker.Reason == workBlockedFailuresFull {
+		t.Fatalf("one kind's full table held another: %+v", task)
+	}
+	h.clock.Advance(5 * time.Second)
+	h.runner.Pump()
+	h.complete("analysis.authorship")
+	if q := h.request(authorship); q.State != opSucceeded {
+		t.Fatalf("the other kind's request %+v", q)
+	}
 	h.runner.Retry("maintenance.parallelism")
 	if h.runner.Pump() != 1 {
 		t.Fatal("Retry did not release the hold")
+	}
+}
+
+// Retry reopens a unit its kind gave up on even after that kind's task was
+// done, so the request does not succeed around it; another kind's failure of
+// the same unit is not cleared by it.
+func TestWorkRetryReopensADoneTask(t *testing.T) {
+	authorship := newFakeWorkDomain("u1@1", "u2@1")
+	authorship.fail["u1"] = 3
+	parallelism := newFakeWorkDomain("u1@1", "u2@1")
+	parallelism.blocker = workBlocker{Reason: workBlockedWriter, Detail: "another run is doing this work"}
+	h := newWorkHarness(t, 1, workDefinition{Kind: "analysis.authorship", Task: authorship}, workDefinition{Kind: "maintenance.parallelism", Task: parallelism})
+	id := h.submit(workRequestSpec{Kinds: []string{"analysis.authorship", "maintenance.parallelism"}, Priority: workPriorityLive,
+		Build: workMembers(workMember{"u1", "1"}, workMember{"u2", "1"})})
+	h.runner.Pump()
+	h.build(id)
+	drain := func(kind string) {
+		for h.pending(kind) {
+			h.complete(kind)
+		}
+	}
+	for _, wait := range []time.Duration{0, 5 * time.Second, 30 * time.Second} {
+		h.clock.Advance(wait)
+		h.runner.Pump()
+		drain("analysis.authorship")
+	}
+	if q := h.request(id); q.Failed != 1 || opTerminal(q.State) {
+		t.Fatalf("after exhausting u1: %+v", q)
+	}
+	if task := h.task("analysis.authorship"); task.Failures != 1 || !task.Examples[0].Exhausted {
+		t.Fatalf("authorship %+v", task)
+	}
+	ran := len(authorship.ran)
+	h.runner.Retry("maintenance.parallelism")
+	if q := h.request(id); q.Failed != 1 {
+		t.Fatalf("another kind's Retry cleared authorship's failure: %+v", q)
+	}
+	h.runner.Retry("analysis.authorship")
+	h.runner.Pump()
+	drain("analysis.authorship")
+	if !slices.Contains(authorship.ran[ran:], "u1") {
+		t.Fatalf("Retry did not ask the done task again: ran %v", authorship.ran[ran:])
+	}
+	parallelism.mu.Lock()
+	parallelism.blocker = workBlocker{}
+	parallelism.mu.Unlock()
+	h.runner.Wake()
+	h.runner.Pump()
+	drain("maintenance.parallelism")
+	if q := h.request(id); q.State != opSucceeded || q.Sealed != 2 || q.Failed != 0 {
+		t.Fatalf("request after Retry: %+v", q)
 	}
 }
 
@@ -1046,28 +1144,33 @@ func TestWorkDecisionTraceIsBounded(t *testing.T) {
 		h.complete("maintenance.parallelism")
 	}
 	in := h.runner.Inspect()
-	if len(in.Decisions) != 4 || in.DecisionsTotal <= 4 {
+	if len(in.Decisions) == 0 || len(in.Decisions) > 4 || in.DecisionsTotal <= int64(len(in.Decisions)) {
 		t.Fatalf("%d decisions of %d", len(in.Decisions), in.DecisionsTotal)
 	}
-	if last := in.Decisions[3]; last.Event != "execution-ended" {
-		t.Fatalf("newest decision %+v", in.Decisions)
+	// A new decision pushes out the oldest and keeps the order.
+	newest := in.Decisions[len(in.Decisions)-1]
+	h.runner.Retry("maintenance.parallelism")
+	after := h.runner.Inspect()
+	if len(after.Decisions) > 4 || after.DecisionsTotal <= in.DecisionsTotal || !slices.Contains(after.Decisions, newest) || after.Decisions[len(after.Decisions)-1] == newest {
+		t.Fatalf("the trace did not keep the newest decisions: %+v then %+v", in.Decisions, after.Decisions)
 	}
 }
 
+// A coarse pass covers its requests at its own boundary: a step that
+// reports Remaining keeps draining, a completed pass covers the requests it
+// ran for without waiting for the library to be quiet, and a request made
+// while it ran waits for a pass of its own.
 func TestWorkCoarseTaskCoversOnlyAtItsBoundary(t *testing.T) {
 	var seen []bool
-	done := false
+	steps := 0
 	global := &scriptedWorkTask{
 		next: func(pop *workPopulation) (workSelection, error) {
 			seen = append(seen, pop.Library())
-			if done {
-				return workSelection{}, nil
-			}
 			return workSelection{Phase: "compare", Coarse: true}, nil
 		},
 		run: func(context.Context, workSelection, workAllocation) (workBatchResult, error) {
-			done = true
-			return workBatchResult{Work: 1, Committed: []workMember{{"a", "1"}}}, nil
+			steps++
+			return workBatchResult{Work: 1, Committed: []workMember{{"a", "1"}}, Remaining: steps%2 == 1}, nil
 		},
 	}
 	h := newWorkHarness(t, 1, workDefinition{Kind: "analysis.findings", Coarse: true, Task: global})
@@ -1081,11 +1184,147 @@ func TestWorkCoarseTaskCoversOnlyAtItsBoundary(t *testing.T) {
 	}
 	job.run(context.Background())
 	if q := h.request(id); q.Sealed != 0 {
-		t.Fatal("a coarse batch's committed units covered the request before its boundary")
+		t.Fatal("a coarse step's committed units covered the request before its boundary")
 	}
 	h.runner.Pump()
+	last := h.take("analysis.findings", 0)
+	library := h.submit(workRequestSpec{Kinds: []string{"analysis.findings"}, Priority: workPriorityLive})
+	h.runner.Pump()
+	last.run(context.Background())
 	if q := h.request(id); q.State != opSucceeded || q.Sealed != 2 || !slices.Equal(seen, []bool{true, true}) {
 		t.Fatalf("request %+v, library populations %v", q, seen)
+	}
+	if q := h.request(library); opTerminal(q.State) {
+		t.Fatalf("a pass that started earlier covered a later request: %+v", q)
+	}
+	h.runner.Pump()
+	h.complete("analysis.findings")
+	h.complete("analysis.findings")
+	if q := h.request(library); q.State != opSucceeded {
+		t.Fatalf("the later request's own pass: %+v", q)
+	}
+}
+
+// A request's mode reaches the kinds it named, not their dependencies; a
+// batch selected in a mode is shared only with demand in that mode, and
+// unpausable demand runs through the library pause.
+func TestWorkRequestModesAndUnpausableDemand(t *testing.T) {
+	modes := map[string][]string{}
+	moded := func(kind string, domain *fakeWorkDomain) *scriptedWorkTask {
+		return &scriptedWorkTask{
+			next: func(pop *workPopulation) (workSelection, error) {
+				modes[kind] = append(modes[kind], pop.Mode())
+				sel, err := domain.Next(context.Background(), pop)
+				sel.Mode = pop.Mode()
+				return sel, err
+			},
+			run: func(ctx context.Context, sel workSelection, allocation workAllocation) (workBatchResult, error) {
+				return domain.RunBatch(ctx, sel, allocation)
+			},
+		}
+	}
+	writing, facts := newFakeWorkDomain("u1@1"), newFakeWorkDomain("u1@1", "u2@1")
+	h := newWorkHarness(t, 2, workDefinition{Kind: "analysis.authorship", Task: moded("analysis.authorship", writing)},
+		workDefinition{Kind: "maintenance.labels.query", Dependencies: []string{"analysis.authorship"}, Task: moded("maintenance.labels.query", facts),
+			DependenciesForRequest: func(spec workRequestSpec) []string {
+				if spec.Mode == "projection" {
+					return nil
+				}
+				return []string{"analysis.authorship"}
+			}})
+	h.runner.SetPaused(true)
+	paused := h.submit(workRequestSpec{Kinds: []string{"maintenance.labels.query"}, Priority: workPriorityBackfill})
+	projection := h.submit(workRequestSpec{Kinds: []string{"maintenance.labels.query"}, Priority: workPriorityBackfill, Mode: "projection", Unpausable: true})
+	if _, err := h.runner.Submit(workRequestSpec{Key: "k", Kinds: []string{"maintenance.labels.query"}, Priority: workPriorityBackfill, Mode: "projection"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.runner.Submit(workRequestSpec{Key: "k", Kinds: []string{"maintenance.labels.query"}, Priority: workPriorityBackfill}); !errors.Is(err, errWorkKeyConflict) {
+		t.Fatalf("a key reused for another mode: %v", err)
+	}
+	h.runner.Pump()
+	if !h.pending("maintenance.labels.query") || h.pending("analysis.authorship") {
+		t.Fatalf("unpausable projection: jobs %+v", h.jobs)
+	}
+	if q := h.request(paused); opTerminal(q.State) || q.Blocker == nil || q.Blocker.Reason != workBlockedPaused {
+		t.Fatalf("paused demand %+v", q)
+	}
+	if q := h.request(projection); q.Mode != "projection" || !q.Unpausable || len(q.Expanded) != 0 {
+		t.Fatalf("projection request %+v", q)
+	}
+	job := h.take("maintenance.labels.query", 0)
+	if slices.Contains(job.job.Demanders, paused) {
+		t.Fatal("a batch selected in a mode was shared with demand in another")
+	}
+	job.run(context.Background())
+	h.runner.SetPaused(false)
+	h.runner.Pump()
+	for h.pending("analysis.authorship") || h.pending("maintenance.labels.query") {
+		for _, kind := range []string{"analysis.authorship", "maintenance.labels.query"} {
+			if h.pending(kind) {
+				h.complete(kind)
+			}
+		}
+	}
+	if !slices.Contains(modes["maintenance.labels.query"], "projection") || slices.Contains(modes["analysis.authorship"], "projection") {
+		t.Fatalf("modes seen: %v", modes)
+	}
+	if q := h.request(paused); q.State != opSucceeded {
+		t.Fatalf("paused demand after unpause %+v", q)
+	}
+
+	t.Run("default coarse pass cannot satisfy force", func(t *testing.T) {
+		blocked := true
+		task := &scriptedWorkTask{
+			next: func(*workPopulation) (workSelection, error) {
+				if blocked {
+					return workSelection{Blocker: workBlocker{Reason: workBlockedExternal}}, nil
+				}
+				return workSelection{Phase: "pass"}, nil
+			},
+			run: func(context.Context, workSelection, workAllocation) (workBatchResult, error) {
+				return workBatchResult{Work: 1}, nil
+			},
+		}
+		h := newWorkHarness(t, 1, workDefinition{Kind: "analysis.findings", Task: task, Coarse: true})
+		h.submit(workRequestSpec{Kinds: []string{"analysis.findings"}, Priority: workPriorityLive})
+		force := h.submit(workRequestSpec{Kinds: []string{"analysis.findings"}, Priority: workPriorityBackfill, Mode: "force"})
+		h.runner.Pump() // both requests become admitted before a pass selects
+		blocked = false
+		h.runner.Wake()
+		h.runner.Pump()
+		job := h.take("analysis.findings", 0)
+		if slices.Contains(job.job.Demanders, force) {
+			t.Fatal("a default pass accepted forced demand")
+		}
+		job.run(context.Background())
+		h.runner.Pump()
+		if q := h.request(force); opTerminal(q.State) || !h.pending("analysis.findings") {
+			t.Fatalf("force did not get its own pass: %+v", q)
+		}
+		h.complete("analysis.findings")
+		if q := h.request(force); q.State != opSucceeded {
+			t.Fatalf("forced pass %+v", q)
+		}
+	})
+}
+
+// Repeated demand reconsiders a blocker that has no event of its own.
+func TestWorkCoalescedSubmitReconsidersBlockers(t *testing.T) {
+	domain := newFakeWorkDomain("u1@1")
+	domain.blocker = workBlocker{Reason: workBlockedWriter, Detail: "another run is doing this work"}
+	h := newWorkHarness(t, 1, workDefinition{Kind: "maintenance.parallelism", Task: domain})
+	spec := workRequestSpec{Key: "auto", Kinds: []string{"maintenance.parallelism"}, Priority: workPriorityLive}
+	h.submit(spec)
+	h.runner.Pump()
+	h.runner.byKind["maintenance.parallelism"].wait = workBlocker{Reason: workBlockedWriter}
+	h.runner.byKind["maintenance.parallelism"].waitUntil = h.clock.Now().Add(time.Hour)
+	domain.mu.Lock()
+	domain.blocker = workBlocker{}
+	domain.mu.Unlock()
+	h.submit(spec)
+	h.runner.Pump()
+	if !h.pending("maintenance.parallelism") {
+		t.Fatal("repeated demand waited out a writer that had finished")
 	}
 }
 
@@ -1168,15 +1407,9 @@ func TestWorkRunLoopWakesAndReconsidersOnItsClock(t *testing.T) {
 	}
 	clock.Advance(5 * time.Second)
 	(<-jobs).run(context.Background())
-	for {
-		in := runner.Inspect()
-		if len(in.Ended) == 1 {
-			if in.Ended[0].ID != id || in.Ended[0].State != opSucceeded {
-				t.Fatalf("request %+v", in.Ended[0])
-			}
-			break
-		}
-		runtime.Gosched()
+	waitUntil(t, 5*time.Second, "the retried request to end", func() bool { return len(runner.Inspect().Ended) == 1 })
+	if ended := runner.Inspect().Ended[0]; ended.ID != id || ended.State != opSucceeded {
+		t.Fatalf("request %+v", ended)
 	}
 	runner.SetPaused(true)
 	queuedID, err := runner.Submit(workRequestSpec{Kinds: []string{"maintenance.parallelism"}, Priority: workPriorityLive})
@@ -1191,6 +1424,110 @@ func TestWorkRunLoopWakesAndReconsidersOnItsClock(t *testing.T) {
 	}
 	if _, err := runner.Submit(workRequestSpec{Kinds: []string{"maintenance.parallelism"}, Priority: workPriorityLive}); !errors.Is(err, errServiceStopping) {
 		t.Fatalf("stopped runner accepted demand: %v", err)
+	}
+}
+
+// The stored pause policy is read, not pushed: a timed pause ends at its
+// time without a settings save, and the loop wakes for it.
+func TestWorkTimedPauseEndsOnItsOwn(t *testing.T) {
+	domain := newFakeWorkDomain("u1@1")
+	h := newWorkHarness(t, 1, workDefinition{Kind: "maintenance.parallelism", Task: domain})
+	until := h.clock.Now().Add(10 * time.Second)
+	reads := 0
+	h.runner.hooks.Paused = func(_ context.Context, now time.Time) (bool, time.Time, error) {
+		reads++
+		return now.Before(until), until, nil
+	}
+	h.runner.readPause(t.Context())
+	h.submit(workRequestSpec{Kinds: []string{"maintenance.parallelism"}, Priority: workPriorityLive})
+	if h.runner.Pump() != 0 || !h.runner.Inspect().Paused {
+		t.Fatal("a paused runner started a batch")
+	}
+	if wait := h.runner.nextDeadline(); wait != 10*time.Second {
+		t.Fatalf("the loop sleeps %v past a pause ending in 10s", wait)
+	}
+	h.clock.Advance(10 * time.Second)
+	h.runner.readPause(t.Context())
+	if h.runner.Inspect().Paused || h.runner.Pump() != 1 || reads != 2 {
+		t.Fatalf("the expired pause still held new batches (%d reads)", reads)
+	}
+
+	t.Run("reconcile while demand keeps waking the loop", func(t *testing.T) {
+		h := newWorkHarness(t, 1, workDefinition{Kind: "maintenance.parallelism", Task: newFakeWorkDomain()})
+		changedAt := h.clock.Now().Add(workReconcileInterval)
+		h.runner.hooks.Paused = func(_ context.Context, now time.Time) (bool, time.Time, error) {
+			return !now.Before(changedAt), time.Time{}, nil
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() { defer close(done); h.runner.Run(ctx) }()
+		defer func() { cancel(); <-done }()
+		for range 40 {
+			select {
+			case <-h.clock.armed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("runner did not wait for its next event")
+			}
+			h.clock.Advance(time.Second)
+			h.runner.Wake()
+		}
+		waitUntil(t, 5*time.Second, "pause policy despite frequent demand", func() bool { return h.runner.Inspect().Paused })
+	})
+}
+
+type idleWorkTask struct {
+	*fakeWorkDomain
+	idles int
+}
+
+func (i *idleWorkTask) Idle(time.Time) { i.idles++ }
+
+// A task that keeps state hears it is idle only while it has neither demand
+// nor a batch.
+func TestWorkIdleTasksHearItBetweenExecutions(t *testing.T) {
+	task := &idleWorkTask{fakeWorkDomain: newFakeWorkDomain("u1@1")}
+	h := newWorkHarness(t, 1, workDefinition{Kind: "maintenance.parallelism", Task: task})
+	h.submit(workRequestSpec{Kinds: []string{"maintenance.parallelism"}, Priority: workPriorityLive})
+	h.runner.Pump()
+	if !h.pending("maintenance.parallelism") || task.idles != 0 {
+		t.Fatalf("a demanded task was told it is idle (%d)", task.idles)
+	}
+	h.complete("maintenance.parallelism")
+	h.runner.Pump()
+	if task.idles == 0 {
+		t.Fatal("a task without demand or a batch never heard it is idle")
+	}
+}
+
+// stuckWorkTask's Next waits for its context, like a read stuck behind a
+// busy catalog.
+type stuckWorkTask struct{ fakeWorkDomain }
+
+func (s *stuckWorkTask) Next(ctx context.Context, _ *workPopulation) (workSelection, error) {
+	<-ctx.Done()
+	return workSelection{}, ctx.Err()
+}
+
+// One stuck Next does not hold admission for every kind: it times out and
+// waits without charging unattempted units, and the pass goes on.
+func TestWorkStuckSelectDoesNotHoldOtherKinds(t *testing.T) {
+	override(t, &workSelectTimeout, 10*time.Millisecond)
+	other := newFakeWorkDomain("u1@1")
+	h := newWorkHarness(t, 2, workDefinition{Kind: "analysis.authorship", Task: &stuckWorkTask{}}, workDefinition{Kind: "maintenance.parallelism", Task: other})
+	h.submit(workRequestSpec{Kinds: []string{"analysis.authorship", "maintenance.parallelism"}, Priority: workPriorityLive})
+	h.runner.Pump()
+	if !h.pending("maintenance.parallelism") {
+		t.Fatal("a stuck select held another kind's admission")
+	}
+	for range 3 {
+		if task := h.task("analysis.authorship"); task.Blocker == nil || task.Blocker.Reason != workBlockedExternal || task.Failures != 0 {
+			t.Fatalf("the stuck kind %+v", task)
+		}
+		h.clock.Advance(workReconcileInterval)
+		h.runner.Pump()
+	}
+	if len(h.runner.Inspect().Requests) == 0 {
+		t.Fatal("slow selection exhausted work that had not been attempted")
 	}
 }
 
@@ -1450,9 +1787,7 @@ func TestWorkForegroundClaimsItsPlaceAmongInlineCallers(t *testing.T) {
 		n, _ := a.acquireCPUs(context.Background(), 1, 1)
 		granted <- n
 	}()
-	for a.facts().CPUWaiters != 1 {
-		runtime.Gosched()
-	}
+	waitUntil(t, 5*time.Second, "the inline caller to wait", func() bool { return a.facts().CPUWaiters == 1 })
 	a.releaseCPUs(held)
 	if got := a.facts(); got.CPUAllocated != 0 {
 		t.Fatalf("a later inline caller took the claimed capacity: %+v", got)
@@ -1474,9 +1809,7 @@ func TestWorkForegroundClaimsItsPlaceAmongInlineCallers(t *testing.T) {
 		n, _ := a.acquireCPUs(context.Background(), 1, 1)
 		granted <- n
 	}()
-	for a.facts().CPUWaiters != 1 {
-		runtime.Gosched()
-	}
+	waitUntil(t, 5*time.Second, "the inline caller to wait", func() bool { return a.facts().CPUWaiters == 1 })
 	a.releaseCPUs(held)
 	a.dropClaim()
 	if got := <-granted; got != 1 {

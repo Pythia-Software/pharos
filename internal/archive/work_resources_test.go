@@ -3,6 +3,8 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"runtime/pprof"
 	"strings"
 	"syscall"
@@ -200,5 +202,50 @@ func TestTaskProfileLabels(t *testing.T) {
 	})
 	if len(got) != 2 || got["op_kind"] != "analysis.labels" || got["op_id"] != "op1" {
 		t.Fatalf("labels: %v", got)
+	}
+}
+
+// History collection reuses lease probes, so it does not open lease files on
+// every library drive each tick; running work shortens the reuse.
+func TestResourceLeaseProbesAreReused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "leases")
+	cache := resourceLeaseCache{}
+	at := time.Unix(1000, 0)
+	if probes := cache.probe([]string{path}, at); len(probes) != 0 {
+		t.Fatalf("missing lease directory: %+v", probes)
+	}
+	// A file where the directory was cannot be listed: a probe reports it.
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if probes := cache.probe([]string{path}, at.Add(resourceLeaseIdle-time.Second)); len(probes) != 0 {
+		t.Fatal("an idle collector probed the drive again within its interval")
+	}
+	if probes := cache.probe([]string{path}, at.Add(resourceLeaseIdle)); len(probes) != 1 {
+		t.Fatal("the idle interval passed without a probe")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	cache.active = true
+	if probes := cache.probe([]string{path}, at.Add(resourceLeaseIdle+resourceLeaseActive)); len(probes) != 0 {
+		t.Fatal("running work did not shorten the interval")
+	}
+
+	// A process may exit and its PID be reused before the disk is probed
+	// again. Cached ownership must not include that replacement's load.
+	lease := filepath.Join(path, "lease")
+	identity := uint64(7)
+	cache = resourceLeaseCache{
+		probes: map[string][]leaseProbe{path: {{Path: lease, Live: true, Info: &leaseInfo{PID: 42, HostID: currentHost().ID}}}},
+		at:     map[string]time.Time{path: at}, started: map[string]uint64{lease: identity},
+		read: func(int) (processUsage, error) { return processUsage{Started: identity}, nil },
+	}
+	if !cache.probe([]string{path}, at.Add(time.Second))[0].Live {
+		t.Fatal("the original process lost its cached ownership")
+	}
+	identity++
+	if cache.probe([]string{path}, at.Add(2*time.Second))[0].Live {
+		t.Fatal("a replacement PID inherited the old lease's ownership")
 	}
 }

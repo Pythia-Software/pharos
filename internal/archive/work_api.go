@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"runtime"
 	"slices"
 	"strconv"
@@ -14,7 +13,7 @@ import (
 func (s *Server) workSettings() map[string]any {
 	config := s.Config()
 	locked := ""
-	if os.Getenv("PHAROS_BACKGROUND_CPUS") != "" {
+	if _, ok := backgroundCPUsFromEnv(); ok {
 		locked = "PHAROS_BACKGROUND_CPUS sets this allowance at process start."
 	} else if config.Path == "" {
 		locked = "This service has no writable configuration path."
@@ -45,7 +44,7 @@ func (s *Server) postWorkSettings(w http.ResponseWriter, r *http.Request, body m
 		writeError(w, errWorkUnavailable, http.StatusConflict)
 		return
 	}
-	if os.Getenv("PHAROS_BACKGROUND_CPUS") != "" {
+	if _, ok := backgroundCPUsFromEnv(); ok {
 		writeError(w, fmt.Errorf("the process-start PHAROS_BACKGROUND_CPUS setting owns this allowance"), http.StatusConflict)
 		return
 	}
@@ -158,7 +157,7 @@ func (s *Server) postWork(w http.ResponseWriter, r *http.Request, body map[strin
 		case "resume":
 			changed = s.work.runner.Resume(kind)
 			switch kind {
-			case "maintenance.origins", "maintenance.library-view", "maintenance.previews", "maintenance.parallelism":
+			case "maintenance.origins", "maintenance.library-view", "maintenance.previews", "maintenance.parallelism", "maintenance.session-shape":
 				// These tasks also honor the existing Search-view Stop.
 				changed = s.Catalog.resumeLibraryRefresh() || changed
 			}

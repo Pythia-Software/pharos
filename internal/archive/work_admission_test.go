@@ -3,8 +3,12 @@ package archive
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestLeafAdmissionSharesTheCallersGrant(t *testing.T) {
@@ -76,14 +80,14 @@ func TestLeafAdmissionCancelledWhileWaitingLeavesNothing(t *testing.T) {
 			return nil
 		})
 	}()
-	for a.facts().CPUWaiters == 0 {
+	waitUntil(t, 5*time.Second, "the caller to wait", func() bool {
 		select {
 		case err := <-done:
 			t.Fatalf("returned before waiting: %v", err)
 		default:
-			runtime.Gosched()
 		}
-	}
+		return a.facts().CPUWaiters != 0
+	})
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled wait: %v", err)
@@ -123,8 +127,43 @@ func TestScheduledCommandsShareOneProcessAuthority(t *testing.T) {
 	}
 }
 
-// One encoding holds a grant clamped to the allowance while it encodes and
-// verifies, and none while it waits for the capture lock and commits.
+// A slot count saved on a drive, an engine name in a library's config, and a
+// stale environment value never stop a library opening on another Mac.
+func TestWorkSettingsArePortableAcrossMacs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pharos.toml")
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	load := func() Config {
+		t.Helper()
+		config, err := loadConfig(path, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return config
+	}
+	write(fmt.Sprintf("work_engine = \"comparison\"\nbackground_cpu_slots = %d\n", runtime.NumCPU()+8))
+	t.Setenv("PHAROS_WORK_ENGINE", "")
+	t.Setenv("PHAROS_BACKGROUND_CPUS", "many")
+	if config := load(); config.WorkEngine != "classic" {
+		t.Fatalf("a library's config chose the engine: %q", config.WorkEngine)
+	}
+	t.Setenv("PHAROS_WORK_ENGINE", "scheduled")
+	if config := load(); config.WorkEngine != "scheduled" || config.BackgroundCPUs != runtime.NumCPU() {
+		t.Fatalf("saved slots were not clamped to this Mac: %+v", config.BackgroundCPUs)
+	}
+	t.Setenv("PHAROS_BACKGROUND_CPUS", "0")
+	if config := load(); config.BackgroundCPUs != 1 {
+		t.Fatalf("environment slots were not clamped: %d", config.BackgroundCPUs)
+	}
+}
+
+// One encoding holds a grant clamped to the allowance while it encodes, one
+// slot while it verifies, and none during its durable sync or while it waits
+// for the capture lock and commits.
 func TestCaptureCompressionAdmitsItsEncoding(t *testing.T) {
 	config, target := compressionFixture(t)
 	manifest := readCaptureManifest(t, config, "conductor")
@@ -140,6 +179,11 @@ func TestCaptureCompressionAdmitsItsEncoding(t *testing.T) {
 		seen[stage] = a.facts().CPUAllocated
 		return nil
 	})
+	synced := -1
+	override(t, &syncToDrive, func(*os.File) error {
+		synced = a.facts().CPUAllocated
+		return nil
+	})
 	var done []compressedGeneration
 	if err := compressCaptures(withWorkAuthority(t.Context(), a), config, nil, func(g compressedGeneration) { done = append(done, g) }); err != nil {
 		t.Fatal(err)
@@ -147,8 +191,8 @@ func TestCaptureCompressionAdmitsItsEncoding(t *testing.T) {
 	if len(done) != 1 {
 		t.Fatalf("compressed %+v", done)
 	}
-	if seen["compress-encode"] != 1 || seen["compress-verify"] != 1 || seen["compress-manifest"] != 0 {
-		t.Fatalf("slots held at each step: %v", seen)
+	if seen["compress-encode"] != 1 || seen["compress-verify"] != 1 || seen["compress-manifest"] != 0 || synced != 0 {
+		t.Fatalf("slots held at each step: %v, durable sync %d", seen, synced)
 	}
 	if facts := a.facts(); facts.CPUAllocated != 0 {
 		t.Fatalf("after the pass: %+v", facts)

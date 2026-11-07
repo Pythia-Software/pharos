@@ -342,13 +342,7 @@ func (m *Manager) evictIdleLocked() bool {
 }
 
 func (m *Manager) dropLocked(key string, entry *managed, kill bool) {
-	delete(m.runners, key)
-	m.threads -= entry.threads
-	m.memory -= entry.memory
-	m.gpu -= entry.gpu
-	if entry.timer != nil {
-		entry.timer.Stop()
-	}
+	m.forgetLocked(key, entry)
 	if kill || entry.gpu > 0 {
 		entry.runner.pool.Kill()
 		// A caller may release its CPU grant as soon as Kill returns. Reap
@@ -359,15 +353,41 @@ func (m *Manager) dropLocked(key string, entry *managed, kill bool) {
 	}
 }
 
+// forgetLocked removes a runner from the manager and its budget.
+func (m *Manager) forgetLocked(key string, entry *managed) {
+	delete(m.runners, key)
+	m.threads -= entry.threads
+	m.memory -= entry.memory
+	m.gpu -= entry.gpu
+	if entry.timer != nil {
+		entry.timer.Stop()
+	}
+}
+
 // Kill stops a runner's workers at once (a stop, where results in flight
-// are not wanted); its users' calls fail.
+// are not wanted); its users' calls fail. It returns once the workers are
+// reaped, so a caller's CPU grant outlives them, but reaps them after
+// releasing the manager: other models' Runner calls do not wait for it. A
+// GPU runner is reaped before the lock is released, as on any drop, so the
+// GPU it held is free when the budget says so.
 func (m *Manager) Kill(runner *Runner) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	reap := []*Runner{}
 	for key, entry := range m.runners {
-		if entry.runner == runner {
-			m.dropLocked(key, entry, true)
+		if entry.runner != runner {
+			continue
 		}
+		if entry.gpu > 0 {
+			m.dropLocked(key, entry, true)
+			continue
+		}
+		m.forgetLocked(key, entry)
+		entry.runner.pool.Kill()
+		reap = append(reap, entry.runner)
+	}
+	m.mu.Unlock()
+	for _, killed := range reap {
+		killed.pool.Close()
 	}
 }
 

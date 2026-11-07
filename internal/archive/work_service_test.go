@@ -329,6 +329,34 @@ func TestModelWorkTaskDiscoversOncePerInputGeneration(t *testing.T) {
 	if len(*sessions) != 2 || (*sessions)[1].alloc.CPUs != 4 || (*sessions)[1].discoveries != 1 {
 		t.Fatalf("discoveries %+v", *sessions)
 	}
+	// While work remains, a moved generation is not a reason to rediscover:
+	// each step refreshes its own conversations. Running out of it is.
+	(*sessions)[1].page = []workMember{{ID: "c-1", Revision: "token"}}
+	if err := c.writeTransaction(t.Context(), "test ingest", func(tx *sql.Tx) error { return bumpAuthorshipInputs(tx) }); err != nil {
+		t.Fatal(err)
+	}
+	if sel, err = task.Next(t.Context(), library); err != nil || sel.Phase != "" || len(sel.Units) != 1 {
+		t.Fatalf("an ingest rediscovered a draining session: %+v %v", sel, err)
+	}
+	(*sessions)[1].page = nil
+	if sel, err = task.Next(t.Context(), library); err != nil || sel.Phase != "discover" {
+		t.Fatalf("an empty page claimed coverage for an older inventory: %+v %v", sel, err)
+	}
+	runModelPhase(t, task, sel)
+	// An idle session keeps its context for a while, then releases it.
+	idle := task.session.(*fakeModelSession)
+	task.Idle(task.used.Add(workModelSessionIdle / 2))
+	if task.session == nil || !idle.discovered {
+		t.Fatal("a briefly idle session was closed")
+	}
+	task.Idle(task.used.Add(workModelSessionIdle))
+	if task.session != nil || idle.discovered {
+		t.Fatal("an idle session kept its context")
+	}
+	if sel, err = task.Next(t.Context(), library); err != nil || sel.Phase != "discover" {
+		t.Fatalf("after an idle close: %+v %v", sel, err)
+	}
+	runModelPhase(t, task, sel)
 	// A finite selection refreshes its own conversations: no generation check.
 	if err := c.writeTransaction(t.Context(), "test ingest", func(tx *sql.Tx) error { return bumpAuthorshipInputs(tx) }); err != nil {
 		t.Fatal(err)
@@ -425,6 +453,19 @@ func TestConversationWorkChargesFailuresAtCanonicalRevisions(t *testing.T) {
 	})
 	if units := failedUnits(err); !slices.Equal(units, []workMember{{ID: "c-root", Revision: canonical}}) {
 		t.Fatalf("a batch error was charged at %v", units)
+	}
+	// A step that leaves its selection pending and stores nothing made no
+	// progress: charged, never counted as work and reselected at once.
+	_, err = runConversationWork(t.Context(), c, library, workAllocation{CPUs: 1}, func(context.Context, []string, workAllocation) (workDomainStep, error) {
+		return workDomainStep{Remaining: []string{"c-root"}}, nil
+	})
+	if units := failedUnits(err); !slices.Equal(units, []workMember{{ID: "c-root", Revision: canonical}}) {
+		t.Fatalf("a step without progress was charged at %v", units)
+	}
+	if out, err := runConversationWork(t.Context(), c, library, workAllocation{CPUs: 1}, func(context.Context, []string, workAllocation) (workDomainStep, error) {
+		return workDomainStep{Remaining: []string{"c-root"}, Progress: true}, nil
+	}); err != nil || out.Work != 1 || !out.Remaining {
+		t.Fatalf("a limit-cut step that stored part of its unit: %+v %v", out, err)
 	}
 	// The model cache being full is capacity, not a failed attempt.
 	_, err = runConversationWork(t.Context(), c, library, workAllocation{CPUs: 1}, func(context.Context, []string, workAllocation) (workDomainStep, error) {
@@ -627,6 +668,9 @@ func TestConversationWorkFiltersHeldConversationsBeforeItsMessageLimit(t *testin
 	}
 	var writing *conversationWorkTask
 	for _, def := range defs {
+		if row, ok := lookupOperationKind(def.Kind); !ok || row.Class != workClassPopulation {
+			t.Errorf("%s uses a conversation population but has execution class %q", def.Kind, row.Class)
+		}
 		if def.Kind == "analysis.authorship" {
 			writing = def.Task.(*conversationWorkTask)
 		}

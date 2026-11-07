@@ -94,15 +94,10 @@ func newApplicationManager(ctx context.Context, application string) (*applicatio
 	}
 	m := &applicationManager{registry: r, id: installationID(application), token: randomToken(), children: map[string]*applicationChild{}, suspended: map[string]bool{}, missing: map[string]bool{}, ctx: ctx,
 		client: &http.Client{Timeout: 2 * time.Minute, Transport: &http.Transport{Proxy: nil}}, starts: map[string]int{}, leaseDirCache: map[string][]string{}, canonicalCache: map[string]string{}}
+	// The broker collects resource history only under the process-start
+	// scheduled engine, which its services inherit; app start reads no
+	// library's config.
 	m.operations = newBrokerOperations(brokerOperationsPath(m.id))
-	if m.operations.history == nil {
-		for _, library := range r.Libraries {
-			if config, err := loadConfig(library.resolve(), false); err == nil && config.WorkEngine == "scheduled" {
-				m.operations.configureResourceHistory()
-				break
-			}
-		}
-	}
 	m.publishLocked()
 	return m, nil
 }
@@ -270,7 +265,11 @@ func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, c
 	_ = os.Remove(path)
 	cmd := exec.Command(runningExecutable(), "--config", config.Path, "serve", "--dynamic", "--endpoint", path, "--application", m.registry.Application)
 	cmd.Env = append(os.Environ(), parentEnv+"="+strconv.Itoa(os.Getpid()))
-	cmd.Env = append(cmd.Env, "PHAROS_RESOURCE_OWNER=broker")
+	// Only a broker that collects history owns it; otherwise each service
+	// keeps its own collector and its /api/status resources.
+	if m.operations.history != nil {
+		cmd.Env = append(cmd.Env, "PHAROS_RESOURCE_OWNER=broker")
+	}
 	cmd.Stderr = os.Stderr
 	// The service's output also goes to its log, from here: a panic is
 	// written by the runtime to the process's stderr, past any copy the
