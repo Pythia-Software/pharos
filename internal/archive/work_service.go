@@ -53,7 +53,7 @@ func (s *Server) configureWork() error {
 	}
 	w := &workService{server: s, authority: newWorkAuthority(max(1, s.Config().BackgroundCPUs)), executions: map[uint64]*workOperation{}, requests: map[uint64]*workOperation{}, batches: map[uint64]*workBatchOperation{}}
 	s.work = w
-	defs, err := s.workDefinitions(w.authority)
+	defs, err := s.expandedWorkDefinitions(w.authority)
 	if err != nil {
 		return err
 	}

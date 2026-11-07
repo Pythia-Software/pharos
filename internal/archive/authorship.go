@@ -1307,6 +1307,16 @@ func (c *Catalog) ingestEnded(stopped bool) {
 }
 
 func (c *Catalog) startAuthorshipInContext(generation string, parent context.Context) bool {
+	if c.work.declares("analysis.authorship") {
+		ctx := c.work.server.life.ctx
+		if parent != nil && parent.Err() != nil {
+			return false
+		}
+		// A read without a selected population adds ordinary live demand.
+		// Explicit recent requests still outrank its historical remainder.
+		_, _, err := c.work.submit(ctx, workRequestSpec{Key: "read:analysis.authorship", Kinds: []string{"analysis.authorship"}, Priority: workPriorityLive, Trigger: triggerRead})
+		return err == nil
+	}
 	state := &c.authorship
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -1332,7 +1342,7 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 		} else {
 			ctx = withWorkProgress(ctx, op.mirrorWork)
 		}
-		err := c.UpdateAuthorship(ctx, generation)
+		err := admitWorkCPU(ctx, c, 1, 1, func(ctx context.Context, _ workAllocation) error { return c.UpdateAuthorship(ctx, generation) })
 		state.mu.Lock()
 		state.running, state.lastError = false, ""
 		// Cancellation interrupts a rebuild; it must not block a later page retry.

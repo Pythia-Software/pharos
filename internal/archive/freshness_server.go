@@ -168,6 +168,13 @@ func (s *Server) countUpgradeInBackground() {
 		return
 	}
 	s.start(OperationSpec{Kind: "maintenance.upgrade-count", Trigger: triggerVersion}, func(ctx context.Context, _ *Op) error {
+		if s.work != nil {
+			// Counting reads the whole upgrade plan once per build: admitted.
+			return s.work.call(ctx, 1, func(ctx context.Context, _ workAllocation) error {
+				s.Catalog.storeUpgradeCount(ctx)
+				return nil
+			})
+		}
 		s.Catalog.storeUpgradeCount(ctx)
 		return nil
 	})

@@ -145,9 +145,25 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		defer func() { meter.release(ctx.Err() == nil) }()
 		ctx = withWorkProgress(ctx, meter.report)
 		meter.report(activityWork{Phase: "waiting for Git refresh"})
+		if s.work != nil && !backfill {
+			// Population execution: Git, tools and findings are the runner's
+			// coarse executions; this operation only asks for them.
+			meter.report(activityWork{Phase: "waiting for analyses"})
+			failure := s.work.refreshAnalysesWork(ctx)
+			meter.finish(ctx.Err() == nil)
+			return failure
+		}
 		refresh, name := s.Catalog.refreshMainIntegrations, "refresh"
 		if backfill {
 			refresh, name = s.Catalog.backfillMainIntegrations, "backfill"
+		}
+		if s.work != nil {
+			// The one-time backfill has no pending ledger to page; it runs
+			// once under an admitted allocation.
+			inner := refresh
+			refresh = func(ctx context.Context) error {
+				return s.work.call(ctx, 1, func(ctx context.Context, _ workAllocation) error { return inner(ctx) })
+			}
 		}
 		failure := refresh(ctx)
 		if failure != nil && ctx.Err() == nil {

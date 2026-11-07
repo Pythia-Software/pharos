@@ -185,13 +185,19 @@ func (s *Server) Serve() error {
 	if s.work != nil {
 		s.work.startLoop()
 	}
-	s.daemon("maintainLibrary", s.Catalog.maintainLibrary)
-	s.daemon("maintainSubstringIndex", s.Catalog.maintainSubstringIndex)
-	s.daemon("maintainToolOutputIndex", s.Catalog.maintainToolOutputIndex)
-	s.daemon("maintainTextSearch", s.Catalog.maintainTextSearch)
-	s.daemon("maintainToolSearch", s.Catalog.maintainToolSearch)
-	s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
-	s.daemon("maintainMessageLabelFacts", s.Catalog.maintainMessageLabelFacts)
+	if s.work != nil {
+		// Population execution: one coordinator submits the projection,
+		// search-index and label-query demand; the runner executes it.
+		s.daemon("maintainLibrary", s.maintainWork)
+	} else {
+		s.daemon("maintainLibrary", s.Catalog.maintainLibrary)
+		s.daemon("maintainSubstringIndex", s.Catalog.maintainSubstringIndex)
+		s.daemon("maintainToolOutputIndex", s.Catalog.maintainToolOutputIndex)
+		s.daemon("maintainTextSearch", s.Catalog.maintainTextSearch)
+		s.daemon("maintainToolSearch", s.Catalog.maintainToolSearch)
+		s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
+		s.daemon("maintainMessageLabelFacts", s.Catalog.maintainMessageLabelFacts)
+	}
 	s.daemon("maintainFingerprintImages", s.maintainFingerprintImages)
 	s.daemon("maintainFingerprintImagesSecondary", s.maintainFingerprintImagesSecondary)
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
@@ -836,20 +842,22 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		// in the background; progress is reported by /api/tools/status. A
 		// release stops it between conversations; the next build resumes.
 		started := s.start(OperationSpec{Kind: "tools.ledger.build", Trigger: triggerUser}, func(ctx context.Context, op *Op) error {
-			op.Plan(StepPlan{Name: "Build the tool index", Unit: "conversation", Total: -1}, StepPlan{Name: "Rebuild tool summaries", Total: -1})
-			op.Step("Build the tool index", "conversation", -1)
-			_, err := s.Catalog.BackfillToolLedger(ctx, func(done, total int) {
-				op.progress("Build the tool index", "", "conversation", float64(done), float64(total), total > 0)
+			return admitWorkCPU(ctx, s.Catalog, 1, 1, func(ctx context.Context, _ workAllocation) error {
+				op.Plan(StepPlan{Name: "Build the tool index", Unit: "conversation", Total: -1}, StepPlan{Name: "Rebuild tool summaries", Total: -1})
+				op.Step("Build the tool index", "conversation", -1)
+				_, err := s.Catalog.BackfillToolLedger(ctx, func(done, total int) {
+					op.progress("Build the tool index", "", "conversation", float64(done), float64(total), total > 0)
+				})
+				if err != nil && ctx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "Tool ledger build: %v\n", err)
+				}
+				op.Step("Rebuild tool summaries", "", -1)
+				rollup := s.Catalog.ensureToolRollup(ctx)
+				if rollup != nil && ctx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", rollup)
+				}
+				return errors.Join(err, rollup)
 			})
-			if err != nil && ctx.Err() == nil {
-				fmt.Fprintf(os.Stderr, "Tool ledger build: %v\n", err)
-			}
-			op.Step("Rebuild tool summaries", "", -1)
-			rollup := s.Catalog.ensureToolRollup(ctx)
-			if rollup != nil && ctx.Err() == nil {
-				fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", rollup)
-			}
-			return errors.Join(err, rollup)
 		})
 		if !started {
 			writeJSON(w, map[string]any{"error": "Pharos is stopping"}, http.StatusServiceUnavailable)

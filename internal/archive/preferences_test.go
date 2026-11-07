@@ -16,6 +16,32 @@ func preferencesCall(t *testing.T, server *Server, method, path, body string) *h
 	return response
 }
 
+func TestPreferencesChangingAgentAnalysisEndsOldDemand(t *testing.T) {
+	c, config := testCatalog(t)
+	config.WorkEngine = "scheduled"
+	s := testServer(t, config, c)
+	s.work.once.Do(func() {})
+	s.work.runner.SetPaused(true)
+	if err := c.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{agentEventsFlag: true}}); err != nil {
+		t.Fatal(err)
+	}
+	_, request, err := s.work.submit(t.Context(), workRequestSpec{Kinds: []string{"analysis.agent_events"}, Priority: workPriorityLive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{agentEventsFlag: false}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-request.done:
+	default:
+		t.Fatal("disabling agent analysis stranded its request")
+	}
+	if request.facts.State != opInterrupted || len(s.work.runner.Inspect().Requests) != 0 {
+		t.Fatalf("old policy demand survived: %+v", request.facts)
+	}
+}
+
 func TestPreferencesFollowTheLibrary(t *testing.T) {
 	useHost(t, "host-a")
 	catalog, config := testCatalog(t)

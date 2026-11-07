@@ -530,6 +530,11 @@ func (c *Catalog) currentToolRollup(ctx context.Context) error {
 // refreshToolRollup runs ensureToolRollup in the background unless it is
 // already running there.
 func (c *Catalog) refreshToolRollup() {
+	if c.work.declares("analysis.tools") {
+		c.work.arm("analysis.tools", findingsMeasure)
+		_, _, _ = c.work.submit(c.work.server.life.ctx, workRequestSpec{Key: "read:analysis.tools", Kinds: []string{"analysis.tools"}, Priority: workPriorityLive, Trigger: triggerRead})
+		return
+	}
 	state := &c.tools
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -537,7 +542,9 @@ func (c *Catalog) refreshToolRollup() {
 		return
 	}
 	refresh := func(ctx context.Context, op *Op) error {
-		err := c.ensureToolRollup(withWorkProgress(ctx, op.mirrorWork))
+		err := admitWorkCPU(ctx, c, 1, 1, func(ctx context.Context, _ workAllocation) error {
+			return c.ensureToolRollup(withWorkProgress(ctx, op.mirrorWork))
+		})
 		if err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
 		}

@@ -48,6 +48,7 @@ func (c *Catalog) UIPreferences(ctx context.Context) (map[string]json.RawMessage
 // SetUIPreferences stores the values in body["set"] and removes the names in
 // body["delete"], all or nothing.
 func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) error {
+	wasEventsEnabled := c.work != nil && c.work.server.agentEventsEnabled(ctx)
 	set, _ := body["set"].(map[string]any)
 	remove, _ := body["delete"].([]any)
 	updates := make(map[string]string, len(set))
@@ -91,6 +92,10 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 	c.flags.invalidate()
 	if err == nil {
 		c.rememberSavedFlags(updates, deletes)
+		if c.work != nil && wasEventsEnabled != c.work.server.agentEventsEnabled(ctx) {
+			c.work.runner.InterruptKinds([]string{"analysis.agent_events"}, "agent analysis policy changed; reissue the request with the current analyses")
+			c.work.runner.Wake()
+		}
 	}
 	return err
 }

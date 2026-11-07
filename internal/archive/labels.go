@@ -1618,6 +1618,9 @@ var labelsPowerCheck = time.Minute
 // which stops if this Mac goes onto battery; on battery the backlog waits,
 // and the stage stays pending for the next pass.
 func (s *Server) chainLabels(ctx context.Context, settings LabelerSettings) error {
+	if s.work.declares("analysis.labels") {
+		return s.routePopulationStage(ctx, "labels", "analysis.labels", backgroundExplicit(ctx))
+	}
 	if missing := settings.missingAssets(); len(missing) > 0 {
 		// Services can run without the app broker, and a broker download may
 		// have served another library's assets. Ensure this stage's assets

@@ -311,6 +311,16 @@ var agentEventsChunkRows = 512
 // row in one transaction. Preparation, inference and persistence overlap.
 // Cancellation keeps committed conversations; the next run resumes the rest.
 func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, settings AgentEventSettings, opts AgentEventsRunOptions) (*AgentEventsRunStats, error) {
+	if authority := workAuthorityFor(ctx, c); authority != nil {
+		if _, admitted := workAllocationFrom(ctx); !admitted {
+			var stats *AgentEventsRunStats
+			err := admitWorkCPU(ctx, c, 1, min(authority.cap(), max(1, labels.Threads)+min(4, max(1, labels.Threads))), func(ctx context.Context, _ workAllocation) (err error) {
+				stats, err = c.RunAgentEvents(ctx, labels, settings, opts)
+				return err
+			})
+			return stats, err
+		}
+	}
 	started := time.Now()
 	stats := &AgentEventsRunStats{}
 	defer func() { stats.Total = time.Since(started) }()
@@ -332,23 +342,24 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 	if labels.Worker == "" && !opts.DryRun {
 		return stats, fmt.Errorf("%w: set labels_worker (or PHAROS_LABELS_WORKER)", labelrt.ErrModelUnavailable)
 	}
-	if !c.agentEventsRun.TryLock() {
-		return stats, errAgentEventsRunning
+	unlock, err := c.agentEventsInvocation()
+	if err != nil {
+		return stats, err
 	}
-	defer c.agentEventsRun.Unlock()
-	if c.Path != "" {
-		lease, err := fileLease(canonical(c.Path)+".agent-events.lock", true)
-		if errors.Is(err, filelock.ErrContended) {
-			return stats, fmt.Errorf("%w: %w", errAgentEventsRunning, err)
-		}
-		if err != nil {
-			return stats, fmt.Errorf("lock the agent events pass: %w", err)
-		}
-		defer lease.Close()
-	}
+	defer unlock()
 	verifier, err := loadAgentEventVerifier(settings.ModelDir, settings.Variant)
 	if err != nil {
 		return stats, err
+	}
+	prep := 0
+	gate := &labelsRun{}
+	if allocation, admitted := workAllocationFrom(ctx); admitted {
+		var serial bool
+		prep, labels.Threads, serial = labelsSplit(allocation.CPUs, labels.Threads, labelsGPUOnly(verifier.model, labels))
+		labels.Workers, opts.ThreadTarget = 1, nil
+		if serial {
+			gate.serial = make(chan struct{}, 1)
+		}
 	}
 	if err := c.ensureAgentEventsLedger(ctx); err != nil {
 		return stats, err
@@ -383,13 +394,12 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 		release()
 	}()
 	infer := func(pending []*agentEventsConversation) error {
-		framed := []labelrt.Framed{}
-		for _, conversation := range pending {
-			for _, message := range conversation.messages {
-				framed = append(framed, message.rows...)
-			}
+		end, err := gate.hold(ctx)
+		if err != nil {
+			return err
 		}
-		if len(framed) > 0 {
+		defer end()
+		if framed := agentEventFramed(pending); len(framed) > 0 {
 			status.stage("scoring", true)
 			defer status.stage("scoring", false)
 			next := target.settings(labels)
@@ -400,11 +410,8 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 			}
 			labels = next
 			if runner == nil {
-				cfg := labelrt.RunnerConfig{GPU: verifier.model.MayUseGPU(labels.Backend), Worker: labels.Worker, Args: runtimeArgs(labels), Workers: max(1, labels.Workers), Threads: labels.Threads,
-					MaxBatch: max(1, labels.MaxBatch), Backoff: labelsWorkerBackoff,
-					OnRestart: func(slot int, cause error) { progress("agent events: restarting worker %d after: %v", slot, cause) }}
 				var err error
-				if runner, release, err = c.labelerRunner(ctx, labels, verifier.model, cfg); err != nil {
+				if runner, release, err = c.labelerRunner(ctx, labels, verifier.model, agentEventsRunnerConfig(verifier, labels, progress)); err != nil {
 					runner, release = nil, func() {}
 					return err
 				}
@@ -421,20 +428,24 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 				stopPool()
 				return err
 			}
-			for _, conversation := range pending {
-				for _, message := range conversation.messages {
-					message.outputs, outputs = outputs[:len(message.rows)], outputs[len(message.rows):]
-				}
-			}
+			assignAgentEventOutputs(pending, outputs)
 		}
 		return nil
 	}
 	workers := labelerPreparationWorkers(labels, opts.Limit, false)
+	if prep > 0 {
+		workers = prep
+	}
 	builders := make([]*labelsItemBuilder, workers)
 	pipeline := agentEventsPipeline{
 		workers: workers,
 		opts:    opts, stats: stats, progress: progress, status: status,
 		build: func(ctx context.Context, worker int, job *agentEventsConversation) (conversation *agentEventsConversation, err error) {
+			end, err := gate.hold(ctx)
+			if err != nil {
+				return nil, err
+			}
+			defer end()
 			if builders[worker] == nil {
 				builders[worker] = builder.fork(ctx)
 			}
@@ -469,6 +480,53 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 		stats.MessagesScored, stats.MessagesUnchanged, stats.Candidates, stats.Events,
 		stats.Prepare.Round(time.Millisecond), stats.Infer.Round(time.Millisecond), stats.Write.Round(time.Millisecond))
 	return stats, nil
+}
+
+// agentEventsInvocation takes the pass's locks: one run at a time in this
+// process, and across processes through a lease the OS releases if the
+// holder exits. Either held elsewhere is errAgentEventsRunning.
+func (c *Catalog) agentEventsInvocation() (release func(), err error) {
+	if !c.agentEventsRun.TryLock() {
+		return nil, errAgentEventsRunning
+	}
+	if c.Path == "" {
+		return c.agentEventsRun.Unlock, nil
+	}
+	lease, err := fileLease(canonical(c.Path)+".agent-events.lock", true)
+	if err != nil {
+		c.agentEventsRun.Unlock()
+		return nil, fmt.Errorf("%w: %v", errAgentEventsRunning, err)
+	}
+	return func() { lease.Close(); c.agentEventsRun.Unlock() }, nil
+}
+
+// agentEventsRunnerConfig is how the verifier's workers run with labels'
+// worker, threads and batching.
+func agentEventsRunnerConfig(verifier *agentEventVerifier, labels LabelerSettings, progress func(string, ...any)) labelrt.RunnerConfig {
+	return labelrt.RunnerConfig{GPU: verifier.model.MayUseGPU(labels.Backend), Worker: labels.Worker, Args: runtimeArgs(labels), Workers: max(1, labels.Workers), Threads: labels.Threads,
+		MaxBatch: max(1, labels.MaxBatch), Backoff: labelsWorkerBackoff,
+		OnRestart: func(slot int, cause error) { progress("agent events: restarting worker %d after: %v", slot, cause) }}
+}
+
+// agentEventFramed is the rows of pending conversations' messages, in order.
+func agentEventFramed(pending []*agentEventsConversation) []labelrt.Framed {
+	framed := []labelrt.Framed{}
+	for _, conversation := range pending {
+		for _, message := range conversation.messages {
+			framed = append(framed, message.rows...)
+		}
+	}
+	return framed
+}
+
+// assignAgentEventOutputs gives each message its rows' outputs, in
+// agentEventFramed's order.
+func assignAgentEventOutputs(pending []*agentEventsConversation, outputs []labelrt.RowOutputs) {
+	for _, conversation := range pending {
+		for _, message := range conversation.messages {
+			message.outputs, outputs = outputs[:len(message.rows)], outputs[len(message.rows):]
+		}
+	}
 }
 
 // agentEventsWork chooses the conversations to look at, newest first: dirty
@@ -809,6 +867,9 @@ var agentEventsChainLimit = 1000
 // chainAgentEvents is the analysis chain's agent events stage, after labels:
 // the same power rules (labelsForPower) and the same backlog handling.
 func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, settings AgentEventSettings) error {
+	if s.work.declares("analysis.agent_events") {
+		return s.routePopulationStage(ctx, "agent_events", "analysis.agent_events", backgroundExplicit(ctx))
+	}
 	if labels.Worker == "" {
 		// No worker is installed beside Pharos or configured.
 		return errStageContinues

@@ -874,8 +874,19 @@ func (c *Catalog) refreshFindings(ctx context.Context, fullPass func(built, gene
 // It is started by GET /api/findings before findings exist, a read that
 // starts a write (§1): the page waits for it, so it is foreground (§10).
 func (c *Catalog) refreshFindingsInBackground(force bool) {
+	if c.work.declares("analysis.findings") {
+		mode := findingsAuto
+		if force {
+			mode = findingsForce
+		}
+		c.work.arm("analysis.findings", mode)
+		_, _, _ = c.work.submit(c.work.server.life.ctx, workRequestSpec{Key: "read:analysis.findings", Kinds: []string{"analysis.findings"}, Priority: workPriorityLive, Trigger: triggerRead})
+		return
+	}
 	c.startBackground(OperationSpec{Kind: "analysis.findings", Trigger: triggerRead, Priority: priorityForeground}, func(ctx context.Context, op *Op) error {
-		err := c.RefreshFindings(withWorkProgress(ctx, op.mirrorWork), force)
+		err := admitWorkCPU(ctx, c, 1, 1, func(ctx context.Context, _ workAllocation) error {
+			return c.RefreshFindings(withWorkProgress(ctx, op.mirrorWork), force)
+		})
 		if err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Findings: %v\n", err)
 		}

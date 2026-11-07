@@ -41,6 +41,10 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 	case "backup":
 		return s.backgroundBackup(ctx, op)
 	case "writing-refine":
+		if s.work.declares(kindRefine) {
+			// The runner's execution is the refinement's operation.
+			return s.work.runRefineWork(ctx, backgroundExplicit(ctx))
+		}
 		ctx, child := op.Child(OperationSpec{Kind: "analysis.authorship.refine", Trigger: triggerChained})
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -107,7 +111,9 @@ func (s *Server) captureAndIndex(ctx context.Context, op *Op, names []string) er
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		result := s.Catalog.IndexCapture(withIngestMode(ctx, ingestMode{deferGit: true}), target, nil)
+		result := s.Catalog.admittedIngest(ctx, target.Source, target.Host.ID, func(ctx context.Context) IngestResult {
+			return s.Catalog.IndexCapture(withIngestMode(ctx, ingestMode{deferGit: true}), target, nil)
+		})
 		op.Advance(1)
 		wrote = wrote || result.Workspaces > 0
 		if result.Error != nil && failure == nil {
