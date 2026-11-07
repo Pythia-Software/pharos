@@ -29,7 +29,7 @@ type ProbeSelection struct {
 // The guided UI always sends kinds, including [] when deferring setup.
 func selectedProbe(config Config, catalog *Catalog, selection ProbeSelection) (ProbeReport, error) {
 	if selection.Kinds == nil {
-		if len(selection.Locations) != 0 {
+		if len(selection.Locations) != 0 || selection.OnlyLocations {
 			return ProbeReport{}, probeRequestError{fmt.Errorf("choose tools before adding folders")}
 		}
 		return ProbeSources(config, catalog), nil

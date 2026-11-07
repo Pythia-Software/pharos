@@ -418,7 +418,8 @@ a library is opened on another Mac. It first asks how to find the history:
   there: not the usual places, not the variables that move them, and not the
   count of new history in the usual places (`"only_locations": true`). A
   folder chosen because it holds the history (Claude's `projects`, Zed's
-  `threads`, Cursor CLI's `chats`) is read as the folder above it.
+  `threads`, Cursor CLI's `chats`) is read as the folder above it. TL1's
+  registry names each project's `tl1.json`, which is read too.
 - **Import an export** adds a ChatGPT or Claude.ai export (below).
 
 Setup lists the tools in the registry's `Setup` order, Cursor and Cursor CLI as

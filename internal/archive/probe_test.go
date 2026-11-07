@@ -760,6 +760,10 @@ func TestProbeSelectedTools(t *testing.T) {
 	if code, _ := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"kinds":["claude"],"accept":["codex"]}`); code != 400 {
 		t.Fatal("accepted an unselected tool", code)
 	}
+	calls := shellCalls
+	if code, _ := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"only_locations":true,"accept":[]}`); code != 400 || shellCalls != calls {
+		t.Fatal("named folders only, with no tools, looked everywhere", code, shellCalls)
+	}
 	if _, err := os.Stat(hostConfigPath(server.Config())); !os.IsNotExist(err) {
 		t.Fatal("discovery changed source permissions", err)
 	}
