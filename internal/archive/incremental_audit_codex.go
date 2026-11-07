@@ -85,7 +85,7 @@ func readCodexAuditNames(ctx context.Context, adapter *jsonlAdapter, identities,
 			reader.db.Close()
 		}
 	}()
-	databases, err := codexNamingDatabases(adapter.config.Path)
+	databases, err := codexNamingDatabases(ctx, adapter.config.Path)
 	if err != nil {
 		return result, err
 	}
@@ -101,7 +101,7 @@ func readCodexAuditNames(ctx context.Context, adapter *jsonlAdapter, identities,
 		if err != nil {
 			return result, err
 		}
-		db, err := openReadOnlySQLite(readable)
+		db, err := openSourceSQLite(ctx, readable)
 		if err != nil {
 			return result, err
 		}

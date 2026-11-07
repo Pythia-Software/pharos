@@ -381,7 +381,7 @@ func TestProbeOffersAntigravityToMacsAlreadySetUp(t *testing.T) {
 func TestAntigravityCapturePlanListsWhatTheAdapterReads(t *testing.T) {
 	dir := antigravityFixture(t)
 	probePut(t, filepath.Join(dir, "brain", antigravityRoot, "scratch", "notes.txt"), "not a transcript")
-	plan, err := planCapture(SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: dir})
+	plan, err := planCapture(context.Background(), SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestAntigravityPrintModeRunsAreHeadless(t *testing.T) {
 	if root, child, other := sender(catalog, antigravityRoot), sender(catalog, antigravityChild), sender(catalog, antigravityOther); root != "automation:agy-print" || child != "" || other != "" {
 		t.Fatalf("senders = %q %q %q", root, child, other)
 	}
-	plan, err := planCapture(source)
+	plan, err := planCapture(context.Background(), source)
 	if err != nil {
 		t.Fatal(err)
 	}

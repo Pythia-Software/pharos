@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -445,7 +446,7 @@ func TestCopilotIsSetUpAndFollowedLikeOtherTools(t *testing.T) {
 
 func TestCopilotCaptureHoldsOnlyTheSessions(t *testing.T) {
 	root := copilotFixture(t)
-	plan, err := planCapture(SourceConfig{Name: "copilot", Kind: "copilot", Path: root})
+	plan, err := planCapture(context.Background(), SourceConfig{Name: "copilot", Kind: "copilot", Path: root})
 	if err != nil {
 		t.Fatal(err)
 	}

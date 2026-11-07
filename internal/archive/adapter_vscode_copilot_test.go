@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -235,7 +236,7 @@ func TestVSCodeCopilotCaptureHoldsOnlyTheSessions(t *testing.T) {
 	useHost(t, "host-a")
 	root := vscodeFixture(t)
 	source := SourceConfig{Name: "vscode", Kind: "vscode-copilot", Path: root, Account: "local", Enabled: true}
-	plan, err := planCapture(source)
+	plan, err := planCapture(context.Background(), source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +366,7 @@ func TestVSCodeCopilotUnreadableWindowLeavesTheOthers(t *testing.T) {
 	if err == nil || strings.Join(found, ",") != vscodeSessionID+","+vscodeEmptyID {
 		t.Fatalf("records %v, error %v", found, err)
 	}
-	if _, err := planCapture(SourceConfig{Name: "vscode", Kind: "vscode-copilot", Path: root}); err == nil {
+	if _, err := planCapture(context.Background(), SourceConfig{Name: "vscode", Kind: "vscode-copilot", Path: root}); err == nil {
 		t.Fatal("a capture missing a window's sessions was planned")
 	}
 }

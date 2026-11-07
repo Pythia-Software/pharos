@@ -2,6 +2,7 @@ package archive
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"maps"
 	"os"
@@ -444,7 +445,7 @@ func TestChatGPTExportReadsShardsAndZIPs(t *testing.T) {
 	for _, path := range []string{sharded, zipped} {
 		useHost(t, "host-a")
 		source := chatGPTSource(path)
-		plan, err := planCapture(source)
+		plan, err := planCapture(context.Background(), source)
 		if err != nil {
 			t.Fatal(err)
 		}

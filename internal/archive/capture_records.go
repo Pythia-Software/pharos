@@ -718,7 +718,7 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	oldCtx := s.c.ctx
 	s.c.ctx = ctx
 	defer func() { s.c.ctx = oldCtx }()
-	db, e := openReadOnlySQLite(file)
+	db, e := openSourceSQLite(ctx, file)
 	if e != nil {
 		return recordObject{}, e
 	}

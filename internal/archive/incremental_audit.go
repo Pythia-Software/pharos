@@ -376,7 +376,7 @@ func (c *Catalog) auditUnitMode(ctx context.Context, unit syncUnit, runID string
 		}
 		var input retainedInput
 		if unit.Source.Kind == "codex" && unit.Source.Options["sqlite_record_capture"] != true {
-			plan, e := planCapture(unit.Source)
+			plan, e := planCapture(ctx, unit.Source)
 			if e != nil {
 				result.Detail = e.Error()
 				return
@@ -701,7 +701,7 @@ func jsonlAuditDependencies(adapter *jsonlAdapter, paths []string) ([]string, []
 		} else if err != nil && !os.IsNotExist(err) {
 			return nil, nil, err
 		}
-		databases, err := codexNamingDatabases(adapter.config.Path)
+		databases, err := codexNamingDatabases(adapter.context(), adapter.config.Path)
 		return files, databases, err
 	}
 	seen := map[string]bool{}
@@ -859,7 +859,7 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 			return nil, nil, err
 		}
-		if err := snapshotSQLite(ctx, path, destination); err != nil {
+		if err := snapshotSourceSQLite(ctx, path, destination); err != nil {
 			return nil, nil, err
 		}
 		after, err := sqliteDependencyState(path)

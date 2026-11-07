@@ -1020,6 +1020,9 @@ func (s *Server) sourceInventory() (map[string]any, error) {
 		item := map[string]any{"name": source.Name, "kind": source.Kind, "account": source.Account, "path": nilIfEmpty(source.Path), "path_status": pathStatus, "enabled": source.Enabled, "capability": capability, "coverage": coverage, "last_attempt_at": state["last_attempt_at"], "last_success_at": state["last_success_at"], "pending_count": integer(state["pending_count"]), "error": state["error"], "stale": stale, "host_id": host.ID, "host_label": host.Label}
 		item["preservation_mode"] = preservationMode(source)
 		item["preservation"] = s.Catalog.inputPreservationStatus(context.Background(), host.ID, source.Name)
+		if reads := sqliteFallbackReads(source.Path); len(reads) > 0 {
+			item["sqlite_reads"] = reads
+		}
 		items = append(items, item)
 		if source.Enabled {
 			enabled++

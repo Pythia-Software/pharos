@@ -152,7 +152,7 @@ func readPendingDeliveryPlan(ctx context.Context, config Config) (pendingDeliver
 			plan.Capture = true
 			return plan, nil
 		}
-		inventory, err := planCapture(source)
+		inventory, err := planCapture(ctx, source)
 		if err != nil {
 			return plan, err
 		}

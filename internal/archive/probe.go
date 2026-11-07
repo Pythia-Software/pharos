@@ -792,7 +792,7 @@ func cursorHasChats(database string) bool {
 	if _, err := os.Stat(database); err != nil {
 		return false
 	}
-	db, err := openReadOnlySQLite(database)
+	db, err := openSourceSQLite(context.Background(), database)
 	if err != nil {
 		return false
 	}
