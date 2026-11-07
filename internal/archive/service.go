@@ -308,20 +308,16 @@ func parentGone(ctx context.Context, parent int, every time.Duration) <-chan str
 	return gone
 }
 
+// driveVolumeIdentity observes the watchdog's directory; tests replace it.
+var driveVolumeIdentity = readDirectoryVolumeIdentity
+
 // driveGone is closed once dir is missing or no longer on the volume it was
 // on at the start: its drive was unplugged or force-unmounted.
 func driveGone(ctx context.Context, dir string, every time.Duration) <-chan struct{} {
 	gone := make(chan struct{})
-	device := func() (int32, bool) {
-		info, err := os.Stat(dir)
-		if err != nil {
-			return 0, false
-		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		return stat.Dev, ok
-	}
-	start, ok := device()
-	if !ok {
+	readIdentity := driveVolumeIdentity
+	start, err := readIdentity(dir)
+	if err != nil {
 		return gone
 	}
 	go func() {
@@ -333,7 +329,7 @@ func driveGone(ctx context.Context, dir string, every time.Duration) <-chan stru
 				return
 			case <-ticker.C:
 			}
-			if current, ok := device(); !ok || current != start {
+			if current, err := readIdentity(dir); err != nil || current != start {
 				close(gone)
 				return
 			}
