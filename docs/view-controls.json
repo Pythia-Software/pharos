@@ -8583,13 +8583,13 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "0f5f91dee382ed29:0",
+      "key": "11a26aa66851a5e0:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
-      "tag": "button",
-      "control": "",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "tag": "select",
+      "control": "value={draft.kind} onChange={e => { const kind = e.target.value as Draft[\"kind\"]; update({ kind }); if (!proposal && kind === \"bug\" && !logs) void includeLogs(true); }}",
+      "contract": "editing",
+      "reason": "Edits the type of an unsent feedback report; changing type never grants send consent."
     },
     {
       "key": "21c546ddb1da3f5d:0",
@@ -8619,6 +8619,42 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "382c8515f9a59919:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => void discardDraft()}",
+      "contract": "action",
+      "reason": "Explicitly discards only this inline feedback proposal and persists that outcome; it never submits feedback or alters a saved receipt."
+    },
+    {
+      "key": "382c8515f9a59919:1",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => void discardDraft()}",
+      "contract": "action",
+      "reason": "Explicitly discards only this inline feedback proposal and persists that outcome; it never submits feedback or alters a saved receipt."
+    },
+    {
+      "key": "50916540af5cdca0:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "div",
+      "control": "onKeyDown={proposal ? event => { // This editor lives inside Ask's form. Enter in a field cannot submit that // form or approve feedback; only the dedicated button grants consent. event.stopPropagation(); if (event.key === \"Escape\") { event.preventDefault(); void keepDraft(); } else if (event.key === \"Enter\" && !(event.target instanceof HTMLTextAreaElement) && !(event.target instanceof HTMLButtonElement)) event.preventDefault(); } : undefined}",
+      "contract": "editing",
+      "reason": "Feedback draft keyboard handling keeps Escape and Enter local to the inline editor; these events cannot approve feedback or submit the Ask question."
+    },
+    {
+      "key": "5553b5dc6b4c68f2:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={proposal ? () => void send() : undefined}",
+      "contract": "action",
+      "reason": "Explicit user approval submits the currently reviewed feedback report; consent is never restored from a URL."
+    },
+    {
       "key": "6f6ae816efe5c29f:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
@@ -8626,6 +8662,15 @@
       "control": "value={draft.comment} onChange={e => update({ comment: e.target.value })}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
+      "key": "84ee876f61972562:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => setCollapsed(false)}",
+      "contract": "editing",
+      "reason": "Reopens an unsent feedback editor or saved receipt inside the conversation; it cannot grant submission consent."
     },
     {
       "key": "b3dfbcb52d181747:0",
@@ -8642,15 +8687,6 @@
       "owner": "Composer",
       "tag": "textarea",
       "control": "value={diagnostics[kind] || \"\"} onChange={e => setDiagnostics(d => ({ ...d, [kind]: boundedLog(e.target.value) }))}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "d50ef63da5300b1e:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "select",
-      "control": "value={draft.kind} onChange={e => { const kind = e.target.value as Draft[\"kind\"]; update({ kind }); if (kind === \"bug\" && !logs) void includeLogs(true); }}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
