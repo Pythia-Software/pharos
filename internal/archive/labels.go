@@ -582,7 +582,10 @@ func (c *Catalog) labelsInvocation() (release func(), err error) {
 	lease, err := fileLease(canonical(c.Path)+".labels.lock", true)
 	if err != nil {
 		c.labels.Unlock()
-		return nil, fmt.Errorf("%w: %v", errLabelsRunning, err)
+		if errors.Is(err, filelock.ErrContended) {
+			return nil, fmt.Errorf("%w: %w", errLabelsRunning, err)
+		}
+		return nil, fmt.Errorf("lock the labels run: %w", err)
 	}
 	return func() { lease.Close(); c.labels.Unlock() }, nil
 }

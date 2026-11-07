@@ -130,6 +130,9 @@ func TestScheduledCommandAuthorityReachesBackgroundWork(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer ops.close()
+		if workAuthorityFor(context.Background(), catalog) != ops.authority {
+			t.Fatal("detached catalog work lost the command's authority")
+		}
 		got := make(chan *workAuthority, 1)
 		catalog.startBackground(OperationSpec{Kind: "analysis.labels"}, func(ctx context.Context, op *Op) error {
 			got <- workAuthorityFor(ctx, catalog)
@@ -150,7 +153,7 @@ func TestScheduledCommandAuthorityReachesBackgroundWork(t *testing.T) {
 		if op.reg.resourceLedger == nil || !op.reg.telemetry {
 			t.Error("a scheduled leased command records no resource telemetry")
 		}
-		if leased.authority == nil || workAuthorityFor(ctx, leased) != leased.authority {
+		if leased.commandCPUs.Load() == nil || workAuthorityFor(ctx, leased) != leased.commandCPUs.Load() {
 			t.Error("a leased command's catalog lacks its authority")
 		}
 		return nil

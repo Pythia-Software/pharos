@@ -19,7 +19,8 @@ import (
 //  2. an authority in ctx with no grant yet (withWorkAuthority): a scheduled
 //     command's, which has no service;
 //  3. the catalog's attached work service (Catalog.work);
-//  4. none (the classic engine): the leaf runs as it always has, at its own
+//  4. the catalog's attached command authority (Catalog.commandCPUs);
+//  5. none (the classic engine): the leaf runs as it always has, at its own
 //     most.
 
 // workAuthorityKey carries an authority without a grant.
@@ -44,6 +45,9 @@ func workAuthorityFor(ctx context.Context, c *Catalog) *workAuthority {
 	}
 	if c != nil && c.work != nil {
 		return c.work.authority
+	}
+	if c != nil {
+		return c.commandCPUs.Load()
 	}
 	return nil
 }

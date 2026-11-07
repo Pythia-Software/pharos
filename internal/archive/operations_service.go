@@ -124,7 +124,7 @@ func (c *Catalog) startBackground(spec OperationSpec, work func(ctx context.Cont
 	if c.background != nil {
 		return c.background(spec, work)
 	}
-	ctx, op := c.beginOp(withWorkAuthority(context.Background(), c.authority), spec)
+	ctx, op := c.beginOp(withWorkAuthority(context.Background(), c.commandCPUs.Load()), spec)
 	c.unowned.Go(func() { runOperation(op, func(context.Context, *Op) error { return work(ctx, op) }) })
 	return true
 }

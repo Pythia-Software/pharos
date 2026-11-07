@@ -81,10 +81,10 @@ type Catalog struct {
 	// or a CLI command's); nil registers nothing.
 	ops  *opRegistry
 	work *workService
-	// authority is a Terminal command's CPU authority under the scheduled
+	// commandCPUs is a Terminal command's CPU authority under the scheduled
 	// engine (cliWorkAuthority), for the background work it starts; a
 	// service's catalog answers to work instead.
-	authority         *workAuthority
+	commandCPUs       atomic.Pointer[workAuthority]
 	unowned           sync.WaitGroup
 	projectionBatches atomic.Int32
 	// ingestRuns counts this process's running ingests (see cacheVersion).

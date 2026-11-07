@@ -75,7 +75,7 @@ func (o *cliOperations) useAuthority(config Config, catalog *Catalog) {
 		o.reg.resourceLedger = newTaskResourceLedger(20, 200)
 	}
 	if catalog != nil {
-		catalog.authority = o.authority
+		catalog.commandCPUs.Store(o.authority)
 	}
 }
 
@@ -355,7 +355,8 @@ func runLeasedCatalog(config Config, command string, spec OperationSpec, open fu
 
 // attach starts journaling into catalog, once it is open.
 func (o *cliOperations) attach(catalog *Catalog) {
-	catalog.ops, catalog.authority = o.reg, o.authority
+	catalog.ops = o.reg
+	catalog.commandCPUs.Store(o.authority)
 	if o.journal = newJournalWriter(catalog, o.reg); o.journal == nil {
 		return
 	}
