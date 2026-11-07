@@ -62,7 +62,7 @@ declare global {
     routeFromLocation?: () => void;
     pharosConcurrencySummary?: {
       open(): void;
-      load(): Promise<void>;
+      load(refresh?: boolean): Promise<void>;
       value(key: string, generatedAt: string | null, from?: string): { amount: string; title: string };
       runtime(metric: string, key: string, generatedAt: string | null, from?: string): { value: number | null; title: string };
       note(): string;
@@ -89,7 +89,7 @@ export function closeConcurrencyModal(): void {
 export function startConcurrencySummary(): void {
   window.pharosConcurrencySummary = {
     open: openConcurrencyModal,
-    async load() { await loadConcurrencyData(true); },
+    async load(refresh = true) { await loadConcurrencyData(refresh); },
     value(key, generatedAt, from) {
       if (!cached) return { amount: loadError ? "—" : "…", title: loadError || "Loading timing data" };
       const settings = readConcurrencySettings(), now = generatedAt ? Date.parse(generatedAt) : Date.now();
