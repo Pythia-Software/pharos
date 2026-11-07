@@ -1,3 +1,4 @@
+import { DataReadinessIndicator } from "./data-readiness";
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ReviewDialog, type CartGroup, type Target } from "./findings";
 import { useViewState } from "./view-state";
@@ -100,7 +101,7 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
     dismissed: "Problems you closed. Bring one back at any time.",
   };
   return <div className="findings-page fixes-page">
-    <div className="view-heading findings-heading"><div><h1>{view === "settings" ? "Fixes settings" : view === "table" && !selected ? "Fixes table" : "Fixes"}</h1><p className="muted">{lede}</p></div></div>
+    <div className="view-heading findings-heading"><div><h1>{view === "settings" ? "Fixes settings" : view === "table" && !selected ? "Fixes table" : "Fixes"}</h1><p className="muted">{lede}</p></div>{view !== "settings" && view !== "table" ? <DataReadinessIndicator id="fixes:overview" title="Fixes" dataset="fixes" query={{view,selected}} /> : null}</div>
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
     {notice ? <p className="safety-notice" role="status">{notice}</p> : null}
     {view === "settings" ? <FixesSettings overview={overview} refreshDiscovery={refreshDiscovery} />

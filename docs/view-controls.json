@@ -316,6 +316,18 @@
       "field": "reader_writing"
     },
     {
+      "file": "web/src/data-readiness.tsx",
+      "field": "readiness_open"
+    },
+    {
+      "file": "web/src/data-readiness.tsx",
+      "field": "readiness_preview"
+    },
+    {
+      "file": "web/src/data-readiness.tsx",
+      "field": "readiness_scope"
+    },
+    {
       "file": "web/src/safety.tsx",
       "field": "safety_case"
     },
@@ -2764,6 +2776,16 @@
       "reason": "Navigation, clipboard, refresh or bookmark/history mutation action; no applied content view state."
     },
     {
+      "key": "html:d3e0918b0679042f:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"dataReadinessToggle\" class=\"header-icon\" type=\"button\" data-view-field=\"readiness_open\" aria-label=\"Data updates\" title=\"Data updates\" aria-haspopup=\"dialog\" aria-controls=\"dataReadinessDialog\">",
+      "binding": "readiness_open",
+      "contract": "view.readiness_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "html:d77e51aab8862932:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
@@ -4663,6 +4685,66 @@
       "control": "onSelect={select} onSelectGroup={selectGroup} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })} onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))}",
       "contract": "dashboard",
       "reason": "Leaf and category actions write analyze_chart.selection once via the shared dashboard owner. Group actions expand to stable descendant values. Range and optional series expansion retain their existing analyze_filters/analyze_chart bindings."
+    },
+    {
+      "key": "79651bd6cef8926d:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessEmpty",
+      "tag": "button",
+      "control": "data-view-field=\"readiness_scope\" onClick={event=>openDataReadiness(id,event.currentTarget)}",
+      "binding": "readiness_scope",
+      "contract": "view.readiness_scope",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "3f1561e4222131f8:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessIndicator",
+      "tag": "button",
+      "control": "data-view-field=\"readiness_scope\" aria-label={`${title}: ${model.label}. ${model.sentence}`} onClick={event=>{event.preventDefault();event.stopPropagation();openDataReadiness(id,event.currentTarget);}}",
+      "binding": "readiness_scope",
+      "contract": "view.readiness_scope",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "2d315ffef7e2f9a5:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessModal",
+      "tag": "select",
+      "control": "id=\"readinessPreviewState\" data-view-field=\"readiness_preview\" value={preview} onChange={event=>setPreview(event.target.value as ReadinessScenario)}",
+      "binding": "readiness_preview",
+      "contract": "view.readiness_preview",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "a99328a9e768c962:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessModal",
+      "tag": "button",
+      "control": "data-view-field=\"readiness_open\" aria-label=\"Close update details\" onClick={()=>dialog.current?.close()}",
+      "binding": "readiness_open",
+      "contract": "view.readiness_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "ac9be1b4534065e3:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessModal",
+      "tag": "dialog",
+      "control": "id=\"dataReadinessDialog\" data-view-field=\"readiness_open\" onClick={event=>{if(event.target!==event.currentTarget)return;const r=event.currentTarget.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)event.currentTarget.close();}}",
+      "binding": "readiness_open",
+      "contract": "view.readiness_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "e7b478b2c462625d:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessModal",
+      "tag": "PageLink",
+      "control": "data-view-field=\"readiness_open\" onClick={()=>{invoker.current=null;dialog.current?.close();}}",
+      "binding": "readiness_open",
+      "contract": "view.readiness_open",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "14a033ebe0d2b22e:0",

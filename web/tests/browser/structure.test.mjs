@@ -1300,14 +1300,15 @@ test("Card Library timeline ticks fit full dollar amounts", { skip }, async t =>
 
 // IndexedDB and painting saved charts during navigation require a real browser.
 test("Card Library restores saved covers while fresh queries are pending", { skip }, async t => {
-  let hold = false, release;
+  let hold = false, release, requested;
+  const pending = new Promise(resolve => { requested = resolve; });
   const gate = new Promise(resolve => { release = resolve; });
   t.after(() => release());
   const app = await open(t, {
     url: "/cards?cards=library&card_search=tool-call-share",
     ready: ".card-library-entry .query-card",
     api: { "* /api/query/:dataset/:operation": async call => {
-      if (hold && ["metrics", "query-v3", "rows-v2"].includes(call.params.operation)) await gate;
+      if (hold && ["metrics", "query-v3", "rows-v2"].includes(call.params.operation)) { requested(); await gate; }
       return defaultApi["* /api/query/:dataset/:operation"](call);
     } },
   });
@@ -1325,12 +1326,14 @@ test("Card Library restores saved covers while fresh queries are pending", { ski
   });
   hold = true;
   await app.page.reload();
-  await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor();
+  await pending;
+  // The saved chart remains painted and usable while its request is held.
+  // Freshness describes data age; it no longer doubles as a refresh spinner.
+  await app.page.locator(".query-cover:not([aria-busy=true])").first().waitFor();
   const catalog = app.page.locator("#card-library");
   await catalog.scrollIntoViewIfNeeded();
   await app.shot("saved-covers-refreshing");
   release(); await app.settled();
-  await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor({ state: "hidden" });
   assert.deepEqual(app.problems(), []);
 });
 

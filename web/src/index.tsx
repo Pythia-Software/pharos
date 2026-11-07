@@ -1,3 +1,5 @@
+import { DataReadinessModal, HeaderDataReadiness, BackgroundProcessingWorkload, DataReadinessEmpty, DataReadinessIndicator } from "./data-readiness";
+import { startReadiness } from "./data-readiness-store";
 import {peopleMessageLabelCatalog} from "./people-message-labels";
 import peopleMessageLabelsDocument from "../../schemas/people_message_labels.schema.json";
 import { formatUSD } from "./currency";
@@ -20,6 +22,7 @@ import { startDayClock } from "./day-window";
 import "./visit-history";
 import { originLabel, originRenderers, useOriginMetadata, isOriginDimension } from "./origin-dimensions";
 import "./uifeedback/pharos-client";
+import { dataSources } from "./data-taxonomy-model";
 import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
@@ -120,7 +123,7 @@ import { agentEventReadWhere, daySpan, eventRates, ratePeriod } from "./agent-ev
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink, useDashboardHeadline } from "./usage-workspace";
-import { CreateDashboardCard, DashboardCardSourceContext } from "./create-dashboard-card";
+import { DashboardResultActions, CreateDashboardCard, DashboardCardSourceContext } from "./create-dashboard-card";
 import { ribbonCardTitle } from "./parallelism-ribbon-card";
 import { UsageQueryIdeas } from "./usage-query-ideas";
 import { readDashboardLink, parallelismSelectionQuery, authorshipStatusText, type AuthorshipStatus } from "./usage-dashboard-model";
@@ -691,7 +694,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
     {selectionBar && !api.query.grouping ? selectionBar(api) : null}
-    {dataset==="message_labels"&&resultsView==="cards"?<MessageLabelCards api={api}/>:dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
+    <DataReadinessEmpty id={`query:${dataset}`} title={dataSources[dataset].label} dataset={dataset} query={api.query} empty={api.execution?.rows==="succeeded"&&!api.loading&&!api.error&&api.rows.length===0}>{dataset==="message_labels"&&resultsView==="cards"?<MessageLabelCards api={api}/>:dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
 
       : <DataTable
       maxHeight={100000}
@@ -716,7 +719,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
         return <><span data-pharos-target={`row:${api.rowId(row)}`} aria-hidden="true" /><button type="button" className="mcp-detail-button" disabled={!records} title={records ? "Open the source records for this group, keeping source filters" : complete ? "These group keys cannot be matched exactly in the source records" : "Include all group key columns to inspect the source records"} onClick={() => { if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }}>Records</button></>;
       }, trailingLabel: usageActions ? "Drill in" : "Inspect" }
         : trailing ? { trailing: (row: Row) => <><span data-pharos-target={`row:${api.rowId(row)}`} aria-hidden="true" />{trailing(row, api)}</>, trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" || dataset === "writing" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : [...new URLSearchParams(location.search).getAll("highlight"),new URLSearchParams(location.search).get("reveal")??""].some(target=>target.startsWith("row:")) ? {trailing:(row:Row)=><span data-pharos-target={`row:${api.rowId(row)}`} aria-hidden="true" />} : {})}
-    />}
+    />}</DataReadinessEmpty>
   </FilterValueProvider>;
 }
 
@@ -991,7 +994,7 @@ function TokenSummary({ where }: { where: WhereTerm[] }) {
   const hasCost = result.metrics.find(metric => metric.id === "cost_usd:")?.buckets[0]?.value != null;
   const reads = value("cache_read_input_tokens"), output = value("output_tokens"), sessions = values.get("agent_sessions") ?? 0;
   const cacheHit = uncached + reads > 0 ? `${Math.round(reads / (uncached + reads) * 100)}%` : "—";
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:usage:${label}`} title={label} dataset="usage" query={{where}} /></span><strong>{amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics usage-cards token-summary" aria-label="Machine token summary" aria-busy={result.loading}>
     {card("Total tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(tokens), "all reported input and output")}
     {card("API price equivalent", result.loading ? "Loading…" : result.error ? "Unavailable" : tokens && !hasCost ? "Unpriced" : formatUSD(cost), "list prices · may include assumed/partial prices; unpriced usage excluded")}
@@ -1012,7 +1015,7 @@ function ToolTimeSummary({ where, selected = false }: { where: WhereTerm[]; sele
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const duration = value("duration"), calls = value("calls"), timed = value("timed");
   const time = (ms: number) => ms >= 3600000 ? `${(ms / 3600000).toLocaleString(undefined, { maximumFractionDigits: 1 })} h` : ms >= 60000 ? `${(ms / 60000).toLocaleString(undefined, { maximumFractionDigits: 1 })} min` : `${(ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} s`;
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:tool_calls:${label}`} title={label} dataset="tool_calls" query={{where}} /></span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Tool Time summary" aria-busy={result.loading}>
     {card("Total recorded tool time", timed ? time(duration) : "—", `all activities in range${selected ? ", not only the legend selection" : ""} · concurrent calls can overlap`)}
     {card("Call volume", calls.toLocaleString(), "all matching calls, including those without timing")}
@@ -1143,7 +1146,7 @@ function ParallelismUsageDashboard() {
   return <CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={dashboardDefaults.parallelism} chartHeadline={false}
     summary={where => <ParallelismSettingsNote where={where} believed={settings} />}
     before={<>
-      {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{ribbonCardTitle(selection?.settings ?? readConcurrencySettings())}</h2><CreateDashboardCard target="ribbon" /></div>, headline) : null}
+      {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{ribbonCardTitle(selection?.settings ?? readConcurrencySettings())}</h2><DashboardResultActions target="ribbon" /></div>, headline) : null}
       <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
       {selection ? <UsageDashboardLinks schema={schemas.parallelism} dataset="parallelism" query={parallelismSelectionQuery(selection)} /> : null}
       <p className="usage-dashboard-note">The query view contains the hourly occupancy records touching the selected range, with the same repository, counting, gap, and ribbon selection. Those records describe threaded activity; model-only timing remains in the chart.</p>
@@ -1210,7 +1213,7 @@ function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: Auth
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const typed = value("typed"), words = value("words"), typedMessages = value("typed_messages");
   const building = status !== null && !status.built_at;
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{building ? "Building…" : result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:writing_messages:${label}`} title={label} dataset="writing_messages" query={{where}} /></span><strong>{building ? "Building…" : result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <>
     <div className="mcp-metrics dashboard-stats" aria-label="Human Words summary" aria-busy={result.loading}>
       {card("Words you wrote", compactNumber(typed), "typed or dictated in the selected period")}
@@ -1234,7 +1237,7 @@ function ConversationsSummary({ where }: { where: WhereTerm[] }) {
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const conversations = value("conversations"), messages = value("messages"), output = value("output");
   const per = (amount: number) => { const mean = amount / conversations; return conversations ? `${mean < 10 ? mean.toLocaleString(undefined, { maximumFractionDigits: 1 }) : compactNumber(mean)} per conversation` : "none in this range"; };
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:conversation_activity:${label}`} title={label} dataset="conversation_activity" query={{where}} /></span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Conversations summary" aria-busy={result.loading}>
     {card("Conversations", conversations.toLocaleString(), "top-level, with their delegated work")}
     {card("Your messages", messages.toLocaleString(), per(messages))}
@@ -1326,7 +1329,7 @@ function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
   const value = (result: typeof events, id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const loading = events.loading || read.loading, error = events.error || read.error;
   const messages = value(events, "messages"), scanned = value(read, "read"), total = value(events, "events");
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{loading ? "Loading…" : error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:agent_events:${label}`} title={label} dataset="agent_events" query={{where}} /></span><strong>{loading ? "Loading…" : error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   if (!loading && !error && !scanned) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. They are read in the background once agent events are turned on in Settings → Background Processing; the first run downloads a small model.</p>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Agent Experience summary" aria-busy={loading}>
     {card("Events", total.toLocaleString(), "matching sentences in agents' replies and thinking")}
@@ -1535,6 +1538,11 @@ function ToolLedgerBanner() {
 
 installOverflowTitles(document);
 installAppNavigation();
+startReadiness();
+const readinessHost = document.createElement("div");
+readinessHost.id = "dataReadinessHost";
+document.body.append(readinessHost);
+createRoot(readinessHost).render(<><HeaderDataReadiness /><DataReadinessModal /></>);
 
 const dataGuideHost = document.createElement("div");
 dataGuideHost.id = "dataGuideHost";
@@ -1552,6 +1560,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["homePage", <HomePage schemas={schemas} />],
   ["cardLibraryPage", <CardLibraryPage schemas={schemas} />],
   ["syncHistoryTables", <SyncTables />],
+  ["backgroundProcessingWorkload", <BackgroundProcessingWorkload />],
   ["askSettingsPage", <AskPharosSettings />],
   ["settingsPage", <SettingsWorkspace content={document.getElementById("settingsContent")!} />],
   ["queryTableLibrary", <LibraryPage />],
@@ -1569,7 +1578,7 @@ const mounts: Array<[string, React.ReactNode]> = [
 function LazyPage({ host, children }: { host: HTMLElement; children: React.ReactNode }) {
   useLocationRevision();
   const visited = useRef(false);
-  visited.current ||= Boolean(host.id === "searchComposerDialog" || host.closest(".view.active"));
+  visited.current ||= Boolean(["searchComposerDialog", "backgroundProcessingWorkload"].includes(host.id) || host.closest(".view.active"));
   if (!visited.current) return null;
   const libraryPage = ["queryTableLibrary", "queryTableUsage", "findingsPage"].includes(host.id);
   const settings = host.id === "findingsPage" && new URLSearchParams(location.search).get("view") === "settings";

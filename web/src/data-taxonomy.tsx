@@ -1,3 +1,4 @@
+import { DataReadinessIndicator } from "./data-readiness";
 import { useViewEntry, useViewState } from "./view-state";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { QueryBuilder, QueryFilterRow, type QueryBuilderProps } from "@pythia-software/query-table-ui";
@@ -45,7 +46,7 @@ export function SourceQueryBuilder<Row>({ dataset, whereRow, ...props }: QueryBu
   return <div className="data-source-query" data-pharos-target={`control:q_${dataset}`}><QueryBuilder {...props} collapsed={props.collapsed??collapsed} onCollapsedChange={props.onCollapsedChange??setCollapsed} whereRow={<>
     {dataset !== "findings" && dataset !== "safety" && dataset !== "fixes" ? <SourceStatement dataset={dataset} /> : null}
     {whereRow ?? <QueryFilterRow api={sourceFilters} fields={props.api.query.grouping ? props.api.grouping!.source.schema.fields : props.fields} />}
-  </>} /></div>;
+  </>} /><DataReadinessIndicator id={`query:${dataset}`} title={dataSources[dataset].label} dataset={dataset} query={props.api.query} empty={props.api.execution?.rows==="succeeded"&&!props.api.loading&&!props.api.error&&props.api.rows.length===0} /></div>;
 }
 
 export function DataTaxonomyModal() {
