@@ -7,6 +7,6 @@ export const authorshipCategories = [
   { key: "resent", label: "Re-sent", color: "var(--gold)", striped: true, description: "Matches something you sent before." },
   { key: "template", label: "Template", color: "var(--heat-2)", description: "A one-click prompt or saved prompt sent again and again, or a slash command." },
   { key: "attachment", label: "Attachment", color: "var(--heat-2)", striped: true, description: "An attachment reference or image placeholder." },
-  { key: "harness", label: "Harness", color: "var(--muted)", description: "Generated prompt context, question forms, and feedback metadata." },
+  { key: "harness", label: "App instructions", color: "var(--muted)", description: "Generated prompt context, question forms, and feedback metadata." },
   { key: "automated", label: "Automated", color: "var(--muted)", striped: true, description: "The whole message came from a script or another agent." },
 ];

@@ -137,11 +137,11 @@ describe("library drive, end to end", { skip }, () => {
     const page = await openPage(t, { onboarding: true });
     const dialog = page.locator("#pharosOnboarding");
     await dialog.waitFor();
-    await dialog.getByRole('group',{name:'Detected tools',exact:true}).waitFor();
-    await dialog.getByRole('checkbox',{name:/Claude Code/}).check();
-    await dialog.getByRole('checkbox',{name:/Codex/}).check();
+    // Looking in the usual places finds both tools' folders.
+    await dialog.getByRole('radio',{name:/Look in the usual places/}).check();
     await dialog.getByRole('button',{name:'Continue',exact:true}).click();
     await dialog.getByText("~/.claude/projects",{exact:true}).waitFor();
+    await dialog.getByRole('checkbox',{name:/Codex/}).waitFor();
     await dialog.getByRole('button',{name:'Continue',exact:true}).click();
     await dialog.getByRole("button", { name: 'Add and capture',exact:true }).click();
     await dialog.getByRole("button", { name: "Index now" }).waitFor({ timeout: 60000 });

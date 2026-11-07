@@ -260,6 +260,10 @@
       "field": "nav_expanded"
     },
     {
+      "file": "web/src/data-taxonomy.tsx",
+      "field": "nav_expanded"
+    },
+    {
       "file": "web/src/findings.tsx",
       "field": "optimize_area"
     },
@@ -314,6 +318,18 @@
     {
       "file": "internal/archive/assets/ui.py",
       "field": "reader_writing"
+    },
+    {
+      "file": "web/src/data-readiness.tsx",
+      "field": "readiness_open"
+    },
+    {
+      "file": "web/src/data-readiness.tsx",
+      "field": "readiness_preview"
+    },
+    {
+      "file": "web/src/data-readiness.tsx",
+      "field": "readiness_scope"
     },
     {
       "file": "web/src/safety.tsx",
@@ -2045,6 +2061,33 @@
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
+      "key": "6d145e032336655c:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "exportsLink",
+      "tag": "button",
+      "control": "'button', 'pharos-link', 'Import an export'",
+      "contract": "settings",
+      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+    },
+    {
+      "key": "4c1b6b4095ac45f2:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "openPanel",
+      "tag": "button",
+      "control": "'button', 'pharos-source-guide', 'Data Guide'",
+      "contract": "view.guide_open",
+      "reason": "Opens the shared read-only guide at Sources, loading its standalone entry during first-run setup. Dialog visibility and selected noun use guide_open and guide_entity."
+    },
+    {
+      "key": "c84bd88c016dc842:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "option",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+    },
+    {
       "key": "72f7e973d26732d2:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "optionalBackup",
@@ -2063,56 +2106,65 @@
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
-      "key": "4f6bab0bc2995df2:0",
+      "key": "03e68dcabacffc50:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "options",
-      "tag": "input",
-      "control": "'input'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "owner": "otherFolder",
+      "tag": "summary",
+      "control": "'summary', '', 'Add a folder Pharos didn’t find'",
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
-      "key": "1a894b236e272d81:0",
+      "key": "5319c4b09932f927:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "refreshNote",
-      "tag": "button",
-      "control": "'button', '', 'Configure sources on this Mac…'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "owner": "otherFolder",
+      "tag": "details",
+      "control": "'details', 'pharos-custom-source'",
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
-      "key": "098e824e7397257b:0",
+      "key": "a410657f3f11d284:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderLocations",
+      "owner": "otherFolder",
       "tag": "select",
       "control": "'select'",
       "contract": "settings",
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
-      "key": "2fc6562e36e1cf59:0",
+      "key": "7288e007f9c65211:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderLocations",
+      "owner": "pathField",
       "tag": "input",
       "control": "'input'",
       "contract": "settings",
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
-      "key": "692c43bc6d0109f2:0",
+      "key": "8165dad42aa683a0:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderLocations",
-      "tag": "summary",
-      "control": "'summary', '', 'Use a different folder'",
+      "owner": "renderImport",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+    },
+    {
+      "key": "72c2a75797c778e2:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderManual",
+      "tag": "details",
+      "control": "'details', 'pharos-other-tools'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
-      "key": "7bca15e95ff0d0c0:0",
+      "key": "7757818f24da7ae8:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderLocations",
-      "tag": "details",
-      "control": "'details', 'pharos-custom-source'",
+      "owner": "renderManual",
+      "tag": "summary",
+      "control": "'summary', '', 'More tools'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
@@ -2126,40 +2178,49 @@
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
-      "key": "7ab7117ddedd4ea1:0",
+      "key": "7cbf75e2f3d166b3:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderTools",
-      "tag": "details",
-      "control": "'details', 'pharos-other-tools'",
-      "contract": "editing",
-      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
-    },
-    {
-      "key": "82f3cefa074105b9:0",
-      "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderTools",
-      "tag": "details",
-      "control": "'details', 'pharos-other-sources'",
-      "contract": "editing",
-      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
-    },
-    {
-      "key": "be92617a24c50042:0",
-      "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderTools",
+      "owner": "renderStart",
       "tag": "summary",
-      "control": "'summary', '', 'Other tools'",
+      "control": "'summary', '', 'Which places?'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
-      "key": "ed773e6cf3b10cfb:0",
+      "key": "dc64d7d2d7976701:0",
       "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderTools",
-      "tag": "summary",
-      "control": "'summary', '', 'ChatGPT exports and other formats'",
+      "owner": "renderStart",
+      "tag": "details",
+      "control": "'details', 'pharos-places'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
+    },
+    {
+      "key": "55ae55f0b2b93911:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "review",
+      "tag": "details",
+      "control": "'details', 'pharos-tool-contents'",
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
+    },
+    {
+      "key": "e43f1e69fa53b869:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "review",
+      "tag": "summary",
+      "control": "'summary', '', 'What each tool records'",
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
+    },
+    {
+      "key": "419f51bddce9c1c1:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "toolChip",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
       "key": "02a9d1cd32a4c315:0",
@@ -2330,6 +2391,16 @@
       "control": "<button id=\"fingerprintEvents\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"fingerprintEventsTitle\" aria-describedby=\"fingerprintEventsDescription\" aria-checked=\"true\">",
       "contract": "settings",
       "reason": "Library-wide fingerprint event display preference, persisted independently of a page URL and applied immediately to every fingerprint."
+    },
+    {
+      "key": "html:6ee22a83547c6076:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button type=\"button\" data-view-field=\"guide_open\" onclick=\"pharosOpenDataGuide('sources',this)\">",
+      "binding": "guide_open",
+      "contract": "view.guide_open",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "html:6f2936f3f335b6b5:0",
@@ -2511,6 +2582,16 @@
       "control": "<button data-view=\"analyze\">",
       "contract": "action",
       "reason": "Navigation, clipboard, refresh or bookmark/history mutation action; no applied content view state."
+    },
+    {
+      "key": "html:2ce0e745682cc646:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"dataGuideToggle\" class=\"header-icon\" type=\"button\" hidden data-view-field=\"guide_open\" aria-label=\"Data Guide\" title=\"Data Guide\" aria-haspopup=\"dialog\" onclick=\"pharosOpenDataGuide(undefined,headerToolAnchor(this))\">",
+      "binding": "guide_open",
+      "contract": "view.guide_open",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "html:302c09e984c88945:0",
@@ -2766,6 +2847,16 @@
       "control": "<button id=\"bookmarkStar\" class=\"header-icon bookmark-star\" type=\"button\" aria-label=\"Bookmark this page\" title=\"Bookmark this page\">",
       "contract": "action",
       "reason": "Navigation, clipboard, refresh or bookmark/history mutation action; no applied content view state."
+    },
+    {
+      "key": "html:d3e0918b0679042f:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"dataReadinessToggle\" class=\"header-icon\" type=\"button\" data-view-field=\"readiness_open\" aria-label=\"Data updates\" title=\"Data updates\" aria-haspopup=\"dialog\" aria-controls=\"dataReadinessDialog\">",
+      "binding": "readiness_open",
+      "contract": "view.readiness_open",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "html:d77e51aab8862932:0",
@@ -3158,15 +3249,6 @@
       "control": "'details', 'json-node'",
       "contract": "reader",
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
-    },
-    {
-      "key": "5ffa23fdcb464b1a:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "loadSources",
-      "tag": "button",
-      "control": "'button', 'toggle '+(source.enabled?'on':'')",
-      "contract": "settings",
-      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
       "key": "1ac1d20bf5578b50:0",
@@ -3601,6 +3683,42 @@
       "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
+      "key": "9f105ee1c05bf3e6:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "sourceCard",
+      "tag": "button",
+      "control": "'button', 'toggle '+(source.enabled?'on':'')",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
+      "key": "9d9e2fb4316a3327:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "sourceRemoval",
+      "tag": "button",
+      "control": "'button', 'source-remove danger', 'Remove'",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
+      "key": "b3832c1805d18b96:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "sourceRemoval",
+      "tag": "button",
+      "control": "'button', 'source-remove', 'Remove…'",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
+      "key": "e2dd12e5918906b4:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "sourceRemoval",
+      "tag": "button",
+      "control": "'button', 'source-remove', 'Cancel'",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
       "key": "aa5a6fe4f81bf10b:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "toolEvent",
@@ -4030,13 +4148,13 @@
       "reason": "Shared group-count field of the card editors; each editor owns its draft value and saves it with the card or template."
     },
     {
-      "key": "02366ad58dfcddfb:0",
+      "key": "561d101f966db39a:0",
       "file": "web/src/card-library.tsx",
       "owner": "CardLibrary",
       "tag": "select",
-      "control": "aria-label=\"Data source\" value={dataset} onChange={event => filter(setDataset)(event.target.value)}",
+      "control": "aria-label=\"Dataset\" value={dataset} onChange={event => filter(setDataset)(event.target.value)}",
       "contract": "cards",
-      "reason": "card_* filters/sort/topic plus card_window/card_filters; navigation and collection actions use their existing contracts."
+      "reason": "Dataset filter uses the existing card_dataset URL field; its label distinguishes query datasets from imported history sources."
     },
     {
       "key": "8dab89eb60a6517d:0",
@@ -4178,13 +4296,13 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "106858b8ced78552:0",
+      "key": "acb2c88ae5fd36c5:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyChart",
       "tag": "svg",
-      "control": "aria-label={`${mode === \"user\" ? \"Continuous conversation threads\" : \"Estimated model activity\"} stacked by ${counting === \"agent\" ? \"session\" : \"workspace\"}; drag to zoom`} onPointerMove={event => { const point = coordinates(event), current = dragRef.current;if (current) moveDrag({ ...current, current: point.time });else onHover(point); }} onPointerLeave={() => { if (!dragRef.current) onHover(null); }} onPointerDown={event => { if (event.button !== 0) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientY - rect.top < top || event.clientY - rect.top > bottom) return; event.preventDefault();const time = coordinates(event).time; moveDrag({ anchor: time, current: time, pointerId: event.pointerId });onHover(null);event.currentTarget.setPointerCapture(event.pointerId); }} onPointerUp={event => { const current = dragRef.current;if (!current || current.pointerId !== event.pointerId) return; const point = coordinates(event);cancelDrag(); if (Math.abs(x(point.time) - x(current.anchor)) > 6) onZoom([Math.min(current.anchor, point.time), Math.max(current.anchor, point.time)]); else if (point.unit) onSelect(point.unit); }} onPointerCancel={cancelDrag} onLostPointerCapture={() => { if (dragRef.current) cancelDrag(); }}",
+      "control": "aria-label={`${mode === \"user\" ? \"Continuous conversations\" : \"Estimated model activity\"} stacked by ${counting === \"agent\" ? \"conversation\" : \"workspace\"}; drag to zoom`} onPointerMove={event => { const point = coordinates(event), current = dragRef.current;if (current) moveDrag({ ...current, current: point.time });else onHover(point); }} onPointerLeave={() => { if (!dragRef.current) onHover(null); }} onPointerDown={event => { if (event.button !== 0) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientY - rect.top < top || event.clientY - rect.top > bottom) return; event.preventDefault();const time = coordinates(event).time; moveDrag({ anchor: time, current: time, pointerId: event.pointerId });onHover(null);event.currentTarget.setPointerCapture(event.pointerId); }} onPointerUp={event => { const current = dragRef.current;if (!current || current.pointerId !== event.pointerId) return; const point = coordinates(event);cancelDrag(); if (Math.abs(x(point.time) - x(current.anchor)) > 6) onZoom([Math.min(current.anchor, point.time), Math.max(current.anchor, point.time)]); else if (point.unit) onSelect(point.unit); }} onPointerCancel={cancelDrag} onLostPointerCapture={() => { if (dragRef.current) cancelDrag(); }}",
       "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
+      "reason": "Ribbon selection and zoom use analyze_parallelism. The updated accessible label names the counted conversation or workspace; hover and an unfinished drag remain transient."
     },
     {
       "key": "cc8808c8b6fc9051:0",
@@ -4687,6 +4805,106 @@
       "reason": "Leaf and category actions write analyze_chart.selection once via the shared dashboard owner. Group actions expand to stable descendant values. Range and optional series expansion retain their existing analyze_filters/analyze_chart bindings."
     },
     {
+      "key": "81c65876d0ac42ca:0",
+      "file": "web/src/data-guide-examples.tsx",
+      "owner": "ConversationChoices",
+      "tag": "button",
+      "control": "data-view-field=\"guide_example\" aria-label={`Conversation ${key === \"review\" ? \"Review\" : \"Implementation\"}`} onClick={() => onConversationChange(key)}",
+      "binding": "guide_example",
+      "contract": "view.guide_example",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "e38f2db022ab5cbf:0",
+      "file": "web/src/data-guide-examples.tsx",
+      "owner": "ExampleTerm",
+      "tag": "button",
+      "control": "data-view-field=\"guide_entity\" aria-label={label ?? `Explain ${dataEntities[term].label.toLowerCase()}`} onClick={() => onSelect(term)}",
+      "binding": "guide_entity",
+      "contract": "view.guide_entity",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "5ca558edb583b4b4:0",
+      "file": "web/src/data-guide-examples.tsx",
+      "owner": "FinderExample",
+      "tag": "button",
+      "control": "data-view-field=\"guide_entity\" aria-label=\"Show Pharos library\" onClick={() => props.onSelect(\"libraries\")}",
+      "binding": "guide_entity",
+      "contract": "view.guide_entity",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "a1751b7f0956574c:0",
+      "file": "web/src/data-guide-examples.tsx",
+      "owner": "FinderExample",
+      "tag": "button",
+      "control": "data-view-field=\"guide_entity\" aria-label=\"Show Applications\" onClick={() => props.onSelect(\"sources\")}",
+      "binding": "guide_entity",
+      "contract": "view.guide_entity",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "79651bd6cef8926d:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessEmpty",
+      "tag": "button",
+      "control": "data-view-field=\"readiness_scope\" onClick={event=>openDataReadiness(id,event.currentTarget)}",
+      "binding": "readiness_scope",
+      "contract": "view.readiness_scope",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "3f1561e4222131f8:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessIndicator",
+      "tag": "button",
+      "control": "data-view-field=\"readiness_scope\" aria-label={`${title}: ${model.label}. ${model.sentence}`} onClick={event=>{event.preventDefault();event.stopPropagation();openDataReadiness(id,event.currentTarget);}}",
+      "binding": "readiness_scope",
+      "contract": "view.readiness_scope",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "2d315ffef7e2f9a5:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessModal",
+      "tag": "select",
+      "control": "id=\"readinessPreviewState\" data-view-field=\"readiness_preview\" value={preview} onChange={event=>setPreview(event.target.value as ReadinessScenario)}",
+      "binding": "readiness_preview",
+      "contract": "view.readiness_preview",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "a99328a9e768c962:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessModal",
+      "tag": "button",
+      "control": "data-view-field=\"readiness_open\" aria-label=\"Close update details\" onClick={()=>dialog.current?.close()}",
+      "binding": "readiness_open",
+      "contract": "view.readiness_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "ac9be1b4534065e3:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessModal",
+      "tag": "dialog",
+      "control": "id=\"dataReadinessDialog\" data-view-field=\"readiness_open\" onClick={event=>{if(event.target!==event.currentTarget)return;const r=event.currentTarget.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)event.currentTarget.close();}}",
+      "binding": "readiness_open",
+      "contract": "view.readiness_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "e7b478b2c462625d:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessModal",
+      "tag": "PageLink",
+      "control": "data-view-field=\"readiness_open\" onClick={()=>{invoker.current=null;dialog.current?.close();}}",
+      "binding": "readiness_open",
+      "contract": "view.readiness_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "14a033ebe0d2b22e:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "DataTaxonomyModal",
@@ -4696,72 +4914,33 @@
       "reason": "Guide visibility, entity and example are registered view fields."
     },
     {
-      "key": "1757ca3bdc87d6fe:0",
+      "key": "1e830d92a97c6ec1:0",
+      "file": "web/src/data-taxonomy.tsx",
+      "owner": "DataTaxonomyModal",
+      "tag": "DataGuideExample",
+      "control": "onSelect={selectEntity} onConversationChange={selectConversation}",
+      "contract": "view.guide_entity",
+      "reason": "Composite illustration delegates term and conversation selections to guide_entity and guide_example through shared useViewState bindings."
+    },
+    {
+      "key": "66209fc099270fa0:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "DataTaxonomyModal",
       "tag": "button",
-      "control": "data-view-field=\"guide_entity\" aria-label=\"Explain workspaces\" onClick={() => setEntity(\"workspaces\")}",
+      "control": "data-view-field=\"guide_entity\" onClick={() => selectEntity(page.id as DataEntity)}",
       "binding": "guide_entity",
       "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
+      "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "1af86a76eaac9620:0",
+      "key": "8dcc1701be64110c:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "onClick={() => { setConversation(\"implementation\"); setEntity(\"conversations\"); }}",
-      "contract": "view.guide_open",
-      "reason": "Guide visibility, entity and example are registered view fields."
-    },
-    {
-      "key": "2130c282d7af426f:0",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(\"tool_calls\")}",
+      "tag": "DashboardSelect",
+      "control": "data-view-field=\"guide_entity\" value={entity} onChange={event => selectEntity(event.target.value as DataEntity)}",
       "binding": "guide_entity",
       "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "2774eab82c3e530c:0",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "onClick={() => { setConversation(\"review\"); setEntity(\"conversations\"); }}",
-      "contract": "view.guide_open",
-      "reason": "Guide visibility, entity and example are registered view fields."
-    },
-    {
-      "key": "419506cdd3a665d8:0",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(\"agents\")}",
-      "binding": "guide_entity",
-      "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "419506cdd3a665d8:1",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(\"agents\")}",
-      "binding": "guide_entity",
-      "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "533b65543dfdeb48:0",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(key)}",
-      "binding": "guide_entity",
-      "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "aa1d3fedd850af1b:0",
@@ -4771,36 +4950,6 @@
       "control": "data-view-field=\"guide_open\" onClick={event => { if (event.target !== event.currentTarget) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.currentTarget.close(); }}",
       "binding": "guide_open",
       "contract": "view.guide_open",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "dd2a8d0fc2f37f17:0",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(\"messages\")}",
-      "binding": "guide_entity",
-      "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "dd2a8d0fc2f37f17:1",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(\"messages\")}",
-      "binding": "guide_entity",
-      "contract": "view.guide_entity",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "dd2a8d0fc2f37f17:2",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "data-view-field=\"guide_entity\" onClick={() => setEntity(\"messages\")}",
-      "binding": "guide_entity",
-      "contract": "view.guide_entity",
       "reason": "Bound by the shared view-state primitive."
     },
     {
@@ -5048,15 +5197,6 @@
       "control": "onClick={event => { if (!(event.target as HTMLElement).closest(\"button\")) openNode(n); }}",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "91f945dc32916f3b:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "InboxSessions",
-      "tag": "button",
-      "control": "aria-label={`View timeline for ${n.label}`} onClick={() => openTimeline(n)}",
-      "contract": "delegation",
-      "reason": "Opens the full-width session timeline from the compact navigator, preserving the selected session range and one-level event disclosures in its URL."
     },
     {
       "key": "3531eb64a70fc13d:0",
@@ -6276,6 +6416,16 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
+      "key": "67724fec68594a8b:0",
+      "file": "web/src/index.tsx",
+      "owner": "LibraryPage",
+      "tag": "button",
+      "control": "data-view-field=\"guide_open\" onClick={event => openDataTaxonomy(undefined, event.currentTarget)}",
+      "binding": "guide_open",
+      "contract": "view.guide_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "b2e3b1e8425cba7a:0",
       "file": "web/src/index.tsx",
       "owner": "LibraryPage",
@@ -7461,11 +7611,11 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "99295ff8758bf7a1:0",
+      "key": "ddd1928c7e12ab89:0",
       "file": "web/src/session-identity.tsx",
       "owner": "SessionIdentity",
       "tag": "button",
-      "control": "aria-label={`Open session ${[outline, name].filter(Boolean).join(\" · \")}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}",
+      "control": "aria-label={`Open session ${name}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}",
       "contract": "delegation",
       "reason": "Session navigation writes the canonical conversation route and delegation_session through the shared explorer openNode handler; the current session has no navigation control."
     },

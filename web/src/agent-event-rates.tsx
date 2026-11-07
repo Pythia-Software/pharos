@@ -1,3 +1,4 @@
+import { DataReadinessIndicator } from "./data-readiness";
 import { agentEventGroups } from "./agent-events-analysis-catalog";
 import { perThousand, type RatePeriod } from "./agent-event-rates-model";
 import { chartSeriesStyle } from "./chart-colors";
@@ -15,7 +16,7 @@ export function AgentEventRates({ periods, period, loading, error }: { periods: 
   const unit = period === "week" ? "week" : "day";
   return <section className="agent-event-rates" aria-busy={loading}>
     <header>
-      <h3>Events per 1,000 agent messages, by {unit}</h3>
+      <h3>Events per 1,000 agent messages, by {unit} <DataReadinessIndicator id="events:rates" title="Event rates" dataset="agent_event_messages" /></h3>
       <p className="muted">Counts follow how much agents worked; this rate divides each {unit}'s events by the agent messages read that {unit}, under the same filters.</p>
     </header>
     {error ? <p className="query-table-error" role="alert">{error}</p> : null}

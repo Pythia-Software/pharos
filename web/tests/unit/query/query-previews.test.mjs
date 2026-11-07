@@ -229,7 +229,7 @@ test("sparse tool-size cohorts explain their cutoff in calls rather than convers
   const recipe = queryRecipes.find(recipe => recipe.id === "output-distribution");
   const preview = await loadQueryPreview(recipe.dataset, query(recipe.measures, { where: recipe.where }), schemas.tool_calls, { recipe });
   assert.equal(preview.state, "empty");
-  assert.equal(preview.emptyLabel, "No cohorts with at least 3 calls");
+  assert.equal(preview.emptyLabel, "No groups with at least 3 calls");
 });
 
 test("sparse skill boxes name their actual sample population", async t => {
@@ -238,9 +238,9 @@ test("sparse skill boxes name their actual sample population", async t => {
   const state = query(recipe.measures, { where: recipe.where });
   const preview = await loadQueryPreview(recipe.dataset, state, schemas.skill_usages, { recipe });
   assert.equal(preview.state, "empty");
-  assert.equal(preview.emptyLabel, "No cohorts with at least 3 body records");
+  assert.equal(preview.emptyLabel, "No groups with at least 3 body records");
   const overridden = await loadQueryPreview(recipe.dataset, state, schemas.skill_usages, { recipe, cover: { ...recipe.cover, sampleUnit: "conversation/path groups" } });
-  assert.equal(overridden.emptyLabel, "No cohorts with at least 3 conversation/path groups");
+  assert.equal(overridden.emptyLabel, "No groups with at least 3 conversation/path groups");
 });
 
 test("empty diagnostic covers explain the exact missing population", async t => {
@@ -592,7 +592,7 @@ test("model tail previews apply task-count support before the visible point budg
  });
  const recipe=queryRecipes.find(r=>r.id==='model-task-token-spread'),item=instantiateRecipe(recipe,7),cover={...recipe.cover,maxGroups:1};
  const preview=await loadQueryPreview('usage',item.query,schemas.usage,{recipe,cover,window:item.window});assert.equal(preview.state,'ready');assert.equal(preview.groupSummary,undefined,'scatter support and omission summaries are not hidden as ranked-list captions');assert.equal(preview.metrics[0].result.buckets.length,1);assert.deepEqual(preview.metrics[0].result.buckets[0].keys,['codex','B supported']);assert.equal(preview.metrics[0].result.buckets[0].count,3);assert.equal(preview.metrics[0].clause.display.maxGroups,1);assert.equal(core.applyQuery(population,item.query,schemas.usage,{now}).total,4);
- population=population.slice(0,1);clearPreviewCache();const empty=await loadQueryPreview('usage',item.query,schemas.usage,{recipe,cover,window:item.window});assert.equal(empty.state,'empty');assert.match(empty.emptyLabel,/at least 3 root tasks/);
+ population=population.slice(0,1);clearPreviewCache();const empty=await loadQueryPreview('usage',item.query,schemas.usage,{recipe,cover,window:item.window});assert.equal(empty.state,'empty');assert.match(empty.emptyLabel,/at least 3 top-level conversations/);
 });
 
 test("metric filters and minimum group sizes run only where advertised and disclose hidden groups", async t => {

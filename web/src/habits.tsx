@@ -5,7 +5,7 @@ import { preferences } from "./preferences";
 import { useViewState } from "./view-state";
 import { ViewDisclosure } from "./view-disclosure";
 import { initiatorLabels } from "./habits-analysis-catalog";
-import { CreateDashboardCard } from "./create-dashboard-card";
+import { DashboardResultActions } from "./create-dashboard-card";
 import { CalendarChart, DaysChart, PunchcardChart } from "./habits-charts";
 import { HabitsChartInspection, type HabitChartPoint } from "./habits-chart-inspection";
 import { habitsCardTitle, readHabitsCardView, type HabitsCardTarget, type HabitsCardView } from "./habits-card";
@@ -105,7 +105,7 @@ export function HabitsPanels({ children }: { children: (before: React.ReactNode,
 // A section's heading, with the standard control that makes it a Home card.
 function Heading({ target }: { target: HabitsCardTarget }) {
   const view = useContext(HabitsViewContext);
-  return <div className="habits-card-title"><h3>{habitsCardTitle(target, view)}</h3><CreateDashboardCard target={target} /></div>;
+  return <div className="habits-card-title"><h3>{habitsCardTitle(target, view)}</h3><DashboardResultActions target={target} /></div>;
 }
 
 // Your streak only: agents and automatic runs have their calendars below.

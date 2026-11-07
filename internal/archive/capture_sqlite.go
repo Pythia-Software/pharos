@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"fmt"
@@ -211,9 +212,22 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 	}
 	temporary := destination + captureTempSuffix
 	os.Remove(temporary)
-	if err := snapshotSQLite(c.ctx, item.path, temporary); err != nil {
+	// A kind whose database also holds credentials is copied row by row,
+	// only what it keeps: what is never written cannot be left behind by a
+	// capture that stops part way.
+	copySnapshot := snapshotSourceSQLite
+	if keep := captureTables(c.source.Kind); keep != nil {
+		copySnapshot = func(ctx context.Context, src, dst string) error { return copySQLiteRows(ctx, src, dst, keep) }
+	}
+	if err := copySnapshot(c.ctx, item.path, temporary); err != nil {
 		os.Remove(temporary)
 		return nil, err
+	}
+	if captureFault != nil {
+		if err := captureFault("snapshot-written", rel); err != nil {
+			os.Remove(temporary)
+			return nil, toDestination(err)
+		}
 	}
 	info, err := syncPath(temporary)
 	if err != nil {
@@ -282,20 +296,187 @@ func (c *sourceCapture) retain(sourcePath string, generations []capturedVersion)
 	return kept
 }
 
+// captureTable is what a capture keeps of a table: the columns, as
+// expressions over the source's (each in place of the column it is
+// named for), "" for each as it is; and the rows, "" for all of them.
+type captureTable struct{ columns, where string }
+
+// captureTables are the tables a capture of a source kind keeps
+// (providerSpec.CaptureTables), or nil to keep them all.
+func captureTables(kind string) map[string]captureTable {
+	if spec, ok := providerFor(kind); ok {
+		return spec.CaptureTables
+	}
+	return nil
+}
+
+// copySQLiteRows writes to dst a copy of src holding only the tables keep
+// names, with their indexes, and of each only the rows and columns it keeps,
+// read in one transaction so the copy is consistent while the owning app
+// keeps committing. Rows keep their rowids.
+func copySQLiteRows(ctx context.Context, src, dst string, keep map[string]captureTable) error {
+	for attempt := 0; ; attempt++ {
+		err := copySQLiteRowsOnce(ctx, src, dst, keep)
+		if err == nil || attempt >= 3 || !strings.Contains(err.Error(), "locked") && !strings.Contains(err.Error(), "busy") {
+			return err
+		}
+		os.Remove(dst)
+		time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
+	}
+}
+
+func copySQLiteRowsOnce(ctx context.Context, src, dst string, keep map[string]captureTable) error {
+	source, err := openSourceSQLite(ctx, src)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	read, err := source.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer read.Rollback()
+	schema, err := queryMapsContext(ctx, read, `SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE sql IS NOT NULL AND type IN ('table','index') AND name NOT LIKE 'sqlite_%' ORDER BY type='index', name`)
+	if err != nil {
+		return err
+	}
+	var encoding string
+	var user, application int64
+	for pragma, value := range map[string]any{"encoding": &encoding, "user_version": &user, "application_id": &application} {
+		if err := read.QueryRowContext(ctx, "PRAGMA "+pragma).Scan(value); err != nil {
+			return err
+		}
+	}
+	// The copy is a temporary file until it is fsynced and renamed, so
+	// SQLite need not journal or sync it.
+	target, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dst}).String()+"?_pragma=journal_mode(off)&_pragma=synchronous(off)")
+	if err != nil {
+		return err
+	}
+	defer target.Close()
+	target.SetMaxOpenConns(1)
+	if _, err := target.ExecContext(ctx, fmt.Sprintf("PRAGMA encoding='%s'; PRAGMA user_version=%d; PRAGMA application_id=%d", encoding, user, application)); err != nil {
+		return err
+	}
+	write, err := target.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer write.Rollback()
+	indexes := []string{}
+	for _, row := range schema {
+		table, statement := firstString(row["tbl_name"]), firstString(row["sql"])
+		spec, kept := keep[table]
+		if !kept {
+			continue
+		}
+		if firstString(row["type"]) == "index" {
+			indexes = append(indexes, statement)
+			continue
+		}
+		if _, err := write.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+		if err := copySQLiteTable(ctx, read, write, table, spec); err != nil {
+			return fmt.Errorf("copy %s: %w", table, err)
+		}
+	}
+	for _, statement := range indexes {
+		if _, err := write.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+	return write.Commit()
+}
+
+// copySQLiteTable copies a table's kept rows and columns, with their rowids
+// when it has them.
+func copySQLiteTable(ctx context.Context, read, write *sql.Tx, table string, spec captureTable) error {
+	quoted, err := quoteRecordIdentifier(table)
+	if err != nil {
+		return err
+	}
+	info, err := queryMapsContext(ctx, read, "SELECT name FROM pragma_table_info(?) ORDER BY cid", table)
+	if err != nil {
+		return err
+	}
+	names := []string{}
+	for _, column := range info {
+		name, err := quoteRecordIdentifier(firstString(column["name"]))
+		if err != nil {
+			return err
+		}
+		names = append(names, name)
+	}
+	columns := defaultString(spec.columns, strings.Join(names, ", "))
+	where := ""
+	if spec.where != "" {
+		where = " WHERE " + spec.where
+	}
+	// A table without a rowid has none to keep.
+	rowid := "rowid, "
+	if _, err := read.ExecContext(ctx, "SELECT rowid FROM "+quoted+" LIMIT 0"); err != nil {
+		rowid = ""
+	}
+	rows, err := read.QueryContext(ctx, "SELECT "+rowid+columns+" FROM "+quoted+where)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	width := len(names)
+	if rowid != "" {
+		width++
+	}
+	insert, err := write.PrepareContext(ctx, "INSERT INTO "+quoted+"("+rowid+strings.Join(names, ", ")+") VALUES("+placeholders(width)+")")
+	if err != nil {
+		return err
+	}
+	defer insert.Close()
+	values := make([]any, width)
+	pointers := make([]any, width)
+	for index := range values {
+		pointers[index] = &values[index]
+	}
+	for count := 0; rows.Next(); count++ {
+		if count%4096 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if err := rows.Scan(pointers...); err != nil {
+			return err
+		}
+		if _, err := insert.ExecContext(ctx, values...); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 // snapshotSQLite writes a transactionally consistent copy of src to dst with
 // SQLite's online backup API from a read-only, query-only connection. It was
 // measured faster and lighter than VACUUM INTO, which also needs a connection
 // that is not query-only.
 func snapshotSQLite(ctx context.Context, src, dst string) error {
-	return snapshotSQLiteWithProgress(ctx, src, dst, nil)
+	return snapshotSQLiteWith(ctx, func(_ context.Context, path string) (*sql.DB, error) { return openReadOnlySQLite(path) }, src, dst, nil)
+}
+
+// snapshotSourceSQLite is snapshotSQLite of a harness's database, which it
+// opens with openSourceSQLite.
+func snapshotSourceSQLite(ctx context.Context, src, dst string) error {
+	return snapshotSQLiteWith(ctx, openSourceSQLite, src, dst, nil)
 }
 
 // snapshotSQLiteWithProgress reports bytes copied from the pinned read
 // transaction, including an initial inventory and each completed page batch.
 // A retry starts a new copy, so its counters start over too.
 func snapshotSQLiteWithProgress(ctx context.Context, src, dst string, progress func(done, total int64)) error {
+	return snapshotSQLiteWith(ctx, func(_ context.Context, path string) (*sql.DB, error) { return openReadOnlySQLite(path) }, src, dst, progress)
+}
+
+func snapshotSQLiteWith(ctx context.Context, open func(context.Context, string) (*sql.DB, error), src, dst string, progress func(done, total int64)) error {
 	for attempt := 0; ; attempt++ {
-		err := backupSQLite(ctx, src, dst, progress)
+		err := backupSQLite(ctx, open, src, dst, progress)
 		if err == nil || attempt >= 3 || !strings.Contains(err.Error(), "locked") && !strings.Contains(err.Error(), "busy") {
 			return err
 		}
@@ -308,8 +489,8 @@ func snapshotSQLiteWithProgress(ctx context.Context, src, dst string, progress f
 // its context has ended: 4096 pages is 16 MB at SQLite's default page size.
 var backupStepPages int32 = 4096
 
-func backupSQLite(ctx context.Context, src, dst string, progress func(done, total int64)) error {
-	db, err := openReadOnlySQLite(src)
+func backupSQLite(ctx context.Context, open func(context.Context, string) (*sql.DB, error), src, dst string, progress func(done, total int64)) error {
+	db, err := open(ctx, src)
 	if err != nil {
 		return err
 	}

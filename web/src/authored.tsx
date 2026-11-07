@@ -45,10 +45,12 @@ const ruleHelp: Record<string, string> = {
   "Sent by another agent session": "Conductor recorded another agent session as its sender.",
   "Sent by automation": "Conductor recorded an API key as its sender.",
 };
+// These are stored classifier identities; vocabulary changes belong in the
+// displayed explanation, never in the lookup keys.
 const harnessRules = new Set(["Conductor system instruction", "System reminder", "Environment context", "Project instructions", "Plugin recommendations", "Harness context"]);
-function explainRule(rule: string | undefined, category: string | undefined): string {
+export function explainAuthorshipRule(rule: string | undefined, category: string | undefined): string {
   if (rule && ruleHelp[rule]) return ruleHelp[rule];
-  if (rule && harnessRules.has(rule)) return "A block the harness adds at the start of the message. It stays part of the prompt; only this count sets it apart.";
+  if (rule && harnessRules.has(rule)) return "A block the agent app adds at the start of the message. It stays part of the prompt; only this count sets it apart.";
   if (rule?.startsWith("Sent by a headless") || rule === "Sent by a codex exec run") return "The run's transcript or logs show it was started headlessly, by a script or another agent.";
   return categoryByKey.get(category ?? "")?.description ?? "";
 }
@@ -98,7 +100,7 @@ function SpanTip({ tip, onEnter, onLeave, onClose }: { tip: Tip; onEnter: () => 
       <span className="muted">{words.toLocaleString()} word{words === 1 ? "" : "s"}</span>
     </div>
     <div className="authored-tip-reason">{segment.reason || segment.rule || "No other rule matched"}</div>
-    <p className="authored-tip-help">{explainRule(segment.rule, segment.category)}</p>
+    <p className="authored-tip-help">{explainAuthorshipRule(segment.rule, segment.category)}</p>
     {source?.workspace_id ? <button type="button" className="authored-tip-source" onClick={() => { onClose(); openMessage(source.workspace_id, source.conversation_id, source.message_id); }}>
       Open the matching text in {source.title || "its conversation"}
     </button> : null}
@@ -189,7 +191,7 @@ function AuthoredMessageCard({ row }: { row: Row }) {
   return <article className="authored-card" data-pharos-target={`section:authored:message:${row.id}`}>
     <div className="authored-head">
       <div className="authored-summary">
-        <button type="button" className="authored-title" onClick={() => window.pharosOpenDetail?.(String(row.work_id ?? row.workspace_id))}>{String(row.title ?? "Untitled work")}</button>
+        <button type="button" className="authored-title" onClick={() => window.pharosOpenDetail?.(String(row.work_id ?? row.workspace_id))}>{String(row.title ?? "Untitled workspace")}</button>
         <div className="authored-meta">{meta.join(" · ")}</div>
       </div>
       <button type="button" className="authored-open" onClick={() => openMessage(String(row.workspace_id), row.conversation_id, row.id)}>Open in conversation</button>
@@ -244,7 +246,7 @@ export const authoredRenderers = {
     for (const [index, segment] of segmentsOf(row).entries()) {
       if (used >= limit) break;
       // Harness blocks shrink to a marker, so the text after them shows.
-      const text = !detail && segment.category === "harness" ? "[Harness instructions] " : segment.text.slice(0, limit - used);
+      const text = !detail && segment.category === "harness" ? "[App instructions] " : segment.text.slice(0, limit - used);
       used += text.length;
       shown.push(segment.category
         ? <mark key={index} className="authored-span" data-category={segment.category} title={`${categoryLabel(segment.category)} · ${segment.reason || segment.rule || ""}${segment.words ? ` · ${segment.words} words` : ""}`}>{text}</mark>

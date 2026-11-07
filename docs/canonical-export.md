@@ -90,8 +90,8 @@ for inheritance, evidence, and grouping semantics.
 Conversations and messages accept `speed: "fast" | "standard"` and an optional
 `service_tier` string. Message settings override conversation settings; a null
 tier defaults to standard when no explicit speed is set. OpenAI's `priority`
-tier is fast. All non-priority or missing tiers default to standard; an explicit
-speed field takes precedence so
+tier (requested as `fast`) and its `ultrafast` tier are fast. All other or
+missing tiers default to standard; an explicit speed field takes precedence so
 Claude's `speed: "fast"` works alongside `service_tier: "standard"`.
 Normalization and streamed request merges update speed and tier independently:
 tier-only accounting preserves an explicit speed until another speed setting or
