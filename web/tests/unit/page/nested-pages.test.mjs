@@ -11,7 +11,8 @@ test("every dashboard belongs to People, Agents or Outcomes and retains its dest
     const pages = analyzePages(params, previews), groups = pages.find(page => page.id === 'dashboards').children;
     assert.deepEqual(groups.map(group => group.label), ['People', 'Agents', 'Outcomes']);
     const dashboards = groups.flatMap(group => group.children);
-    const topics = Object.keys(usageTopics).filter(topic => previews || !['agent_experience', 'agent_event_rates'].includes(topic));
+    // Agent Events is always listed, under Agents; the lab's Agent Experience waits on the preview.
+    const topics = Object.keys(usageTopics).filter(topic => previews || topic !== 'agent_experience');
     assert.deepEqual(dashboards.map(page => page.id).sort(), topics.map(topic => `dashboards:${topic}`).sort());
     assert.equal(new Set(dashboards.map(page => page.id)).size, dashboards.length);
     for (const group of groups) {
@@ -24,6 +25,8 @@ test("every dashboard belongs to People, Agents or Outcomes and retains its dest
     }
     assert.equal(nestedPageTrail(pages, 'dashboards:human')[1].label, 'People');
     assert.equal(nestedPageTrail(pages, 'dashboards:thinking-detail')[1].label, 'Agents');
+    assert.equal(nestedPageTrail(pages, 'dashboards:agent_event_rates')[1].label, 'Agents');
+    assert.ok(pages.find(page => page.id === 'query').children.some(page => page.id === 'query:agent_event_rates'));
     assert.equal(nestedPageTrail(pages, 'dashboards:carbon')[1].label, 'Outcomes');
     assert.ok(pages.find(page => page.id === 'query').children.every(page => page.href));
   }

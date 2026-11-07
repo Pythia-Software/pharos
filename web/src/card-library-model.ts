@@ -8,7 +8,8 @@ export const cardLibraryParams = ["card_search", "card_data", "card_topic", "car
 export const cardTopicAll = "all";
 export const cardSorts = [["topic", "Topic"], ["data", "Dataset"], ["kind", "Card kind"], ["title", "Title"]] as const;
 // The active card definitions; retired cards keep their IDs for old links.
-// Agent Events cards are offered only while its preview is on, as its
+// Cards over the preview's raw event tables (agent-events-flag.ts) are
+// offered only while it is on; Agent Events cards always are, as its
 // dashboard is listed.
 export function cardTemplates(previews = agentEventsEnabled()): QueryRecipe[] {
   return queryRecipes.filter(recipe => !recipe.retired && (previews || !agentEventDatasets.has(recipe.dataset)));

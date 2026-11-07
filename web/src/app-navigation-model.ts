@@ -39,7 +39,8 @@ const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   tokens: "Outcomes", carbon: "Outcomes",
 };
 
-// Preview pages (agent-events-flag.ts) are listed only when turned on.
+// Preview pages (agent-events-flag.ts) are listed only when turned on; Agent
+// Events is not one of them.
 export function analyzePages(params: URLSearchParams, previews = agentEventsEnabled()): NestedPage[] {
   return [
     { id: "dashboards", label: "Dashboards", children: (["People", "Agents", "Outcomes"] as const).map(label => ({
