@@ -278,7 +278,7 @@ func copyVerified(ctx context.Context, source, target string) (transferFile, err
 		}
 	}
 	if err == nil {
-		err = out.Sync()
+		err = syncToDrive(out)
 	}
 	if e := out.Close(); err == nil {
 		err = e
@@ -308,13 +308,20 @@ func copyVerified(ctx context.Context, source, target string) (transferFile, err
 	return transferFile{SHA256: digest, Size: size}, nil
 }
 
-func retainedTree(ctx context.Context, source, target, label string, skipImports bool) ([]transferFile, error) {
-	files := []transferFile{}
-	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
-		return files, nil
+// Discovery and copying share the evidence boundary. A preflight must never
+// overlook a file that transfer would preserve, or mistake locks for history.
+func walkRetainedTree(ctx context.Context, source string, skipImports bool, visit func(string, fs.DirEntry) error) error {
+	if source == "" {
+		return nil
 	}
-	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
+	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
@@ -338,6 +345,13 @@ func retainedTree(ctx context.Context, source, target, label string, skipImports
 		if entry.Name() == ".delivered.json" || entry.Name() == "indexed.json" || strings.HasSuffix(entry.Name(), ".lock") || strings.HasSuffix(entry.Name(), ".partial") || strings.HasSuffix(entry.Name(), captureTempSuffix) {
 			return nil
 		}
+		return visit(path, entry)
+	})
+}
+
+func retainedTree(ctx context.Context, source, target, label string, skipImports bool) ([]transferFile, error) {
+	files := []transferFile{}
+	err := walkRetainedTree(ctx, source, skipImports, func(path string, _ fs.DirEntry) error {
 		rel, err := filepath.Rel(source, path)
 		if err != nil {
 			return err
@@ -382,36 +396,52 @@ func sanitizeHistory(ctx context.Context, path string) error {
 	if _, err = db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
 		return err
 	}
+	// A snapshot carries hundreds of derived schema objects. Drop them in
+	// one transaction instead of creating and committing a rollback journal
+	// for each object, including when the retained history is only a few rows.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for _, row := range rows {
 		kind, name := firstString(row["type"]), firstString(row["name"])
 		if kind == "table" {
 			continue
 		}
-		if _, err = db.Exec("DROP " + strings.ToUpper(kind) + " IF EXISTS " + quotedIdentifier(name)); err != nil {
+		if _, err = tx.ExecContext(ctx, "DROP "+strings.ToUpper(kind)+" IF EXISTS "+quotedIdentifier(name)); err != nil {
 			return err
 		}
 	}
 	// Drop virtual tables before their automatically managed shadow tables.
 	for _, row := range rows {
 		if strings.HasPrefix(strings.ToUpper(firstString(row["sql"])), "CREATE VIRTUAL TABLE") {
-			if _, err = db.Exec("DROP TABLE IF EXISTS " + quotedIdentifier(firstString(row["name"]))); err != nil {
+			if _, err = tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+quotedIdentifier(firstString(row["name"]))); err != nil {
 				return err
 			}
 		}
 	}
-	remaining, err := queryMaps(db, `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+	remaining, err := queryMapsContext(ctx, tx, `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
 	if err != nil {
 		return err
 	}
 	for _, row := range remaining {
 		name := firstString(row["name"])
 		if !keep[name] {
-			if _, err = db.Exec("DROP TABLE " + quotedIdentifier(name)); err != nil {
+			if _, err = tx.ExecContext(ctx, "DROP TABLE "+quotedIdentifier(name)); err != nil {
 				return err
 			}
 		}
 	}
-	if _, err = db.Exec(`DELETE FROM meta WHERE key<>'schema_version'; VACUUM`); err != nil {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM meta WHERE key<>'schema_version'`); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	// VACUUM cannot run inside the transaction. It removes freed pages that
+	// may still contain the private state removed above.
+	if _, err = db.ExecContext(ctx, "VACUUM"); err != nil {
 		return err
 	}
 	return syncFile(path)

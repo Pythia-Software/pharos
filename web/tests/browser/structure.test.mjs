@@ -531,6 +531,10 @@ const ROUTES = [
   })),
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
   { name: "Background Processing", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
+  { name: "Background Processing integrity warning", url: "/settings/sync", ready: ".sync-warning", api: {
+    "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], issues: [{ id: "mismatch", source_name: "codex", unit: `/sessions/${"long-workspace-name/".repeat(12)}rollout.jsonl` }] },
+    "GET /api/activity": { runs: [{ id: "verified", kind: "verification", state: "complete", verification: { checked: 12, passed: 10, reindexed: 1, mismatch: 1, deferred: 1, errors: 0 } }] },
+  } },
   ...[false, true].map(details => ({ name: `Background Processing deferred verification${details ? ' details' : ''}`, url: "/settings/sync", ready: "#syncHistoryTables .qt-row", api: {
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [{ ...defaultApi["GET /api/sync/status"].history[0], audit: { outcome: "deferred", discovered_units: 10, deferred_units: 1, detail: "large group queued for manual verification" } }] },
   }, ...(details ? { open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),

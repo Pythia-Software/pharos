@@ -445,7 +445,7 @@ func freezeRetainedFile(ctx context.Context, sourceDir, readerDir, rel string, s
 	if err = os.Chtimes(out.Name(), a.ModTime(), a.ModTime()); err != nil {
 		return err
 	}
-	if err = out.Sync(); err != nil {
+	if err = syncToDrive(out); err != nil {
 		return err
 	}
 	if err = out.Close(); err != nil {
@@ -455,7 +455,7 @@ func freezeRetainedFile(ctx context.Context, sourceDir, readerDir, rel string, s
 		return err
 	}
 	if dir, err := os.Open(filepath.Dir(dest)); err == nil {
-		_ = dir.Sync()
+		_ = syncToDrive(dir)
 		dir.Close()
 	}
 	return nil
