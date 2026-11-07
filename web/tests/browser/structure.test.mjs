@@ -202,26 +202,50 @@ const ROUTES = [
     }));
     assert.ok(widths.copy>widths.available*.8,'the library introduction leaves an unused artwork column');
   }},
-  ...['tools','other','none','locations','custom','review','empty'].map(step=>({name:`Application sources ${step}`,url:'/app',ready:'#application-setup[open]',api:{
+  // One route per screen of source setup: how to find, what the usual
+  // places hold (or that they hold nothing), the folders named by hand, the
+  // review (with and without anything to add) and importing an export.
+  ...['start','found','nothing','manual','review','empty','import'].map(step=>({name:`Application sources ${step}`,url:'/app',ready:'#application-setup[open]',api:{
     'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[]},
     'POST /api/app/create':{saved:true},
-    ...(step==='none'?{'GET /api/probe/tools':{tools:[]}}:{}),
+    ...(step==='nothing'?{'GET /api/probe/tools':{tools:[]}}:{}),
   },open:async page=>{
     await page.locator('#meet-pharos').click();await page.locator('#start-setup').click();
     for(let i=0;i<4;i++)await page.locator('#submit').click();
     await page.locator('#configure-sources').click();
-    const guide=page.locator('#pharosOnboarding');
-    await guide.locator('.pharos-other-tools>summary').waitFor();
-    if(['tools','none'].includes(step))return;
-    if(step==='other'){await guide.locator('.pharos-other-tools>summary').click();return}
-    if(step==='empty'){await guide.getByRole('checkbox',{name:/Claude Code/}).uncheck();await guide.locator('.pharos-other-tools>summary').click()}
-    await guide.getByRole('checkbox',{name:step==='empty'?/Antigravity/:/Claude Code/}).check();
-    await guide.getByRole('button',{name:'Continue',exact:true}).click();
-    await guide.getByRole('button',{name:'Back',exact:true}).waitFor();
-    if(step==='custom')await guide.locator('.pharos-custom-source summary').click();
-    if(step==='review')await guide.getByRole('button',{name:'Continue',exact:true}).click();
+    const guide=page.locator('#pharosOnboarding'),next=guide.getByRole('button',{name:'Continue',exact:true});
+    await guide.locator('.pharos-places>summary').waitFor();
+    if(step==='start'){await guide.locator('.pharos-places>summary').click();return}
+    if(step==='import'){await guide.getByRole('button',{name:'Import an export',exact:true}).click();return}
+    if(step==='manual'){
+      await guide.getByRole('radio',{name:/tell Pharos where to look/}).check();await next.click();
+      await guide.getByRole('checkbox',{name:/Cursor/}).check();return;
+    }
+    await next.click();
+    if(step==='nothing')return guide.getByRole('button',{name:'Choose tools and folders',exact:true}).waitFor();
+    await guide.locator('.pharos-candidate').first().waitFor();
+    if(step==='empty')for(const box of await guide.locator('.pharos-candidate input[type=checkbox]').all())await box.uncheck();
+    if(step!=='found')await next.click();
   },shown:'#pharosOnboarding'})),
-  {name:'Source settings guide',url:'/settings/sources',ready:'#pharosFindSources',open:page=>page.locator('#pharosFindSources').click(),shown:'#pharosOnboarding'},
+  {name:'Source settings guide',url:'/settings/sources',ready:'#pharosFindSources',open:async page=>{
+    const trigger=page.locator('#sourceToolbar').getByRole('button',{name:'Data Guide',exact:true});
+    await trigger.click();
+    const guide=page.getByRole('dialog',{name:'Data Guide',exact:true});
+    await guide.waitFor();
+    await guide.getByRole('button',{name:'Explain sources from Cursor',exact:true}).waitFor();
+    await page.keyboard.press('Escape');
+    assert.ok(await trigger.evaluate(element=>element===document.activeElement),'Sources guide lost its invoking control');
+    await page.locator('#pharosFindSources').click();
+  },shown:'#pharosOnboarding',check:async(page,app)=>{
+    const trigger=page.locator('#pharosOnboarding').getByRole('button',{name:'Data Guide',exact:true});
+    await trigger.click();
+    const guide=page.getByRole('dialog',{name:'Data Guide',exact:true});
+    await guide.waitFor();
+    assert.deepEqual(await layoutProblems(page),[],'source setup guide layout');
+    await app.shot('source-setup-data-guide');
+    await page.keyboard.press('Escape');
+    assert.ok(await trigger.evaluate(element=>element===document.activeElement),'nested source guide lost focus');
+  }},
   ...["create","open","recover"].map(flow=>({name:`Application library ${flow}`,url:"/app",ready:"#library-list .card",open:page=>page.locator(`#library-actions [data-flow="${flow}"]`).click(),shown:"#setup:not([hidden])"})),
   ...["storage","details","review"].map(step=>({name:`Application SSD ${step}`,url:"/app",ready:"#application-setup[open]",api:{"GET /api/app/state":{application:"/Applications/Pharos.app",selected:"",mcp:"",busy:false,libraries:[]}},open:async page=>{
     await page.locator('#meet-pharos').click();await page.locator('#start-setup').click();
@@ -266,7 +290,19 @@ const ROUTES = [
 
   ].map(route=>({...route,preferences:{"pharos-theme":"dark"}})),
   { name: "TL1 attempts query", url: "/analyze?analyze_mode=query&analyze_data=tl1_attempts", ready: ".usage-workspace-table .qt-row" },
-  { name: "Data guide", url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", ready: ".usage-workspace-table .qt-row", open: page => page.locator(".usage-workspace-table .data-source-link").click(), shown: ".data-guide[open]" },
+  { name: "Data guide", url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", ready: ".usage-workspace-table .qt-row", open: page => page.locator(".usage-workspace-table .data-source-link").click(), shown: ".data-guide[open]",
+    check: async (page, app) => {
+      const guide = page.getByRole('dialog', { name: 'Data Guide', exact: true });
+      const picker = guide.getByRole('combobox', { name: 'Guide term', exact: true });
+      for (const [term, label] of [['conversations','Conversations'],['agents','Agent sessions'],['turns','Turns'],['messages','Messages'],['tool_calls','Tool calls'],['skills','Skills and instructions'],['compactions','Context compactions'],['tokens','Tokens and API cost'],['repositories','Repositories'],['workspaces','Workspaces'],['work_items','Work items'],['agent_apps','Agent apps'],['providers','Providers'],['models','Models and effort'],['channels','Channels'],['machines','Machines'],['libraries','Libraries'],['sources','Sources']]) {
+        if (await picker.isVisible()) await picker.selectOption(term);
+        else await guide.getByRole('navigation', { name: 'Data Guide terms' }).getByRole('button', { name: label, exact: true }).click();
+        await page.waitForFunction(value => new URLSearchParams(location.search).get('guide_entity') === value, term);
+        assert.deepEqual(await layoutProblems(page), [], term + ' illustration layout');
+        await app.shot('illustration-' + term);
+      }
+    },
+  },
   ...[["usage", false], ["tool_calls", true]].map(([dataset, explore]) => ({
     name: `Query ideas ${explore ? "Explore " : ""}${dataset}`,
     url: `/analyze?analyze_mode=query&analyze_data=${dataset}`,
@@ -358,7 +394,7 @@ const ROUTES = [
       const outline = page.getByRole("navigation", { name: "Conversation outline", exact: true });
       await outline.getByRole("button", { name: /^Turn 1/ }).first().waitFor();
       if (selection === "sub-agent") {
-        await outline.locator("summary").filter({ hasText: "Sub-agent session · codex" }).click();
+        await outline.locator("summary").filter({ hasText: "Sub-agent conversation · codex" }).click();
         await outline.getByRole("button", { name: /Turn 1.*Review the change/ }).click();
       } else await outline.getByRole("button", { name: /^Turn 3/ }).first().click();
       await page.getByRole("region", { name: "Selected turn preview" }).locator(".result-message").first().waitFor();
@@ -988,12 +1024,12 @@ test("Background Processing shares the busy switch across Hourly and Daily and s
   const history = page.getByRole('region', { name: 'Recent run history', exact: true });
   for (const work of ['Index changes', 'Update findings', 'Back up']) assert.ok(await history.getByText(work, { exact: true }).count());
   await history.getByRole('button', { name: 'Add filter', exact: true }).click();
-  await page.getByRole('button', { name: /^Work(?:\s|$)/ }).click();
-  await history.getByRole('combobox', { name: 'Value for Work', exact: true }).fill('Back up');
+  await page.getByRole('button', { name: /^Operation(?:\s|$)/ }).click();
+  await history.getByRole('combobox', { name: 'Value for Operation', exact: true }).fill('Back up');
   await page.waitForFunction(() => document.querySelectorAll('#syncHistoryTables .qt-row').length === 1);
   assert.ok(await history.getByText('Back up', { exact: true }).isVisible());
   assert.equal(await page.getByRole('region', { name: 'Source status', exact: true }).locator('.qt-row').count(), 2, 'history filters leave other tables alone');
-  await history.getByRole('button', { name: 'Remove Work filter', exact: true }).click();
+  await history.getByRole('button', { name: 'Remove Operation filter', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('#syncHistoryTables .qt-row').length === 3);
   await history.getByRole('button', { name: 'Add filter', exact: true }).click();
   await page.getByRole('button', { name: 'Started started_at', exact: true }).click();
@@ -1300,14 +1336,15 @@ test("Card Library timeline ticks fit full dollar amounts", { skip }, async t =>
 
 // IndexedDB and painting saved charts during navigation require a real browser.
 test("Card Library restores saved covers while fresh queries are pending", { skip }, async t => {
-  let hold = false, release;
+  let hold = false, release, requested;
+  const pending = new Promise(resolve => { requested = resolve; });
   const gate = new Promise(resolve => { release = resolve; });
   t.after(() => release());
   const app = await open(t, {
     url: "/cards?cards=library&card_search=tool-call-share",
     ready: ".card-library-entry .query-card",
     api: { "* /api/query/:dataset/:operation": async call => {
-      if (hold && ["metrics", "query-v3", "rows-v2"].includes(call.params.operation)) await gate;
+      if (hold && ["metrics", "query-v3", "rows-v2"].includes(call.params.operation)) { requested(); await gate; }
       return defaultApi["* /api/query/:dataset/:operation"](call);
     } },
   });
@@ -1325,12 +1362,14 @@ test("Card Library restores saved covers while fresh queries are pending", { ski
   });
   hold = true;
   await app.page.reload();
-  await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor();
+  await pending;
+  // The saved chart remains painted and usable while its request is held.
+  // Freshness describes data age; it no longer doubles as a refresh spinner.
+  await app.page.locator(".query-cover:not([aria-busy=true])").first().waitFor();
   const catalog = app.page.locator("#card-library");
   await catalog.scrollIntoViewIfNeeded();
   await app.shot("saved-covers-refreshing");
   release(); await app.settled();
-  await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor({ state: "hidden" });
   assert.deepEqual(app.problems(), []);
 });
 
@@ -1423,6 +1462,7 @@ test('Tokens and Cost keeps missing pricing actionable across refresh, chart vie
   await notice.locator('summary').click();
   const prompt = page.getByRole('textbox', { name: 'Pricing refresh prompt' });
   assert.equal(await prompt.inputValue(), missingPrices.prompt);
+  await page.waitForFunction(() => JSON.parse(new URLSearchParams(location.search).get('disclosures') || '{}')['tokens.pricing-prompt'] === true);
   await page.reload();
   await prompt.waitFor();
   assert.equal(await prompt.inputValue(), missingPrices.prompt, 'the expanded prompt restores after reload');

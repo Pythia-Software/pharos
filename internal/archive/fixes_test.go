@@ -149,6 +149,37 @@ func TestFixesGroupingAndDestination(t *testing.T) {
 	if gh == nil || gh.Scope != "global" || gh.Target != "global" || gh.Category != "tool" || gh.Title != "`gh pr edit` keeps failing for agents" {
 		t.Fatalf("a problem spread over repositories is the global setup's: %+v", gh)
 	}
+	if !strings.Contains(gh.DestWhere, "a line in ~/.claude/CLAUDE.md (empty today)") {
+		t.Fatalf("a global tool fix names Claude Code's empty global file: %s", gh.DestWhere)
+	}
+	// The global file is the members' usual harness's, whichever it is; one
+	// kept in the app's settings is never called empty.
+	members := func(providers ...string) []fixesEvent {
+		events := append([]fixesEvent{}, gh.events...)
+		for i := range events {
+			events[i].Provider = providers[min(i, len(providers)-1)]
+		}
+		return events
+	}
+	opencode := []fixesGuide{{Name: "~/.config/opencode/AGENTS.md", Lines: []string{"Edit PR bodies with `gh api`."}}}
+	rules := []fixesGuide{{Name: "~/Documents/Cline/Rules/github.md", Lines: []string{"Edit PR bodies with `gh api`."}}}
+	for _, test := range []struct {
+		events []fixesEvent
+		global []fixesGuide
+		want   string
+	}{
+		{members("claude", "opencode"), nil, "~/.config/opencode/AGENTS.md (empty today)"},
+		{members("claude", "opencode"), opencode, "~/.config/opencode/AGENTS.md"},
+		{members("codex", "claude"), nil, "~/.claude/CLAUDE.md (empty today)"},
+		{members("cline"), rules, "~/Documents/Cline/Rules/"},
+		{members("cline"), opencode, "~/Documents/Cline/Rules/ (empty today)"},
+		{members("cursor"), nil, "Cursor's User Rules (Cursor Settings → Rules)"},
+		{members("gemini"), nil, "~/.gemini/GEMINI.md (empty today)"},
+	} {
+		if got := fixesGlobalFile(test.events, test.global); got != test.want {
+			t.Fatalf("members of %v: global file %q, want %q", test.events[len(test.events)-1].Provider, got, test.want)
+		}
+	}
 	if fixesFind(items, "flamegraph") != nil {
 		t.Fatalf("one work item is not a recurring problem")
 	}

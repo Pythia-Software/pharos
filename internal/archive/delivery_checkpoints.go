@@ -9,6 +9,12 @@ import (
 // metadata, aliases and instructions as well as messages, without reconstructing
 // inputs from derived SQL rows or loading the source's transcripts during cleanup.
 func conversationDeliveryDigest(workspaceID string, c ConversationRecord) string {
+	// Conductor's extractor was its coverage before it had a field of its
+	// own; the digest keeps that form, so checkpoints taken before still
+	// match.
+	if c.Extractor != "" && c.Coverage == "complete" {
+		c.Coverage, c.Extractor = c.Extractor, ""
+	}
 	return hashBytes([]byte(workspaceID + ":" + conversationDerivationVersion + ":" + jsonText(c)))
 }
 

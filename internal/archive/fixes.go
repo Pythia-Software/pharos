@@ -583,15 +583,20 @@ func fixesGlobalFile(events []fixesEvent, global []fixesGuide) string {
 	for _, e := range events {
 		providers[e.Provider]++
 	}
+	providers["antigravity"] += providers["gemini"]
+	// Registry order breaks ties, so Claude Code wins one.
 	provider, best := "claude", 0
-	for _, name := range []string{"claude", "codex", "antigravity"} {
-		if providers[name] > best {
-			provider, best = name, providers[name]
+	for _, spec := range providerRegistry {
+		if spec.Instructions != "" && providers[spec.Kind] > best {
+			provider, best = spec.Kind, providers[spec.Kind]
 		}
 	}
 	file := strings.Trim(globalInstructionFile(provider), "`")
+	if !instructionPath(file) {
+		return file // kept in the app's settings, which Pharos cannot read
+	}
 	for _, guide := range global {
-		if guide.Name == file && !fixesBlank(guide.Lines) {
+		if (guide.Name == file || strings.HasSuffix(file, "/") && strings.HasPrefix(guide.Name, file)) && !fixesBlank(guide.Lines) {
 			return file
 		}
 	}

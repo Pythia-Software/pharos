@@ -682,7 +682,7 @@ test("Aggregate time and cross-query links express their source scope", () => {
   const calls = new URL(links.find(link => link.label.includes("Tool calls")).href, "http://localhost");
   assert.equal(calls.searchParams.get("analyze_carbon"), "custom-assumptions");
   assert.deepEqual(decodeQueryStrict(calls.searchParams.get("q_tool_calls")).where, [{ field: "conversation_id", op: "=", value: "child" }]);
-  assert.equal(links.find(link => link.label === "Root conversation").href, "/conversation/root");
+  assert.equal(links.find(link => link.kind === "root").href, "/conversation/root");
   const human = usageRowLinks("writing", row, current).find(link => link.label.startsWith("Messages"));
   assert.deepEqual(decodeQueryStrict(new URL(human.href, "http://localhost").searchParams.get("q_writing_messages")).where, [{ field: "work_id", op: "=", value: "work" }]);
 });
@@ -708,7 +708,7 @@ test("MCP Details links use explicit request targets while workspace units link 
   assert.deepEqual(usageRowLinks("mcp_calls", { arguments_json: "invalid" }), []);
   assert.deepEqual(usageRowLinks("mcp_calls", { arguments_json: '{"query":"search terms"}' }), []);
   const [checkout] = usageRowLinks("parallelism", { counting: "workspace", location: "/worktree /+" });
-  assert.equal(checkout.label, "Works at this checkout");
+  assert.equal(checkout.label, "Workspaces at this checkout");
   const url = new URL(checkout.href, "http://localhost");
   assert.equal(url.pathname, "/library");
   assert.deepEqual(decodeQueryStrict(url.searchParams.get("q_library")).where, [{ field: "location", op: "=", value: "/worktree /+" }]);

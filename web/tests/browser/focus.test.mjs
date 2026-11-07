@@ -178,6 +178,9 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   const {page,calls,shot}=await open(t,{url:'/app',ready:'#application-setup[open]',api:{
     'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'source-review-library',mcp:'',busy:false,libraries:[]},
     'POST /api/app/create':{saved:true},
+    // A folder added on the found screen fails its check: the reply cannot be
+    // read. (Error statuses count as test failures here.)
+    'POST /api/probe':({body})=>body.locations.length?{checked:[]}:undefined,
     'POST /api/probe/accept':{added:['claude'],enabled:[],declined:['claude-work'],skipped:[]},
     'POST /api/capture':{run:{id:'capture-test',state:'complete',sources:['claude'],bytes_copied:2400000,results:[]}},
     'POST /api/index':{run:{id:'index-test',state:'complete',sources:['claude'],conversations:24,messages:100,results:[]}},
@@ -188,7 +191,7 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   for(let step=0;step<4;step++)await page.locator('#submit').click();
   await page.locator('#configure-sources').click();
   const guide=page.locator('#pharosOnboarding');
-  await guide.getByRole('group',{name:'Detected tools',exact:true}).waitFor();
+  await guide.getByRole('radio',{name:/Look in the usual places/}).waitFor();
   assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
   assert.ok(!calls.some(call=>call.path==='/api/probe'),'presence detection parsed source history');
   await shot('source-tools');
@@ -196,12 +199,40 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   await guide.locator('.pharos-candidate').first().waitFor();
   assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
   await guide.getByRole('checkbox',{name:/claude-work\/projects/}).uncheck();
+  const guideButton=guide.getByRole('button',{name:'Data Guide',exact:true});
+  const callsBeforeGuide=calls.length;
+  await guideButton.click();
+  const dictionary=page.getByRole('dialog',{name:'Data Guide',exact:true});
+  await dictionary.waitFor();
+  await dictionary.getByRole('button',{name:'Explain sources from Cursor',exact:true}).waitFor();
+  const guideURL=new URL(page.url());
+  const restored=await open(t,{url:guideURL.pathname+guideURL.search,ready:'.data-guide[open]'});
+  assert.equal(await restored.page.getByRole('button',{name:'Sources',exact:true}).getAttribute('aria-current'),'page','first-run setup did not restore the selected guide term');
+  assert.ok(restored.calls.every(call=>call.path.startsWith('/api/app/')),'restoring the setup guide requested library data');
+  await shot('source-guide');
+  await page.keyboard.press('Escape');
+  assert.ok(await guideButton.evaluate(element=>element===document.activeElement),'closing the setup guide lost focus');
+  assert.equal(await guide.getByRole('checkbox',{name:/claude-work\/projects/}).isChecked(),false,'opening the guide discarded source choices');
+  assert.equal(calls.length,callsBeforeGuide,'the standalone guide requested library data');
+  await guideButton.click();
+  await dictionary.waitFor();
+  assert.equal(await page.locator('#dataGuideHost').count(),1,'reopening duplicated the guide');
+  await page.keyboard.press('Escape');
   await shot('source-locations');
+  // A folder for another tool that fails its check leaves the list as it was.
+  await guide.getByText('Add a folder Pharos didn’t find',{exact:true}).click();
+  await guide.getByRole('combobox',{name:'Tool for this folder'}).selectOption('codex');
+  await guide.getByRole('textbox',{name:'Folder'}).fill('/missing');
+  await guide.getByRole('button',{name:'Check folder',exact:true}).click();
+  await guide.locator('.pharos-error').waitFor();
+  assert.ok(await guide.getByRole('button',{name:'Continue',exact:true}).isVisible(),'a failed folder check left no way on');
+  assert.ok(!await guide.getByRole('checkbox',{name:/claude-work\/projects/}).isChecked(),'a failed folder check forgot a folder left out');
   await guide.getByRole('button',{name:'Continue',exact:true}).click();
   assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
   await shot('source-review');
   await page.keyboard.press('Escape');
   assert.ok(await guide.getByRole('button',{name:'Continue',exact:true}).isVisible(),'Escape left the review');
+  assert.ok(!await guide.getByRole('checkbox',{name:/claude-work\/projects/}).isChecked(),'going back forgot a folder left out');
   await guide.getByRole('button',{name:'Continue',exact:true}).click();
   assert.ok(!calls.some(call=>['/api/probe/accept','/api/capture','/api/index'].includes(call.path)),'history was read or capture approved before final consent');
   await guide.getByRole('button',{name:'Add and capture',exact:true}).click();
@@ -427,8 +458,8 @@ test("Eject when safe ejects once safe while the page is hidden", { skip }, asyn
   await page.waitForFunction(() => window.ejects === 1, null, { timeout: 20000 });
 });
 
-test("Data guide takes focus, keeps controls reachable and returns focus @ 320", { skip }, async t => {
-  const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", viewport: { width: 320, height: 900 }, ready: ".usage-workspace-table .qt-row" });
+for (const width of [1440, 320]) test(`Data guide takes focus, keeps controls reachable and returns focus @ ${width}`, { skip }, async t => {
+  const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", viewport: { width, height: 900 }, ready: ".usage-workspace-table .qt-row" });
   const { page } = app;
   const opener = page.locator(".usage-workspace-table .data-source-link");
   await app.shot("from-statement");
@@ -436,12 +467,76 @@ test("Data guide takes focus, keeps controls reachable and returns focus @ 320",
   const dialog = page.getByRole("dialog", { name: "Data Guide", exact: true });
   await dialog.waitFor();
   await app.shot("tool-call-guide");
-  await dialog.getByRole("button", { name: "Review", exact: true }).click();
-  await press(dialog.getByRole("button", { name: /Agent sessions/ }));
-  const source = dialog.getByRole("region", { name: "Dataset row definitions", exact: true });
-  await source.waitFor({ state: "hidden" });
-  await press(dialog.getByRole("navigation", { name: "Data layers", exact: true }).getByRole("button", { name: "Tool calls", exact: true }));
-  await source.waitFor({ state: "visible" });
+  const review = dialog.getByRole("button", { name: "Conversation Review", exact: true });
+  await press(review);
+  await page.waitForFunction(() => new URLSearchParams(location.search).get('guide_example') === 'review');
+  assert.equal(await review.evaluate(element => element === document.activeElement), true, 'a surviving conversation control keeps focus');
+  const terms = dialog.getByRole("combobox", { name: "Guide term", exact: true });
+  const choose = async (value, label) => {
+    if (width < 760) { await terms.focus(); await terms.selectOption(value); }
+    else await dialog.getByRole('navigation', { name: 'Data Guide terms' }).getByRole('button', { name: label, exact: true }).click();
+    await page.waitForFunction(value => new URLSearchParams(location.search).get('guide_entity') === value, value);
+  };
+  const follow = async (link, entity) => {
+    const previous = await link.elementHandle();
+    await press(link);
+    await page.waitForFunction(value => new URLSearchParams(location.search).get('guide_entity') === value, entity);
+    await page.waitForFunction(element => !element.isConnected, previous);
+    assert.equal(await dialog.evaluate(element => element.contains(document.activeElement)), true, 'replacing the focused illustration keeps focus in the guide');
+    assert.equal(await page.evaluate(() => document.activeElement.getClientRects().length > 0), true, 'the replacement focus target is visible');
+    await page.keyboard.press('Tab');
+    assert.equal(await dialog.evaluate(element => element.contains(document.activeElement)), true, 'Tab continues through guide controls');
+  };
+  await choose('work_items', 'Work items');
+  await follow(dialog.getByRole('button', { name: 'Explain workspaces', exact: true }), 'workspaces');
+  await follow(dialog.getByRole('button', { name: 'Conversation Review', exact: true }), 'conversations');
+  await choose('work_items', 'Work items');
+  await follow(dialog.getByRole('button', { name: 'Explain workspaces', exact: true }), 'workspaces');
+  await follow(dialog.getByRole('button', { name: 'Conversation Implementation', exact: true }), 'conversations');
+  if (width >= 760) {
+    const conversationGroup = dialog.locator('summary').filter({hasText: /^Conversations$/});
+    await press(conversationGroup);
+    await choose('repositories', 'Repositories');
+    await follow(dialog.getByRole('button', {name: 'Conversation Review', exact: true}), 'conversations');
+    // Keep later selections available, whether focus recovery used the closed
+    // summary or revealed the destination term.
+    if (!await conversationGroup.evaluate(element => element.parentElement.open)) await press(conversationGroup);
+  }
+  await choose('libraries', 'Libraries');
+  const finder = await dialog.getByLabel('Finder window', {exact:true}).elementHandle();
+  const applications = dialog.getByRole('button', {name:'Show Applications',exact:true});
+  await press(applications);
+  await dialog.getByRole('button', {name:'Explain sources from Cursor',exact:true}).waitFor();
+  assert.equal(await applications.evaluate(element=>element===document.activeElement),true,'changing Finder locations lost focus');
+  assert.equal(await finder.evaluate(element=>element.isConnected),true,'changing locations replaced the Finder window');
+  await press(dialog.getByRole('button', {name:'Show Pharos library',exact:true}));
+  await dialog.getByRole('button', {name:'Explain libraries',exact:true}).waitFor();
+  await follow(dialog.getByRole('button', { name: 'Explain sources', exact: true }).first(), 'sources');
+  await choose('agents', 'Agent sessions');
+  const helper = dialog.getByRole('button', { name: 'Explain agent sessions', exact: true }).first();
+  assert.equal(await helper.evaluate(element => {
+    const bounds = element.getBoundingClientRect(), history = element.closest('.guide-chat-history').getBoundingClientRect(), dialog = element.closest('dialog').getBoundingClientRect();
+    const picker = element.closest('dialog').querySelector('.data-guide-picker');
+    const top = Math.max(history.top, picker?.getClientRects().length ? picker.getBoundingClientRect().bottom : dialog.top);
+    return bounds.top >= top && bounds.bottom <= Math.min(history.bottom, dialog.bottom);
+  }), true, 'explaining sessions scrolls a delegated session into view');
+  await press(helper);
+  assert.equal(await helper.evaluate(element => element === document.activeElement), true, 'explaining an inline helper retains focus');
+  for (const [term, label] of [['skills', 'skills and instructions'], ['compactions', 'context compactions'], ['tokens', 'tokens and api cost'], ['models', 'models and effort'], ['channels', 'channels'], ['agent_apps', 'agent apps']]) {
+    const link = dialog.getByRole('button', { name: `Explain ${label}`, exact: true }).first();
+    await press(link);
+    await page.waitForFunction(value => new URLSearchParams(location.search).get('guide_entity') === value, term);
+    assert.equal(await link.evaluate(element => element === document.activeElement), true, 'switching between parts of the same illustration retains keyboard focus');
+  }
+  const laterUsage = dialog.getByRole('button', { name: 'Explain tokens and api cost', exact: true }).last();
+  await press(laterUsage);
+  await page.waitForFunction(() => new URLSearchParams(location.search).get('guide_entity') === 'tokens');
+  assert.equal(await laterUsage.evaluate(element => element === document.activeElement), true, 'a link later in the conversation keeps focus when the guide highlights repeated usage');
+  assert.equal(await laterUsage.evaluate(element => {
+    const bounds = element.getBoundingClientRect(), viewport = element.closest('.guide-chat-history').getBoundingClientRect();
+    return bounds.top >= viewport.top && bounds.bottom <= viewport.bottom;
+  }), true, 'the focused usage link stays in view rather than scrolling to an earlier response');
+  await choose('tool_calls', 'Tool calls');
   await holdsFocus(page, dialog, opener);
   await press(opener);
   await dialog.getByRole("button", { name: "Close data guide", exact: true }).click();
@@ -462,9 +557,16 @@ test("Data guide takes focus, keeps controls reachable and returns focus @ 320",
     const app = await open(t, { url: url.pathname + url.search, ready: ".qt-table .qt-row" });
     const { page } = app;
     const aggregate = page.getByRole("combobox", { name: /^Aggregation for/ }).first();
+    const refreshed = page.waitForResponse(response => {
+      if (new URL(response.url()).pathname !== `/api/query/${dataset}/query-v3` || response.request().method() !== 'POST') return false;
+      const request = response.request().postDataJSON();
+      return request?.rows && request.grouping?.summaries?.some(summary => summary.id === 'total' && summary.op === 'avg');
+    });
     await aggregate.selectOption("avg");
     assert.equal(await aggregate.inputValue(), "avg");
-    // The new aggregation reruns the query; a popover opened mid-render closes.
+    // Wait for the scheduled refresh as well as in-flight requests. Opening a
+    // popover before the aggregation refresh starts can race its focus return.
+    await refreshed;
     await app.settled();
     for (const name of ["Add filter", "Add HAVING filter", "Customize columns"]) {
       const opener = page.getByRole("button", { name, exact: true });
@@ -473,6 +575,7 @@ test("Data guide takes focus, keeps controls reachable and returns focus @ 320",
       await page.waitForFunction(element => element.contains(document.activeElement), await editor.elementHandle());
       await page.keyboard.press("Escape");
       await editor.waitFor({ state: "hidden" });
+      await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
     }
     const guideLink = page.locator(".data-source-link");
     await press(guideLink);
@@ -621,7 +724,7 @@ test("Search content search takes focus and returns it to the query builder @ 39
   const { page } = await open(t, { url: "/library?view=table", viewport: { width: 390, height: 844 }, ready: "#queryTableLibrary .qt-row" });
   const button = page.getByRole("button", { name: "Messages", exact: true });
   await press(button);
-  const dialog = page.getByRole("dialog", { name: "Search within work", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Search within this workspace", exact: true });
   await useSearchMenus(page, dialog);
   await holdsFocus(page, dialog, button);
 });
@@ -638,8 +741,8 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
     api: { "POST /api/search/text/validate": ({ body }) => ({ where: body.where }) } });
   const { page } = app;
   await press(page.getByRole("button", { name: "Edit messages search", exact: true }));
-  const dialog = page.getByRole("dialog", { name: "Search within work", exact: true });
-  const heading = dialog.getByRole("heading", { name: "Search within work", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Search within this workspace", exact: true });
+  const heading = dialog.getByRole("heading", { name: "Search within this workspace", exact: true });
   const inViewport = element => { const rect = element.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; };
   assert.ok(await heading.evaluate(inViewport), "the modal heading is outside the viewport");
   const bounds = await dialog.boundingBox();
@@ -708,7 +811,7 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
   const viewport = { width: 390, height: 844 };
   test(`overflowed header tools remain live and restore focus at ${viewport.width}px`, { skip }, async t => {
     const { page } = await open(t, { url: '/library?view=table', viewport, ready: '#queryTableLibrary .qt-row',
-      preferences: { 'pharos-header-tools-v1': ['summary', 'theme', 'history', 'library', 'search', 'settings'] },
+      preferences: { 'pharos-header-tools-v1': ['guide', 'summary', 'theme', 'history', 'library', 'search', 'settings'] },
     });
     const more = page.getByRole('button', { name: 'More tools', exact: true });
     await press(more);
@@ -725,6 +828,8 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
     await page.keyboard.press('Escape');
     await page.locator('#usageSummary').waitFor({ state: 'hidden' });
     await page.waitForFunction(element => document.activeElement === element, await more.elementHandle());
+    await activateHeaderTool(page, 'dataGuideToggle');
+    await holdsFocus(page, page.getByRole('dialog', {name:'Data Guide',exact:true}), more);
   });
 }
 
@@ -770,7 +875,9 @@ test("grouped results' Detail takes focus, keeps it and returns it on Escape", {
 });
 
 test('header editing keeps keyboard focus on the handle being changed', { skip }, async t => {
-  const { page } = await open(t, { url: '/settings/header', ready: '#headerActive .header-tool' });
+  const { page, settled, shot } = await open(t, { url: '/settings/header', ready: '#headerActive .header-tool' });
+  const guideButton=page.locator('#dataGuideToggle');
+  assert.equal(await guideButton.isVisible(),false,'the Data Guide shortcut starts in the toolbox');
   const add = page.getByRole('button', { name: 'Add Navigation bar', exact: true });
   const handle = page.getByRole('button', { name: 'Arrange Navigation bar', exact: true });
   await press(add);
@@ -793,6 +900,18 @@ test('header editing keeps keyboard focus on the handle being changed', { skip }
   const settings = page.getByRole('button', { name: 'Arrange Settings', exact: true });
   await press(settings, 'Delete');
   await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
+  await press(page.getByRole('button',{name:'Add Data Guide',exact:true}));
+  const guideHandle=page.getByRole('button',{name:'Arrange Data Guide',exact:true});
+  await page.waitForFunction(element=>document.activeElement===element,await guideHandle.elementHandle());
+  await settled();
+  await page.reload();
+  await guideHandle.waitFor();
+  await activateHeaderTool(page,'dataGuideToggle');
+  await holdsFocus(page,page.getByRole('dialog',{name:'Data Guide',exact:true}),guideButton);
+  await shot('data-guide-shortcut');
+  await press(guideHandle,'Delete');
+  await page.getByRole('button',{name:'Add Data Guide',exact:true}).waitFor();
+  assert.equal(await guideButton.isVisible(),false,'removing the shortcut returns it to the toolbox');
 });
 
 // Both drawers share setDrawer; History stands for them, inline and in More.
@@ -873,26 +992,26 @@ test("page Find inside an ARIA modal searches only the modal and Escape closes F
 
 test("the delegation session sheet on a phone takes focus, keeps it and returns it on Escape", { skip }, async t => {
   const { page } = await open(t, { url: `/work/${workID}/conversation/conv-child`, viewport: { width: 390, height: 844 }, ready: ".conversation-panel .turn" });
-  const show = page.locator('button[aria-label="Show workspace sessions"]');
+  const show = page.locator('button[aria-label="Show agent sessions"]');
   await press(show);
-  const sheet = page.locator('[role="dialog"][aria-label="Workspace sessions"]');
+  const sheet = page.locator('[role="dialog"][aria-label="Agent sessions"]');
   await sheet.waitFor();
   await holdsFocus(page, sheet, show);
   await press(show);
-  await press(sheet.getByRole('button', { name: 'Hide workspace sessions', exact: true }));
-  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Show workspace sessions');
+  await press(sheet.getByRole('button', { name: 'Hide agent sessions', exact: true }));
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Show agent sessions');
 });
 
 test("the workspace sidebar returns focus when collapsed and preserves the reader when reopened", { skip }, async t => {
   const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn" });
   const reader = page.getByRole('region', { name: 'Conversation viewer', exact: true });
-  const hide = page.getByRole('button', { name: 'Hide workspace sessions', exact: true });
-  const show = page.getByRole('button', { name: 'Show workspace sessions', exact: true });
+  const hide = page.getByRole('button', { name: 'Hide agent sessions', exact: true });
+  const show = page.getByRole('button', { name: 'Show agent sessions', exact: true });
   await page.locator('.turn').nth(6).evaluate(turn => turn.scrollIntoView({ block: 'center', behavior: 'instant' }));
   await settled();
   const scroll = await page.locator('.workspace-reader-content').evaluate(el => el.scrollTop);
   await press(hide);
-  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Show workspace sessions');
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Show agent sessions');
   assert.equal(await reader.isVisible(), true);
   assert.equal(await hide.evaluate(el => { el.focus(); return el === document.activeElement; }), false, 'collapsed sessions cannot receive keyboard focus');
   await press(show);
@@ -2245,4 +2364,149 @@ for (const [width, count, view] of [[390,2,'compare'],[1440,1,'trend']]) test(`A
   await link.click();
   await page.waitForURL(url=>url.pathname==='/analyze'&&url.searchParams.get('analyze_topic')==='tokens');
   await modal.waitFor({state:'hidden'});
+});
+
+for(const width of [1440,390])test(`Data freshness follows the native modal and Background Processing at ${width}px`,{skip},async t=>{
+  const {idleStatus}=await import('./fixtures.mjs');
+  const status={...idleStatus,freshness:[...idleStatus.freshness,{domain:'an.ledger',label:'Tool ledger',behind:{state:'current'}},{domain:'an.authorship',group:'analyses',label:'Writing estimates',as_of:new Date(Date.now()-3600000).toISOString(),pending_since:new Date(Date.now()-187*60000).toISOString(),behind:{state:'behind',count:128,unit:'message'},reason:{code:'changed',text:'New messages are waiting'},next:'Next frequent update'}]};
+  const {page,calls,push,shot,settled}=await open(t,{url:'/analyze?analyze_topic=human&readiness_preview=hours',viewport:{width,height:1000},ready:'.usage-analysis-trend[aria-busy="false"]',api:{'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
+  assert.equal(await page.locator('.data-freshness-icon use').evaluateAll(elements=>elements.filter(element=>!document.getElementById(element.getAttribute('href').slice(1))).length),0,'freshness symbols resolve in the served page shell');
+  await shot('lag-clock');
+  await activateHeaderTool(page,'dataReadinessToggle');
+  const dialog=page.locator('#dataReadinessDialog');await dialog.waitFor();
+  assert.ok(await dialog.evaluate(element=>element.contains(document.activeElement)));
+  await page.locator('body>header .brand').evaluate(element=>element.focus());assert.ok(await dialog.evaluate(element=>element.contains(document.activeElement)));
+  const picker=dialog.getByRole('combobox',{name:'Preview example'});
+  await picker.selectOption('days');await page.waitForFunction(()=>document.getElementById('dataReadinessTitle')?.textContent.includes('2 days'));
+  await picker.selectOption('missing');await page.locator('.data-readiness-empty').first().waitFor();
+  assert(await page.locator('.data-readiness-empty [role="progressbar"]').count()>0);
+  await picker.selectOption('clear');await page.waitForFunction(()=>document.getElementById('dataReadinessTitle')?.textContent==='Up to date as of 6 minutes ago');
+  await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+  await shot('current-check');
+  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=human'));
+  await activateHeaderTool(page,'dataReadinessToggle');await dialog.waitFor();
+  const updated={...status,freshness:status.freshness.map(row=>row.domain==='an.authorship'?{...row,pending_since:null,behind:{state:'current'},reason:null,as_of:new Date().toISOString()}:row)};
+  push('/api/status/stream',updated);await page.waitForFunction(()=>/Up to date|No updates waiting|Showing saved results/.test(document.getElementById('dataReadinessTitle')?.textContent));
+  await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+  assert.ok(await page.evaluate(()=>['dataReadinessToggle','headerMore'].includes(document.activeElement?.id)));
+  push('/api/status/stream',status);
+  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=tools'));
+  await page.locator('.usage-tools-dashboard [aria-busy="false"]').first().waitFor();
+  await page.waitForFunction(()=>document.getElementById('dataReadinessToggle')?.getAttribute('aria-label').includes('Up to date'));
+  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=human'));
+  await page.locator('[data-readiness-result="chart:writing_messages"]').click();await dialog.waitFor();
+  assert.notEqual(await dialog.locator('header small').innerText(),'This page');
+  await dialog.getByRole('link',{name:'Update settings',exact:true}).click();await page.locator('#backgroundSchedule .bg-col').first().waitFor();await settled();
+  assert(await page.locator('.data-readiness-workload').isVisible());
+  assert.equal(calls.filter(call=>call.method==='POST'&&/^\/api\/(sync|background|labels)/.test(call.path)).length,0,'reviewing status never enqueues work or changes Settings');
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await shot('settings');
+});
+
+for(const width of [1440,390])test(`Freshness is reachable on collapsed tables and bespoke dashboard panels at ${width}px`,{skip},async t=>{
+ const queryLayout=encodeURIComponent(JSON.stringify({library:true}));
+ const {idleStatus}=await import('./fixtures.mjs');
+ const background=structuredClone(defaultApi['GET /api/background']);
+ const upgrade={...background.view.items.find(item=>item.id==='writing-refine'),id:'upgrade',label:'Library upgrade',verb:'Upgrading the library',fixed:true};
+ background.view.items.push(upgrade);background.view.cadences.find(cadence=>cadence.id==='daily').items.push('upgrade');
+ const status={...idleStatus,background:background.view};
+ const {page,settled,push}=await open(t,{url:'/library?query_layout='+queryLayout,viewport:{width,height:1000},ready:'[data-readiness-result="query:library"]',api:{'GET /api/background':background,'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
+ const dialog=page.locator('#dataReadinessDialog');
+ const check=async (selector)=>{
+  const button=page.locator(selector).first();await button.waitFor();
+  await button.focus();assert(await button.evaluate(element=>element===document.activeElement));
+  await button.click();await dialog.waitFor();assert(await dialog.evaluate(element=>element.contains(document.activeElement)));
+  await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+  assert(await button.evaluate(element=>element===document.activeElement));
+  await settled();assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ };
+ await check('[data-readiness-result="query:library"]');
+ for(const [url,identity] of [
+  ['/findings?view=table','query:findings'],
+  ['/findings?optimize_area=safety&view=table','query:safety'],
+  ['/findings?optimize_area=fixes&view=table','query:fixes'],
+  ['/analyze?analyze_topic=habits','chart:habits-calendar'],
+  ['/analyze?analyze_topic=thinking-overview','chart:thinking-waits'],
+  ['/analyze?analyze_topic=thinking-detail','chart:thinking-distributions'],
+  ['/analyze?analyze_topic=parallelism','chart:ribbon'],
+  ['/analyze?analyze_topic=carbon','carbon:estimate'],
+  ['/analyze?analyze_topic=agent_experience','events:examples'],
+ ]){
+  await page.evaluate(url=>window.pharosNavigate(url),url);
+  await check(`[data-readiness-result="${identity}"]`);
+ }
+ // Follow a bespoke chart's prerequisite through the real Settings disclosure.
+ // The domain/task reduction itself is covered by the readiness unit tests.
+ push('/api/status/stream',{...status,freshness:[...status.freshness,{domain:'an.ledger',label:'Tools ledger',behind:{state:'behind',count:8,unit:'conversation'},reason:{code:'version',text:'This version of Pharos rebuilds it'},next:'updates when you run the library upgrade'}]});
+ await page.waitForFunction(()=>window.pharosStatusStore?.current()?.view?.library?.freshness?.some(row=>row.domain==='an.ledger'));
+ await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=thinking-overview'));
+ await page.locator('[data-readiness-result="chart:thinking-waits"]').click();await dialog.waitFor();
+ await dialog.getByRole('link',{name:'Update settings',exact:true}).click();
+ await page.locator('#background-detail-upgrade').waitFor();
+});
+
+// These are live ledger snapshots: no preview parameter, and the running
+// snapshot has the same reason replacement the Go ledger actually emits.
+test('Live data updates keep real backlog, existing results and first-build progress', {skip}, async t=>{
+ const {idleStatus}=await import('./fixtures.mjs');
+ const iso=minutes=>new Date(Date.now()-minutes*60000).toISOString();
+ const currentSource={domain:'conv:claude',label:'Conversations (claude)',task_id:'conversations',as_of:iso(2),behind:{state:'current'}};
+ const view={domain:'view',label:'Search view',behind:{state:'current'}};
+ const status={...idleStatus,freshness:[{...currentSource,pending_since:iso(540),behind:{state:'behind'},reason:{code:'needs-capture',text:'New conversations are waiting'}},view,{domain:'conv:new',label:'Conversations (new)',as_of:null,output_missing:true,behind:{state:'behind'},reason:{code:'never-indexed',text:'Not indexed yet'}}]};
+ const excluded={...EMPTY_QUERY,where:[{field:'source_kind',op:'=',value:'new',negated:true}]};
+ const bookmark={id:'durable-readiness',title:'Saved conversations',url:'/library?q_library=@aaaaaaaaaaaaaaaaaaaaaa',query:excluded};
+ const {page,push,settled}=await open(t,{url:'/library?view=conversation&q_library='+encodeURIComponent(encodeQuery(excluded)),ready:'.conversation-result-card',preferences:{'pharos-bookmarks-v1':[bookmark]},api:{
+  'GET /api/status':status,'GET /api/status/stream':eventStream(status),
+  '* /api/query/:dataset/:operation':call=>{
+   const reply=defaultApi['* /api/query/:dataset/:operation'](call);
+   if(call.params.dataset==='writing_messages'&&call.body?.metrics?.some(metric=>metric.dateGrouping||metric.groupBy?.length)&&reply.metrics)return {...reply,metrics:reply.metrics.map(metric=>({...metric,buckets:[]}))};
+   return call.params.dataset==='writing_messages'&&['rows','rows-v2','query-v3'].includes(call.params.operation)?{...reply,rows:[],total:0,sourceTotal:0}:reply;
+  },
+ }});
+ // Settle the capture frame as well as fetches, then check an ordinary reload.
+ for(let attempt=0;attempt<2;attempt++){
+  await settled();
+  assert.equal(new URL(page.url()).searchParams.has('readiness_preview'),false);
+  assert.equal(await page.locator('.conversation-result-card').count(),48);
+  await activateHeaderTool(page,'dataReadinessToggle');
+  const dialog=page.locator('#dataReadinessDialog');await dialog.waitFor();
+  assert.match(await dialog.getByRole('heading').innerText(),/9 hours behind/);
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({state:'hidden'});
+  // Native dismissal precedes the close event that persists URL state.
+  await page.waitForFunction(()=>new URL(location.href).searchParams.get('readiness_open')==='0');
+  if(!attempt){await page.reload();await page.locator('.conversation-result-card').first().waitFor();}
+ }
+ const first={...status,freshness:[currentSource,view,{domain:'an.authorship',label:'Writing estimates',as_of:null,output_missing:true,behind:{state:'behind',count:128,unit:'message'},reason:{code:'never-built',text:'Not built yet'}}]};
+ push('/api/status/stream',first);
+ await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_mode=query&analyze_data=writing_messages'));
+ const empty=page.locator('.data-readiness-empty');await empty.waitFor();
+ await empty.getByRole('progressbar').waitFor();
+ for(const state of ['queued','running']){
+  push('/api/status/stream',{...first,freshness:first.freshness.map(row=>row.domain==='an.authorship'?{...row,reason:{code:'running',text:'Updating now'},catching_up:'op-writing'}:row),operations:[{id:'op-writing',kind:'analysis.authorship',label:'Writing estimates',state,step:{done:58,total:128,unit:'message'}}]});
+  await page.waitForFunction(state=>window.pharosStatusStore?.current()?.view?.library?.operations?.some(operation=>operation.id==='op-writing'&&operation.state===state),state);
+  await empty.locator('[role=progressbar][aria-valuenow]').waitFor();
+  assert(await empty.isVisible());
+  assert.equal(new URL(page.url()).searchParams.has('readiness_preview'),false);
+ }
+ // The chart's first-build surface must not hide independently loaded tiles.
+ await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=human'));
+ await page.locator('.usage-analysis-trend[aria-busy="false"]').waitFor();
+ await empty.waitFor();
+ await page.locator('[aria-label="Human Words summary"][aria-busy="false"]').waitFor();
+ assert(await empty.isVisible());
+ push('/api/status/stream',{...first,freshness:first.freshness.map(row=>row.domain==='an.authorship'?{...row,output_missing:false,reason:null,as_of:iso(0),behind:{state:'current'}}:row),operations:[]});
+ await empty.waitFor({state:'hidden'});
+ await page.locator('[data-readiness-result="chart:writing_messages"]').waitFor();
+ // A saved query still renders with a durable URL and no local snapshot. Its
+ // update details must use the same stored definition as its loaded preview.
+ push('/api/status/stream',status);
+ await page.evaluate(()=>window.pharosNavigate('/home'));
+ const saved=page.locator('[data-card-id="durable-readiness"]');
+ await saved.locator('.query-cover:not([aria-busy="true"])').waitFor();
+ await saved.locator('[data-readiness-result="card:durable-readiness"]').click();
+ const details=page.locator('#dataReadinessDialog');await details.waitFor();
+ await details.getByRole('progressbar').first().waitFor();
+ await details.getByRole('link',{name:'Update settings',exact:true}).click();
+ await page.locator('#background-detail-conversations').waitFor();
 });
