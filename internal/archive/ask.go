@@ -101,7 +101,20 @@ type askSaving struct {
 
 var askID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,100}$`)
 var askRequestTimeout = 3 * time.Minute
+var askWriteTimeout = 10 * time.Second
 var askVisitLimit = 1000
+
+// Drafts, visits and the initial question are saved before inference starts.
+// They must not wait indefinitely behind an indexer's catalog transaction.
+func (s *Server) askWrite(ctx context.Context, label string, run func(*sql.Tx) error) error {
+	writeCtx, cancel := context.WithTimeout(ctx, askWriteTimeout)
+	defer cancel()
+	err := s.Catalog.writeTransaction(writeCtx, label, run)
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		return fmt.Errorf("Pharos is busy saving library changes; try again in a moment: %w", err)
+	}
+	return err
+}
 
 func askDecode(body map[string]any, out any) error {
 	b, err := json.Marshal(body)
@@ -124,7 +137,7 @@ func (s *Server) askSettings(ctx context.Context) (askSettings, error) {
 	return config, err
 }
 func (s *Server) saveAskSettings(ctx context.Context, config askSettings) error {
-	return s.Catalog.writeTransaction(ctx, "ask-settings", func(tx *sql.Tx) error {
+	return s.askWrite(ctx, "ask-settings", func(tx *sql.Tx) error {
 		_, err := tx.Exec("INSERT INTO ask_settings(host_id,value) VALUES(?,?) ON CONFLICT(host_id) DO UPDATE SET value=excluded.value", currentHost().ID, jsonText(config))
 		return err
 	})
@@ -143,7 +156,7 @@ func (s *Server) saveAskSession(ctx context.Context, session askSession, index b
 	if session.HostID == "" {
 		session.HostID = currentHost().ID
 	}
-	return s.Catalog.writeTransaction(ctx, "ask-session", func(tx *sql.Tx) error {
+	return s.askWrite(ctx, "ask-session", func(tx *sql.Tx) error {
 		result, err := tx.Exec("INSERT INTO ask_sessions(id,host_id,value,updated_at) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at ", session.ID, session.HostID, jsonText(session), session.UpdatedAt)
 		if err != nil {
 			return err
@@ -377,8 +390,16 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.ask.mu.Lock()
-	defer s.ask.mu.Unlock()
+	// These routes use only the catalog. In particular, recording a visit
+	// must not hold the lock needed to start, stop or reconcile a question
+	// while it waits for the catalog writer.
+	switch r.URL.Path {
+	case "/api/ask/visits", "/api/ask/remove-visit", "/api/ask/clear-visits",
+		"/api/ask/status", "/api/ask/sessions", "/api/ask/suggestions":
+	default:
+		s.ask.mu.Lock()
+		defer s.ask.mu.Unlock()
+	}
 	fail := func(err error) { writeError(w, err, 400) }
 	switch r.URL.Path {
 	case "/api/ask/suggestions":
@@ -618,7 +639,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(fmt.Errorf("too many visits"))
 			return
 		}
-		err = s.Catalog.writeTransaction(ctx, "ask-visits", func(tx *sql.Tx) error {
+		err = s.askWrite(ctx, "ask-visits", func(tx *sql.Tx) error {
 			// The browser history is authoritative. Reconcile its initial snapshot
 			// to remove superseded entries retained by earlier versions, and replace
 			// individual identities atomically as titles or query state change.
@@ -657,7 +678,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(err)
 			return
 		}
-		err := s.Catalog.writeTransaction(ctx, "ask-remove-visit", func(tx *sql.Tx) error {
+		err := s.askWrite(ctx, "ask-remove-visit", func(tx *sql.Tx) error {
 			_, err := tx.Exec("DELETE FROM ask_visits WHERE host_id=? AND url=? AND at=?", currentHost().ID, visit.URL, visit.At)
 			return err
 		})
@@ -671,7 +692,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(fmt.Errorf("POST required"))
 			return
 		}
-		err := s.Catalog.writeTransaction(ctx, "ask-clear-visits", func(tx *sql.Tx) error {
+		err := s.askWrite(ctx, "ask-clear-visits", func(tx *sql.Tx) error {
 			_, err := tx.Exec("DELETE FROM ask_visits WHERE host_id=?", currentHost().ID)
 			return err
 		})
