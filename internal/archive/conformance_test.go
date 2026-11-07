@@ -42,6 +42,8 @@ type conformanceCase struct {
 }
 
 var conformanceCases = map[string]conformanceCase{
+	"openclaw":       {build: func(t *testing.T) SourceConfig { return conformanceSource("openclaw", openClawFixture(t)) }, secrets: []string{personalAgentSecret}},
+	"hermes":         {build: func(t *testing.T) SourceConfig { return conformanceSource("hermes", hermesFixture(t)) }, secrets: []string{personalAgentSecret}},
 	"claude":         {build: conformanceClaude},
 	"codex":          {build: conformanceCodex},
 	"copilot":        {build: func(t *testing.T) SourceConfig { return conformanceSource("copilot", copilotFixture(t)) }, secrets: []string{copilotSecret}},

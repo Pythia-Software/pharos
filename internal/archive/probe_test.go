@@ -291,6 +291,8 @@ func TestLoginShellEnvToleratesNoiseAndHangs(t *testing.T) {
 		t.Setenv("XDG_DATA_HOME", "/profiles/data")
 		t.Setenv("CLINE_DATA_DIR", "/profiles/cline data")
 		t.Setenv("CLINE_DIR", "/profiles/cline")
+		t.Setenv("OPENCLAW_STATE_DIR", "/profiles/openclaw")
+		t.Setenv("HERMES_HOME", "/profiles/hermes")
 		override(t, &shellEnvCache.key, "")
 		override(t, &shellEnvCache.at, time.Time{})
 		override(t, &shellEnvCache.values, map[string]string{})
