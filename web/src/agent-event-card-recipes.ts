@@ -27,28 +27,34 @@ const friction: WhereTerm = { field: "family_group", op: "=", value: "Friction" 
 const choices: WhereTerm = { field: "family_group", op: "=", value: "Choices you may not see" };
 const kind = (value: string): WhereTerm => ({ field: "family", op: "=", value });
 const inRepository: WhereTerm = { field: "repository_name", op: "is_not_null", value: "" };
+// Plain obstacles are most friction in every repository ("I see the bug"):
+// left out, the bars show the kinds a change to the setup can address.
+const notObstacle: WhereTerm = { field: "family", op: "!=", value: "obstacle" };
+// In thinking, workarounds and assumptions mostly narrate ordinary steps of
+// the work; in replies they are what the agent told the person.
+const inReplies: WhereTerm = { field: "source", op: "=", value: "reply" };
 const read = "Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages, in turns a person or a delegating agent started: scripted runs are left out. Opening the dashboard does not run the pass.";
 const empty = "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.";
 
 export const agentEventCardRecipes: QueryRecipe[] = [
   { ...base, days, id: "agent-events-repository-friction", title: "Where agents hit friction", unit: "events per 1,000 messages",
-    description: "Friction per 1,000 agent messages read over the last {days} days, by repository and kind.", where: [friction, inRepository, ...agentEventWorkTurns],
+    description: "Environment problems, missing tools, out-of-date docs, failures already there and unclear instructions per 1,000 agent messages read over the last {days} days, by repository and kind.", where: [friction, notObstacle, inRepository, ...agentEventWorkTurns],
     measures: [rate("friction_by_repository", ["repository_name", "family"], "Friction events per 1,000 messages read", { minCount: floor })], cover: bars("friction_by_repository"),
     action: "See where agents struggle", emptyLabel: empty,
-    note: `Each repository's rate divides by its own messages read, so a busy repository does not rank high for volume alone. Open a bar for the sentences behind it; Fixes groups the recurring ones into changes to docs, checks, environment or tools. ${read}` },
+    note: `Each repository's rate divides by its own messages read, so a busy repository does not rank high for volume alone. Plain obstacles, most of the friction everywhere, are left out; the dashboard shows them. Open a bar for the sentences behind it; Fixes groups the recurring ones into changes to docs, checks, environment or tools. ${read}` },
   { ...base, days, id: "agent-events-stale-docs", title: "Docs agents found out of date", unit: "events per 1,000 messages",
     description: "Times per 1,000 agent messages over the last {days} days that an agent said a doc, comment or instruction no longer matched the code, by repository.", where: [kind("stale_guidance"), inRepository, ...agentEventWorkTurns],
     measures: [rate("stale_by_repository", ["repository_name"], "Out-of-date guidance per 1,000 messages read", { minCount: floor })], cover: bars("stale_by_repository"),
     action: "Read what was out of date", emptyLabel: empty,
-    note: `Open a bar to read each sentence in its conversation. Fixes collects the docs named more than once into an update you can hand to an agent. ${read}` },
+    note: `A review or audit that reads docs against the code reports more of these, so read the sentences before the rate: each one names a doc, comment or instruction to fix. Fixes collects the ones named more than once into an update you can hand to an agent. ${read}` },
   { ...base, days, id: "agent-events-known-failures", title: "Failures agents stepped around", unit: "events per 1,000 messages",
     description: "Times per 1,000 agent messages over the last {days} days that an agent met a failure it judged already there, or flaky, and left it, by repository.", where: [kind("preexisting_failure"), inRepository, ...agentEventWorkTurns],
     measures: [rate("failures_by_repository", ["repository_name"], "Pre-existing failures per 1,000 messages read", { minCount: floor })], cover: bars("failures_by_repository"),
     action: "Read the failures", emptyLabel: empty,
     note: `A failure every agent steps around costs each of them the time to rule it out. Open a bar for the sentences; Fixes lists the checks that keep failing. ${read}` },
-  { ...base, days, id: "agent-events-unseen-choices", title: "Choices agents made without asking", unit: "events per 1,000 messages",
-    description: "Workarounds, unchecked claims, assumptions and deferred work per 1,000 agent messages over the last {days} days, by repository.", where: [choices, inRepository, ...agentEventWorkTurns],
-    measures: [rate("choices_by_repository", ["repository_name", "family"], "Unseen choices per 1,000 messages read", { minCount: floor })], cover: bars("choices_by_repository"),
+  { ...base, days, id: "agent-events-unseen-choices", title: "Choices agents made without asking", unit: "events per 1,000 replies",
+    description: "Deferred work, risks, unchecked claims, workarounds and assumptions per 1,000 agent replies over the last {days} days, by repository and kind.", where: [choices, inReplies, inRepository, ...agentEventWorkTurns],
+    measures: [rate("choices_by_repository", ["repository_name", "family"], "Unseen choices per 1,000 replies read", { minCount: floor })], cover: bars("choices_by_repository"),
     action: "Review the choices", emptyLabel: empty,
-    note: `These are decisions an agent noted while working that a summary may leave out. Open a bar to review them in their conversations. Risky actions lists the risky commands themselves. ${read}` },
+    note: `These are decisions an agent stated in a reply, such as a check it did not run or a step it did by hand, that are easy to read past. Replies only: in thinking the same kinds mostly narrate ordinary steps, at about three times the rate. Open a bar to review them in their conversations. Risky actions lists the risky commands themselves. ${read}` },
 ];

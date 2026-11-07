@@ -83,10 +83,15 @@ than the work (reply or thinking, model, provider, harness, main agent or subage
 narrates far more than a reply, nearly all thinking read is from Claude models, and a subagent's messages read are
 mostly thinking.
 
+The friction and unseen-choice breakdowns, and the cards, leave out scripted runs: turns whose `prompted_by` is
+`automated` or `none` (a corpus generator, an SDK script). They were 37% of the messages read over two weeks, with
+rates of their own; Who prompted still shows them. The unseen-choice breakdown and card count replies only: in
+thinking the same kinds mostly narrate ordinary steps, at about three times the reply rate.
+
 Four cards (`web/src/agent-event-card-recipes.ts`) open the dashboard at their views, each about something in the
-person's repositories they can change or review: where agents hit friction (repository × friction kind), docs agents
-found out of date, failures agents stepped around, and choices agents made without asking. They appear in the Card
-Library only while the preview is on. Cards on thinking against replies, models, who prompted, prompt length and
+person's repositories they can change or review: where agents hit friction (repository × friction kind, without plain
+obstacles), docs agents found out of date, failures agents stepped around, and choices agents made without asking
+(replies). They appear in the Card Library only while the preview is on. Cards on thinking against replies, models, who prompted, prompt length and
 subagents were dropped: each difference came mostly from how much text a source narrates or from turn size, not from
 anything the person controls. Intervals for small groups wait on Query Table
 ([handoff](handoffs/query-table-rate-intervals.md)).
