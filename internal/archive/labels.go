@@ -301,7 +301,7 @@ func acquireLabelerCPU(ctx context.Context, c *Catalog, threads int, gpuOnly boo
 	if gpuOnly {
 		inference = 1
 	}
-	most := threads + min(4, threads)
+	most := inference + min(4, threads)
 	least := inference + 1
 	if a := workAuthorityFor(ctx, c); a != nil {
 		most = min(a.cap(), most)

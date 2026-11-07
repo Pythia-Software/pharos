@@ -1073,7 +1073,14 @@ func TestAdmittedLabelerLeavesThreadsToTheAuthority(t *testing.T) {
 	hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
 	t.Setenv(labelertest.FakeHelloEnv, hellos)
 	authority := newWorkAuthority(4)
-	discovered := -1
+	discovered, discoverySlots := -1, -1
+	lock := lockFileLease
+	override(t, &lockFileLease, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+		if strings.HasSuffix(file.Name(), ".labels.lock") {
+			discoverySlots = authority.facts().CPUAllocated
+		}
+		return lock(file, mode, wait)
+	})
 	progress := labelsProgressFunc(func(line string) {
 		if strings.Contains(line, "to rebuild") {
 			discovered = authority.facts().CPUAllocated
@@ -1083,11 +1090,50 @@ func TestAdmittedLabelerLeavesThreadsToTheAuthority(t *testing.T) {
 	if err != nil || !stats.Complete || stats.MessagesLabeled == 0 {
 		t.Fatalf("an admitted run: %+v %v", stats, err)
 	}
-	if discovered != 0 || authority.facts().CPUAllocated != 0 {
-		t.Fatalf("slots held after discovery %d, after the run %d", discovered, authority.facts().CPUAllocated)
+	if discoverySlots != 1 || discovered != 0 || authority.facts().CPUAllocated != 0 {
+		t.Fatalf("slots during discovery %d, after discovery %d, after run %d", discoverySlots, discovered, authority.facts().CPUAllocated)
 	}
 	if threads := labelerHelloThreads(t, hellos); !slices.Equal(threads, []int{2}) {
 		t.Fatalf("an admitted run's workers: %v threads", threads)
+	}
+	// GPU-only inference needs one CPU beside at most four preparation
+	// workers. Do not reserve unused CPUs for a long pass.
+	gpuAuthority := newWorkAuthority(8)
+	gpu, err := acquireLabelerCPU(withWorkAuthority(t.Context(), gpuAuthority), nil, 4, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(gpu.Release)
+	if gpu.Allocation.CPUs != 5 {
+		t.Fatalf("GPU-only pipeline reserved %d CPUs for five workers", gpu.Allocation.CPUs)
+	}
+	gpu.Release()
+
+	// A cap lowered while a larger pipeline waits retries at the new cap.
+	a := newWorkAuthority(8)
+	ctx := withWorkAuthority(t.Context(), a)
+	occupied, err := acquireWorkCPU(ctx, nil, 8, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Release()
+	done := make(chan *workCPUGrant, 1)
+	failure := make(chan error, 1)
+	go func() {
+		grant, err := acquireLabelerCPU(ctx, nil, 4, false)
+		done <- grant
+		failure <- err
+	}()
+	waitUntil(t, 5*time.Second, "labeling to wait for its grant", func() bool { return a.facts().CPUWaiters == 1 })
+	a.SetCPUs(2)
+	occupied.Release()
+	grant := <-done
+	if err := <-failure; err != nil {
+		t.Fatal(err)
+	}
+	defer grant.Release()
+	if grant.Allocation.CPUs != 2 {
+		t.Fatalf("pipeline did not adopt the lowered allowance: %+v", grant.Allocation)
 	}
 }
 
