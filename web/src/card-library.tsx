@@ -207,7 +207,7 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     <p className="card-library-feedback" role="status">{message}</p>
     <div id="card-library-panel" className="card-library-grid" role="tabpanel" aria-labelledby={`card-library-tab-${topic}`} aria-busy={loading}>{cards.map(item => <div className="card-library-entry" id={`card-${item.id}`} data-card-definition={item.id} data-card-idea={item.idea} key={item.id}>
       <QueryCard discovery id={item.id} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={suggestionWindowLabel(item)} category={item.category} loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={previews[item.id]} error={errors[item.id]}
-        onOpen={onOpen} onKeep={() => onKeep(item)} onReload={() => reloadPreview(job(item))} />
+        readinessSource={{dataset:item.dataset,query:item.query}} onOpen={onOpen} onKeep={() => onKeep(item)} onReload={() => reloadPreview(job(item))} />
       {collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> Added to your collection</span> : null}
     </div>)}</div>
     {!cards.length ? <p className="card-library-empty">No cards match these filters. <button type="button" onClick={clearFilters}>Clear filters</button></p> : null}

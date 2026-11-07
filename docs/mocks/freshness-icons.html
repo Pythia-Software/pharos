@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Compare original Pharos freshness icon prototypes at their actual interface sizes.">
+  <link rel="icon" href="data:,">
+  <title>Pharos · Freshness icon comparison</title>
+  <style>
+    :root{color-scheme:light;--bg:#eee7d8;--panel:#fffaf0;--ink:#2c2821;--muted:#756c5f;--accent:#315845;--gold:#ad823b;--orange:#b76020;--bad:#9c3d36;--line:#d5c8b3;--soft:#f4eee2;--focus:#315845;--serif:Charter,"Iowan Old Style",Palatino,Georgia,serif;--sans:"Avenir Next",Avenir,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    :root[data-theme="dark"]{color-scheme:dark;--bg:#10241b;--panel:#183529;--ink:#f3ebdc;--muted:#b5ab93;--accent:#d8ae5e;--gold:#d4ad66;--orange:#f0a064;--bad:#ef8c84;--line:#2d4f40;--soft:#1e3b2d;--focus:#8cc6a0}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 var(--sans)}button,select,input{font:inherit;color:inherit}button,select{border:1px solid var(--line);border-radius:5px;background:var(--panel)}button{cursor:pointer}button:disabled{cursor:default;opacity:.4}button:hover:not(:disabled){background:var(--soft)}button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--focus);outline-offset:4px}a{color:var(--accent)}h1,h2,h3,p{margin:0}h1,h2,h3{font-family:var(--serif);font-weight:400}h1{font-size:clamp(34px,4.2vw,54px);line-height:1.12;letter-spacing:-.035em}h2{font-size:27px;line-height:1.25}h3{font-size:21px;line-height:1.3}code,pre{font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}.muted{color:var(--muted)}.eyebrow{font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}.shell{max-width:1340px;margin:auto;padding:36px 40px 48px}.topline{display:flex;justify-content:space-between;gap:20px;align-items:center;border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:31px}.wordmark{font:23px var(--serif);color:var(--accent)}.topline span+span{border-left:1px solid var(--line);padding-left:16px;margin-left:16px}.intro{max-width:820px}.intro p{margin-top:14px;max-width:720px;color:var(--muted);font-size:15px}.toolbar{display:flex;flex-wrap:wrap;gap:14px 24px;align-items:flex-end;margin:28px 0 24px}.toolbar label{display:grid;gap:5px;font-size:11px;color:var(--muted)}.toolbar select{padding:7px 28px 7px 10px;min-height:36px;max-width:100%}.toolbar .check{display:flex;flex-direction:row;align-items:center;gap:8px;min-height:36px;color:var(--ink);font-size:12px}.check input{accent-color:var(--accent);width:15px;height:15px;margin:0}.toolbar .push{margin-left:auto}.pair{display:grid;grid-template-columns:1fr 1fr;gap:20px}.preview{min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}.preview-heading{padding:18px 20px;display:flex;justify-content:space-between;gap:12px;align-items:center;border-bottom:1px solid var(--line)}.preview-heading .eyebrow{margin-bottom:5px}.enlarged{display:flex;align-items:center;justify-content:center;width:54px;height:54px;flex:none}.enlarged .app-icon{width:40px;height:40px}.sample-header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line)}.sample-header .brand{font:22px var(--serif);color:var(--accent);margin-right:auto}.sample-header .breadcrumb{font-size:11px;color:var(--muted)}.icon-button{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;padding:0;border:1px solid transparent;border-radius:4px;background:transparent}.icon-button .app-icon{width:18px;height:18px}.icon-button.selected{background:var(--soft);border-color:var(--accent)}.icon-button.forced-hover{background:var(--soft);border-color:var(--line)}.sample-main{padding:20px}.sample-label{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px}.inline-button{display:inline-flex;align-items:center;justify-content:center;flex:none;width:26px;height:26px;min-height:26px;padding:5px;border:1px solid transparent;background:transparent;border-radius:4px}.inline-button:hover{border-color:var(--line)}.inline-button .app-icon{width:15px;height:15px;flex:none}.metric{font:34px/1.2 var(--serif);margin-top:2px}.metric small{font:11px var(--sans);color:var(--muted);margin-left:7px}.mini-chart{display:flex;align-items:flex-end;gap:7px;height:65px;margin:16px 0 12px;border-bottom:1px solid var(--line);padding-bottom:1px}.mini-chart i{flex:1;background:var(--accent);opacity:.7;min-width:0}.sample-status{font-size:12px;color:var(--muted);min-height:20px}.sample-footer{padding:11px 20px;font-size:10px;color:var(--muted);border-top:1px solid var(--line);background:var(--soft)}.reference-note{font-size:11px;color:var(--muted);margin-top:12px;max-width:1050px}.section-title{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:36px 0 15px}.section-title p{font-size:11px;color:var(--muted)}.legend{display:flex;flex-wrap:wrap;gap:6px 20px;margin:0 0 17px;color:var(--muted);font-size:11px}.legend span{display:flex;gap:7px;align-items:center}.legend i{display:inline-block;width:12px;border-top:2px solid currentColor}.tone{color:var(--muted)}.tone[data-state="hours"]{color:var(--gold)}.tone[data-state="orange"]{color:var(--orange)}.tone[data-state="days"]{color:var(--bad)}html[data-mono="true"] .tone{color:var(--ink)}.app-icon{display:block;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex:none}.sprite{position:absolute;width:0;height:0;overflow:hidden;pointer-events:none}.comparison{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}.comparison-head,.family-row{display:grid;grid-template-columns:minmax(240px,2.8fr) repeat(7,minmax(60px,1fr));align-items:center}.comparison-head{padding:12px 20px;font-size:10px;color:var(--muted);background:var(--soft)}.comparison-head>span:not(:first-child){text-align:center}.family-row{padding:17px 20px;border-top:1px solid var(--line)}.family-row[data-selected="true"]{background:var(--soft)}.family-description{padding-right:18px}.family-title{display:flex;align-items:center;gap:9px;margin-bottom:5px}.family-title strong{font-size:13px;font-weight:600}.family-title .app-icon{width:22px;height:22px;color:var(--accent)}.family-description p{font-size:11px;line-height:1.6;color:var(--muted);max-width:270px}.family-description button{font-size:10px;padding:3px 8px;margin-top:8px}.family-description button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}.state-cell{display:grid;justify-items:center;gap:8px;min-width:0}.state-cell .app-icon{width:var(--study-size,15px);height:var(--study-size,15px)}.state-cell .cell-label{display:none;font-size:10px;color:var(--muted)}.state-cell .icon-slot{display:flex;align-items:center;justify-content:center;min-height:32px;min-width:32px}.behavior-note{font-size:11px;color:var(--muted);margin-top:11px}.bottom-grid{display:grid;grid-template-columns:1.05fr 1fr;gap:28px;margin-top:34px}.control-states{display:flex;flex-wrap:wrap;gap:24px;padding:19px 0}.control-state{display:grid;gap:9px;justify-items:center;font-size:10px;color:var(--muted)}.size-line{display:flex;align-items:center;gap:18px;border-top:1px solid var(--line);padding:14px 0}.size-line p{font-size:11px;color:var(--muted);margin-right:auto}.size-sample{display:grid;gap:5px;justify-items:center;font-size:10px;color:var(--muted)}.size-sample>span{display:grid;place-items:center;height:28px;min-width:24px}.contrast-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:15px}.contrast-sample{display:flex;align-items:center;gap:9px;padding:13px;border:1px solid var(--line);border-radius:5px;font-size:11px;background:var(--panel);color:var(--muted)}.contrast-sample[data-appearance="light"]{--panel:#fffaf0;--muted:#756c5f;--ink:#2c2821;--gold:#ad823b;--orange:#b76020;--bad:#9c3d36;--line:#d5c8b3}.contrast-sample[data-appearance="dark"]{--panel:#183529;--muted:#b5ab93;--ink:#f3ebdc;--gold:#d4ad66;--orange:#f0a064;--bad:#ef8c84;--line:#2d4f40}.contrast-sample .app-icon{width:15px;height:15px}.readout{margin:14px 0 0;font-size:12px;color:var(--muted)}.readout strong{color:var(--ink);font-weight:500}.notes{padding-left:21px;font-size:12px;color:var(--muted);margin:15px 0 0}.notes li{margin:9px 0}.notes strong{font-weight:500;color:var(--ink)}details{border-top:1px solid var(--line);padding-top:14px;margin-top:18px}summary{cursor:pointer;font-size:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel);padding:14px;border:1px solid var(--line);border-radius:5px;margin:12px 0 0}footer{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;margin-top:30px;padding-top:16px;border-top:1px solid var(--line);font-size:10px;color:var(--muted)}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}dialog{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;width:min(440px,calc(100vw - 32px));padding:25px}dialog::backdrop{background:#0006}dialog p{color:var(--muted);margin:14px 0 20px;font-size:13px}dialog button{padding:6px 12px}dialog .eyebrow{margin-bottom:8px}
+    .dial-study{margin:0 0 24px;padding:20px;background:var(--panel);border:1px solid var(--line);border-radius:8px}.dial-study h2{font-size:24px}.dial-study>p{font-size:12px;color:var(--muted);margin-top:7px;max-width:790px}.dial-sequence{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:14px;margin-top:20px}.dial-example{display:grid;justify-items:center;align-content:start;gap:7px;min-width:0;text-align:center;font-size:11px}.dial-example .app-icon{width:40px;height:40px}.dial-example small{color:var(--muted);font-size:10px}.dial-example:first-child{border-right:1px solid var(--line);padding-right:12px}.dial-example .icon-slot{height:48px;display:grid;place-items:center}.dial-check{fill:none}
+    @media(max-width:780px){.dial-sequence{grid-template-columns:repeat(4,minmax(0,1fr));gap:20px 12px}.dial-study{padding:16px}}
+    @media(max-width:1050px){.shell{padding:25px 24px 35px}.comparison-head,.family-row{grid-template-columns:minmax(210px,2.8fr) repeat(7,minmax(48px,1fr))}.sample-header .breadcrumb{display:none}.comparison-head,.family-row{padding-left:15px;padding-right:15px}}
+    @media(max-width:780px){.comparison-head{display:none}.family-row{grid-template-columns:repeat(7,minmax(0,1fr));gap:14px 0}.family-description{grid-column:1/-1;padding:0}.family-description p{max-width:none}.family-title{margin-bottom:4px}.family-description button{margin-top:7px}.state-cell .cell-label{display:block}.bottom-grid{grid-template-columns:1fr;gap:28px}.section-title{align-items:flex-start;flex-direction:column;gap:6px}.toolbar .push{margin-left:0}.reference-note{max-width:620px}}
+    @media(max-width:540px){.shell{padding:20px 16px 30px}.topline{align-items:flex-start;margin-bottom:23px}.topline .eyebrow{font-size:9px}.topline span+span{display:none}.pair{grid-template-columns:1fr;gap:16px}.preview-heading{padding:15px 16px}.preview-heading h3{font-size:20px}.sample-main{padding:16px}.sample-header{padding:10px 16px}.toolbar{gap:12px 16px}.toolbar label{flex:1;min-width:110px}.toolbar label:first-child{flex-basis:100%}.toolbar .check{flex-basis:100%;min-height:28px}.family-row{grid-template-columns:repeat(4,minmax(0,1fr));gap:15px 0}.family-description{grid-column:1/-1}.comparison{border-radius:6px}.legend{gap:6px 13px}.size-line{gap:12px}.section-title{margin-top:28px}.sample-status{font-size:11px}}
+    @media(pointer:coarse){button,select{min-height:44px}.icon-button,.inline-button{min-width:44px;min-height:44px}.family-description button{padding:6px 12px}.state-cell .icon-slot{min-width:44px;min-height:44px}}
+    @media print{.toolbar,.family-description button,.control-states,details,dialog{display:none}.shell{padding:0}.pair,.comparison,.bottom-grid{break-inside:avoid}body{background:var(--panel)}.family-row{break-inside:avoid}}
+  </style>
+</head>
+<body>
+  <!-- Proposed interface symbols follow docs/iconography.md. Existing history,
+       settings and info geometry is reused from the page-shell sprite. -->
+  <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="study-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.2 2"/></symbol>
+    <symbol id="study-clock-mark" viewBox="0 0 24 24"><path d="M11.2 20.46a8.5 8.5 0 1 1 9.26-9.26M12 7v5l3.2 2M18.5 14.5v3.2M18.5 20.5h.01"/></symbol>
+    <symbol id="study-history" viewBox="0 0 24 24"><path d="M3.4 10a8.7 8.7 0 1 1 .2 4.7M3.4 4.8V10h5.2M12 7v5l3.2 2"/></symbol>
+    <symbol id="study-data-clock" viewBox="0 0 24 24"><ellipse cx="9" cy="6" rx="5.5" ry="2.5"/><path d="M3.5 6v11c0 1.4 2.5 2.5 5.5 2.5M14.5 6v3M3.5 11c0 1.4 2.5 2.5 5.5 2.5"/><circle cx="16" cy="16" r="5"/><path d="M16 13v3l2 1"/></symbol>
+    <symbol id="study-database" viewBox="0 0 24 24"><ellipse cx="9" cy="6" rx="5.5" ry="2.5"/><path d="M3.5 6v11c0 1.4 2.5 2.5 5.5 2.5M14.5 6v3M3.5 11c0 1.4 2.5 2.5 5.5 2.5"/></symbol>
+    <symbol id="study-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 10.5v5m0-8h.01"/></symbol>
+    <symbol id="study-empty" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M8 12h8"/></symbol>
+    <symbol id="study-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M9.8 3.3h4.4l.5 2.1 1.4.8 2.1-.6 2.2 3.8-1.6 1.5v1.8l1.6 1.5-2.2 3.8-2.1-.6-1.4.8-.5 2.1H9.8l-.5-2.1-1.4-.8-2.1.6-2.2-3.8 1.6-1.5v-1.8L3.6 9.4l2.2-3.8 2.1.6 1.4-.8z"/></symbol>
+  </defs></svg>
+  <main class="shell">
+    <div class="topline"><div><span class="wordmark">Pharos</span><span class="eyebrow">Interface studies</span></div><div class="eyebrow">Freshness / database clock</div></div>
+    <header class="intro"><h1>A little clock for older data.</h1><p>The database-clock direction, refined: a filled pie shows hours behind, and a checkmark replaces the clock when up to date. Try it at 15px, in the header, and without color.</p></header>
+    <form class="toolbar" onsubmit="return false" aria-label="Comparison controls">
+      <label>Example state<select id="state"><option value="current">Up to date</option><option value="minutes">3 minutes behind</option><option value="recent">45 minutes behind</option><option value="one">1 hour behind</option><option value="hours" selected>3 hours behind</option><option value="six">6 hours behind</option><option value="orange">9 hours behind</option><option value="twelve">12 hours behind</option><option value="days">2 days behind</option><option value="unknown">Update status unavailable</option><option value="missing">No results yet</option></select></label>
+      <label>Matrix icon size<select id="size"><option value="14">14px · dense</option><option value="15" selected>15px · card</option><option value="16">16px · inline</option><option value="18">18px · header</option></select></label>
+      <label>Appearance<select id="theme"><option value="light" selected>Light</option><option value="dark">Dark</option><option value="system">System</option></select></label>
+      <label class="check push"><input id="mono" type="checkbox"> Hide semantic color</label>
+    </form>
+    <section class="dial-study" aria-labelledby="dial-title"><h2 id="dial-title">The database clock, refined</h2><p>One full dial = 12 hours behind, filling clockwise from the top. It stays full at 12h+; the text keeps the exact age. The checkmark means up to date. These are enlarged drawings; actual UI sizes appear below.</p><div class="dial-sequence" id="dial-sequence"></div></section>
+    <div class="pair" id="preview-pair"></div>
+    <p class="reference-note">Reference: the original PR’s <code>FreshnessIcon</code> geometry, preserved before the database-clock implementation, including its 20 × 20 viewBox. <a href="../../web/src/data-readiness.tsx">The working tree</a> now uses the approved database clock. The five alternatives use the repo’s 24 × 24 grid. These are code-rendered, synthetic UI examples; no photographic reference was used.</p>
+    <div class="section-title"><h2>Compare the whole family</h2><p>Icons below are actual size. Choose a direction to preview above.</p></div>
+    <div class="legend" aria-label="Current staleness thresholds"><span><i class="tone"></i> Up to 2h · neutral</span><span><i class="tone" data-state="hours"></i> Over 2h · yellow</span><span><i class="tone" data-state="orange"></i> Over 8h · orange</span><span><i class="tone" data-state="days"></i> Over 24h · red</span></div>
+    <section class="comparison" aria-label="Icon families and freshness states">
+      <div class="comparison-head" aria-hidden="true"><span>Direction / tradeoff</span><span>Current</span><span>45 min</span><span>3 hours</span><span>9 hours</span><span>2 days</span><span>Unknown</span><span>No results</span></div>
+      <div id="families"></div>
+    </section>
+    <p class="behavior-note">The database clock encodes hours behind as a filled pie, not work completed. Only up-to-date data gets a checkmark. Unknown and missing results keep the database with an unfilled question or dash badge. The other clock directions keep fixed hands.</p>
+    <div class="bottom-grid">
+      <section aria-labelledby="context-title"><h2 id="context-title">Check the small details</h2><p class="readout" id="selected-description"></p>
+        <div class="control-states" id="control-states"></div>
+        <div class="size-line"><p>Unscaled SVG sizes</p><div id="sizes" style="display:contents"></div></div>
+        <div class="contrast-pair" id="contrast-pair"></div>
+        <p class="readout">Click a freshness icon in either preview to open its example status. Hover, tab focus, selected, and disabled treatments use the same thin-stroke artwork.</p>
+      </section>
+      <section aria-labelledby="read-title"><h2 id="read-title">What I’d look for</h2>
+        <ul class="notes"><li><strong>A clock-shaped quantity.</strong> Three hours is a quarter, six is a half, nine is three quarters. The dial never wraps back to empty.</li><li><strong>A calm current state.</strong> The checkmark replaces the entire clock face; the database outline stays recognizable.</li><li><strong>Legibility at 15px.</strong> The clock hands are removed so the small face can show a clean area of fill.</li><li><strong>Freshness stays separate from work.</strong> The pie measures lag, not processing progress. Running and paused jobs can have the same stale data.</li><li><strong>Keep exact age in text.</strong> A full dial means 12h or more. Unknown status never gets a checkmark or an invented slice.</li></ul>
+        <details id="artwork"><summary>Drawing rules and selected SVG</summary><p class="readout">Original geometry; 24 × 24 viewBox; 1.6-unit currentColor outline; round caps and joins; no gradients, font glyphs, or icon packages. The pie is intentionally filled to encode a quantity, using the icon standard’s meaningful-solid-mark exception. The database and checkmark remain unfilled. Existing history and info symbols are reused. The PR baseline and earlier database-clock reference are preserved.</p><p class="readout">The database direction keeps an unfilled question badge for unknown status and an unfilled dash badge for missing results. Other clock/history alternatives reuse the existing info symbol for unknown status.</p><pre id="svg-source"></pre><p class="readout">Production integration would add symbols to the page shell and their names to <code>IconName</code>, following <a href="../iconography.md">docs/iconography.md</a>.</p></details>
+      </section>
+    </div>
+    <footer><span>Design comparison · simulated data · no processing actions</span><a href="analysis-readiness.html">Open the existing readiness study</a></footer>
+    <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+  </main>
+  <dialog id="status-dialog" aria-labelledby="dialog-title" aria-describedby="dialog-copy"><div class="eyebrow" id="dialog-family"></div><h2 id="dialog-title"></h2><p id="dialog-copy"></p><form method="dialog"><button>Close details</button></form></dialog>
+  <noscript><p>This comparison needs JavaScript to draw the state variants and switch the previews.</p></noscript>
+  <script>
+    'use strict';
+    const families = [
+      {id:'reference',name:'Original PR',tag:'Three observations + now rail',note:'Encodes lag directly. At small sizes it can resemble text alignment.',read:'The original reference, unchanged. Its widening gap distinguishes age even without color.'},
+      {id:'clock',name:'Plain clock',tag:'Familiarity first',note:'The simplest age cue. It can also suggest a schedule or waiting.',read:'My familiarity-first candidate. Exact age stays in the text; the clock is a stable freshness landmark.'},
+      {id:'clock-mark',name:'Clock + status mark',tag:'A stronger stale state',note:'Adds an exclamation above 2h. Test whether the small mark stays readable.',read:'Adds a shape cue for older data without changing the hands. The extra detail trades quietness for emphasis.'},
+      {id:'gap',name:'Single gap to now',tag:'Simplify the current idea',note:'One observation, one rail. Less busy, but the meaning still needs learning.',read:'My continuity-first candidate. A growing gap preserves the PR’s metaphor with fewer strokes.'},
+      {id:'history',name:'History',tag:'Reuse an existing symbol',note:'Reads as an older snapshot; may be mistaken for undo or refresh.',read:'Reuses ph-icon-history exactly. Familiar artwork, but Pharos already uses it for navigation history.'},
+      {id:'data-clock',name:'Database + clock',tag:'Hours as a filled pie',note:'A 12-hour lag dial, with a checkmark when up to date. No clock hands.',read:'The selected direction: a filled 12-hour dial measures lag; a checkmark replaces the clock for up-to-date data. At 12h+ the dial stays full.'},
+    ];
+    const states = {
+      current:{hours:0,label:'Up to date',short:'Current',copy:'Up to date as of 6 minutes ago. Activity since that check may not yet be included.'},
+      minutes:{hours:0.05,label:'3 minutes behind',short:'3 min',copy:'Results are 3 minutes behind known changes. This is within the expected update interval.'},
+      recent:{hours:0.75,label:'45 minutes behind',short:'45 min',copy:'Results are 45 minutes behind known changes. Open update details for the relevant processing steps.'},
+      one:{hours:1,label:'1 hour behind',short:'1 hour',copy:'Results are 1 hour behind known changes. The dial fills one twelfth of its face.'},
+      hours:{hours:3,label:'3 hours behind',short:'3 hours',copy:'Results are 3 hours behind known changes. Processing may be running, scheduled, or paused; freshness alone does not say which.'},
+      six:{hours:6,label:'6 hours behind',short:'6 hours',copy:'Results are 6 hours behind known changes. The dial is half full.'},
+      orange:{hours:9,label:'9 hours behind',short:'9 hours',copy:'Results are 9 hours behind known changes. Open update details to see the outstanding work.'},
+      twelve:{hours:12,label:'12 hours behind',short:'12 hours',copy:'Results are 12 hours behind known changes. The dial stays full for any greater delay; exact age remains in the text.'},
+      days:{hours:48,label:'2 days behind',short:'2 days',copy:'Results are 2 days behind known changes. Existing results remain visible while updates are outstanding.'},
+      unknown:{label:'Update status unavailable',short:'Unknown',copy:'There is not enough evidence to determine freshness. Unknown does not mean very stale.'},
+      missing:{label:'No results yet',short:'No results',copy:'A required first analysis has not published results yet. This is different from a valid query that returned no rows.'},
+    };
+    const matrixStates=['current','recent','hours','orange','days','unknown','missing'];
+    const controls={state:document.getElementById('state'),size:document.getElementById('size'),theme:document.getElementById('theme'),mono:document.getElementById('mono')};
+    const params=new URLSearchParams(location.search);
+    let chosen=families.some(family=>family.id===params.get('family'))?params.get('family'):'data-clock';
+    if(Object.hasOwn(states,params.get('state')))controls.state.value=params.get('state');
+    if(['14','15','16','18'].includes(params.get('size')))controls.size.value=params.get('size');
+    if(['light','dark','system'].includes(params.get('theme')))controls.theme.value=params.get('theme');
+    controls.mono.checked=params.get('mono')==='1';
+    const systemTheme=matchMedia('(prefers-color-scheme:dark)');
+    const findFamily=id=>families.find(family=>family.id===id);
+    const toneState=state=>({one:'recent',six:'hours',twelve:'orange'})[state]??state;
+    function lagPie(hours){
+      if(!Number.isFinite(hours)||hours<=0)return '';
+      // Clamp rather than modulo: old data must never look current after 12h.
+      if(hours>=12)return '<circle class="lag-pie" cx="16" cy="16" r="5" fill="currentColor" stroke="none"/>';
+      const angle=hours/12*Math.PI*2;
+      const x=Number((16+5*Math.sin(angle)).toFixed(4));
+      const y=Number((16-5*Math.cos(angle)).toFixed(4));
+      return `<path class="lag-pie" d="M16 16L16 11A5 5 0 ${hours>6?1:0} 1 ${x} ${y}Z" fill="currentColor" stroke="none"/>`;
+    }
+    function databaseIcon(state){
+      const database='<use href="#study-database"/>';
+      if(state==='current')return database+'<path class="dial-check" d="m12.5 17 3 3 5.5-6"/>';
+      const ring='<circle cx="16" cy="16" r="5"/>';
+      if(state==='unknown')return database+ring+'<path d="M14.5 14.3a1.5 1.5 0 1 1 2.3 1.3c-.8.4-.8.7-.8 1.1m0 2h.01"/>';
+      if(state==='missing')return database+ring+'<path d="M13.5 16h5"/>';
+      return database+lagPie(states[state].hours)+ring;
+    }
+    function svg(family,state,size){
+      let viewBox='0 0 24 24',geometry;
+      if(family==='data-clock'){
+        geometry=databaseIcon(state);
+      }else if(family==='data-clock-original'){
+        geometry='<use href="#study-data-clock"/>';
+      }else if(family==='reference'){
+        // Deliberately preserve FreshnessIcon's 20px grid and geometry exactly.
+        viewBox='0 0 20 20';
+        const missing=state==='missing',unknown=state==='unknown';
+        const gap=({current:0,minutes:0,recent:2,hours:4,orange:6,days:8,unknown:4,missing:4})[toneState(state)];
+        geometry='<path d="M17 3v14" opacity=".45"/>'+[5,10,15].map((y,index)=>`<path d="M3 ${y}h${missing?10:11-gap*(index+1)/3}"${missing?' stroke-dasharray="1 3"':unknown?' stroke-dasharray="2 2"':''}/>`).join('');
+      }else if(family==='gap'){
+        const gap=({current:0,minutes:0,recent:2,hours:4,orange:6,days:8,unknown:4,missing:0})[toneState(state)];
+        geometry=`<path d="M20 4v16" opacity=".45"/><path d="M4 12h${14-gap}"${state==='unknown'?' stroke-dasharray="2 2"':state==='missing'?' stroke-dasharray="1 3"':''}/>`;
+      }else{
+        const name=state==='unknown'?'info':state==='missing'?'empty':family==='clock-mark'&&!['hours','orange','days'].includes(toneState(state))?'clock':family;
+        geometry=`<use href="#study-${name}"/>`;
+      }
+      return `<svg class="app-icon" viewBox="${viewBox}" aria-hidden="true" focusable="false"${size?` style="width:${size}px;height:${size}px"`:''}>${geometry}</svg>`;
+    }
+    function iconButton(family,state,classes='icon-button',extra=''){
+      return `<button type="button" class="${classes} tone" data-state="${toneState(state)}" data-detail="${family}" aria-label="${findFamily(family).name}: ${states[state].label}. View update details" title="${states[state].label}" aria-haspopup="dialog" aria-controls="status-dialog" ${extra}>${svg(family,state)}</button>`;
+    }
+    const bars=[28,46,36,61,45,75,55,83,65,72,92,68];
+    function preview(family,reference){
+      const item=findFamily(family),state=controls.state.value,missing=state==='missing';
+      return `<article class="preview" aria-label="${reference?'Original PR reference':'Selected alternative'}"><div class="preview-heading"><div><div class="eyebrow">${reference?'Original PR / reference':'Selected direction / prototype'}</div><h3>${reference?'Three observations + now rail':item.name}</h3></div><span class="enlarged tone" data-state="${toneState(state)}" title="40px enlarged drawing">${svg(family,state)}</span></div><div class="sample-header"><span class="brand">Pharos</span><span class="breadcrumb">My library / Analyze</span>${iconButton(family,state)}<span class="muted">${svg('settings','current',18)}</span></div><div class="sample-main"><div class="sample-label"><span>Human Words</span>${iconButton(family,state,'inline-button')}</div><div class="metric">${missing?'—':'12,480'}<small>${missing?'No results yet':'words'}</small></div><div class="mini-chart" role="img" aria-label="${missing?'No published results':'Synthetic daily word counts'}">${missing?'':bars.map(height=>`<i style="height:${height}%"></i>`).join('')}</div><p class="sample-status">${states[state].label}</p></div><div class="sample-footer">18px header · 15px card · 40px enlarged drawing above</div></article>`;
+    }
+    function updateURL(){
+      const next=new URL(location.href);
+      for(const [key,value] of Object.entries({family:chosen,state:controls.state.value,size:controls.size.value,theme:controls.theme.value,mono:controls.mono.checked?'1':null})){
+        if(value===null)next.searchParams.delete(key);else next.searchParams.set(key,value);
+      }
+      // File URLs remain usable in browsers that disallow history replacement.
+      try{history.replaceState(null,'',next);}catch{}
+    }
+    function render(announce=false){
+      const state=controls.state.value,item=findFamily(chosen);
+      document.documentElement.dataset.theme=controls.theme.value==='system'?(systemTheme.matches?'dark':'light'):controls.theme.value;
+      document.documentElement.dataset.mono=String(controls.mono.checked);
+      document.documentElement.style.setProperty('--study-size',controls.size.value+'px');
+      const dialSamples=[['data-clock-original','hours','Earlier','Reference prototype'],['data-clock','current','Up to date','Checkmark'],['data-clock','one','1 hour','One twelfth'],['data-clock','hours','3 hours','One quarter'],['data-clock','six','6 hours','One half'],['data-clock','orange','9 hours','Three quarters'],['data-clock','twelve','12 hours','Full dial'],['data-clock','days','2 days','Stays full']];
+      document.getElementById('dial-sequence').innerHTML=dialSamples.map(([family,key,label,description])=>`<div class="dial-example"><span class="icon-slot tone" data-state="${toneState(key)}" role="img" aria-label="${family==='data-clock-original'?'Earlier database clock reference':states[key].label}">${svg(family,key)}</span><span>${label}</span><small>${description}</small></div>`).join('');
+      document.getElementById('preview-pair').innerHTML=preview('reference',true)+preview(chosen,false);
+      document.getElementById('families').innerHTML=families.map(family=>`<article class="family-row" data-selected="${family.id===chosen}" aria-label="${family.name}"><div class="family-description"><div class="family-title">${svg(family.id,'hours')}<strong>${family.name}</strong></div><p>${family.note}</p><button type="button" data-choose="${family.id}" aria-pressed="${family.id===chosen}" aria-controls="preview-pair" aria-label="Preview ${family.name}">${family.id===chosen?'Previewing':family.id==='reference'?'Preview reference':'Preview direction'}</button></div>${matrixStates.map(key=>`<div class="state-cell"><span class="icon-slot tone" data-state="${key}" role="img" aria-label="${family.name}: ${states[key].label}" title="${states[key].label}">${svg(family.id,key)}</span><span class="cell-label">${states[key].short}</span></div>`).join('')}</article>`).join('');
+      document.getElementById('selected-description').textContent=item.read;
+      document.getElementById('control-states').innerHTML=[['Default','',''],['Hover',' forced-hover',''],['Selected',' selected','aria-pressed="true"'],['Disabled','','disabled']].map(([label,extra,attributes])=>`<div class="control-state">${iconButton(chosen,state,'icon-button'+extra,attributes)}<span>${label}</span></div>`).join('');
+      document.getElementById('sizes').innerHTML=[14,15,16,18].map(size=>`<div class="size-sample"><span class="tone" data-state="${toneState(state)}">${svg(chosen,state,size)}</span><span>${size}px</span></div>`).join('');
+      document.getElementById('contrast-pair').innerHTML=['light','dark'].map(appearance=>`<div class="contrast-sample" data-appearance="${appearance}"><span class="tone" data-state="${toneState(state)}">${svg(chosen,state)}</span>${appearance==='light'?'Light surface':'Dark surface'}</div>`).join('');
+      const output=svg(chosen,state).replace('class="app-icon"','class="app-icon" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"');
+      document.getElementById('svg-source').textContent=output.replace(/<use href="#([^"]+)"\/>/g,(_,id)=>document.getElementById(id).innerHTML);
+      if(announce)document.getElementById('announcement').textContent=`${item.name}. ${states[state].label}. Matrix icons ${controls.size.value} pixels. ${controls.mono.checked?'Monochrome.':'Semantic color.'}`;
+    }
+    function change(){render(true);updateURL();}
+    Object.values(controls).forEach(control=>control.addEventListener('change',change));
+    systemTheme.addEventListener('change',()=>{if(controls.theme.value==='system')render();});
+    document.addEventListener('click',event=>{
+      const choose=event.target.closest('[data-choose]');
+      if(choose){chosen=choose.dataset.choose;change();document.querySelector(`[data-choose="${chosen}"]`).focus({preventScroll:true});return;}
+      const detail=event.target.closest('[data-detail]');
+      if(detail){const family=findFamily(detail.dataset.detail),state=controls.state.value;document.getElementById('dialog-family').textContent=family.name+' · simulated status';document.getElementById('dialog-title').textContent=states[state].label;document.getElementById('dialog-copy').textContent=states[state].copy;document.getElementById('status-dialog').showModal();}
+    });
+    render();
+  </script>
+</body>
+</html>

@@ -1,3 +1,4 @@
+import { DataReadinessIndicator, DataReadinessEmpty } from "./data-readiness";
 import React, { useEffect, useMemo, useState } from "react";
 import { MAX_WHERE_CLAUSES, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldDef, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { MetricCard, defaultRenderers, type MetricTheme } from "@pythia-software/query-table-ui";
@@ -22,7 +23,7 @@ export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, que
   const key = JSON.stringify([query, params ?? {}]);
   // A result belongs to its query and to the refresh it was fetched for, so
   // results from before a refresh read as loading, never as current.
-  const [state, setState] = useState<{ key: string; refresh: number; results: AggregationResultEntry[]; error: string; loading: boolean }>({ key: "", refresh: 0, results: [], error: "", loading: true });
+  const [state, setState] = useState<{ key: string; refresh: number; results: AggregationResultEntry[]; error: string; loading: boolean; updatedAt?: number }>({ key: "", refresh: 0, results: [], error: "", loading: true });
   const [refresh, setRefresh] = useState(0);
   useEffect(() => onDatasetRefresh(dataset, () => setRefresh(value => value + 1)), [dataset]);
   useEffect(() => {
@@ -30,12 +31,12 @@ export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, que
     setState(previous => ({ ...previous, loading: true }));
     const [request, parameters] = JSON.parse(key) as [QueryState, RequestParams];
     runAnalysisQuery(dataset, schema, request, { signal: controller.signal, params: parameters })
-      .then(results => setState({ key, refresh, results, error: "", loading: false }))
+      .then(results => setState({ key, refresh, results, error: "", loading: false, updatedAt: Date.now() }))
       .catch(failure => { if (!controller.signal.aborted) setState({ key, refresh, results: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
   }, [dataset, key, refresh]);
   const current = state.key === key;
-  return { results: current ? state.results : [], loading: !current || state.refresh !== refresh || state.loading, error: current ? state.error : "" };
+  return { updatedAt: current ? state.updatedAt : undefined, results: current ? state.results : [], loading: !current || state.refresh !== refresh || state.loading, error: current ? state.error : "" };
 }
 
 export function AnalysisViewControl({ catalog, state, onChange }: { catalog: AnalysisCatalog; state: AnalysisState; onChange: (view: AnalysisView) => void }) {
@@ -147,6 +148,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const componentTheme: MetricTheme | undefined = analysis.components ? { dimensions: { [view.split]: { layer: "components",
     overrides: analysis.components.parts.map(part => ({ value: part.label, color: metricSeriesColor([view.split], [part.label]) })) } } } : undefined;
   const empty = !result.loading && !error && entry && (analysis.components ? !entry.buckets.some(bucket => Number(bucket.value) > 0) && !Number(entry.other?.value) : !entry.buckets.length || entry.buckets.every(bucket => bucket.distribution?.kind === "histogram" ? !bucket.distribution.n : bucket.distribution?.kind === "box" && !bucket.distribution.summary));
+  const outputEmpty=!result.loading&&!error&&(Boolean(empty)||result.results.every(entry=>!entry.buckets.length));
   const hidden = entry?.hiddenGroups ? `${entry.hiddenGroups.toLocaleString()} ${entry.hiddenGroups === 1 ? "group" : "groups"} hidden below the minimum of ${view.minSamples.toLocaleString()} ${sampleSubject(catalog, view)}.` : "";
 
   // Box and bar rows have a fixed pitch; give a full day of hours its rows.
@@ -154,14 +156,14 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)} />;
 
   return <section className="usage-analysis-dashboard" aria-label="Dashboard analysis" aria-busy={result.loading}>
-    {controls}
-    {error ? <p className="query-table-error" role="alert">{error}</p>
+    <div className="data-readiness-chart-controls">{controls}<DataReadinessIndicator id={`chart:${dataset}`} title={analysisCardCopy(catalog, view, where, schema).title} dataset={dataset} query={analysis.query} empty={outputEmpty} updatedAt={result.updatedAt} /></div>
+    <DataReadinessEmpty id={`chart:${dataset}`} title={analysisCardCopy(catalog, view, where, schema).title} dataset={dataset} query={analysis.query} empty={outputEmpty}>{error ? <p className="query-table-error" role="alert">{error}</p>
       : empty ? <p className="usage-analysis-empty" role="status">{analysisEmptyLabel(catalog, view)}</p>
       : <div className="dashboard-card-anchor"><MetricCard className={tall ? "usage-analysis-tall" : undefined} clause={{ ...clause, label: analysisCardCopy(catalog, view, where, schema).title }} result={presentation.metric as AggregationResultEntry | undefined} fields={view.view !== "cycle" ? analysisFields(catalog, view, schema) : analysis.native ? schema.fields.map(field => field.name === clause.dateGrouping?.field ? { ...field, label: view.cycle === "hour" ? "Local hour" : "Weekday" } : field) : [...schema.fields, ...cycleFields]} loading={result.loading} renderers={defaultRenderers} theme={componentTheme ?? hourTheme}
         onInspect={view.view === "cycle" && !analysis.native ? undefined : bucket => {
           const query = analysisInspectQuery(analysis, presentation.sourceBucket(bucket) as typeof bucket, analysis.clause, schema, view.view);
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
-        }} /><CreateDashboardCard source={{ catalog, state, where, schema }} /></div>}
+        }} /><CreateDashboardCard source={{ catalog, state, where, schema }} /></div>}</DataReadinessEmpty>
     {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote((catalog.breakdowns[view.split] ?? catalog.components![view.split]).label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}
       {analysis.selection ? <> <button type="button" className="usage-preset-clear" onClick={() => set({ selection: { values: [], excluded: false } })}>Show every group</button></> : null}</p> : null}
     {children}

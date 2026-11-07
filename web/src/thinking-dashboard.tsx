@@ -1,3 +1,4 @@
+import { DataReadinessIndicator } from "./data-readiness";
 import React, { useEffect, useRef, useState } from "react";
 import {
   EMPTY_QUERY,
@@ -14,7 +15,7 @@ import { ViewDisclosure } from "./view-disclosure";
 import { PageLink } from "./nested-pages";
 import { SearchHelp } from "./search-help";
 import { usageWorkspaceURL } from "./usage-workspace-model";
-import { CreateDashboardCard, DashboardCardSourceContext } from "./create-dashboard-card";
+import { DashboardResultActions, DashboardCardSourceContext } from "./create-dashboard-card";
 import { thinkingCardTitle } from "./thinking-card";
 
 import {
@@ -689,7 +690,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
             <>
               <div className="thinking-card-title">
                 <h2>{thinkingCardTitle("thinking-distributions", state)}</h2>
-                <CreateDashboardCard target="thinking-distributions" />
+                <DashboardResultActions target="thinking-distributions" />
               </div>
               {fixed ? (
                 <p className="usage-dashboard-note">
@@ -805,7 +806,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                         : "≥1.5×"}
                     </span>
                   </div>
-                  <h3>Is one time of day consistently faster?</h3>
+                  <h3>Is one time of day consistently faster? <DataReadinessIndicator id="thinking:hour" title="Is one time of day consistently faster?" dataset="model_requests" query={{state,nativeFilters}} /></h3>
                   <p className="usage-dashboard-note">
                     Day-balanced workload-adjusted gaps in three-hour windows.
                     Each day/window needs 20 modeled gaps from three
@@ -886,17 +887,17 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
             <>
               <div className="thinking-stat-cards thinking-overview-stats">
                 <div>
-                  <span>Typical wait</span>
+                  <span>Typical wait<DataReadinessIndicator id="thinking:metric:typical-wait" title="Typical wait" dataset="model_requests" query={{state,nativeFilters}} /></span>
                   <strong>{thinkingDuration(data.summary.median)}</strong>
                   <small>Median observed gap</small>
                 </div>
                 <div>
-                  <span>Slowest 10% begin at</span>
+                  <span>Slowest 10% begin at<DataReadinessIndicator id="thinking:metric:slowest-10%-begin-at" title="Slowest 10% begin at" dataset="model_requests" query={{state,nativeFilters}} /></span>
                   <strong>{thinkingDuration(data.summary.p90)}</strong>
                   <small>90th percentile</small>
                 </div>
                 <div>
-                  <span>Timing coverage</span>
+                  <span>Timing coverage<DataReadinessIndicator id="thinking:metric:timing-coverage" title="Timing coverage" dataset="model_requests" query={{state,nativeFilters}} /></span>
                   <strong>
                     {data.Retained
                       ? ((100 * data.Timed) / data.Retained).toFixed(1)
@@ -906,7 +907,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   <small>Usable gaps / retained requests</small>
                 </div>
                 <div>
-                  <span>Conversations represented</span>
+                  <span>Conversations represented<DataReadinessIndicator id="thinking:metric:conversations-represented" title="Conversations represented" dataset="model_requests" query={{state,nativeFilters}} /></span>
                   <strong>{thinkingCount(data.Conversations)}</strong>
                   <small>Including requests without timing</small>
                 </div>
@@ -921,10 +922,10 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   groups={data.groups}
                   groupBy={state.groupBy === "none" ? "model" : state.groupBy}
                   title={thinkingCardTitle("thinking-waits", state)}
-                  action={<CreateDashboardCard target="thinking-waits" />}
+                  action={<DashboardResultActions target="thinking-waits" />}
                 />
                 <div>
-                  <h2>What affects the wait?</h2>
+                  <h2>What affects the wait? <DataReadinessIndicator id="thinking:factors" title="What affects the wait?" dataset="model_requests" query={{state,nativeFilters}} /></h2>
                   <p className="usage-dashboard-note">
                     Associated wait multiplier when each input doubles.
                   </p>
@@ -1008,12 +1009,12 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 summary="Which models and agents have usable timing?"
                 className="usage-query-search thinking-disclosure"
               >
-                <h3>By recorded model</h3>
+                <h3>By recorded model <DataReadinessIndicator id="thinking:models" title="By recorded model" dataset="model_requests" query={{state,nativeFilters}} /></h3>
                 <GroupTable
                   data={{ ...data, groups: data.coverage ?? [] }}
                   state={{ ...state, view: "histogram", groupBy: "model" }}
                 />
-                <h3>By agent app</h3>
+                <h3>By agent app <DataReadinessIndicator id="thinking:harness" title="By agent app" dataset="model_requests" query={{state,nativeFilters}} /></h3>
                 <GroupTable
                   data={{ ...data, groups: data.agentCoverage ?? [] }}
                   state={{ ...state, view: "histogram", groupBy: "harness" }}
