@@ -2,6 +2,7 @@ package archive
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -216,5 +217,64 @@ func TestAProviderNeedsOnlyItsSpec(t *testing.T) {
 	}
 	if _, err := selectedProbe(Config{}, nil, ProbeSelection{Kinds: &[]string{"canonical"}}); err == nil {
 		t.Fatal("setup offered a provider it does not list")
+	}
+}
+
+// fakeEntry is a directory entry a fake host lists.
+type fakeEntry struct {
+	name string
+	mode fs.FileMode
+}
+
+func (e fakeEntry) Name() string               { return e.name }
+func (e fakeEntry) IsDir() bool                { return e.mode.IsDir() }
+func (e fakeEntry) Type() fs.FileMode          { return e.mode.Type() }
+func (e fakeEntry) Info() (fs.FileInfo, error) { return nil, fs.ErrNotExist }
+
+// Where a provider's data may be is a function of the host alone, in the
+// order probe prefers, and a profile folder is listed only when needed.
+func TestResolveRootsIsAFunctionOfTheHost(t *testing.T) {
+	listed := 0
+	host := hostEnv{Home: "/home/someone", Applications: []string{"/Applications"},
+		Getenv: func(name string) string {
+			return map[string]string{"CLAUDE_CONFIG_DIR": "~/../shared/claude", "CLINE_DIR": "/opt/cline", "XDG_DATA_HOME": "/data"}[name]
+		},
+		List: func(dir string) []fs.DirEntry {
+			listed++
+			if dir != "/home/someone" {
+				t.Fatalf("listed %s", dir)
+			}
+			return []fs.DirEntry{fakeEntry{".claude-work", fs.ModeDir}, fakeEntry{".claude.json", 0}, fakeEntry{".bashrc", 0}}
+		}}
+	roots := func(kind string) []string {
+		spec, _ := providerFor(kind)
+		list := []string{}
+		for root := range resolveRoots(spec, host) {
+			list = append(list, root.FoundBy+" "+root.Path)
+		}
+		return list
+	}
+	if got := strings.Join(roots("claude"), "\n"); got != strings.Join([]string{
+		"data folder /home/someone/.claude", "data folder /home/someone/.config/claude", "profile folder /home/someone/.claude-work",
+		"application /Applications/Claude Code.app", "CLAUDE_CONFIG_DIR /home/shared/claude"}, "\n") {
+		t.Fatal(got)
+	}
+	if got := roots("cline"); !slices.Equal(got, []string{"data folder /home/someone/.cline/data", "CLINE_DIR /opt/cline/data"}) {
+		t.Fatal(got)
+	}
+	if got := roots("opencode"); !slices.Equal(got, []string{"data folder /home/someone/.local/share/opencode", "XDG_DATA_HOME /data/opencode"}) {
+		t.Fatal(got)
+	}
+	if got := roots("chatgpt"); len(got) != 0 {
+		t.Fatal(got)
+	}
+	// Stopping at the first root reads no listing.
+	listed = 0
+	spec, _ := providerFor("claude")
+	for range resolveRoots(spec, host) {
+		break
+	}
+	if listed != 0 {
+		t.Fatal("listed a profile folder before it was needed")
 	}
 }

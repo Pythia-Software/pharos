@@ -505,7 +505,7 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 		sqliteNotes(t, filepath.Join(root, "state.sqlite"), "WAL")
 		cancelled, cancel := context.WithCancel(context.Background())
 		cancel()
-		if _, err := codexNamingDatabases(cancelled, root); !errors.Is(err, context.Canceled) {
+		if _, err := codexNamingDatabases(sourceFiles{ctx: cancelled}, root); !errors.Is(err, context.Canceled) {
 			t.Fatalf("Codex's state databases were listed for a cancelled read: %v", err)
 		}
 	})

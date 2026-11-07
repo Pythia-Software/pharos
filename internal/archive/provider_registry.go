@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"io/fs"
+	"iter"
 	"os"
 	"path/filepath"
 	"slices"
@@ -446,6 +447,73 @@ func opencodeKept() map[string]captureTable {
 		keep[table] = captureTable{}
 	}
 	return keep
+}
+
+// hostEnv is everything resolving a provider's locations depends on, so a
+// test can resolve them for any home without touching this Mac.
+type hostEnv struct {
+	Home string
+	// Getenv reads a variable that names a provider's folder.
+	Getenv func(string) string
+	// Applications are the folders that hold app bundles.
+	Applications []string
+	// List names a folder's entries, in one bounded listing.
+	List func(dir string) []fs.DirEntry
+}
+
+// probeRoot is one place a provider may keep its data, and how it is known.
+type probeRoot struct{ Path, FoundBy string }
+
+// path is the folder a variable's value names: Sub below it, with ~ the
+// home given.
+func (env probeEnv) path(home, value string) string {
+	if value == "~" || strings.HasPrefix(value, "~/") {
+		value = filepath.Join(home, strings.TrimPrefix(value[1:], "/"))
+	}
+	return filepath.Join(resolvePath(home, value), env.Sub)
+}
+
+// resolveRoots yields where spec's data may be on host, in the order probe
+// prefers them: data folders, profile folders, applications, then the
+// variables that name a folder. It checks nothing exists; probe does. A
+// profile folder's listing is read only when the roots before it are not
+// enough.
+func resolveRoots(spec *providerSpec, host hostEnv) iter.Seq[probeRoot] {
+	return func(yield func(probeRoot) bool) {
+		probe := spec.Probe
+		if probe == nil {
+			return
+		}
+		for _, folder := range probe.Folders {
+			if !yield(probeRoot{filepath.Join(host.Home, filepath.FromSlash(folder)), "data folder"}) {
+				return
+			}
+		}
+		if probe.Profiles != nil && host.List != nil {
+			dir := filepath.Join(host.Home, probe.Profiles.Dir)
+			for _, entry := range host.List(dir) {
+				if strings.HasPrefix(entry.Name(), probe.Profiles.Prefix) && !antigravityBackup(entry.Name()) && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) {
+					if !yield(probeRoot{filepath.Join(dir, entry.Name()), "profile folder"}) {
+						return
+					}
+				}
+			}
+		}
+		for _, root := range host.Applications {
+			for _, bundle := range probe.Applications {
+				if !yield(probeRoot{filepath.Join(root, bundle), "application"}) {
+					return
+				}
+			}
+		}
+		for _, env := range probe.Env {
+			if value := host.Getenv(env.Name); value != "" {
+				if !yield(probeRoot{env.path(host.Home, value), env.Name}) {
+					return
+				}
+			}
+		}
+	}
 }
 
 // probeEnvNames are the variables naming providers' folders

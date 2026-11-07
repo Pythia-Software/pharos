@@ -106,7 +106,7 @@ func (a baseAdapter) databaseVersion(path string) int64 {
 	}
 	version := int64(0)
 	for _, file := range []string{path, path + "-wal"} {
-		if info, err := os.Stat(file); err == nil {
+		if info, err := a.files().Stat(file); err == nil {
 			version = max(version, info.ModTime().UnixNano())
 		}
 	}
@@ -207,10 +207,6 @@ func MakeAdapter(config SourceConfig) (Adapter, error) {
 	return spec.New(baseAdapter{config: config, capability: spec.Mutation}), nil
 }
 
-func pathFingerprint(root string, include func(string, os.DirEntry) bool) (string, error) {
-	return sourceFiles{}.pathFingerprint(root, include)
-}
-
 // pathFingerprint takes sizes through the capture view, so storing a captured
 // file compressed changes neither the capture's fingerprint nor its agreement
 // with the live source's.
@@ -223,7 +219,7 @@ func (s sourceFiles) pathFingerprint(root string, include func(string, os.DirEnt
 	if !info.IsDir() {
 		rows = append(rows, fmt.Sprintf("%s:%d:%d", filepath.Base(root), info.Size(), info.ModTime().UnixNano()))
 	} else {
-		err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		err = s.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return nil
 			}
@@ -286,17 +282,8 @@ func iso(value any) string {
 	return asString(value)
 }
 
-func readJSON(path string) (any, error) {
-	value, _, err := readJSONVersion(path)
-	return value, err
-}
-
-// readJSONVersion also reports the version (mtime) of the file it read.
-func readJSONVersion(path string) (any, int64, error) {
-	return sourceFiles{}.ReadJSONVersion(path)
-}
-
-// ReadJSONVersion is readJSONVersion through the capture view.
+// ReadJSONVersion reads a JSON file through the capture view, and reports
+// the version (mtime) of the file it read.
 func (s sourceFiles) ReadJSONVersion(path string) (any, int64, error) {
 	file, err := s.Open(path)
 	if err != nil {
@@ -346,14 +333,14 @@ func (a *canonicalAdapter) Fingerprint() (string, error) {
 	return a.indexVersion() + ":" + fingerprint, err
 }
 func (a *canonicalAdapter) Discover(emit func(WorkspaceRecord) error) error {
-	info, err := os.Stat(a.config.Path)
+	info, err := a.files().Stat(a.config.Path)
 	if err != nil {
 		return err
 	}
 	files := []string{a.config.Path}
 	if info.IsDir() {
 		files = nil
-		_ = filepath.WalkDir(a.config.Path, func(path string, entry os.DirEntry, e error) error {
+		_ = a.files().WalkDir(a.config.Path, func(path string, entry os.DirEntry, e error) error {
 			if e == nil && !entry.IsDir() && strings.HasSuffix(strings.ToLower(path), ".json") {
 				files = append(files, path)
 			}
@@ -362,7 +349,7 @@ func (a *canonicalAdapter) Discover(emit func(WorkspaceRecord) error) error {
 		sort.Strings(files)
 	}
 	for _, file := range files {
-		raw, version, err := readJSONVersion(file)
+		raw, version, err := a.files().ReadJSONVersion(file)
 		if err != nil {
 			return fmt.Errorf("cannot read canonical export %s: %w", file, err)
 		}
@@ -617,7 +604,7 @@ func (a *jsonlAdapter) discoverParts(unchanged func([]sourcePart) bool, emit fun
 
 func (a *jsonlAdapter) planParts() (*sourceWorkPlan, error) {
 	groups, infos, roots := map[string][]string{}, map[string]fs.FileInfo{}, []string{}
-	if err := filepath.WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
+	if err := a.files().WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
 		info, err := a.transcriptInfo(path, entry, walkErr)
 		if err != nil {
 			return err

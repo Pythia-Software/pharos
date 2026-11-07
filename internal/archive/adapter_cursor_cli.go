@@ -70,9 +70,9 @@ type cursorCLIChat struct{ store, meta string }
 // that cannot be listed is reported with the chats of the others.
 func (a *cursorCLIAdapter) chats() ([]cursorCLIChat, error) {
 	root := filepath.Join(a.config.Path, "chats")
-	folders, err := os.ReadDir(root)
+	folders, err := a.files().ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
-		if _, err := os.Stat(a.config.Path); err != nil {
+		if _, err := a.files().Stat(a.config.Path); err != nil {
 			return nil, err
 		}
 		return nil, nil
@@ -84,7 +84,7 @@ func (a *cursorCLIAdapter) chats() ([]cursorCLIChat, error) {
 		if !folder.IsDir() {
 			continue
 		}
-		entries, err := os.ReadDir(filepath.Join(root, folder.Name()))
+		entries, err := a.files().ReadDir(filepath.Join(root, folder.Name()))
 		if err != nil {
 			failures = append(failures, err)
 			continue
@@ -160,11 +160,7 @@ func (a *cursorCLIAdapter) discoverParts(unchanged func([]sourcePart) bool, emit
 
 // open opens a chat's database for reading in one transaction.
 func (a *cursorCLIAdapter) open(store string) (*sql.DB, *sql.Tx, error) {
-	readable, err := a.files().Database(store)
-	if err != nil {
-		return nil, nil, err
-	}
-	db, err := openSourceSQLite(a.context(), readable)
+	db, err := a.files().SQLite(store)
 	if err != nil {
 		return nil, nil, err
 	}

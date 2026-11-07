@@ -50,7 +50,7 @@ const zedDatabase = "threads/threads.db"
 
 // database is Zed's threads database: the source itself when it is a file.
 func (a *zedAdapter) database() (string, error) {
-	info, err := os.Stat(a.config.Path)
+	info, err := a.files().Stat(a.config.Path)
 	if err != nil {
 		return "", err
 	}
@@ -58,7 +58,7 @@ func (a *zedAdapter) database() (string, error) {
 		return a.config.Path, nil
 	}
 	database := filepath.Join(a.config.Path, filepath.FromSlash(zedDatabase))
-	if _, err := os.Stat(database); errors.Is(err, os.ErrNotExist) {
+	if _, err := a.files().Stat(database); errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	} else if err != nil {
 		return "", err
@@ -104,11 +104,7 @@ type zedThread struct {
 
 // open opens the database for reading in one transaction.
 func (a *zedAdapter) open(database string) (*sql.DB, *sql.Tx, error) {
-	readable, err := a.files().Database(database)
-	if err != nil {
-		return nil, nil, err
-	}
-	db, err := openSourceSQLite(a.context(), readable)
+	db, err := a.files().SQLite(database)
 	if err != nil {
 		return nil, nil, err
 	}

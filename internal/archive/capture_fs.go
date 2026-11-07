@@ -3,6 +3,7 @@ package archive
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"io/fs"
@@ -37,6 +38,23 @@ type sourceFiles struct {
 }
 
 func (a baseAdapter) files() sourceFiles { return sourceFiles{view: a.view, ctx: a.context()} }
+
+// Adapters reach their source only through sourceFiles, so a captured source
+// is read as its capture and a live one as it is. liveSourceAccess names the
+// adapter functions that read the OS directly on purpose, and why: what they
+// read is not the source, or is read before there is one.
+// TestAdaptersReadThroughTheAccessLayer holds every other adapter function,
+// in adapters.go and adapter_*.go, to sourceFiles.
+var liveSourceAccess = map[string]string{
+	"installedAntigravityVersion": "The Antigravity version installed now, observed on this Mac only.",
+	"conductorCommitChange":       "The user's Git repositories, looked up on this Mac only (localLookups).",
+	"gitRemote":                   "The user's Git repositories, looked up on this Mac only (localLookups).",
+	"antigravityDataDir":          "Probe checks a folder before it is a source.",
+	"cursorProbeStats":            "Probe counts a location's chats before it is a source.",
+	"opencodeProbeStats":          "Probe counts a location's sessions before it is a source.",
+	"zedProbeStats":               "Probe counts a location's threads before it is a source.",
+	"snapshotSessions":            "Reads a snapshot generation capture indexing has already materialized.",
+}
 
 // rel is path's captured path in the view, if it is inside it.
 func (v *captureView) rel(path string) (string, bool) {
@@ -350,6 +368,41 @@ func (v *captureView) open(rel string) (*sourceFile, error) {
 	return &sourceFile{Reader: decoder, file: file, decoder: decoder, info: originalInfo{FileInfo: info, size: entry.Size}}, nil
 }
 
+// Listing reads names, which a capture keeps as they are, so these read the
+// directory itself. They are here so an adapter reaches every part of its
+// source through sourceFiles (TestAdaptersReadThroughTheAccessLayer).
+
+// ReadDir lists a directory, as os.ReadDir.
+func (s sourceFiles) ReadDir(path string) ([]fs.DirEntry, error) { return os.ReadDir(path) }
+
+// WalkDir walks a tree, as filepath.WalkDir; take sizes with Info.
+func (s sourceFiles) WalkDir(root string, walk fs.WalkDirFunc) error {
+	return filepath.WalkDir(root, walk)
+}
+
+// Glob lists the paths pattern matches, as filepath.Glob.
+func (s sourceFiles) Glob(pattern string) ([]string, error) { return filepath.Glob(pattern) }
+
+// SQLite opens the database at path as the source is read: under a view its
+// captured copy (decoded, if stored encoded), otherwise the live file down
+// the locked-database ladder (openSourceSQLite).
+func (s sourceFiles) SQLite(path string) (*sql.DB, error) {
+	readable, err := s.Database(path)
+	if err != nil {
+		return nil, err
+	}
+	return openSourceSQLite(s.context(), readable)
+}
+
+// context is the files' context, or the background one for files made
+// without it (probe's, a test's).
+func (s sourceFiles) context() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
+
 // Database is a path at which SQLite can open path: the path itself for a
 // live source or a plain capture, or for an encoded snapshot its decoded copy
 // in the reader's lease (materialize).
@@ -361,7 +414,7 @@ func (s sourceFiles) Database(path string) (string, error) {
 	if !ok {
 		return path, nil
 	}
-	return s.view.materialize(s.ctx, rel)
+	return s.view.materialize(s.context(), rel)
 }
 
 // materialize returns a path at which the captured entry rel can be opened

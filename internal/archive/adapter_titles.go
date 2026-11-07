@@ -2,7 +2,6 @@ package archive
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -45,12 +44,12 @@ func codexStateVersion(path string) int {
 
 // Read only known metadata stores under the configured source root. Optional
 // older databases without threads.name do not turn prompt previews into names.
-func codexNamingDatabases(ctx context.Context, root string) ([]string, error) {
-	info, err := os.Stat(root)
+func codexNamingDatabases(source sourceFiles, root string) ([]string, error) {
+	info, err := source.Stat(root)
 	if err != nil || !info.IsDir() {
 		return nil, err
 	}
-	entries, err := os.ReadDir(root)
+	entries, err := source.ReadDir(root)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +59,7 @@ func codexNamingDatabases(ctx context.Context, root string) ([]string, error) {
 			continue
 		}
 		path := filepath.Join(root, entry.Name())
-		db, err := openSourceSQLite(ctx, path)
+		db, err := source.SQLite(path)
 		if err != nil {
 			return nil, err
 		}
@@ -84,7 +83,7 @@ func codexNamingDatabases(ctx context.Context, root string) ([]string, error) {
 
 func (a *jsonlAdapter) codexNames() (map[string]transcriptName, error) {
 	names := map[string]transcriptName{}
-	if info, err := os.Stat(a.config.Path); err != nil || !info.IsDir() {
+	if info, err := a.files().Stat(a.config.Path); err != nil || !info.IsDir() {
 		return names, err
 	}
 	index := filepath.Join(a.config.Path, "session_index.jsonl")
@@ -110,13 +109,13 @@ func (a *jsonlAdapter) codexNames() (map[string]transcriptName, error) {
 	} else if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	databases, err := codexNamingDatabases(a.context(), a.config.Path)
+	databases, err := codexNamingDatabases(a.files(), a.config.Path)
 	if err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
 	for _, path := range databases {
-		db, err := openSourceSQLite(a.context(), path)
+		db, err := a.files().SQLite(path)
 		if err != nil {
 			return nil, err
 		}
@@ -236,10 +235,6 @@ func (a *jsonlAdapter) transcriptNames(roots []string) (map[string]transcriptNam
 		}
 	}
 	return result, nil
-}
-
-func codexRolloutIdentity(path string) (string, error) {
-	return sourceFiles{}.codexRolloutIdentity(path)
 }
 
 // codexRolloutIdentity reads only the rollout's header: for an encoded

@@ -65,7 +65,7 @@ func (a *cursorAdapter) globalDatabase() (string, error) {
 	if a.database != "" {
 		return a.database, nil
 	}
-	info, err := os.Stat(a.config.Path)
+	info, err := a.files().Stat(a.config.Path)
 	if err != nil {
 		return "", err
 	}
@@ -81,11 +81,11 @@ type cursorWindow struct{ database, workspace string }
 
 // windows lists the windows' storage of a user folder.
 func (a *cursorAdapter) windows() ([]cursorWindow, error) {
-	if info, err := os.Stat(a.config.Path); err != nil || !info.IsDir() {
+	if info, err := a.files().Stat(a.config.Path); err != nil || !info.IsDir() {
 		return nil, err
 	}
 	storage := filepath.Join(a.config.Path, "workspaceStorage")
-	entries, err := os.ReadDir(storage)
+	entries, err := a.files().ReadDir(storage)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	} else if err != nil {
@@ -119,7 +119,7 @@ func (a *cursorAdapter) captureInputs() (databases, files []string, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := os.Stat(global); err == nil {
+	if _, err := a.files().Stat(global); err == nil {
 		databases = append(databases, global)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, nil, err
@@ -202,11 +202,7 @@ type cursorHead struct {
 
 // open opens a database for reading in one transaction.
 func (a *cursorAdapter) open(database string) (*sql.DB, *sql.Tx, error) {
-	readable, err := a.files().Database(database)
-	if err != nil {
-		return nil, nil, err
-	}
-	db, err := openSourceSQLite(a.context(), readable)
+	db, err := a.files().SQLite(database)
 	if err != nil {
 		return nil, nil, err
 	}

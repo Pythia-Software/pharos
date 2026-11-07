@@ -54,11 +54,11 @@ func chatGPTConversationFiles(names []string) []string {
 // exportFiles are the files the source names: a folder's conversation
 // files, or the file itself (a ZIP, or one conversation file).
 func (a *chatGPTAdapter) exportFiles() ([]string, error) {
-	info, err := os.Stat(a.config.Path)
+	info, err := a.files().Stat(a.config.Path)
 	if err != nil || !info.IsDir() {
 		return []string{a.config.Path}, nil
 	}
-	entries, err := os.ReadDir(a.config.Path)
+	entries, err := a.files().ReadDir(a.config.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func (a *chatGPTAdapter) Fingerprint() (string, error) {
 	}
 	rows := []string{}
 	for _, file := range files {
-		if _, err := os.Stat(file); err != nil {
+		if _, err := a.files().Stat(file); err != nil {
 			return "", fmt.Errorf("ChatGPT export is missing %s", file)
 		}
 		fingerprint, err := a.files().pathFingerprint(file, func(string, os.DirEntry) bool { return true })

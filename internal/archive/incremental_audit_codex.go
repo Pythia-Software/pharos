@@ -85,7 +85,7 @@ func readCodexAuditNames(ctx context.Context, adapter *jsonlAdapter, identities,
 			reader.db.Close()
 		}
 	}()
-	databases, err := codexNamingDatabases(ctx, adapter.config.Path)
+	databases, err := codexNamingDatabases(sourceFiles{view: adapter.view, ctx: ctx}, adapter.config.Path)
 	if err != nil {
 		return result, err
 	}

@@ -107,6 +107,22 @@ Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Libr
 
 Each kind of source is one entry in `providerRegistry` (`provider_registry.go`). Its `providerSpec` declares the adapter, what capture copies and which of a database's tables it keeps, how retained inputs are acquired and named, where probe looks for it, whether setup offers it and in what order, whether background updates read it, and its rank among mirrors. Code that depends on a source's kind reads the spec rather than switching on the kind, so adding a provider is one entry plus its adapter (`TestAProviderNeedsOnlyItsSpec`). Parsers still name their own harnesses and channels.
 
+### Source access
+
+Adapters reach their source only through `sourceFiles` (`capture_fs.go`), so the same code reads a capture as it was captured and a live source as it is:
+- **Files:** `Stat`, `Info`, `Open`, `OpenContent`, `ReadFile`, `Tail`, and listing (`ReadDir`, `WalkDir`, `Glob`). Under a capture view, a file stored compressed is read and sized as its original.
+- **Databases:** `SQLite` opens the captured copy, decoded if needed, or the live file down the [locked-database ladder](#reading-a-locked-database).
+
+`liveSourceAccess` names the few adapter functions that read the OS directly, each with its reason:
+- the installed Antigravity version;
+- Git lookups in the user's repositories;
+- probe's counts of a location before it is a source;
+- snapshot generations capture indexing has already materialized.
+
+`TestAdaptersReadThroughTheAccessLayer` parses the adapter files and fails on any other direct `os`, `filepath`, `sql` or `exec` access.
+
+Where probe looks is a function of the host alone. `resolveRoots(spec, hostEnv)` yields a provider's data folders, profile folders, applications and the folders its variables name, in the order probe prefers. `hostEnv` carries the home, environment, application folders and a listing function, so a test resolves any home without touching this Mac.
+
 ### Content capabilities
 
 Each spec also declares what its records hold (`Content`, `provider_capabilities.go`), for each of:

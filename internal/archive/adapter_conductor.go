@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -96,7 +95,7 @@ func (a *conductorAdapter) planParts() (*sourceWorkPlan, error) {
 }
 
 func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
-	info, err := os.Stat(a.config.Path)
+	info, err := a.files().Stat(a.config.Path)
 	if err != nil {
 		return err
 	}
@@ -104,7 +103,7 @@ func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]s
 	if !info.IsDir() {
 		candidates = append(candidates, a.config.Path)
 	} else {
-		if err := filepath.WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
+		if err := a.files().WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
 			if err := a.context().Err(); err != nil {
 				return err
 			}
@@ -174,16 +173,6 @@ func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]s
 	return nil
 }
 
-func openReadOnlySQLite(path string) (*sql.DB, error) {
-	dsn := (&url.URL{Scheme: "file", Path: path}).String() + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(1)"
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	return db, nil
-}
-
 // readsEveryIndex: Conductor keeps one database, which every plan reads to
 // list its sessions, and the generations' index diffs against it.
 func (a *conductorAdapter) readsEveryIndex(string) bool { return true }
@@ -206,11 +195,7 @@ func (a *conductorAdapter) readGroup(parts []sourcePart) (*WorkspaceRecord, []so
 }
 
 func (a *conductorAdapter) database(path string, selected map[string]bool, unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
-	readable, err := a.files().Database(path)
-	if err != nil {
-		return err
-	}
-	db, err := openSourceSQLite(a.context(), readable)
+	db, err := a.files().SQLite(path)
 	if err != nil {
 		return err
 	}

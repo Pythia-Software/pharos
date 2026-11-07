@@ -47,14 +47,14 @@ var opencodeCaptureTables = map[string]bool{"session_v2": true, "session_message
 // databases lists OpenCode's databases: the source itself when it is one,
 // otherwise each opencode*.db in it.
 func (a *opencodeAdapter) databases() ([]string, error) {
-	info, err := os.Stat(a.config.Path)
+	info, err := a.files().Stat(a.config.Path)
 	if err != nil {
 		return nil, err
 	}
 	if !info.IsDir() {
 		return []string{a.config.Path}, nil
 	}
-	entries, err := os.ReadDir(a.config.Path)
+	entries, err := a.files().ReadDir(a.config.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -115,11 +115,7 @@ type opencodeSession struct {
 
 // open opens a database for reading in one transaction.
 func (a *opencodeAdapter) open(database string) (*sql.DB, *sql.Tx, error) {
-	readable, err := a.files().Database(database)
-	if err != nil {
-		return nil, nil, err
-	}
-	db, err := openSourceSQLite(a.context(), readable)
+	db, err := a.files().SQLite(database)
 	if err != nil {
 		return nil, nil, err
 	}

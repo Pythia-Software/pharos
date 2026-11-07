@@ -28,7 +28,7 @@ func (a *clineAdapter) partExtractor() string { return clineExtractor }
 
 // sessionsDir is the folder holding the sessions.
 func (a *clineAdapter) sessionsDir() string {
-	if info, err := os.Stat(filepath.Join(a.config.Path, "sessions")); err == nil && info.IsDir() {
+	if info, err := a.files().Stat(filepath.Join(a.config.Path, "sessions")); err == nil && info.IsDir() {
 		return filepath.Join(a.config.Path, "sessions")
 	}
 	return a.config.Path
@@ -39,7 +39,7 @@ type clineSession struct{ id, manifest, messages string }
 
 func (a *clineAdapter) sessions() ([]clineSession, error) {
 	dir := a.sessionsDir()
-	entries, err := os.ReadDir(dir)
+	entries, err := a.files().ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -53,11 +53,11 @@ func (a *clineAdapter) sessions() ([]clineSession, error) {
 		}
 		id := entry.Name()
 		messages := filepath.Join(dir, id, id+".messages.json")
-		if info, err := os.Stat(messages); err != nil || !info.Mode().IsRegular() {
+		if info, err := a.files().Stat(messages); err != nil || !info.Mode().IsRegular() {
 			continue
 		}
 		session := clineSession{id: id, messages: messages}
-		if info, err := os.Stat(filepath.Join(dir, id, id+".json")); err == nil && info.Mode().IsRegular() {
+		if info, err := a.files().Stat(filepath.Join(dir, id, id+".json")); err == nil && info.Mode().IsRegular() {
 			session.manifest = filepath.Join(dir, id, id+".json")
 		}
 		sessions = append(sessions, session)
