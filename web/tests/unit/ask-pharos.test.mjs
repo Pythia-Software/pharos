@@ -197,6 +197,33 @@ test('suggestions keep only well-formed, distinct questions from the library', (
   assert.equal(model.askSuggestionItems(Array.from({length:20},(_,i)=>({id:'f'+i,text:'Question '+i+'?'}))).length,12);
 });
 
+test('wider suggestion rows show more cards without narrowing them', () => {
+  const count=(width,available=12)=>model.askIdeaLayout(width,available).count;
+  assert.equal(count(320),1,'a phone reads one card at a time');
+  assert.equal(count(660),3,'the Home composer keeps three cards');
+  assert.ok(count(1200)>3&&count(1200)<count(2133),'full screen Ask fills a wide window');
+  assert.equal(count(5000),11,'one question stays off the row for the placeholder and rotation');
+  assert.equal(count(5000,3),3,'a short slate still fills three cards');
+  assert.equal(count(2133,2),2);
+  assert.equal(count(0),0);
+  for(const width of [320,599,600,660,1000,1200,1440,1920,2133,2600,5000])for(const available of [1,2,3,5,12]){
+    const layout=model.askIdeaLayout(width,available),{count:n,card,peek,stride,side}=layout;
+    assert.ok(n>=1&&n<=available&&(n<=3||n<available));
+    if(n>3)assert.ok(card>=200,`cards stay readable at ${width}px`);
+    // The reading block, centered on slot k at scrollLeft k*stride, starts after the left peek and fills the row.
+    assert.ok(Math.abs(side-Math.floor(n/2)*stride-peek)<1e-9);
+    assert.ok(Math.abs(peek+n*card+(n-1)*(stride-card)+peek-width)<1e-9,`cards and peeks fill ${width}px`);
+    // From any resting card, two rotations either way (a timed glide plus a
+    // click during it) keep the reading block and its peeks on built cards.
+    const slots=layout.copies*available;
+    for(let center=0;center<available;center++)for(const shift of [-2*n,0,2*n]){
+      const first=layout.lead*available+center+shift-Math.floor(n/2);
+      assert.ok(first-1>=0&&first+n<slots,`${width}px, ${available} cards: rotating ${shift} from ${center} runs out of cards`);
+    }
+  }
+  assert.equal(model.askIdeaLayout(660,12).copies,3,'the Home row keeps one copy of the slate on each side');
+});
+
 test('Ask keeps asking for suggestions while they are being chosen, backing off', () => {
   const delays=Array.from({length:8},(_,attempt)=>model.askSuggestionRetryDelay(attempt));
   assert.equal(delays[0],20000);

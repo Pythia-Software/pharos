@@ -998,6 +998,15 @@
       "reason": "Closes or floats the private Ask composer; Ask chat identity continues to use ask_chat."
     },
     {
+      "key": "fragment:da65a2b34d22e892:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-notice-dismiss cursor-interaction\" aria-label=\"Dismiss message\" title=\"Dismiss\">",
+      "contract": "transient",
+      "reason": "Dismisses an Ask error message; the message is not view state and does not survive a reload."
+    },
+    {
       "key": "fragment:e4b6f7d373db8149:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",

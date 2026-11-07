@@ -11,6 +11,27 @@ function askSuggestionItems(list) {
   }).slice(0,12);
 }
 
+// The suggestion carousel shows one card on narrow screens and at least three
+// from 600 px. Wider rows, such as full screen Ask, add cards while each stays
+// at least 200 px wide. Past three, one question stays off the row, for the
+// placeholder and for rotation to bring in. Peeks of the neighbouring cards
+// sit on both sides; side is the list padding that puts the first card read
+// right after the left peek when the viewport scrolls to the reading block's
+// center slot times the stride.
+// The row repeats the slate copies times and rests in the copy after lead
+// copies, with room on each side for two full rotations and a peek: a timed
+// glide plus a click during it never scrolls past the last card.
+function askIdeaLayout(width, available) {
+  const gap=14,minCard=200;
+  if(!(width>0)||!(available>0))return {count:0,card:0,peek:0,stride:0,side:0,lead:0,copies:0};
+  const fit=Math.floor((width-2*44+gap)/(minCard+gap));
+  const count=Math.max(1,width<600?1:Math.min(available,Math.max(3,Math.min(fit,available-1))));
+  const peek=count>1?44:28,card=(width-2*peek-(count-1)*gap)/count,stride=card+gap;
+  const lead=Math.max(1,Math.ceil((Math.floor(count/2)+2*count+1)/available));
+  const trail=Math.max(1,Math.ceil((Math.ceil(count/2)+2*count)/available));
+  return {count,card,peek,stride,side:peek+Math.floor(count/2)*stride,lead,copies:lead+1+trail};
+}
+
 // While the first suggestions are still being chosen, ask again after 20 s,
 // doubling up to every five minutes: a busy library can take longer than any
 // fixed number of tries.

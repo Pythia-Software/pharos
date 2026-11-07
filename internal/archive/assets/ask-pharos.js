@@ -13,13 +13,22 @@ window.initPharosAsk = function(root, {previews} = {}) {
   let showInvitation = true, invitationDismissed = false;
   let loadingModels=false,providers=[], accessEnabled=false, disposed=false, draftTimer=null, writeQueue=Promise.resolve();
   const providerModels={},providerCatalog={};
-  const report=error=>{searchNotice.hidden=false;searchNotice.textContent=error.message||String(error);};
+  // Errors float over the top of Ask until dismissed, replaced, or resolved by
+  // the action that raised them (source), so they never move the conversation.
+  let noticeSource='';
+  const report=(error,{source='',lead=''}={})=>{noticeSource=source;noticeText.textContent=[lead,error?.message||String(error)].filter(Boolean).join(' ');notice.hidden=false;};
+  const clearNotice=source=>{if(source!==undefined&&source!==noticeSource)return;notice.hidden=true;noticeText.textContent='';noticeSource='';};
   const api=async(path,body,signal,onProgress)=>{
     const response=await fetch("/api/ask/"+path,{method:body?"POST":"GET",headers:{"Content-Type":"application/json",...(onProgress?{Accept:'application/x-ndjson'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal});
     return askReadResponse(response,onProgress);
   };
   const modalReturns = new WeakMap();
-  const searchNotice = find('.pharos-search-notice');
+  const notice=find('.pharos-notice'),noticeText=find('.pharos-notice-text');
+  find('.pharos-notice-dismiss').addEventListener('click',()=>{
+    const focused=notice.contains(document.activeElement);clearNotice();
+    // Keep keyboard users in Ask rather than dropping focus to the page.
+    if(focused)[question,...product.querySelectorAll('.pharos-regular :is(input,button)')].find(element=>!element.disabled&&element.getClientRects().length)?.focus({preventScroll:true});
+  });
   const thread = find('.pharos-thread');
   const threadWrap=find('.pharos-thread-wrap'),threadViewport=find('.pharos-thread-viewport'),latestButton=find('.pharos-latest');
   let threadFollowing=true,threadLayoutFrame=null;
@@ -85,8 +94,8 @@ window.initPharosAsk = function(root, {previews} = {}) {
     });
     ideaOrder=ideas.map((_,index)=>index);
   }
-  let ideaPage = 0, ideaCenter=1,ideaPaused=matchMedia('(prefers-reduced-motion: reduce)').matches,ideaElapsed = 0, ideaLastTick = Date.now();
-  let ideaCount=3,ideaStride=0,ideaSize='',ideaMoving=false,ideaScrollEnd=null,ideaMotion=null;
+  let ideaCenter=1,ideaPaused=matchMedia('(prefers-reduced-motion: reduce)').matches,ideaElapsed = 0, ideaLastTick = Date.now();
+  let ideaCount=3,ideaLead=1,ideaStride=0,ideaSize='',ideaMoving=false,ideaScrollEnd=null,ideaMotion=null;
   const ideaCycleMs = 30000;
   let appearance = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   let pickerPage = null;
@@ -375,7 +384,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     history[push?'pushState':'replaceState'](history.state,'',href);
     window.dispatchEvent(new Event('pharos:uri-changed'));
   }
-  function flushDraft(){clearTimeout(draftTimer);draftTimer=null;const payload=draftPending;draftPending=null;if(payload)writeQueue=writeQueue.catch(()=>{}).then(()=>api('session',payload)).catch(report);return writeQueue;}
+  function flushDraft(){clearTimeout(draftTimer);draftTimer=null;const payload=draftPending;draftPending=null;if(payload)writeQueue=writeQueue.catch(()=>{}).then(()=>api('session',payload)).then(()=>clearNotice('draft'),error=>report(error,{source:'draft',lead:'Your draft wasn\u2019t saved.'}));return writeQueue;}
   function saveChat(touch=true){
     if(disposed)return;
     surfaceRestorePending=false;
@@ -808,7 +817,8 @@ window.initPharosAsk = function(root, {previews} = {}) {
   // carousel's controls and preferences.
   function showIdeas(items,announce=''){
     if(ideaMotion){ideaMotion.cancel();ideaMotion=null;}clearTimeout(ideaScrollEnd);ideaScrollEnd=null;ideaMoving=false;ideaViewport.removeAttribute('data-moving');
-    ideas=items;dressIdeas();ideaCenter=Math.min(1,Math.max(0,ideas.length-1));ideaPage=0;ideaElapsed=0;ideaLastTick=Date.now();ideaSize='';ideaRow.replaceChildren();
+    // The first card read is the list's first; renderIdeas keeps it as the count changes.
+    ideas=items;dressIdeas();ideaCount=1;ideaCenter=0;ideaElapsed=0;ideaLastTick=Date.now();ideaSize='';ideaRow.replaceChildren();
     render();syncComposer();renderIdeas();sizeModal();
     if(announce)find('.pharos-idea-announcement').textContent=announce;
   }
@@ -838,14 +848,17 @@ window.initPharosAsk = function(root, {previews} = {}) {
     ideaElapsed=0;ideaLastTick=Date.now();ideaSize='';syncIdeaVisibility();renderIdeas();sizeModal();
   });
   syncIdeaVisibility();
-  function buildIdeas(){
-    if(ideaRow.children.length)return;
-    for(let slot=0;slot<ideas.length*3;slot++){
+  // The resting slot of the card at center; wider rows keep more copies before it.
+  const ideaSlot=center=>ideaLead*ideas.length+center;
+  function buildIdeas(copies){
+    if(ideaRow.children.length===copies*ideas.length)return;
+    ideaRow.replaceChildren();
+    for(let slot=0;slot<ideas.length*copies;slot++){
       const id=ideaOrder[slot%ideas.length],button=find('#pharos-suggestion-template').content.firstElementChild.cloneNode(true);
       button.dataset.idea=id;button.dataset.slot=slot;button.dataset.corners=ideaCorners[id].join(',');
       button.querySelector('.pharos-idea-text').textContent=ideas[id].text;
       button.addEventListener('click',()=>{
-        if(button.hasAttribute('data-xray')){moveIdeas(Number(button.dataset.slot)-(ideas.length+ideaCenter),true);return;}
+        if(button.hasAttribute('data-xray')){moveIdeas(Number(button.dataset.slot)-ideaSlot(ideaCenter),true);return;}
         stop();closePicker();question.value=ideas[id].text;chosenIdea=ideas[id];syncSuggestions();autoFit();drawEdge();saveChat();question.focus();const end=question.value.length+promptEditor.chips().length;question.setSelectionRange(end,end);
       });
       ideaRow.append(button);
@@ -862,8 +875,8 @@ window.initPharosAsk = function(root, {previews} = {}) {
   }
   function markReading(){
     if(ideasHidden||suggestions.hidden||!ideaViewport.clientWidth)return;
-    const at=ideaStride?Math.round(ideaViewport.scrollLeft/ideaStride):ideas.length+ideaCenter;
-    const first=at-Math.floor(ideaCount/2),last=at+Math.floor(ideaCount/2);
+    const at=ideaStride?Math.round(ideaViewport.scrollLeft/ideaStride):ideaSlot(ideaCenter);
+    const first=at-Math.floor(ideaCount/2),last=first+ideaCount-1;
     let height=54,repaint=false;
     [...ideaRow.children].forEach((button,slot)=>{
       const reading=slot>=first&&slot<=last;
@@ -885,22 +898,23 @@ window.initPharosAsk = function(root, {previews} = {}) {
   function settleIdeas(){
     if(!ideaStride)return;
     clearTimeout(ideaScrollEnd);ideaScrollEnd=null;
-    const at=Math.round(ideaViewport.scrollLeft/ideaStride);ideaCenter=wrapIdea(at);ideaPage=Math.floor(ideaCenter/3);
-    ideaViewport.scrollLeft=(ideas.length+ideaCenter)*ideaStride;
+    const at=Math.round(ideaViewport.scrollLeft/ideaStride);ideaCenter=wrapIdea(at);
+    ideaViewport.scrollLeft=ideaSlot(ideaCenter)*ideaStride;
     ideaMoving=false;ideaMotion=null;ideaViewport.removeAttribute('data-moving');ideaViewport.style.scrollSnapType='';markReading();updateIdeaClock();
   }
   function renderIdeas() {
     if(!ideasRequested&&accessEnabled)void loadIdeas();
     if(suggestions.hidden||ideasHidden||!ideas.length)return;
-    buildIdeas();const width=ideaViewport.clientWidth;if(!width)return;
-    ideaCount=width>=600?Math.min(3,ideas.length):1;
-    const cardWidth=(width-2*(ideaCount===3?44:28)-(ideaCount-1)*14)/ideaCount;
-    const size=width+':'+cardWidth;
+    const width=ideaViewport.clientWidth;if(!width)return;
+    const layout=askIdeaLayout(width,ideas.length),size=width+':'+layout.count;
+    buildIdeas(layout.copies);
     if(size!==ideaSize){
       if(ideaMotion){ideaMotion.cancel();ideaMotion=null;}
-      ideaSize=size;ideaMoving=false;ideaViewport.removeAttribute('data-moving');ideaViewport.style.scrollSnapType='';ideaStride=cardWidth+14;
-      suggestions.style.setProperty('--pharos-idea-width',cardWidth+'px');suggestions.style.setProperty('--pharos-idea-side',(width-cardWidth)/2+'px');
-      ideaViewport.scrollLeft=(ideas.length+ideaCenter)*ideaStride;
+      // Keep the first card read in place when the row gains or loses cards.
+      ideaCenter=wrapIdea(ideaCenter-Math.floor(ideaCount/2)+Math.floor(layout.count/2));ideaCount=layout.count;
+      ideaLead=layout.lead;ideaSize=size;ideaMoving=false;ideaViewport.removeAttribute('data-moving');ideaViewport.style.scrollSnapType='';ideaStride=layout.stride;
+      suggestions.style.setProperty('--pharos-idea-width',layout.card+'px');suggestions.style.setProperty('--pharos-idea-side',layout.side+'px');suggestions.style.setProperty('--pharos-idea-peek',layout.peek+'px');
+      ideaViewport.scrollLeft=ideaSlot(ideaCenter)*ideaStride;
     }
     markReading();drawIdeas();updateIdeaClock();
   }

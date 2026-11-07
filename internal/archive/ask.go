@@ -111,10 +111,19 @@ func (s *Server) askWrite(ctx context.Context, label string, run func(*sql.Tx) e
 	defer cancel()
 	err := s.Catalog.writeTransaction(writeCtx, label, run)
 	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-		return fmt.Errorf("Pharos is busy saving library changes; try again in a moment: %w", err)
+		return askBusyError{err}
 	}
 	return err
 }
+
+// askBusyError is shown to people as is, so it leaves out the deadline's text;
+// errors.Is still finds the deadline.
+type askBusyError struct{ err error }
+
+func (e askBusyError) Error() string {
+	return "Pharos is busy saving library changes; try again in a moment."
+}
+func (e askBusyError) Unwrap() error { return e.err }
 
 func askDecode(body map[string]any, out any) error {
 	b, err := json.Marshal(body)
