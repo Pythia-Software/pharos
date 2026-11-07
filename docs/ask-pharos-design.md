@@ -331,6 +331,13 @@ inherited MCP configuration; Antigravity uses a dedicated navigation agent,
 plan mode and its terminal sandbox. No adapter uses permission-bypass flags.
 Provider login remains the CLI's responsibility; Pharos accepts no API keys.
 
+Before inference, draft and question saves have a ten-second catalog-write
+deadline. A busy catalog returns a retryable explanation rather than leaving
+the composer waiting indefinitely before the CLI starts. Visit-history writes
+use that same deadline and run without Ask's chat-state lock, so they cannot
+block starting or canceling a question. Status, history and suggestion reads
+also run independently of that lock.
+
 Every inference launch explicitly connects the read-only Pharos MCP server for
 the current library using the same executable and configuration as Settings →
 MCP, including portable libraries. Codex requires that server to initialize and preapproves only its tools,

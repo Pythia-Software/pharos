@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -489,6 +490,83 @@ func TestAskCancelAndDisable(t *testing.T) {
 // must not lose it, make a reload report the request stopped, or hold up the
 // rest of Ask; a stop meanwhile replaces it.
 func TestAskSavesAnswerPastABusyCatalog(t *testing.T) {
+	// Visits are saved independently of the chat state. A background writer
+	// holding the catalog must not stop Ask status reads or cancellation.
+	for _, action := range []string{"visits", "remove-visit", "clear-visits"} {
+		t.Run(action+" waiting for writer", func(t *testing.T) {
+			s := askTestServer(t)
+			// Join discovery before t.Cleanup restores the provider overrides.
+			defer settleServer(t, s)
+			askEnable(t, s)
+			override(t, &askWriteTimeout, time.Minute)
+			release, err := s.Catalog.acquireWriteGate(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { release() }()
+			finished := make(chan *httptest.ResponseRecorder, 1)
+			go func() { finished <- askCall(t, s, http.MethodPost, action, map[string]any{}) }()
+			if !waitFor(time.Second, func() {
+				for s.Catalog.writers.waiting.Load() == 0 {
+					runtime.Gosched()
+				}
+			}) {
+				t.Fatal("visit write did not wait for the catalog")
+			}
+			for _, request := range []struct{ method, path string }{{http.MethodGet, "status"}, {http.MethodPost, "cancel"}} {
+				response := make(chan *httptest.ResponseRecorder, 1)
+				go func() { response <- askCall(t, s, request.method, request.path, map[string]any{}) }()
+				select {
+				case result := <-response:
+					if result.Code != http.StatusOK {
+						t.Fatalf("%s: %s", request.path, result.Body.String())
+					}
+				case <-time.After(time.Second):
+					t.Fatalf("%s waited for visit persistence", request.path)
+				}
+			}
+			// Let the queued write finish before the catalog closes.
+			release()
+			release = func() {}
+			if result := <-finished; result.Code != http.StatusOK {
+				t.Fatalf("%s: %s", action, result.Body.String())
+			}
+		})
+	}
+
+	// Both the draft queue and startAsk save before launching a CLI. Their
+	// deadline must cover writer acquisition, with no inference after failure.
+	for _, action := range []string{"session", "send", "visits", "settings"} {
+		t.Run(action+" writer deadline", func(t *testing.T) {
+			s := askTestServer(t)
+			defer settleServer(t, s)
+			askEnable(t, s)
+			override(t, &askWriteTimeout, 50*time.Millisecond)
+			override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+				t.Error("CLI launched before the question was saved")
+				return askReply("home"), nil
+			})
+			release, err := s.Catalog.acquireWriteGate(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			response := make(chan *httptest.ResponseRecorder, 1)
+			go func() { response <- askCall(t, s, http.MethodPost, action, askInput()) }()
+			select {
+			case result := <-response:
+				if result.Code != http.StatusBadRequest || !strings.Contains(result.Body.String(), "Pharos is busy saving library changes") {
+					t.Fatalf("unhelpful persistence failure: %d %s", result.Code, result.Body.String())
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("pre-launch save ignored its deadline")
+			}
+			if len(s.ask.active) != 0 {
+				t.Fatal("failed question was reserved as an active request")
+			}
+		})
+	}
+
 	busy := func(t *testing.T, s *Server) (release func()) {
 		held, done, written := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 		calls := 0
