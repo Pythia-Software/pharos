@@ -794,6 +794,17 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		if err := guardCapture(tx, record, workspaceID, host, &authority); err != nil {
 			return 0, 0, err
 		}
+		// A new workspace is this copy's alone: what it leaves alone, held in
+		// another workspace, is neither written nor counted in it.
+		if workspaceID == "" && slices.ContainsFunc(authority.conversations, func(claim conversationAuthority) bool { return claim.older }) {
+			conversations, claims := []ConversationRecord{}, []conversationAuthority{}
+			for index, claim := range authority.conversations {
+				if !claim.older {
+					conversations, claims = append(conversations, record.Conversations[index]), append(claims, claim)
+				}
+			}
+			record.Conversations, authority.conversations = conversations, claims
+		}
 	}
 	if (record.SourceKind == "conductor" || record.SourceKind == "tl1") && workspaceID != "" {
 		for _, conversation := range record.Conversations {
@@ -881,6 +892,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 	conversationIDs := make([]string, len(record.Conversations))
 	merged := map[string]bool{}
 	written := 0
+	kept := false
 	for index, conversation := range record.Conversations {
 		if err := ctx.Err(); err != nil {
 			return 0, 0, err
@@ -918,6 +930,18 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		conversationIDs[index] = conversationID
 		if err := recordOriginObservation(tx, conversationID, host, record.SourceKind, conversation); err != nil {
 			return 0, 0, err
+		}
+		// What the source gave is what a delivery checkpoint matches.
+		delivered := conversation
+		if conversation.Coverage == "partial" {
+			if conversation.Messages, err = keepStoredMessages(ctx, tx, conversationID, conversation); err != nil {
+				return 0, 0, err
+			}
+			// The workspace's own counts and token metrics include them too.
+			if !kept {
+				record.Conversations, kept = slices.Clone(record.Conversations), true
+			}
+			record.Conversations[index].Messages = conversation.Messages
 		}
 		var searchCurrent bool
 		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM message_search_state WHERE conversation_id=? AND version=?)
@@ -978,7 +1002,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		if err := linkAliases(tx, conversationID, conversation.Aliases); err != nil {
 			return 0, 0, err
 		}
-		input := conversationDeliveryDigest(workspaceID, conversation)
+		input := conversationDeliveryDigest(workspaceID, delivered)
 		var priorInput string
 		inputErr := tx.QueryRow("SELECT fingerprint FROM conversation_derivation_inputs WHERE conversation_id=?", conversationID).Scan(&priorInput)
 		if inputErr != nil && inputErr != sql.ErrNoRows {
@@ -1113,22 +1137,41 @@ var errOlderCopy = errors.New("the capture is older than what its host already i
 // stored is left alone, and then so are the workspace's own fields: only a copy
 // no older in any part may replace them, and prune, as a live sync does. A
 // record with nothing newer is rejected with errOlderCopy. Equal versions are
-// the same content, so they pass.
+// the same content, so they pass. A conversation is checked wherever it is
+// stored, which a source that regroups its sessions may have changed; a new
+// workspace has nothing of its own to roll back.
 func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, authority *copyAuthority) error {
-	if workspaceID == "" {
-		return nil
-	}
 	older := 0
 	for index, conversation := range record.Conversations {
 		claim := &authority.conversations[index]
 		if claim.id == "" {
 			continue
 		}
-		stored, known, err := storedCopyVersion(tx, host, workspaceID, claim.id, conversation.Origin)
-		if err != nil {
+		// The newer copy this host wrote where the conversation is now or
+		// where this record keeps it: another host, or a source regrouping
+		// its sessions, may have moved it since.
+		var holder string
+		if err := tx.QueryRow("SELECT workspace_id FROM conversations WHERE id=?", claim.id).Scan(&holder); err != nil {
 			return err
 		}
-		rejected, err := evidenceVersionRejected(tx, host, workspaceID, claim.id, conversation.Origin, conversation.Observed, stored, known, record.EvidenceIdentity)
+		var stored int64
+		known := false
+		for _, workspace := range []string{holder, workspaceID} {
+			var version int64
+			err := tx.QueryRow("SELECT version FROM copy_versions WHERE host_id=? AND workspace_id=? AND conversation_id=? AND origin=?", host, workspace, claim.id, conversation.Origin).Scan(&version)
+			if err == nil && (!known || version > stored) {
+				holder, stored, known = workspace, version, true
+			} else if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+		}
+		if !known {
+			var err error
+			if stored, known, err = storedCopyVersion(tx, host, holder, claim.id, conversation.Origin); err != nil {
+				return err
+			}
+		}
+		rejected, err := evidenceVersionRejected(tx, host, holder, claim.id, conversation.Origin, conversation.Observed, stored, known, record.EvidenceIdentity)
 		if err != nil {
 			return err
 		}
@@ -1136,6 +1179,12 @@ func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, 
 			claim.older = true
 			older++
 		}
+	}
+	if workspaceID == "" {
+		if older > 0 && older == len(record.Conversations) {
+			return errOlderCopy
+		}
+		return nil
 	}
 	stored, known, err := storedCopyVersion(tx, host, workspaceID, "", "")
 	if err != nil {
@@ -1644,6 +1693,59 @@ func replaceMetrics(tx *sql.Tx, workspaceID string, values []map[string]any) err
 		}
 	}
 	return nil
+}
+
+// keepStoredMessages returns a partial read's messages with the indexed ones
+// from its unread messages (ConversationRecord.Unread), each after the stored
+// message it followed. A partial read holds less than its source once did
+// (Cursor keeps the headers of messages it no longer holds), so it removes
+// nothing indexed from what it could not read, nor the usage and tool calls
+// derived from it; what it read replaces what was indexed from it.
+func keepStoredMessages(ctx context.Context, tx *sql.Tx, conversationID string, conversation ConversationRecord) ([]MessageRecord, error) {
+	messages := conversation.Messages
+	stored, err := storedMessages(ctx, tx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	read := make(map[string]bool, len(messages))
+	for _, message := range messages {
+		read[message.NativeID] = true
+	}
+	unread := make(map[string]bool, len(conversation.Unread))
+	for _, id := range conversation.Unread {
+		unread[id] = true
+	}
+	// A message's own records are "<id>:<part>".
+	fromUnread := func(id string) bool {
+		if conversation.Unread == nil || unread[id] {
+			return true
+		}
+		at := strings.LastIndexByte(id, ':')
+		return at > 0 && unread[id[:at]]
+	}
+	after, previous, missing := map[string][]MessageRecord{}, "", 0
+	for _, message := range stored {
+		if read[message.NativeID] {
+			previous = message.NativeID
+			continue
+		}
+		if !fromUnread(message.NativeID) {
+			continue
+		}
+		after[previous] = append(after[previous], message)
+		missing++
+	}
+	if missing == 0 {
+		return messages, nil
+	}
+	kept := make([]MessageRecord, 0, len(messages)+missing)
+	kept = append(kept, after[""]...)
+	for _, message := range messages {
+		kept = append(kept, message)
+		kept = append(kept, after[message.NativeID]...)
+		delete(after, message.NativeID)
+	}
+	return kept, nil
 }
 
 func replaceAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord) error {

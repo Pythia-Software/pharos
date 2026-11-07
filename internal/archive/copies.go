@@ -71,7 +71,7 @@ func resolveAuthority(tx *sql.Tx, record WorkspaceRecord, workspaceID, host stri
 		claim.id = stored[index].id
 		carried[claim.id] = true
 		same := stored[index].writer == host && stored[index].origin == conversation.Origin
-		if claim.id == "" || same && conversation.Origin != "user-export" {
+		if claim.id == "" || same && conversation.Origin != "user-export" && !conversation.Copy {
 			claim.writer = true
 			continue
 		}
@@ -87,6 +87,7 @@ func resolveAuthority(tx *sql.Tx, record WorkspaceRecord, workspaceID, host stri
 		if same {
 			covered = holdsEvery(ids, conversation.Messages)
 		}
+		covered = covered && !conversation.Copy
 		claim.writer = covered
 		if !covered {
 			claim.stored = ids

@@ -745,6 +745,11 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		adapter := &opencodeAdapter{baseAdapter: baseAdapter{config: unit.Source, ctx: ctx}}
 		return adapter.readGroup(unit.Parts)
 	}
+	if unit.Source.Kind == "cursor" {
+		// As OpenCode: one database holds every composer.
+		adapter := &cursorAdapter{baseAdapter: baseAdapter{config: unit.Source, ctx: ctx}}
+		return adapter.readGroup(unit.Parts)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, nil, err
 	}

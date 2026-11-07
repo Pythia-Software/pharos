@@ -194,6 +194,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		"opencode":       {".local/share/opencode"},
 		"cline":          {".cline/data"},
 		"vscode-copilot": vscodeUserDirs,
+		"cursor":         {cursorUserDir},
 	} {
 		for _, path := range paths {
 			check(kind, filepath.Join(home, filepath.FromSlash(path)), "data folder")
@@ -239,7 +240,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		check(source.Kind, source.Path, "configured source")
 	}
 	tools := []ProbeTool{}
-	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline", "vscode-copilot"} {
+	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline", "vscode-copilot", "cursor"} {
 		if tool, exists := found[kind]; exists {
 			tools = append(tools, tool)
 		}
@@ -327,6 +328,14 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 			}
 		}
 	}
+	if status.HostFileExists && (kinds == nil || kinds["cursor"]) {
+		dir := filepath.Join(home, filepath.FromSlash(cursorUserDir))
+		if cursorHasChats(filepath.Join(dir, "globalStorage", "state.vscdb")) {
+			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "cursor", resolved) == nil {
+				status.NewSources++
+			}
+		}
+	}
 	if status.HostFileExists && (kinds == nil || kinds["copilot"]) {
 		for _, dir := range probeStatusDirs(home, "COPILOT_HOME", "", ".copilot") {
 			if info, err := os.Stat(filepath.Join(dir, "session-state")); err == nil && info.IsDir() {
@@ -411,6 +420,7 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 			run.vscodeCopilot(filepath.Join(home, filepath.FromSlash(user)), "default location")
 		}
 	})
+	timed("cursor", func() { run.cursor(filepath.Join(home, filepath.FromSlash(cursorUserDir)), "default location") })
 	timed("antigravity", func() {
 		for _, dir := range antigravityDirs(home) {
 			foundBy := "~/.gemini/antigravity* directory"
@@ -488,6 +498,8 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 			run.cline(path, foundBy)
 		case "vscode-copilot":
 			run.vscodeCopilot(path, foundBy)
+		case "cursor":
+			run.cursor(path, foundBy)
 		case "antigravity":
 			run.antigravity(path, foundBy)
 		case "conductor":
@@ -741,6 +753,47 @@ func (r *probeRun) vscodeCopilot(dir, foundBy string) {
 				continue
 			}
 			stats.add(probeStats{files: 1, sessions: 1, bytes: info.Size(), oldest: info.ModTime(), newest: info.ModTime(), samples: []probeSession{{session.id, info.ModTime()}}})
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// cursorUserDir is Cursor's home-relative user folder.
+const cursorUserDir = "Library/Application Support/Cursor/User"
+
+// cursorHasChats reports whether a Cursor global database holds a message,
+// without reading any.
+func cursorHasChats(database string) bool {
+	if _, err := os.Stat(database); err != nil {
+		return false
+	}
+	db, err := openReadOnlySQLite(database)
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+	var found int
+	return db.QueryRow(`SELECT 1 FROM cursorDiskKV WHERE key GLOB 'bubbleId:*' LIMIT 1`).Scan(&found) == nil
+}
+
+// cursor finds Cursor's user folder and counts the chats in its global
+// database.
+func (r *probeRun) cursor(dir, foundBy string) {
+	candidate, resolved := r.locate("cursor", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	candidate.Unit, candidate.baseName = "session", ""
+	if candidate.Status == "found" {
+		database, err := (&cursorAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: resolved}}}).globalDatabase()
+		if _, statErr := os.Stat(database); err == nil && errors.Is(statErr, os.ErrNotExist) {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"cursor", candidate.DisplayPath, foundBy, "no globalStorage/state.vscdb"})
+			return
+		}
+		var stats probeStats
+		if err == nil {
+			stats, err = cursorProbeStats(database)
 		}
 		stats.apply(candidate, err)
 	}

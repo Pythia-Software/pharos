@@ -50,6 +50,16 @@ type ConversationRecord struct {
 	// Instructions are the instruction files and skills the transcript
 	// recorded as loaded (see instructions.go).
 	Instructions []InstructionRecord `json:"Instructions,omitempty"`
+	// Unread, on a partial conversation, names the messages its source lists
+	// but could not read; what was indexed from them is kept (see
+	// keepStoredMessages). A partial conversation without it keeps every
+	// indexed message it lacks.
+	Unread []string `json:"Unread,omitempty"`
+	// Copy marks a conversation rebuilt from another's copy of it, as a
+	// Cursor fork holds its deleted parent's first messages: it only adds
+	// messages not yet indexed, never replacing what a read of the
+	// conversation itself wrote.
+	Copy bool `json:"Copy,omitempty"`
 	// Observed is the version of the source this copy was read from (see
 	// sourceVersion); not part of the record's digest.
 	Observed int64 `json:"-"`
@@ -194,6 +204,8 @@ func MakeAdapter(config SourceConfig) (Adapter, error) {
 		return &clineAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "vscode-copilot":
 		return &vscodeCopilotAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
+	case "cursor":
+		return &cursorAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "opencode":
 		return &opencodeAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "conductor":
