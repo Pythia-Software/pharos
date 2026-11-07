@@ -272,7 +272,7 @@ func downloadLabelsAsset(ctx context.Context, asset labelsAsset, progress func(d
 			return fmt.Errorf("download %s: %w", asset.Name, err)
 		}
 	}
-	return file.Sync()
+	return syncToDrive(file)
 }
 
 // verifyLabelsDownload checks the download's size and SHA-256 against the

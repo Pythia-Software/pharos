@@ -49,13 +49,15 @@ func TestDiagnosticJournalFoldsRepeatsAndOutlastsARestart(t *testing.T) {
 }
 
 func TestDiagnosticJournalStaysBounded(t *testing.T) {
-	override(t, &diagnosticJournalBytes, 2048)
+	override(t, &diagnosticJournalLimit, 5)
+	override(t, &diagnosticJournalBytes, 512)
 	path := filepath.Join(t.TempDir(), "requests.jsonl")
 	journal := &diagnosticJournal{path: path}
-	for i := range diagnosticJournalLimit + 50 {
+	const extra = 10
+	for i := range diagnosticJournalLimit + extra {
 		journal.add(diagnosticEvent{At: formatTime(time.Unix(int64(i)*120, 0)), Level: "warning", Kind: "slow", Message: fmt.Sprint("request ", i)})
 	}
-	if events := journal.list(); len(events) != diagnosticJournalLimit || events[0].Message != fmt.Sprint("request ", diagnosticJournalLimit+49) {
+	if events := journal.list(); len(events) != diagnosticJournalLimit || events[0].Message != fmt.Sprint("request ", diagnosticJournalLimit+extra-1) {
 		t.Fatalf("kept %d events, newest %q", len(events), events[0].Message)
 	}
 	if info, err := os.Stat(path); err != nil || info.Size() > int64(diagnosticJournalLimit)*400 {

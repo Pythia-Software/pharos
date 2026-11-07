@@ -95,7 +95,7 @@ func durableJSON(path string, value any) error {
 		return err
 	}
 	defer f.Close()
-	return f.Sync()
+	return syncToDrive(f)
 }
 
 func descriptorPath(config Config) string {

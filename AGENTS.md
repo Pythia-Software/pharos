@@ -207,7 +207,8 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   - `slowTest(t)` for a test that takes seconds, so that `-short` skips it.
 
   `TestMain` keeps tests off this Mac: no `ioreg`, `scutil`, `diskutil` or
-  GitHub, no user git configuration, and catalogs without drive flushes.
+  GitHub, no user git configuration, and disposable files and catalogs without
+  drive flushes.
   Tests of those opt back in, for example with `stubDriveTool` or
   `useDurableCatalog`.
 - **Go tests run in several processes, one test at a time in each.**
