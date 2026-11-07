@@ -9,6 +9,7 @@ const HEADER_TOOLS = [
   { id: 'ask', element: 'askPharosToggle', label: 'Ask Pharos', description: 'Ask about the current page and browse while Pharos works.', on: true },
   { id: 'readiness', element: 'dataReadinessToggle', label: 'Data updates', description: 'See when this page was last updated and what is still waiting.', on: true },
   { id: 'summary', element: 'usageSummaryToggle', label: 'Quick Stats', description: 'Recent words, tokens, CO₂e, and API cost.', on: true, legacy: 'pharos-show-usage-summary-button' },
+  { id: 'guide', element: 'dataGuideToggle', label: 'Data Guide', description: 'Understand conversations, agent sessions, workspaces, and the rest of your agent history.', on: false },
   { id: 'annotations', element: 'feedbackToggle', label: 'Agent annotations', description: 'Mark up the interface to share feedback with an agent.', on: false, legacy: 'pharos-show-agent-annotation-button' },
   { id: 'feedback', element: 'feedbackSubmitToggle', label: 'Send feedback', description: 'Send a bug report, request, or prompt to Pythia Software.', on: true },
   { id: 'settings', element: 'settingsToggle', label: 'Settings', description: 'Keep app settings within reach.', on: true, required: true },

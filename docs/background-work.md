@@ -332,7 +332,7 @@ Scheduled indexing never runs it; it marks `sync_deferred` instead (§5).
 | `analysis.github` | Check GitHub for renamed repositories · Checking GitHub | chained | svc (+`gh`) | — (network only) | an.identities | — | Stops on release only. | record | step | parent's |
 | `analysis.identities` | Link identities · Linking identities | chained | svc | D:w W:w | an.identities | — | Stops on release only. | batch | step | parent's |
 | `analysis.git` | Look up merges in Git · Looking up merges in Git | chained, startup (one-time backfill), after a legacy sync | svc (+`git`) | D:w W:w | an.git | — | Stops; it runs again after the next index. Each `git` call has a 5 s limit (Conductor's git has none). | batch | >5 s when not a stage | bg |
-| `analysis.tools` | Update the Tools rollup · Updating the Tools rollup | chained, read (a Query Table request, or a Thinking read with request timings pending), version | svc | D:w W:w | an.tools | — | Stops; it runs again on the next index or Tools request. | batch | >5 s when not a stage | bg; fg when read-started |
+| `analysis.tools` | Update tool summaries · Updating tool summaries | chained, read (a Query Table request, or a Thinking read with request timings pending), version | svc | D:w W:w | an.tools | — | Stops; it runs again on the next index or Tools request. | batch | >5 s when not a stage | bg; fg when read-started |
 | `analysis.authorship` | Update writing estimates · Updating writing estimates | chained, read (`/api/authorship`, usage summary, native menu usage poll) | svc | D:w W:w | an.authorship | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
 | `analysis.authorship.refine` | Refine writing history · Refining writing history | daily, requested | svc | D:w W:w | an.authorship.refined | work | Stops; historical refinement runs again on its daily schedule. | batch | always | bg |
 | `analysis.labels` (variant `backlog`) | Label messages · Labeling messages | chained (the last stage, when `labels_enabled` is on; background item Message labels), cli (`pharos labels run`); `backlog` is chained after a stage that left more than its share, plugged in only, and stops if this Mac goes onto battery | svc, cli (+ worker process) | D:w W:w | an.labels | work | Stops between batches; the next run resumes it. | batch | >5 s when not a stage | bg |
@@ -464,7 +464,7 @@ nothing.
 | `catalog.repair` (variants `refine-usage`, `repair-usage-attribution`) | Repair usage (Terminal) · Repairing usage | cli | cli | D:w W:w | an.tools, an.authorship | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
 | `repositories.merge` | Merge repositories (Terminal) · Merging repositories | cli (`repositories --merge --apply`) | cli | D:w W:w | an.identities, an.git | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
 | `analysis.agent_events.import` | Import agent events (Terminal) · Importing agent events | cli (`agent-events import FILE`) | cli | D:w W:w | an.agent_events | — | Pharos cannot stop it; the import is one transaction, so a kill leaves the previous events. | none (to Pharos) | always | fg |
-| `tools.ledger.build` | Build the Tools ledger · Building the Tools ledger | user (`POST /api/tools/backfill`), version, step of `library.upgrade` | svc, cli (`build-tools`) | D:w W:w | an.ledger, an.tools | — | Stops between conversations; building the ledger again resumes it. | record | always | fg |
+| `tools.ledger.build` | Build the tool index · Building the tool index | user (`POST /api/tools/backfill`), version, step of `library.upgrade` | svc, cli (`build-tools`) | D:w W:w | an.ledger, an.tools | — | Stops between conversations; building the tool index again resumes it. | record | always | fg |
 
 Notes:
 
@@ -1233,7 +1233,7 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   }],
   "attention": [{"id": "backup-failed", "severity": "error", "title": "The last backup failed",
                  "detail": "…", "action": {"label": "Open Backups", "path": "/settings/backups"}}],
-  "freshness": [{"domain": "an.tools", "group": "analyses", "label": "Tools rollup", "as_of": "…",
+  "freshness": [{"domain": "an.tools", "group": "analyses", "label": "Tool summaries", "as_of": "…",
                  "behind": {"state": "behind", "count": null, "unit": null}, "state_label": "Behind",
                  "reason": {"code": "deferred-by-schedule", "text": "Waits for Update everything now"},
                  "catching_up": null, "catching_up_label": null, "next": "updates with the next manual index"}],

@@ -131,7 +131,7 @@ test("result outlines keep turns, setup and nested inline agents under their own
  // Result cards can load the reader even if another page-shell initializer fails.
  assert.equal(typeof reader.window.pharosConversationOutline, "function");
  const outline = reader.window.pharosConversationOutline(conversation);
- assert.equal(outline.length, 3); assert.equal(outline[0].label, "Session setup");
+ assert.equal(outline.length, 3); assert.equal(outline[0].label, "Agent setup");
  assert.equal(outline[1].label, "Turn 1"); assert.equal(outline[2].label, "Turn 2");
  assert.equal(outline[1].human.text, "Inspect the rules."); assert.equal(outline[1].response.text, "Done.");
  const agent = outline[1].children[0];

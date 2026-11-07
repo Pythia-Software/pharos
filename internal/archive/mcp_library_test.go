@@ -901,7 +901,8 @@ f = open(sys.argv[1], "a"); fcntl.flock(f, fcntl.LOCK_EX); print("locked", flush
 	if err := holder.Start(); err != nil {
 		t.Skipf("python3: %v", err)
 	}
-	defer holder.Process.Kill()
+	// Reaped, or later tests in this process would see it among its children.
+	defer func() { holder.Process.Kill(); holder.Wait() }()
 	if line, err := bufio.NewReader(locked).ReadString('\n'); err != nil || line != "locked\n" {
 		t.Fatalf("lock holder: %q %v", line, err)
 	}

@@ -747,14 +747,24 @@ func (m *applicationManager) mcp(ctx context.Context, request map[string]any) (m
 // provides the same directory picker on the Mac running this local service.
 // Keep cancellation distinct from failure, and return paths as JSON so spaces,
 // quotes and newlines survive without shell interpolation.
-var applicationFolderPicker = func(ctx context.Context) (string, error) {
+var applicationFolderPicker = func(ctx context.Context, purpose string) (string, error) {
 	if runtime.GOOS != "darwin" {
 		return "", fmt.Errorf("the folder picker requires macOS; enter the folder path instead")
 	}
-	const script = `const app = Application.currentApplication();
+	picker := pickerPurposes[purpose]
+	if picker.Prompt == "" {
+		picker = pickerPurposes["library"]
+	}
+	call := "chooseFolder"
+	if picker.File {
+		call = "chooseFile"
+	}
+	// The prompt is one of pickerPurposes' constants, quoted as JSON.
+	prompt, _ := json.Marshal(picker.Prompt)
+	script := `const app = Application.currentApplication();
 app.includeStandardAdditions = true;
 try {
-  JSON.stringify(app.chooseFolder({withPrompt: "Choose a Pharos library or a parent folder for a new library."}).toString());
+  JSON.stringify(app.` + call + `({withPrompt: ` + string(prompt) + `}).toString());
 } catch (error) {
   if (error.errorNumber !== -128) throw error;
   JSON.stringify("");
@@ -768,6 +778,17 @@ try {
 		return "", fmt.Errorf("could not read the selected folder: %w", err)
 	}
 	return path, nil
+}
+
+// pickerPurposes are what a picker can be opened to choose, and what it says.
+// The native app's NSOpenPanel says the same (PharosApp.swift).
+var pickerPurposes = map[string]struct {
+	Prompt string
+	File   bool
+}{
+	"library": {Prompt: "Choose a Pharos library or a parent folder for a new library."},
+	"source":  {Prompt: "Choose the folder that holds this tool’s conversations."},
+	"export":  {Prompt: "Choose the export you downloaded: its ZIP, or its conversations.json.", File: true},
 }
 
 func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
@@ -818,7 +839,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer m.pickerMu.Unlock()
-		path, err := applicationFolderPicker(r.Context())
+		path, err := applicationFolderPicker(r.Context(), firstString(body["purpose"]))
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return

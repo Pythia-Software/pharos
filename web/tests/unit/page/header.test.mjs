@@ -52,6 +52,7 @@ test('header defaults start with navigation and preserve previous visibility cho
   assert.ok(defaults.includes('theme'));
   assert.ok(defaults.includes('summary'));
   assert.ok(!defaults.includes('navigator'));
+  assert.ok(!defaults.includes('guide'));
   const legacy = new Map([
     ['pharos-show-nav-button', true], ['pharos-show-agent-annotation-button', true],
     ['pharos-show-theme-button', false], ['pharos-show-usage-summary-button', false],
@@ -69,6 +70,7 @@ test('saved header layouts keep their order and omissions, reject unknowns, and 
   assert.deepEqual(plain(header.normalizeHeaderTools(['theme', 'history', 'theme', 'retired', null, {}])), ['theme', 'history', 'settings']);
   assert.deepEqual(plain(header.normalizeHeaderTools([])), ['settings']);
   assert.deepEqual(plain(header.normalizeHeaderTools(['settings', 'search'])), ['settings', 'search']);
+  assert.deepEqual(plain(header.normalizeHeaderTools(['guide', 'settings'])), ['guide', 'settings']);
   for (const invalid of [null, false, 'search', {}]) {
     assert.deepEqual(plain(header.normalizeHeaderTools(invalid)), plain(header.defaultHeaderTools()));
   }
@@ -82,6 +84,8 @@ test('header tools move in either direction, add once, and return to the toolbox
   assert.deepEqual(plain(edit(start, 'library', 1)), start);
   assert.deepEqual(plain(edit(start, 'library', 2)), start);
   assert.deepEqual(plain(edit(start, 'theme', 1)), ['history', 'theme', 'library', 'settings', 'search']);
+  assert.deepEqual(plain(edit(start, 'guide', 1)), ['history', 'guide', 'library', 'settings', 'search']);
+  assert.deepEqual(plain(edit(['guide', ...start], 'guide', null)), start);
   assert.deepEqual(plain(edit(start, 'history', null)), ['library', 'settings', 'search']);
   assert.deepEqual(plain(edit(start, 'settings', null)), start);
   assert.deepEqual(plain(edit(start, 'settings', 0)), ['settings', 'history', 'library', 'search'], 'Settings can still be repositioned');

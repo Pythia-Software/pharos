@@ -131,6 +131,19 @@ claims of equal authority produce a conflict, not whichever source indexed
 last. An SDK entrypoint or headless process by itself proves a runtime, not
 who started it. A bare `source_kind=codex` or `harness=codex` does not prove CLI.
 New unrecognized markers remain unknown until their meaning is established.
+A harness whose own store only one client writes proves that client: the
+Cursor CLI's sessions are CLI, and Cursor's, Zed's and VS Code Copilot's are
+IDE. The Copilot CLI's runtime and `session-state` folder also serve Copilot
+SDK apps and VS Code, so a Copilot session's channel is the client its
+`workspace.yaml` names as its creator: `github/cli` is CLI, and VS Code's
+`vscode` and `vscode-agent-host` are IDE. Any other SDK app's name, or none,
+leaves it unknown. Cline's CLI and its editor extensions share one folder, so a
+Cline session's channel is the client its manifest names (`cli`; `vscode`,
+`jetbrains` or `neovim` for IDE; `desktop`; `web`), but only for a session a
+person started there (`sessionHistoryOrigin.mode` `user`): an imported history
+names the app that imported it, and a scheduled run was not started from its
+client, so both stay unknown. OpenCode's terminal and desktop apps share its
+database and record neither, so OpenCode's channel stays unknown.
 Do not infer the channel from transcript prose mentioning an app or a familiar
 working-directory path.
 

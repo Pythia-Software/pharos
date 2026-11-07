@@ -34,6 +34,8 @@ test("TL1 cards open their grouped attempts in the shared Analyze table", t => {
   assert.equal(restored.dataset, "tl1_attempts");
   assert.deepEqual(restored.query, core.normalizeQueryState(suggestion.query));
   assert.ok(restored.query.grouping);
+  const title = restored.query.grouping.summaries.find(summary => summary.field === 'title' && summary.op === 'row');
+  assert.equal(title.label, schemas.tl1_attempts.fields.find(field => field.name === 'title').label);
   assert.deepEqual(restored.window, suggestion.window);
 });
 
@@ -275,7 +277,7 @@ test("cards split by a key offer a group count named for the key, and the count 
     const recipe = queryRecipes.find(recipe => recipe.id === id), item = instantiateRecipe(recipe, recipe.days?.[0] ?? 7, clock);
     return { recipe, item, groups: cardGroupsFor(item.query, { recipe, cover: item.cover }, schemas[recipe.dataset].fields) };
   };
-  for (const [id, noun, fallback] of [["model-cost-share", "provider/model groups", 6], ["model-cost-share-trend", "models", 15], ["repository-token-share", "repositories", 5], ["repository-model-use", "repository/provider/model groups", 6], ["usage-work", "root tasks", 6]])
+  for (const [id, noun, fallback] of [["model-cost-share", "provider/model groups", 6], ["model-cost-share-trend", "models", 15], ["repository-token-share", "repositories", 5], ["repository-model-use", "repository/provider/model groups", 6], ["usage-work", "top-level conversations", 6]])
     assert.deepEqual(offered(id).groups, { noun, max: 100, fallback }, id);
   for (const id of ["api-cost-total", "session-token-cost", "human-words-weekday", "habits-streak", "writing-hours"]) assert.equal(offered(id).groups, undefined, `${id} has no groups to count`);
   for (const recipe of queryRecipes.filter(recipe => !recipe.retired)) {

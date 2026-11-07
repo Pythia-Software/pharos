@@ -3,7 +3,7 @@ import type { QueryRecipe } from "./curiosity-data";
 const tokens = { dataset: "usage", field: "first_usage_at", unit: "tokens", category: "usage", idea: "cost-01" } as const;
 const daily = (id: string, field: string, split: string, label: string) => ({ id, op: "sum" as const, field, groupBy: ["day", split], groupLimit: 10000, label });
 const cover = (metricId: string) => ({ mode: "source" as const, metricId, kind: "auto" as const, maxGroups: 15, showOther: true, showLegend: true, showHeadline: false, height: 300 });
-const volume = "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage fact’s placement; facts are not prorated.";
+const volume = "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage record’s placement; facts are not prorated.";
 
 export const dashboardCardRecipes: QueryRecipe[] = [
   { id: "compactions-by-trigger", title: "Context compactions by trigger", description: "Recorded context compactions over the last {days} days, split by human, machine and unknown triggers.", dataset: "compactions", field: "occurred_at", category: "thinking", idea: "models-01", unit: "compactions", days: [7, 30, 90],

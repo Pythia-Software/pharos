@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,7 +28,7 @@ const conductorExtractor = "conductor-v14-inference-speed"
 
 // conductorPartExtractor versions the parser for per-session part states
 // (source_item_states). It changes separately from conductorExtractor, which
-// every Conductor conversation also stores as its coverage, so a parser change
+// every Conductor conversation also stores as its extractor, so a parser change
 // that must reach sessions already indexed need not rewrite them all.
 // +sender: user messages record who sent them.
 const conductorPartExtractor = conductorExtractor + "+sender+reasoning-v1"
@@ -95,7 +95,7 @@ func (a *conductorAdapter) planParts() (*sourceWorkPlan, error) {
 }
 
 func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
-	info, err := os.Stat(a.config.Path)
+	info, err := a.files().Stat(a.config.Path)
 	if err != nil {
 		return err
 	}
@@ -103,7 +103,7 @@ func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]s
 	if !info.IsDir() {
 		candidates = append(candidates, a.config.Path)
 	} else {
-		if err := filepath.WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
+		if err := a.files().WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
 			if err := a.context().Err(); err != nil {
 				return err
 			}
@@ -125,7 +125,7 @@ func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]s
 	sort.Strings(candidates)
 	for _, path := range candidates {
 		if boundary, ok := a.context().Value(sqliteAcquisitionKey{}).(*sqliteAcquisitionBoundary); ok && a.view == nil && !boundary.reconciled[path] {
-			supported, err := conductorConversationDatabase(path)
+			supported, err := conductorConversationDatabase(a.context(), path)
 			if err != nil {
 				return err
 			}
@@ -173,26 +173,29 @@ func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]s
 	return nil
 }
 
-func openReadOnlySQLite(path string) (*sql.DB, error) {
-	dsn := (&url.URL{Scheme: "file", Path: path}).String() + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(1)"
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	return db, nil
-}
-
 // readsEveryIndex: Conductor keeps one database, which every plan reads to
 // list its sessions, and the generations' index diffs against it.
 func (a *conductorAdapter) readsEveryIndex(string) bool { return true }
 
-func (a *conductorAdapter) database(path string, selected map[string]bool, unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
-	readable, err := a.files().Database(path)
-	if err != nil {
-		return err
+// readGroup reads, as indexing does, the session parts name; nothing when
+// that session is gone.
+func (a *conductorAdapter) readGroup(parts []sourcePart) (*WorkspaceRecord, []sourcePart, error) {
+	if len(parts) == 0 {
+		return nil, nil, nil
 	}
-	db, err := openReadOnlySQLite(readable)
+	separator := strings.LastIndex(parts[0].item, ":sessions:")
+	if separator < 0 {
+		return nil, nil, errors.New("invalid session identity")
+	}
+	path := strings.TrimPrefix(parts[0].item[:separator], "sqlite:")
+	var record *WorkspaceRecord
+	var read []sourcePart
+	err := a.database(path, map[string]bool{parts[0].item[separator+len(":sessions:"):]: true}, func([]sourcePart) bool { return false }, func(value *WorkspaceRecord, parts []sourcePart) error { record, read = value, parts; return nil })
+	return record, read, err
+}
+
+func (a *conductorAdapter) database(path string, selected map[string]bool, unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
+	db, err := a.files().SQLite(path)
 	if err != nil {
 		return err
 	}
@@ -745,7 +748,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 		messages = append(messages, MessageRecord{NativeID: sid + ":context-snapshot", Role: "system", Kind: "metadata", Text: jsonText(map[string]any{"type": "context_snapshot", "context_token_count": session["context_token_count"], "context_used_percent": session["context_used_percent"]}), Model: currentModel, Effort: currentEffort, CreatedAt: updated, EvidenceLocator: "sqlite:" + path + ":sessions:" + sid, Selected: true})
 	}
 	aliases = uniqueStrings(append(aliases, sid))
-	return WorkspaceRecord{SourceID: sid, SourceKind: "conductor", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Location: location, Repository: repository, Metadata: metadata, PRs: prs, Metrics: metrics, Changes: changes, Conversations: []ConversationRecord{{NativeID: "conductor:" + sid, Provider: provider, Account: a.config.Account, Aliases: aliases, Origin: "sqlite:" + path, Harness: "conductor", Coverage: conductorExtractor, Messages: messages, Model: model, Effort: currentEffort, StartedAt: started, EndedAt: updated}}}, nil
+	return WorkspaceRecord{SourceID: sid, SourceKind: "conductor", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Location: location, Repository: repository, Metadata: metadata, PRs: prs, Metrics: metrics, Changes: changes, Conversations: []ConversationRecord{{NativeID: "conductor:" + sid, Provider: provider, Account: a.config.Account, Aliases: aliases, Origin: "sqlite:" + path, Harness: "conductor", Coverage: "complete", Extractor: conductorExtractor, Messages: messages, Model: model, Effort: currentEffort, StartedAt: started, EndedAt: updated}}}, nil
 }
 
 // conductorSender names who sent a Conductor message row. Conductor records

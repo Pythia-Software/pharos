@@ -231,9 +231,9 @@ function Methodology() {
       className="usage-query-search thinking-disclosure"
     >
       <p>
-        Think time is a coarse proxy: the first retained usage-bearing response
-        event minus the latest linked tool-result timestamp. The request
-        ledger’s <code>requested_at</code> field names that response evidence,
+        Think time estimates the wait between the latest linked tool result
+        and the first recorded response with token usage. The model-request
+        record’s <code>requested_at</code> field names that response evidence,
         not a verified request-send clock. The wait includes reasoning, some
         generation, queueing, scheduling and delivery. It measures neither
         first-token latency nor pure inference nor complete user-turn duration.
@@ -289,7 +289,7 @@ function Methodology() {
       <p>
         A separate per-model ridge regression estimates log gap from workload,
         cache and effort with five conversation-held-out folds. It uses only the
-        selected cohort; every displayed request is evaluated by a fit that
+        selected group; every displayed request is evaluated by a fit that
         excludes its conversation. Each training fold needs 200 requests from 20
         conversations, a reported effort present in training and numeric
         features within training ranges. Unsupported observations remain
@@ -1014,7 +1014,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   data={{ ...data, groups: data.coverage ?? [] }}
                   state={{ ...state, view: "histogram", groupBy: "model" }}
                 />
-                <h3>By agent / harness <DataReadinessIndicator id="thinking:harness" title="By agent / harness" dataset="model_requests" query={{state,nativeFilters}} /></h3>
+                <h3>By agent app <DataReadinessIndicator id="thinking:harness" title="By agent app" dataset="model_requests" query={{state,nativeFilters}} /></h3>
                 <GroupTable
                   data={{ ...data, groups: data.agentCoverage ?? [] }}
                   state={{ ...state, view: "histogram", groupBy: "harness" }}
@@ -1022,8 +1022,8 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 <p>
                   Missing timing stays in the retained denominator. A source
                   with no projected usage requests cannot appear in this table.
-                  Model names are retained as recorded; agent family is not
-                  necessarily API vendor.
+                  Model names are retained as recorded; Provider identifies the agent
+                  product and may differ from the API vendor.
                 </p>
               </ViewDisclosure>
               <ViewDisclosure viewKey="thinking:compaction-waits" summary="How compaction changes observed waits" className="usage-query-search thinking-disclosure">
@@ -1141,7 +1141,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                       </p>
                     )}
                     <p>
-                      Harness-reported thinkingDurationMs is matched by
+                      App-reported thinkingDurationMs is matched by
                       conversation and response identity, taking the maximum
                       repeated report once. The chart shows up to 1,600 evenly
                       selected pairs; statistics use all matched pairs.

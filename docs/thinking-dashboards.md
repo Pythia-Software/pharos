@@ -71,8 +71,11 @@ Speed breakdowns are available on both Waiting and Thinking, and saved cards
 retain the selected breakdown. Ingestion stores normalized `speed` (`fast` or
 `standard`), the original normalized `service_tier`, and `speed_source` on
 messages and model requests. Explicit `usage.speed` wins (including Claude fast
-mode with a standard service tier). Otherwise priority/fast tiers are fast, and
-all other, null or missing tiers count as standard. `speed_source` distinguishes
+mode with a standard service tier). Otherwise priority, fast and ultrafast
+tiers are fast (`fastTiers` in `request_speed.go`), and all other, null or
+missing tiers count as standard. A change to that list re-derives, once, only
+the conversations whose stored requests took their speed from a tier it now
+judges otherwise. `speed_source` distinguishes
 `speed`, `service_tier`, and the `assumed_standard` fallback policy.
 
 Codex turn configuration is retained per message and resets each turn. ChatGPT

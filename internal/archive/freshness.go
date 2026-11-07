@@ -760,7 +760,7 @@ func libraryInputs(meta map[string]string) string {
 // stops at the first that fails.
 var chainStages = []struct{ kind, domain, label string }{
 	{"analysis.github", "", "GitHub check"}, {"analysis.identities", "an.identities", "Identity links"}, {"analysis.git", "an.git", "Merges from Git"},
-	{"analysis.tools", "an.tools", "Tools rollup"}, {"analysis.authorship", "an.authorship", "Writing classification"}, {"analysis.findings", "findings", "Findings"}}
+	{"analysis.tools", "an.tools", "Tool summaries"}, {"analysis.authorship", "an.authorship", "Writing classification"}, {"analysis.findings", "findings", "Findings"}}
 
 // chainFailure applies failure precedence (§5) to a domain that is not
 // current: its own stage failed after its last completion (and after the
@@ -826,7 +826,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 
 	// The Tools rollup: built for the ledger's generation, this layout and
 	// this timezone, with no dirty workspaces.
-	tools := domainEntry{domain: "an.tools", group: "analyses", label: "Tools rollup", state: freshCurrent,
+	tools := domainEntry{domain: "an.tools", group: "analyses", label: "Tool summaries", state: freshCurrent,
 		asOf: latestTime(deferred["tools"].completedAt, ends["analysis.tools"].succeeded)}
 	var dirty int64
 	dirtyErr := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM (SELECT 1 FROM tool_rollup_dirty LIMIT ?)", freshnessCap).Scan(&dirty)
@@ -898,7 +898,7 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	// Counting them reads every conversation, so the ledger takes the count
 	// from the last time anything asked for the upgrade's steps, and only
 	// while the library has not changed since.
-	ledgerEntry := domainEntry{domain: "an.ledger", group: "analyses", label: "Tools ledger", unit: "conversation", next: nextUpgrade}
+	ledgerEntry := domainEntry{domain: "an.ledger", group: "analyses", label: "Tool index", unit: "conversation", next: nextUpgrade}
 	if steps, ok := l.countedSteps(meta, metaErr, &ledgerEntry); ok {
 		pending := int64(0)
 		for _, step := range steps {

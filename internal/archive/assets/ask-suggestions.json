@@ -66,7 +66,7 @@
   },
   {
    "id": "delegation",
-   "label": "Subagents and delegation",
+   "label": "Sub-agents and delegation",
    "pages": ["work","analyze/tokens"],
    "signals": ["delegation.agents"]
   },
@@ -289,7 +289,7 @@
    "area": "delegation",
    "form": "understand",
    "prior": 0.9,
-   "variants": ["How much of my work do subagents do, and does it help?","When do my agents delegate, and what does it cost?"]
+   "variants": ["How much of my work do sub-agents do, and does it help?","When do my agents delegate, and what does it cost?"]
   },
   {
    "id": "parallel-pattern",

@@ -23,7 +23,7 @@ import "./visit-history";
 import { originLabel, originRenderers, useOriginMetadata, isOriginDimension } from "./origin-dimensions";
 import "./uifeedback/pharos-client";
 import { dataSources } from "./data-taxonomy-model";
-import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
+import { DataTaxonomyModal, openDataTaxonomy, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary, openableProps, type ResultTarget } from "./conversation-results";
@@ -301,11 +301,11 @@ const renderers: RenderRegistry<Row> = {
     // ID is one of its keys; otherwise its identity is the group's.
     const keys = query?.grouping ? groupKeyFields(query.grouping.keys) : null;
     const work = row.workspace_id ?? (!keys || keys.includes("id") ? row.id : undefined);
-    if (work == null || work === "") return String(value ?? "Untitled work");
+    if (work == null || work === "") return String(value ?? "Untitled workspace");
     return <button className="qt-work-link" data-overflow-title="" onClick={(event) => {
       event.stopPropagation();
       window.pharosOpenDetail?.(String(work));
-    }}>{String(value ?? "Untitled work")}</button>;
+    }}>{String(value ?? "Untitled workspace")}</button>;
   },
   pull_requests({ value, row }: CellContext<Row>) {
     const prs = pullRequests(row);
@@ -384,23 +384,23 @@ const emptyMessages: Record<Dataset, string> = {
   message_labels:"No messages match these labels and filters.",
   compactions: "No compactions match this query.",
   model_requests: "No model requests match this query.",
-  library: "No work matches this query.",
+  library: "No workspaces match this query.",
   usage: "No token usage matches this query.",
   conversation_activity: "No recorded conversation activity matches this query.",
-  writing: "No conversations with user messages match this query.",
+  writing: "No workspaces with user messages match this query.",
   writing_messages: "No classified user messages match this query.",
-  mcp_calls: "No MCP calls match this query.",
-  tools: "No tool use matches this query.",
+  mcp_calls: "No Pharos MCP requests match this query.",
+  tools: "No tool summaries match this query.",
   tool_calls: "No tool calls match this query.",
   skill_usages: "No skill usage evidence matches this query.",
-  tl1_attempts: "No TL1 runs match this query.",
+  tl1_attempts: "No TL1 attempts match this query.",
   parallelism: "No agent activity matches this query.",
   rhythm: "No activity matches this query.",
   findings: "No findings match this query.",
   safety: "No risky action notices match this query.",
   fixes: "No fixes match this query.",
   agent_events: "No agent events match this query.",
-  agent_event_messages: "No agent messages read for events match this query.",
+  agent_event_messages: "No messages checked for agent events match this query.",
 };
 
 // Query Table 1.0.0 still formats numeric metrics with a field renderer only for
@@ -711,7 +711,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
       onNavigate={navigateLink}
       total={api.total}
       loading={api.loading}
-      emptyMessage={api.loading ? "Loading results…" : failed ? failedMessage : searching ? "No work matches this search and these filters." : emptyMessages[dataset]}
+      emptyMessage={api.loading ? "Loading results…" : failed ? failedMessage : searching ? "No workspaces match this search and these filters." : emptyMessages[dataset]}
       classNames={{ empty: api.loading ? "pharos-table-loading" : undefined }}
       {...(api.query.grouping ? { trailing: (row: Row) => {
         const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, groupKeyField(key)));
@@ -777,7 +777,7 @@ function ConversationResultCard({ row, api, renderers, find }: { row: Row; api: 
   return <article className="conversation-result-card" data-pharos-target={`row:${row.id}`}>
     <div className="conversation-result-head">
       <div className="conversation-result-summary">
-        <button className="conversation-result-title" type="button" onClick={() => window.pharosOpenDetail?.(String(row.id))}>{String(row.title ?? "Untitled work")}</button>
+        <button className="conversation-result-title" type="button" onClick={() => window.pharosOpenDetail?.(String(row.id))}>{String(row.title ?? "Untitled workspace")}</button>
         <ConversationFacts row={row} fields={api.visibleFields} query={api.query} renderers={renderers} />
       </div>
       <div className="conversation-result-actions">
@@ -806,7 +806,7 @@ function ConversationResultCard({ row, api, renderers, find }: { row: Row; api: 
 
 function ConversationResults({ api, searching, failed, renderers }: { api: QueryTableApi<Row>; searching: boolean; failed: boolean; renderers: RenderRegistry<Row> }) {
   const find = libraryFind(api.query.hostState);
-  if (!api.loading && !api.rows.length) return <div className="conversation-results-empty no-results">{failed ? failedMessage : searching ? "No work matches this search and these filters." : "No work matches this query."}</div>;
+  if (!api.loading && !api.rows.length) return <div className="conversation-results-empty no-results">{failed ? failedMessage : searching ? "No workspaces match this search and these filters." : "No workspaces match this query."}</div>;
   return <div className={`conversation-results ${api.loading ? "loading" : ""}`} aria-busy={api.loading}>
     {api.loading && !api.rows.length ? <div className="conversation-results-empty">Loading conversations…</div> : null}
     {api.rows.map((row) => <ConversationResultCard key={String(api.rowId(row) ?? row.id)} row={row} api={api} renderers={renderers} find={find} />)}
@@ -842,7 +842,7 @@ async function openConversation(id: string) {
 
 function findHitLabel(hit: FindHit): string {
   if (hit.url) return `Open tool call${hit.tool_name ? ` · ${hit.tool_name}` : ""}`;
-  if (hit.path) return hit.attribution === "workspace" ? "Open work · conversation unknown" : "Open conversation";
+  if (hit.path) return hit.attribution === "workspace" ? "Open workspace · conversation unknown" : "Open conversation";
   if (hit.role === "user") return "Open message from a person";
   if (["thinking", "reasoning", "analysis"].includes(hit.message_kind ?? "")) return "Open saved agent reasoning";
   if (hit.role === "assistant" && hit.message_kind === "message") return "Open agent reply";
@@ -883,7 +883,7 @@ function LibraryPage() {
   const [found, setFound] = useState<FindSummary | null>(null);
   useEffect(() => { setFound(null); }, [find]);
   return <div className={`pharos-query-page${find ? " library-searching" : ""}`}>
-    <div className="view-heading"><div><h1>Search</h1><p className="muted">Find past work. Follow a conversation, compare projects, or build a view of your own.</p></div></div>
+    <div className="view-heading"><div><h1>Search</h1><p className="muted">Find past work. Follow a conversation, compare repositories, or build a view of your own.</p></div><button data-view-field="guide_open" type="button" onClick={event => openDataTaxonomy(undefined, event.currentTarget)}><Icon name="info" />Data Guide</button></div>
     <QuerySurface dataset="library" host={host} resultPresentation={api => <SearchResultsDisplay view={searchResultsView(api.query, readLibraryHost(api.query.hostState).view)}
       onChange={next => api.setDefinition?.(previous => ({ query: queryForSearchResultsView(previous.query, next), hostState: libraryHostState({ ...readLibraryHost(previous.hostState), view: next }) }))} />}
       onFind={setFound} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} queryContent={api => <LibrarySearchClause api={api} />} controls={() => <>
@@ -1000,7 +1000,7 @@ function TokenSummary({ where }: { where: WhereTerm[] }) {
     {card("API price equivalent", result.loading ? "Loading…" : result.error ? "Unavailable" : tokens && !hasCost ? "Unpriced" : formatUSD(cost), "list prices · may include assumed/partial prices; unpriced usage excluded")}
     {card("Cache hit rate", result.loading ? "Loading…" : result.error ? "Unavailable" : cacheHit, `${compactNumber(reads)} cached input tokens read`)}
     {card("Output tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(output), "including reported reasoning output")}
-    {card("Agent sessions", result.loading ? "Loading…" : result.error ? "Unavailable" : sessions.toLocaleString(), "distinct sessions in the current filters")}
+    {card("Agent sessions", result.loading ? "Loading…" : result.error ? "Unavailable" : sessions.toLocaleString(), "distinct agent sessions in the current filters")}
   </div>;
 }
 
@@ -1187,7 +1187,7 @@ function HumanUsageDashboard() {
   return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={dashboardDefaults.human} readWhere={readHumanWhere}
     summary={where => <HumanWordsSummary where={where} status={status} />}
     panels={() => <>
-      <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, copied agent output, templates, attachments, harness instructions and automated prompts. Select a column, bar or box to open its messages; each message is highlighted by where its text came from.</p>
+      <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, copied agent output, templates, attachments, app instructions and automated prompts. Select a column, bar or box to open its messages; each message is highlighted by where its text came from.</p>
     </>} />;
 }
 
@@ -1198,7 +1198,7 @@ const readHumanWhere: ReadWhere = (where, state) => {
   const read = readHumanLink(where, state.v === analysisVersion);
   if (!read.unsupported.length) return read;
   const selection = (term: WhereTerm) => predicatesOf(term).some(clause => clause.field === state.split);
-  return { where: read.where, notice: <>This older link’s {read.unsupported.some(selection) ? "legend selection and filters" : "filters"} on whole works cannot keep their meaning for messages, so they are left out: {read.unsupported.map(describeTerm).join("; ")}.</> };
+  return { where: read.where, notice: <>This older link’s {read.unsupported.some(selection) ? "legend selection and filters" : "filters"} on whole workspaces cannot keep their meaning for messages, so they are left out: {read.unsupported.map(describeTerm).join("; ")}.</> };
 };
 
 // The dashboard's population, whatever the chart draws.
@@ -1485,7 +1485,7 @@ function MCPSettingsPage() {
     <div className="mcp-setup-grid">
       <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Connection</h2><p className="muted">Add this stdio server in an agent client’s MCP settings. The client launches Pharos locally.</p></div><button type="button" disabled={!status} onClick={() => void copy("connection", connection)}>{copied === "connection" ? "Copied" : "Copy JSON"}</button></div><pre className="mcp-code"><code>{connection || (readErrors.status ? "Connection settings unavailable. Use Refresh to try again." : "Loading…")}</code></pre><p className="mcp-fineprint">Client settings formats vary. Use the command and args shown here if your client does not accept this JSON shape.</p></section>
       <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Prompt for an agent</h2><p className="muted">Paste this when asking an agent to add Pharos and use it efficiently.</p></div><button type="button" disabled={!status} onClick={() => void copy("prompt", prompt)}>{copied === "prompt" ? "Copied" : "Copy prompt"}</button></div><pre className="mcp-prompt">{prompt || (readErrors.status ? "Connection settings unavailable. Use Refresh to try again." : "Loading…")}</pre></section>
-      {status?.skill?.text ? <section className="mcp-card mcp-skill-card"><div className="mcp-card-heading"><div><h2>Skill for agents</h2><p className="muted">A short skill that teaches an agent to search prior coding sessions with Pharos, and to ask you to turn on MCP when it isn’t available. Save it as:</p></div><button type="button" onClick={() => void copy("skill", status.skill?.text ?? "")}>{copied === "skill" ? "Copied" : "Copy skill"}</button></div>
+      {status?.skill?.text ? <section className="mcp-card mcp-skill-card"><div className="mcp-card-heading"><div><h2>Skill for agents</h2><p className="muted">A short skill that teaches an agent to search past coding conversations with Pharos, and to ask you to turn on MCP when it isn’t available. Save it as:</p></div><button type="button" onClick={() => void copy("skill", status.skill?.text ?? "")}>{copied === "skill" ? "Copied" : "Copy skill"}</button></div>
         <ul className="mcp-skill-paths">{Object.entries(status.skill.paths ?? {}).map(([harness, where]) => <li key={harness}><span>{harness === "claude" ? "Claude Code" : harness === "codex" ? "Codex" : harness}</span><code>{where}</code></li>)}</ul>
         <pre className="mcp-prompt">{status.skill.text}</pre></section> : null}
     </div>
@@ -1530,9 +1530,9 @@ function ToolLedgerBanner() {
   if (!status || (!running && status.pending_conversations === 0 && !status.backfill.error)) return null;
   const percent = status.backfill.total ? Math.round(status.backfill.done / status.backfill.total * 100) : 0;
   return <div className="tool-ledger-banner" role="status">
-    {running ? <span>Building the tool ledger from retained transcripts: {status.backfill.done.toLocaleString()} of {status.backfill.total.toLocaleString()} conversations ({percent}%).</span>
-      : <span>{status.pending_conversations.toLocaleString()} of {status.conversations.toLocaleString()} conversations need a tool ledger rebuild. Building it re-reads their retained messages; no source files are needed.{status.backfill.error ? ` Last attempt failed: ${status.backfill.error}` : ""}</span>}
-    {running ? null : <button type="button" onClick={() => void build()}>Build tool ledger</button>}
+    {running ? <span>Building the tool index from saved transcripts: {status.backfill.done.toLocaleString()} of {status.backfill.total.toLocaleString()} conversations ({percent}%).</span>
+      : <span>{status.pending_conversations.toLocaleString()} of {status.conversations.toLocaleString()} conversations need their tool index rebuilt. Building it reads their saved messages; no source files are needed.{status.backfill.error ? ` Last attempt failed: ${status.backfill.error}` : ""}</span>}
+    {running ? null : <button type="button" onClick={() => void build()}>Build tool index</button>}
   </div>;
 }
 

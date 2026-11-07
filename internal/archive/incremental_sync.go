@@ -144,7 +144,8 @@ func (c *Catalog) syncSettings(ctx context.Context) (syncSettings, error) {
 }
 
 func automaticProvider(kind string) bool {
-	return slices.Contains([]string{"claude", "codex", "conductor", "antigravity"}, kind)
+	spec, ok := registeredKind(kind)
+	return ok && spec.Automatic
 }
 
 func (s *Server) autoSources(settings syncSettings) []SourceConfig {
