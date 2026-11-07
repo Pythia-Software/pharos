@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -254,6 +255,93 @@ func TestManifestPathsCannotLeaveTheCapture(t *testing.T) {
 			t.Errorf("%q was accepted", bad)
 		}
 	}
+	t.Run("view mapping destinations", func(t *testing.T) {
+		for _, bad := range []string{"", "/outside", "../outside", "files/../../outside", "files/../outside", "files//a", "files/a/",
+			"./files", "files/./a", `files\a`, `\outside`, `\\server\share`, "//server/share", "C:/outside", "C:outside", "C:", "files/a\x00b"} {
+			manifest := &captureManifest{Source: captureSourceInfo{Kind: "claude", Path: "/src"}, PathMap: []capturePathMapping{
+				{Original: "/src", Captured: bad}, {Original: "/valid", Captured: "source"},
+			}}
+			before := jsonText(manifest)
+			view := newCaptureView(Host{}, dir, manifest)
+			if got, ok := view.capturedSource(manifest.Source); ok || got != "" {
+				t.Errorf("destination %q mapped its required source: (%q, %v)", bad, got, ok)
+			}
+			if got, ok := view.captured("/valid/a"); !ok || got != filepath.Join(dir, "source", "a") {
+				t.Errorf("invalid destination %q dropped a valid temporary mapping: (%q, %v)", bad, got, ok)
+			}
+			if jsonText(manifest) != before {
+				t.Errorf("validation changed manifest containing %q", bad)
+			}
+		}
+	})
+	t.Run("suffix bounds", func(t *testing.T) {
+		for _, destination := range []string{"files", "source", "history/old.db", "."} {
+			view := newCaptureView(Host{}, dir, &captureManifest{PathMap: []capturePathMapping{{Original: "/src", Captured: destination}}})
+			mapped := filepath.Join(dir, filepath.FromSlash(destination))
+			for _, suffix := range []string{"..", "../outside", "a/../../outside", "//../outside", "a\x00b", "a\x00/../outside"} {
+				if got, ok := view.captured("/src/" + suffix); ok || got != "" {
+					t.Errorf("%q suffix %q escaped forward: (%q, %v)", destination, suffix, got, ok)
+				}
+				captured := mapped + string(filepath.Separator) + filepath.FromSlash(suffix)
+				if got := view.original(captured); got != captured {
+					t.Errorf("%q suffix %q escaped in reverse: %q", destination, suffix, got)
+				}
+			}
+			for _, suffix := range []string{`a\b`, "a:b", "C:/outside", "C:outside", "CON", "a/NUL"} {
+				got, ok := view.captured("/src/" + suffix)
+				if runtime.GOOS == "windows" {
+					if ok || got != "" {
+						t.Errorf("native unrepresentable suffix %q accepted: (%q, %v)", suffix, got, ok)
+					}
+				} else {
+					want := filepath.Join(mapped, suffix)
+					if !ok || got != want || view.original(want) != "/src/"+suffix {
+						t.Errorf("literal POSIX suffix %q changed: (%q, %v), reverse %q", suffix, got, ok, view.original(want))
+					}
+				}
+			}
+		}
+	})
+	t.Run("direct mapping outside view", func(t *testing.T) {
+		outside := filepath.Join(root, "outside.db")
+		view := &captureView{dir: dir, mappings: []capturePathMapping{{Original: "/src", Captured: outside}}}
+		if got, ok := view.captured("/src"); ok || got != "" {
+			t.Errorf("direct mapping escaped view: (%q, %v)", got, ok)
+		}
+		if got := view.original(outside); got != outside {
+			t.Errorf("reverse direct mapping escaped view: %q", got)
+		}
+	})
+	t.Run("evidence lookup and required root", func(t *testing.T) {
+		captureRoot := t.TempDir()
+		dir := filepath.Join(captureRoot, "host-a", "claude")
+		manifest := &captureManifest{Version: 1, Host: currentHost(), Source: captureSourceInfo{Name: "claude", Kind: "claude", Path: "/src"},
+			PathMap: []capturePathMapping{{Original: "/src", Captured: "files"}}}
+		writeSourceFile(t, filepath.Join(dir, captureManifestName), jsonText(manifest))
+		writeSourceFile(t, filepath.Join(dir, "outside"), "outside mapped root")
+		writeSourceFile(t, filepath.Join(dir, "files", "p", "s.jsonl"), "captured evidence")
+		if got, err := capturedPathIn(captureRoot, "host-a", "claude", "/src/p/s.jsonl"); err != nil || readText(t, got) != "captured evidence" {
+			t.Fatalf("valid evidence lookup: %q, %v", got, err)
+		}
+		for _, name := range []string{"/src/../outside", "/src/a/../../outside"} {
+			if got, err := capturedPathIn(captureRoot, "host-a", "claude", name); err == nil || got != "" {
+				t.Errorf("evidence lookup escaped mapping for %q: %q, %v", name, got, err)
+			}
+			manifest.Source.Path = name
+			writeSourceFile(t, filepath.Join(dir, captureManifestName), jsonText(manifest))
+			if _, _, _, err := openCaptureAdapter(captureTarget{Host: currentHost(), Source: "claude", Dir: dir}); err == nil || !strings.Contains(err.Error(), "does not map its source path") {
+				t.Errorf("unsafe required source %q opened an adapter: %v", name, err)
+			}
+		}
+		// The broader view constructor must not loosen persisted policy.
+		for _, destination := range []string{"source", "history/old.db", "."} {
+			manifest.PathMap[0].Captured = destination
+			writeSourceFile(t, filepath.Join(dir, captureManifestName), jsonText(manifest))
+			if _, err := loadCaptureManifest(dir); err == nil {
+				t.Errorf("persisted mapping %q bypassed files-only policy", destination)
+			}
+		}
+	})
 }
 
 func TestIndexMarkerSkipsSnapshotsReplacedWhileIndexing(t *testing.T) {

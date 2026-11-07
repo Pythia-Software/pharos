@@ -920,7 +920,7 @@ func copyStableAuditFile(ctx context.Context, path, destination string, info os.
 	return os.Chtimes(destination, info.ModTime(), info.ModTime())
 }
 
-var auditCategories = []string{"workspaces", "workspace_names", "conversations", "conversation_group_membership", "messages", "search", "conversation_documents", "agent_sessions", "agent_session_usage", "agent_session_messages", "model_requests", "tool_calls", "tool_commands", "tool_urls", "metrics", "metric_ledger", "summaries"}
+var auditCategories = []string{"workspaces", "workspace_names", "conversations", "conversation_group_membership", "messages", "search", "conversation_documents", "agent_sessions", "agent_session_usage", "agent_session_token_evidence", "agent_session_messages", "model_requests", "tool_calls", "tool_commands", "tool_urls", "metrics", "metric_ledger", "summaries"}
 var auditSearchWord = regexp.MustCompile(`[\p{L}\p{N}]{3,24}`)
 
 // Optional read-only probe observer; production leaves it nil.

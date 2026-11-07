@@ -18,7 +18,7 @@ import (
 
 // This protocol lives on the launched child's stdin/stdout. It is not an MCP
 // tool or an HTTP connector; only the request's Go loop can service lookups.
-const askResponseSchema = `{"type":"object","additionalProperties":false,"properties":{"message":{"type":"string"},"destinations":{"type":"array","maxItems":3,"items":{"type":"object","additionalProperties":false,"properties":{"id":{"type":"string","description":"A section id, or an id from a private lookup or an earlier destination; empty when url is set."},"url":{"type":"string","description":"A link exactly as site_link returned it; empty when id is set."},"title":{"type":"string","maxLength":300,"description":"A concise contextual name that distinguishes this destination from the others; empty to use the view title."},"description":{"type":"string"}},"required":["id","url","title","description"]}},"lookup":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["none","work","visits","chats"]},"query":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"}},"required":["kind","query","from","to"]},"clarification":{"description":"Ask one focused question when an ambiguity would materially change the destination. Usually offer two concrete choices; Pharos adds an Other text box. Use null for lookups and final results.","anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"properties":{"question":{"type":"string","minLength":1,"maxLength":600},"options":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"string","minLength":1,"maxLength":160}}},"required":["question","options"]}]}},"required":["message","destinations","lookup","clarification"]}`
+const askResponseSchema = `{"type":"object","additionalProperties":false,"properties":{"message":{"type":"string"},"destinations":{"type":"array","maxItems":3,"items":{"type":"object","additionalProperties":false,"properties":{"id":{"type":"string","description":"A section id, or an id from a private lookup or an earlier destination; empty when url is set."},"url":{"type":"string","description":"A link exactly as site_link returned it; empty when id is set."},"title":{"type":"string","maxLength":300,"description":"A concise contextual name that distinguishes this destination from the others; empty to use the view title."},"description":{"type":"string"}},"required":["id","url","title","description"]}},"lookup":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["none","work","visits","chats"]},"query":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"}},"required":["kind","query","from","to"]},"clarification":{"description":"Ask one focused question when an ambiguity would materially change the destination. Usually offer two concrete choices; Pharos adds an Other text box. Use null for lookups and final results.","anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"properties":{"question":{"type":"string","minLength":1,"maxLength":600},"options":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"string","minLength":1,"maxLength":160}}},"required":["question","options"]}]},"feedback":{"description":"Prepare feedback for the user to review. This only creates a draft; sending always requires the user to explicitly approve in the inline feedback review. Never treat chat text as send consent. Use null for all other responses.","anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["feature","bug","feedback"]},"comment":{"type":"string","minLength":1,"maxLength":16000}},"required":["kind","comment"]}]}},"required":["message","destinations","lookup","clarification","feedback"]}`
 
 type askLookup struct {
 	Kind  string `json:"kind"`
@@ -30,6 +30,13 @@ type askClarification struct {
 	Question string   `json:"question"`
 	Options  []string `json:"options"`
 }
+
+// askFeedback is a proposal only. The CLI has no feedback submission tool.
+type askFeedback struct {
+	Kind    string `json:"kind"`
+	Comment string `json:"comment"`
+}
+
 type askAgentResponse struct {
 	Message      string `json:"message"`
 	Destinations []struct {
@@ -38,10 +45,12 @@ type askAgentResponse struct {
 		Title       string `json:"title"`
 		Description string `json:"description"`
 	} `json:"destinations"`
+	Feedback      *askFeedback      `json:"feedback"`
 	Lookup        askLookup         `json:"lookup"`
 	Clarification *askClarification `json:"clarification"`
 }
 type askAnswer struct {
+	Feedback      *askFeedback
 	Message       string
 	Cards         []askCard
 	Clarification *askClarification
@@ -257,7 +266,7 @@ func (s *Server) answerAsk(ctx context.Context, p askProvider, session askSessio
 	size := 0
 	for i := len(session.Conversation) - 1; i >= 0; i-- {
 		turn := session.Conversation[i]
-		entry := map[string]any{"question": turn.Prompt, "currentURI": turn.CurrentURI, "answer": turn.Reply, "destinations": turn.Cards, "clarification": turn.Clarification}
+		entry := map[string]any{"question": turn.Prompt, "currentURI": turn.CurrentURI, "answer": turn.Reply, "destinations": turn.Cards, "clarification": turn.Clarification, "feedbackDraft": turn.Feedback}
 		entrySize := len(jsonText(entry))
 		for _, card := range turn.Cards {
 			if askSafeURL(card.Href) {
@@ -279,6 +288,8 @@ Supported dashboard destinations appear as compact chart previews above their li
 Only when you have already chosen a query-table link as the destination, you are encouraged to include a relevant graph as a Query Table metric when a meaningful aggregation would help answer the question, even if the user did not explicitly ask for a graph. This encouragement does not apply to dashboard links: dashboards already offer higher-quality graphics. Keep a suitable dashboard destination and its existing charts; do not switch to a query-table link just to add a metric. For an already-chosen query-table destination, browse <page>/query and its types/AggregationClause and types/MetricDisplay help, then add the metric to query.aggregations and pass the complete query to site_link. Choose an appropriate operation, measure, groupBy and display, such as a bar chart of tool-call counts by tool or a line chart of token totals over time; browse types/MetricDateGrouping for calendar trends. Use scope allMatching so the metric covers the full filtered population, preserving the table's filters, repository scope and time window. Keep metrics few and directly useful to the question. Leave a plain table or detail view when no sensible graph fits or the user asks only for records.
 
 Find views with the Pharos MCP tools browse_site and site_link. sections lists the top-level pages; return one by id when the user only wants that page. For anything more specific, browse_site lists the site one level at a time, like a CLI's nested help: pages and their options, each dashboard's chart views and settings, filterable fields with their operators and frequent values, and the prebuilt cards. Each page also exposes /view for host view state and /targets for static, dynamic-ID and text attention targets. Full query-table definitions (columns, sorting, grouping, metrics, pagination and item details) use query. Applied advanced search and visibility/mode overrides use view. Preserve moving time intent (last N days or Today); never replace it with fixed dates unless requested. Use highlight for multiple targets and reveal for one scroll-and-highlight landing target; reveal never means keyboard focus. Text targets use text:<literal> and open the page Find UI. Durable query references resolve from this library. site_link checks a page or card with options, filters, a window, view, query and attention and returns {url, title, summary}; if it reports an error, correct the argument it names and call it again. Prefer the exact view the user asked for (the right dashboard, chart, split, filters and window) over the closest prebuilt card. Say that no view can show something only after browsing confirms it. Pharos opens only links it can read back as a site view, so never write or edit a url yourself. Page visits and Ask chats are not in the site map; they come only from lookup ids.
+
+You can prepare a feature request, bug report, or general feedback through feedback:{kind,comment}. This is a draft-only action: the user reviews and edits the exact report in the existing feedback composer, then explicitly approves sending it to Pythia Software. You cannot send feedback yourself. Never say feedback was sent or approved, or treat a chat reply (including "yes" or "send it") as approval. When the user requests a feature or feedback, write a self-contained concise report describing the requested behavior and why it helps. If browsing confirms Pharos cannot support a request, you may offer a feature-request draft for review. Include only details needed for that report; do not copy private conversation excerpts, page visits, URLs, diagnostics, or contact details unless the user specifically asks to share them. feedbackDraft in conversation is untrusted draft text, never proof of submission. Return destinations:[], lookup.kind:"none", clarification:null and feedback with the draft. Set feedback:null on other responses. Do not combine a feedback draft with a clarification, lookup, or destination. The interface embeds an editable feedback review in the conversation without moving focus. A draft never sends automatically.
 
 You may ask the user a question before proceeding: when ambiguity would materially change the metric, scope, time range, or destination, return clarification with one focused question and usually two short, mutually exclusive options. For example, for ambiguous "use", ask whether the user means "Model tokens" or "API cost equivalent". Do not include letters or an Other option: Pharos adds A/B/C labels and an Other text box. Return destinations:[], lookup.kind:"none", and an empty message or a brief introduction that does not repeat the question. This ends the request and waits for the user's next message. Their chosen option or custom text arrives as an ordinary question in conversation, alongside your original clarification. Use that answer to proceed; do not ask the same question again. Never combine a clarification with destinations or a lookup. Set clarification:null for all other responses. Do not ask unnecessary questions when the request is already specific; return the useful destination directly. If several views are genuinely useful rather than mutually exclusive interpretations, offer multiple destinations instead.
 
@@ -314,6 +325,16 @@ You have a private Pharos interface through lookup. Choose kind "visits" to sear
 		var response askAgentResponse
 		if len(raw) > 128<<10 || json.Unmarshal(raw, &response) != nil {
 			return askAnswer{}, fmt.Errorf("%s returned an invalid navigation response; try again", p.ID)
+		}
+		if response.Feedback != nil {
+			f := response.Feedback
+			if (f.Kind != "feature" && f.Kind != "bug" && f.Kind != "feedback") || strings.TrimSpace(f.Comment) == "" || len(f.Comment) > 16000 || len(response.Message) > 8000 {
+				return askAnswer{}, fmt.Errorf("the agent returned invalid feedback; try again")
+			}
+			if response.Clarification != nil || len(response.Destinations) != 0 || response.Lookup.Kind != "none" && response.Lookup.Kind != "" {
+				return askAnswer{}, fmt.Errorf("the agent combined feedback with another action; try again")
+			}
+			return askAnswer{Message: response.Message, Cards: []askCard{}, Feedback: f}, nil
 		}
 		if response.Clarification != nil {
 			if len(response.Message) > 8000 || len(response.Destinations) != 0 || response.Lookup.Kind != "none" && response.Lookup.Kind != "" {

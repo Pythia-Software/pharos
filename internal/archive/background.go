@@ -102,6 +102,8 @@ var backgroundItems = []backgroundItem{
 		Kinds: []string{"index.changes.automatic"}, Why: "It reads only what changed since the last check."},
 	{ID: "search", Label: "Search", Verb: "Updating search", Feeds: "Search and the Library", Cadence: cadenceFrequent, Fixed: true, continuous: true,
 		Why: "It updates the conversations that changed, as soon as they are added."},
+	{ID: "fingerprints", Label: "Conversation fingerprints", Verb: "Rendering conversation fingerprints", Feeds: "Fingerprint columns and conversation cards", Cadence: cadenceFrequent, continuous: true,
+		Kinds: []string{"maintenance.fingerprints"}, Why: "Prepares compact images in the background and refreshes them when their messages, labels, events or tools change."},
 	{ID: "other-sources", Label: "Other sources", Verb: "Reading other sources", Feeds: "Their pages, such as TL1", Cadence: cadenceHourly, readsWholeSources: true,
 		Kinds: []string{"background.capture/sources"}, Why: "These sources can’t be checked for small changes, so each update reads them in full."},
 	{ID: "preserve", Label: "Preserve originals", Verb: "Preserving originals", Feeds: "Recovery, and history from your other Macs", Cadence: cadenceDaily,

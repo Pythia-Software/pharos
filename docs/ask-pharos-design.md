@@ -218,6 +218,50 @@ Other text survives reloads. Only the latest question's controls accept answers;
 older questions remain visible in the transcript. The agent should ask only when
 needed, then proceed once the ambiguity has been resolved.
 
+Ask Pharos can also return a `feedback` draft (`kind`: feature, bug, or feedback;
+`comment`: up to 16,000 bytes). It is mutually exclusive with destinations,
+clarifications, and private lookups. The draft persists and is indexed with the
+visible conversation. This ends the CLI request without sending anything.
+
+The existing feedback composer is embedded directly in the conversation, without
+opening a dialog or moving keyboard focus. The user edits the report there and
+explicitly chooses **Approve and send feedback** to submit to Pythia Software.
+Chat text, including “yes” or “send it”, never grants submission
+consent. Enter in another form field cannot submit an Ask proposal. The CLI's
+MCP access remains read-only and has no feedback submission capability.
+
+Each proposal has separate browser draft, review, pending-submission and receipt
+storage. It does not import manual feedback drafts, annotations, screenshots,
+or diagnostic logs. Logs are opt-in; the optional contact email is visible and
+editable before approval. **Keep draft** or pressing Escape within the review
+collapses it without sending; **Review feedback** restores the editor.
+**Discard draft** removes this proposal's local edits, review, and pending report,
+and records a tombstone so restoring the chat cannot resurrect it. The tombstone
+and autosave guard share an IndexedDB transaction to prevent delayed saves from
+recreating discarded data. Discard does not remove confirmed receipts or retract
+an earlier submission. Failures preserve the draft and unchanged retries reuse
+the submission ID.
+Only a matching confirmed receipt marks delivery. The proposal owns the active
+send independently of its editor, so switching chats reconnects to that same
+operation. Approval atomically checks saved receipts, discards and pending IDs
+before preparing a submission, including from a stale editor in another tab.
+Receipt persistence and pending/draft cleanup commit together. Receipts retain
+the submitted kind and text, so a restored sent summary shows the approved report
+rather than the generated proposal. Older ID-only receipts omit unavailable
+report text. Reopening a confirmed proposal shows its receipt rather than
+sending again. The agent receives the proposed
+text as draft context, never as evidence that it was approved or sent.
+
+The UI embedding boundary uses a mount function that returns a disposer, matching
+Ask's existing link previews. This allows each action to reuse a normal React
+interface without rebuilding the conversation shell. The current proposal
+schema, Go validation, browser storage and executor remain feedback-specific.
+Future actions should each have a typed proposal, explicit validation, a review
+interface and a narrowly scoped executor reached only through affirmative user
+consent. When adding a second action, extract the shared draft/terminal-state,
+keyboard and receipt lifecycle rather than copying the feedback composer or
+allowing arbitrary agent-supplied component names, URLs or commands.
+
 Each suggestion card has a smooth ribbon on one corner or two opposite corners;
 never decorate adjacent corners. Vary the curvature and color orientation between
 ribbons. Keep these choices stable during resizing, theme changes, and carousel
@@ -330,6 +374,13 @@ disabled; Claude runs without native tools, hooks, session persistence, or
 inherited MCP configuration; Antigravity uses a dedicated navigation agent,
 plan mode and its terminal sandbox. No adapter uses permission-bypass flags.
 Provider login remains the CLI's responsibility; Pharos accepts no API keys.
+
+Before inference, draft and question saves have a ten-second catalog-write
+deadline. A busy catalog returns a retryable explanation rather than leaving
+the composer waiting indefinitely before the CLI starts. Visit-history writes
+use that same deadline and run without Ask's chat-state lock, so they cannot
+block starting or canceling a question. Status, history and suggestion reads
+also run independently of that lock.
 
 Every inference launch explicitly connects the read-only Pharos MCP server for
 the current library using the same executable and configuration as Settings →

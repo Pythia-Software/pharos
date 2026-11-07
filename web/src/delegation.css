@@ -1153,3 +1153,5 @@ button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--
 .without-events .lt-session-node>summary,.without-events .lt-session-row,.without-events .delegation-axis.lt-resizable-axis{grid-template-columns:var(--lt-execution) var(--lt-time)}
 .delegation-ancestor .lt-session-identity:not(.is-interactive):not([aria-current="true"]) strong{color:var(--muted)}
 .delegation-parallel.is-preview .delegation-lane-scroll{border:1px solid var(--line);border-radius:4px}
+
+.delegation-token-evidence { color: var(--muted); font-size: var(--fs-sm); margin: 8px 0; max-width: 85ch; }

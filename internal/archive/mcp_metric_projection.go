@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const metricProjectionVersion = "metrics-v2-stored-sessions"
+const metricProjectionVersion = "metrics-v4-consuming-layer-leaves"
 
 // Projections are invalidated by authoritative table writes, never by MCP audit
 // writes. Publication takes the writer lock before reading, so concurrent ingest
@@ -238,22 +238,18 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 		if err != nil {
 			return err
 		}
-		ownUsage := []map[string]any{}
-		hasChildren := false
-		for _, u := range usage {
-			if firstString(u["native_id"]) != "main" {
-				hasChildren = true
-			}
-		}
-		var childExists bool
-		if err = tx.QueryRowContext(ctx, childConversationQuery, cid).Scan(&childExists); err != nil {
+		// Aggregate usage belongs to the owner when there are no delegates that
+		// could share it. Include navigation placeholders and external children.
+		var hasDelegates bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE conversation_id=? AND native_id<>'main')
+			OR (`+childConversationQuery+`)`, cid, cid).Scan(&hasDelegates); err != nil {
 			return err
 		}
-		hasChildren = hasChildren || childExists
+		ownUsage := []map[string]any{}
 		unassigned := false
 		for _, u := range usage {
 			if firstString(u["native_id"]) == "main" {
-				if firstString(conv["provider"]) == "claude" && hasChildren && firstString(u["attribution"]) == "session-remainder" {
+				if hasDelegates && strings.HasSuffix(firstString(u["attribution"]), "-remainder") {
 					unassigned = true
 					continue
 				}
@@ -394,7 +390,7 @@ func metricFallback(ctx context.Context, tx *sql.Tx, workspace, cid string, valu
 	seen := map[string]bool{}
 	for _, row := range rows {
 		name := firstString(row["name"])
-		if seen[name] || values[name].Value != nil && (cid != "" || values[name].Status == "complete") {
+		if seen[name] || values[name].Status == "unattributable" || values[name].Value != nil && (cid != "" || values[name].Status == "complete") {
 			continue
 		}
 		seen[name] = true

@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -102,6 +103,69 @@ func TestTokenUsageFixtures(t *testing.T) {
 }
 
 func TestNestedSubagentsArePersistedWithCostDimensions(t *testing.T) {
+	t.Run("structured Agent result fallback", func(t *testing.T) {
+		launch := MessageRecord{NativeID: "launch", Kind: "delegation", CallID: "child", Model: "claude-opus-5", Text: `{"tool":"Agent","input":{"model":"sonnet"}}`}
+		result := MessageRecord{NativeID: "handback", Kind: "delegation_result", CallID: "child", Model: "claude-opus-5", CreatedAt: "2026-08-05T13:17:21Z", Text: `{"details":{"status":"completed","totalToolUseCount":0,"totalTokens":110,"usage":{"input_tokens":5,"cache_read_input_tokens":90,"cache_creation_input_tokens":5,"output_tokens":10}},"content":"Finished"}`}
+		request := MessageRecord{NativeID: "request", ParentNativeID: "child", Text: `{"type":"assistant","message":{"id":"request","usage":{"input_tokens":200,"output_tokens":20}}}`}
+		for _, check := range []struct {
+			name     string
+			messages []MessageRecord
+			want     float64
+		}{
+			{"result only", []MessageRecord{launch, result}, 110},
+			{"duplicate result", []MessageRecord{launch, result, result}, 110},
+			{"request already retained", []MessageRecord{launch, request, result}, 220},
+			{"task total already retained", []MessageRecord{launch, result, {Text: `{"type":"system","subtype":"task_notification","tool_use_id":"child","usage":{"total_tokens":300}}`}}, 300},
+			{"SDK aggregate includes child", []MessageRecord{launch, result, {Text: `{"type":"result","usage":{"total_tokens":150}}`}}, 150},
+			{"ordinary tool output", []MessageRecord{launch, {Kind: "tool_result", CallID: "child", Text: result.Text}}, 0},
+			{"unproved child identity", []MessageRecord{result}, 0},
+			{"multi-step result is only a last request", []MessageRecord{launch, {Kind: "delegation_result", CallID: "child", Text: strings.Replace(result.Text, `"totalToolUseCount":0`, `"totalToolUseCount":12`, 1)}}, 0},
+			{"incomplete result", []MessageRecord{launch, {Kind: "delegation_result", CallID: "child", Text: strings.Replace(result.Text, `"completed"`, `"async_launched"`, 1)}}, 0},
+			{"inconsistent result counters", []MessageRecord{launch, {Kind: "delegation_result", CallID: "child", Text: strings.Replace(result.Text, `"totalTokens":110`, `"totalTokens":999`, 1)}}, 0},
+			{"quoted usage", []MessageRecord{launch, {Kind: "delegation_result", CallID: "child", Text: `{"content":"{\"details\":{\"usage\":{\"total_tokens\":999}}}"}`}}, 0},
+			{"parent launch usage stays parent", []MessageRecord{{Kind: "delegation", CallID: "child", Text: `{"type":"assistant","message":{"usage":{"input_tokens":2,"cache_read_input_tokens":16751,"cache_creation_input_tokens":3137,"output_tokens":3}}}`}}, 19893},
+		} {
+			t.Run(check.name, func(t *testing.T) {
+				if got := conversationTokenCounts(check.messages)["total_tokens"]; got != check.want {
+					t.Fatalf("tokens = %v, want %v", got, check.want)
+				}
+			})
+		}
+		summaries := agentSessionSummaries([]MessageRecord{launch, result})
+		if len(summaries) != 2 || summaries[0].counts["total_tokens"] != 0 || summaries[1].counts["total_tokens"] != 110 {
+			t.Fatalf("result belongs to child: %#v", summaries)
+		}
+		for bucket, counts := range summaries[1].usage {
+			if bucket.model != "sonnet" || bucket.hour != "2026-08-05T13:00:00Z" || counts["uncached_input_tokens"] != 5 || counts["cache_read_input_tokens"] != 90 || counts["cache_creation_input_tokens"] != 5 || counts["output_tokens"] != 10 {
+				t.Fatalf("result dimensions = %#v %#v", bucket, counts)
+			}
+		}
+		// A resume inherits the original agent, not a later parent model.
+		original := launch
+		original.CallID, original.NativeID = "original", "original-launch"
+		originalResult := MessageRecord{Kind: "delegation_result", CallID: "original", Text: `{"details":{"agentId":"agent-a","status":"async_launched"}}`}
+		resume := launch
+		resume.Text = `{"tool":"Agent","input":{"resume":"agent-a"}}`
+		for _, summary := range agentSessionSummaries([]MessageRecord{original, originalResult, resume, result}) {
+			if summary.nativeID == "child" {
+				for bucket := range summary.usage {
+					if bucket.model != "sonnet" {
+						t.Fatalf("resume model = %q, want original sonnet", bucket.model)
+					}
+				}
+			}
+		}
+		claim := MessageRecord{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","modelUsage":{"claude-opus-5":{"inputTokens":100,"outputTokens":10},"claude-sonnet-5":{"inputTokens":5,"cacheReadInputTokens":90,"cacheCreationInputTokens":5,"outputTokens":10}}}`}
+		for _, summary := range agentSessionSummaries([]MessageRecord{launch, result, claim}) {
+			if summary.nativeID == "main" {
+				for bucket, counts := range summary.usage {
+					if counts["total_tokens"] > 0 && bucket.model != "claude-opus-5" {
+						t.Fatalf("SDK remainder lost its model after child alias subtraction: %q", bucket.model)
+					}
+				}
+			}
+		}
+	})
 	catalog, _ := testCatalog(t)
 	nestedCheckpoints := []MessageRecord{
 		{NativeID: "outer-call", Kind: "delegation", CallID: "outer", Text: `{}`},
@@ -185,6 +249,34 @@ func TestNestedSubagentsArePersistedWithCostDimensions(t *testing.T) {
 }
 
 func TestUsageBucketsWithMissingAndExplicitModelCoalesce(t *testing.T) {
+	t.Run("aggregate source models survive synthetic replies", func(t *testing.T) {
+		claim := MessageRecord{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","modelUsage":{"claude-opus-5":{"inputTokens":100,"outputTokens":10},"claude-haiku-5-5":{"inputTokens":50,"outputTokens":5}}}`}
+		request := MessageRecord{Kind: "metadata", Model: "claude-opus-5", Text: `{"type":"assistant","message":{"id":"request","usage":{"input_tokens":60,"output_tokens":5}}}`}
+		for _, check := range []struct {
+			name     string
+			messages []MessageRecord
+			want     map[string]float64
+		}{
+			{"only aggregate", []MessageRecord{claim}, map[string]float64{"claude-opus-5": 110, "claude-haiku-5-5": 55}},
+			{"retained request and aggregate", []MessageRecord{request, claim}, map[string]float64{"claude-opus-5": 110, "claude-haiku-5-5": 55}},
+			{"cumulative aggregates", []MessageRecord{claim, {Kind: "result", Model: "<synthetic>", Text: `{"type":"result","modelUsage":{"claude-opus-5":{"inputTokens":200,"outputTokens":20},"claude-haiku-5-5":{"inputTokens":100,"outputTokens":10}}}`}}, map[string]float64{"claude-opus-5": 220, "claude-haiku-5-5": 110}},
+			{"unmatched request model stays unpriced", []MessageRecord{{Kind: "metadata", Text: request.Text}, claim}, map[string]float64{"": 65, "<synthetic>": 100}},
+			{"one model with cache TTL", []MessageRecord{{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":5,"output_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":20}},"modelUsage":{"claude-opus-5":{"inputTokens":5,"outputTokens":10,"cacheCreationInputTokens":20}}}`}}, map[string]float64{"claude-opus-5": 35}},
+			{"model identity without redundant counters", []MessageRecord{{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":5,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":200000}}}`}}, map[string]float64{"claude-opus-5": 15}},
+		} {
+			t.Run(check.name, func(t *testing.T) {
+				got := map[string]float64{}
+				for _, summary := range agentSessionSummaries(check.messages) {
+					for bucket, counts := range summary.usage {
+						got[bucket.model] += counts["total_tokens"]
+					}
+				}
+				if jsonText(got) != jsonText(check.want) {
+					t.Fatalf("model usage = %v, want %v", got, check.want)
+				}
+			})
+		}
+	})
 	catalog, _ := testCatalog(t)
 	record := WorkspaceRecord{SourceID: "usage-model", SourceKind: "codex", Account: "local", Conversations: []ConversationRecord{{
 		NativeID: "usage-model", Provider: "codex", Model: "gpt-test", Account: "local",
@@ -252,5 +344,143 @@ func TestQuotedContinuationMarkerKeepsCounterPrefix(t *testing.T) {
 		if got := conversationTokenCounts([]MessageRecord{quoted, count(1100, 100), count(1300, 200)}); got["total_tokens"] != 1300 {
 			t.Fatalf("%s %s: got %v; want 1300", quoted.Role, quoted.Kind, got)
 		}
+	}
+}
+
+func agentFooterResult(total int64) string {
+	footer := fmt.Sprintf("agentId: agent-one (use SendMessage with to: 'agent-one', summary: '<5-10 word recap>' to continue this agent)\n<usage>subagent_tokens: %d\ntool_uses: 83\nduration_ms: 835048</usage>", total)
+	return jsonText(map[string]any{"content": []any{map[string]any{"type": "text", "text": "Report"}, map[string]any{"type": "text", "text": footer}}, "is_error": false})
+}
+
+func TestNestedAgentTokenEvidence(t *testing.T) {
+	launch := MessageRecord{NativeID: "launch", Kind: "delegation", CallID: "child", Text: `{"tool":"Agent","input":{}}`}
+	result := MessageRecord{NativeID: "result", Kind: "delegation_result", CallID: "child", Text: agentFooterResult(116837)}
+	for _, check := range []struct {
+		name           string
+		launch, result MessageRecord
+		want           int
+	}{
+		{"harness footer", launch, result, 1},
+		{"ordinary tool", MessageRecord{Kind: "delegation", CallID: "child", Text: `{"tool":"Read"}`}, result, 0},
+		{"not delegated", MessageRecord{}, result, 0},
+		{"ordinary output", launch, MessageRecord{Kind: "tool_result", CallID: "child", Text: result.Text}, 0},
+		{"quoted footer", launch, MessageRecord{Kind: "delegation_result", CallID: "child", Text: jsonText(map[string]any{"content": result.Text})}, 0},
+		{"prose prefix", launch, MessageRecord{Kind: "delegation_result", CallID: "child", Text: strings.Replace(result.Text, "agentId:", "Here is an example: agentId:", 1)}, 0},
+		{"wrong resume", MessageRecord{Kind: "delegation", CallID: "child", Text: `{"tool":"Agent","input":{"resume":"other"}}`}, result, 0},
+		{"identity mismatch", launch, MessageRecord{Kind: "delegation_result", CallID: "child", Text: strings.Replace(result.Text, `"is_error":false`, `"details":{"agentId":"other"},"is_error":false`, 1)}, 0},
+		{"duplicate footer", launch, MessageRecord{Kind: "delegation_result", CallID: "child", Text: strings.Replace(result.Text, `"Report"`, `"<usage>subagent_tokens: 9"`, 1)}, 0},
+		{"zero", launch, MessageRecord{Kind: "delegation_result", CallID: "child", Text: agentFooterResult(0)}, 0},
+		{"overflow", launch, MessageRecord{Kind: "delegation_result", CallID: "child", Text: strings.Replace(result.Text, "116837", "99999999999999999999999", 1)}, 0},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			messages := []MessageRecord{check.launch, check.result}
+			if evidence := conversationTokenEvidence(messages); len(evidence) != check.want {
+				t.Fatalf("evidence = %+v, want %d", evidence, check.want)
+			}
+			if got := conversationTokenCounts(messages)["total_tokens"]; got != 0 {
+				t.Fatalf("untyped observation entered accounting: %v", got)
+			}
+		})
+	}
+	c, _ := testCatalog(t)
+	if err := c.replacePricing(testPricing(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	messages := []MessageRecord{launch, result, {NativeID: "aggregate", Kind: "result", CreatedAt: "2026-07-02T00:00:00Z", Text: `{"type":"result","usage":{"input_tokens":199990,"output_tokens":10}}`}}
+	record := WorkspaceRecord{SourceID: "scoped", SourceKind: "canonical", Account: "local", Title: "Scoped usage", Conversations: []ConversationRecord{{NativeID: "scoped", Provider: "codex", Account: "local", Model: "gpt-5.5", Messages: messages}}}
+	tx, err := c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = ingestWorkspace(tx, record, false); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	workspace := stableID("workspace", "canonical", "local", "scoped")
+	s, err := c.delegationSnapshot(context.Background(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var child, root *delegationNode
+	for _, n := range s.Nodes {
+		if n.TokenAttribution != nil && n.TokenAttribution.Observed > 0 {
+			child = n
+		} else {
+			root = n
+		}
+	}
+	if child == nil || root == nil {
+		t.Fatalf("nodes=%+v", s.Nodes)
+	}
+	if child.Self["tokens"].Value == nil || *child.Self["tokens"].Value != 116837 || child.Self["tokens"].Quality != "reported-minimum" || child.Self["cost"].Value != nil {
+		t.Fatalf("child=%+v", child)
+	}
+	if root.Self["tokens"].Value != nil || root.TokenAttribution.Unallocated != 200000 || root.Self["cost"].Value != nil {
+		t.Fatalf("aggregate ascribed to parent self: %+v", root)
+	}
+	if *s.Totals["tokens"].Value != 200000 || *root.All["tokens"].Value != 200000 || root.All["cost"].Value == nil {
+		t.Fatalf("overlapping evidence inflated totals: %+v", s.Totals)
+	}
+	var ledger int64
+	if err = c.DB.QueryRow(`SELECT SUM(total_tokens) FROM agent_session_usage`).Scan(&ledger); err != nil || ledger != 200000 {
+		t.Fatalf("ledger=%d %v", ledger, err)
+	}
+	// Membership refresh preserves the separate evidence, and repair also
+	// handles non-Claude workspaces. A later source correction removes it.
+	var conversation string
+	if err = c.DB.QueryRow(`SELECT id FROM conversations WHERE workspace_id=?`, workspace).Scan(&conversation); err != nil {
+		t.Fatal(err)
+	}
+	tx, err = c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = refreshAgentSessionMembership(tx, workspace, conversation, record.Conversations[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.DB.Exec(`DELETE FROM usage_attribution_state`); err != nil {
+		t.Fatal(err)
+	}
+	if repaired, err := c.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 1 {
+		t.Fatalf("repair=%d %v", repaired, err)
+	}
+	var observations int
+	if err = c.DB.QueryRow(`SELECT COUNT(*) FROM agent_session_token_evidence`).Scan(&observations); err != nil || observations != 1 {
+		t.Fatalf("evidence=%d %v", observations, err)
+	}
+	if _, err = c.DB.Exec(`DELETE FROM agent_sessions WHERE native_id='child'`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err = c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = refreshAgentSessionMembership(tx, workspace, conversation, record.Conversations[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.DB.QueryRow(`SELECT COUNT(*) FROM agent_session_token_evidence`).Scan(&observations); err != nil || observations != 1 {
+		t.Fatalf("newly materialized session lost evidence: %d %v", observations, err)
+	}
+	tx, err = c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Conversations[0].Messages[1].Text = `{"content":[]}`
+	if err = replaceAgentSessions(tx, workspace, conversation, record.Conversations[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.DB.QueryRow(`SELECT COUNT(*) FROM agent_session_token_evidence`).Scan(&observations); err != nil || observations != 0 {
+		t.Fatalf("stale evidence=%d %v", observations, err)
 	}
 }

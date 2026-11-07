@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS sync_generations (
 );
 CREATE TABLE IF NOT EXISTS conversation_derivation_inputs (
   conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
-  fingerprint TEXT NOT NULL
+  fingerprint TEXT NOT NULL,
+  child_usage TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS repositories (
@@ -411,6 +412,16 @@ CREATE TABLE IF NOT EXISTS agent_session_usage (
   PRIMARY KEY(agent_session_id, usage_hour, model, effort, attribution)
 );
 CREATE INDEX IF NOT EXISTS agent_session_usage_hour_idx ON agent_session_usage(usage_hour);
+-- Scoped observations that cannot enter the categorized/priced usage ledger.
+-- The same last-request counter may be repeated in result copies; consumers
+-- take its maximum per session, never sum it with overlapping request usage.
+CREATE TABLE IF NOT EXISTS agent_session_token_evidence (
+  agent_session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL,
+  total_tokens INTEGER NOT NULL CHECK(total_tokens > 0),
+  PRIMARY KEY(agent_session_id, message_id, scope)
+);
 CREATE TABLE IF NOT EXISTS usage_attribution_state (
   workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
   version TEXT NOT NULL

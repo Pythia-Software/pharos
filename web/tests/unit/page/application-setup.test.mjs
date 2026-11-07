@@ -223,3 +223,22 @@ test('library settings resolves local and external destinations and rejects inva
   assert.throws(()=>pharosLibraryProposal('Research','relative/path','mac'),/absolute/);
   assert.throws(()=>pharosLibraryProposal('Research','','network'),/store/);
 });
+
+test('startup folder choices use the host adapter or service picker and always restore the initiating control', async () => {
+  const page=readFileSync(join(assets,'application.html'),'utf8');
+  const picker=page.slice(page.indexOf('async function pickFolder('),page.indexOf("\n$('choose-folder').onclick"));
+  for(const native of [true,false]) for(const result of ['/Volumes/Archive',null,new Error('Picker unavailable')]) {
+    const field={value:'/manual/path'},button={disabled:false,focus(){this.focused=true;}},busy={disabled:true};
+    const calls=[];
+    const window={pharosHost:{capabilities:{folders:{available:native}},folders:{chooseLibraryFolder:async()=>{calls.push('host');if(result instanceof Error)throw result;return result;}}}};
+    const model=vm.runInNewContext(picker+';({pickFolder})',{
+      window,$:id=>id==='library-form'?{querySelectorAll:()=>[button,busy]}:field,
+      notice(){},updateLibraryProposal(){},call:async(action,body)=>{calls.push([action,plain(body)]);if(result instanceof Error)throw result;return {path:result};},
+    });
+    if(result instanceof Error)await assert.rejects(model.pickFolder('path',button),/Picker unavailable/);
+    else await model.pickFolder('path',button);
+    assert.equal(field.value,typeof result==='string'?result:'/manual/path');
+    assert.deepEqual(calls,native?['host']:[['choose-folder',{}]]);
+    assert.equal(button.disabled,false);assert.equal(busy.disabled,true);assert.equal(button.focused,true);
+  }
+});

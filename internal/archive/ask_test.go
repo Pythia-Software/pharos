@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -68,6 +69,99 @@ func askReply(ids ...string) []byte {
 		choices = append(choices, map[string]string{"id": id, "description": "Explore the recorded evidence."})
 	}
 	return []byte(jsonText(map[string]any{"message": "Here are useful places to look.", "destinations": choices, "lookup": askLookup{Kind: "none"}, "clarification": nil}))
+}
+
+func TestAskFeedbackDraftConversation(t *testing.T) {
+	s := askTestServer(t)
+	askEnable(t, s)
+	var sends atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sends.Add(1)
+		t.Error("Ask must not submit feedback")
+	}))
+	defer upstream.Close()
+	t.Setenv("PHAROS_FEEDBACK_URL", upstream.URL)
+	proposal := &askFeedback{Kind: "feature", Comment: "Add export of selected conversations to Markdown so I can share a review."}
+	calls := 0
+	override(t, &askRunCLI, func(ctx context.Context, provider askProvider, selection askSelection, prompt string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return []byte(jsonText(askAgentResponse{Feedback: proposal, Lookup: askLookup{Kind: "none"}})), nil
+		}
+		_, raw, _ := strings.Cut(prompt, "Context JSON:\n")
+		var data struct {
+			Conversation []struct {
+				Feedback *askFeedback `json:"feedbackDraft"`
+			} `json:"conversation"`
+		}
+		if err := json.Unmarshal([]byte(raw), &data); err != nil || len(data.Conversation) != 2 || data.Conversation[0].Feedback == nil || *data.Conversation[0].Feedback != *proposal {
+			t.Fatalf("draft missing from follow-up context: %s %v", raw, err)
+		}
+		// Even affirmative chat text only returns another draft for review.
+		return []byte(jsonText(askAgentResponse{Feedback: proposal, Lookup: askLookup{Kind: "none"}})), nil
+	})
+	input := askInput()
+	input["prompt"] = "Please request Markdown export"
+	askOK(t, s, "send", input)
+	restarted := testServer(t, s.Config(), s.Catalog)
+	session, err := restarted.askSession(t.Context(), "chat-1")
+	if err != nil || len(session.Conversation) != 1 || session.Conversation[0].Status != "feedback" || session.Conversation[0].Feedback == nil || *session.Conversation[0].Feedback != *proposal || len(s.ask.active) != 0 {
+		t.Fatalf("draft not saved while waiting for consent: %+v %v", session, err)
+	}
+	input["turnID"], input["prompt"] = "turn-2", "yes, send it"
+	askOK(t, s, "send", input)
+	if sends.Load() != 0 {
+		t.Fatal("draft or affirmative chat text sent feedback")
+	}
+	var count int
+	if err := s.Catalog.reader().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH ?", `"Markdown"`).Scan(&count); err != nil || count < 1 {
+		t.Fatalf("visible feedback draft was not indexed: %d %v", count, err)
+	}
+}
+
+func TestAskFeedbackValidation(t *testing.T) {
+	s := askTestServer(t)
+	for _, tc := range []struct {
+		name, kind, comment, lookup string
+		clarification, destination  bool
+	}{
+		{name: "empty", kind: "feature", comment: " "},
+		{name: "unsupported kind", kind: "prompt", comment: "Build it"},
+		{name: "oversize", kind: "bug", comment: strings.Repeat("x", 16001)},
+		{name: "lookup", kind: "feature", comment: "Add export", lookup: "visits"},
+		{name: "clarification", kind: "feature", comment: "Add export", clarification: true},
+		{name: "destination", kind: "feature", comment: "Add export", destination: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+				var response askAgentResponse
+				reply := askReply()
+				if tc.destination {
+					reply = askReply("analyze")
+				}
+				_ = json.Unmarshal(reply, &response)
+				response.Feedback = &askFeedback{Kind: tc.kind, Comment: tc.comment}
+				if tc.lookup != "" {
+					response.Lookup.Kind = tc.lookup
+				}
+				if tc.clarification {
+					response.Clarification = &askClarification{Question: "Which export?", Options: []string{"Markdown"}}
+				}
+				return []byte(jsonText(response)), nil
+			})
+			if _, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil {
+				t.Fatal("invalid or mixed feedback proposal accepted")
+			}
+		})
+	}
+	for _, kind := range []string{"feature", "bug", "feedback"} {
+		override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+			return []byte(jsonText(askAgentResponse{Feedback: &askFeedback{Kind: kind, Comment: "Reviewed report"}, Lookup: askLookup{Kind: "none"}})), nil
+		})
+		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err != nil || answer.Feedback == nil || answer.Feedback.Kind != kind {
+			t.Fatalf("valid feedback: %+v %v", answer, err)
+		}
+	}
 }
 
 func TestAskClarificationConversation(t *testing.T) {
@@ -489,6 +583,83 @@ func TestAskCancelAndDisable(t *testing.T) {
 // must not lose it, make a reload report the request stopped, or hold up the
 // rest of Ask; a stop meanwhile replaces it.
 func TestAskSavesAnswerPastABusyCatalog(t *testing.T) {
+	// Visits are saved independently of the chat state. A background writer
+	// holding the catalog must not stop Ask status reads or cancellation.
+	for _, action := range []string{"visits", "remove-visit", "clear-visits"} {
+		t.Run(action+" waiting for writer", func(t *testing.T) {
+			s := askTestServer(t)
+			// Join discovery before t.Cleanup restores the provider overrides.
+			defer settleServer(t, s)
+			askEnable(t, s)
+			override(t, &askWriteTimeout, time.Minute)
+			release, err := s.Catalog.acquireWriteGate(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { release() }()
+			finished := make(chan *httptest.ResponseRecorder, 1)
+			go func() { finished <- askCall(t, s, http.MethodPost, action, map[string]any{}) }()
+			if !waitFor(time.Second, func() {
+				for s.Catalog.writers.waiting.Load() == 0 {
+					runtime.Gosched()
+				}
+			}) {
+				t.Fatal("visit write did not wait for the catalog")
+			}
+			for _, request := range []struct{ method, path string }{{http.MethodGet, "status"}, {http.MethodPost, "cancel"}} {
+				response := make(chan *httptest.ResponseRecorder, 1)
+				go func() { response <- askCall(t, s, request.method, request.path, map[string]any{}) }()
+				select {
+				case result := <-response:
+					if result.Code != http.StatusOK {
+						t.Fatalf("%s: %s", request.path, result.Body.String())
+					}
+				case <-time.After(time.Second):
+					t.Fatalf("%s waited for visit persistence", request.path)
+				}
+			}
+			// Let the queued write finish before the catalog closes.
+			release()
+			release = func() {}
+			if result := <-finished; result.Code != http.StatusOK {
+				t.Fatalf("%s: %s", action, result.Body.String())
+			}
+		})
+	}
+
+	// Both the draft queue and startAsk save before launching a CLI. Their
+	// deadline must cover writer acquisition, with no inference after failure.
+	for _, action := range []string{"session", "send", "visits", "settings"} {
+		t.Run(action+" writer deadline", func(t *testing.T) {
+			s := askTestServer(t)
+			defer settleServer(t, s)
+			askEnable(t, s)
+			override(t, &askWriteTimeout, 50*time.Millisecond)
+			override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+				t.Error("CLI launched before the question was saved")
+				return askReply("home"), nil
+			})
+			release, err := s.Catalog.acquireWriteGate(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			response := make(chan *httptest.ResponseRecorder, 1)
+			go func() { response <- askCall(t, s, http.MethodPost, action, askInput()) }()
+			select {
+			case result := <-response:
+				if result.Code != http.StatusBadRequest || !strings.Contains(result.Body.String(), "Pharos is busy saving library changes") {
+					t.Fatalf("unhelpful persistence failure: %d %s", result.Code, result.Body.String())
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("pre-launch save ignored its deadline")
+			}
+			if len(s.ask.active) != 0 {
+				t.Fatal("failed question was reserved as an active request")
+			}
+		})
+	}
+
 	busy := func(t *testing.T, s *Server) (release func()) {
 		held, done, written := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 		calls := 0

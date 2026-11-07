@@ -779,6 +779,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		}
 	}
 	record = filtered
+	record.Conversations = conversationsWithChildUsage(record.Conversations)
 	for _, conversation := range record.Conversations {
 		if conversation.ParentNativeID != "" {
 			if _, err = tx.Exec(`INSERT OR REPLACE INTO conversation_parent_refs(provider,account,native_id,parent_native_id) VALUES(?,?,?,?)`, conversation.Provider, conversation.Account, conversation.NativeID, conversation.ParentNativeID); err != nil {
@@ -896,6 +897,19 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 	if err := claimClaudeUsage(tx, &record); err != nil {
 		return 0, 0, err
 	}
+	priorIDs := make([]string, len(authority.conversations))
+	for i, claim := range authority.conversations {
+		priorIDs[i] = claim.id
+	}
+	record.Conversations, err = conversationsWithStoredChildUsage(tx, workspaceID, record.Conversations, priorIDs)
+	if err != nil {
+		return 0, 0, err
+	}
+	var usageCurrent bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM usage_attribution_state WHERE workspace_id=? AND version=?)`, workspaceID, usageAttributionVersion).Scan(&usageCurrent); err != nil {
+		return 0, 0, err
+	}
+	replayed := []string{}
 	messageCount, conversationCount := 0, 0
 	conversationIDs := make([]string, len(record.Conversations))
 	merged := map[string]bool{}
@@ -1016,14 +1030,15 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 			return 0, 0, err
 		}
 		input := conversationDeliveryDigest(workspaceID, delivered)
-		var priorInput string
-		inputErr := tx.QueryRow("SELECT fingerprint FROM conversation_derivation_inputs WHERE conversation_id=?", conversationID).Scan(&priorInput)
+		childUsage := childUsageFingerprint(conversation.Messages)
+		var priorInput, priorChildUsage string
+		inputErr := tx.QueryRow("SELECT fingerprint,child_usage FROM conversation_derivation_inputs WHERE conversation_id=?", conversationID).Scan(&priorInput, &priorChildUsage)
 		if inputErr != nil && inputErr != sql.ErrNoRows {
 			return 0, 0, inputErr
 		}
 		// A claim can change what an unchanged conversation's replies count:
 		// another conversation's start moved, or it came or went.
-		if !force && input == priorInput && !usageChanged {
+		if !force && usageCurrent && input == priorInput && !usageChanged && childUsage == priorChildUsage {
 			continue
 		}
 		if force {
@@ -1036,7 +1051,10 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 				return 0, 0, err
 			}
 		}
-		if err := replaceAgentSessions(tx, workspaceID, conversationID, conversation); err != nil {
+		// Replaying an unchanged source for an attribution upgrade is a repair;
+		// it must retain positive facts whose envelopes were never retained.
+		preserveUnavailable := !usageCurrent && input == priorInput && !usageChanged
+		if err := writeResolvedAgentSessions(tx, workspaceID, conversationID, conversation, false, false, preserveUnavailable); err != nil {
 			return 0, 0, err
 		}
 		if err := replaceToolLedger(tx, workspaceID, conversationID, conversation); err != nil {
@@ -1045,10 +1063,11 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		if err := replaceConversationInstructions(tx, workspaceID, conversationID, conversation.Instructions, nil, "transcript"); err != nil {
 			return 0, 0, err
 		}
-		if _, err := tx.Exec(`INSERT INTO conversation_derivation_inputs(conversation_id,fingerprint) VALUES(?,?)
-			ON CONFLICT(conversation_id) DO UPDATE SET fingerprint=excluded.fingerprint`, conversationID, input); err != nil {
+		if _, err := tx.Exec(`INSERT INTO conversation_derivation_inputs(conversation_id,fingerprint,child_usage) VALUES(?,?,?)
+			ON CONFLICT(conversation_id) DO UPDATE SET fingerprint=excluded.fingerprint,child_usage=excluded.child_usage`, conversationID, input, childUsage); err != nil {
 			return 0, 0, err
 		}
+		replayed = append(replayed, conversationID)
 	}
 	if err := applyClaudeGroupUsage(tx, workspaceID, record.Conversations, conversationIDs, authority.conversations); err != nil {
 		return 0, 0, err
@@ -1074,11 +1093,20 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		}
 	}
 	if authority.workspace {
-		// This record wrote the workspace's sessions and token metrics with the
-		// current attribution, so RepairUsageAttribution can skip it.
-		if _, err := tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
-			ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`, workspaceID, usageAttributionVersion); err != nil {
-			return 0, 0, err
+		// An old workspace is upgraded only after every stored conversation
+		// has replayed. Omitted or non-writer conversations keep repair pending.
+		complete := usageCurrent
+		if !complete {
+			if err := tx.QueryRow(`SELECT NOT EXISTS(SELECT 1 FROM conversations WHERE workspace_id=?
+				AND id NOT IN (SELECT value FROM json_each(?)))`, workspaceID, jsonText(replayed)).Scan(&complete); err != nil {
+				return 0, 0, err
+			}
+		}
+		if complete {
+			if _, err := tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
+				ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`, workspaceID, usageAttributionVersion); err != nil {
+				return 0, 0, err
+			}
 		}
 		metrics := record.Metrics
 		if tokens := reconciledTokenMetrics(record); len(tokens) > 0 || claudeRecordHasUsage(record) {
@@ -1779,25 +1807,57 @@ func replaceAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conver
 }
 
 func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord, suppressCostState bool) error {
-	return writeAgentSessions(tx, workspaceID, conversationID, conversation, suppressCostState, false)
+	return writeAgentSessions(tx, workspaceID, conversationID, conversation, suppressCostState, false, false)
 }
 
 // A text backfill changes membership and order, but must preserve usage that
 // has already been reconciled across conversations, and linked child sessions.
 // Newly discovered delegations still need a session of their own.
 func refreshAgentSessionMembership(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord) error {
-	return writeAgentSessions(tx, workspaceID, conversationID, conversation, false, true)
+	return writeAgentSessions(tx, workspaceID, conversationID, conversation, false, true, false)
 }
 
-func writeAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord, suppressCostState, preserveExisting bool) error {
+func writeAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord, suppressCostState, preserveExisting, preserveUnavailable bool) error {
+	messages, err := messagesWithStoredChildUsage(tx, conversationID, conversation.Messages)
+	if err != nil {
+		return err
+	}
+	conversation.Messages = messages
+	return writeResolvedAgentSessions(tx, workspaceID, conversationID, conversation, suppressCostState, preserveExisting, preserveUnavailable)
+}
+
+// Callers holding a resolved workspace must not reload it for each session.
+func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord, suppressCostState, preserveExisting, preserveUnavailable bool) error {
 	summaries := agentSessionSummariesWithCostState(conversation.Messages, suppressCostState)
-	priorSessions, err := queryMaps(tx, "SELECT id,native_id FROM agent_sessions WHERE conversation_id=?", conversationID)
+	priorSessions, err := queryMaps(tx, "SELECT id,native_id,total_tokens FROM agent_sessions WHERE conversation_id=?", conversationID)
 	if err != nil {
 		return err
 	}
 	existingSessions := map[string]string{}
 	for _, row := range priorSessions {
 		existingSessions[firstString(row["native_id"])] = firstString(row["id"])
+	}
+	preserved := map[string]bool{}
+	if preserveUnavailable {
+		reconstructable := map[string]bool{}
+		for _, summary := range summaries {
+			reconstructable[summary.nativeID] = len(summary.counts) > 0
+			for _, index := range summary.messageIndexes {
+				if usageCopyOf(conversation.Messages[index]) != "" {
+					reconstructable[summary.nativeID] = true
+				}
+			}
+		}
+		// Group reconciliation deliberately replaces the main cost-state
+		// claim with its remainder, even when no main requests were retained.
+		if suppressCostState {
+			reconstructable["main"] = true
+		}
+		for _, prior := range priorSessions {
+			if integer(prior["total_tokens"]) > 0 && !reconstructable[firstString(prior["native_id"])] {
+				preserved[firstString(prior["id"])] = true
+			}
+		}
 	}
 	messageIDs := map[string]string{}
 	rows, err := queryMaps(tx, "SELECT id,native_id FROM messages WHERE conversation_id=?", conversationID)
@@ -1832,7 +1892,7 @@ func writeAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversa
 		}
 	}
 	for _, summary := range summaries {
-		if preserveExisting && existingSessions[summary.nativeID] != "" {
+		if (preserveExisting && existingSessions[summary.nativeID] != "") || preserved[ids[summary.nativeID]] {
 			continue
 		}
 		childAgent := conversation.AgentDepth > 0
@@ -1919,6 +1979,21 @@ func writeAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversa
 			}
 		}
 	}
+	if !preserveExisting {
+		if _, err := tx.Exec(`DELETE FROM agent_session_token_evidence WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id=?)`, conversationID); err != nil {
+			return err
+		}
+	}
+	for _, evidence := range conversationTokenEvidence(conversation.Messages) {
+		if preserveExisting && existingSessions[evidence.stream] != "" {
+			continue
+		}
+		if id := ids[evidence.stream]; id != "" {
+			if _, err := tx.Exec(`INSERT OR REPLACE INTO agent_session_token_evidence(agent_session_id,message_id,scope,total_tokens) VALUES(?,?,'last-request',?)`, id, messageID(evidence.index), evidence.total); err != nil {
+				return err
+			}
+		}
+	}
 	for _, summary := range summaries {
 		for _, index := range summary.messageIndexes {
 			if index < 0 || index >= len(conversation.Messages) {
@@ -1943,6 +2018,9 @@ func writeAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversa
 	for key := range priorMappings {
 		if _, ok := desiredMappings[key]; !ok {
 			parts := strings.SplitN(key, "\x00", 2)
+			if preserved[parts[0]] {
+				continue
+			}
 			if _, err := tx.Exec("DELETE FROM agent_session_messages WHERE agent_session_id=? AND message_id=?", parts[0], parts[1]); err != nil {
 				return err
 			}
@@ -1957,7 +2035,7 @@ func writeAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversa
 	}
 	for _, session := range priorSessions {
 		id := firstString(session["id"])
-		if !retained[id] {
+		if !retained[id] && !preserved[id] {
 			if _, err := tx.Exec("DELETE FROM agent_sessions WHERE id=?", id); err != nil {
 				return err
 			}

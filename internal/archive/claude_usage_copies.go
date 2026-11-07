@@ -613,12 +613,17 @@ func rederiveRecoveredClaudeUsage(ctx context.Context, tx *sql.Tx, saved Workspa
 }
 
 // rebuildWorkspaceUsage derives a workspace's sessions, hourly usage and token
-// metrics again from its stored conversations, whatever they held before: a
-// reply it counted may now be another's. The model requests of the
+// metrics again from retained evidence, preserving positive legacy facts when
+// their envelopes were not retained. A reply it counted may now be another's.
+// The model requests of the
 // conversations in ledger are derived again too.
 func rebuildWorkspaceUsage(tx *sql.Tx, workspaceID string, conversations []ConversationRecord, ids []string, ledger map[string]bool) error {
+	conversations, err := conversationsWithStoredChildUsage(tx, workspaceID, conversations, ids)
+	if err != nil {
+		return err
+	}
 	for j, conversation := range conversations {
-		if err := replaceAgentSessions(tx, workspaceID, ids[j], conversation); err != nil {
+		if err := writeResolvedAgentSessions(tx, workspaceID, ids[j], conversation, false, false, true); err != nil {
 			return err
 		}
 		if ledger[ids[j]] {
@@ -635,14 +640,38 @@ func rebuildWorkspaceUsage(tx *sql.Tx, workspaceID string, conversations []Conve
 		if _, err := tx.Exec("DELETE FROM metrics WHERE workspace_id=? AND unit='tokens'", workspaceID); err != nil {
 			return err
 		}
-		return replaceMetrics(tx, workspaceID, metrics)
+		// The persisted sessions also include facts preserved from legacy
+		// imports. Replacing metrics from messages alone would omit them in
+		// a workspace that mixes legacy and reconstructable conversations.
+		fields := make([]string, 0, len(usageTokenFields))
+		for _, field := range usageTokenFields {
+			fields = append(fields, "COALESCE(SUM("+field+"),0) AS "+field)
+		}
+		rows, err := queryMaps(tx, "SELECT "+strings.Join(fields, ",")+" FROM agent_sessions WHERE workspace_id=?", workspaceID)
+		if err != nil {
+			return err
+		}
+		known := map[string]bool{"total_tokens": true}
+		for _, metric := range metrics {
+			known[firstString(metric["name"])] = true
+		}
+		totals := tokenCounts{}
+		for _, field := range usageTokenFields {
+			value := float64(integer(rows[0][field]))
+			if value != 0 || known[field] {
+				totals[field] = value
+			}
+		}
+		return replaceMetrics(tx, workspaceID, tokenMetricRows(totals))
 	}
 	return nil
 }
 
 // storedWorkspaceConversations reads a workspace's conversations back from
 // the catalog, as the usage derivations need them.
-func storedWorkspaceConversations(ctx context.Context, q queryer, workspaceID string) ([]ConversationRecord, []string, error) {
+var storedWorkspaceConversations = loadStoredWorkspaceConversations
+
+func loadStoredWorkspaceConversations(ctx context.Context, q queryer, workspaceID string) ([]ConversationRecord, []string, error) {
 	items, err := queryMapsContext(ctx, q, `SELECT id,native_id,parent_id,provider,account,model,effort,agent_depth,started_at FROM conversations
 		WHERE workspace_id=? ORDER BY agent_depth,native_id`, workspaceID)
 	if err != nil {

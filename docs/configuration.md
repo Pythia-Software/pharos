@@ -438,6 +438,8 @@ storage, other apps' containers, Mail, Messages, and other volumes.
 | TL1 | `~/.tl1/registry.json`, or for TL1 releases before it `~/.tl1/workspaces.json`; installations in a temporary directory or with missing files are skipped, as the TL1 adapter does |
 | Copilot CLI | `~/.copilot`, or `COPILOT_HOME`, when it has a `session-state` folder; each `session-state/<id>/events.jsonl` (or an older release's `session-state/<id>.jsonl`) is a session |
 | OpenCode | `~/.local/share/opencode`, or `$XDG_DATA_HOME/opencode`; each session in its `opencode*.db` databases is a session |
+| OpenClaw | `~/.openclaw` or `$OPENCLAW_STATE_DIR`; native `agents/<agent>/agent/openclaw-agent.sqlite` databases and legacy `agents/<agent>/sessions/*.jsonl` transcripts |
+| Hermes Agent | `~/.hermes` or `$HERMES_HOME`; `state.db` and named `profiles/<name>/state.db` databases |
 | Cline | `~/.cline/data`, `CLINE_DATA_DIR`, or `$CLINE_DIR/data`, when it has a `sessions` folder; each `sessions/<id>/<id>.messages.json` is a session |
 | VS Code Copilot | the `User` folder of VS Code, VS Code Insiders, VSCodium or Positron under `~/Library/Application Support`; each chat session (`workspaceStorage/<hash>/chatSessions/<id>.jsonl`, an older release's `.json`, or a window without a folder's in `globalStorage/emptyWindowChatSessions`) is a session |
 | Cursor | `~/Library/Application Support/Cursor/User`; each composer with a message in `globalStorage/state.vscdb` is a session |
@@ -447,7 +449,7 @@ storage, other apps' containers, Mail, Messages, and other volumes.
 | Claude.ai | nothing on disk: export your data from Claude.ai, then **Import an export** (or add a `claude-ai` source) for the downloaded ZIP, its `conversations.json`, or the folder holding it |
 
 The app and its service do not inherit the shell's environment, so Pharos also
-reads `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `XDG_DATA_HOME`, `CLINE_DATA_DIR` and `CLINE_DIR` from the login shell (`$SHELL -l -i -c`,
+reads `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `XDG_DATA_HOME`, `CLINE_DATA_DIR`, `CLINE_DIR`, `OPENCLAW_STATE_DIR` and `HERMES_HOME` from the login shell (`$SHELL -l -i -c`,
 two-second limit, cached for ten minutes). This runs the shell's startup files;
 set `PHAROS_PROBE_SHELL=0` in the service's environment to skip it.
 
@@ -832,6 +834,8 @@ upload permissions keep their existing behavior.
 | `claude-ai` | the export's ZIP or `conversations.json`, whole |
 | `copilot` | each session's `events.jsonl` and `workspace.yaml` under `session-state` (or an older release's flat `<id>.jsonl`); not `session-store.db`, Copilot's own index, nor its config, logs or file snapshots |
 | `opencode` | a snapshot of each `opencode*.db` holding only its session, message, part and project tables: OpenCode keeps credentials, accounts and settings in the same database, so a snapshot is a copy of those tables, row by row, and nothing else is ever written to the capture, even by one that stops part way. With `sqlite_record_capture`, the rows copied before indexing leave out the same tables. A session deleted in OpenCode before its last capture was indexed is indexed from an older snapshot that holds it |
+| `openclaw` | selective snapshots of native session and transcript tables, including embedded compressed payloads and canonical reset/deletion archive blobs before file publication; referenced cold archives and, for legacy JSONL, `sessions.json`. Authentication, configuration, workspace files and memory indexes are excluded |
+| `hermes` | selective snapshots of `sessions`, `messages` and `session_model_usage`, including each named profile. Authentication, configuration, memory, trajectories and unrelated runtime tables are excluded |
 | `cline` | each session's `<id>.json` and `<id>.messages.json` under `sessions`; not its compacted context (`<id>.compaction.json`), nor Cline's settings (which hold provider credentials), index database or checkpoints |
 | `vscode-copilot` | each chat session's file under `workspaceStorage/<hash>/chatSessions` or `globalStorage/emptyWindowChatSessions`, and its window's `workspace.json`; not a session's older `.json` beside its journal, nor the rest of the user folder: settings, `state.vscdb` databases and extension storage, which can hold other extensions' secrets |
 | `cursor` | a snapshot of `globalStorage/state.vscdb` and of each window's `state.vscdb`, and each window's `workspace.json`. A snapshot is a copy, row by row, of only the composers, their messages and headers, and a window's list of its composers, with each composer's encryption keys and encrypted state left out: Cursor's sign-in tokens (`cursorAuth/*`), settings and every other row are never written to the capture, even by one that stops part way. No rows are copied before indexing, even with `sqlite_record_capture`, since only a snapshot leaves them out; rows that option exports come from the snapshot. A composer deleted in Cursor before its last capture was indexed is indexed from an older snapshot that holds it |

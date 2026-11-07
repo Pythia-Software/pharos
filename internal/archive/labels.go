@@ -164,6 +164,9 @@ func (c *Catalog) ensureLabelsSchema(ctx context.Context) error {
 		if err := messageLabelFactTriggers(ctx, tx); err != nil {
 			return err
 		}
+		if err := fingerprintSourceTriggers(ctx, tx); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('labels_schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, labelsSchemaVersion)
 		return err
 	})
