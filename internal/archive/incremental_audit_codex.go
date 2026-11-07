@@ -134,7 +134,7 @@ func readCodexAuditNames(ctx context.Context, adapter *jsonlAdapter, identities,
 			if err = rows.Scan(&id, &rollout); err != nil {
 				break
 			}
-			if path := firstString(rollout); path != "" && paths[filepath.Clean(path)] && firstString(id) != "" {
+			if path := firstString(rollout); path != "" && paths[plainRollout(filepath.Clean(path))] && firstString(id) != "" {
 				ids[firstString(id)] = true
 				if limitErr := auditEvidenceBudget(int64(len(ids))*128, budget); limitErr != nil {
 					rows.Close()
@@ -282,10 +282,16 @@ func freezeCodexAuditRecord(ctx context.Context, unit syncUnit, dir string, budg
 		path := part.item
 		if adapter.view != nil {
 			var ok bool
-			path, ok = adapter.view.captured(part.item)
+			path, ok = adapter.view.capturedRollout(part.item)
 			if !ok {
 				return nil, nil, used, errAuditUnstable
 			}
+		}
+		// A compressed rollout is frozen as it is, under its own name.
+		path = rolloutFile(path)
+		original := part.item
+		if compressedRollout(path) {
+			original += ".zst"
 		}
 		info, err := adapter.files().Stat(path)
 		if err != nil {
@@ -295,7 +301,7 @@ func freezeCodexAuditRecord(ctx context.Context, unit syncUnit, dir string, budg
 		if err := auditEvidenceBudget(used, budget); err != nil {
 			return nil, nil, used, err
 		}
-		copied, ok := view.captured(part.item)
+		copied, ok := view.captured(original)
 		if !ok {
 			return nil, nil, used, errors.New("Codex audit evidence outside source")
 		}

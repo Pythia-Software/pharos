@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
@@ -111,6 +113,133 @@ func (s sourceFiles) Open(path string) (*sourceFile, error) {
 	return &sourceFile{Reader: file, file: file, info: info}, nil
 }
 
+// Codex compresses a rollout idle for a week to <name>.jsonl.zst, one zstd
+// frame of the same bytes that declares their size, deletes the plain file
+// and keeps its mtime; resuming the thread restores the plain file. Capture
+// copies the compressed file as it is. Everything else knows the rollout by
+// its plain path and its content's size (contentInfo), so compression changes
+// neither a part, an origin nor an evidence locator, and parses nothing again.
+// Only reading it decodes it (OpenContent).
+const compressedRolloutSuffix = ".jsonl.zst"
+
+func compressedRollout(path string) bool {
+	return strings.HasSuffix(strings.ToLower(path), compressedRolloutSuffix)
+}
+
+// plainRollout is the plain file a compressed rollout was, or path itself.
+func plainRollout(path string) string {
+	if compressedRollout(path) {
+		return path[:len(path)-len(".zst")]
+	}
+	return path
+}
+
+// rolloutStem is a rollout's file name without .jsonl or .jsonl.zst.
+func rolloutStem(path string) string {
+	base := filepath.Base(plainRollout(path))
+	return base[:len(base)-len(filepath.Ext(base))]
+}
+
+// preferRollout picks which of a rollout's two forms to read when both are
+// listed: the newer, and the plain one when they are as new. Compression keeps
+// the mtime and an append moves it, so this is the form Codex itself reads
+// while both exist, and in a capture or retained input it passes over a copy
+// superseded since (the plain file captured before an append and compression,
+// or the compressed one captured before a resume) however that input was
+// assembled.
+func preferRollout(plain, compressed string, plainInfo, compressedInfo fs.FileInfo) string {
+	if compressedInfo.ModTime().After(plainInfo.ModTime()) {
+		return compressed
+	}
+	return plain
+}
+
+// rolloutFile is the file to read for a rollout known by its plain path (a
+// part item or origin): the plain file, or its compressed form when that is
+// the one preferRollout reads.
+func rolloutFile(plain string) string {
+	if !strings.HasSuffix(strings.ToLower(plain), ".jsonl") {
+		return plain
+	}
+	compressedInfo, err := os.Stat(plain + ".zst")
+	if err != nil {
+		return plain
+	}
+	plainInfo, err := os.Stat(plain)
+	if err != nil {
+		return plain + ".zst"
+	}
+	return preferRollout(plain, plain+".zst", plainInfo, compressedInfo)
+}
+
+// capturedRollout finds the copy of the rollout named by its plain path, in
+// whichever form was taken: a source configured as one compressed file maps
+// only that file.
+func (v *captureView) capturedRollout(item string) (string, bool) {
+	if path, ok := v.captured(item); ok {
+		return rolloutFile(path), true
+	}
+	return v.captured(item + ".zst")
+}
+
+// resolveRolloutSource follows a source configured as one rollout file to
+// whichever form of it is there now, since Codex renames it on compression
+// and on resume.
+func resolveRolloutSource(config SourceConfig) SourceConfig {
+	if lower := strings.ToLower(config.Path); strings.HasSuffix(lower, ".jsonl") || compressedRollout(lower) {
+		config.Path = rolloutFile(plainRollout(config.Path))
+	}
+	return config
+}
+
+// contentInfo describes a compressed rollout as the plain file it stands for:
+// the size its frame declares, read once per process while the file is
+// unchanged (cachedHead). A frame without a size keeps the stored size, so
+// its rollout is parsed once more after compression. Other files are as info.
+func (s sourceFiles) contentInfo(path string, info fs.FileInfo) fs.FileInfo {
+	if !compressedRollout(path) {
+		return info
+	}
+	size, err := s.cachedHead("zstd-content-size", path, func() (any, error) {
+		file, err := s.Open(path)
+		if err != nil {
+			return int64(-1), err
+		}
+		defer file.Close()
+		head := make([]byte, zstd.HeaderMaxSize)
+		n, err := io.ReadFull(file, head)
+		if err != nil && err != io.ErrUnexpectedEOF {
+			return int64(-1), err
+		}
+		var header zstd.Header
+		if header.Decode(head[:n]) != nil || !header.HasFCS || header.FrameContentSize > math.MaxInt64 {
+			return int64(-1), nil
+		}
+		return int64(header.FrameContentSize), nil
+	})
+	if err != nil || size.(int64) < 0 {
+		return info
+	}
+	return originalInfo{FileInfo: info, size: size.(int64)}
+}
+
+// OpenContent is Open for a reader of the content: a file the harness itself
+// stored compressed (compressedRollout) is decoded as it reads, and Stat
+// reports it as contentInfo does, as plans listed it.
+func (s sourceFiles) OpenContent(path string) (*sourceFile, error) {
+	file, err := s.Open(path)
+	if err != nil || !compressedRollout(path) {
+		return file, err
+	}
+	info := s.contentInfo(path, file.info)
+	decoder, err := newCaptureDecoder(bufio.NewReaderSize(file.Reader, 64<<10))
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	return &sourceFile{Reader: decoder, file: file.file, decoder: decoder, outer: file.decoder, info: info, sourceEncoded: true}, nil
+}
+
 // ReadFile reads path's original bytes.
 func (s sourceFiles) ReadFile(path string) ([]byte, error) {
 	file, err := s.Open(path)
@@ -151,14 +280,32 @@ type sourceFile struct {
 	io.Reader
 	file    *os.File
 	decoder *zstd.Decoder
-	info    fs.FileInfo
+	// outer is the capture's own decoder under a source-side one; Pharos does
+	// not compress .zst files, so it is nil in practice.
+	outer *zstd.Decoder
+	info  fs.FileInfo
+	// sourceEncoded marks content decoded from a harness-compressed file,
+	// which is longer than the file as stored.
+	sourceEncoded bool
 }
 
 func (f *sourceFile) Stat() (fs.FileInfo, error) { return f.info, nil }
 
+// readLimit bounds a reader to the bytes present when the file was opened: a
+// log appended meanwhile is read again next time. A harness never appends to
+// a file it compressed, so its whole content is read.
+func (f *sourceFile) readLimit() int64 {
+	if f.sourceEncoded {
+		return math.MaxInt64
+	}
+	return f.info.Size()
+}
+
 func (f *sourceFile) Close() error {
-	if f.decoder != nil {
-		f.decoder.Close()
+	for _, decoder := range []*zstd.Decoder{f.decoder, f.outer} {
+		if decoder != nil {
+			decoder.Close()
+		}
 	}
 	return f.file.Close()
 }

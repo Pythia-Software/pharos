@@ -480,6 +480,11 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 // A bounded verification may acquire only one filesystem dependency group.
 // The private plan controls acquisition, never bypasses durable publication.
 func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig, progress func(CaptureSourceResult), selected *capturePlan) CaptureSourceResult {
+	if isCodexSource(source.Kind) {
+		// A single rollout is recorded under its plain path, which compression
+		// and resume leave alone; planning copies whichever form is there.
+		source.Path = plainRollout(source.Path)
+	}
 	c := &sourceCapture{session: s, ctx: ctx, source: source, progress: progress, checkpoint: time.Now(),
 		result:         CaptureSourceResult{Name: source.Name, Kind: source.Kind, State: "running", captureRunRecord: captureRunRecord{StartedAt: now(), Errors: []captureError{}}},
 		verifyDelivery: s.preserveUnindexed || s.deliveryTarget != ""}

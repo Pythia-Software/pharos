@@ -27,9 +27,30 @@ type capturePlan struct {
 	pathMap       []capturePathMapping
 }
 
+// preferRollouts drops the form of a rollout listed both plain and
+// compressed that the adapter does not read (preferRollout).
+func preferRollouts(items []captureItem) []captureItem {
+	listed := map[string]bool{}
+	for _, item := range items {
+		listed[item.path] = true
+	}
+	kept := items[:0:0]
+	for _, item := range items {
+		plain := plainRollout(item.path)
+		if listed[plain] && listed[plain+".zst"] && rolloutFile(plain) != item.path {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept
+}
+
 // planCapture lists exactly what the source's adapter would read.
 func planCapture(source SourceConfig) (capturePlan, error) {
 	plan := capturePlan{complete: true}
+	if strings.EqualFold(source.Kind, "codex") {
+		source = resolveRolloutSource(source)
+	}
 	info, err := os.Stat(source.Path)
 	if err != nil {
 		return plan, fmt.Errorf("source path is unavailable: %w", err)
@@ -57,8 +78,9 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 	case "codex":
 		adapter := jsonlAdapter{baseAdapter: baseAdapter{config: source}, provider: "codex"}
 		plan.files = plan.walk(source.Path, info, "", func(file string) bool {
-			return jsonl(file) && adapter.accept(file) || info.IsDir() && file == filepath.Join(source.Path, "session_index.jsonl")
+			return adapter.transcriptName(file) && adapter.accept(file) || info.IsDir() && file == filepath.Join(source.Path, "session_index.jsonl")
 		})
+		plan.files = preferRollouts(plan.files)
 		if info.IsDir() {
 			databases, err := codexNamingDatabases(source.Path)
 			if err != nil {

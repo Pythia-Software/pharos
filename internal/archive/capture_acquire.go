@@ -305,7 +305,7 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 	}
 	// A frozen inventory's identity proves its closure; per-record identities
 	// below include only the transcript group and metadata that produced it.
-	root, ok := view.captured(frozen.Source.Path)
+	root, ok := view.capturedSource(frozen.Source)
 	if !ok {
 		return fail(errors.New("unmapped retained source root"))
 	}
@@ -475,7 +475,8 @@ func retainedRecordIdentity(view *captureView, record *WorkspaceRecord, parts []
 		values = append(values, part.item, part.signal)
 	}
 	for _, f := range view.manifest.Files {
-		if selected[f.Path] {
+		// A compressed rollout is selected by the plain path it stands for.
+		if selected[f.Path] || selected[plainRollout(f.Path)] {
 			values = append(values, f.Path, f.SHA256)
 			if f.ObservedNS > record.Observed {
 				observe(record, f.ObservedNS)

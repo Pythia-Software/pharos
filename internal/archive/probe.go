@@ -535,7 +535,7 @@ func (r *probeRun) codex(dir, foundBy string) {
 			present = true
 			if err == nil {
 				var stats probeStats
-				stats, err = walkTranscripts(root, r.deadline, func(relative string) (string, bool) {
+				stats, err = walkRollouts(root, r.deadline, func(relative string) (string, bool) {
 					ids := sessionUUID.FindAllString(filepath.Base(relative), -1)
 					if len(ids) == 0 {
 						return "", true
@@ -805,7 +805,19 @@ func (s probeStats) apply(candidate *ProbeCandidate, err error) {
 // walkTranscripts measures the *.jsonl files under root. classify maps a
 // root-relative slash path to a session ID and whether the file is a session.
 func walkTranscripts(root string, deadline time.Time, classify func(string) (string, bool)) (probeStats, error) {
+	return walkJSONL(root, deadline, false, classify)
+}
+
+// walkRollouts is walkTranscripts for Codex, which also keeps rollouts as
+// .jsonl.zst. A rollout listed in both forms counts once, as the plain one.
+func walkRollouts(root string, deadline time.Time, classify func(string) (string, bool)) (probeStats, error) {
+	return walkJSONL(root, deadline, true, classify)
+}
+
+func walkJSONL(root string, deadline time.Time, compressed bool, classify func(string) (string, bool)) (probeStats, error) {
 	var stats probeStats
+	// Walks list names in order, so a plain rollout precedes its .zst.
+	plain := map[string]bool{}
 	visited := 0
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -818,7 +830,13 @@ func walkTranscripts(root string, deadline time.Time, classify func(string) (str
 			stats.truncated = true
 			return filepath.SkipAll
 		}
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl") {
+		isPlain := strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl")
+		if entry.IsDir() || !isPlain && !(compressed && compressedRollout(entry.Name())) {
+			return nil
+		}
+		if compressed && isPlain {
+			plain[path] = true
+		} else if compressed && plain[plainRollout(path)] {
 			return nil
 		}
 		info, err := entry.Info()

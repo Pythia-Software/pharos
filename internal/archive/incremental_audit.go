@@ -443,7 +443,7 @@ func (c *Catalog) auditUnitMode(ctx context.Context, unit syncUnit, runID string
 			manifest := view.manifest
 			// Historical Conductor readers map one superseded database, not
 			// the current source root. Lease exactly that generation.
-			canonicalRoot, _ := newCaptureView(view.host, view.dir, manifest).captured(manifest.Source.Path)
+			canonicalRoot, _ := newCaptureView(view.host, view.dir, manifest).capturedSource(manifest.Source)
 			if isConductorSource(unit.Source.Kind) && canonicalRoot != unit.Reader.Config().Path {
 				original := view.original(unit.Reader.Config().Path)
 				rel, err := filepath.Rel(view.dir, unit.Reader.Config().Path)
@@ -619,7 +619,11 @@ func readCapturedAuditRecord(ctx context.Context, unit syncUnit) (*WorkspaceReco
 			if separator := strings.LastIndex(original, ":sessions:"); separator >= 0 {
 				original = original[:separator]
 			}
-			path, ok := view.captured(original)
+			lookup := view.captured
+			if isCodexSource(unit.Source.Kind) {
+				lookup = view.capturedRollout
+			}
+			path, ok := lookup(original)
 			if !ok {
 				return "", errAuditUnstable
 			}
@@ -752,6 +756,9 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		}
 		if strings.HasPrefix(part.item, "sqlite:") {
 			databases = append(databases, strings.TrimPrefix(part.item, "sqlite:"))
+		} else if isCodexSource(unit.Source.Kind) {
+			// A compressed rollout is frozen as it is, under its own name.
+			files = append(files, rolloutFile(part.item))
 		} else {
 			files = append(files, part.item)
 		}
