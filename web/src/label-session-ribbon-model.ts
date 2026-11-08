@@ -150,13 +150,18 @@ export function ribbonLayers(items:RibbonObservation[]){
 
 /** Reveal the retained source, preserving the current workspace's timeline state. */
 export function ribbonSourceURL(item:Pick<RibbonObservation,'start'> & Partial<RibbonObservation>,source:{workspace:string;conversation:string;session:string},currentURL:string){
- const workspace=item.message?.work_id||source.workspace,conversation=item.message?.conversation_id||source.conversation;
+ const conversation=item.message?.conversation_id||source.conversation;
+ const workspace=item.message?.work_id||(conversation===source.conversation?source.workspace:undefined);
  const message=item.message?.id||item.mark?.message_id,call=item.mark?.tool_id;
- if(!workspace||!conversation||!message&&!call)return null;
- const path=`/work/${encodeURIComponent(workspace)}`,current=new URL(currentURL,'http://pharos.local');
- const params=current.pathname===path||current.pathname.startsWith(path+'/')?new URLSearchParams(current.search):new URLSearchParams();
+ if(!conversation||!message&&!call)return null;
+ // Without the source message's workspace, resolve the conversation by ID;
+ // borrowing its container's workspace would create an inconsistent link.
+ const path=workspace?`/work/${encodeURIComponent(workspace)}`:`/conversation/${encodeURIComponent(conversation)}`,current=new URL(currentURL,'http://pharos.local');
+ const params=workspace&&(current.pathname===path||current.pathname.startsWith(path+'/'))?new URLSearchParams(current.search):new URLSearchParams();
  for(const key of ['message','call','at','reveal','reader_view','delegation_event'])params.delete(key);
- params.set('reader_view','conversation');params.set('conversation',conversation);params.set('delegation_session',item.message?.session_id||source.session);
+ params.set('reader_view','conversation');params.set('conversation',conversation);
+ const session=item.message?.session_id||(conversation===source.conversation?source.session:'');
+ if(session)params.set('delegation_session',session);else params.delete('delegation_session');
  if(message){params.set('message',message);params.set('reveal',`message:${message}`);}
  if(!message&&call)params.set('reveal',`call:${call}`);
  if(call){params.set('call',call);params.set('at',new Date(item.start).toISOString());}

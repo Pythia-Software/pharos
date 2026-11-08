@@ -171,8 +171,10 @@ test('workspace sidebar visibility and width restore without leaving the selecte
  await hide.click();await children().waitFor();await app.shot('collapsed-root');
  const rootURL=new URL(page.url());await children().click();await hide.waitFor();
  assert.equal(new URL(page.url()).searchParams.get('conversation'),rootURL.searchParams.get('conversation'));
+ await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('reader_event_link','e7');history.replaceState(null,'',url)});
  await page.getByRole('table',{name:'Agent session hierarchy and usage'}).getByRole('button',{name:'Open session Review implementation',exact:true}).click();
  await page.locator('.conversation-panel [data-message-id="conv-child-reply"]').first().waitFor();
+ assert.equal(new URL(page.url()).searchParams.has('reader_event_link'),false,'event IDs belong to their source conversation');
  assert.ok(await chips().getByText('Machine: Laptop',{exact:true}).isVisible());
  assert.ok(await chips().getByText('Execution machine: Worker',{exact:true}).isVisible());
  assert.ok(await chips().getByText('1 turn',{exact:true}).isVisible());
@@ -382,6 +384,17 @@ test('moved conversation links resolve their workspace and unavailable links kee
  assert.equal(new URL(page.url()).pathname,`/work/${workID}/conversation/${rootConversation}`);
  for(const [key,value] of params)assert.equal(new URL(page.url()).searchParams.get(key),value);
  assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ // Search and Home must not keep a native conversation selection, and opening
+ // another workspace through the Library entry point selects its own reader.
+ await page.getByRole('button',{name:'Back to Search',exact:true}).click();await page.locator('#library.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.has('conversation'),false);
+ await page.evaluate(()=>{void window.pharosOpenDetail('former-work')});
+ await page.waitForURL(url=>url.searchParams.get('conversation')==='other-conversation');
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ await page.goBack();await page.locator('#library.active').waitFor();await app.settled();
+ await page.goForward();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),'other-conversation');
  // Re-enter through the path form while the original workspace is mounted.
  await page.evaluate(()=>window.pharosNavigate('/work/former-work'));
  await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
@@ -395,6 +408,57 @@ test('moved conversation links resolve their workspace and unavailable links kee
  await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
  assert.equal(await page.locator('.conversation-panel').isVisible(),true);
  assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
+ const missingMessage=`/work/${workID}/conversation/${rootConversation}?message=missing-message`;
+ await page.getByRole('button',{name:'Back to Search',exact:true}).focus();
+ await page.evaluate(url=>window.pharosNavigate(url),missingMessage);
+ await page.getByRole('status').filter({hasText:'linked message or tool call'}).waitFor();
+ assert.equal(await page.getByRole('button',{name:'Back to Search',exact:true}).evaluate(element=>element===document.activeElement),true,'restoring a message target leaves keyboard focus alone');
+ await page.reload();await page.getByRole('status').filter({hasText:'linked message or tool call'}).waitFor();
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}/conversation/${rootConversation}?message=m-1`);
+ await page.getByRole('status').filter({hasText:'linked message or tool call'}).waitFor({state:'hidden'});
+ await page.locator('.conversation-panel [data-message-id="m-1"]').first().waitFor();await app.settled();
+ // Conversation-only references use the service's current-workspace redirect,
+ // including links opened through the shared in-app navigation entry point.
+ await page.route('**/conversation/conv-root?*',route=>route.fulfill({status:302,headers:{location:`/work/${workID}/conversation/${rootConversation}?message=m-1`}}));
+ await page.evaluate(()=>window.pharosNavigate('/conversation/conv-root?message=m-1'));
+ await page.waitForURL(url=>url.pathname===`/work/${workID}/conversation/${rootConversation}`);
+ await page.locator('.conversation-panel [data-message-id="m-1"]').first().waitFor();await app.settled();
+});
+
+test('leaving a workspace cancels pending overview and transcript loads',{skip},async t=>{
+ const deferred=()=>{let resolve;const promise=new Promise(done=>resolve=done);return{promise,resolve}};
+ const overviewStarted=deferred(),overviewRelease=deferred(),transcriptStarted=deferred(),transcriptRelease=deferred();
+ const resolutionStarted=deferred(),resolutionRelease=deferred();
+ t.after(()=>{overviewRelease.resolve();transcriptRelease.resolve();resolutionRelease.resolve()});
+ const work=defaultApi['GET /api/work/:id']({params:{id:workID}}),base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const analysis={...base,rows:[{...base.rows[0],child_count:0}],focus:[{...base.rows[0],child_count:0}],session_count:1,total:1};
+ let holdOverview=true;
+ const api={
+  'GET /api/work/:id':async({params})=>{if(params.id==='delayed-work'&&holdOverview){overviewStarted.resolve();await overviewRelease.promise}return{...work,id:params.id,conversations:[{...work.conversations[0],workspace_id:params.id}]};},
+  'GET /api/work/:id/delegation':analysis,
+  'GET /api/work/:id/conversations/:conversation':async request=>{if(request.params.id==='delayed-work'){transcriptStarted.resolve();await transcriptRelease.promise}return{...defaultApi['GET /api/work/:id/conversations/:conversation']({...request,params:{...request.params,id:workID}}),workspace_id:request.params.id};},
+  'GET /api/work/:id/conversations/:conversation/signals':({params})=>({conversation_id:params.conversation,signals:[]}),
+  'POST /api/query-object-references':async({body})=>{resolutionStarted.resolve();await resolutionRelease.promise;return body.references.map(reference=>({reference,href:`/work/${workID}/conversation/${rootConversation}`}));},
+ };
+ const app=await open(t,{url:`/work/${workID}`,api,ready:'.conversation-panel:not(.conversation-loading)'}),{page}=app;
+ const cancelled=path=>page.waitForEvent('requestfailed',{predicate:request=>new URL(request.url()).pathname===path});
+ let aborted=cancelled('/api/work/delayed-work');
+ await page.evaluate(()=>{void window.pharosOpenDetail('delayed-work')});await overviewStarted.promise;
+ await page.evaluate(()=>window.pharosNavigate('/cards'));await aborted;
+ overviewRelease.resolve();holdOverview=false;await page.locator('#cards.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/cards');
+ aborted=cancelled(`/api/work/delayed-work/conversations/${rootConversation}`);
+ await page.evaluate(()=>{void window.pharosOpenDetail('delayed-work')});await transcriptStarted.promise;
+ await page.evaluate(id=>{void window.pharosOpenDetail(id)},workID);await aborted;
+ transcriptRelease.resolve();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,`/work/${workID}/conversation/${rootConversation}`);
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ assert.equal(await page.locator('html').evaluate(element=>element.classList.contains('page-loading')),false);
+ aborted=cancelled('/api/query-object-references');
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}?conversation=elsewhere`);await resolutionStarted.promise;
+ await page.evaluate(()=>window.pharosNavigate('/cards'));await aborted;
+ resolutionRelease.resolve();await page.locator('#cards.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/cards');
 });
 
 for(const width of [1440,390])test(`single-agent Conversation and Timeline share the actual reader at ${width}px`,{skip},async t=>{

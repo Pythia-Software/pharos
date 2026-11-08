@@ -123,6 +123,11 @@ test('workspace fingerprint event links open the source conversation and preserv
  const direct=new URL(eventLinkURL({id:'direct-conversation',work_id:'workspace-test'},event),'http://pharos.invalid');
  assert.equal(direct.pathname,'/work/workspace-test');
  assert.equal(direct.searchParams.get('conversation'),'direct-conversation');
+ const inherited=conversation('container',[message('reply','C.report',{conversation_id:'elsewhere'})]);
+ const resolved=new URL(eventLinkURL(inherited,event),'http://pharos.invalid');
+ assert.equal(resolved.pathname,'/conversation/elsewhere');assert.equal(resolved.searchParams.get('message'),'reply');
+ inherited.messages[0].work_id='source-work';
+ assert.equal(new URL(eventLinkURL(inherited,event),'http://pharos.invalid').pathname,'/work/source-work');
 });
 
 test('timeline legend keeps specific labels with their parent modes without duplicating ancestors',()=>{
@@ -315,7 +320,7 @@ test('fingerprint source selection follows the clicked message within a compress
  assert.equal(fingerprintMessageAt(token,0),messages[0]);assert.equal(fingerprintMessageAt(token,1),messages[2]);
  assert.equal(fingerprintMessageAt({messages:[]},.5),undefined);
  const selected=fingerprintMessageAt(token,.5),url=new URL(ribbonSourceURL({message:selected,start:0},{workspace:'work /space',conversation:'workspace-ribbon',session:'main'},'/analyze?analyze_data=message_labels'),'http://pharos.invalid');
- assert.equal(url.pathname,'/work/work%20%2Fspace');
+ assert.equal(url.pathname,'/conversation/source%20%2Fconversation','the source workspace is not recorded on this message');
  assert.equal(url.searchParams.get('conversation'),'source /conversation');
  assert.equal(url.searchParams.get('delegation_session'),'source /session');
  assert.equal(url.searchParams.get('message'),'second');assert.equal(url.searchParams.get('reveal'),'message:second');
@@ -455,6 +460,9 @@ test('ribbon source links retain aliases and timeline settings while revealing t
  const deep=new URL(ribbonSourceURL(item,source,current.replace('/work/work%20%2Fone?','/work/work%20%2Fone/conversation/original?')),'http://localhost');assert.equal(deep.searchParams.get('delegation_start'),'4');
  assert.equal(ribbonSourceURL({id:'inferred',start:0,end:10},source,current),null);
  const external=new URL(ribbonSourceURL({...item,message:{...item.message,work_id:'elsewhere'}},source,current),'http://localhost');assert.equal(external.pathname,'/work/elsewhere');assert.equal(external.searchParams.has('delegation_start'),false);
+ const inherited=new URL(ribbonSourceURL({...item,message:{...item.message,work_id:undefined,session_id:undefined}},source,current),'http://localhost');
+ assert.equal(inherited.pathname,'/conversation/original');assert.equal(inherited.searchParams.get('message'),'m:&=1');
+ assert.equal(inherited.searchParams.has('delegation_start'),false);assert.equal(inherited.searchParams.has('delegation_session'),false);
 });
 
 test('timeline legends follow drawn intervals, errors and the visible portion of caller composition',()=>{
