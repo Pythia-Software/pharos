@@ -327,6 +327,12 @@ test('diagnostic queries preserve separate numeric distributions and incomplete 
   assert.equal(new Set(tables.coverage.rows.map(row => row.id)).size, 2);
   assert.equal(tables.deferred.rows[0].completed_at, null);
   for (const table of Object.values(syncTables({}))) assert.deepEqual(table.rows, []);
+  // CPU and RSS this platform could not read arrive as null: missing, while
+  // a measured zero stays a zero.
+  const unmeasured = syncTables({ history: [{ run_id: 'a', seconds: 2, cpu_seconds: null, cpu_percent_one_core: null, rss_observed_peak_bytes: null, rss_baseline_bytes: 0 }],
+    statistics: { changes: { samples: 1, elapsed_seconds: { median: 2, p95: 2, last: 2 }, cpu_seconds: null, rss_observed_peak_bytes: null, estimated_cpu_duty_percent_one_core: null } } });
+  assert.deepEqual([unmeasured.history.rows[0].cpu_seconds, unmeasured.history.rows[0].cpu_percent_one_core, unmeasured.history.rows[0].rss_observed_peak_bytes, unmeasured.history.rows[0].rss_baseline_bytes], [null, null, null, 0]);
+  assert.deepEqual([unmeasured.costs.rows[0].cpu_median, unmeasured.costs.rows[0].ram_last, unmeasured.costs.rows[0].cpu_duty, unmeasured.costs.rows[0].elapsed_median], [null, null, null, 2]);
 });
 
 test('run detail queries distinguish unknown work totals and forecasts from measured zeroes', () => {

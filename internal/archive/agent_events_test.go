@@ -257,6 +257,17 @@ func TestAgentEventKindsAgreeEverywhere(t *testing.T) {
 	if stored, err := os.ReadFile(path); err != nil || string(stored) != string(data) {
 		t.Fatalf("%s is not agentEventFamilies; run with PHAROS_UPDATE_AGENT_EVENT_KINDS=1 (%v)", path, err)
 	}
+	for _, name := range []string{"agent_events", "agent_event_rates"} {
+		agentEventSchemaKindsAgree(t, name, want.Groups, func(yield func(key, label string)) {
+			for _, k := range want.Kinds {
+				yield(k.Key, k.Label)
+			}
+		})
+	}
+}
+
+func agentEventSchemaKindsAgree(t *testing.T, name string, groups []string, kinds func(func(key, label string))) {
+	t.Helper()
 	var schema struct {
 		Fields []struct {
 			Name   string `json:"name"`
@@ -267,10 +278,11 @@ func TestAgentEventKindsAgreeEverywhere(t *testing.T) {
 			} `json:"filter"`
 		} `json:"fields"`
 	}
-	raw, err := os.ReadFile(filepath.Join("..", "..", "schemas", "agent_events.schema.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "schemas", name+".schema.json"))
 	if err != nil || json.Unmarshal(raw, &schema) != nil {
-		t.Fatalf("read the schema: %v", err)
+		t.Fatalf("read the %s schema: %v", name, err)
 	}
+	seen := 0
 	for _, field := range schema.Fields {
 		var got, expected []string
 		for _, option := range field.Filter.Values.Options {
@@ -278,18 +290,20 @@ func TestAgentEventKindsAgreeEverywhere(t *testing.T) {
 		}
 		switch field.Name {
 		case "family":
-			for _, k := range want.Kinds {
-				expected = append(expected, k.Key+"="+k.Label)
-			}
+			kinds(func(key, label string) { expected = append(expected, key+"="+label) })
 		case "family_group":
-			for _, group := range want.Groups {
+			for _, group := range groups {
 				expected = append(expected, group+"="+group)
 			}
 		default:
 			continue
 		}
+		seen++
 		if !slices.Equal(got, expected) {
-			t.Errorf("schema %s options %v, want %v", field.Name, got, expected)
+			t.Errorf("%s schema %s options %v, want %v", name, field.Name, got, expected)
 		}
+	}
+	if seen != 2 {
+		t.Errorf("%s schema has %d of its kind and group fields", name, seen)
 	}
 }

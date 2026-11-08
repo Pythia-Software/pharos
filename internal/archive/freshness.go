@@ -62,6 +62,9 @@ type freshnessRow struct {
 	OutputMissing bool `json:"output_missing,omitempty"`
 	// TaskID identifies the source's owning background task, when known.
 	TaskID string `json:"task_id,omitempty"`
+	// TaskIDs lists every background task that catches the row up, when
+	// more than one does; the soonest scheduled of them updates it first.
+	TaskIDs []string `json:"task_ids,omitempty"`
 	// short is the summary's words for a scheduled row ("updates
 	// tomorrow").
 	short string
@@ -358,6 +361,7 @@ type domainEntry struct {
 	pendingSince         string
 	outputMissing        bool
 	taskID               string
+	taskIDs              []string
 	// running is the code used when an operation is catching it up.
 	running string
 	// short is the Data row's muted words while scheduled.
@@ -369,7 +373,7 @@ type domainEntry struct {
 // first, §5).
 func (l *ledger) add(entry domainEntry) {
 	row := freshnessRow{Domain: entry.domain, Group: entry.group, Label: entry.label, AsOf: optional(entry.asOf),
-		Behind: freshnessBehind{State: entry.state}, OutputMissing: entry.outputMissing, TaskID: entry.taskID}
+		Behind: freshnessBehind{State: entry.state}, OutputMissing: entry.outputMissing, TaskID: entry.taskID, TaskIDs: entry.taskIDs}
 	if entry.countKnown && entry.state != freshCurrent {
 		count := entry.count
 		row.Behind.Count = &count
@@ -651,7 +655,10 @@ func latestTime(values ...string) string {
 }
 
 // captures is capt:<host>/<source>: captured data waiting to be indexed,
-// from the cached capturedHosts.
+// from the cached capturedHosts. Preserve originals indexes every Mac's
+// captures on its cadence; Other sources also indexes the captures of this
+// Mac's whole-source kinds (by source name). Only the background view knows
+// which of the two runs first, so such rows list both.
 func (l *ledger) captures() {
 	if l.in.files == nil {
 		return
@@ -663,6 +670,16 @@ func (l *ledger) captures() {
 	for _, capture := range l.in.files.captures {
 		entry := domainEntry{domain: "capt:" + capture.host + "/" + capture.source, group: "conversations", asOf: capture.indexedAt,
 			label: "Captures (" + capture.source + " on " + defaultString(capture.hostLabel, capture.host) + ")", running: "indexing", next: nextManualIndex, state: freshCurrent}
+		entry.taskID = "preserve"
+		if kind := l.in.sourceKinds[capture.source]; kind != "" && !automaticProvider(kind) && !isConductorSource(kind) {
+			entry.taskIDs = []string{"preserve", "other-sources"}
+		}
+		for _, task := range append([]string{entry.taskID}, entry.taskIDs...) {
+			if cadence := l.itemCadence(task); cadence != cadenceManual {
+				entry.next = cadenceNext[cadence]
+				break
+			}
+		}
 		switch {
 		case l.in.files.capturesUnreadable:
 			// The last rows read, which cannot be checked now.

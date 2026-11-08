@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
+	"github.com/gbdubs/pharos/internal/platform/localidentity"
 	sqlite "modernc.org/sqlite"
 )
 
@@ -88,44 +88,64 @@ func (c *sourceCapture) captureDatabases(items []captureItem, present map[string
 }
 
 func sqliteState(file string) (sqliteSourceState, error) {
-	info, err := os.Stat(file)
+	state, _, _, err := observeSQLite(file)
+	return state, err
+}
+
+// observeSQLite stats a database and its WAL once each and returns the stat
+// results its state came from; wal is nil when the WAL is absent.
+func observeSQLite(file string) (state sqliteSourceState, db, wal fs.FileInfo, err error) {
+	db, err = os.Stat(file)
+	if err != nil {
+		return sqliteSourceState{}, nil, nil, err
+	}
+	if !db.Mode().IsRegular() {
+		return sqliteSourceState{}, nil, nil, fs.ErrNotExist
+	}
+	state = sqliteSourceState{Size: db.Size(), MTimeNS: db.ModTime().UnixNano()}
+	if wal, err = os.Stat(file + "-wal"); err == nil {
+		state.WALSize, state.WALMTimeNS = wal.Size(), wal.ModTime().UnixNano()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return sqliteSourceState{}, nil, nil, err
+	} else {
+		wal = nil
+	}
+	return state, db, wal, nil
+}
+
+// sqliteDependencyState is sqliteState plus the local identity of the
+// database and, when it holds frames, of its WAL, each from the same stat as
+// its size and time, so replacing either one changes the state. An identity
+// that cannot be observed is an error, never an empty identity a later
+// observation could match.
+func sqliteDependencyState(file string) (sqliteSourceState, error) {
+	state, db, wal, err := observeSQLite(file)
 	if err != nil {
 		return sqliteSourceState{}, err
 	}
-	if !info.Mode().IsRegular() {
-		return sqliteSourceState{}, fs.ErrNotExist
+	if state.Identity, err = localIdentityText(db); err != nil {
+		return sqliteSourceState{}, fmt.Errorf("identify %s: %w", file, err)
 	}
-	state := sqliteSourceState{Size: info.Size(), MTimeNS: info.ModTime().UnixNano()}
-	if wal, err := os.Stat(file + "-wal"); err == nil {
-		state.WALSize, state.WALMTimeNS = wal.Size(), wal.ModTime().UnixNano()
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return sqliteSourceState{}, err
+	if state.WALSize > 0 {
+		if state.WALIdentity, err = localIdentityText(wal); err != nil {
+			return sqliteSourceState{}, fmt.Errorf("identify %s-wal: %w", file, err)
+		}
 	}
 	return state, nil
 }
 
-func sqliteDependencyState(file string) (sqliteSourceState, error) {
-	state, err := sqliteState(file)
+// localIdentity observes the local object a stat result describes; tests
+// replace it to simulate an unavailable identity.
+var localIdentity = localidentity.Of
+
+// localIdentityText is the legacy decimal "device:inode" text of info's
+// object, which stored capture states and source preflight hashes keep.
+func localIdentityText(info fs.FileInfo) (string, error) {
+	key, err := localIdentity(info)
 	if err != nil {
-		return state, err
+		return "", err
 	}
-	info, err := os.Stat(file)
-	if err != nil {
-		return state, err
-	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		state.Identity = fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
-	}
-	if state.WALSize > 0 {
-		wal, err := os.Stat(file + "-wal")
-		if err != nil {
-			return state, err
-		}
-		if stat, ok := wal.Sys().(*syscall.Stat_t); ok {
-			state.WALIdentity = fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
-		}
-	}
-	return state, nil
+	return key.DeviceInode()
 }
 
 // restorePlainSnapshot replaces an encoded latest snapshot with its original

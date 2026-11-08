@@ -2,6 +2,23 @@ import {shortLabel,stateColor} from "./conversation-labels";
 import catalog from "../../pricing/model_colors.json";
 import { activities, activityPresentation } from "./machine-activity-data";
 import { orderedValues } from "./session-shape-bands";
+import agentEventKinds from "./agent-event-kinds.json";
+
+// Agent event groups take the reader's event hues (ui.py's --event-* tokens):
+// friction red, learning ochre, second look green, choices blue. A kind is a
+// shade of its group's hue, darkest first.
+const eventGroupHues: Record<string, string> = { Friction: "var(--event-friction)", "Reactions and learning": "var(--event-learning)", "Worth a second look": "var(--event-second-look)", "Choices you may not see": "var(--event-choices)" };
+// A kind's legend entry sits under its group (groupPath), so a group's chip
+// selects its kinds. Kinds of one group, drawn together, alternate darker
+// (toward ink) and lighter (toward the page) so neighbours stay apart.
+const kindShades: Array<[number, "--ink" | "--bg"]> = [[100, "--bg"], [55, "--ink"], [50, "--bg"], [80, "--ink"], [75, "--bg"], [35, "--ink"], [30, "--bg"], [65, "--ink"]];
+const eventKindStyles = new Map<string, { color: string; group: string; groupPath: string[]; order: string }>(agentEventKinds.kinds.flatMap(kind => {
+  const siblings = agentEventKinds.kinds.filter(other => other.group === kind.group), index = siblings.indexOf(kind);
+  const [share, toward] = kindShades[index % kindShades.length];
+  const style = { color: share === 100 ? eventGroupHues[kind.group] : `color-mix(in srgb,${eventGroupHues[kind.group]} ${share}%,var(${toward}))`, group: kind.group, groupPath: [kind.group],
+    order: `${agentEventKinds.groups.indexOf(kind.group)}:${String(index).padStart(2, "0")}` };
+  return [[kind.key, style], [kind.label, style]] as [string, typeof style][];
+}));
 
 type Provider = keyof typeof catalog.providers;
 type ModelStyle = { provider: Provider; class: string; color: string };
@@ -83,6 +100,8 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
       groupPath:[group,...scope==='label'?parts.slice(1,-1).map((_,index)=>shortLabel(parts.slice(0,index+2).join('.'))):[]]};
   }
   if (scope.startsWith("root_")) scope = scope.slice(5);
+  if (scope === "family_group" && Object.hasOwn(eventGroupHues, name)) return { color: eventGroupHues[name], order: String(agentEventKinds.groups.indexOf(name)) };
+  if (scope === "family" && eventKindStyles.has(name)) return eventKindStyles.get(name)!;
   // Daily covers key series by their displayed label; Machine Time's palette applies to either.
   if (scope === "hour_of_day") return { color: hourOfDayColor(Number.parseInt(name, 10)), order: name };
   if (scope === "activity") return { color: (activities.find(item => item.label === name) ?? activityPresentation(name)).color, order: name };

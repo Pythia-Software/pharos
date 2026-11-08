@@ -3,12 +3,15 @@ package archive
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/localidentity"
 )
 
 // Snapshots step through one read transaction: a writer committing between
@@ -129,4 +132,173 @@ func (c *cancelAfter) Err() error {
 		return context.Canceled
 	}
 	return nil
+}
+
+// replaceKeepingStat renames a new file over name with the same bytes and
+// modification time, while the old one stays open so its inode is not reused.
+func replaceKeepingStat(t *testing.T, name string) {
+	t.Helper()
+	info, err := os.Stat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { held.Close() })
+	if err := os.WriteFile(name+".new", data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(name+".new", info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(name+".new", name); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A database's dependency state names the database and, only while it holds
+// frames, its WAL, so either can be replaced without changing size or time
+// and still invalidate what depends on it. An identity it cannot observe is
+// an error, not an empty identity.
+func TestSQLiteDependencyStateIdentities(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "source.db")
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Second)
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(name, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(name, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	observe := func() sqliteSourceState {
+		t.Helper()
+		state, err := sqliteDependencyState(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	legacy := func(name string) string {
+		t.Helper()
+		key, err := localidentity.Stat(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, err := key.DeviceInode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return text
+	}
+	write(file, "database")
+	// An absent and an empty WAL need no identity.
+	state := observe()
+	if state.Identity != legacy(file) || state.WALIdentity != "" || state.Size != 8 || state.MTimeNS != stamp.UnixNano() {
+		t.Fatalf("database alone: %+v", state)
+	}
+	if again := observe(); again != state {
+		t.Fatalf("same files observed differently: %+v then %+v", state, again)
+	}
+	write(file+"-wal", "")
+	if state = observe(); state.WALIdentity != "" || state.WALSize != 0 || state.WALMTimeNS != stamp.UnixNano() {
+		t.Fatalf("empty WAL: %+v", state)
+	}
+	write(file+"-wal", "frames")
+	state = observe()
+	if state.WALIdentity != legacy(file+"-wal") || state.WALIdentity == state.Identity || state.WALSize != 6 {
+		t.Fatalf("nonempty WAL: %+v", state)
+	}
+	if again := observe(); again != state {
+		t.Fatalf("same files observed differently: %+v then %+v", state, again)
+	}
+
+	replaceKeepingStat(t, file)
+	replaced := observe()
+	if replaced.Identity == state.Identity || replaced.WALIdentity != state.WALIdentity {
+		t.Fatalf("database replacement: %+v, was %+v", replaced, state)
+	}
+	state = replaced
+	replaceKeepingStat(t, file+"-wal")
+	replaced = observe()
+	if replaced.WALIdentity == state.WALIdentity || replaced.Identity != state.Identity {
+		t.Fatalf("WAL replacement: %+v, was %+v", replaced, state)
+	}
+	replaced.Identity, replaced.WALIdentity, state.Identity, state.WALIdentity = "", "", "", ""
+	if replaced != state {
+		t.Fatalf("replacement changed size or time: %+v, was %+v", replaced, state)
+	}
+
+	// A failed identity is the error itself and never reads as a missing
+	// file, so a capture keeps what it had; the WAL's matters only while it
+	// holds frames.
+	for _, failing := range []string{"source.db", "source.db-wal"} {
+		override(t, &localIdentity, func(info fs.FileInfo) (localidentity.Key, error) {
+			if info.Name() == failing {
+				return localidentity.Key{}, localidentity.ErrUnavailable
+			}
+			return localidentity.Of(info)
+		})
+		state, err := sqliteDependencyState(file)
+		if !errors.Is(err, localidentity.ErrUnavailable) || errors.Is(err, fs.ErrNotExist) || state != (sqliteSourceState{}) {
+			t.Fatalf("%s identity failure: %+v, %v", failing, state, err)
+		}
+	}
+	write(file+"-wal", "")
+	if state, err := sqliteDependencyState(file); err != nil || state.WALIdentity != "" {
+		t.Fatalf("empty WAL needed its identity: %+v, %v", state, err)
+	}
+}
+
+// A capture that cannot identify a database records a failure and keeps the
+// snapshot it has, as current rather than missing, and reuses it once the
+// identity is available again.
+func TestCaptureKeepsSnapshotWhenIdentityFails(t *testing.T) {
+	useHost(t, "host-a")
+	conductor := filepath.Join(t.TempDir(), "conductor")
+	if err := os.MkdirAll(conductor, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db := openWritableSQLite(t, filepath.Join(conductor, "conductor.db"))
+	execSQL(t, db, "CREATE TABLE sessions(id TEXT PRIMARY KEY)", "CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT)", "INSERT INTO sessions VALUES('kept')")
+	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: conductor, Enabled: true})
+	if summary := runCapture(t, config); !summary.OK {
+		t.Fatalf("first capture: %#v", summary)
+	}
+	before := readCaptureManifest(t, config, "conductor").Snapshots[0]
+	if before.Source.Identity == "" {
+		t.Fatalf("snapshot has no source identity: %+v", before)
+	}
+
+	attempts := 0
+	override(t, &localIdentity, func(fs.FileInfo) (localidentity.Key, error) {
+		attempts++
+		return localidentity.Key{}, localidentity.ErrUnsupported
+	})
+	summary, err := Capture(t.Context(), config, config.Sources, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := captureResult(t, summary, "conductor"); summary.OK || attempts == 0 || result.SnapshotsTaken != 0 || result.SnapshotsUnchanged != 0 {
+		t.Fatalf("unidentified database: %#v", summary)
+	}
+	manifest := readCaptureManifest(t, config, "conductor")
+	if len(manifest.Snapshots) != 1 || manifest.Snapshots[0].MissingSince != "" || manifest.Snapshots[0].Source != before.Source || manifest.Snapshots[0].Captured != before.Captured {
+		t.Fatalf("identity failure changed the snapshot: %+v, was %+v", manifest.Snapshots, before)
+	}
+	if _, err := os.Stat(capturedPath(config, "conductor", before.Captured)); err != nil {
+		t.Fatal(err)
+	}
+
+	localIdentity = localidentity.Of
+	if result := captureResult(t, runCapture(t, config), "conductor"); result.SnapshotsUnchanged != 1 || result.SnapshotsTaken != 0 {
+		t.Fatalf("restored identity did not reuse the snapshot: %#v", result)
+	}
 }

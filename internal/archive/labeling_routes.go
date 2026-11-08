@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -554,17 +553,22 @@ func cliEnvironment(path string) []string {
 // stdout line is sanitized into events, and the process group is cleaned up
 // after a terminal event (labelingLingerGrace, SIGTERM, labelingKillGrace,
 // SIGKILL), on timeout or on a hard stop. started is called with the pid
-// once the process runs.
+// once the process runs. Where the platform has no process group for the
+// CLI it is never started: StartError says why.
+//
+// Cleanup records each signal sent, with an error when the platform refused
+// it, and an unknown group status where an observation failed; a group that
+// is gone is not recorded.
 func runLabelingProcess(path string, args, env []string, dir, prompt string, events labelingReceipt, stderr *os.File, stream *labelingStream, mu *sync.Mutex,
 	timeout time.Duration, hardStop <-chan struct{}, started func(pid int)) (result labelingProcess) {
 	begin := time.Now()
 	defer func() { result.Duration = time.Since(begin) }()
-	stdoutR, stdoutW, err := os.Pipe()
+	stdoutR, stdoutW, err := labelingPipe()
 	if err != nil {
 		result.StartError = err.Error()
 		return result
 	}
-	stdinR, stdinW, err := os.Pipe()
+	stdinR, stdinW, err := labelingPipe()
 	if err != nil {
 		stdoutR.Close()
 		stdoutW.Close()
@@ -574,7 +578,13 @@ func runLabelingProcess(path string, args, env []string, dir, prompt string, eve
 	cmd := exec.Command(path, args...)
 	cmd.Dir, cmd.Env = dir, append(cliEnvironment(path), env...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdinR, stdoutW, stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := labelingConfigureProcess(cmd); err != nil {
+		for _, pipe := range []*os.File{stdoutR, stdoutW, stdinR, stdinW} {
+			pipe.Close()
+		}
+		result.StartError = err.Error()
+		return result
+	}
 	err = cmd.Start()
 	stdoutW.Close()
 	stdinR.Close()
@@ -634,11 +644,26 @@ func runLabelingProcess(path string, args, env []string, dir, prompt string, eve
 		cmd.Wait()
 		close(exited)
 	}()
-	signalGroup := func(signal syscall.Signal, reason string) {
-		if err := syscall.Kill(-pid, signal); err == nil || !errors.Is(err, syscall.ESRCH) {
-			result.Cleanup = append(result.Cleanup, map[string]any{"signal": signal.String(), "reason": reason,
+	signalGroup := func(action labelingAction, reason string) {
+		err := labelingSignalGroup(pid, action)
+		if errors.Is(err, errLabelingGroupAbsent) {
+			return
+		}
+		entry := map[string]any{"signal": labelingActionLabel(action), "reason": reason, "after_seconds": time.Since(begin).Seconds()}
+		if err != nil {
+			// Not delivered: the group may still run.
+			entry["error"] = err.Error()
+		}
+		result.Cleanup = append(result.Cleanup, entry)
+	}
+	// group is the group's state, recording why when it cannot be known.
+	group := func(reason string) labelingGroupState {
+		state, err := labelingObserveGroup(pid)
+		if state == labelingGroupUnknown {
+			result.Cleanup = append(result.Cleanup, map[string]any{"group": "unknown", "reason": reason, "error": fmt.Sprint(err),
 				"after_seconds": time.Since(begin).Seconds()})
 		}
+		return state
 	}
 	timeoutTimer := time.NewTimer(timeout)
 	defer timeoutTimer.Stop()
@@ -650,7 +675,7 @@ func runLabelingProcess(path string, args, env []string, dir, prompt string, eve
 			return
 		}
 		terminated = true
-		signalGroup(syscall.SIGTERM, reason)
+		signalGroup(labelingTerminate, reason)
 		kill = time.After(labelingKillGrace)
 	}
 wait:
@@ -676,19 +701,21 @@ wait:
 				terminate("stopped")
 			}
 		case <-kill:
-			signalGroup(syscall.SIGKILL, "still running after SIGTERM")
+			signalGroup(labelingForceKill, "still running after SIGTERM")
 			kill = nil
 		}
 	}
 	// Children that outlive the CLI are part of the attempt too.
-	if syscall.Kill(-pid, 0) == nil {
-		signalGroup(syscall.SIGTERM, "process group outlived the CLI")
+	if group("process group status unknown after the CLI exited") == labelingGroupPresent {
+		signalGroup(labelingTerminate, "process group outlived the CLI")
 		deadline := time.Now().Add(labelingKillGrace)
-		for syscall.Kill(-pid, 0) == nil && time.Now().Before(deadline) {
+		state, _ := labelingObserveGroup(pid)
+		for state == labelingGroupPresent && time.Now().Before(deadline) {
 			time.Sleep(20 * time.Millisecond)
+			state, _ = labelingObserveGroup(pid)
 		}
-		if syscall.Kill(-pid, 0) == nil {
-			signalGroup(syscall.SIGKILL, "process group still running after SIGTERM")
+		if state != labelingGroupAbsent && group("process group status unknown after SIGTERM") == labelingGroupPresent {
+			signalGroup(labelingForceKill, "process group still running after SIGTERM")
 		}
 	}
 	select {

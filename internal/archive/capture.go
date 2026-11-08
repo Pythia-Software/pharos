@@ -18,7 +18,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/gbdubs/pharos/internal/platform/filelock"
@@ -375,7 +374,7 @@ var (
 func beginCapture(config Config) (*captureSession, error) {
 	if d, err := readLibraryDescriptor(config); err == nil {
 		config.PendingCapture = config.PendingCapture || d.RetainPendingEvidence
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if !libraryDescriptorMissing(err) {
 		return nil, err
 	}
 	root := config.CaptureRoot
@@ -922,13 +921,16 @@ func (c *sourceCapture) ensureSpace(bytes int64) error {
 	if bytes == 0 {
 		return nil
 	}
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(c.dir, &stat); err != nil {
+	space, err := diskCapacity(c.dir)
+	if err != nil {
 		return toDestination(err)
 	}
-	free := int64(stat.Bavail) * int64(stat.Bsize)
-	if free-bytes < captureFreeMargin {
-		return destinationError{fmt.Errorf("needs %d bytes but only %d are free", bytes+captureFreeMargin, free)}
+	need, err := spaceNeeded(bytes, captureFreeMargin)
+	if err != nil {
+		return destinationError{err}
+	}
+	if space.AvailableBytes < need {
+		return destinationError{fmt.Errorf("needs %d bytes but only %d are free", need, space.AvailableBytes)}
 	}
 	return nil
 }
@@ -1006,7 +1008,7 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 	if err := os.Chtimes(temporary, mtime, mtime); err != nil {
 		return abandon(toDestination(err))
 	}
-	if err := syscall.Fsync(int(out.Fd())); err != nil {
+	if err := syncFileData(out); err != nil {
 		return abandon(toDestination(err))
 	}
 	if err := out.Close(); err != nil {
@@ -1385,7 +1387,7 @@ func syncPath(file string) (os.FileInfo, error) {
 		return nil, err
 	}
 	defer handle.Close()
-	if err := syscall.Fsync(int(handle.Fd())); err != nil {
+	if err := syncFileData(handle); err != nil {
 		return nil, err
 	}
 	return handle.Stat()

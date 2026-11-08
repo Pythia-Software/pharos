@@ -93,6 +93,14 @@ My Library/
   deliveries/                 small delivery receipts, when used
 ```
 
+`pharos-library.json` (format version 1) records the library's ID, its writable
+instance and the library folder's inode (`directory_inode`). Renaming or moving the
+folder within a volume keeps the inode, so the library keeps its identity; a copy
+gets a new inode and must go through **Recover library**. When Pharos cannot read
+the folder's inode it refuses to open the library rather than skip the check or
+write a replacement descriptor. Only macOS and Linux can read that inode today, so
+other platforms cannot create or open a writable library yet.
+
 The app registration, selected library and remembered library facts are stored under
 `~/Library/Application Support/Pharos/applications/<installation-id>/`. Runtime
 endpoint files there are private, temporary credentials. Each service binds an

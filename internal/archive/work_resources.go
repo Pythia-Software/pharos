@@ -94,9 +94,12 @@ type taskHelperObservation struct {
 	Role       string
 	From, To   time.Time
 	CPUSeconds *float64
-	// FootprintBytes is the helper's footprint at the end of the interval.
+	// FootprintBytes is the reader's memory figure at the end of the interval,
+	// not a task peak. CounterBasis names the reader (physical footprint only
+	// for the kernel reader); availability is independent of CPU.
 	FootprintBytes *uint64
 	GPUSeconds     *float64
+	CounterBasis   string
 	// Exclusive is true when no other task used the helper in the interval.
 	Exclusive   bool
 	Basis, Note string
@@ -364,19 +367,26 @@ func (s *taskHelperScope) end() {
 		s.r.mu.Lock()
 		exclusive := s.exclusive
 		s.r.mu.Unlock()
-		observation := taskHelperObservation{PID: s.pid, Role: s.role, From: s.from, To: s.r.clock(), Exclusive: exclusive}
+		observation := taskHelperObservation{PID: s.pid, Role: s.role, From: s.from, To: s.r.clock(), Exclusive: exclusive, CounterBasis: resourceBasis}
 		switch {
 		case s.startErr != nil || err != nil:
 			observation.Basis, observation.Note = basisUnavailable, "The helper's counters could not be read."
+		case finish.Started == 0 || s.start.Started == 0:
+			observation.Basis, observation.Note = basisUnavailable, "The helper's process identity could not be verified."
 		case finish.Started != s.start.Started:
 			observation.Basis, observation.Note = basisUnavailable, "The helper was replaced during the interval."
 		default:
-			cpu := max(0, finish.CPUSeconds-s.start.CPUSeconds)
-			footprint := finish.Footprint
-			observation.CPUSeconds, observation.FootprintBytes = &cpu, &footprint
 			observation.Basis = basisMeasured
 			if !exclusive {
 				observation.Basis, observation.Note = basisShared, "Other tasks used the helper in the same interval."
+			}
+			if s.start.Known.has(counterOwnCPU) && finish.Known.has(counterOwnCPU) && finish.CPUSeconds >= s.start.CPUSeconds {
+				observation.CPUSeconds = new(finish.CPUSeconds - s.start.CPUSeconds)
+			} else {
+				observation.Note += " CPU counters were unavailable or reset during the interval."
+			}
+			if finish.Known.has(counterMemory) {
+				observation.FootprintBytes = new(finish.Footprint)
 			}
 		}
 		s.r.observeHelper(observation)
@@ -440,14 +450,15 @@ type taskAllocationView struct {
 }
 
 type taskHelperView struct {
-	PID       int              `json:"pid"`
-	Role      string           `json:"role"`
-	From      string           `json:"from"`
-	To        string           `json:"to"`
-	CPU       resourceQuantity `json:"cpu_seconds"`
-	Footprint resourceQuantity `json:"footprint_bytes"`
-	GPU       resourceQuantity `json:"gpu_seconds"`
-	Note      string           `json:"note,omitempty"`
+	CounterBasis string           `json:"counter_basis,omitempty"`
+	PID          int              `json:"pid"`
+	Role         string           `json:"role"`
+	From         string           `json:"from"`
+	To           string           `json:"to"`
+	CPU          resourceQuantity `json:"cpu_seconds"`
+	Footprint    resourceQuantity `json:"footprint_bytes"`
+	GPU          resourceQuantity `json:"gpu_seconds"`
+	Note         string           `json:"note,omitempty"`
 }
 
 const (
@@ -527,16 +538,16 @@ func (r *taskResources) view(now time.Time) taskResourceView {
 	helperCPU, helperGPU, measured, shared, unavailable := 0.0, 0.0, 0, 0, 0
 	gpuMeasured := false
 	for _, helper := range r.helpers {
-		entry := taskHelperView{PID: helper.PID, Role: helper.Role, From: formatTime(helper.From), To: formatTime(helper.To), Note: helper.Note,
-			CPU: unknownQuantity("cpu_seconds", helper.Basis, ""), Footprint: unknownQuantity("bytes", helper.Basis, ""), GPU: unknownQuantity("gpu_seconds", basisUnavailable, "")}
+		entry := taskHelperView{PID: helper.PID, Role: helper.Role, From: formatTime(helper.From), To: formatTime(helper.To), Note: helper.Note, CounterBasis: helper.CounterBasis,
+			CPU: unknownQuantity("cpu_seconds", basisUnavailable, ""), Footprint: unknownQuantity("bytes", basisUnavailable, ""), GPU: unknownQuantity("gpu_seconds", basisUnavailable, "")}
 		if helper.CPUSeconds != nil {
-			entry.CPU.Value = new(*helper.CPUSeconds)
+			entry.CPU = quantity(*helper.CPUSeconds, "cpu_seconds", helper.Basis, "")
 			if helper.Basis == basisMeasured {
 				helperCPU += *helper.CPUSeconds
 			}
 		}
 		if helper.FootprintBytes != nil {
-			entry.Footprint.Value = new(float64(*helper.FootprintBytes))
+			entry.Footprint = quantity(float64(*helper.FootprintBytes), "bytes", helper.Basis, "End-of-interval memory reading; not a task memory peak.")
 		}
 		if helper.GPUSeconds != nil {
 			entry.GPU = quantity(*helper.GPUSeconds, "gpu_seconds", helper.Basis, "")
@@ -545,10 +556,12 @@ func (r *taskResources) view(now time.Time) taskResourceView {
 				gpuMeasured = true
 			}
 		}
-		switch helper.Basis {
-		case basisMeasured:
+		switch {
+		case helper.CPUSeconds == nil:
+			unavailable++
+		case helper.Basis == basisMeasured:
 			measured++
-		case basisShared:
+		case helper.Basis == basisShared:
 			shared++
 		default:
 			unavailable++

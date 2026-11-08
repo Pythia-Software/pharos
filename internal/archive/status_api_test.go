@@ -187,8 +187,11 @@ func TestStatusSnapshotCarriesTheLastMeasuredStorage(t *testing.T) {
 	if _, ok := library()["storage_bytes"]; ok {
 		t.Fatal("storage before any drive check")
 	}
-	drives.cached(config)
-	drives.store(config, &driveState{sizes: librarySizes{LibraryBytes: 1_234_567}, checked: time.Now()})
+	if _, _, err := drives.cached(config); err != nil {
+		t.Fatal(err)
+	}
+	key, _, _ := driveKey(config)
+	drives.store(config, &driveState{identity: key, sizes: librarySizes{LibraryBytes: 1_234_567}, checked: time.Now()})
 	override(t, &statusCoalesce, 0)
 	if got := library()["storage_bytes"]; got != float64(1_200_000) {
 		t.Fatalf("storage from the last drive check, to two figures: %v", got)
@@ -923,7 +926,7 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 		slices.ContainsFunc(total.Processes[len(want):], func(r resourceReading) bool { return !strings.HasPrefix(r.Role, "worker:") }) {
 		t.Fatalf("the machine's total: %v, want %v and any workers", got, want)
 	}
-	if !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == 0 {
+	if !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == nil || *total.MemoryBytes == 0 {
 		t.Fatalf("the total's line: %+v", total)
 	}
 	entries := document["libraries"].([]map[string]any)

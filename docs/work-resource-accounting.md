@@ -7,6 +7,9 @@ code is in `internal/archive/resources_history.go` (history) and
 `internal/archive/work_resources.go` (tasks). Both extend the process sampler
 in `resources.go` described in [background-work.md](background-work.md) §10.
 
+The platform boundary and future-port contract are described in
+[work-portability.md](work-portability.md).
+
 Both are dormant under classic execution. The history collector runs only
 when its owner starts it, which happens with the scheduled engine. Until then
 Pharos samples only while someone is looking, as §10 of background-work.md
@@ -86,6 +89,11 @@ it as not measured. Ownership never comes from matching a process name.
   separate.
 - **No repeated times.** A sample is stored only when its reading is newer
   than the last one.
+- **Counter availability.** CPU, memory and I/O availability comes from the
+  platform reader. Missing counters stay null; known zeroes remain zero.
+  Memory lower bounds carry `memory_partial`, alongside CPU and I/O flags.
+  Memory is physical footprint only on macOS; elsewhere it is approximate
+  Go runtime-managed memory, identified in the series note and basis.
 - **Missing readings.** A tick with no readable process is a sample with
   null values at the tick's time. A null is never drawn as zero.
 - **Wall time.** Sample, segment, marker and window times are wall-clock
@@ -224,7 +232,11 @@ The record holds:
 - **Owned buffers.** Current and peak.
 - **Helper intervals.** Process counters read at admission and at release.
   An interval is `measured` only while the task owned the helper
-  exclusively. A helper replaced during the interval is `unavailable`.
+  exclusively, both observations carry the CPU counter and matching nonzero
+  process identities, and the counter did not reset. CPU and endpoint memory
+  availability are independent. `counter_basis` identifies the native reader;
+  endpoint memory is not a task peak. A replaced or unverifiable helper is
+  `unavailable`.
 - **GPU time.** Only from explicit device or helper reports, or exclusive
   samples. Otherwise `unavailable`.
 

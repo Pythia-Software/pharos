@@ -24,6 +24,10 @@ export const queryCategories = {
   findings: { label: "Findings", tone: "var(--gold)" },
   library: { label: "Search", tone: "color-mix(in srgb,var(--muted) 70%,var(--sea))" },
   tl1: { label: "TL1", tone: "color-mix(in srgb,var(--heat-2) 70%,var(--warn))" },
+  agent_events: { label: "Agent Events", tone: "color-mix(in srgb,var(--sea) 55%,var(--warn))" },
+  // This week against the ones before: new and returning Fixes, safeguards
+  // got around, friction by week (digest-card-recipes.ts).
+  digest: { label: "Weekly digest", tone: "color-mix(in srgb,var(--sea) 45%,var(--gold))" },
 } as const;
 export type QueryCategory = keyof typeof queryCategories;
 
@@ -40,6 +44,7 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   if (dataset === "findings") return "findings";
   if (dataset === "safety") return "safety";
   if (dataset === "fixes") return "findings";
+  if (dataset === "agent_events" || dataset === "agent_event_messages" || dataset === "agent_event_rates") return "agent_events";
   if (dataset === "parallelism" || dataset === "rhythm") return "machines";
   if (dataset === "session_shape") return "sessions";
   if ((dataset === "model_requests" || dataset === "compactions")) return "thinking";
