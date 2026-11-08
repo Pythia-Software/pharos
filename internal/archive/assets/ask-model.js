@@ -11,6 +11,27 @@ function askSuggestionItems(list) {
   }).slice(0,12);
 }
 
+// The suggestion carousel shows one card on narrow screens and at least three
+// from 600 px. Wider rows, such as full screen Ask, add cards while each stays
+// at least 200 px wide. Past three, one question stays off the row, for the
+// placeholder and for rotation to bring in. Peeks of the neighbouring cards
+// sit on both sides; side is the list padding that puts the first card read
+// right after the left peek when the viewport scrolls to the reading block's
+// center slot times the stride.
+// The row repeats the slate copies times and rests in the copy after lead
+// copies, with room on each side for two full rotations and a peek: a timed
+// glide plus a click during it never scrolls past the last card.
+function askIdeaLayout(width, available) {
+  const gap=14,minCard=200;
+  if(!(width>0)||!(available>0))return {count:0,card:0,peek:0,stride:0,side:0,lead:0,copies:0};
+  const fit=Math.floor((width-2*44+gap)/(minCard+gap));
+  const count=Math.max(1,width<600?1:Math.min(available,Math.max(3,Math.min(fit,available-1))));
+  const peek=count>1?44:28,card=(width-2*peek-(count-1)*gap)/count,stride=card+gap;
+  const lead=Math.max(1,Math.ceil((Math.floor(count/2)+2*count+1)/available));
+  const trail=Math.max(1,Math.ceil((Math.ceil(count/2)+2*count)/available));
+  return {count,card,peek,stride,side:peek+Math.floor(count/2)*stride,lead,copies:lead+1+trail};
+}
+
 // While the first suggestions are still being chosen, ask again after 20 s,
 // doubling up to every five minutes: a busy library can take longer than any
 // fixed number of tries.
@@ -137,6 +158,57 @@ function askFullscreenExit(href, from, id) {
 function askHistoryEntries({sessions = [], current = null, query = ''}) {
   const entries = query || !current ? sessions : [current, ...sessions.filter(session => session.id !== current.id)];
   return [...entries].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+// Each CLI and model a chat's turns used, most recent first. Server summaries
+// carry the list; the open chat derives it from its turns, and a chat without
+// a question yet names the model it will ask.
+function askHistoryModels(session, labels = {}) {
+  let uses = Array.isArray(session.models) ? session.models : [];
+  if (!Array.isArray(session.models)) {
+    const seen = new Set();
+    for (const turn of [...(session.conversation || [])].reverse()) {
+      const key = turn.cli + '\u0000' + turn.model;
+      if (!turn.model || seen.has(key)) continue;
+      seen.add(key); uses.push({cli: turn.cli, model: turn.model, label: turn.modelLabel});
+    }
+    if (!uses.length && session.selection?.model) uses = [{cli: session.selection.provider, model: session.selection.model}];
+  }
+  return uses.map(use => ({cli: use.cli || '', model: use.model || '', label: use.label || labels[use.cli]?.[use.model] || use.model || use.cli || ''}));
+}
+function askHistoryDay(timestamp) { const day = new Date(timestamp); day.setHours(0, 0, 0, 0); return day; }
+// Recent chats group by day, older ones by month.
+function askHistoryGroup(timestamp, now = Date.now()) {
+  if (!timestamp) return 'Earlier';
+  const days = Math.round((askHistoryDay(now) - askHistoryDay(timestamp)) / 86400000), date = new Date(timestamp);
+  if (days <= 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return 'Previous 7 days';
+  if (days < 30) return 'Previous 30 days';
+  return date.toLocaleDateString(undefined, {month: 'long', ...(date.getFullYear() !== new Date(now).getFullYear() ? {year: 'numeric'} : {})});
+}
+function askHistoryStamp(timestamp, now = Date.now()) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp), days = Math.round((askHistoryDay(now) - askHistoryDay(timestamp)) / 86400000);
+  if (days <= 1) return date.toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
+  if (days < 7) return date.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
+  return date.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(date.getFullYear() !== new Date(now).getFullYear() ? {year: 'numeric'} : {})});
+}
+function askHistoryFullDate(timestamp) {
+  return new Date(timestamp).toLocaleString(undefined, {weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit'});
+}
+// One history row: title, turn count, models and when the chat was last active.
+function askHistoryRow(session, {now = Date.now(), labels = {}} = {}) {
+  const turns = session.questionCount ?? session.conversation?.length ?? 0, models = askHistoryModels(session, labels);
+  const started = session.createdAt && session.createdAt !== session.updatedAt ? 'Started ' + askHistoryFullDate(session.createdAt) : '';
+  return {
+    title: session.conversation?.[0]?.prompt || session.draft || 'Untitled chat',
+    turns: turns ? turns + (turns === 1 ? ' turn' : ' turns') : 'Draft',
+    models,
+    modelSummary: models.map(model => model.label).join(', '),
+    group: askHistoryGroup(session.updatedAt, now),
+    stamp: askHistoryStamp(session.updatedAt, now),
+    when: [session.updatedAt ? (turns ? 'Last active ' : 'Edited ') + askHistoryFullDate(session.updatedAt) : '', started].filter(Boolean).join(' · '),
+  };
 }
 // Keep snapshots/replacements ahead of later removals, even on slow requests.
 // A failed write must not prevent the next deletion or clear from running.

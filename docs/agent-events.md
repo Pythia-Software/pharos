@@ -8,7 +8,10 @@ thinking, with what it was about and what the agent did about it, linked to the 
 It is a preview. Settings → Background Processing → **Agent events (preview)**, beside message labels, turns it on for a library: it lists the
 pages in Analyze and starts the pass that finds events on this Mac (below). `agent_events_enabled = true` in the
 library's configuration does both too, and locks the switch on; `/assets/preferences.js` tells the page so
-(`window.pharosConfiguredFlags`), since no preference records it. Direct links work either way.
+(`window.pharosConfiguredFlags`), since no preference records it. Direct links work either way. The **Agent Events**
+dashboard (Analyze → Dashboards → Agents) and its four cards are listed whether or not the preview is on, as Fixes
+is: until the pass has read messages they say so and point to Settings → Background Processing. The lab's Agent
+Experience dashboard and the raw event tables wait on the switch (`agent-events-flag.ts`).
 
 ## How events are found
 
@@ -48,6 +51,66 @@ They back two query datasets, `agent_events` (events at or above the threshold) 
 dashboard's catalog (`web/src/agent-events-analysis-catalog.ts`). The dashboard also draws **events per 1,000 agent
 messages** by day or week, dividing by the messages read in each period under the same filters: the engine's parts
 split only additive measures, so this panel computes the rate from two grouped counts.
+
+### Agent Events dashboard
+
+`agent_event_facts` (`agent_event_facts.go`) gives each message the pass read the context its rates are broken down
+by, so a breakdown never reads the conversation history at query time:
+
+- `agent_event_facts`: one row per message read, with its turn (`turn_id`, the prompt it answered, found from the
+  prompts' source order), who prompted the turn (`prompted_by`: `person` when the prompt has typed words, `automated`
+  when it has none, `agent` for a delegated subagent's run, `unclassified` before authorship has run, `none` before
+  the first prompt), the prompt's typed words, model, effort, provider, harness, whether it is a subagent, and its
+  events at the threshold. A message without a time takes its conversation's start (`time_source`).
+- `agent_event_fact_kinds`: the message's events per reported kind.
+
+The facts are rebuilt per conversation when its stamp changes (messages read, their events, authorship, model or
+parent), in batches of 200 conversations: while the events pass runs (at most every ten minutes), when its backlog is done,
+after an import (`refreshAgentEventFactsLogged`), and by `pharos agent-events facts`. Opening the dashboard never runs the pass or rebuilds the facts.
+
+They back the `agent_event_rates` dataset: one row per (message read, reported kind), with that kind's events in the
+message (usually none). Every message read is in every kind, so a rate's denominator, the distinct messages, turns
+or conversations read under the filters, stays the same whichever kinds are filtered or broken down; only the
+numerator follows the kinds. Its queries use memory scratch storage (`executeQueryV3`), since the rows are narrow and
+file scratch made a distinct share take seconds.
+
+The catalog (`web/src/agent-event-rates-catalog.ts`) offers events per 1,000 messages read and the shares of messages,
+turns and conversations with an event, by kind group, kind, reply or thinking, who prompted, prompt length (person
+prompts only), main agent or subagent, model, model and effort, effort, provider, harness, repository, week, and
+pairs of these. Compare hides groups under 200 messages read by default. A bar opens the messages behind it that
+have an event of its kind, each linking into the reader with its events marked (`reader_events=1`). The rates
+describe what agents wrote; nothing scores a person, a prompt or a model. The first view answers "where are my
+agents struggling?": friction per 1,000 messages by repository and kind, without plain obstacles (most of every repository's friction; Friction kind shows them), with links to the Fixes kinds that turn
+recurring friction into a change (`agentEventFixLinks`). Breakdowns whose differences come from the text read rather
+than the work (reply or thinking, model, provider, harness, main agent or subagent) carry a note saying so: thinking
+narrates far more than a reply, nearly all thinking read is from Claude models, and a subagent's messages read are
+mostly thinking.
+
+The dashboard uses the shared population controls (`population: true`, [dashboard
+analysis](dashboard-analysis.md#population)): its filters, such as a kind group, a kind, a repository or who
+prompted, are chips beside Range, removable one by one, with Edit for any other term; a trend legend entry's menu
+counts only that kind or leaves it out, and a kind's entry sits under its group, whose chip selects the group's
+kinds. Distribution counts each **conversation**: its events under the population, as a histogram or, by
+repository, provider, harness or role, as box plots. It shows whether a bar rests on many conversations or one:
+over two weeks the top 10% of conversations held about half of the friction without plain obstacles, and one
+conversation held 14 of grady.dev's 21 environment-friction events. Query Table draws unit histograms in even
+steps, so the long tail crowds the first bar on a log axis; Session Shape's fine bins need a per-record value,
+which a conversation's total is not.
+
+The friction and unseen-choice breakdowns, and the cards, leave out scripted runs: turns whose `prompted_by` is
+`automated` or `none` (a corpus generator, an SDK script). They were 37% of the messages read over two weeks, with
+rates of their own; Who prompted still shows them. The unseen-choice breakdown and card count replies only: in
+thinking the same kinds mostly narrate ordinary steps, at about three times the reply rate.
+
+Four cards (`web/src/agent-event-card-recipes.ts`) open the dashboard at their views, each about something in the
+person's repositories they can change or review: where agents hit friction (repository × friction kind, without plain
+obstacles), docs agents found out of date, failures agents stepped around, and choices agents made without asking
+(replies). Cards on thinking against replies, models, who prompted, prompt length and
+subagents were dropped: each difference came mostly from how much text a source narrates or from turn size, not from
+anything the person controls. Intervals for small groups wait on Query Table
+([handoff](handoffs/query-table-rate-intervals.md)), as does colouring a repository × kind bar by its kind
+([handoff](handoffs/query-table-tuple-colors.md)): Query Table colours a two-field bar by the whole pair, so the same
+kind takes a different colour on each repository's row.
 
 ### In the reader
 

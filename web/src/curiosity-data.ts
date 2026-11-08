@@ -24,6 +24,7 @@ import { sessionShapeCardRecipes } from "./session-shape-card-recipes";
 import type { ThinkingState } from "./thinking-model";
 import { thinkingCardRecipes } from "./thinking-card-recipes";
 import { dashboardCardRecipes } from "./dashboard-card-recipes";
+import { agentEventCardRecipes } from "./agent-event-card-recipes";
 import { weekdayRecipes } from "./weekday-recipes";
 import { habitsCardRecipes } from "./habits-card-recipes";
 import type { HabitsCardTarget } from "./habits-card";
@@ -113,6 +114,7 @@ const baseRecipes: QueryRecipe[] = [
   ...coverageRecipes,
   ...sessionShapeCardRecipes,
   ...dashboardCardRecipes,
+  ...agentEventCardRecipes,
   ...thinkingCardRecipes,
   ...weekdayRecipes,
   ...habitsCardRecipes,

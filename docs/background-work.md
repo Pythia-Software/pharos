@@ -1504,7 +1504,12 @@ allowlist with a reason (request handling, subprocess pipes, timers).
 Shared query-cache builds are read-only preparation, not structural background
 work. Each requesting page can cancel its own wait. Builds retain their own
 budgets (Thinking allows two minutes); the cache adds no shorter deadline and
-keeps completed values after a request leaves. The catalog tracks these workers,
+keeps completed values. A build that no request waits for any more stops after
+a three-second grace period (`derivedIdleGrace`), which lets a reload reattach,
+and its result is discarded. Cancelling it ends its reader transaction, so an
+abandoned page holds no reader connection or WAL snapshot. A build for a
+superseded generation stops as soon as its last waiter leaves. Warm-up builds
+(`warmCaches`) run to completion. The catalog tracks these workers,
 cancels them on close, and joins them before closing SQLite connections. Each
 worker enables mapped-memory fault protection and uses the service's clean exit
 or direct MCP's disconnected-library recovery. Large session-statistics backfills

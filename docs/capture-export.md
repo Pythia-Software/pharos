@@ -39,8 +39,9 @@ OUT/<id>/captures/<host>/<source>/history/...   earlier file versions and snapsh
 files, at the same relative names. Source JSON is never reserialized, and
 encoded (zstd) members stay encoded. Nothing else is copied: the export
 holds no catalog, credentials, settings, host TOML, locks, index marker or
-runtime endpoint. The only directories are the ancestors of those files and
-the mapped roots described under [Closure](#closure).
+runtime endpoint. The only directories are the ancestors of those files and,
+for a capture with no latest member, the empty `files/` described under
+[Closure](#closure).
 
 ## Envelope, version 1
 
@@ -86,15 +87,20 @@ If two entries name the same stored path, their size, encoding and
 stored-size claims must match, and so must their digests where both record
 one.
 
-Each `path_map` root must be a latest member, the `files` root or an
-ancestor directory of a latest member. A mapped root with no members is
-exported as an empty directory, with no file invented for it, so an empty
-capture mapped to `files` exports an empty `files/`. A mapped root that the
-capture holds as an undeclared file is refused.
+Each `path_map` root must name a latest member or an ancestor directory of
+one. The one exception is the `files` root: mapped with no latest member
+below it, it is exported as an empty directory, with no file invented for
+it, so an empty capture mapped to `files` exports an empty `files/`. Any
+other mapped root is refused, alone or beside valid members: a file that is
+gone (`files/missing.sqlite`), an earlier version, a path the capture holds
+as an undeclared file, or an empty directory the manifest does not declare.
+Absent evidence never becomes a directory, and nothing is dropped from the
+manifest to make it pass. The exporter and the verifier apply the same rule.
 
 Unreferenced regular files under `files/` and `history/` (a
 `*.pharos-tmp` left by a killed copy, a `*.conflict-N` set aside) are left
-out. A symbolic link or special file anywhere under them is refused.
+out. A symbolic link or special file anywhere under them is refused, so the
+export examines every entry there, within the inspection bounds below.
 
 At the top of the source directory, an export admits only `manifest.json`,
 `files/` and `history/`. It leaves out the state it recognizes:
@@ -127,6 +133,15 @@ full retention closure.
   over 16 MiB (`host.json`, `manifest.json`, `export.json`), a path over
   4,096 UTF-8 bytes, or more than 1 TiB of stored bytes or of decoded bytes
   in total, counted separately.
+- A source directory whose inspection would examine more than 200,000
+  entries in one pass, or reach a directory more than 128 levels below the
+  export root (the source directory is level 3, `captures/<host>/<source>`),
+  or a path over 4,096 bytes measured as it would sit in the export. Every
+  name counts: kept members, directories, unreferenced leftovers and the
+  top-level state left out. Directories are listed in bounded batches, with
+  cancellation checked before every name, and passing a bound fails the
+  export instead of skipping the rest. The same bounds apply to verifying an
+  export.
 - Paths that would not travel: an empty, `.` or `..` segment, a backslash,
   NUL or colon, a drive or UNC form, a segment ending in a dot or space, or
   a Windows reserved name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9`,
@@ -188,9 +203,17 @@ is checked against its manifest claim:
 Nothing in the capture is ever repaired, recompressed or rewritten. The
 file's identity, size and modification time must be the same before and
 after the copy, and its byte count must equal its size. Before the lock is
-released, the metadata is read again and must be identical, and every
-member must still be the same unchanged file. Reading may update access
-times; contents, names and modification times stay as they were.
+released, the metadata is read again and must be identical. Every member is
+then reopened through the same confined handles and its stored bytes are
+hashed again, without decoding, reading at most its copied size plus one
+byte. They must hash to the copy's stored SHA-256, and the file's identity,
+size and modification time must match the copy before and after that read
+and at its name. This second read is not counted against the stored-byte
+limit again. A mismatch fails the attempt and removes only its unpublished
+stage. There is no retry, and this is not a filesystem snapshot: any finite
+check can still be raced by a writer outside the lock protocol. Reading may
+update access times; contents, names and modification times stay as they
+were.
 
 ## Publication
 
@@ -221,7 +244,9 @@ contents alone:
 3. `host.json` and `manifest.json` pass the metadata validation above.
 4. The files present, the files the envelope lists and the files the
    manifest declares are the same set. The directories are exactly the
-   derived ones, and nothing is a link or special file.
+   derived ones, and nothing is a link or special file. The permitted tree
+   is derived from the metadata first, so an undeclared entry is refused as
+   soon as it is seen, without listing what is inside it.
 5. Every file has its recorded size and stored SHA-256.
 6. Every member also passes the same decoded check against its manifest
    claim.

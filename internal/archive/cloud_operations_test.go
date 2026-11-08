@@ -13,16 +13,21 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"filippo.io/age"
 	"filippo.io/age/armor"
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 func cloudFixture(t *testing.T, protected bool) (*Catalog, Config, cloudDestination, cloudRun, string) {
@@ -116,6 +121,52 @@ func TestCloudArchiveRoundTripAndChangedDownload(t *testing.T) {
 			recovered, err := os.ReadFile(filepath.Join(stored.RestoredDirectory, "round-trip-test.bin"))
 			if err != nil || len(recovered) != 1<<20 {
 				t.Fatalf("missing recovered sample: %v", err)
+			}
+			// With that evidence recorded, only the adapter's contention is a
+			// running verification (here a raw flock); any other failure keeps
+			// its cause. Neither changes the run nor restores anything.
+			lockPath := filepath.Join(config.StagingRoot, "cloud-verify-"+run.ID+".lock")
+			staged := func() []string {
+				var names []string
+				_ = filepath.WalkDir(config.StagingRoot, func(path string, _ fs.DirEntry, _ error) error {
+					names = append(names, path)
+					return nil
+				})
+				return names
+			}
+			prior, before := run, staged()
+			refused := func(t *testing.T, err error, contended bool) {
+				t.Helper()
+				if (err != nil && err.Error() == "verification is already running for this revision") != contended {
+					t.Fatalf("verification lock: %v", err)
+				}
+				if again, e := c.cloudRun(ctx, run.ID); e != nil || again != stored || run != prior {
+					t.Fatalf("a refused verification changed its run: %+v %+v %v", run, again, e)
+				}
+				if after := staged(); !slices.Equal(after, before) {
+					t.Fatalf("a refused verification restored files: %v", after)
+				}
+			}
+			holder, err := os.Open(lockPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = syscall.Flock(int(holder.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+				t.Fatal(err)
+			}
+			refused(t, c.finishCloudVerification(ctx, config, &run, archive, []byte("correct recovery password")), true)
+			holder.Close()
+			for _, failure := range captureLockFailures() {
+				t.Run("lock "+failure.name, func(t *testing.T) {
+					var files []*os.File
+					override(t, &lockCloudVerification, checkedLock(t, filelock.Exclusive, filelock.Try, &files, func(int, *os.File) error { return failure.err }))
+					err := c.finishCloudVerification(ctx, config, &run, archive, []byte("correct recovery password"))
+					refused(t, err, failure.contended)
+					if !failure.contended && (!errors.Is(err, failure.err) || !strings.Contains(err.Error(), lockPath)) {
+						t.Fatalf("verification lock failure: %v", err)
+					}
+					requireLocksClosed(t, files, 1)
+				})
 			}
 			var manifestJSON string
 			if err = c.reader().QueryRow("SELECT manifest_json FROM cloud_backup_runs WHERE id=?", run.ID).Scan(&manifestJSON); err != nil {

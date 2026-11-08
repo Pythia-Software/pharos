@@ -30,6 +30,10 @@ export type AnalysisMeasure = {
   populationShare?: boolean;
   // A population the measure implies, such as fully priced usage.
   where?: WhereTerm[];
+  // The records a drill-down opens, within the point's or bar's population:
+  // those behind the numerator, such as messages with an event. Unlike
+  // where, it never changes the value drawn.
+  drill?: WhereTerm[];
   // The ordered breakdown that bands each record's value, such as a band of
   // per-session ratios. Where that band has fine bins, Over time can draw
   // the measure's distribution as a heatmap (heatmapAxis).
@@ -49,17 +53,34 @@ export type AnalysisMeasure = {
 // part may instead sum a row expression, which states a condition: zero-result
 // searches are SUM(IF([result_count]=0,1,0)). Pooling still sums each part per
 // period, window or unit. Such a part names what it counts (label).
-export type RatioPart = string | { op: "sum" | "count"; field: string; label?: string } | { op: "sum"; expression: string; label: string };
-type Part = { op: "sum" | "count"; field?: string; expression?: string; label?: string };
+// A part may also count a field's distinct values, optionally only on rows
+// meeting a condition (when) and in units of per: messages with an event are
+// COUNT_DISTINCT(IF([events]>0,[message_id],NULL)), thousands of messages
+// COUNT_DISTINCT([message_id])/1000. Where one record is not one
+// observation (a message read once per kind), only a distinct count states
+// the population. Pooling adds distinct counts too, which is exact where the
+// counted values partition periods and groups (a message has one time and
+// one model) and counts a value once per period or group it reaches where
+// they do not (a conversation over several days).
+export type RatioPart = string | { op: "sum" | "count"; field: string; label?: string } | { op: "sum"; expression: string; label: string }
+  | { op: "count_distinct"; field: string; when?: string; per?: number; label: string };
+type Part = { op: "sum" | "count" | "count_distinct"; field?: string; expression?: string; when?: string; per?: number; label?: string };
 export const ratioPart = (part: RatioPart): Part => typeof part === "string" ? { op: "sum", field: part } : part;
-const partExpression = (part: RatioPart) => { const { op, field, expression } = ratioPart(part); return `${op.toUpperCase()}(${expression ?? `[${field}]`})`; };
+const partExpression = (part: RatioPart) => {
+  const { op, field, expression, when, per } = ratioPart(part);
+  if (op === "count_distinct") return `COUNT_DISTINCT(${when ? `IF(${when},[${field}],NULL)` : `[${field}]`})${per ? `/${per}` : ""}`;
+  return `${op.toUpperCase()}(${expression ?? `[${field}]`})`;
+};
+// A part computed as a formula rather than one aggregate of one field.
+const formulaPart = (part: RatioPart) => { const { expression, when, per } = ratioPart(part); return Boolean(expression || when || per); };
 // A part as an aggregation clause, or a grouped row's summary column.
-export const partClause = (part: RatioPart): Pick<AggregationClause, "op" | "field" | "expression"> => { const { op, field, expression } = ratioPart(part); return expression ? { op: "sum", expression: partExpression(part) } : { op, field }; };
-const partColumn = (part: RatioPart): Pick<SummaryColumn, "op" | "field" | "expression"> => { const { op, field, expression } = ratioPart(part); return expression ? { op: "formula", expression: partExpression(part) } : { op, field }; };
+export const partClause = (part: RatioPart): Pick<AggregationClause, "op" | "field" | "expression"> => { const { op, field } = ratioPart(part); return formulaPart(part) ? { op: "sum", expression: partExpression(part) } : { op, field }; };
+const partColumn = (part: RatioPart): Pick<SummaryColumn, "op" | "field" | "expression"> => { const { op, field } = ratioPart(part); return formulaPart(part) ? { op: "formula", expression: partExpression(part) } : { op, field }; };
 // What a part adds up, in words: "summed input tokens", "the count of duration ms".
 export const partLabel = (part: RatioPart) => { const { op, field, label } = ratioPart(part); return label ?? `${op === "sum" ? "summed" : "the count of"} ${field!.replaceAll("_", " ")}`; };
-// The field a drill-down shows for a part, where it has one.
-export const partField = (part: RatioPart) => ratioPart(part).field;
+// The field a drill-down shows for a part, where it has one: a summed or
+// counted field, not a distinct identity.
+export const partField = (part: RatioPart) => { const { op, field } = ratioPart(part); return op === "count_distinct" ? undefined : field; };
 // A breakdown groups by one or more fields, such as provider and model. The
 // trend draws its groups as series: in a fixed order where one is given,
 // with labels for known values and for a missing one.
@@ -299,7 +320,7 @@ export function catalogProblems(catalog: AnalysisCatalog): string[] {
   }
   if (!has(catalog.measures, catalog.trend.metric) || !trendSplit(catalog, catalog.trend.split)) problems.push("The trend's default measure or breakdown is unknown.");
   if (!catalog.periods.day && !catalog.timestamp) problems.push("The trend needs a day field or a timestamp.");
-  for (const [id, measure] of Object.entries(catalog.measures)) for (const part of measure.ratio ?? []) if (typeof part !== "string" && "expression" in part && !part.label) problems.push(`${id} has an expression part without a label.`);
+  for (const [id, measure] of Object.entries(catalog.measures)) for (const part of measure.ratio ?? []) if (typeof part !== "string" && ("expression" in part || part.op === "count_distinct") && !part.label) problems.push(`${id} has an expression or distinct part without a label.`);
   return problems;
 }
 
@@ -367,11 +388,14 @@ export function reductionLabel(reduce: AnalysisReduce, measure: AnalysisMeasure,
 // old name never overrides a later choice.
 // A catalog's own older names (legacy), then the engine's: norm, the old
 // single reference line, is the %ile control's mean (norm: true is
-// percentiles ["mean"]; norm: false asks for none and is left out).
+// percentiles ["mean"]; norm: false asks for none and is left out). A state
+// that names its percentiles keeps them: a resolved state carries norm as
+// whether it draws them, so reading it again must not turn them into a mean.
 export function canonicalState<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): T {
   const read = catalog.legacy ? catalog.legacy(state) as T : state;
   if (typeof read.norm !== "boolean") return read;
   const { norm, ...rest } = read;
+  if (Array.isArray(read.percentiles)) return rest as T;
   return (norm ? { ...rest, percentiles: ["mean"] } : rest) as T;
 }
 
@@ -489,7 +513,7 @@ export function heatmapSource<T extends AnalysisState>(catalog: AnalysisCatalog,
 // Why each trend option is unavailable for this measure, breakdown and
 // display, if it is. The controls disable the option with this reason, and
 // normalizeTrend moves a state off it.
-export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalysis, "metric" | "split" | "display" | "share">) {
+export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalysis, "metric" | "split" | "display" | "share"> & Pick<AnalysisState, "selection">) {
   const measure = catalog.measures[state.metric], kind = trendKind(measure), name = measure.label.toLowerCase();
   const component = (split: string) => {
     const parts = catalog.components?.[split];
@@ -504,10 +528,14 @@ export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalys
     period: (period: ChartPeriod) => catalog.periods[periodField(period)] || catalog.timestamp ? undefined : `These records have no ${periodField(period)} to group by`,
     heatmap: heatmapAxis(catalog, state) ? undefined : state.split === noSplit ? `${measure.label} has no per-record value to draw as a heatmap`
       : !catalog.breakdowns[state.split]?.bins ? "A heatmap needs a breakdown over a continuous value, such as a band" : `${measure.label} does not add up across records, so a heatmap cannot total it`,
-    norm: state.display === "cumulative" ? "A reference level compares interval values, not running totals" : state.display === "heatmap" ? undefined : state.share ? "Shares have no reference level" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a reference level` : undefined,
+    norm: state.display === "cumulative" ? "A reference level compares interval values, not running totals" : state.display === "heatmap" ? undefined : state.share ? "Shares have no reference level" : !measure.additive && state.split !== noSplit && !singleSeries(state) ? `${measure.label} has no total across groups; choose no breakdown, or one group in the legend, for a reference level` : undefined,
     component, name,
   };
 }
+
+// Whether a legend selection draws exactly one group: a measure without a
+// total across groups has reference levels of that group alone.
+export const singleSeries = (state: Pick<AnalysisState, "selection">) => state.selection?.values.length === 1 && !state.selection.excluded;
 
 // Fill the trend's defaults and move each setting the measure cannot use to
 // the nearest one it can. Only drawing and querying use the result; the saved
@@ -646,6 +674,9 @@ export type AnalysisQuery = {
   // totals. occurrences counts the whole hours or days in a bounded range;
   // problem says why the query does not run (too long a range).
   native?: boolean; occurrences?: number; problem?: string;
+  // The measure's drill-down records (AnalysisMeasure.drill), which a bar
+  // opens within its group.
+  drill?: WhereTerm[];
   // A share is of every group in the population the filters define. A
   // legend selection (the state's selection) only chooses which groups are
   // drawn, so it never enters the executed query and never changes a
@@ -779,7 +810,7 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
     const summaries = [summary("analysis_value", measure), ...ratioParts(measure), { id: "analysis_records", op: "count" as const, label: catalog.records.plural }, ...samples ? [samplesColumn(samples)] : []];
     if (state.view === "distribution") summaries.splice(1, 0, { id: "analysis_median", op: "formula", expression: `MEDIAN([${measure.value}])`, label: `Median ${measure.label.toLowerCase()} per ${catalog.records.label.toLowerCase()}` });
     const having: WhereTerm[] = "minCount" in counted ? [{ field: samples ? "analysis_samples" : "analysis_records", op: ">=", value: String(state.minSamples) }] : [];
-    return { query, clause, grouped: false, selection, supporting: breakdown ? groupedRecords(supported, groupBy, summaries, having) : { ...EMPTY_QUERY, where: supported } };
+    return { query, clause, grouped: false, selection, supporting: breakdown ? groupedRecords(supported, groupBy, summaries, having) : { ...EMPTY_QUERY, where: supported }, ...measure.drill ? { drill: measure.drill } : {} };
   }
 
   // Breakdown first: a scatter colors its points by the first key.
@@ -968,7 +999,7 @@ export function analysisInspectQuery(analysis: AnalysisQuery, bucket: Aggregatio
   }
   if (view === "cycle" && !analysis.native) return null;
   const { aggregations: _, ...units } = analysis.query;
-  const opened = inspectBucketQuery(analysis.grouped ? units : { ...EMPTY_QUERY, where: analysis.query.where }, bucket, clause, schema);
+  const opened = inspectBucketQuery(analysis.grouped ? units : { ...EMPTY_QUERY, where: [...analysis.query.where, ...analysis.drill ?? []] }, bucket, clause, schema);
   return opened && withinBudget(opened) ? opened : null;
 }
 // Whether every where list of a query, its grouping source's included, fits

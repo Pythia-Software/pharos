@@ -20,9 +20,12 @@ import (
 //
 //   - A key names the value and whatever else it depends on, such as the local
 //     date for costs at today's prices.
-//   - Concurrent requests for a missing value wait for one computation. It
-//     can finish after the initiating request is abandoned. Every caller can
-//     cancel its wait; builders keep their own budgets and stop on catalog close.
+//   - Concurrent requests for a missing value wait for one computation. Every
+//     caller can cancel its wait, including the one that started it. A build
+//     that no request waits for stops after derivedIdleGrace, so a reload can
+//     reattach but an abandoned page does not keep a reader connection and its
+//     snapshot for minutes. Builds keep their own budgets otherwise, and stop
+//     on catalog close. Warm-up builds run to completion.
 //   - After source changes, warmCaches recomputes the values pages used recently,
 //     so the next visit does not wait.
 //
@@ -59,6 +62,57 @@ type derivedEntry struct {
 	// compute and usedAt let warmCaches recompute a value still in use.
 	compute func(context.Context) (any, error)
 	usedAt  time.Time
+	// While the build runs, waiters counts the callers waiting for it. When
+	// the last leaves, idle waits derivedIdleGrace and then abandons the build:
+	// cancels it and discards whatever it returns. keep marks a build a warm-up
+	// started or joined; it is never abandoned.
+	waiters   int
+	keep      bool
+	idle      *time.Timer
+	abandoned bool
+}
+
+// derivedIdleGrace is how long a build that no request waits for keeps
+// running, so that a reload of the same page reattaches to it.
+var derivedIdleGrace = 3 * time.Second
+
+// leave records that a waiter stopped waiting for entry, with mu held.
+func (cache *derivedCache) leave(entry *derivedEntry) {
+	entry.waiters--
+	if entry.waiters > 0 || entry.keep || entry.idle != nil {
+		return
+	}
+	select {
+	case <-entry.ready:
+		return
+	default:
+	}
+	var idle *time.Timer
+	idle = time.AfterFunc(derivedIdleGrace, func() {
+		cache.mu.Lock()
+		defer cache.mu.Unlock()
+		if entry.idle == idle {
+			cache.abandon(entry)
+		}
+	})
+	entry.idle = idle
+}
+
+// abandon cancels a running build nobody waits for, with mu held. Its result
+// is discarded, so callers that arrive meanwhile wait for it to stop and then
+// start another: one build per key at a time.
+func (cache *derivedCache) abandon(entry *derivedEntry) {
+	if entry.idle != nil {
+		entry.idle.Stop()
+		entry.idle = nil
+	}
+	if entry.keep || entry.waiters > 0 {
+		return
+	}
+	if cancel := cache.builds[entry]; cancel != nil {
+		entry.abandoned = true
+		cancel()
+	}
 }
 
 // recentUse is how long after its last request a value is kept warm.
@@ -193,6 +247,23 @@ func isWarmOnly(ctx context.Context) bool { return ctx.Value(warmOnlyKey{}) == t
 // derivedValue is cachedValue without a type. A request marks the value as
 // used, which keeps it warm.
 func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(context.Context) (any, error), request bool) (any, error) {
+	if parent, _ := ctx.Value(derivedAdmissionKey{}).(*derivedAdmission); parent != nil {
+		// Do not hold a heavy slot while waiting for a shared dependency. A
+		// queue of parents waiting on queued children would otherwise deadlock.
+		parent.release()
+		ctx = context.WithValue(ctx, derivedAdmissionKey{}, (*derivedAdmission)(nil))
+		value, err := c.derivedValueUnadmitted(ctx, key, compute, request)
+		release, admissionErr := parent.gate.acquire(ctx)
+		if admissionErr != nil {
+			return nil, admissionErr
+		}
+		parent.release = release
+		return value, err
+	}
+	return c.derivedValueUnadmitted(ctx, key, compute, request)
+}
+
+func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, compute func(context.Context) (any, error), request bool) (any, error) {
 	// Attribution is published by writers (see ensureOrigins); publication
 	// advances the generation, so values computed from older origins are
 	// recomputed.
@@ -223,7 +294,7 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			if isWarmOnly(ctx) {
 				return nil, errDerivedCold
 			}
-			return compute(ctx)
+			return computeDerived(ctx, compute)
 		}
 		cache.version = version
 		if isWarmOnly(ctx) {
@@ -275,13 +346,18 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			}
 		}
 		entry := cache.entries[key]
-		if entry != nil && entry.version != version {
+		if entry != nil && (entry.version != version || entry.abandoned) {
 			select {
 			case <-entry.ready:
 			default:
 				// Finish the existing build before starting the latest generation.
 				// Several commits during a slow read must not launch several whole-
 				// catalog scans for the same value. New callers still get fresh data.
+				// A superseded build serves only the callers already waiting for it,
+				// so without them it stops now.
+				if entry.waiters == 0 {
+					cache.abandon(entry)
+				}
 				cache.mu.Unlock()
 				select {
 				case <-entry.ready:
@@ -292,12 +368,12 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 				}
 			}
 		}
-		if entry == nil || entry.version != version {
+		if entry == nil || entry.version != version || entry.abandoned {
 			usedAt := time.Time{}
 			if entry != nil {
 				usedAt = entry.usedAt
 			}
-			entry = &derivedEntry{version: version, ready: make(chan struct{}), compute: compute, usedAt: usedAt}
+			entry = &derivedEntry{version: version, ready: make(chan struct{}), compute: compute, usedAt: usedAt, keep: !request}
 			if cache.entries == nil {
 				cache.entries = map[string]*derivedEntry{}
 			}
@@ -343,25 +419,39 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 					defer cache.mu.Unlock()
 					entry.value, entry.err, entry.fault = value, err, fault
 					delete(cache.builds, entry)
+					if entry.idle != nil {
+						entry.idle.Stop()
+						entry.idle = nil
+					}
 					if isThinkingCohortKey(key) {
 						entry.compute = nil
 					}
-					if (err != nil || cache.generation != generation) && cache.entries[key] == entry {
+					if (err != nil || entry.abandoned || cache.generation != generation) && cache.entries[key] == entry {
 						delete(cache.entries, key)
 					}
 					close(entry.ready)
 					cache.pruneDelegationEntries(cache.version, time.Now())
 					cache.pruneThinkingEntries(cache.version, time.Now())
 				}()
-				value, err = compute(work)
+				value, err = computeDerived(work, compute)
 			}()
 		} else if request {
 			entry.usedAt = time.Now()
+		} else {
+			entry.keep = true
+		}
+		entry.waiters++
+		if entry.idle != nil {
+			entry.idle.Stop()
+			entry.idle = nil
 		}
 		cache.mu.Unlock()
 		select {
 		case <-entry.ready:
 		case <-ctx.Done():
+			cache.mu.Lock()
+			cache.leave(entry)
+			cache.mu.Unlock()
 			cache.repanicFault()
 			return nil, ctx.Err()
 		}

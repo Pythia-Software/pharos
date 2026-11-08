@@ -283,7 +283,7 @@ const ROUTES = [
   {name:"Ask Pharos ready",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI},
   {name:"Ask Pharos full screen",url:"/ask",ready:"#askPage #pharos-ask .pharos-ai:not([hidden])",api:askAPI},
   {name:"Ask Pharos model picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-model-trigger").click(),shown:"#pharos-model-menu:not([hidden])"},
-  {name:"Ask Pharos history",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-history-trigger").click(),shown:"#pharos-chat-history:not([hidden])"},
+  {name:"Ask Pharos history",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-history-trigger").click(),shown:"#pharos-chat-history[open]"},
   {name:"Ask Pharos conversation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-turn",api:askAPI,check:async page=>{
     const visible=await page.locator('.pharos-user-question').first().evaluate(message=>{
       const viewport=message.closest('.pharos-thread-viewport');
@@ -484,6 +484,10 @@ const ROUTES = [
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   { name: "Analyze workspace agent experience dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", ready: `.usage-agent-experience-dashboard ${overTimeReady}` },
+  // Agent Events opens on Compare; its trend is the stacked kind chart.
+  { name: "Agent Events dashboard", url: "/analyze?analyze_topic=agent_event_rates", ready: `.usage-agent-events-dashboard ${analysisReady}`,
+    check: async page => assert.deepEqual(await page.locator(".usage-agent-events-dashboard [role=alert], .usage-agent-events-dashboard .query-table-error").allTextContents(), [], "the dashboard reports an error") },
+  { name: "Agent Events trend by kind", url: `/analyze?analyze_topic=agent_event_rates&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "trend", metric: "per_thousand", split: "family", period: "day" }))}`, ready: `.usage-agent-events-dashboard ${overTimeReady}` },
   // With a partial population, so its chips share the control row at 320 px.
   { name: "Analyze workspace session shape dashboard", url: `/analyze?${new URLSearchParams({ analyze_workspace: "1", analyze_topic: "session_shape",
     analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "started_at", op: ">=", value: "-30d" }, { field: "started_at", op: "<", value: "+0s" }, { any: [{ field: "harness", op: "!=", value: "antigravity-cli" }, { field: "harness", op: "is_null", value: "" }] }] }) })}`,
@@ -954,6 +958,19 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
   await page.evaluate(()=>window.pharosPrefs.flush());
   await page.reload();await toggle.waitFor();await viewport.waitFor();await settled();
   assert.equal(await toggle.getAttribute('aria-expanded'),'true');
+  // Full screen gives the row the window's width, so it reads more cards at once.
+  // Its suggestions give way to a draft, so clear the one chosen above.
+  await page.goto(new URL('/ask',page.url()).href);await editor.waitFor();await editor.fill('');
+  await viewport.waitFor();await settled();
+  assert.ok(await viewport.locator('[data-reading]').count()>3,'a wide full screen row shows more than three suggestions');
+  assert.deepEqual(await layoutProblems(page),[]);
+  await readable();
+  await distinctHint();
+  await shot('full-screen-2133');
+  await suggestions.getByRole('button',{name:'Next suggestions',exact:true}).click();
+  await page.waitForFunction(()=>!document.querySelector('.pharos-idea-viewport').hasAttribute('data-moving'));
+  await readable();
+  await distinctHint();
 });
 
 test("Background Processing items drag between all four columns for a week", { skip }, async t => {

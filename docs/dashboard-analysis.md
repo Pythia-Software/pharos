@@ -125,12 +125,22 @@ what each offers and why.
   label: "requests with no results" }`, so a share of records meeting a
   condition pools like any ratio. It runs as `SUM(IF(...))` in clauses,
   formulas and grouped rows, and names what it counts (`label`, which
-  `catalogProblems` requires). Pooling still sums each part per period,
-  window or unit. Each also has:
+  `catalogProblems` requires). A part may also **count distinct values**,
+  `{ op: "count_distinct", field, when?, per?, label }`: the turns with an
+  event are `{ op: "count_distinct", field: "turn_id", when: "[events]>0" }`,
+  running as `COUNT_DISTINCT(IF([events]>0,[turn_id],NULL))`, and `per: 1000`
+  divides by a thousand (events per 1,000 messages). A distinct part is exact
+  for each group and window it is computed over; Other and a trailing window
+  pool such parts by adding them, which counts a unit in several groups or
+  periods once in each (Agent Events states this in its notes). Pooling still
+  sums each part per period, window or unit. Each also has:
   - an optional per-record `value`, which makes the measure eligible for
     record distributions;
   - an `additive` flag, which decides whether groups may be shown as shares;
   - an optional implied population (`where`), such as fully priced usage;
+  - an optional `drill`: where terms a bar's or point's records add, so a
+    rate opens the records behind its numerator (Agent Events opens the
+    messages with an event, `events > 0`, rather than every message read).
   - an optional `valueBins` (or a `band`), the breakdown whose fine bins
     hold the per-record value. A record distribution of it without a
     breakdown is then a histogram over those bins on the value's own axis
@@ -591,8 +601,13 @@ no sum, cumulative or share.
   mid-afternoon draws only 29 whole days. When fewer earlier points have a
   value (all time, or a ratio with idle periods), the chart says how many it
   averaged. It is not offered for shares, cumulative displays, or
-  non-additive measures with several series. The legend and tooltip show it,
-  and the note says what it averages.
+  non-additive measures with several series; a non-additive measure by a
+  breakdown has levels once the legend selects one group (`singleSeries`),
+  and they are that group's own. The legend and tooltip show each level,
+  and the note says what they read. Normalizing a resolved state again (the
+  series builder and card previews do) keeps its levels: `canonicalState`
+  reads `norm` as the older single mean only in a state without
+  `percentiles`.
 - **Complete results only.** A clause with partial coverage, a truncated
   group count, hidden groups or a bucket error is an error beneath the chart,
   never idle periods, as in `buildCardTrend`. No results yet means loading,

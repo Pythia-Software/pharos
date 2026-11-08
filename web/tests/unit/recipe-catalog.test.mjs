@@ -109,7 +109,13 @@ test("suggestions and the card library only offer active recipes", t => {
   const offered = suggestionPool(clock);
   assert.equal(offered.length, queryRecipes.length - retired.size);
   assert.ok(offered.every(suggestion => !retired.has(suggestion.id)));
-  const templates = cardTemplates();
+  const templates = cardTemplates(true);
   assert.equal(templates.length, queryRecipes.length - retired.size);
   assert.ok(templates.every(recipe => !retired.has(recipe.id)));
+  // Agent Events cards are offered whether or not the preview is on, as its
+  // dashboard is listed; with no events read they say how to turn the pass on.
+  const events = templates.filter(recipe => recipe.dataset === "agent_event_rates");
+  assert.ok(events.length > 0);
+  assert.deepEqual(cardTemplates(false).map(recipe => recipe.id), templates.map(recipe => recipe.id));
+  assert.ok(events.every(recipe => /Settings/.test(recipe.emptyLabel ?? "")), "an Agent Events card without events says how to turn the pass on");
 });

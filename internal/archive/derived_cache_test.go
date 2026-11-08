@@ -2,7 +2,9 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +30,7 @@ func TestDerivedValuesAreComputedOncePerCommit(t *testing.T) {
 	}
 	// The request that starts the computation gives up; the computation does
 	// not, since other requests are waiting for it.
+	override(t, &derivedIdleGrace, 0)
 	abandoned, cancel := context.WithCancel(context.Background())
 	abandonedDone := make(chan error, 1)
 	go func() { _, err := cachedValue(abandoned, catalog, "answer", compute); abandonedDone <- err }()
@@ -45,6 +48,7 @@ func TestDerivedValuesAreComputedOncePerCommit(t *testing.T) {
 			values[index] = value
 		}()
 	}
+	waitUntil(t, time.Second, "every request to wait for the build", func() bool { return derivedWaiters(catalog, "answer") == 1+len(values) })
 	cancel()
 	select {
 	case err := <-abandonedDone:
@@ -76,6 +80,34 @@ func TestDerivedValuesAreComputedOncePerCommit(t *testing.T) {
 	}
 }
 
+func TestDerivedAdmissionReleasesAfterFailure(t *testing.T) {
+	for _, panics := range []bool{false, true} {
+		t.Run(fmt.Sprint("panic=", panics), func(t *testing.T) {
+			gate := &queryAdmission{limit: 1}
+			override(t, &heavyQueries, gate)
+			catalog, _ := testCatalog(t)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			_, err := cachedValue(ctx, catalog, "failed", func(ctx context.Context) (int, error) {
+				_, err := cachedValue(ctx, catalog, "failed-dependency", func(context.Context) (int, error) {
+					if panics {
+						panic("cannot compute")
+					}
+					return 0, errors.New("cannot compute")
+				})
+				return 0, err
+			})
+			if err == nil || !strings.Contains(err.Error(), "cannot compute") {
+				t.Fatalf("lost cache build error: %v", err)
+			}
+			value, err := cachedValue(ctx, catalog, "failed", func(context.Context) (int, error) { return 42, nil })
+			if err != nil || value != 42 {
+				t.Fatalf("failed cache build retained admission: %d %v", value, err)
+			}
+		})
+	}
+}
+
 func TestDerivedBuildLifetime(t *testing.T) {
 	for _, request := range []bool{true, false} {
 		name := "request"
@@ -84,6 +116,13 @@ func TestDerivedBuildLifetime(t *testing.T) {
 		}
 		t.Run(name+" deadline and cancellation leave a reusable build", func(t *testing.T) {
 			catalog, _ := libraryFixture(t)
+			// A reload within the grace period reattaches; a warm-up build never
+			// needs one.
+			grace := time.Hour
+			if !request {
+				grace = 0
+			}
+			override(t, &derivedIdleGrace, grace)
 			release := make(chan struct{})
 			var releaseOnce sync.Once
 			finish := func() { releaseOnce.Do(func() { close(release) }) }
@@ -125,7 +164,22 @@ func TestDerivedBuildLifetime(t *testing.T) {
 				t.Fatal("request cancellation ended shared work")
 			}
 			// A later request reuses the same in-flight build and its good value.
-			finish()
+			if !request {
+				finish()
+			} else {
+				reloaded := make(chan any, 1)
+				go func() {
+					value, _ := catalog.derivedValue(t.Context(), "slow", func(context.Context) (any, error) {
+						return nil, errors.New("the reload restarted the build")
+					}, true)
+					reloaded <- value
+				}()
+				waitUntil(t, time.Second, "the reload to reattach", func() bool { return derivedWaiters(catalog, "slow") == 1 })
+				finish()
+				if value := <-reloaded; value != 7 {
+					t.Fatalf("the reload received %v", value)
+				}
+			}
 			value, err := catalog.derivedValue(t.Context(), "slow", func(context.Context) (any, error) {
 				return nil, errors.New("the abandoned build was restarted")
 			}, request)
@@ -134,6 +188,83 @@ func TestDerivedBuildLifetime(t *testing.T) {
 			}
 		})
 	}
+	t.Run("an abandoned request build stops and is not cached", func(t *testing.T) {
+		catalog, _ := libraryFixture(t)
+		override(t, &derivedIdleGrace, 0)
+		started := make(chan struct{})
+		var calls atomic.Int32
+		compute := func(ctx context.Context) (any, error) {
+			if calls.Add(1) > 1 {
+				return 8, nil
+			}
+			// Hold a read snapshot the way a dataset build does.
+			tx, err := catalog.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+			if err != nil {
+				return nil, err
+			}
+			defer tx.Rollback()
+			var count int
+			if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM workspaces").Scan(&count); err != nil {
+				return nil, err
+			}
+			close(started)
+			<-ctx.Done()
+			return count, nil // A result after cancellation must not be kept.
+		}
+		waiting, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { _, err := catalog.derivedValue(waiting, "abandoned", compute, true); done <- err }()
+		<-started
+		if catalog.reader().Stats().InUse == 0 {
+			t.Fatal("the build holds no reader connection")
+		}
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+		waitUntil(t, time.Second, "the abandoned build to release its reader", func() bool {
+			return derivedWaiters(catalog, "abandoned") < 0 && catalog.reader().Stats().InUse == 0
+		})
+		if value, err := catalog.derivedValue(t.Context(), "abandoned", compute, true); err != nil || value != 8 {
+			t.Fatalf("the abandoned build's result was cached: %v %v", value, err)
+		}
+	})
+	t.Run("a superseded build nobody waits for stops", func(t *testing.T) {
+		catalog, _ := libraryFixture(t)
+		other := otherProcess(t, catalog)
+		override(t, &derivedIdleGrace, time.Hour)
+		started, stopped := make(chan struct{}), make(chan struct{})
+		var calls atomic.Int32
+		compute := func(ctx context.Context) (any, error) {
+			if calls.Add(1) > 1 {
+				return "current", nil
+			}
+			close(started)
+			<-ctx.Done()
+			close(stopped)
+			return "superseded", nil
+		}
+		waiting, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { _, err := catalog.derivedValue(waiting, "superseded", compute, true); done <- err }()
+		<-started
+		cancel()
+		<-done
+		if _, err := other.DB.Exec(`UPDATE workspaces SET title='Renamed' WHERE id='c'`); err != nil {
+			t.Fatal(err)
+		}
+		// The new generation cannot reattach to the old build, so it does not
+		// wait out the grace period: it stops the old build, then starts its own.
+		value, err := catalog.derivedValue(t.Context(), "superseded", compute, true)
+		if err != nil || value != "current" {
+			t.Fatalf("new generation received %v %v", value, err)
+		}
+		select {
+		case <-stopped:
+		default:
+			t.Fatal("the superseded build kept running")
+		}
+	})
 	t.Run("catalog close", func(t *testing.T) {
 		catalog, _ := libraryFixture(t)
 		started, finished := make(chan struct{}), make(chan struct{})
@@ -250,6 +381,18 @@ func TestDerivedCloseCancelsDatabaseWaits(t *testing.T) {
 			}
 		})
 	}
+}
+
+// derivedWaiters reports how many callers wait for key's running build, or -1
+// when no build for key is running.
+func derivedWaiters(c *Catalog, key string) int {
+	c.derived.mu.Lock()
+	defer c.derived.mu.Unlock()
+	entry := c.derived.entries[key]
+	if entry == nil || c.derived.builds[entry] == nil {
+		return -1
+	}
+	return entry.waiters
 }
 
 func TestCachesOutliveCommitsDuringARun(t *testing.T) {

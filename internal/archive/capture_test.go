@@ -319,6 +319,60 @@ func TestCaptureAppendsAndPreservesRewrittenFiles(t *testing.T) {
 	}
 }
 
+// capturedEntries is what a manifest says was captured, without its run
+// record: a failed run still records itself.
+func capturedEntries(t *testing.T, config Config, source string) string {
+	t.Helper()
+	manifest := readCaptureManifest(t, config, source)
+	data, err := json.Marshal([]any{manifest.Files, manifest.Snapshots})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// A capture's copy is flushed after it has the source's timestamps. A failed
+// flush is a capture-drive error: the previous capture, its manifest entry
+// and its history stay as they were, with no partial copy.
+func TestCaptureFlushFailureKeepsThePreviousCapture(t *testing.T) {
+	useHost(t, "host-a")
+	claude := filepath.Join(t.TempDir(), "claude")
+	file := filepath.Join(claude, "p", "s.jsonl")
+	writeSourceFile(t, file, "line one\n")
+	config := captureTestConfig(t, SourceConfig{Name: "claude", Kind: "claude", Path: claude, Enabled: true})
+	runCapture(t, config)
+	before := capturedEntries(t, config, "claude")
+	writeSourceFile(t, file, "LINE ONE\n")
+	source, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := &os.PathError{Op: "fsync", Path: file, Err: syscall.EIO}
+	calls := failFileSync(t, failure, func(f *os.File) bool {
+		if stat, err := f.Stat(); err != nil || !stat.ModTime().Equal(source.ModTime()) {
+			t.Errorf("flushed before the copy had its timestamps: %v, %v", stat, err)
+		}
+		return strings.HasSuffix(f.Name(), captureTempSuffix)
+	})
+	run := runCapture(t, config)
+	result := captureResult(t, run, "claude")
+	if run.OK || *calls != 1 || len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Error, "capture drive") || !strings.Contains(result.Errors[0].Error, syscall.EIO.Error()) {
+		t.Fatalf("capture after %d failed flushes: %+v", *calls, result)
+	}
+	if after := capturedEntries(t, config, "claude"); after != before {
+		t.Fatalf("a failed copy changed what the manifest records:\n%s\n%s", before, after)
+	}
+	if text := readText(t, capturedPath(config, "claude", "files/p/s.jsonl")); text != "line one\n" {
+		t.Fatalf("previous capture replaced: %q", text)
+	}
+	if left := temporariesUnder(t, config.CaptureRoot); len(left) != 0 {
+		t.Fatalf("partial copies left behind: %v", left)
+	}
+	if _, err := os.Stat(capturedPath(config, "claude", "history")); !os.IsNotExist(err) {
+		t.Fatalf("a failed copy moved the previous capture to history: %v", err)
+	}
+}
+
 func TestCaptureKeepsFilesDeletedAtSource(t *testing.T) {
 	useHost(t, "host-a")
 	claude := filepath.Join(t.TempDir(), "claude")
@@ -647,6 +701,42 @@ func TestCaptureRetainsSnapshotGenerations(t *testing.T) {
 	manifest := readCaptureManifest(t, config, "conductor")
 	if manifest.Source.Account != "changed-account" || manifest.Snapshots[0].Path != filepath.Join(moved, "conductor.db") || sessionsIn(manifest.Snapshots[0].Captured) != "pending-3" {
 		t.Fatalf("native snapshot kept stale configuration: %+v", manifest)
+	}
+}
+
+// A SQLite snapshot is flushed through a read-only handle before it is kept.
+// A failed flush is a capture-drive error that keeps the previous snapshot
+// as the latest, adds no generation and leaves no partial snapshot.
+func TestCaptureSnapshotFlushFailureKeepsThePreviousSnapshot(t *testing.T) {
+	useHost(t, "host-a")
+	conductor := filepath.Join(t.TempDir(), "conductor")
+	if err := os.MkdirAll(conductor, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db := openWritableSQLite(t, filepath.Join(conductor, "conductor.db"))
+	execSQL(t, db, "CREATE TABLE sessions(id TEXT PRIMARY KEY)", "CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT)", "INSERT INTO sessions VALUES('generation-1')")
+	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: conductor, Enabled: true})
+	runCapture(t, config)
+	before := capturedEntries(t, config, "conductor")
+	previous := readCaptureManifest(t, config, "conductor").Snapshots[0]
+	kept := readText(t, capturedPath(config, "conductor", previous.Captured))
+	execSQL(t, db, "INSERT INTO sessions VALUES('generation-2')")
+	calls := failFileSync(t, syscall.EINTR, func(f *os.File) bool {
+		if _, err := f.Write([]byte("x")); err == nil {
+			t.Error("snapshot flushed through a writable handle")
+		}
+		return strings.HasSuffix(f.Name(), captureTempSuffix)
+	})
+	run := runCapture(t, config)
+	result := captureResult(t, run, "conductor")
+	if run.OK || *calls != 1 || len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Error, "capture drive") || !strings.Contains(result.Errors[0].Error, syscall.EINTR.Error()) {
+		t.Fatalf("capture after %d failed flushes: %+v", *calls, result)
+	}
+	if capturedEntries(t, config, "conductor") != before || readText(t, capturedPath(config, "conductor", previous.Captured)) != kept {
+		t.Fatal("a failed snapshot replaced the previous one")
+	}
+	if left := temporariesUnder(t, config.CaptureRoot); len(left) != 0 {
+		t.Fatalf("partial snapshots left behind: %v", left)
 	}
 }
 

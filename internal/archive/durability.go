@@ -76,8 +76,9 @@ func catalogDSN(path string) string {
 // connections background work keeps checked out during a sync (the tool
 // rollup, the authorship scan, the findings snapshot) cannot leave a page
 // waiting for one. In WAL a reader never waits on the writer; it reads the last
-// commit. The page cache is per connection, so it is smaller than the writer
-// pool's; the shared mmap does most of the caching.
+// commit. Heavy executions are separately bounded by heavyQueries before they
+// lease a connection, leaving capacity here for light request reads. SQLite's
+// darwin build shares a page-cache mutex even across separate connections.
 const readerConns = 8
 
 func readerDSN(path string) string {

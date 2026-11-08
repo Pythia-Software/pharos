@@ -210,7 +210,14 @@ shared `analyze_chart` / `analyze_filters` URL contract; chart selections open
 the matching boundary records and their source messages. Create card uses the
 same controls and naming functions as the chart.
 
-`compactions` reads retained metadata boundary messages directly. Consecutive
+`compactions` reads `compaction_boundaries`, one row per retained metadata
+boundary message with its trigger and trigger evidence already classified.
+Triggers on `messages` keep it current in the writer's transaction, so queries
+never parse message bodies. A new catalog is complete at once. An older catalog,
+or a change to the classification (`compactionBoundaryVersion`), refills it in
+the Tools stage 200 conversations at a time; until that finishes, queries derive
+the same rows from the messages, and a read that finds it pending starts the
+stage. Consecutive
 boundaries and boundaries with no later model request count separately. Claude's
 `compactMetadata.trigger` records manual or automatic; Codex's attributed
 `compaction_trigger` is inferred by the adapter from turn position. Unknown

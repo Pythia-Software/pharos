@@ -395,6 +395,22 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	if err != nil || len(summaries) != 1 || summaries[0].QuestionCount != 2 || len(summaries[0].Conversation) != 1 {
 		t.Fatalf("history summaries: %+v %v", summaries, err)
 	}
+	if want := []askModelUse{{CLI: "Codex", Model: "test-model", Label: "Test Model"}}; !reflect.DeepEqual(summaries[0].Models, want) {
+		t.Fatalf("history summary models = %+v, want %+v", summaries[0].Models, want)
+	}
+	// A chat that changed models lists each once, most recently used first,
+	// with the label from its latest turn.
+	mixed := askSession{ID: "chat-mixed", CreatedAt: 1, UpdatedAt: 2, Selection: askSelection{Provider: "Claude", Model: "opus"}, Conversation: []askTurn{
+		{ID: "a", Prompt: "Mixed models", CLI: "Claude", Model: "opus", ModelLabel: "Opus (old label)"},
+		{ID: "b", Prompt: "Next", CLI: "Codex", Model: "gpt", ModelLabel: "GPT"},
+		{ID: "c", Prompt: "Last", CLI: "Claude", Model: "opus", ModelLabel: "Opus"},
+	}}
+	if err = s.saveAskSession(t.Context(), mixed, false); err != nil {
+		t.Fatal(err)
+	}
+	if mixedSummaries, err := s.askSessions(t.Context(), "Mixed models", 0); err != nil || len(mixedSummaries) != 1 || !reflect.DeepEqual(mixedSummaries[0].Models, []askModelUse{{CLI: "Claude", Model: "opus", Label: "Opus"}, {CLI: "Codex", Model: "gpt", Label: "GPT"}}) {
+		t.Fatalf("mixed-model summary: %+v %v", mixedSummaries, err)
+	}
 	for _, query := range []string{"retries", "Navigation reply 2", "Explore the recorded evidence", "Review recorded model usage"} {
 		matches, err := s.askSessions(t.Context(), query, 0)
 		if err != nil || len(matches) != 1 || matches[0].ID != session.ID {
@@ -648,7 +664,7 @@ func TestAskSavesAnswerPastABusyCatalog(t *testing.T) {
 			go func() { response <- askCall(t, s, http.MethodPost, action, askInput()) }()
 			select {
 			case result := <-response:
-				if result.Code != http.StatusBadRequest || !strings.Contains(result.Body.String(), "Pharos is busy saving library changes") {
+				if result.Code != http.StatusBadRequest || !strings.Contains(result.Body.String(), "Pharos is busy saving library changes") || strings.Contains(result.Body.String(), "deadline") {
 					t.Fatalf("unhelpful persistence failure: %d %s", result.Code, result.Body.String())
 				}
 			case <-time.After(2 * time.Second):
@@ -1087,9 +1103,20 @@ func TestAskDisableInterruptsModelDiscovery(t *testing.T) {
 	}
 }
 func TestAskCLIProcessCancellation(t *testing.T) {
+	// The shell and its background child both inherit the write end of held;
+	// the read end reaches EOF only once every holder has exited.
+	held, holder, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	cmd := askCommand(ctx, "/bin/sh", t.TempDir(), "-c", "printf ready; sleep 30 & wait")
+	cmd, err := askCommand(ctx, "/bin/sh", t.TempDir(), "-c", "sleep 30 & printf ready; wait")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.ExtraFiles = []*os.File{holder}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -1097,6 +1124,8 @@ func TestAskCLIProcessCancellation(t *testing.T) {
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	holder.Close()
+	defer func() { _ = cmd.Cancel(); _ = cmd.Wait() }()
 	ready := make([]byte, 5)
 	if _, err = io.ReadFull(stdout, ready); err != nil {
 		t.Fatal(err)
@@ -1111,6 +1140,76 @@ func TestAskCLIProcessCancellation(t *testing.T) {
 		}
 	case <-time.After(4 * time.Second):
 		t.Fatal("descendant kept canceled request alive")
+	}
+	if !waitFor(4*time.Second, func() { _, _ = io.Copy(io.Discard, held) }) {
+		t.Fatal("the background child outlived the canceled request")
+	}
+
+	// A command that never starts leaves no process to cancel.
+	marker := filepath.Join(t.TempDir(), "launched")
+	launch := []string{"-c", "touch " + marker}
+	t.Run("pre-canceled context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		cmd, err := askCommand(ctx, "/bin/sh", t.TempDir(), launch...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); !errors.Is(err, context.Canceled) || cmd.Process != nil {
+			t.Fatalf("Start = %v, process %v", err, cmd.Process)
+		}
+		if err := cmd.Cancel(); err != nil {
+			t.Fatalf("Cancel without a process = %v", err)
+		}
+	})
+	t.Run("start failure", func(t *testing.T) {
+		cmd, err := askCommand(t.Context(), filepath.Join(t.TempDir(), "missing"), t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); err == nil || cmd.Process != nil {
+			t.Fatalf("Start = %v, process %v", err, cmd.Process)
+		}
+		if err := cmd.Cancel(); err != nil {
+			t.Fatalf("Cancel without a process = %v", err)
+		}
+	})
+	t.Run("configuration refusal", func(t *testing.T) {
+		override(t, &askProcessConfig, func(*exec.Cmd) error { return errProcessIsolationUnsupported })
+		cmd, err := askCommand(t.Context(), "/bin/sh", t.TempDir(), launch...)
+		if cmd != nil || !errors.Is(err, errProcessIsolationUnsupported) {
+			t.Fatalf("askCommand = %v, %v", cmd, err)
+		}
+		// Each caller returns the refusal itself, before pipes or a start:
+		// not authentication advice, and not a missing CLI.
+		cli := filepath.Join(t.TempDir(), "cli")
+		if err := os.WriteFile(cli, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("HOME", t.TempDir())
+		settings := filepath.Join(os.Getenv("HOME"), ".gemini", "antigravity-cli", "settings.json")
+		if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(settings, []byte(`{"permissions":{"allow":["mcp(pharos-ask/*)"]}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"Codex", "Claude", "Antigravity"} {
+			provider := askProvider{ID: name, path: cli, mcp: askMCPServer{Command: "/test/pharos", Args: []string{"mcp"}}, Models: []askModel{{ID: "test-model", Efforts: []string{"Default"}}}}
+			models, err := askDiscoverModels(t.Context(), provider)
+			if models != nil || !errors.Is(err, errProcessIsolationUnsupported) || strings.Contains(err.Error(), "authenticate") {
+				t.Fatalf("%s model discovery = %v, %v", name, models, err)
+			}
+			if _, err := askRunCLI(t.Context(), provider, askSelection{Provider: name, Model: "test-model", Effort: "Default"}, "prompt"); !errors.Is(err, errProcessIsolationUnsupported) {
+				t.Fatalf("%s request = %v", name, err)
+			}
+		}
+		if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a refused command ran: %v", err)
+		}
+	})
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a command that never started ran: %v", err)
 	}
 }
 

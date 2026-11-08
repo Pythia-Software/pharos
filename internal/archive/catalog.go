@@ -265,6 +265,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureAgentEventsSchema(); err != nil {
 		return fmt.Errorf("initialize agent events: %w", err)
 	}
+	if err := c.ensureAgentEventFactsSchema(); err != nil {
+		return fmt.Errorf("initialize agent event facts: %w", err)
+	}
 	if err := c.ensureFindingsSchema(); err != nil {
 		return fmt.Errorf("initialize findings tables: %w", err)
 	}
@@ -420,6 +423,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureRequestEvidence(); err != nil {
 		return fmt.Errorf("initialize request evidence: %w", err)
+	}
+	if err := c.ensureCompactionBoundaries(); err != nil {
+		return fmt.Errorf("initialize compaction boundaries: %w", err)
 	}
 	// Columns such as effort are added above when opening a legacy catalog.
 	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_analytics_time_idx

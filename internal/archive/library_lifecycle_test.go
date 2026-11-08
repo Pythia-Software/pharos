@@ -1403,6 +1403,52 @@ func TestLibraryRecoveryCandidate(t *testing.T) {
 			t.Fatal("recovered originals could not be delivered", err)
 		}
 	}
+	// A backup's lock is shared and interoperates with raw flock; a copied
+	// library takes its exclusive use lease. Only contention is an active
+	// operation; any other failure to open or lock either source keeps its
+	// cause. Neither stages or publishes anything.
+	raw, err := os.Open(filepath.Join(dest, backupLockName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = syscall.Flock(int(raw.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = RecoverLibrary(t.Context(), dest, filepath.Join(t.TempDir(), "held"), nil); !errors.Is(err, filelock.ErrContended) || !errors.Is(err, syscall.EWOULDBLOCK) || !strings.Contains(err.Error(), "wait for active operations") {
+		t.Fatal("recovery beside a raw backup lock:", err)
+	}
+	raw.Close()
+	for _, failure := range leaseLockFailures() {
+		t.Run("lock "+failure.name, func(t *testing.T) {
+			contended := errors.Is(failure.err, filelock.ErrContended)
+			var sourceLocks []refusedLease
+			override(t, &lockRecoverySource, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+				if wait != filelock.Try {
+					t.Errorf("recovery waited for %s", file.Name())
+				}
+				sourceLocks = append(sourceLocks, refusedLease{file, mode})
+				return failure.err
+			})
+			leases := failFileLease(t, ".pharos-use.lock", failure.err)
+			parent := t.TempDir()
+			for _, source := range []string{dest, filepath.Dir(a.Path)} {
+				_, err := RecoverLibrary(t.Context(), source, filepath.Join(parent, "candidate"), nil)
+				if !errors.Is(err, failure.err) || strings.Contains(err.Error(), "wait for active operations") != contended ||
+					!contended && !strings.Contains(err.Error(), "cannot open or lock recovery source") {
+					t.Fatalf("%s: %v", source, err)
+				}
+				if entries, err := os.ReadDir(parent); err != nil || len(entries) != 0 {
+					t.Fatalf("%s: a refused recovery staged %v %v", source, entries, err)
+				}
+			}
+			requireLeasesClosed(t, sourceLocks, 1)
+			requireLeasesClosed(t, *leases, 1)
+			if sourceLocks[0].mode != filelock.Shared || (*leases)[0].mode != filelock.Exclusive {
+				t.Fatalf("recovery lock modes: backup %v, copied library %v", sourceLocks[0].mode, (*leases)[0].mode)
+			}
+		})
+	}
+
 	data, _ := os.ReadFile(filepath.Join(dest, backupManifestName))
 	var manifest backupManifest
 	_ = json.Unmarshal(data, &manifest)
