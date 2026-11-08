@@ -507,7 +507,7 @@
   gap: 7px;
   font-size: var(--fs-xs);
   color: var(--muted);
-  padding: 10px 0 0;
+  padding: 0;
 }
 .delegation-session-heading {
   order: -1;
@@ -526,7 +526,6 @@
   display: none;
 }
 .delegation-context > button,
-.delegation-context summary,
 .delegation-transcript-link {
   color: var(--accent);
   font: inherit;
@@ -540,46 +539,14 @@
   white-space: nowrap;
   cursor: pointer;
 }
-.delegation-context > details {
-  position: relative;
-}
-.delegation-child-menu {
-  position: absolute;
-  z-index: 5;
-  top: 100%;
-  left: 0;
-  width: 400px;
-  max-width: 70vw;
-  max-height: 350px;
-  overflow: auto;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  box-shadow: 0 6px 20px #0002;
-  padding: 6px;
-  border-radius: 4px;
-}
-.delegation-child-menu button {
-  display: block;
-  text-align: left;
-  width: 100%;
-  padding: 7px;
-  background: none;
-  border: 0;
-  font-size: var(--fs-xs);
-}
-.delegation-child-menu :is(strong, small) {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.delegation-child-menu small {
-  color: var(--muted);
-  margin-top: 3px;
-}
+.delegation-context > .delegation-sidebar-link { display: none; }
+.workspace-inbox.sidebar-collapsed .delegation-context > .delegation-sidebar-link { display: block; }
+.delegation-context:has(.delegation-segments),
+.workspace-inbox.sidebar-collapsed .delegation-context:has(.delegation-sidebar-link) { padding-top: 10px; }
 .delegation-transcript-link {
-  display: block;
-  margin-top: 4px;
+  display: inline-block;
+  margin: 0;
+  padding: 1px 5px;
   font-size: var(--fs-xs);
 }
 .delegation-parallel {
@@ -1054,7 +1021,7 @@
 /* The disclosure keeps its Key control available beside either presentation. */
 .lt-key-disclosure{display:inline}
 .lt-timeline-legend.is-readonly{position:relative;z-index:11}
-.lt-timeline-legend.is-readonly :is(.usage-legend-item,.lt-key-open){cursor:zoom-in}
+.lt-timeline-legend.is-readonly :is(.usage-legend-item,.lt-key-open){cursor:pointer}
 .lt-key-open{background:none;color:var(--ink);font:inherit}
 .lt-key-disclosure::details-content{display:contents}
 .lt-timeline-legend.is-compact{display:flex;flex-wrap:wrap;align-items:center;gap:0 3px}
@@ -1109,7 +1076,7 @@
 /* The sidebar clock is a static overview; session identities remain live.
    Activating the clock preserves saved columns, window and disclosures. */
 .delegation-parallel.is-preview{position:relative;--lt-execution:clamp(110px,40%,175px)!important;--lt-events:0px!important;--lt-time:minmax(0,1fr)!important;--lt-min-width:0px!important}
-.lt-preview-activate{position:absolute;inset:0;z-index:10;width:100%;padding:0;border:0;border-radius:0;background:transparent;cursor:zoom-in;text-align:right;color:var(--accent)}
+.lt-preview-activate{position:absolute;inset:0;z-index:10;width:100%;padding:0;border:0;border-radius:0;background:transparent;cursor:pointer;text-align:right;color:var(--accent)}
 .lt-preview-activate>span{position:absolute;right:0;top:0;display:inline-flex;align-items:center;gap:4px;padding:2px 4px;background:var(--panel);font-size:10px}
 .lt-preview-activate .app-icon{width:12px;height:12px}
 .lt-preview-activate:hover{background:color-mix(in srgb,var(--gold) 4%,transparent)}

@@ -1417,7 +1417,7 @@ for (const trigger of ["context jump", "scroll"]) test(`a ${trigger} reaches a p
   assert.equal(calls.filter(call => call.path.endsWith("/delegation")).length, 1, "the deep link loads delegation analysis once for the selected conversation");
   if (trigger === "scroll") {
     await page.evaluate(() => { const scroller = document.querySelector(".workspace-reader-content"); scroller.scrollTop = scroller.scrollHeight; });
-    await page.getByRole("button", { name: /codex.*Open child/ }).waitFor();
+    await page.getByRole("button", { name: /Open conversation/ }).waitFor();
   }
   await page.locator(".token-marker").last().evaluate(marker => marker.click());
   await page.waitForFunction(() => {
@@ -1425,7 +1425,7 @@ for (const trigger of ["context jump", "scroll"]) test(`a ${trigger} reaches a p
     const bounds = target?.getBoundingClientRect();
     return bounds?.height > 0 && bounds.bottom > 0 && bounds.top < innerHeight;
   });
-  const child = page.getByRole("button", { name: /codex.*Open child/ });
+  const child = page.getByRole("button", { name: /Open conversation/ });
   await child.click();
   await settled();
   assert.ok(await page.getByRole("article", { name: "User message", exact: true }).getByText("Review the change (conv-child)", { exact: true }).isVisible());
@@ -1604,6 +1604,13 @@ test("annotated element screenshots render, the annotation surfaces stay on scre
   await page.setViewportSize({ width: 360, height: 420 });
   const box = await onScreen(page.locator(".feedback-toolbar"));
   assert.equal(box, true, `expanded toolbar at [${box}] in 360×420`);
+  // The browser adapter may ask for clipboard permission; use its acknowledged
+  // transfer boundary while exercising real capture, IndexedDB and export.
+  await page.evaluate(() => { window.pharosHost.clipboard.writeText = async () => {}; });
+  const exported = page.waitForResponse(response => response.url().endsWith('/api/feedback/screenshot'));
+  await page.locator('#feedbackCopy').click();
+  await exported;
+  await page.waitForFunction(() => document.getElementById('feedbackToastMessage').textContent.startsWith('Copied 1 annotation'));
   await page.locator("#feedbackSend").click();
   const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
   await dialog.waitFor();
@@ -2909,11 +2916,19 @@ for(const width of [1440,390])test(`Data freshness follows the native modal and 
   await picker.selectOption('days');await page.waitForFunction(()=>document.getElementById('dataReadinessTitle')?.textContent.includes('2 days'));
   await picker.selectOption('missing');await page.locator('.data-readiness-empty').first().waitFor();
   assert(await page.locator('.data-readiness-empty [role="progressbar"]').count()>0);
+  await page.setViewportSize({width,height:320});
+  const constrained=await dialog.locator('.data-guide-body').evaluate(element=>({client:element.clientHeight,scroll:element.scrollHeight}));
+  assert(constrained.scroll>constrained.client,'long update details scroll inside a short viewport');
+  assert(await dialog.getByRole('link',{name:'Update settings'}).isVisible());
+  await page.setViewportSize({width,height:1000});
   await picker.selectOption('clear');await page.waitForFunction(()=>document.getElementById('dataReadinessTitle')?.textContent==='Up to date as of 6 minutes ago');
+  const compact=await dialog.boundingBox();
+  assert(compact.height<900,'short update details do not fill the viewport');
   await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
   await shot('current-check');
   await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=human'));
   await activateHeaderTool(page,'dataReadinessToggle');await dialog.waitFor();
+  await shot('update-details');
   const updated={...status,freshness:status.freshness.map(row=>row.domain==='an.authorship'?{...row,pending_since:null,behind:{state:'current'},reason:null,as_of:new Date().toISOString()}:row)};
   push('/api/status/stream',updated);await page.waitForFunction(()=>/Up to date|No updates waiting|Showing saved results/.test(document.getElementById('dataReadinessTitle')?.textContent));
   await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
@@ -2939,7 +2954,7 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  const upgrade={...background.view.items.find(item=>item.id==='writing-refine'),id:'upgrade',label:'Library upgrade',verb:'Upgrading the library',fixed:true};
  background.view.items.push(upgrade);background.view.cadences.find(cadence=>cadence.id==='daily').items.push('upgrade');
  const status={...idleStatus,background:background.view};
- const {page,settled,push}=await open(t,{url:'/library?query_layout='+queryLayout,viewport:{width,height:1000},ready:'[data-readiness-result="query:library"]',api:{'GET /api/background':background,'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
+ const {page,settled,push,shot}=await open(t,{url:'/library?query_layout='+queryLayout,viewport:{width,height:1000},ready:'[data-readiness-result="query:library"]',api:{'GET /api/background':background,'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
  const dialog=page.locator('#dataReadinessDialog');
  const check=async (selector)=>{
   const button=page.locator(selector).first();await button.waitFor();
@@ -2975,6 +2990,11 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  ]){
   await page.evaluate(url=>window.pharosNavigate(url),url);
   await check(`[data-readiness-result="${identity}"]`);
+  if(identity==='events:examples'&&process.env.PHAROS_UI_SCREENSHOTS){
+   await activateHeaderTool(page,'dataReadinessToggle');await dialog.waitFor();
+   await shot('agent-experience-update-details');
+   await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+  }
   if(identity==='query:safety'){
    const table=page.locator('.safety-table .data-source-query');
    await table.getByTitle('Configure auto-update').click();

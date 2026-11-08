@@ -11,7 +11,7 @@
 .pharos-library-controls{min-width:0;font-size:var(--fs-md,13px)}
 .combo-button>.pharos-drive{gap:7px;min-width:0;max-width:190px;font-weight:400;line-height:1}
 .combo-button>.pharos-app-update{flex:none;color:var(--combo-accent);background:color-mix(in srgb,var(--combo-accent) 14%,var(--combo-bg))}
-.pharos-app-update[aria-disabled=true]{cursor:progress}
+.pharos-app-update[aria-disabled=true]{cursor:default}
 .pharos-app-update[data-phase=available]::after{content:'';position:absolute;top:5px;right:5px;width:5px;height:5px;border-radius:50%;background:currentColor;box-shadow:0 0 0 2px var(--combo-bg)}
 .pharos-update-ring{position:absolute;inset:3px;width:calc(100% - 6px);height:calc(100% - 6px);fill:none;stroke:currentColor;stroke-width:1.8;pointer-events:none}
 .pharos-update-ring[hidden]{display:none}

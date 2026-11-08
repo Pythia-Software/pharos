@@ -179,6 +179,7 @@ type Props = {
   compact?: boolean;
   splitReader?: boolean;
   openOverview?: () => void;
+  showSessions?: () => void;
   openConversation: (id: string, message?: string, session?: string) => Promise<void>;
   // Reports whether the workspace's sessions form a hierarchy: more than one
   // session, or one linked to a parent or child elsewhere.
@@ -514,6 +515,7 @@ export function DelegationExplorer({
   compact = false,
   splitReader = false,
   openOverview,
+  showSessions,
   openConversation,
   onHierarchy,
 }: Props) {
@@ -888,9 +890,7 @@ export function DelegationExplorer({
             link.type = "button";
             link.className = "delegation-transcript-link";
             link.dataset.delegationSession = n.id;
-            link.textContent = n.external_child
-              ? `${n.external_child.provider} · Open child ↗`
-              : `${n.provider} · ${formatted(n.self.clock?.value, "ms")} · Open child`;
+            link.textContent = "Open conversation ↗";
             link.onclick = (event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -938,18 +938,16 @@ export function DelegationExplorer({
     createPortal(
       <>
         <div className="delegation-context">
-          {current
-            .filter((n) => n.external_parent)
-            .map((n) => (
-              <button
-                key={n.id} data-session-id={n.id}
-                onClick={() => openExternal(n.external_parent!, n.parent_id)}
-                title="Parent conversation in another workspace"
-              >
-                ← Parent · {n.external_parent!.provider} ·{" "}
-                {n.external_parent!.label}
-              </button>
-            ))}
+          {shownSession && (shownSession.parent_id || shownSession.external_parent) && (
+            <button type="button" className="delegation-sidebar-link" data-view-field="sidebar_visible" onClick={showSessions}>
+              Parent session
+            </button>
+          )}
+          {shownSession && Math.max(shownSession.child_count, childSessions.length) > 0 && (
+            <button type="button" className="delegation-sidebar-link" data-view-field="sidebar_visible" onClick={showSessions}>
+              {Math.max(shownSession.child_count, childSessions.length)}{data?.focus_truncated && shownSession.child_count <= childSessions.length ? "+" : ""} child session{Math.max(shownSession.child_count, childSessions.length) === 1 ? "" : "s"}
+            </button>
+          )}
           {shownSession && (() => {
             const position = segmentPosition(shownSession.segments, conversation);
             return position && (
@@ -960,35 +958,6 @@ export function DelegationExplorer({
               </span>
             );
           })()}
-          {shownSession && (
-            <span title="Usage attributed to the selected agent session. Aggregate branch remainders are shown separately.">
-              {metricText(shownSession.self.tokens)} tokens · This agent session
-            </span>
-          )}
-          {childSessions.length > 0 && (
-            <ViewDisclosure viewKey="delegation:scope" summary={<>
-                {childSessions.length}
-                {data?.focus_truncated ? "+" : ""} child sessions
-              </>}>
-              <div className="delegation-child-menu">
-                {childSessions.map((n) => (
-                  <button key={n.id} data-session-id={n.id} onClick={() => openNode(n)}>
-                    <strong>{n.label}</strong>
-                    <small>
-                      {n.external_child ? "Another workspace · " : ""}
-                      {n.provider} · {metricText(n.self.tokens)} tokens ·{" "}
-                      {formatted(n.self.clock.value, "ms")} evidence span
-                    </small>
-                  </button>
-                ))}
-                {data?.focus_truncated && (
-                  <small>
-                    More session links are available in the workspace hierarchy.
-                  </small>
-                )}
-              </div>
-            </ViewDisclosure>
-          )}
         </div>
         {shownSession && tokenAttributionText(shownSession) && <p className="delegation-token-evidence">
           {tokenAttributionText(shownSession)}{" "}

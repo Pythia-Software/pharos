@@ -138,6 +138,14 @@ export function dashboardQueryLinks(dataset: UsageDataset, query: QueryState, sc
             select: [...new Set(["started_at", "tool_name", "operation_name", "status", ...destination.query.select.map(column => field(column.field))])].filter(name => names.has(name)).map(field => ({ field })), orderBy } };
       }
     }
+    // Agent Experience evidence is most useful with the source sentence and
+    // its classification, with the highest-confidence observations first.
+    if (destination.dataset === "agent_events" && destination.purpose === "contributors" && !destination.query.grouping) {
+      destination = { ...destination, title: "Events to read", query: { ...destination.query,
+        select: ["family", "sentence", "subject", "response", "source", "occurred_at", "title", "probability"].map(field => ({ field })),
+        orderBy: [{ field: "probability", dir: "desc" }, { field: "occurred_at", dir: "desc" }, { field: "id", dir: "asc" }],
+      } };
+    }
     const target = generatedQueryTarget(destination.dataset, orderedUsageQuery(destination.dataset, destination.query));
     const targetDataset = target.dataset as UsageDataset;
     const query = fitQueryToScreen(target.query);
