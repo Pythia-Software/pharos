@@ -101,6 +101,7 @@ import safetyDocument from "../../schemas/safety.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
 import agentEventsDocument from "../../schemas/agent_events.schema.json";
 import agentEventMessagesDocument from "../../schemas/agent_event_messages.schema.json";
+import agentEventRatesDocument from "../../schemas/agent_event_rates.schema.json";
 import sessionShapeDocument from "../../schemas/session_shape.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { safetyDetailURL, safetyStateLabels } from "./safety-route";
@@ -121,6 +122,7 @@ import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
+import { agentEventFixLinks, agentEventRatesCatalog } from "./agent-event-rates-catalog";
 import { AgentEventExamples } from "./agent-event-examples";
 import { AgentEventRates } from "./agent-event-rates";
 import { agentEventReadWhere, daySpan, eventRates, ratePeriod } from "./agent-event-rates-model";
@@ -149,7 +151,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "people_message_labels" | "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages" | "session_shape";
+type Dataset = "people_message_labels" | "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages" | "agent_event_rates" | "session_shape";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -223,6 +225,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   fixes: loadSchema<Row>(fixesDocument),
   agent_events: loadSchema<Row>(agentEventsDocument),
   agent_event_messages: loadSchema<Row>(agentEventMessagesDocument),
+  agent_event_rates: loadSchema<Row>(agentEventRatesDocument),
   session_shape: loadSchema<Row>(sessionShapeDocument),
 };
 
@@ -406,6 +409,7 @@ const emptyMessages: Record<Dataset, string> = {
   fixes: "No fixes match this query.",
   agent_events: "No agent events match this query.",
   agent_event_messages: "No messages checked for agent events match this query.",
+  agent_event_rates: "No messages checked for agent events match this query.",
   session_shape: "No sessions match this query.",
 };
 
@@ -1103,6 +1107,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "carbon") return <CarbonDashboard />;
   if (topic === "time") return <ToolTimeDashboard />;
   if (topic === "agent_experience") return <AgentExperienceDashboard />;
+  if (topic === "agent_event_rates") return <AgentEventRatesDashboard />;
   if (topic === "session_shape") return <SessionShapeDashboard />;
   return <SkillsDashboard />;
 }
@@ -1357,6 +1362,40 @@ function AgentExperienceDashboard() {
     </>} />;
 }
 
+// Agent Events: how often each kind of event occurs, over agent_event_rates
+// (agent-event-rates-catalog.ts). The summary states the population every
+// rate divides: the messages, turns and conversations the pass read.
+const agentEventRateSummaryMetrics: AggregationClause[] = [
+  { id: "read", op: "count_distinct", field: "message_id", groupBy: [] },
+  { id: "events", op: "sum", field: "events", groupBy: [] },
+  { id: "with", op: "sum", expression: "COUNT_DISTINCT(IF([events]>0,[message_id],NULL))", groupBy: [] },
+  { id: "turns", op: "count_distinct", field: "turn_id", groupBy: [] },
+  { id: "conversations", op: "count_distinct", field: "conversation_id", groupBy: [] },
+];
+function AgentEventRatesSummary({ where }: { where: WhereTerm[] }) {
+  const result = useMetrics("agent_event_rates", where, agentEventRateSummaryMetrics);
+  const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
+  const read = value("read"), events = value("events");
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  if (!result.loading && !result.error && !read) return <p className="usage-dashboard-note" role="status">No agent messages read for events match these filters. Messages are read in the background once agent events are turned on in Settings → Background Processing, and these rates are prepared after each pass.</p>;
+  return <div className="mcp-metrics dashboard-stats" aria-label="Agent Events summary" aria-busy={result.loading}>
+    {card("Messages read", read.toLocaleString(), `agent replies and thinking blocks, in ${value("turns").toLocaleString()} turns and ${value("conversations").toLocaleString()} conversations`)}
+    {card("Events per 1,000 messages", read ? Math.round(1000 * events / read).toLocaleString() : "—", `${events.toLocaleString()} matching events`)}
+    {card("Messages with an event", read ? `${(100 * value("with") / read).toFixed(1)}%` : "—", `${value("with").toLocaleString()} of the messages read`)}
+  </div>;
+}
+// What to do about friction: Fixes groups recurring events into changes to
+// guidance, environment, tools or docs, by the kinds this population names.
+function AgentEventFixLinks({ where }: { where: WhereTerm[] }) {
+  const links = agentEventFixLinks(where);
+  if (!links.length) return null;
+  return <p className="usage-dashboard-note">Fixes groups the friction that keeps recurring into changes you can make to your setup: {links.map((link, index) => <React.Fragment key={link.href}>{index ? index === links.length - 1 ? " and " : ", " : ""}<a href={link.href}>{link.label}</a></React.Fragment>)}.</p>;
+}
+function AgentEventRatesDashboard() {
+  return <CatalogDashboard catalog={agentEventRatesCatalog} dataset="agent_event_rates" name="agent-events" defaults={dashboardDefaults.agent_event_rates}
+    summary={where => <><AgentEventRatesSummary where={where} /><AgentEventFixLinks where={where} /></>}
+    after={<p className="usage-dashboard-note">Every rate divides by what the events pass read: agent replies and thinking blocks, never all messages. A kind filter narrows the events, not the messages read. Events are sentences a small model judged to express a kind of event (confidence threshold 0.5), so expect misses and false alarms; compare rates rather than single counts, and within one model version. Thinking narrates more than replies do, and nearly all thinking read is from Claude models, so compare reply with reply. These rates describe how often agents wrote such sentences; they do not score prompts, people or models. Select a point or bar to open the messages with a matching event, each linked to the reader with its events marked.</p>} />;
+}
 // Session Shape: the engine chart opens on sessions by length band as weekly
 // shares; below it, the forensic panels the chart cannot draw. Its fixed
 // views are Card Library cards that open this chart. Durations in seconds

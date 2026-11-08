@@ -198,6 +198,13 @@ test("the broker load remains visible during a service timeout, and partial rate
   assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["≥12%", "2.0 GB", "≥4.0 MB/s", "last 48 GB"]);
   for (const id of ["cpu", "io"]) assert.match(unavailable.load.metrics.find(metric => metric.id === id).warning, /waiting for another sample.*may undercount/);
   assert.equal(unavailable.load.metrics.find(metric => metric.id === "memory").warning, undefined);
+  // A process whose memory could not be read makes the total a lower bound;
+  // memory nobody could read is a dash, not zero.
+  const memory = resources => model(view({ resources })).load.metrics.find(metric => metric.id === "memory");
+  const partial = memory({ cpu_percent: 1, memory_bytes: 2e9, memory_partial: true });
+  assert.equal(partial.value, "≥2.0 GB");
+  assert.match(partial.warning, /memory could not be read.*may undercount/);
+  assert.equal(memory({ cpu_percent: 1, memory_bytes: null, memory_partial: true }).value, "—");
 });
 
 test("GPU load is scoped to Pharos processes, including idle and unavailable states", () => {

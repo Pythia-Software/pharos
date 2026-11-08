@@ -559,6 +559,54 @@
       }
     },
     {
+      "name": "first_seen_at",
+      "label": "First seen date",
+      "type": "datetime",
+      "group": "Fix",
+      "description": "The start of the local day an agent first reported this problem, for date ranges such as the last 7 days.",
+      "bindings": {
+        "postgres": {
+          "expr": "first_seen_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"first_seen_at\"",
+          "datetimeFormat": "rfc3339"
+        }
+      },
+      "select": {
+        "default": false
+      },
+      "render": "datetime_rel",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "last_seen_at",
+      "label": "Last seen date",
+      "type": "datetime",
+      "group": "Fix",
+      "description": "The start of the local day an agent last reported this problem, for date ranges such as the last 7 days.",
+      "bindings": {
+        "postgres": {
+          "expr": "last_seen_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"last_seen_at\"",
+          "datetimeFormat": "rfc3339"
+        }
+      },
+      "select": {
+        "default": false
+      },
+      "render": "datetime_rel",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
       "name": "handed_at",
       "label": "Handed off",
       "type": "datetime",

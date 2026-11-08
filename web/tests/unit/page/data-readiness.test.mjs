@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readinessDomains,readinessModel,readinessPreview,readinessTone,readinessSettingsURL,readinessStageLabel,readinessStageDescription,readinessStageState,readinessProgressText} from '../../../src/data-readiness-model.ts';
+import {readinessDomains,readinessModel,readinessPreview,readinessTone,readinessSettingsURL,readinessStageLabel,readinessStageDescription,readinessStageState,readinessProgressText,readinessGroups,readinessSubjects,readinessNextText,readinessHasProgress} from '../../../src/data-readiness-model.ts';
 import {readinessDial} from '../../../src/data-readiness-icon.ts';
 const now=Date.parse('2026-11-07T17:24:00Z'),iso=minutes=>new Date(now-minutes*60000).toISOString();
 const scope=(dataset='writing_messages',extra={})=>({id:dataset,title:dataset,dataset,...extra});
@@ -308,4 +308,63 @@ test('stage copy explains progress without exposing processing identifiers or di
  assert.equal(readinessProgressText({...stage,count:1,unit:'message'}),'1 message waiting');
  assert.equal(readinessProgressText(stage),'No progress details yet');
  assert(!readinessStageDescription({...stage,row:undefined}).includes('internal exception'));
+});
+test('per-source stages collapse into one row per step, state and next run, with Done rows folded together',()=>{
+ const capture=(host,source,state)=>row(`capt:${host}/${source}`,{label:`Captures (${source} on ${host==='studio'?'Studio':'Air'})`,task_id:'preserve',
+  ...state==='behind'?{behind:{state:'behind'},reason:{code:'not-indexed',text:'Captured data is not indexed yet'},next:'updates with the next daily update'}:{}});
+ const data=snapshot([...['claude','tl1'].map(name=>row('conv:'+name,{label:`Conversations (${name})`,task_id:'conversations'})),
+  capture('studio','claude','behind'),capture('studio','codex','behind'),capture('studio','tl1'),capture('air','claude','behind'),capture('air','tl1'),row('an.authorship')]);
+ data.freshness.shift();
+ data.background.items.push({id:'preserve',label:'Preserve originals',state:'scheduled',cadence:'daily',next_at:iso(-600)},{id:'conversations',label:'New conversations',state:'current',next_at:iso(-3)});
+ const model=readinessModel(data,[scope()],now),groups=readinessGroups(model.stages);
+ assert.equal(model.kind,'behind');
+ assert.deepEqual(groups.map(group=>group.label),['Read saved conversations','Done']);
+ const [waiting,done]=groups;
+ assert.deepEqual(waiting.subjects,['claude, codex on Studio','claude on Air']);
+ assert.equal(waiting.stages.length,3);assert.equal(waiting.nextAt,Date.parse(iso(-600)));
+ assert.equal(waiting.progress,null,'waiting without counts draws no empty progress');
+ assert.equal(waiting.detail,'Runs with the next daily update.','captured data names the schedule that reads it');
+ assert.deepEqual(done.subjects,['Read new conversations (2 sources)','Read saved conversations (2 sources on 2 Macs)','Estimate your writing']);
+ assert.equal(model.nextAt,Date.parse(iso(-600)),'the summary’s next check is the one that reads what is waiting');
+ // A different next run, or an owner without a schedule, is a separate row
+ // that says how it will run.
+ const manual=data.freshness.find(row=>row.domain==='capt:air/claude');
+ manual.task_id='other-sources';manual.next='updates with the next manual index';
+ data.background.items.push({id:'other-sources',label:'Other sources',state:'manual',cadence:'manual',next_at:null});
+ const split=readinessGroups(readinessModel(data,[scope()],now).stages);
+ assert.deepEqual(split.map(group=>group.subjects.join(' · ')).slice(0,2),['claude, codex on Studio','claude on Air']);
+ assert.match(split[1].detail,/request an update in settings/);assert.equal(split[1].nextAt,null);
+ // Failures come before waiting work; an operation's progress shows once.
+ data.operations=[{id:'op-ic',state:'running',label:'Index captures',step:{done:1,total:3,unit:'source'}}];
+ for(const row of data.freshness.filter(row=>row.domain.startsWith('capt:studio')&&row.behind.state==='behind'))row.catching_up='op-ic';
+ data.freshness.find(row=>row.domain==='an.authorship').behind.state='failed';
+ const ordered=readinessGroups(readinessModel(data,[scope()],now).stages);
+ assert.deepEqual(ordered.map(group=>group.section),['attention','running','waiting','done']);
+ assert.equal(ordered[1].progress?.operation?.id,'op-ic');assert.deepEqual(ordered[1].subjects,['claude, codex on Studio']);
+});
+test('next-run copy states the time and how long until it, or that it is overdue',()=>{
+ assert.equal(readinessNextText(null,now),'');
+ assert.match(readinessNextText(now+12*60000,now),/^Next update .+, in 12 minutes$/);
+ assert.match(readinessNextText(now+(10*60-1)*60000,now),/, in 10 hours$/);
+ assert.match(readinessNextText(now-60000,now),/^Due since /);
+ assert.deepEqual(readinessSubjects(['claude','codex','']),['claude, codex']);
+ assert.equal(readinessHasProgress({id:'x',label:'x',state:'behind',reason:'',next:''}),false);
+ assert.equal(readinessHasProgress({id:'x',label:'x',state:'behind',reason:'',next:'',count:4}),true);
+});
+test('a row read by several tasks uses whichever is scheduled first',()=>{
+ const tl1=row('capt:studio/tl1',{label:'Captures (tl1 on Studio)',task_id:'preserve',task_ids:['preserve','other-sources'],behind:{state:'behind'},reason:{code:'not-indexed',text:'Captured data is not indexed yet'},next:'updates with the next daily update'});
+ const data=snapshot([tl1]);
+ const at=(hours,minutes)=>new Date(Date.UTC(2026,10,8,hours,minutes)).toISOString();
+ data.background.items.push({id:'preserve',label:'Preserve originals',state:'scheduled',cadence:'daily',next_at:at(3,0)},{id:'other-sources',label:'Other sources',state:'scheduled',cadence:'hourly',next_at:at(3,54)});
+ const stage=()=>readinessModel(data,[scope('usage')],now).stages.find(stage=>stage.id==='capt:studio/tl1');
+ assert.equal(stage().item.id,'preserve');assert.equal(stage().nextAt,at(3,0),'a daily task due sooner beats an hourly one due later');
+ assert.equal(readinessStageDescription(stage()),'Runs with the next daily update.');
+ data.background.items.find(item=>item.id==='other-sources').next_at=at(2,54);
+ assert.equal(stage().item.id,'other-sources');assert.equal(stage().nextAt,at(2,54));
+ assert.equal(readinessStageDescription(stage()),'Runs with the next hourly update.');
+ // A task with no planned run never hides one that has a time.
+ data.background.items.find(item=>item.id==='preserve').next_at=null;data.background.items.find(item=>item.id==='other-sources').next_at=at(3,54);
+ assert.equal(stage().item.id,'other-sources');
+ data.background.items.find(item=>item.id==='other-sources').next_at=null;
+ assert.equal(stage().item.id,'preserve');assert.equal(stage().nextAt,null);
 });

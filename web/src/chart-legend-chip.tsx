@@ -2,6 +2,7 @@ import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "reac
 import type { ChartSeries } from "./chart-series";
 import type { LegendAction } from "./chart-selection";
 import type { PopulationAction } from "./dashboard-population";
+import { Icon } from "./icons";
 
 // A legend value's menu. The selection only chooses what is drawn; where the
 // dashboard has a population (onPopulation), the last two items filter every
@@ -74,7 +75,7 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
         firstFocus.current = event.key === "ArrowUp" ? -1 : 0;
         setOpen(true);
       }}>
-      {marker}{item.label}<span className="usage-legend-caret" aria-hidden="true">▾</span>
+      {marker}{item.label}<Icon name="chevron-down" className="usage-legend-caret" />
     </button>
     {open ? <div ref={menu} id={menuId} className="usage-legend-menu" role="menu" aria-label={`Filter ${name}`} onKeyDown={event => {
       const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
@@ -86,8 +87,9 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
       entries[next]?.focus();
     }}>
       <div className="usage-legend-menu-heading" data-overflow-title="">{marker}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</div>
-      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("only")}><span>{category ? "Show only this category" : "Show only this value"}</span><small>Replace the current selection</small></button>
-      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("toggle")}><span>{category ? remove ? "Remove all from selection" : "Add all to selection" : remove ? "Remove from selection" : "Add to selection"}</span><small>{soleSelection ? "Show all values again" : selectionActive ? "Keep the rest of your selection" : "Start a multi-value selection"}</small></button>
+      {/* With nothing selected, adding to the selection is the same as showing only this value. */}
+      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("only")}><span>{category ? "Show only this category" : "Show only this value"}</span><small>{selectionActive ? "Replace the current selection" : "Then add others from their menus"}</small></button>
+      {selectionActive ? <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("toggle")}><span>{category ? remove ? "Remove all from selection" : "Add all to selection" : remove ? "Remove from selection" : "Add to selection"}</span><small>{soleSelection ? "Show all values again" : "Keep the rest of your selection"}</small></button> : null}
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("exclude")}><span>{category ? "Show all except this category" : "Show all except this value"}</span><small>{category ? "Include every label outside this category" : "Include every other value, even in Other"}</small></button>
       <button type="button" role="menuitem" tabIndex={-1} className="usage-legend-menu-reset" disabled={!selectionActive} onClick={() => choose("clear")}>Show all values</button>
       {onPopulation ? <>

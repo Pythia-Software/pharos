@@ -368,8 +368,8 @@
   // one row (in the app, every Pharos process on this Mac). CPU is % of one core,
   // as Activity Monitor shows it; I/O is what the processes read and write
   // per second, and Storage what the library keeps on its drive (from the
-  // last drive check). A figure not measured yet is a dash, and I/O stays
-  // out for a service that does not measure it. GPU uses counters from
+  // last drive check). A figure not measured yet, or not measurable here,
+  // is a dash, and I/O stays out for a service that does not measure it. GPU uses counters from
   // the same Pharos process tree; WAL is shown only above 1 GB.
   function loadModel(resources, storage = null, wal = null, sizesStale = false) {
     if (!resources || typeof resources !== 'object') return null;
@@ -385,10 +385,12 @@
     metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? `${sizesStale ? 'last ' : ''}${size(storage)}` : '—'});
     if (Number.isFinite(wal) && wal > 1e9) metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: `${sizesStale ? 'last ' : ''}${size(wal)}`});
     for (const metric of metrics) {
-      const partial = metric.id === 'cpu' ? resources.cpu_partial : metric.id === 'gpu' ? gpu?.partial : metric.id === 'io' ? resources.disk_partial : false;
+      const partial = metric.id === 'cpu' ? resources.cpu_partial : metric.id === 'gpu' ? gpu?.partial
+        : metric.id === 'io' ? resources.disk_partial : metric.id === 'memory' ? resources.memory_partial : false;
       if (partial && metric.value !== '—') {
         metric.value = '≥' + metric.value;
-        metric.warning = 'Some processes or clients are still waiting for another sample; this reading may undercount usage.';
+        metric.warning = metric.id === 'memory' ? 'Some processes’ memory could not be read; this reading may undercount usage.'
+          : 'Some processes or clients are still waiting for another sample, or could not be read; this reading may undercount usage.';
       }
     }
     return {metrics};

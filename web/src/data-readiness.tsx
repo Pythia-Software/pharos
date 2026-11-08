@@ -4,7 +4,7 @@ import {Icon,type IconName} from './icons';
 import {readinessDial} from './data-readiness-icon';
 import {PageLink,useLocationRevision} from './nested-pages';
 import {useViewState} from './view-state';
-import {readinessAge,readinessModel,readinessPreview,readinessScenarios,readinessSettingsURL,readinessStageDescription,readinessStageState,readinessProgressText,timeValue,type ReadinessScope,type ReadinessModel,type ReadinessStage,type ReadinessScenario} from './data-readiness-model';
+import {readinessAge,readinessClock,readinessGroups,readinessNextText,readinessModel,readinessPreview,readinessScenarios,readinessSettingsURL,readinessProgressText,type ReadinessScope,type ReadinessModel,type ReadinessStage,type ReadinessScenario} from './data-readiness-model';
 import {displayedReadinessScopes,processingState,readinessRevision,registerReadiness,subscribeReadiness} from './data-readiness-store';
 import './data-readiness.css';
 const useProcessing=()=>useSyncExternalStore(subscribeReadiness,readinessRevision);
@@ -47,7 +47,7 @@ export function HeaderDataReadiness(){
   useLayoutEffect(()=>{if(!host)return;host.dataset.tone=model.tone;host.title=`${model.label}. ${model.sentence}`;host.setAttribute('aria-label',`Data updates: ${model.label}. ${model.sentence}`);},[host,model.label,model.sentence,model.tone]);
   return host?createPortal(<FreshnessIcon model={model}/>,host):null;
 }
-const clock=(at:number|null)=>at===null?'Time unavailable':new Date(at).toLocaleString(undefined,{...(new Date(at).toDateString()===new Date().toDateString()?{}:{month:'short',day:'numeric'}),hour:'numeric',minute:'2-digit'});
+const clock=(at:number|null)=>readinessClock(at);
 function StageProgress({stage}:{stage:ReadinessStage}){
   const step=stage.operation?.step,done=step?.done??stage.done,total=step?.total??stage.total;
   const hasTotal=typeof total==='number'&&Number.isFinite(total)&&total>=0;
@@ -56,7 +56,17 @@ function StageProgress({stage}:{stage:ReadinessStage}){
   const value=hasTotal&&hasDone?(total?Math.min(100,Math.round(done/total*100)):0):null;
   return <div className="data-readiness-progress"><div><span>{amount}</span>{value!==null?<span>{value}%</span>:null}</div><div className={`pharos-status-bar${value===null?' indeterminate waiting':''}`} role="progressbar" aria-label={stage.label} {...value===null?{'aria-valuetext':amount}:{'aria-valuenow':value,'aria-valuemin':0,'aria-valuemax':100}}><i style={{width:value===null?'30%':value+'%'}}/></div></div>;
 }
-function ProgressList({model}:{model:ReadinessModel}){return <ul className="data-readiness-stages">{model.stages.map(stage=>{const description=readinessStageDescription(stage);return <li key={stage.id}><div><strong>{stage.label}</strong><span>{readinessStageState(stage)}</span></div>{stage.state!=='current'?<StageProgress stage={stage}/>:null}{stage.state!=='current'&&(description||stage.nextAt)?<p>{description}{stage.nextAt?`${description?' · ':''}Next planned check: ${clock(timeValue(stage.nextAt))}`:''}</p>:null}</li>;})}</ul>;}
+function ProgressList({model}:{model:ReadinessModel}){
+  const now=Date.now();
+  return <ul className="data-readiness-stages">{readinessGroups(model.stages).map(group=>{
+    if(group.section==='done')return <li key={group.key} className="data-readiness-done"><div><strong>Done</strong></div><p>{group.subjects.join(' · ')}</p></li>;
+    const next=readinessNextText(group.nextAt,now);
+    return <li key={group.key} data-section={group.section}><div><strong>{group.label}</strong><span>{group.status}</span></div>
+      {group.subjects.map(subject=><p key={subject} className="data-readiness-subjects">{subject}</p>)}
+      {group.progress?<StageProgress stage={group.progress}/>:null}
+      {group.detail||next?<p>{group.detail}{group.detail&&next?' ':''}{next?<span className="data-readiness-next">{next}.</span>:null}</p>:null}</li>;
+  })}</ul>;
+}
 // A first analysis is not a zero-row query. Use the existing library empty
 // surface and the same stage list; never enqueue work from this surface.
 export function DataReadinessEmpty({id,title,dataset,query,empty,children}:ReadinessScope&{children:React.ReactNode}){

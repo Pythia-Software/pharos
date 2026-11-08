@@ -30,6 +30,8 @@ const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = e
 // A card's trailing window with whole days and a mean reference level (buildCardTrend).
 const trailing = { rollingPeriods: 7, completePeriods: true, percentiles: ["mean"] as PercentileLevel[] };
 const calls = (metric: string, split = "tool_name", extra: Partial<AnalysisState> = {}) => engine("calls", "compare")(metric, split, extra);
+// Agent Events compare at the dashboard's minimum of messages read.
+const events = (metric: string, split: string, extra: Partial<AnalysisState> = {}) => engine("agent_event_rates", "compare")(metric, split, { minSamples: 200, ...extra });
 const dashboards: Record<string, CardDashboard> = {
   "compactions-by-trigger": engine("compaction", "trend")("compactions", "trigger"),
  "message-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
@@ -156,6 +158,12 @@ const dashboards: Record<string, CardDashboard> = {
   "parallel-repositories": parallel("agent_hours", "repository_name", { view: "compare" }),
   "parallel-active-weekday": parallel("active_hours", "none", { view: "cycle", cycle: "weekday" }),
   "parallel-weekday": parallel("at_once", "none", { view: "cycle", cycle: "weekday" }),
+  // Agent Events: the cover's filters are the dashboard's population.
+  "agent-events-repository-friction": events("per_thousand", "friction_repository"),
+  "agent-events-stale-docs": events("per_thousand", "repository_name"),
+  "agent-events-known-failures": events("per_thousand", "repository_name"),
+  "agent-events-unseen-choices": events("per_thousand", "choices_repository"),
+  "digest-friction-weeks": events("per_thousand", "week"),
   // Session Shape: one record per agent session. Rates carry their coverage
   // population as the card's filters.
   "session-sources": sessions("sessions", "harness", {}),
