@@ -689,7 +689,7 @@ func backfillExecutionEvidence(ctx context.Context, tx *sql.Tx, ids []string, on
 			}
 		}
 		messages, err := tx.QueryContext(ctx, `SELECT native_id,kind,COALESCE(call_id,''),text FROM messages WHERE conversation_id=?
-		 AND (kind IN ('delegation','delegation_result') OR (`+claudeWorkflowCallSQL+`) OR (kind='tool_result' AND call_id<>'') OR (kind='metadata' AND text LIKE '{"payload":%"type":"session_meta"%'))
+		 AND (kind IN ('delegation','delegation_result') OR (`+claudeWorkflowCallSQL("")+`) OR (kind='tool_result' AND call_id<>'') OR (kind='metadata' AND text LIKE '{"payload":%"type":"session_meta"%'))
 		 ORDER BY source_order IS NULL,source_order,created_at,id`, id)
 		if err != nil {
 			return err

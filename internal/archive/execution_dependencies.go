@@ -413,7 +413,7 @@ func fillDependencyInverse(ctx context.Context, q queryer, entry *dependencyInve
 	for _, row := range rows {
 		launchers = append(launchers, firstString(row["id"]))
 	}
-	rows, err = queryMapsContext(ctx, q, `SELECT DISTINCT conversation_id id FROM messages WHERE `+claudeWorkflowCallSQL+within("conversation_id"), args...)
+	rows, err = queryMapsContext(ctx, q, `SELECT DISTINCT conversation_id id FROM messages WHERE `+claudeWorkflowCallSQL("")+within("conversation_id"), args...)
 	if err != nil {
 		return err
 	}

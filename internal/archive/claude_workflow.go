@@ -57,10 +57,15 @@ func claudeWorkflowAcknowledgement(native, text string) string {
 	return run
 }
 
-// Kept identical in the partial index and its readers. This selects launch
-// calls without reading every tool result in a library. CASE guards old rows
-// whose text is not JSON.
-const claudeWorkflowCallSQL = `kind IN ('tool_call','delegation') AND call_id<>'' AND CASE WHEN json_valid(text) THEN json_extract(text,'$.tool') END='Workflow'`
+// Shared by extraction, its partial index and retained-evidence invalidation.
+// row qualifies columns for a table or an OLD/NEW trigger row; empty leaves
+// them unqualified. CASE guards old rows whose text is not JSON.
+func claudeWorkflowCallSQL(row string) string {
+	if row != "" {
+		row += "."
+	}
+	return row + `kind IN ('tool_call','delegation') AND ` + row + `call_id<>'' AND CASE WHEN json_valid(` + row + `text) THEN json_extract(` + row + `text,'$.tool') END='Workflow'`
+}
 
 func conversationWorkflowEvidence(conversation ConversationRecord) []EvidenceRecord {
 	if conversation.Provider != "claude" {
@@ -106,7 +111,7 @@ func retainedWorkflowEvidence(ctx context.Context, q queryer, scope []string) (m
 	where, args := executionScope("m.conversation_id", scope)
 	rows, err := queryMapsContext(ctx, q, `SELECT m.conversation_id,c.native_id,c.account,m.native_id message_native,m.kind,m.call_id,
 	 CASE WHEN m.kind IN ('tool_call','delegation') THEN '{"tool":"Workflow"}' ELSE m.text END text
-	 FROM (SELECT conversation_id,call_id FROM messages WHERE `+claudeWorkflowCallSQL+`) d
+	 FROM (SELECT conversation_id,call_id FROM messages WHERE `+claudeWorkflowCallSQL("")+`) d
 	 JOIN conversations c ON c.id=d.conversation_id AND c.provider='claude'
 	 JOIN messages m ON m.conversation_id=d.conversation_id AND m.call_id=d.call_id AND m.call_id<>''
 	 WHERE m.kind IN ('tool_call','delegation','tool_result','delegation_result')`+where+` ORDER BY m.conversation_id,m.id`, args...)

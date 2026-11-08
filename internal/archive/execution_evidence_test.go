@@ -143,6 +143,78 @@ func TestClaudeWorkflowEvidenceIngestAndBackfill(t *testing.T) {
 	}
 }
 
+func TestRetainedWorkflowEvidenceFollowsCallChanges(t *testing.T) {
+	for _, tc := range []struct{ name, change string }{
+		{"deleted call", `DELETE FROM messages WHERE id='workflow-call'`},
+		{"renamed tool", `UPDATE messages SET text='{"tool":"Bash"}' WHERE id='workflow-call'`},
+		{"malformed call", `UPDATE messages SET text='invalid JSON' WHERE id='workflow-call'`},
+		{"changed call ID", `UPDATE messages SET call_id='other-call' WHERE id='workflow-call'`},
+		{"cleared call ID", `UPDATE messages SET call_id='' WHERE id='workflow-call'`},
+		{"changed kind", `UPDATE messages SET kind='reasoning' WHERE id='workflow-call'`},
+		{"duplicate call", `INSERT INTO messages(id,conversation_id,native_id,role,kind,call_id,text,content_hash)
+		 VALUES('duplicate','root','duplicate','assistant','tool_call','call','{"tool":"Workflow"}','duplicate')`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := executionFixture(t, executionFixtureConversation{id: "root", provider: "claude"},
+				executionFixtureConversation{id: "child", depth: 1, provider: "claude"})
+			fixtureExec(t, c, `UPDATE conversations SET native_id='root:subagent:workflows/wf_run/agent-child' WHERE id='child'`)
+			insertCall := func() {
+				fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,call_id,text,content_hash)
+				 VALUES('workflow-call','root','workflow-call','assistant','tool_call','call','{"tool":"Workflow"}','call')`)
+			}
+			insertCall()
+			fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,call_id,text,content_hash)
+			 VALUES('result','root','result','tool','tool_result','call',?,'result')`, workflowAck("root", "wf_run"))
+			backfill := func() int {
+				t.Helper()
+				n, err := c.BackfillExecutionEvidence(t.Context(), 100)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return n
+			}
+			checkParent := func(want parentState) {
+				t.Helper()
+				r := fixtureResolution(t, c)
+				x := r.Execution(r.BindConversation("child").ExecutionID)
+				if x == nil || x.Parent.State != want || want == parentResolved && x.Parent.ParentID != "conversation:root" {
+					t.Fatalf("child parent = %+v, want %s", x, want)
+				}
+			}
+			backfill()
+			checkParent(parentResolved) // warm the cache with the saved claim
+			fixtureExec(t, c, tc.change)
+			var version string
+			if err := c.DB.QueryRow(`SELECT version FROM execution_evidence_state WHERE conversation_id='root'`).Scan(&version); err != nil {
+				t.Fatal(err)
+			}
+			if version != executionEvidenceStale+executionEvidenceVersion {
+				t.Fatalf("changed Workflow call left evidence current: %s", version)
+			}
+			checkParent(parentMissing)
+			if backfill() == 0 {
+				t.Fatal("backfill skipped the changed Workflow call")
+			}
+			checkParent(parentMissing)
+			if claim := findClaim(executionClaimsOf(t, c.DB, "root"), evidenceWorkflowLaunch, ""); claim != nil {
+				t.Fatalf("repair retained an obsolete workflow claim: %+v", claim)
+			}
+			if backfill() != 0 {
+				t.Fatal("repaired evidence did not stay current")
+			}
+			// Inserting the valid call again must also invalidate the repaired
+			// state, so the acknowledgement can regain its parent link.
+			fixtureExec(t, c, `DELETE FROM messages WHERE id IN ('workflow-call','duplicate')`)
+			insertCall()
+			checkParent(parentResolved)
+			if backfill() == 0 {
+				t.Fatal("backfill skipped the restored Workflow call")
+			}
+			checkParent(parentResolved)
+		})
+	}
+}
+
 // stampExecutionDigests records on seeded ledger rows the execution
 // dependency digest a run would have built them at, and propagates, as a
 // fixture that stands for built derivatives needs: a row without a digest
@@ -567,6 +639,8 @@ func TestRetainedEvidenceFollowsStoredRows(t *testing.T) {
 	// A deletion of the result leaves no acknowledgement, before and after
 	// re-derivation; an unrelated message changes nothing.
 	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('note','root','note','assistant','reasoning','thinking','note')`)
+	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,call_id,text,content_hash)
+	 VALUES('unrelated-call','root','unrelated-call','assistant','tool_call','unrelated','{"tool":"Bash"}','bash')`)
 	if version("root") != executionEvidenceVersion {
 		t.Fatalf("an unread message marked the evidence stale: %s", version("root"))
 	}
