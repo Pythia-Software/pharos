@@ -1423,6 +1423,50 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
   }
 });
 
+test('overlapping context profiles reveal the stream actually clicked', {skip}, async t=>{
+  const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-context .token-marker'});
+  const entries=await page.evaluate(()=>document.querySelector('.conversation-panel').navigatorData.contexts.map(entry=>({id:entry.message.id,size:entry.sample.size,title:entry.title})));
+  const parent=entries.find(entry=>entry.size===150200),child=entries.find(entry=>entry.id==='m-17');
+  assert.ok(parent&&child,'the fixture has overlapping main and subagent profiles');
+  const parentButton=page.getByRole('button',{name:parent.title,exact:true});
+  const childButton=page.getByRole('button',{name:child.title,exact:true});
+  const parentBounds=await parentButton.boundingBox(),childBounds=await childButton.boundingBox();
+  const clickX=(Math.max(parentBounds.x,childBounds.x)+Math.min(parentBounds.x+parentBounds.width,childBounds.x+childBounds.width))/2;
+  assert.ok(clickX>Math.max(parentBounds.x,childBounds.x)&&clickX<Math.min(parentBounds.x+parentBounds.width,childBounds.x+childBounds.width));
+  // This point is inside both buttons' rectangles, above the smaller profile.
+  await page.mouse.click(clickX,parentBounds.y+parentBounds.height*.9);
+  await page.waitForFunction(id=>[...document.querySelectorAll('.token-highlight')].some(target=>target.closest('[data-message-id]')?.dataset.messageId===id),parent.id);
+  await settled();
+  // Keyboard activation still reaches the small profile.
+  await childButton.focus();await page.keyboard.press('Enter');
+  await page.waitForFunction(id=>[...document.querySelectorAll('.token-highlight')].some(target=>target.closest('[data-message-id]')?.dataset.messageId===id),child.id);
+});
+
+test('untimed session navigator draws calls and failures and reveals by message order', {skip}, async t=>{
+  const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-timeline',api:{
+    'GET /api/work/:id/conversations/:conversation':call=>{
+      const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
+      if(call.params.conversation!=='conv-root')return body;
+      const event=(id,kind,text,extra={})=>({id,native_id:id,kind,role:'assistant',created_at:null,text:typeof text==='string'?text:JSON.stringify(text),...extra});
+      return {...body,messages:[event('prompt','message','Check the files',{role:'user'}),
+        event('command','tool_call',{name:'Bash',input:{command:'check'}},{call_id:'cmd'}),
+        event('result','tool_result',{exit_code:1,content:'Process exited with code 1'},{call_id:'cmd'}),
+        event('delegate','delegation',{name:'Task',input:{description:'Review files'}},{call_id:'agent'}),
+        event('done','delegation_result',{content:'Reviewed'},{call_id:'agent'}),
+        event('reply','message','Finished checking the files')]};
+    },
+  }});
+  const navigator=page.locator('.reader-navigator'),key=navigator.getByLabel('Timeline key');
+  for(const name of ['Run','Delegation','Error'])assert.ok(await key.getByText(name,{exact:true}).isVisible());
+  assert.ok(await navigator.getByText('Message order · timestamps unavailable',{exact:true}).isVisible());
+  await navigator.getByRole('button',{name:'Browse session timeline'}).focus();
+  await page.keyboard.press('End');await settled();
+  await page.waitForFunction(()=>{
+    const target=document.querySelector('[data-message-id="reply"].authorship-target'),bounds=target?.getBoundingClientRect();
+    return bounds?.height>0&&bounds.top<innerHeight&&bounds.bottom>document.querySelector('.reader-navigator-host').getBoundingClientRect().bottom;
+  });
+});
+
 test('session navigator scrolling reuses transcript geometry on a long session', {skip}, async t=>{
   const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root?reader_navigator=${encodeURIComponent(JSON.stringify(['timeline','context','turns']))}`,ready:'.reader-navigator-turn',api:{
     'GET /api/work/:id/conversations/:conversation':call=>{

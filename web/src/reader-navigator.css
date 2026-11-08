@@ -21,8 +21,8 @@
 .reader-navigator-turn,.reader-navigator-context .token-marker{position:absolute;top:0;bottom:0;min-width:3px;padding:0;border:0;border-radius:0}
 .reader-navigator-turn{background:color-mix(in srgb,var(--muted) 18%,transparent);border-left:2px solid var(--gold);color:var(--muted);font:9px ui-monospace,monospace;overflow:hidden;text-align:left}
 .reader-navigator-turn:hover{background:color-mix(in srgb,var(--accent) 25%,transparent)}
-.reader-navigator-context .token-marker{background:transparent}
-.reader-navigator-context .token-marker::before{content:'';position:absolute;inset:0;background:var(--token-color);clip-path:var(--context-profile);opacity:.7;pointer-events:none}
+.reader-navigator-context .token-marker{background:transparent;clip-path:var(--context-profile)}
+.reader-navigator-context .token-marker::before{content:'';position:absolute;inset:0;background:var(--token-color);opacity:.7;pointer-events:none}
 .reader-navigator-context .compaction-marker{width:2px!important}
 .reader-navigator-context .token-marker:hover,.reader-navigator-context .token-marker:focus-visible{outline:1px solid var(--ink);outline-offset:-1px}
 .reader-navigator-track>small{display:block;color:var(--muted);font-size:10px;padding:5px}

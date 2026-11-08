@@ -4,22 +4,30 @@ import type {AgentEventLink} from './event-link-layout';
 import type {TimeRange} from './timeline-label-model';
 
 export type ReaderContext={title:string;color:string;message:{id:string};sample:{stream:string;compact?:boolean;trigger?:string;size:number|null;window?:number|null};from:number;width:number;label:string};
-export type ReaderNavigatorData={messages:LabelMessage[];marks:ActivityMark[];events:AgentEventLink[];taxonomy:Taxonomy;turns:{target:HTMLDetailsElement;messages:string[];label:string}[];contexts:ReaderContext[];jumpContext:(entry:ReaderContext)=>void;jumpMessage:(id:string)=>void};
+export type ReaderNavigatorMark=Omit<ActivityMark,'start'|'end'>&{start:number|null;end:number|null};
+export type ReaderNavigatorData={messages:LabelMessage[];marks:ReaderNavigatorMark[];events:AgentEventLink[];taxonomy:Taxonomy;turns:{target:HTMLDetailsElement;messages:string[];label:string}[];contexts:ReaderContext[];jumpContext:(entry:ReaderContext)=>void;jumpMessage:(id:string)=>void};
 export type ReaderSpan={top:number;bottom:number;start:number;end:number};
 export type ReaderGeometry={spans:ReaderSpan[];ends:number[]};
 
 /** Build once per session. Missing timestamps stay missing; an entirely
  * untimed transcript explicitly uses message order instead of a fake clock. */
-export function readerNavigatorClock(messages:LabelMessage[],marks:ActivityMark[]){
-  const timed=messages.some(message=>message.at&&Number.isFinite(Date.parse(message.at)))||marks.length>0;
+export function readerNavigatorClock(messages:LabelMessage[],sourceMarks:ReaderNavigatorMark[]){
+  const timed=messages.some(message=>message.at&&Number.isFinite(Date.parse(message.at)))||sourceMarks.some(mark=>mark.start!==null&&Number.isFinite(mark.start));
   const drawn=timed?messages:messages.map((message,index)=>({...message,at:new Date(index).toISOString()}));
+  const ordinals=new Map(messages.map((message,index)=>[message.id,index]));
+  const marks:ActivityMark[]=sourceMarks.flatMap(mark=>{
+    const start=timed?mark.start:mark.message_id?ordinals.get(mark.message_id):undefined;
+    if(start==null||!Number.isFinite(start))return [];
+    const known=timed&&mark.end_known&&mark.end!==null&&Number.isFinite(mark.end)&&mark.end>=start;
+    return [{...mark,start,end:known?mark.end!:start,end_known:known}];
+  });
   const intervals=labelIntervals(drawn,marks),byID=new Map<string,TimeRange>();
   for(const {message,start,end} of intervals)byID.set(message.id,[start,end]);
   for(const mark of marks)if(mark.message_id)byID.set(mark.message_id,[mark.start,mark.end_known?Math.max(mark.start,mark.end):mark.start]);
   let start=Infinity,end=-Infinity;
   for(const span of byID.values()){start=Math.min(start,span[0]);end=Math.max(end,span[1]);}
   const range:TimeRange=Number.isFinite(start)?[start,Math.max(start+1,end)]:[0,1];
-  return {messages:drawn,byID,range,timed};
+  return {messages:drawn,marks,byID,range,timed};
 }
 
 export function readerGeometry(spans:ReaderSpan[]):ReaderGeometry{
