@@ -211,6 +211,33 @@ func TestPeerLinksFromReadDiffsCopiesAndTL1(t *testing.T) {
 	if second := links["read_written_by:impl>second"]; second.confidence != peerHigh || !strings.Contains(second.evidence, `"timing":"return"`) {
 		t.Fatalf("second review after the implementer's next prompt: %+v", second)
 	}
+	// A diff stored before its output came back gets the output in place,
+	// keeping its rowid; the refresh still reads it.
+	f = newPeerFixture(t, c.DB)
+	f.seq = 250
+	f.work("pending", "Pending review")
+	f.message("pending-ask", "pending-c", "user", "message", "Review it", 42)
+	pending := f.read("pending-c", 43, true, written...)
+	f.exec(`UPDATE tool_calls SET result_message_id=NULL WHERE id=?`, pending)
+	commitSeed(t, f.tx)
+	if err := c.RefreshPeerLinks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := storedPeerLinks(t, c)["read_written_by:impl>pending"]; ok {
+		t.Fatal("a diff without output linked")
+	}
+	if _, err := c.DB.Exec(`UPDATE tool_calls SET result_message_id=? WHERE id=?`, pending, pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RefreshPeerLinks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if l, ok := storedPeerLinks(t, c)["read_written_by:impl>pending"]; !ok || l.rightMessage != pending {
+		t.Fatalf("a diff whose output arrived later was not read: %+v", l)
+	}
+	if err := c.DB.QueryRow(`SELECT 1 FROM work_peer_links_dirty`).Scan(new(int)); err != sql.ErrNoRows {
+		t.Fatalf("late output stays marked after the refresh read it: %v", err)
+	}
 	// A family that joins another (here, launched by the review) stops being
 	// related work of its own.
 	if _, err := c.DB.Exec(`INSERT INTO conversation_launches(child_id,parent_id,tool_call_id,program) VALUES('second-c','review-c','launch','codex')`); err != nil {
@@ -238,7 +265,7 @@ func TestPeerLinksFromReadDiffsCopiesAndTL1(t *testing.T) {
 func TestPeerLinkConfidence(t *testing.T) {
 	c, _ := testCatalog(t)
 	f := newPeerFixture(t, c.DB)
-	for _, id := range []string{"writer", "busy", "untimed", "busy-late", "reader", "rival", "tied", "writer2", "returner"} {
+	for _, id := range []string{"writer", "busy", "untimed", "busy-late", "reader", "rival", "tied", "writer2", "returner", "writer3", "rereader"} {
 		f.work(id, id)
 	}
 	lines := peerLines("Writer", 6)
@@ -279,6 +306,15 @@ func TestPeerLinkConfidence(t *testing.T) {
 	f.read("returner-c", 801, true, lines2...)
 	f.message("returner-done", "returner-c", "assistant", "message", "P2: rename it.", 805)
 	f.message("writer2-fix", "writer2-c", "user", "message", "Rename it", 810)
+	// Opening the files first does not weaken the diff that shows the same
+	// lines as added.
+	lines3 := peerLines("Third", 5)
+	f.message("writer3-ask", "writer3-c", "user", "message", "Write the third part", 900)
+	f.edit("writer3-c", 901, lines3...)
+	f.message("writer3-done", "writer3-c", "assistant", "message", "Written.", 902)
+	f.message("rereader-ask", "rereader-c", "user", "message", "Review the third part", 903)
+	f.read("rereader-c", 903, false, lines3...)
+	rediff := f.read("rereader-c", 904, true, lines3...)
 	// A short quote is uncertain; a reply quoted days later is not linked.
 	for _, quote := range []struct {
 		id            string
@@ -299,6 +335,10 @@ func TestPeerLinkConfidence(t *testing.T) {
 		"read_written_by:writer>busy":      peerLow + "/start",
 		"read_written_by:writer>untimed":   peerLow + "/",
 		"read_written_by:writer2>returner": peerHigh + "/return",
+		"read_written_by:writer3>rereader": peerHigh + "/start",
+	}
+	if l := links["read_written_by:writer3>rereader"]; l.rightMessage != rediff {
+		t.Fatalf("a diff link is anchored on %q, not the diff %q", l.rightMessage, rediff)
 	}
 	got := map[string]string{}
 	for key, l := range links {

@@ -66,6 +66,9 @@ const relatedWorkAPI = {
       peer: { workspace_id: peerWorkID, title: review.title, role: review.role } };
     return { ...data, rows: [...data.rows, peer], focus: [...data.focus, peer], matched: { ...data.matched, [peer.id]: true }, total: data.total + 1, session_count: data.session_count + 1, group_totals: data.totals };
   },
+  "GET /api/work/:id/conversations/:conversation": request => request.params.id === peerWorkID ? { ...relatedWork.peer_conversations[0],
+    messages: [{ id: "conv-review-ask", role: "user", kind: "message", text: "Review the changes" }, { id: "conv-review-reply", role: "assistant", kind: "message", text: "P1: the sort ignores ties." }] }
+    : defaultApi["GET /api/work/:id/conversations/:conversation"](request),
 };
 // The root session's last reply, which the card previews as its latest response.
 const latestResponseID = defaultApi["GET /api/work/:id/conversations/:conversation"]({ params: { id: workID, conversation: rootConversation } }).messages
@@ -640,7 +643,16 @@ const ROUTES = [
   { name: "Workspace overview", url: work, api: tokenEvidenceAPI, ready: ".delegation-table tbody tr" },
   { name: "Workspace Timeline", url: `${work}?explorer=timeline`, ready: ".lt-session-root" },
   { name: "Workspace with related work", url: work, api: relatedWorkAPI, ready: ".peer-strip .peer-chip.uncertain", open: page => page.locator(".peer-reasons summary").click(), shown: ".peer-reasons[open] li",
-    check: page => page.locator('[data-session-id="s-peer"]').first().waitFor() },
+    check: async page => {
+      await page.locator('[data-session-id="s-peer"]').first().waitFor();
+      // Following a hand-off opens the related conversation and reveals the
+      // message without taking keyboard focus.
+      await page.goto(`${page.url().split("/work/")[0]}${work}/conversation/${rootConversation}`);
+      await page.locator(".handoff-marker").first().click();
+      await page.locator(".peer-reader-note").waitFor();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+      assert.ok(await page.evaluate(() => !document.activeElement?.closest(".conversation-panel")), "following a hand-off moved focus into the reader");
+    } },
   { name: "Workspace Timeline skipping idle time, agent events expanded", url: `${work}?explorer=timeline&disclosures=${idleTimelineDisclosures}`, api: idleTimelineAPI, ready: ".lt-session-node .lt-session-row-label svg.event-link-glyph", open: page => page.locator(".lt-session-ribbon .lt-idle-cut-line").first().waitFor({ state: "attached" }), shown: ".lt-clock-heading .lt-idle-cut time" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, api: tokenEvidenceAPI, ready: ".conversation-panel .turn" },

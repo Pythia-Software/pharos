@@ -57,14 +57,14 @@ left out.
 
 | Links | Right | Wrong | Precision |
 |---|---|---|---|
-| Diff + the writer's next prompt followed | 103 | 4 | 0.96 |
-| Diff + began as the writer's turn ended, wrote nothing, clear lead | 522 | 78 | 0.87 |
+| Diff + the writer's next prompt followed | 105 | 4 | 0.96 |
+| Diff + began as the writer's turn ended, wrote nothing, clear lead | 543 | 84 | 0.87 |
 | Quoted copies within a day, ≥ 40 words | 757 | 93 | 0.89 |
-| **Related pairs shown solid and in the hierarchy** | **1,095** | **164** | **0.87** |
-| Related pairs shown dashed | 465 | 426 | 0.52 |
-| Dashed: diff, no timing, reader wrote nothing | 258 | 189 | 0.58 |
+| **Related pairs shown solid and in the hierarchy** | **1,115** | **170** | **0.87** |
+| Related pairs shown dashed | 466 | 454 | 0.51 |
+| Dashed: diff, no timing, reader wrote nothing | 262 | 217 | 0.55 |
 | Dashed: diff + start timing, reader wrote code | 49 | 60 | 0.45 |
-| Dashed: file reads + start timing | 127 | 137 | 0.48 |
+| Dashed: file reads + start timing | 122 | 133 | 0.48 |
 | Dashed: quoted copies under 40 words | 56 | 36 | 0.61 |
 | Quoted copies after a day (dropped; earlier run) | 15 | 62 | 0.19 |
 | File reads, no timing (dropped; earlier run) | 44 | 492 | 0.08 |

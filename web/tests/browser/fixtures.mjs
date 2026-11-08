@@ -849,7 +849,7 @@ export const defaultApi = {
   // The Session signals strip: the failed call's result, and two late prompts
   // as corrections, so stepping lands in a collapsed turn.
   "GET /api/work/:id/conversations/:conversation/signals": ({ params }) => {
-    if (params.id !== workID) return undefined;
+    if (params.id !== workID && params.id !== peerWorkID) return undefined;
     const coverage = { has_tool_data: true, has_timestamps: true, has_authorship: true, has_context_window: false };
     if (params.conversation !== rootConversation) return { conversation_id: params.conversation, signals: [], coverage };
     const messages = transcript(), failed = messages.filter(message => message.kind === "tool_result" && JSON.parse(message.text).is_error), late = messages.filter(message => message.role === "user").slice(-2);

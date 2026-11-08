@@ -28,7 +28,7 @@ import (
 // becomes a peer.
 
 // peerLinksVersion names the derivation rules; a new version rebuilds.
-const peerLinksVersion = "peers-v2"
+const peerLinksVersion = "peers-v3"
 
 // Tunables are package variables so tests can lower them.
 var (
@@ -199,6 +199,15 @@ func (c *Catalog) RefreshPeerLinks(ctx context.Context) error {
 	if maxRow < lastRow {
 		maxRow = lastRow
 	}
+	// A call stored before its result came back gets the result in place,
+	// keeping its rowid; a trigger keeps the earliest such call's start.
+	var updated, revision sql.NullString
+	if err := c.reader().QueryRowContext(ctx, `SELECT since,revision FROM work_peer_links_dirty WHERE id=1`).Scan(&updated, &revision); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if !full && updated.Valid && (!since.Valid || updated.String < since.String) {
+		since = updated
+	}
 	readsDirty := full || since.Valid
 	contentDirty := full || builtAuthorship != authorship || builtTL1 != tl1
 	if !readsDirty && !contentDirty {
@@ -276,6 +285,13 @@ func (c *Catalog) RefreshPeerLinks(ctx context.Context) error {
 				if _, err := insert.ExecContext(ctx, l.left, l.right, l.kind, l.confidence, l.leftMessage, l.rightMessage, nullIfEmpty(l.at), jsonText(l.evidence), l.left, l.right); err != nil {
 					return err
 				}
+			}
+		}
+		// A result that arrived while this ran changed the revision and stays
+		// for the next run.
+		if revision.Valid {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM work_peer_links_dirty WHERE revision=?`, revision.String); err != nil {
+				return err
 			}
 		}
 		for key, value := range map[string]string{"peer_links_version": want, "peer_links_tool_rowid": fmt.Sprint(maxRow), "peer_links_authorship": authorship, "peer_links_tl1": tl1, "peer_links_built_at": now()} {
@@ -502,12 +518,14 @@ func (c *Catalog) derivePeerReads(ctx context.Context, f *peerFamilies, from str
 // peerReadLink picks the writer whose lines a reader read, if one stands out.
 func (c *Catalog) peerReadLink(ctx context.Context, text *sql.Stmt, index *peerWriteIndex, clock *peerClock, f *peerFamilies, reader string, reads []peerRead) (*peerLink, error) {
 	type tally struct {
-		added, shown      int
-		writeMsg, readMsg string
-		firstRead         time.Time
+		added, shown               int
+		writeMsg, readMsg, diffMsg string
+		firstRead                  time.Time
 	}
 	tallies := map[string]*tally{}
-	seen := map[uint64]bool{}
+	// A line counts once as shown and once as added: one first seen in a
+	// file read still counts when a later diff adds it.
+	seen, seenAdded := map[uint64]bool{}, map[uint64]bool{}
 	for _, read := range reads {
 		var body string
 		if err := text.QueryRowContext(ctx, read.message).Scan(&body); err != nil {
@@ -523,10 +541,14 @@ func (c *Catalog) peerReadLink(ctx context.Context, text *sql.Stmt, index *peerW
 			readPeerLines(body, shown, nil)
 		}
 		for hash := range shown {
-			if seen[hash] {
+			newShown, newAdded := !seen[hash], added[hash] && !seenAdded[hash]
+			if !newShown && !newAdded {
 				continue
 			}
 			seen[hash] = true
+			if newAdded {
+				seenAdded[hash] = true
+			}
 			writer, message, ok := index.uniqueWriter(hash, read.at, reader)
 			if !ok {
 				continue
@@ -536,8 +558,13 @@ func (c *Catalog) peerReadLink(ctx context.Context, text *sql.Stmt, index *peerW
 				t = &tally{writeMsg: message, readMsg: read.message, firstRead: read.at}
 				tallies[writer] = t
 			}
-			t.shown++
-			if added[hash] {
+			if newShown {
+				t.shown++
+			}
+			if newAdded {
+				if t.diffMsg == "" {
+					t.diffMsg = read.message
+				}
 				t.added++
 			}
 		}
@@ -599,8 +626,13 @@ func (c *Catalog) peerReadLink(ctx context.Context, text *sql.Stmt, index *peerW
 	if confidence == "" {
 		return nil, nil
 	}
+	// A diff link is anchored on the diff that showed the lines.
+	readMsg := t.readMsg
+	if basis == "diff" {
+		readMsg = t.diffMsg
+	}
 	return &peerLink{left: writer, right: reader, kind: "read_written_by", confidence: confidence,
-		leftMessage: t.writeMsg, rightMessage: t.readMsg, at: formatTime(t.firstRead),
+		leftMessage: t.writeMsg, rightMessage: readMsg, at: formatTime(t.firstRead),
 		evidence: map[string]any{"basis": basis, "lines": top, "runner_up": second, "timing": timing, "reader_lines": own}}, nil
 }
 

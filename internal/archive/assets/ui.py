@@ -1629,7 +1629,7 @@ else if(new URLSearchParams(location.search).has('reveal'))window.pharosView?.re
 else if(workspaceInbox){const state=readerStates.get(conversations[index].id);if(state){if(!same)[...panel.querySelectorAll('.turn-list > .turn')].forEach((turn,i)=>{if(state.turns[i])panel.materializeTurn?.(i);turn.open=Boolean(state.turns[i])});if(!same||historyMode==='replace')host.scrollTop=state.scroll}else if(!same)host.scrollTop=0}
 else panel.scrollIntoView({behavior:'smooth',block:'start'});
 };
-window.pharosOpenHandoff=marker=>{const index=conversations.findIndex(c=>c.id===marker.conversation);if(index<0||!host.isConnected)return false;void selectConversation(index,{message:marker.message});return true};
+window.pharosOpenHandoff=marker=>{const index=conversations.findIndex(c=>c.id===marker.conversation);if(index<0||!host.isConnected)return false;void selectConversation(index,{message:marker.message,focusReader:false});return true};
 const paths=new Map(),pathEntry=path=>{if(!paths.has(path))paths.set(path,{changes:[],conversation:''});return paths.get(path)};
 for(const change of w.changes.filter(c=>c.path))pathEntry(change.path).changes.push(change);
 for(const file of w.files||[]){const entry=pathEntry(file.path);entry.conversation||=file.conversation_id}
