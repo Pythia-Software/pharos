@@ -26,6 +26,8 @@ import (
 	"filippo.io/age"
 	"filippo.io/age/armor"
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 const cloudMagic = "PHAROS-CLOUD-1\n"
@@ -641,6 +643,9 @@ func extractCloudArchive(ctx context.Context, config Config, payload io.Reader, 
 	return directory, nil
 }
 
+// Tests replace the verification lock to exercise adapter failures.
+var lockCloudVerification = filelock.Lock
+
 // Retain known files for explicit recovery. No live-library paths are replaced.
 func (c *Catalog) finishCloudVerification(ctx context.Context, config Config, r *cloudRun, path string, password []byte) error {
 	lockPath := filepath.Join(expandPath(config.StagingRoot), "cloud-verify-"+r.ID+".lock")
@@ -649,8 +654,11 @@ func (c *Catalog) finishCloudVerification(ctx context.Context, config Config, r 
 		return err
 	}
 	defer lock.Close()
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return errors.New("verification is already running for this revision")
+	if err = lockCloudVerification(lock, filelock.Exclusive, filelock.Try); err != nil {
+		if errors.Is(err, filelock.ErrContended) {
+			return errors.New("verification is already running for this revision")
+		}
+		return fmt.Errorf("lock cloud verification %s: %w", lockPath, err)
 	}
 
 	r.Verified = false
