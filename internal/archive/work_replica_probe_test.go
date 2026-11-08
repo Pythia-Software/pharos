@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -195,6 +196,9 @@ func TestWorkReplica(t *testing.T) {
 		if err := replay.check(); err != nil {
 			t.Fatal(err)
 		}
+		if err := replicaReplayClock(clock); err != nil {
+			t.Fatal(err)
+		}
 		// Every primary and arrival request must still be inspectable when
 		// the probe awaits it, within the work API's ended-request summaries.
 		if requested == "scheduled" && len(descriptor.Phases)+len(replay.Arrivals) > replicaRequestLimit {
@@ -259,7 +263,10 @@ func TestWorkReplica(t *testing.T) {
 	}
 	defer c.Close()
 	c.evidenceOnly = true
-	c.now = func() time.Time { return clock }
+	// Arrival demand advances clockOffset by nanoseconds (see the demand
+	// hook); with no replay it stays 0 and the clock stays pinned.
+	var clockOffset atomic.Int64
+	c.now = func() time.Time { return clock.Add(time.Duration(clockOffset.Load())) }
 	server := testServer(t, serverConfig, c)
 	replayHost := currentHost().ID
 	if replay != nil {
@@ -404,7 +411,14 @@ func TestWorkReplica(t *testing.T) {
 		// full daemon cadence; classic continues its whole pass instead.
 		if executed != "classic" {
 			arrivals.demandKinds = demanded
-			arrivals.demand = func(context.Context, int) (uint64, error) {
+			arrivals.demand = func(_ context.Context, index int) (uint64, error) {
+				// A fresh arrival needs a fresh finite request, not a join of
+				// an earlier live one with the same key. Advancing the
+				// request clock by index+1 ns gives each arrival its own key;
+				// replicaReplayClock guarantees that the millisecond
+				// formatTime population bounds do not move, and the product
+				// route's bounds are day-granular.
+				clockOffset.Store(int64(index + 1))
 				return replicaDemandRecent(server, config.APIToken, demanded)
 			}
 		}
@@ -538,51 +552,48 @@ func TestWorkReplica(t *testing.T) {
 		}
 		return uint64(parsed)
 	}
-	// await polls the work API until every request in ids has ended. Each
-	// request's history_active_until_seconds is the last poll that saw it
-	// not yet ended (null if none did): a lower bound on when its work
-	// ended, unlike ended_seconds, which is the first poll that saw it end.
+	// await polls the work API until every request in ids has ended and
+	// returns their ended facts. Every poll also watches the arrival
+	// requests sent so far, so each one's timings come from the polls
+	// around its own end, and one that ends other than succeeded fails the
+	// run at once, even while the primary history is still running. What
+	// the polls saw is kept across awaits in watch.
+	watch := replicaRequestWatch{seenLive: map[uint64]float64{}, terminal: map[uint64]map[string]any{}}
 	await := func(ids []uint64, phase func(int) string) map[uint64]map[string]any {
-		ended := map[uint64]map[string]any{}
-		live := map[uint64]float64{}
-		for len(ended) < len(ids) {
+		for {
+			tracked := map[uint64]string{}
+			if arrivals != nil {
+				arrivalIDs, firsts, _ := arrivals.requestIDs()
+				for i, id := range arrivalIDs {
+					tracked[id] = "arrival:" + firsts[i]
+				}
+			}
+			for i, id := range ids {
+				tracked[id] = phase(i)
+			}
 			status, value, err := probeJSON(server, config.APIToken, http.MethodGet, "/api/work", nil)
 			if err != nil || status != http.StatusOK {
 				fail("work state: %d %v", status, err)
 			}
 			state, _ := value["state"].(map[string]any)
-			for _, list := range []string{"requests", "ended"} {
-				items, _ := state[list].([]any)
-				for _, item := range items {
-					facts, _ := item.(map[string]any)
-					number, _ := facts["id"].(json.Number)
-					id, _ := number.Int64()
-					terminal := facts["state"] == "succeeded" || facts["state"] == "failed" || facts["state"] == "cancelled" || facts["state"] == "interrupted"
-					i := slices.Index(ids, uint64(id))
-					switch {
-					case i < 0 || ended[uint64(id)] != nil:
-					case !terminal:
-						live[uint64(id)] = time.Since(started).Seconds()
-					default:
-						facts["ended_seconds"] = time.Since(started).Seconds()
-						facts["history_active_until_seconds"] = nil
-						if seen, ok := live[uint64(id)]; ok {
-							facts["history_active_until_seconds"] = seen
-						}
-						facts["phase"] = phase(i)
-						ended[uint64(id)] = facts
-					}
+			for _, id := range watch.observe(state, tracked, time.Since(started).Seconds()) {
+				if facts := watch.terminal[id]; strings.HasPrefix(tracked[id], "arrival:") && facts["state"] != "succeeded" {
+					fail("arrival request %v ended %v: %v", facts["id"], facts["state"], facts["reason"])
 				}
 			}
-			if len(ended) < len(ids) {
-				select {
-				case <-ctx.Done():
-					fail("work requests did not end: %v", ctx.Err())
-				case <-time.After(time.Second):
+			if !slices.ContainsFunc(ids, func(id uint64) bool { return watch.terminal[id] == nil }) {
+				ended := map[uint64]map[string]any{}
+				for _, id := range ids {
+					ended[id] = watch.terminal[id]
 				}
+				return ended
+			}
+			select {
+			case <-ctx.Done():
+				fail("work requests did not end: %v", ctx.Err())
+			case <-time.After(time.Second):
 			}
 		}
-		return ended
 	}
 	// primaryPhases names the primary phases by request id, so an arrival
 	// request that joined one is reported as such.
@@ -619,13 +630,6 @@ func TestWorkReplica(t *testing.T) {
 			requests = append(requests, ended[id])
 		}
 		engine["requests"] = requests
-		_, value, _ := probeJSON(server, config.APIToken, http.MethodGet, "/api/work", nil)
-		state, _ := value["state"].(map[string]any)
-		engine["tasks"], engine["authority"] = state["tasks"], state["authority"]
-		engine["decisions_total"] = state["decisions_total"]
-		if _, ledger, err := probeJSON(server, config.APIToken, http.MethodGet, "/api/operations/resources", nil); err == nil {
-			report["task_resources"] = ledger
-		}
 		for _, facts := range ended {
 			if facts["state"] != "succeeded" {
 				fail("work request %v ended %v: %v", facts["id"], facts["state"], facts["reason"])
@@ -714,6 +718,18 @@ func TestWorkReplica(t *testing.T) {
 		arrivals.settled(rounds, followups, time.Since(started).Seconds())
 		for _, kind := range demanded {
 			settle(ctx, kind)
+		}
+	}
+	// The scheduled engine's tasks, authority and resource ledger, read once
+	// every primary, arrival and follow-up request has ended, so they cover
+	// all of the run's work.
+	if executed != "classic" && len(descriptor.Stages) == 0 {
+		_, value, _ := probeJSON(server, config.APIToken, http.MethodGet, "/api/work", nil)
+		state, _ := value["state"].(map[string]any)
+		engine["tasks"], engine["authority"] = state["tasks"], state["authority"]
+		engine["decisions_total"] = state["decisions_total"]
+		if _, ledger, err := probeJSON(server, config.APIToken, http.MethodGet, "/api/operations/resources", nil); err == nil {
+			report["task_resources"] = ledger
 		}
 	}
 	execution := work.until(replicaCPUNow())
@@ -1188,6 +1204,16 @@ const replicaFollowupRounds = 3
 // without the scheduled engine.
 const replicaRequestLimit = 16
 
+// replicaReplayClock refuses a replay clock whose arrival offsets (at most
+// replicaRequestLimit nanoseconds) could change its millisecond formatTime
+// value, which bounds the stored populations.
+func replicaReplayClock(clock time.Time) error {
+	if clock.Nanosecond()%int(time.Millisecond) != 0 {
+		return fmt.Errorf("a replay clock must be whole milliseconds, so arrival request offsets cannot move its stored bounds: %s", clock.Format(time.RFC3339Nano))
+	}
+	return nil
+}
+
 // replicaReplay is a deterministic schedule of recent arrivals. Each one
 // writes production-derived provider files from a frozen arm input into an
 // arm-private source folder, then runs the service's background Capture &
@@ -1602,6 +1628,50 @@ func (a *replicaArrivals) ready(checked, at time.Time) {
 	}
 }
 
+// replicaRequestWatch is what the probe's polls of the work API saw of the
+// requests it tracks, kept across awaits: the last poll that saw each
+// request live, and its facts from the first poll that saw it terminal.
+type replicaRequestWatch struct {
+	seenLive map[uint64]float64
+	terminal map[uint64]map[string]any
+}
+
+// observe records one poll of the work state, taken seconds after work
+// start, for the requests in tracked (id to phase name), and returns the
+// ids it saw terminal for the first time. A terminal request's facts gain
+// ended_seconds (this poll, an upper bound on its end),
+// history_active_until_seconds (the last poll that saw it live, a lower
+// bound; null if none did) and phase; later polls leave them unchanged.
+func (w *replicaRequestWatch) observe(state map[string]any, tracked map[uint64]string, seconds float64) (ended []uint64) {
+	for _, list := range []string{"requests", "ended"} {
+		items, _ := state[list].([]any)
+		for _, item := range items {
+			facts, _ := item.(map[string]any)
+			number, _ := facts["id"].(json.Number)
+			parsed, _ := number.Int64()
+			id := uint64(parsed)
+			phase, ok := tracked[id]
+			if !ok || w.terminal[id] != nil {
+				continue
+			}
+			switch facts["state"] {
+			case "succeeded", "failed", "cancelled", "interrupted":
+				facts["ended_seconds"] = seconds
+				facts["history_active_until_seconds"] = nil
+				if seen, ok := w.seenLive[id]; ok {
+					facts["history_active_until_seconds"] = seen
+				}
+				facts["phase"] = phase
+				w.terminal[id] = facts
+				ended = append(ended, id)
+			default:
+				w.seenLive[id] = seconds
+			}
+		}
+	}
+	return ended
+}
+
 // requestIDs is the distinct work requests the arrivals' demand reached,
 // with the arrival that first reached each, and how many arrivals sent it.
 func (a *replicaArrivals) requestIDs() (ids []uint64, firsts []string, total int) {
@@ -1856,6 +1926,74 @@ func TestWorkReplicaReplayPlan(t *testing.T) {
 		if err := replay.check(); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	// Arrival offsets never move a whole-millisecond clock's stored bounds;
+	// a clock between milliseconds is refused, since they could.
+	for _, value := range []string{"2026-11-07T23:59:59Z", "2026-11-07T23:59:59.123Z"} {
+		clock, _ := time.Parse(time.RFC3339, value)
+		if err := replicaReplayClock(clock); err != nil {
+			t.Errorf("%s: %v", value, err)
+		}
+		if moved := clock.Add(replicaRequestLimit * time.Nanosecond); formatTime(moved) != formatTime(clock) {
+			t.Errorf("%s: offset moved the stored bound to %s", value, formatTime(moved))
+		}
+	}
+	for _, value := range []string{"2026-11-07T23:59:59.999999990Z", "2026-11-07T23:59:59.000000001Z"} {
+		if clock, _ := time.Parse(time.RFC3339, value); replicaReplayClock(clock) == nil {
+			t.Errorf("%s: accepted", value)
+		}
+	}
+}
+
+// The watch keeps a request's timings from the polls around its own end,
+// across awaits, including a request tracked only after it was first seen.
+func TestWorkReplicaRequestWatch(t *testing.T) {
+	poll := func(states ...string) map[string]any {
+		live, ended := []any{}, []any{}
+		for i, state := range states {
+			facts := map[string]any{"id": json.Number(fmt.Sprint(i + 1)), "state": state}
+			if state == "running" || state == "queued" {
+				live = append(live, facts)
+			} else if state != "" {
+				ended = append(ended, facts)
+			}
+		}
+		return map[string]any{"requests": live, "ended": ended}
+	}
+	watch := replicaRequestWatch{seenLive: map[uint64]float64{}, terminal: map[uint64]map[string]any{}}
+	primary := map[uint64]string{1: "history"}
+	both := map[uint64]string{1: "history", 2: "arrival:a1"}
+	steps := []struct {
+		state   map[string]any
+		tracked map[uint64]string
+		ended   []uint64
+	}{
+		{poll("running", "running", "running"), primary, nil},
+		{poll("running", "running", "failed"), both, nil}, // 3 is never tracked
+		{poll("running", "running"), both, nil},
+		{poll("running", "succeeded"), both, []uint64{2}},
+		{poll("succeeded", "succeeded"), both, []uint64{1}},
+		{poll("succeeded", "succeeded"), both, nil},
+	}
+	for i, step := range steps {
+		if ended := watch.observe(step.state, step.tracked, float64(i+1)); !slices.Equal(ended, step.ended) {
+			t.Fatalf("poll %d: newly ended %v, want %v", i+1, ended, step.ended)
+		}
+	}
+	for id, want := range map[uint64][3]any{1: {5.0, 4.0, "history"}, 2: {4.0, 3.0, "arrival:a1"}} {
+		facts := watch.terminal[id]
+		if got := [3]any{facts["ended_seconds"], facts["history_active_until_seconds"], facts["phase"]}; got != want {
+			t.Errorf("request %d: ended, last live, phase = %v, want %v", id, got, want)
+		}
+	}
+	if _, ok := watch.terminal[3]; ok {
+		t.Error("an untracked request was recorded")
+	}
+	// A request first seen already terminal has no live lower bound.
+	late := replicaRequestWatch{seenLive: map[uint64]float64{}, terminal: map[uint64]map[string]any{}}
+	late.observe(poll("cancelled"), primary, 1)
+	if facts := late.terminal[1]; facts["history_active_until_seconds"] != nil || facts["ended_seconds"] != 1.0 {
+		t.Errorf("first seen terminal: %v", facts)
 	}
 }
 
