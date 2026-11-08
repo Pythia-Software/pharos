@@ -1205,6 +1205,10 @@ test("Home search button focuses its input", { skip }, async t => {
   const { page } = await open(t, { url: "/", ready: ".home-belt-row .query-card" });
   await press(page.getByRole("button", { name: "Search past work", exact: true }));
   await page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input"));
+  const composer = page.getByRole("region", { name: "Search composer", exact: true });
+  await composer.getByRole("combobox", { name: "Date comparison", exact: true }).selectOption("all");
+  const add = composer.locator(".text-query-tools").getByRole("button", { name: "Add condition", exact: true });
+  await page.waitForFunction(element => document.activeElement === element, await add.elementHandle());
 });
 
 test("All Cards moves focus to its content and browser history returns Home", { skip }, async t => {
