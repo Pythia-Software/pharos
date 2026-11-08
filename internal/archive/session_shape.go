@@ -811,9 +811,60 @@ func (c *Catalog) refreshSessionShape(ctx context.Context, limit int, wait bool)
 	return done, nil
 }
 
+const sessionShapePendingSQL = `SELECT conversation_id id FROM session_shape_dirty WHERE conversation_id IN (SELECT value FROM json_each(?))`
+
+// sessionShapePendingFor is which selected conversations' stored session
+// shape is pending: an indexed lookup, for a selector.
+func (c *Catalog) sessionShapePendingFor(ctx context.Context, ids []string) ([]string, error) {
+	pending, err := workDomainPending(ctx, c.reader(), sessionShapePendingSQL, workDomainIDs(ids))
+	return sortedKeys(pending), err
+}
+
+// refreshSessionShapeFor stores the selected dirty conversations' session
+// shape: refreshSessionShape's derivation in one read snapshot and its
+// revision-guarded publication, for a work selection.
+func (c *Catalog) refreshSessionShapeFor(ctx context.Context, ids []string) (workDomainStep, error) {
+	var step workDomainStep
+	ids = workDomainIDs(ids)
+	if len(ids) == 0 {
+		return step, nil
+	}
+	if !c.sessionShapeMu.TryLock() {
+		return step, errWorkDomainBusy
+	}
+	defer c.sessionShapeMu.Unlock()
+	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return step, err
+	}
+	dirty, err := queryMapsContext(ctx, tx, "SELECT conversation_id,revision FROM session_shape_dirty WHERE conversation_id IN (SELECT value FROM json_each(?)) LIMIT ?", jsonText(ids), sessionShapeBatch)
+	var batch []sessionShapeDerived
+	if err == nil {
+		batch, err = deriveSessionShapeRows(ctx, tx, dirty)
+	}
+	_ = tx.Rollback()
+	if err != nil {
+		return step, err
+	}
+	attempted := map[string]bool{}
+	for _, derived := range batch {
+		attempted[derived.id] = true
+	}
+	if len(batch) > 0 {
+		if err := c.publishSessionShape(ctx, batch); err != nil {
+			return step, err
+		}
+	}
+	pending, err := workDomainPending(ctx, c.reader(), sessionShapePendingSQL, ids)
+	step.classify(ids, attempted, pending)
+	return step, err
+}
+
 // sessionShapeAllFacts returns every conversation's facts: stored facts for
 // clean conversations and fresh ones for a bounded increment of dirty ones.
-// A large backfill is left to maintenance; partial totals are never returned.
+// A large backfill is left to maintenance (maintainLibrary, or the
+// maintenance.session-shape task), so a page never writes; partial totals
+// are never returned.
 func (c *Catalog) sessionShapeAllFacts(ctx context.Context) (map[string]sessionShapeFacts, error) {
 	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {

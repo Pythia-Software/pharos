@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -74,6 +75,11 @@ type Config struct {
 	// AgentEvents configures the agent events pass (docs/agent-events.md);
 	// it runs on the labeler's worker and budget.
 	AgentEvents AgentEventSettings
+	// WorkEngine is the process-start comparison choice (PHAROS_WORK_ENGINE).
+	// BackgroundCPUs is cooperative worker capacity for this process, not a
+	// machine-wide cap; it is read only under the scheduled engine.
+	WorkEngine     string
+	BackgroundCPUs int
 }
 
 func defaultConfig(path string) Config {
@@ -86,6 +92,7 @@ func defaultConfig(path string) Config {
 		UpcomingDays: 23, EligibleDays: 30, SnoozeDays: 14, StagingCapBytes: 2_000_000_000,
 		CPUIDLECeiling: .35, IOMBPSCeiling: 25, YieldPollSeconds: 2,
 		CaptureRoot: filepath.Join(root, "captures"), CaptureGenerations: 1, CaptureCompressAfterDays: 14,
+		WorkEngine: "classic", BackgroundCPUs: runtime.NumCPU(),
 	}
 }
 
@@ -208,6 +215,14 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 	config.Labels = labelerSettingsFrom(root, base)
 	config.AgentEvents = agentEventSettingsFrom(root, base)
 	config.Labels = config.AgentEvents.withPeer(config.Labels)
+	// The engine is a comparison switch chosen at process start, never stored
+	// with a library: a drive opened by another binary or Mac runs classic
+	// unless that process asks otherwise. Anything but "scheduled" is classic.
+	config.WorkEngine = "classic"
+	if os.Getenv("PHAROS_WORK_ENGINE") == "scheduled" {
+		config.WorkEngine = "scheduled"
+		config.BackgroundCPUs = backgroundCPUSlots(root)
+	}
 	for index := range config.Sources {
 		config.Sources[index].File = path
 	}
@@ -220,6 +235,25 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 		config.APIToken = randomToken()
 	}
 	return config, nil
+}
+
+// backgroundCPUSlots is this process's scheduled-engine allowance. The saved
+// value travels with the library's drive and the environment variable may be
+// stale, so neither can stop a library opening: an unreadable value is
+// ignored and any count is clamped to this Mac's cores.
+func backgroundCPUSlots(root map[string]any) int {
+	slots := intValue(root, "background_cpu_slots", runtime.NumCPU())
+	if value, ok := backgroundCPUsFromEnv(); ok {
+		slots = value
+	}
+	return min(max(slots, 1), runtime.NumCPU())
+}
+
+// backgroundCPUsFromEnv reports a usable PHAROS_BACKGROUND_CPUS, which then
+// owns the allowance for the life of the process.
+func backgroundCPUsFromEnv() (int, bool) {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv("PHAROS_BACKGROUND_CPUS")))
+	return value, err == nil
 }
 
 func (c Config) EnsureDirs() error {

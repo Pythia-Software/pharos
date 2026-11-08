@@ -454,3 +454,319 @@ test("without a snapshot the panel says why", () => {
   assert.equal(unavailable.available, false);
   assert.equal(unavailable.message, "No answer");
 });
+
+// Resource history (docs/work-resource-accounting.md): four series with
+// their own units on one time axis. Gaps, restarts and missing GPU values
+// break a line; nothing is drawn as zero or repeated.
+const historyNow = Date.parse("2026-11-07T12:00:00Z");
+const ago_ = seconds => historyNow - seconds * 1000;
+const history = (changes = {}) => ({
+  version: 1, available: true, scope: "this library service", now: historyNow, window_seconds: 900,
+  series: { cpu: { available: true, unit: "percent_one_core" }, memory: { available: true, unit: "bytes" }, disk: { available: false, unit: "bytes_per_second" }, gpu: { available: true, unit: "percent_driver_time" } },
+  samples: { t: [ago_(60), ago_(58), ago_(56), ago_(20), ago_(18), ago_(16)], cpu: [null, 50, 250, 10, 12, null],
+    memory: [1e9, 1e9, 1.2e9, 1e9, 1e9, 1e9], disk: [null, null, null, null, null, null],
+    cpu_partial: [false, false, false, true, false, false], disk_partial: [false, false, false, false, false, false], processes: [1, 1, 1, 2, 2, 2] },
+  gpu: { t: [ago_(59), ago_(54), ago_(49), ago_(19)], value: [10, 20, null, 30], partial: [false, false, true, false] },
+  segments: [{ t: ago_(60), reason: "started" }, { t: ago_(20), reason: "gap" }],
+  coverage: [{ t: ago_(60), covered: [{ pid: 1, role: "service" }], omitted: [] },
+    { t: ago_(20), covered: [{ pid: 1, role: "service" }, { pid: 2, role: "cli:ingest" }], omitted: ["Pharos Mac app: ownership is not verified, so it is not measured"] }],
+  markers: [{ t: ago_(57), event: "start", id: "a", kind: "analysis.labels" }, { t: ago_(17), event: "end", id: "a", kind: "analysis.labels" }],
+  ...changes,
+});
+
+test("history draws separate series, breaking lines at gaps and missing readings", () => {
+  const strip = plain(panel.historyModel(history()));
+  assert.deepEqual(strip.series.map(series => series.id), ["cpu", "gpu", "memory"], "I/O that is not measured has no row");
+  const series = id => strip.series.find(entry => entry.id === id);
+  assert.equal(series("cpu").paths.length, 2, "the gap segment breaks CPU, and a null reading is not drawn");
+  assert.equal(series("cpu").current, "—", "the latest reading is missing, so now is a dash");
+  assert.equal(series("cpu").peak, "250%", "CPU can exceed one core");
+  assert.equal(series("memory").paths.length, 2);
+  assert.equal(series("memory").current, "1.0 GB");
+  // GPU keeps its own sample times: its first point is at its own time, and
+  // the null value splits it, leaving a lone sample as a short dash.
+  const gpu = series("gpu");
+  assert.equal(gpu.paths.length, 2);
+  const x = time => Math.round(((time - (historyNow - 900e3)) / 900e3) * strip.width * 10) / 10;
+  assert.ok(gpu.paths[0].startsWith(`M${x(ago_(59))} `), gpu.paths[0]);
+  const zero = String(strip.height - 1);
+  assert.ok(!gpu.paths.some(path => path.split(/[ML]/).filter(Boolean).some(point => point.split(" ")[1] === zero)), "a missing GPU value is never drawn as zero");
+  assert.equal(strip.markers.length, 2);
+  assert.match(strip.caption, /15 min.*this library service.*2 processes/);
+  assert.equal(strip.omitted.length, 1);
+  for (const entry of strip.series) assert.ok(strip.summary.includes(entry.summary), "the accessible summary covers every series");
+  assert.match(series("cpu").summary, /% of one core/);
+  assert.match(series("cpu").summary, /gaps/);
+  assert.match(series("cpu").summary, /lower bounds/);
+
+  const runtimeOnly = history();
+  runtimeOnly.series.cpu.available = false;
+  runtimeOnly.gpu = null;
+  runtimeOnly.series.memory = { available: true, basis: "go-runtime", note: "Go runtime-managed memory; not RSS." };
+  runtimeOnly.samples.memory_partial = runtimeOnly.samples.t.map(() => true);
+  const runtimeStrip = plain(panel.historyModel(runtimeOnly));
+  assert.deepEqual(runtimeStrip.series.map(entry => entry.id), ["memory"], "unavailable CPU and GPU do not gain rows");
+  assert.match(runtimeStrip.series[0].summary, /Go runtime-managed memory/);
+  assert.match(runtimeStrip.series[0].summary, /lower bounds/);
+  assert.equal(runtimeStrip.series[0].current, "≥1.0 GB");
+  assert.equal(plain(panel.historyInspect(runtimeOnly, ago_(16))).values.find(entry => entry.id === "memory").text, "≥1.0 GB");
+  // No history (classic execution, an older service): no strip.
+  assert.equal(panel.historyModel({ version: 1, available: false }), null);
+  assert.equal(panel.historyModel(null), null);
+  assert.equal(panel.historyModel(history({ samples: { t: [] } })), null);
+  // Samples outside the window are not drawn.
+  assert.equal(plain(panel.historyModel(history({ now: ago_(-900) }))).series.find(entry => entry.id === "cpu").paths.length, 0);
+});
+
+test("inspecting the history shows the nearest values and the tasks running then", () => {
+  const at = plain(panel.historyInspect(history(), ago_(18.5)));
+  assert.equal(at.t, ago_(18));
+  assert.deepEqual(at.values.map(value => [value.id, value.text]), [["cpu", "12%"], ["gpu", "30%"], ["memory", "1.0 GB"]]);
+  assert.deepEqual(at.tasks, ["analysis.labels"], "running at the same time, not attributed");
+  assert.equal(at.covered, 2);
+  assert.equal(at.omitted.length, 1);
+  const partial = plain(panel.historyInspect(history(), ago_(20)));
+  assert.equal(partial.values[0].text, "≥10%", "a lower bound says so");
+  const ended = plain(panel.historyInspect(history(), ago_(16)));
+  assert.deepEqual(ended.tasks, []);
+  assert.equal(ended.values[0].text, "—");
+  const far = plain(panel.historyInspect(history(), ago_(500)));
+  assert.ok(far.values.every(value => value.text === "—"), "no sample nearby is unknown");
+  assert.equal(panel.historyInspect({ available: false }, historyNow), null);
+});
+
+test("the strip appears only beside a Load row, in the same scope", () => {
+  const withLoad = model(view({ resources: { cpu_percent: 12, memory_bytes: 1e9 } }), { history: history() });
+  assert.ok(withLoad.load && withLoad.history);
+  assert.equal(withLoad.history.scope, "this library service");
+  assert.equal(model(view({ resources: { cpu_percent: 12 } })).history, null, "no document, no strip");
+  const unavailable = model({ library: null, service: { name: "Euclid", resources: null }, resources: null, appOperations: [], attention: [] }, { history: history() });
+  assert.equal(unavailable.history, null);
+});
+
+test("a task's resources keep basis and allocation apart, and never guess", () => {
+  assert.equal(panel.taskResourceModel(null), null);
+  assert.equal(panel.taskResourceModel({}), null);
+  const resources = {
+    version: 1,
+    allocation: { current: { cpu_slots: 4, gpu: 0 }, slot_seconds: { value: 40, unit: "slot_seconds", basis: "allocated" } },
+    time: { active: { value: 80, unit: "seconds", basis: "measured" } },
+    waits: { capacity: { value: 3, unit: "seconds", basis: "measured" }, writer: { value: 1, unit: "seconds", basis: "measured" }, power: { value: 0, unit: "seconds", basis: "measured" } },
+    cpu: { go_process: { value: null, unit: "cpu_seconds", basis: "shared", coverage: "Shared service process." },
+      helpers: { value: 2.5, unit: "cpu_seconds", basis: "measured", coverage: "Dedicated helpers." } },
+    gpu: { time: { value: null, unit: "gpu_seconds", basis: "unavailable" } },
+    memory: { owned_buffers_peak_bytes: { value: 64e6, unit: "bytes", basis: "counted" }, process: { value: null, unit: "bytes", basis: "shared", coverage: "Shared heap." } },
+    io: { logical_read_bytes: { value: 12e6, unit: "bytes", basis: "counted", coverage: "Instrumented logical bytes only; coverage is partial." }, logical_written_bytes: { value: 0, unit: "bytes", basis: "counted" } },
+  };
+  const shown = plain(panel.taskResourceModel(resources));
+  const item = id => shown.items.find(entry => entry.id === id);
+  // The grant is an allowance, not usage, and leads to where it is set.
+  assert.match(item("allocation").text, /4 CPU slots/);
+  assert.match(item("allocation").text, /not usage/);
+  assert.equal(item("allocation").link, "/settings/sync");
+  assert.match(item("active").text, /1 min/);
+  // Waits: the total and each kind's time, longest first, in words rather
+  // than wait keys; a zero wait is left out.
+  assert.match(item("waits").text, /4 s/);
+  assert.ok(item("waits").text.indexOf("3 s") < item("waits").text.indexOf("1 s"));
+  // Every CPU, memory, I/O and GPU figure carries its basis in its text.
+  assert.match(item("cpu").text, /2\.5 s measured/);
+  assert.doesNotMatch(item("cpu").text, /partial/, "full coverage is not a lower bound");
+  assert.match(item("service").text, /shared/, "shared service CPU and memory show their basis, not a number");
+  assert.doesNotMatch(item("service").text, /\d/);
+  assert.match(item("memory").text, /64 MB counted/);
+  assert.match(item("io").text, /12 MB.*counted, partial/, "instrumented bytes are a lower bound and say so");
+  for (const direction of ["logical_read_bytes", "logical_written_bytes"]) {
+    const unknown = plain(panel.taskResourceModel({...resources, io: {...resources.io, [direction]: {value: null, unit: "bytes", basis: "unavailable"}}}));
+    const io = unknown.items.find(entry => entry.id === "io");
+    const label = direction === "logical_read_bytes" ? "read" : "wrote";
+    assert.match(io.text, new RegExp(`${label} not measured`));
+    assert.doesNotMatch(io.text, new RegExp(`${label} 0 B`), "a missing counter cannot become measured zero");
+  }
+  assert.equal(item("gpu"), undefined, "an unavailable GPU figure without a GPU grant is left out, not shown as zero");
+  assert.match(shown.tooltip, /Shared service process/);
+  assert.match(shown.tooltip, /Dedicated helpers/);
+  // A lower bound from the helpers, and a GPU grant without a timing.
+  const partial = plain(panel.taskResourceModel({ ...resources, allocation: { current: { cpu_slots: 0, gpu: 1 } },
+    cpu: { helpers: { value: 1, unit: "cpu_seconds", basis: "measured", coverage: "Some helper intervals were shared or unreadable; this is a lower bound." } } }));
+  assert.match(partial.items.find(entry => entry.id === "cpu").text, /measured, partial/);
+  assert.match(partial.items.find(entry => entry.id === "gpu").text, /not measured/);
+  assert.match(partial.items.find(entry => entry.id === "allocation").text, /GPU/);
+  const line = plain(panel.operationLine(operation("r", { kind: "analysis.labels", resources })));
+  assert.equal(line.resources.text, shown.text);
+  assert.equal(line.export.path, "/api/operations/resources?kind=analysis.labels");
+  // Without a record (classic execution, an older service): no line, no export.
+  assert.equal(plain(panel.operationLine(operation("s"))).resources, null);
+  assert.equal(plain(panel.operationLine(operation("s"))).export, null);
+});
+
+test("the resource exports and profile belong to the library service's own tasks", () => {
+  const resources = { version: 1, time: { active: { value: 5, unit: "seconds", basis: "measured" } } };
+  const library = model(view({ operations: [operation("lib", { kind: "analysis.labels", resources })] }));
+  assert.ok(library.lines[0].export);
+  assert.match(library.profile.path, /^\/api\/diagnostics\/profile\?seconds=5$/);
+  // The app's own work is not in the service's ledger, and the profile is
+  // offered only beside a service that keeps task records.
+  const app = model(view({ operations: [] }, { appOperations: [operation("app", { kind: "library.transfer", resources })] }));
+  assert.equal(app.lines[0].export, null);
+  assert.equal(app.profile, null);
+  assert.equal(model(view({ operations: [operation("old", { kind: "analysis.labels" })] })).profile, null, "an older service gets no profile link");
+});
+
+test("history markers tell starts from ends, name their task and are honest about observed ends", () => {
+  const doc = history({ markers: [
+    { t: ago_(57), event: "start", id: "a", kind: "analysis.labels" },
+    { t: ago_(18), event: "end", id: "a", kind: "analysis.labels", observed: true },
+    { t: ago_(19), event: "start", id: "b", kind: "index.search" },
+    { t: ago_(17), event: "end", id: "b", kind: "index.search", observed: false },
+  ] });
+  const strip = plain(panel.historyModel(doc, { labels: { "analysis.labels": "Message labels" } }));
+  assert.deepEqual(strip.markers.map(marker => marker.event), ["start", "end", "start", "end"]);
+  const [start, observed, , exact] = strip.markers;
+  assert.match(start.text, /Message labels/, "a known kind uses its name");
+  assert.match(exact.text, /index\.search/, "an unknown kind keeps its identity");
+  // An observed end happened after the previous sample; an exact end has one time.
+  assert.match(observed.text, /between/);
+  assert.doesNotMatch(exact.text, /between/);
+  assert.notEqual(start.text.replace(/Message labels/, ""), exact.text.replace(/index\.search/, ""), "starts and ends read differently");
+  assert.match(strip.summary, /2 starts, 2 ends/);
+  // Inspecting near a marker names it; far from any it names none.
+  const near = plain(panel.historyInspect(doc, ago_(18), { labels: { "analysis.labels": "Message labels" } }));
+  assert.ok(near.marks.some(mark => /Message labels/.test(mark)));
+  assert.ok(near.text.includes(near.marks[0]));
+  assert.deepEqual(plain(panel.historyInspect(doc, ago_(300))).marks, []);
+  // Running tasks keep their kinds; the readout uses names.
+  const running = plain(panel.historyInspect(doc, ago_(40), { labels: { "analysis.labels": "Message labels" } }));
+  assert.deepEqual(running.tasks, ["analysis.labels"]);
+  assert.match(running.text, /Message labels/);
+  assert.doesNotMatch(running.text, /analysis\.labels/, "a named kind is not shown by its key");
+});
+
+test("task names for markers come from the snapshot's operations and their stages", () => {
+  const labels = plain(panel.operationLabels(view({ operations: [operation("p", { kind: "background.update", label: "Background update",
+    children: [operation("c", { kind: "analysis.labels", label: "Message labels" })] })] })));
+  assert.equal(labels["analysis.labels"], "Message labels");
+  assert.equal(labels["background.update"], "Background update");
+  // Names seen earlier are kept when a later snapshot no longer has them.
+  const kept = panel.operationLabels(view({ operations: [] }), { "analysis.labels": "Message labels" });
+  assert.equal(kept["analysis.labels"], "Message labels");
+});
+
+const store = loadClassicScript("status-store.js").window.pharosStatusStore;
+
+test("history fetched with since= appends without repeating a time and drops what left the window", () => {
+  const N = historyNow;
+  const columns = (t, cpu) => ({ t, cpu, memory: t.map(() => 1e9), disk: t.map(() => null), cpu_partial: t.map(() => false), disk_partial: t.map(() => false), memory_partial: t.map(() => false), processes: t.map(() => 1) });
+  const previous = { version: 1, available: true, library: "", now: N, window_seconds: 60, samples: columns([N - 50e3, N - 10e3], [1, 2]),
+    gpu: { t: [N - 45e3], value: [5], partial: [false] }, segments: [{ t: N - 50e3, reason: "started" }],
+    coverage: [{ t: N - 50e3, covered: [{ pid: 1 }], omitted: [] }], markers: [{ t: N - 55e3, event: "start", id: "old", kind: "k" }] };
+  const next = { version: 1, available: true, library: "", since: N - 10e3, now: N + 20e3, window_seconds: 60,
+    samples: columns([N - 10e3, N + 5e3], [99, 3]), gpu: { t: [N + 2e3], value: [7], partial: [false] }, segments: [], coverage: [],
+    markers: [{ t: N + 1e3, event: "start", id: "x", kind: "k" }] };
+  previous.samples.memory_partial[1] = true;
+  const merged = plain(store.mergeHistory(previous, next));
+  assert.deepEqual(merged.samples.t, [N - 10e3, N + 5e3]);
+  assert.deepEqual(merged.samples.cpu, [2, 3], "a repeated time keeps the first reading");
+  assert.deepEqual(merged.samples.memory_partial, [true, false], "incremental history preserves memory coverage");
+  assert.deepEqual(merged.gpu.t, [N + 2e3], "GPU samples merge on their own times");
+  assert.deepEqual(merged.segments.map(segment => segment.reason), ["started"], "the segment in effect at the window's start stays");
+  assert.equal(merged.coverage.length, 1);
+  assert.deepEqual(merged.markers.map(marker => marker.id), ["x"]);
+  assert.equal(merged.now, N + 20e3);
+  const late = {t: N - 20e3, event: "start", id: "late", kind: "k"};
+  const complete = plain(store.mergeHistory(previous, {...next, markers_complete: true, markers: [late]}));
+  assert.deepEqual(complete.markers, [late], "complete marker snapshots include late starts and retire corrected/removed markers");
+  assert.deepEqual(complete.samples.cpu, [2, 3], "only samples still use the incremental cursor");
+  // A full document, an unavailable one or another scope replaces.
+  assert.equal(store.mergeHistory(previous, { ...next, since: undefined }).samples.cpu[0], 99);
+  assert.equal(store.mergeHistory(previous, { version: 1, available: false }).available, false);
+  assert.equal(store.mergeHistory(previous, { ...next, library: "other" }).library, "other");
+  assert.equal(store.mergeHistory(null, next), next);
+  assert.equal(store.historyEndpoint(true), "/api/app/resources/history");
+  assert.equal(store.historyEndpoint(false), "/api/resources/history");
+});
+
+test("the store fetches history only while the panel shows it", async () => {
+  let clock = historyNow, sampled = historyNow;
+  const requests = [];
+  const fetch = async url => {
+    requests.push(url);
+    if (url.startsWith("/api/resources/history")) return { ok: true, status: 200, json: async () => history({ since: url.includes("since=") ? 1 : undefined }) };
+    return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ resources: { sampled_at: new Date(sampled).toISOString() } }) };
+  };
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  const live = store.createStore({ EventSource: null, fetch, setTimeout: () => 0, clearTimeout() {}, hidden: () => false, now: () => clock });
+  live.start();
+  await settle();
+  assert.ok(!requests.some(url => url.includes("history")), "no history while the panel is closed");
+  live.openHistory();
+  await settle();
+  assert.equal(live.current().history.available, true);
+  // A newer reading brings one since= fetch, no sooner than HISTORY_MS.
+  clock += store.HISTORY_MS;
+  sampled += 2000;
+  await live.refresh();
+  await settle();
+  assert.ok(requests.at(-1).startsWith(`/api/resources/history?since=${history().samples.t.at(-1)}`), requests.at(-1));
+  live.closeHistory();
+  assert.equal(live.current().history, null);
+  const before = requests.length;
+  clock += store.HISTORY_MS;
+  sampled += 2000;
+  await live.refresh();
+  await settle();
+  assert.ok(!requests.slice(before).some(url => url.includes("history")));
+  live.stop();
+});
+
+test("without a collector the store asks for history once until the panel is reopened", async () => {
+  for (const answer of [
+    { ok: true, status: 200, json: async () => ({ version: 1, available: false, reason: "No resource history is collected in this process." }) },
+    { ok: false, status: 404, json: async () => ({}) },
+  ]) {
+    let clock = historyNow, sampled = historyNow;
+    const requests = [];
+    const fetch = async url => {
+      if (url.startsWith("/api/resources/history")) { requests.push(url); return answer; }
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ resources: { sampled_at: new Date(sampled).toISOString() } }) };
+    };
+    const settle = () => new Promise(resolve => setImmediate(resolve));
+    const live = store.createStore({ EventSource: null, fetch, setTimeout: () => 0, clearTimeout() {}, hidden: () => false, now: () => clock });
+    live.start();
+    live.openHistory();
+    await settle();
+    assert.equal(live.current().history.available, false);
+    for (let i = 0; i < 3; i++) {
+      clock += store.HISTORY_MS;
+      sampled += 2000;
+      await live.refresh();
+      await settle();
+    }
+    assert.equal(requests.length, 1, `newer snapshots do not ask again: ${requests}`);
+    live.closeHistory();
+    live.openHistory();
+    await settle();
+    assert.equal(requests.length, 2, "reopening the panel asks once more");
+    live.stop();
+  }
+});
+
+test("a collector without this scope yet is asked again", async () => {
+  let clock = historyNow, sampled = historyNow;
+  const requests = [];
+  const fetch = async url => {
+    if (url.startsWith("/api/resources/history")) { requests.push(url); return { ok: true, status: 200, json: async () => ({ version: 1, available: false, pending: true }) }; }
+    return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ resources: { sampled_at: new Date(sampled).toISOString() } }) };
+  };
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  const live = store.createStore({ EventSource: null, fetch, setTimeout: () => 0, clearTimeout() {}, hidden: () => false, now: () => clock });
+  live.start();
+  live.openHistory();
+  await settle();
+  clock += store.HISTORY_MS;
+  sampled += 2000;
+  await live.refresh();
+  await settle();
+  assert.equal(requests.length, 2);
+  live.stop();
+});

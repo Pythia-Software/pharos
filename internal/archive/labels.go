@@ -203,6 +203,11 @@ type LabelerSettings struct {
 	// (agent events' beside labels', and the reverse), so that the default
 	// budget fits both models at the threads Settings chose.
 	PeerThreads int
+	// authorityAdmitted marks a caller the work authority admitted (§7.1):
+	// its grant already counts the worker's threads (labelsSplit fits them
+	// inside it), so the manager bounds only its model cache (memory and
+	// the shared GPU). Never read from a library's settings.
+	authorityAdmitted bool
 }
 
 func labelerSettingsFrom(root map[string]any, base string) LabelerSettings {
@@ -259,13 +264,54 @@ func (c *Catalog) labelerManager(settings LabelerSettings) *labelrt.Manager {
 
 // labelsBudget is what settings allow every model's workers together:
 // labels_thread_budget, else both models' workers and threads or half the
-// cores, whichever is more; and labels_memory_budget_mb.
+// cores, whichever is more; and labels_memory_budget_mb. An admitted caller
+// leaves threads to the work authority (admittedLabeler).
 func labelsBudget(settings LabelerSettings) labelrt.Budget {
+	if settings.authorityAdmitted {
+		return labelrt.Budget{MemoryMB: settings.MemoryBudgetMB}
+	}
 	threads := settings.ThreadBudget
 	if threads <= 0 {
 		threads = max(max(1, settings.Workers)*max(1, settings.Threads)+settings.PeerThreads, runtime.NumCPU()/2)
 	}
 	return labelrt.Budget{Threads: threads, MemoryMB: settings.MemoryBudgetMB}
+}
+
+// admittedLabeler is settings for an inference caller under ctx: with a
+// work grant in ctx the authority is the one CPU budget, since a second
+// thread budget in the manager could only refuse work the authority granted
+// (for example while the other model's runner is resident beside it on
+// battery); without one they are unchanged. Every call to the manager sets
+// its budget, so a later classic caller sets its own again.
+func admittedLabeler(ctx context.Context, settings LabelerSettings) LabelerSettings {
+	_, settings.authorityAdmitted = ctx.Value(workAdmissionKey{}).(workAdmission)
+	return settings
+}
+
+// acquireLabelerCPU admits a labeler pipeline's execution (preparation
+// beside one model worker; see labelsSplit) and nothing before it. It asks
+// for at least the worker's threads and one preparation worker, so that grants
+// of different sizes start the same worker and a warm one is reused, and for
+// at most four preparation workers more. Without an authority it admits
+// nothing and the caller runs at its own settings. A cap lowered below that
+// least while waiting admits from one slot instead.
+func acquireLabelerCPU(ctx context.Context, c *Catalog, threads int, gpuOnly bool) (*workCPUGrant, error) {
+	threads = max(1, threads)
+	inference := threads
+	if gpuOnly {
+		inference = 1
+	}
+	most := inference + min(4, threads)
+	least := inference + 1
+	if a := workAuthorityFor(ctx, c); a != nil {
+		most = min(a.cap(), most)
+		least = min(most, least)
+	}
+	grant, err := acquireWorkCPU(ctx, c, least, most)
+	if errors.Is(err, errWorkGrantExceedsCap) && least > 1 {
+		grant, err = acquireWorkCPU(ctx, c, 1, most)
+	}
+	return grant, err
 }
 
 // The battery budget (docs/local-labeler.md, "Scheduling and power"): one
@@ -452,6 +498,11 @@ func labelsInputHash(items []labelingItem) string {
 // items differ from what their stored labels were made from, and stores the
 // results in batched write transactions. It stops between batches when ctx
 // ends, keeping what was stored; the next run resumes.
+//
+// Under a work authority it admits two leaves in turn: discovery (one
+// serial reader) at one slot, then labeling at acquireLabelerCPU's grant. It
+// waits for the second holding only the labels locks, which nothing waits
+// on: another run that finds them held is errLabelsRunning.
 func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts LabelsRunOptions) (*LabelsRunStats, error) {
 	started := time.Now()
 	stats := &LabelsRunStats{}
@@ -464,29 +515,23 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 	if settings.Worker == "" && !opts.DryRun {
 		return stats, fmt.Errorf("%w: set labels_worker (or PHAROS_LABELS_WORKER)", labelrt.ErrModelUnavailable)
 	}
-	// One run at a time: in this process, and across processes (the
-	// service and pharos labels run) through a lease the OS releases if the
-	// holder exits.
-	if !c.labels.TryLock() {
-		return stats, errLabelsRunning
+	discovery, err := acquireWorkCPU(ctx, c, 1, 1)
+	if err != nil {
+		return stats, err
 	}
-	defer c.labels.Unlock()
-	if c.Path != "" {
-		lease, err := fileLease(canonical(c.Path)+".labels.lock", true)
-		if errors.Is(err, filelock.ErrContended) {
-			return stats, fmt.Errorf("%w: %w", errLabelsRunning, err)
-		}
-		if err != nil {
-			return stats, fmt.Errorf("lock the labels run: %w", err)
-		}
-		defer lease.Close()
+	defer discovery.Release()
+	release, err := c.labelsInvocation()
+	if err != nil {
+		return stats, err
 	}
+	defer release()
+	dctx := discovery.Ctx
 	model, err := labelrt.LoadModel(settings.ModelDir, settings.Variant)
 	if err != nil {
 		return stats, err
 	}
 	identity := labelsModelIdentity(model)
-	if err := c.ensureLabelsSchema(ctx); err != nil {
+	if err := c.ensureLabelsSchema(dctx); err != nil {
 		return stats, err
 	}
 	_, authorship, err := c.authorshipEstimateGenerations()
@@ -494,29 +539,40 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 		return stats, err
 	}
 	if !opts.DryRun {
-		// A row's labels are bits in its model's label order; readers decode
-		// them with the order recorded here (messageLabelsAttacher).
-		order, _ := json.Marshal(model.Manifest.Labels.Order)
-		if err := c.writeTransaction(ctx, "record the labels model", func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, `INSERT INTO message_labels_models(model,labels_json) VALUES(?,?) ON CONFLICT(model) DO NOTHING`, identity, string(order))
-			return err
-		}); err != nil {
+		if err := c.recordLabelsModel(dctx, model, identity); err != nil {
 			return stats, err
 		}
 	}
-	builder, err := newLabelsItemBuilder(ctx, c.reader())
+	builder, err := newLabelsItemBuilder(dctx, c.reader())
 	if err != nil {
 		return stats, err
 	}
-	todo, err := c.labelsWork(ctx, builder, identity, opts, stats)
+	todo, err := c.labelsWork(dctx, builder, identity, opts, stats)
 	if err != nil {
 		return stats, err
 	}
+	discovery.Release()
 	progress("labels: %d conversations to rebuild of %d", len(todo), stats.Conversations)
 	reportWork(ctx, "labeling messages", "conversation", 0, len(todo))
 
 	run := &labelsRun{c: c, settings: settings, opts: opts, model: model, identity: identity, stats: stats, progress: progress}
-	if err := run.execute(ctx, builder, todo); err != nil {
+	gpuOnly := labelsGPUOnly(model, settings)
+	grant, err := acquireLabelerCPU(ctx, c, settings.Threads, gpuOnly)
+	if err != nil {
+		return stats, err
+	}
+	if _, admitted := workAllocationFrom(grant.Ctx); admitted {
+		prep, inference, serial := labelsSplit(grant.Allocation.CPUs, settings.Threads, gpuOnly)
+		run.settings = admittedLabeler(grant.Ctx, settings)
+		run.prep, run.settings.Threads, run.settings.Workers = prep, inference, 1
+		run.opts.ThreadTarget = nil
+		if serial {
+			run.serial = make(chan struct{}, 1)
+		}
+	}
+	err = run.execute(grant.Ctx, builder, todo)
+	grant.Release()
+	if err != nil {
 		return stats, err
 	}
 	// The ledger is current when every conversation was covered and no input
@@ -545,11 +601,84 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 	return stats, err
 }
 
+// labelsInvocation takes the labels run's locks: one run at a time in this
+// process, and across processes (the service and pharos labels run) through a
+// lease the OS releases if the holder exits. Either held elsewhere is
+// errLabelsRunning; any other lease failure keeps its cause.
+func (c *Catalog) labelsInvocation() (release func(), err error) {
+	if !c.labels.TryLock() {
+		return nil, errLabelsRunning
+	}
+	if c.Path == "" {
+		return c.labels.Unlock, nil
+	}
+	lease, err := fileLease(canonical(c.Path)+".labels.lock", true)
+	if err != nil {
+		c.labels.Unlock()
+		if errors.Is(err, filelock.ErrContended) {
+			return nil, fmt.Errorf("%w: %w", errLabelsRunning, err)
+		}
+		return nil, fmt.Errorf("lock the labels run: %w", err)
+	}
+	return func() { lease.Close(); c.labels.Unlock() }, nil
+}
+
+// recordLabelsModel stores the model's label order: a row's labels are bits
+// in that order, and readers decode them with it (messageLabelsAttacher).
+func (c *Catalog) recordLabelsModel(ctx context.Context, model *labelrt.Model, identity string) error {
+	order, _ := json.Marshal(model.Manifest.Labels.Order)
+	return c.writeTransaction(ctx, "record the labels model", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO message_labels_models(model,labels_json) VALUES(?,?) ON CONFLICT(model) DO NOTHING`, identity, string(order))
+		return err
+	})
+}
+
+// labelsDiscovery is what labelsDiscover found: the jobs, newest first,
+// whether every conversation is wanted (Full, or a stored label from another
+// model or contract), and who follows each conversation (its forks and the
+// conversations that re-send its messages) when asked for the graph.
+type labelsDiscovery struct {
+	jobs      []*labelsJob
+	all       bool
+	followers map[string][]string
+}
+
 // labelsWork chooses the conversations to rebuild, newest first: dirty ones, ones whose
 // structure changed or that were never built, and forks of any of those
 // (they copy their parent's history); everything for Full, a new model or a
 // new contract. Conversations no longer in the catalog lose their labels.
 func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, identity string, opts LabelsRunOptions, stats *LabelsRunStats) ([]*labelsJob, error) {
+	found, err := c.labelsDiscover(ctx, builder, identity, opts, stats, false)
+	if err != nil {
+		return nil, err
+	}
+	return found.jobs, nil
+}
+
+// labelsDiscover is labelsWork. With graph it always reads who re-sends
+// whose messages, so a later change can be followed without this scan, and
+// gives every wanted conversation a dirty mark of its own before returning.
+// labelsLedger is what the ledger holds for one conversation: whether it was
+// built, at which structure and unit count, its dirty token, and how many
+// labels it has.
+type labelsLedger struct {
+	built         bool
+	structure     string
+	token         string
+	labels, units int64
+}
+
+// labelsWant is the rule that decides one conversation, for discovery and a
+// session step's refresh alike: whether its inputs changed (its forks, which
+// copy its history, and its re-senders follow it), and whether it needs
+// labels (changed, never built, or labels lost or stray). all is a model or
+// contract change that relabels it.
+func labelsWant(ledger labelsLedger, structure string, all bool) (changed, want bool) {
+	changed = all || ledger.built && ledger.structure != structure || ledger.token != ""
+	return changed, changed || !ledger.built || ledger.labels != ledger.units
+}
+
+func (c *Catalog) labelsDiscover(ctx context.Context, builder *labelsItemBuilder, identity string, opts LabelsRunOptions, stats *LabelsRunStats, graph bool) (*labelsDiscovery, error) {
 	p := builder.p
 	stored := map[string]string{}
 	rows, err := queryMapsContext(ctx, c.DB, `SELECT conversation_id,structure FROM message_labels_conversations`)
@@ -603,11 +732,7 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 	for _, id := range ids {
 		structures[id] = labelsStructure(p, builder.sessions, id)
 		previous, built := stored[id]
-		// Its inputs changed: its forks, which copy its history, follow.
-		changed[id] = all || built && previous != structures[id] || tokens[id] != ""
-		if changed[id] || !built || counts[id] != units[id] {
-			want[id] = true
-		}
+		changed[id], want[id] = labelsWant(labelsLedger{built: built, structure: previous, token: tokens[id], labels: counts[id], units: units[id]}, structures[id], all)
 	}
 	// Forks copy their parent's history, and a re-sent message's target
 	// text is resolved against its source's classification, so both follow
@@ -625,7 +750,7 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 			queue = append(queue, id)
 		}
 	}
-	if len(queue) > 0 && !all {
+	if len(queue) > 0 && !all || graph {
 		reusers, err := c.labelsReusers(ctx)
 		if err != nil {
 			return nil, err
@@ -653,9 +778,26 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 	// clears. A run cut short (--limit, a stop) before reaching it would lose
 	// it for good, so it gets a dirty mark of its own first, which this run
 	// clears only once it is built.
-	if len(followed) > 0 && !opts.DryRun && len(opts.Conversations) == 0 {
+	mark := followed
+	if graph {
+		// A session stores selected conversations ahead of the rest, so every
+		// conversation wanted for a change needs a reason of its own, not only
+		// followers. A model or contract change (all) is otherwise only this
+		// view of the ledger: once a selected step rewrites the last old-model
+		// label, all is off, and so is the only reason its dependents, already
+		// labeled by the new model, had to follow its change. One wanted only
+		// for missing labels (never built, or labels lost) gets none: the
+		// ledger keeps it wanted until it is built, and a mark would read as a
+		// change to every later run, whose forks and re-senders then follow.
+		for _, id := range ids {
+			if want[id] && changed[id] && tokens[id] == "" {
+				mark = append(mark, id)
+			}
+		}
+	}
+	if len(mark) > 0 && !opts.DryRun && len(opts.Conversations) == 0 {
 		if err := c.writeTransaction(ctx, "mark conversations that follow a changed one", func(tx *sql.Tx) error {
-			for _, id := range followed {
+			for _, id := range mark {
 				if tokens[id] != "" {
 					continue
 				}
@@ -709,7 +851,7 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 			return nil, err
 		}
 	}
-	return jobs, nil
+	return &labelsDiscovery{jobs: jobs, all: all, followers: children}, nil
 }
 
 // labelsRun is one run's pipeline: preparation workers build conversations' items;
@@ -733,6 +875,33 @@ type labelsRun struct {
 	// cancel stops the run (the writer's failure does).
 	cancel   context.CancelFunc
 	exportMu sync.Mutex
+	// prep, when set, is the number of preparation workers an allocation
+	// chose (a limited or serial run still prepares one at a time).
+	prep int
+	// serial, when set, is a one-slot gate preparation and inference each
+	// hold while they compute, so a one-CPU allocation alternates between
+	// them instead of running both.
+	serial chan struct{}
+	// stored, when set, receives each job after its transaction commits,
+	// with whether the job's conversation was completed.
+	stored func(job *labelsJob, complete bool)
+	// failed, when set, receives each job the run gave up on: its items could
+	// not be built, or the worker could not label one of its messages. A job
+	// cut by Limit is not failed.
+	failed func(job *labelsJob)
+}
+
+// hold takes the serial gate, if any, until the returned release.
+func (r *labelsRun) hold(ctx context.Context) (release func(), err error) {
+	if r.serial == nil {
+		return func() {}, nil
+	}
+	select {
+	case r.serial <- struct{}{}:
+		return func() { <-r.serial }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // export writes one item's line (see LabelsRunOptions.Export).
@@ -833,7 +1002,11 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 	defer func() { r.releasePool(parent.Err() != nil) }()
 	built := make(chan *labelsJob, 2)
 	produced := make(chan error, 1)
-	workers := labelerPreparationWorkers(r.settings, r.opts.Limit, r.opts.OneAtATime || r.opts.Export != nil)
+	serial := r.opts.OneAtATime || r.opts.Export != nil
+	workers := labelerPreparationWorkers(r.settings, r.opts.Limit, serial)
+	if r.prep > 0 && r.opts.Limit == 0 && !serial {
+		workers = r.prep
+	}
 	go func() { produced <- r.produce(ctx, builder, jobs, built, workers) }()
 	writes := make(chan *labelsJob, 64)
 	written := make(chan error, 1)
@@ -849,7 +1022,12 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 					rows[i] = labelrt.Framed{IDs: seq.message.seqs[seq.chunk], Spans: seq.message.spans[seq.chunk]}
 				}
 				started := time.Now()
-				result, err := r.runner.RunBatch(ctx, rows, []string{"probs"})
+				var result *labelrt.RunResult
+				release, err := r.hold(ctx)
+				if err == nil {
+					result, err = r.runner.RunBatch(ctx, rows, []string{"probs"})
+					release()
+				}
 				out := labelsBatchResult{batch: batch, err: err, took: time.Since(started)}
 				if err == nil {
 					if probs := result.Tensor("probs"); probs == nil || len(probs.Float32) != len(rows)*r.model.Labels() {
@@ -1132,6 +1310,11 @@ func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, job
 		if limit > 0 {
 			limit -= limited // Limited runs have exactly one preparation worker.
 		}
+		release, err := r.hold(ctx)
+		if err != nil {
+			return labelsPrepared{job: jobs[index], err: err}
+		}
+		defer release()
 		opFrom(ctx).RunIO(func() {
 			result = r.prepareConversation(ctx, builders[worker], jobs[index], limit)
 		})
@@ -1142,6 +1325,9 @@ func (r *labelsRun) produce(ctx context.Context, builder *labelsItemBuilder, job
 				// A damaged conversation keeps its dirty mark for the next run.
 				r.progress("labels: conversation %s skipped: %v", jobs[index].conversation, result.err)
 				r.stats.ConversationsFailed++
+				if r.failed != nil {
+					r.failed(jobs[index])
+				}
 				return true
 			}
 			failure = result.err
@@ -1349,12 +1535,21 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 		}
 		for _, job := range pending {
 			r.stats.MessagesRemoved += len(job.stale)
+			complete := job.complete
+			failed := false
 			for _, message := range job.messages {
 				if message.failed {
 					r.stats.MessagesFailed++
+					complete, failed = false, true
 				} else {
 					r.stats.MessagesLabeled++
 				}
+			}
+			if r.stored != nil {
+				r.stored(job, complete)
+			}
+			if failed && r.failed != nil {
+				r.failed(job)
 			}
 		}
 		pending, rows = nil, 0

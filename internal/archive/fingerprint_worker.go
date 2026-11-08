@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -309,4 +310,123 @@ func waitFingerprintWorker(ctx context.Context, delay time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+// Fingerprint rendering under population execution. The two daemons above
+// become one declared coarse task: the maintenance coordinator submits its
+// demand while the item is on the continuous Frequently schedule, and Run
+// now asks the same task for a pass. Each admitted batch runs up to one
+// worker per granted CPU, at most one per renderer slot, so both renderer
+// slots stay busy at a cap of two or more and one runs at a cap of one. The
+// domain keeps its dirty rows, retry backoff, revision-checked publication
+// and renderer scratch reuse.
+
+// fingerprintPower is the daemons' gate as of now: whether continuous
+// rendering may run at all (the Frequently cadence, power allowing) and
+// whether it runs slower on battery (one worker, spaced images).
+func (s *Server) fingerprintPower(ctx context.Context) (allowed, slower bool) {
+	settings, err := s.Catalog.backgroundSettings(ctx, time.Now())
+	if err != nil {
+		return false, false
+	}
+	item, _ := backgroundItemByID("fingerprints")
+	battery := settings.Battery.onPower(cadenceFrequent, s.cachedPower(ctx))
+	return settings.cadence(item) == cadenceFrequent && battery != batteryWait, battery == batterySlower
+}
+
+// fingerprintMaintenanceTask is maintenance.fingerprints as a coarse task.
+// Demand the pending check started follows the daemons' cadence and battery
+// gate, so it ends rather than waits when either turns it off; a requested
+// pass (Run now, a scheduled item) runs regardless, as runSearchBatches did.
+func (s *Server) fingerprintMaintenanceTask() *maintenanceTask {
+	c := s.Catalog
+	var pruneAt atomic.Int64 // unix nanoseconds of the last scheduled prune
+	pruneDue := func() bool { return time.Since(time.Unix(0, pruneAt.Load())) > time.Minute }
+	return &maintenanceTask{kind: kindFingerprints, phase: "render", cpus: 1,
+		maxCPUs: func(ctx context.Context) int {
+			if _, slower := s.fingerprintPower(ctx); slower {
+				return 1
+			}
+			return len(c.fingerprints.active)
+		},
+		probe: func(ctx context.Context) (bool, error) {
+			if c.readOnly || c.queryOnly {
+				return false, nil
+			}
+			if allowed, _ := s.fingerprintPower(ctx); !allowed {
+				return false, nil
+			}
+			pending, err := catalogExists(ctx, c, "SELECT 1 FROM fingerprint_entities WHERE dirty=1 AND next_attempt<=unixepoch()")
+			if err != nil || pending || !pruneDue() {
+				return pending, err
+			}
+			return catalogExists(ctx, c, "SELECT 1 FROM fingerprint_orphans WHERE not_before<=unixepoch()")
+		},
+		step: func(ctx context.Context, allocation workAllocation) (bool, int64, error) {
+			if c.readOnly || c.queryOnly {
+				return false, 0, nil
+			}
+			requested := maintenanceModeFrom(ctx) != ""
+			var work int64
+			pruned := false
+			// Scheduled rendering prunes at most once a minute, as the primary
+			// daemon did; a requested pass drains the orphans first.
+			if requested || pruneDue() {
+				pruneAt.Store(time.Now().UnixNano())
+				var err error
+				if pruned, err = c.pruneFingerprintBlobs(ctx); err != nil {
+					return false, 0, err
+				}
+				if pruned {
+					work++
+				}
+			}
+			_, slower := s.fingerprintPower(ctx)
+			rendered, more, err := c.renderFingerprintBatch(ctx, allocation, slower, maintenanceSlice)
+			return more || requested && pruned, work + rendered, err
+		}}
+}
+
+// renderFingerprintBatch renders dirty images with one worker per granted
+// CPU (at most one per renderer slot; one when slower) until nothing is
+// eligible or slice has passed. Each worker lets interactive queries go
+// first before every image and starts the next image without a gap, except
+// on battery's slower policy. more reports that a worker stopped at the
+// slice with images still to render.
+func (c *Catalog) renderFingerprintBatch(ctx context.Context, allocation workAllocation, slower bool, slice time.Duration) (int64, bool, error) {
+	workers := min(max(allocation.CPUs, 1), len(c.fingerprints.active))
+	if slower {
+		workers = 1
+	}
+	deadline := time.Now().Add(slice)
+	var rendered atomic.Int64
+	var more atomic.Bool
+	failures := make([]error, workers)
+	var wait sync.WaitGroup
+	for index := range workers {
+		wait.Go(func() {
+			for {
+				if err := c.queries.wait(ctx); err != nil {
+					failures[index] = err
+					return
+				}
+				did, err := c.refreshFingerprintImages(ctx)
+				if err != nil || !did {
+					failures[index] = err
+					return
+				}
+				rendered.Add(1)
+				if !time.Now().Before(deadline) {
+					more.Store(true)
+					return
+				}
+				if slower && !waitFingerprintWorker(ctx, 2*time.Second) {
+					failures[index] = ctx.Err()
+					return
+				}
+			}
+		})
+	}
+	wait.Wait()
+	return rendered.Load(), more.Load(), errors.Join(failures...)
 }

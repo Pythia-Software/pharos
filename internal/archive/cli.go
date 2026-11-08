@@ -394,7 +394,9 @@ func runIngestCLI(ctx context.Context, config Config, catalog *Catalog, op *Op) 
 			return err
 		}
 		op.Step(source.Name, "", -1)
-		results = append(results, catalog.Ingest(adapter, nil))
+		// Each source is one admitted CPU leaf of this command's authority;
+		// the ingest itself runs as it always has.
+		results = append(results, catalog.admittedIngest(ctx, source.Name, currentHost().ID, func(context.Context) IngestResult { return catalog.Ingest(adapter, nil) }))
 	}
 	op.Step("Link identities and refresh the Search view", "", -1)
 	links, err := catalog.ReconcileIdentities()

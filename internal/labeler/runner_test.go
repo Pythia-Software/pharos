@@ -112,6 +112,50 @@ func TestManagerSharesOneBudgetAcrossModels(t *testing.T) {
 	if _, memory, runners := manager.Usage(); runners != 1 || memory != 1600 {
 		t.Fatalf("%d runners, %d MB", runners, memory)
 	}
+	// Killed workers are reaped before Kill (or the Runner call that found
+	// them dead) returns, and after the manager is released.
+	reaped := []*Runner{}
+	reap := reapRunner
+	t.Cleanup(func() { reapRunner = reap })
+	reapRunner = func(r *Runner) {
+		if r == nil {
+			return
+		}
+		if !manager.mu.TryLock() {
+			t.Error("a killed runner was reaped under the manager's lock")
+		} else {
+			manager.mu.Unlock()
+		}
+		reap(r)
+		reaped = append(reaped, r)
+	}
+	requireReaped := func(r *Runner, what string) {
+		t.Helper()
+		if len(reaped) == 0 || reaped[len(reaped)-1] != r {
+			t.Fatalf("%s: reaped %v", what, reaped)
+		}
+		for _, slot := range r.pool.slots {
+			if slot.worker != nil && slot.worker.cmd.ProcessState == nil {
+				t.Fatalf("%s returned before the native worker was reaped", what)
+			}
+		}
+	}
+	manager.Kill(b)
+	requireReaped(b, "Kill")
+	c, releaseC, err := manager.Runner(t.Context(), first, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseC()
+	c.pool.mu.Lock()
+	c.pool.closed = true // dead: the next Runner call replaces it
+	c.pool.mu.Unlock()
+	d, releaseD, err := manager.Runner(t.Context(), first, cfg)
+	if err != nil || d == c {
+		t.Fatalf("a dead runner was not replaced: %v", err)
+	}
+	defer releaseD()
+	requireReaped(c, "Runner over a dead runner")
 }
 
 // A smaller budget (on battery) stops idle runners over it and holds the
@@ -148,6 +192,30 @@ func TestManagerSetBudget(t *testing.T) {
 	manager.SetBudget(Budget{Threads: 4})
 	if got := manager.Budget(); got.Threads != 4 {
 		t.Fatalf("budget %+v", got)
+	}
+	active, releaseActive, err := manager.Runner(t.Context(), model, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.Retire()
+	if _, _, runners := manager.Usage(); runners != 1 {
+		t.Fatal("a deliberate change stopped a runner still in use")
+	}
+	if _, _, err := manager.Runner(t.Context(), model, cfg); !errors.Is(err, ErrBudget) {
+		t.Fatalf("a retiring configuration accepted another user: %v", err)
+	}
+	releaseActive()
+	if _, _, runners := manager.Usage(); runners != 0 {
+		t.Fatal("the retiring runner stayed resident after its last release")
+	}
+	fresh, releaseFresh, err := manager.Runner(t.Context(), model, cfg)
+	if err != nil || fresh == active {
+		t.Fatalf("a deliberate change reused the retired configuration: %v", err)
+	}
+	releaseFresh()
+	manager.Retire()
+	if _, _, runners := manager.Usage(); runners != 0 {
+		t.Fatal("idle configurations survived retirement")
 	}
 }
 

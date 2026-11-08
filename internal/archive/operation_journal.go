@@ -180,6 +180,18 @@ func imageOf(op *Op, view opView) journalImage {
 	image.stepName, image.stepUnit = view.Step.Name, view.Step.Unit
 	image.stepDone, image.stepTotal, image.stepKnown = view.Step.Done, view.Step.Total, view.Step.Total >= 0
 	detail := map[string]any{"holds": view.Spec.Holds, "affects": view.Spec.Affects, "priority": view.Spec.Priority}
+	if view.Resources != nil && opTerminal(view.State) {
+		detail["resources"] = view.Resources.compact()
+	}
+	if len(view.NeededBy) > 0 {
+		detail["needed_by"] = view.NeededBy
+	}
+	if len(view.SharedWork) > 0 {
+		detail["work_ids"] = view.SharedWork
+	}
+	if view.SharedWorkOmitted > 0 {
+		detail["work_ids_omitted"] = view.SharedWorkOmitted
+	}
 	if view.Step.Detail != "" {
 		detail["step_detail"] = view.Step.Detail
 	}

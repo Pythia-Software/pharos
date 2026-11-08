@@ -139,6 +139,12 @@ func (s *Server) postLabelsSettings(w http.ResponseWriter, r *http.Request, body
 		}
 	}
 	s.wakeBackground()
+	if s.work != nil {
+		if len(threads) > 0 {
+			s.Catalog.labelerManager(s.Config().Labels).Retire()
+		}
+		s.work.runner.Wake()
+	}
 	s.getBackground(w, r)
 }
 
@@ -178,7 +184,13 @@ func (s *Server) setLabelerThreads(threads map[string]int) error {
 
 func (s *Server) setLabelsEnabled(ctx context.Context, enabled bool) error {
 	s.configMu.Lock()
-	defer s.configMu.Unlock()
+	changed := false
+	defer func() {
+		s.configMu.Unlock()
+		if changed && s.work != nil {
+			s.work.runner.InterruptKinds([]string{"analysis.labels", "maintenance.labels.query"}, "message-label policy changed; reissue the request with the current analyses")
+		}
+	}()
 	// Enabling an already indexed library must schedule its earlier messages
 	// too, even if the disabled stage had previously been marked complete.
 	if enabled && !s.config.Labels.Enabled {
@@ -194,6 +206,7 @@ func (s *Server) setLabelsEnabled(ctx context.Context, enabled bool) error {
 	if err != nil {
 		return err
 	}
+	changed = s.config.Labels.Enabled != enabled
 	s.config.Labels.Enabled = enabled
 	return nil
 }

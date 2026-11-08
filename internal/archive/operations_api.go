@@ -168,13 +168,25 @@ func operationEntry(view opView, byID map[OpID]opView, at time.Time) map[string]
 	}
 	if view.Foreign {
 		entry["detail"] = defaultString(firstString(entry["detail"]), "In another process ("+strings.Replace(view.Process, "cli:", "pharos ", 1)+")")
-	} else if kind.Stop != "" && !opTerminal(view.State) && view.State != opStopping && view.Parent == "" {
+	} else if (kind.Stop != "" || view.WorkControlled) && !opTerminal(view.State) && view.State != opStopping && view.Parent == "" {
 		entry["stoppable"] = true
 		entry["stop"] = map[string]any{"method": "POST", "path": "/api/operations/stop", "body": map[string]any{"id": view.ID}}
 	}
+	if view.Resources != nil {
+		entry["resources"] = view.Resources
+	}
+	if len(view.NeededBy) > 0 {
+		entry["needed_by"] = view.NeededBy
+	}
+	if len(view.SharedWork) > 0 {
+		entry["work_ids"] = view.SharedWork
+	}
+	if view.SharedWorkOmitted > 0 {
+		entry["work_ids_omitted"] = view.SharedWorkOmitted
+	}
 	running := []map[string]any{}
 	for _, id := range view.Children {
-		if child, ok := byID[id]; ok && child.Kind != nil && !child.Kind.Hidden && !child.Tentative && !opTerminal(child.State) {
+		if child, ok := byID[id]; ok && child.Kind != nil && !child.Kind.Hidden && !child.Tentative && (!opTerminal(child.State) || child.ActiveDescendants) {
 			running = append(running, operationEntry(child, byID, at))
 		}
 	}
@@ -319,7 +331,7 @@ func (s *Server) operationsDocumentViews(ctx context.Context, fresh bool) (map[s
 		if view.Parent != "" || view.Kind == nil || view.Kind.Hidden || view.Tentative {
 			continue
 		}
-		if opTerminal(view.State) && at.Sub(view.Ended) > operationsRecent {
+		if opTerminal(view.State) && !view.ActiveDescendants && at.Sub(view.Ended) > operationsRecent {
 			continue
 		}
 		operations = append(operations, operationEntry(view, byID, at))
@@ -373,7 +385,11 @@ func (s *Server) stopOperation(w http.ResponseWriter, body map[string]any) {
 		return
 	}
 	stopped := false
-	switch view.Kind.Stop {
+	stopKind := view.Kind.Stop
+	if view.WorkControlled {
+		stopKind = "work"
+	}
+	switch stopKind {
 	case "index":
 		s.ingestStop.mu.Lock()
 		current := s.ingestStop.runID
