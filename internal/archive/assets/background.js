@@ -15,9 +15,10 @@
 .bg-card p{margin:6px 0 0;font-size:var(--fs-sm)}
 .bg-mode{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px}
 .bg-mode>div:first-child{flex:1 1 220px;min-width:0}
-.bg-seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.bg-seg{display:inline-flex;border:1px solid var(--line);border-radius:6px}
 .bg-seg button{border:0;border-radius:0;background:transparent;color:var(--ink);font:inherit;font-size:var(--fs-sm);padding:7px 12px;cursor:pointer}
 .bg-seg button+button{border-left:1px solid var(--line)}
+.bg-seg button:first-child{border-radius:4px 0 0 4px}.bg-seg button:last-child{border-radius:0 4px 4px 0}.bg-seg button:only-child{border-radius:4px}
 .bg-seg button[aria-pressed=true]{background:var(--accent);color:var(--bg);font-weight:650}
 #backgroundSchedule .bg-button{padding:7px 14px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);font:inherit;font-size:var(--fs-sm);font-weight:600;cursor:pointer}
 #backgroundSchedule .bg-button:hover:not(:disabled),.bg-seg button:hover{border-color:var(--accent)}
