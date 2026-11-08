@@ -81,7 +81,7 @@ body:has(#detail.active .conversation-timeline-active) :is(.conversation-map,.co
 .delegation-inbox-session { position: relative; height: 100%; min-width: 0; align-self: stretch; }
 .delegation-inbox-session .lt-session-identity { position: relative; width: 100%; font: inherit; }
 .delegation-inbox-session .lt-session-identity small { font-size: 9px; }
-.delegation-inbox-session .session-fold { top: 13px; }
+.delegation-inbox-session .session-fold { top: 11px; }
 .delegation-inbox-metric { color: var(--ink); font-size: var(--fs-xs); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .workspace-session-sheet-open :is(.conversation-find,.conversation-find-rail,.conversation-map,.conversation-map-window) { display: none !important; }

@@ -5432,6 +5432,7 @@
       "owner": "ParallelActivity",
       "tag": "button",
       "control": "aria-label={`${collapsed.has(n.id)?\"Expand\":\"Collapse\"} child sessions of ${n.label}`} onClick={()=>toggle(n)}",
+      "disclosure": true,
       "contract": "delegation",
       "reason": "Session hierarchy folding uses the existing delegation_collapsed route owner. Recursive event-tree disclosures use the shared ViewDisclosure URL owner independently of session nesting."
     },
