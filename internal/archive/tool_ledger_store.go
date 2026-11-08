@@ -570,7 +570,11 @@ func (c *Catalog) ensureToolRollup(ctx context.Context) error {
 	}
 	// Request timings are derived from the same ledger, a conversation at a
 	// time. Their exclusions read the mirrored workspaces the rollup publishes.
-	return c.refreshRequestTimings(ctx)
+	if err := c.refreshRequestTimings(ctx); err != nil {
+		return err
+	}
+	// The stored compaction boundaries need a one-time backfill alongside.
+	return c.backfillCompactionBoundaries(ctx)
 }
 
 func (c *Catalog) updateStaleToolRollup(ctx context.Context) error {
