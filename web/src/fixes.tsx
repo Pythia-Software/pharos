@@ -1,3 +1,4 @@
+import { optimizeTableRemainder, type OptimizeTableSchemas } from "./optimize-table-title";
 import { DataReadinessIndicator } from "./data-readiness";
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ReviewDialog, type CartGroup, type Target } from "./findings";
@@ -91,7 +92,6 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
   }, [setError]);
 
   const lede = view === "settings" ? "Choose which recurring problems stay on the menu. Your choices follow the library between Macs."
-    : view === "table" && !selected ? "Every fix in every state, including those your settings hide from Open, with its kind, place, recurrence and priority. Tick rows to act on several at once; filter, group and chart them like any table."
     : selected ? "One recurring problem, the agents' own words about it, and where the fix probably belongs."
       : "Problems agents keep running into across separate work items, which one change to guidance, the environment, a tool or docs could prevent. Tick cards to copy a prompt for your agent; a problem that recurs after its handoff opens again.";
   const hiddenNote = overview ? fixesHiddenNote(shown.hidden, overview.bounds) : "";
@@ -101,7 +101,7 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
     dismissed: "Problems you closed. Bring one back at any time.",
   };
   return <div className="findings-page fixes-page">
-    <div className="view-heading findings-heading"><div><h1>{view === "settings" ? "Fixes settings" : view === "table" && !selected ? "Fixes table" : "Fixes"}</h1><p className="muted">{lede}</p></div>{view !== "settings" && view !== "table" ? <DataReadinessIndicator id="fixes:overview" title="Fixes" dataset="fixes" query={{view,selected}} /> : null}</div>
+    {view !== "table" || selected ? <div className="view-heading findings-heading"><div><h1>{view === "settings" ? "Fixes settings" : "Fixes"}</h1><p className="muted">{lede}</p></div>{view !== "settings" && view !== "table" ? <DataReadinessIndicator id="fixes:overview" title="Fixes" dataset="fixes" query={{view,selected}} /> : null}</div> : null}
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
     {notice ? <p className="safety-notice" role="status">{notice}</p> : null}
     {view === "settings" ? <FixesSettings overview={overview} refreshDiscovery={refreshDiscovery} />
@@ -388,13 +388,14 @@ export function FixesSelectionBar({ selection, copy }: { selection: SelectionApi
 }
 
 // What a table limited to hidden fixes, or one state, holds.
-export function FixesTableContext({ query, total }: { query: QueryState; total: number | null | undefined }) {
+export function FixesTableContext({ query, schemas, total, fallback }: { query: QueryState; schemas: OptimizeTableSchemas; total: number | null | undefined; fallback: React.ReactNode }) {
   const focus = fixesTableFocus(query);
-  if (focus.shown !== "hidden") return null;
-  return <section className="findings-panel safety-check-context" data-pharos-target="section:fixes-hidden">
-    <p className="findings-muted">Fixes · Open · hidden by your settings</p>
-    <h2>Fixes your settings hide from Open</h2>
-    <p>{typeof total === "number" ? `${plural(total, "fix", "fixes")}. ` : ""}Each is quiet longer than your bound, seen in fewer work items than your minimum, or guidance working as intended. The dashboard leaves them out until they recur or you change the bounds; you can still hand them off or close them here.</p>
-    <a href={fixesURL("settings")}>Fixes settings</a>
-  </section>;
+  if (focus.shown !== "hidden" || focus.state !== "open") return <>{fallback}</>;
+  const remainder = optimizeTableRemainder(schemas.source, query, [{ field: "state", op: "=", value: "open" }, { field: "shown", op: "!=", value: "shown" }], schemas.result);
+  const count = typeof total === "number" ? query.grouping ? plural(total, "group") : plural(total, "fix", "fixes") : "";
+  return <div className="optimize-table-context" data-pharos-target="section:fixes-hidden">
+    <h1 className="optimize-table-title">Fixes your settings hide from Open</h1>
+    <p className="optimize-table-meta">{["Fixes", "Open", "hidden by your settings", count, remainder].filter(Boolean).join(" · ")}</p>
+    <p className="optimize-table-explanation">These are quiet, rare, or marked as intended. They stay off the dashboard until they recur or you change the bounds; you can still hand them off or close them here. <a href={fixesURL("settings")}>Fixes settings</a></p>
+  </div>;
 }

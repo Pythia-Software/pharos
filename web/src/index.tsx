@@ -1,3 +1,4 @@
+import { optimizeTableTitle, optimizeTableSchemas, type OptimizeTableSchemas } from "./optimize-table-title";
 import messagesDocument from "../../schemas/messages.schema.json";
 import { DataReadinessModal, HeaderDataReadiness, BackgroundProcessingWorkload, DataReadinessEmpty, DataReadinessIndicator } from "./data-readiness";
 import { startReadiness } from "./data-readiness-store";
@@ -461,7 +462,7 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
 // carries other request parameters, such as a message search cursor.
 // onFind receives Library message-search coverage when present.
 type SurfaceHost = { query: HostQueryOptions; find: (state: HostQueryState | undefined) => string; onState?: (state: HostQueryState | undefined) => void };
-function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, trailing, selectionBar, queryHistory = false, controls, queryContent, querySummary, resultPresentation, presets }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; selectionBar?: (api: QueryTableApi<Row>) => React.ReactNode; queryHistory?: boolean; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode }) {
+function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, trailing, selectionBar, queryHistory = false, controls, queryContent, querySummary, resultPresentation, presets, optimizeTitle, tableHeading }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; selectionBar?: (api: QueryTableApi<Row>) => React.ReactNode; queryHistory?: boolean; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; optimizeTitle?: string; tableHeading?: (api: QueryTableApi<Row>, fallback: React.ReactNode, schemas: OptimizeTableSchemas) => React.ReactNode }) {
   const attention = useMemo(() => createAttentionRegistry(), [dataset]);
   const visible = datasetIsVisible(dataset);
   const schema = useMemo(() => {
@@ -670,6 +671,8 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   // requests independently of useQueryTable's active row-fetch flag.
   useOriginMetadata(Boolean(visible));
   if (!visible) return null;
+  const headingSchemas = optimizeTableSchemas(api);
+  const fallbackHeading = optimizeTitle ? <h1 className="optimize-table-title">{optimizeTableTitle(optimizeTitle, headingSchemas.source, api.query, headingSchemas.result)}</h1> : null;
   return <FilterValueProvider value={filterPresentations[dataset]}>
     <QueryRecovery busy={api.execution?.status === "running" || api.restoration.status === "resolving" || (!capabilities && !capabilityError)} error={capabilityError ?? api.error} recovered={recovered} identity={api.execution?.key ?? JSON.stringify(api.query)}
       onRetry={() => {
@@ -694,6 +697,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
         if (capabilityError) setCapabilityRetry(value => value + 1);
       }} />
     {Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
+    {fallbackHeading ? tableHeading?.(api, fallbackHeading, headingSchemas) ?? fallbackHeading : null}
     {presets?.(api)}
     {queryContent || resultPresentation ? <SourceQueryBuilder dataset={dataset} compact summary={querySummary?.(api)} api={api} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
       whereRow={<>
@@ -1608,8 +1612,8 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["queryTableUsage", <UsagePage />],
   ["mcpSettingsPage", <MCPSettings />],
   ["logsPage", <LogsPage copy={copyText} />],
-  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" queryHistory presets={api => <SafetyTableContext query={api.query} total={api.total} />} selectionBar={api => <SafetySelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open notice</a>} />}
-    fixesTable={<QuerySurface dataset="fixes" queryHistory presets={api => <FixesTableContext query={api.query} total={api.total} />} selectionBar={api => <FixesSelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={fixDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(fixDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open fix</a>} />} />],
+  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" optimizeTitle="Efficiency findings" />} safetyTable={<QuerySurface dataset="safety" optimizeTitle="Risky action notices" queryHistory tableHeading={(api, fallback, schemas) => <SafetyTableContext query={api.query} schemas={schemas} total={api.total} fallback={fallback} />} selectionBar={api => <SafetySelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open notice</a>} />}
+    fixesTable={<QuerySurface dataset="fixes" optimizeTitle="Fixes" queryHistory tableHeading={(api, fallback, schemas) => <FixesTableContext query={api.query} schemas={schemas} total={api.total} fallback={fallback} />} selectionBar={api => <FixesSelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={fixDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(fixDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open fix</a>} />} />],
 ];
 
 // Mount a page on its first visit. Hidden pages used to load capabilities,
