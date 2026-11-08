@@ -814,6 +814,9 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		t.Fatal("non-timestamp window accepted")
 	}
 	for _, input := range []string{
+		`{"page":"analyze/tokens","options":{"selection":{"values":[],"excluded":false,"allHidden":true}}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"disclosures":{"timeline-key":false}},"reveal":"section:timeline-key"}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"disclosures":{"timeline-key":true}},"reveal":"section:timeline-key"}`,
 		`{"page":"analyze/thinking-detail","view":{"thinking":{"view":"calendar","groupBy":"model_effort","timezone":"America/Denver","range":"30d","hiddenPercentiles":["p95"],"hours":6}}}`,
 		`{"page":"cards","view":{"card_window":"today","card_filters":false},"highlight":["card:tool-failures"],"reveal":"text:failed command"}`,
 		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"find":"failed command","find_case":true,"reader_expanded":["message:m"],"reader_filter":["prompts","response"],"reader_navigator":["timeline","context","turns"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,

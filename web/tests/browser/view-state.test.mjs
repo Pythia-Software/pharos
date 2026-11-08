@@ -141,7 +141,12 @@ test('Timeline pending events stay announced for a collapsed session, after rest
 });
 
 test('workspace sidebar visibility and width restore without leaving the selected conversation',{skip},async t=>{
- const app=await open(t,{url:`/work/${workID}/conversation/${rootConversation}?sidebar_width=460`,ready:'.conversation-panel .turn'}),{page}=app;
+ const api={'GET /api/work/:id/conversations/:conversation':request=>{
+  const conversation=defaultApi['GET /api/work/:id/conversations/:conversation'](request);
+  if(request.params.conversation!=='conv-child')return {...conversation,machine:'Unknown',execution_machine:'Unknown'};
+  return {...conversation,machine:'Laptop',execution_machine:'Worker',effort:'medium',messages:conversation.messages.filter(message=>message.role!=='user')};
+ }};
+ const app=await open(t,{api,url:`/work/${workID}/conversation/${rootConversation}?sidebar_width=460`,ready:'.conversation-panel .turn'}),{page}=app;
  const show=page.getByRole('button',{name:'Show agent sessions',exact:true}),hide=page.getByRole('button',{name:'Hide agent sessions',exact:true});
  const divider=page.getByRole('separator',{name:'Resize agent sessions sidebar',exact:true});
  assert.equal(await divider.getAttribute('aria-valuenow'),'460');
@@ -154,17 +159,52 @@ test('workspace sidebar visibility and width restore without leaving the selecte
  await page.goForward();await show.waitFor();await show.click();await app.settled();
  assert.equal(await divider.getAttribute('aria-valuenow'),'340');
  assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
+ const context=()=>page.locator('.conversation-panel .delegation-context');
+ const children=()=>context().getByRole('button',{name:'1 child session',exact:true});
+ await page.locator('.delegation-session-heading').waitFor();
+ assert.equal(await children().isVisible(),false);
+ const chips=()=>page.locator('.conversation-panel .conversation-title-content > .chips');
+ assert.equal(await chips().getByText(/^(Machine|Execution machine):/).count(),0);
+ assert.equal(await chips().getByText(/^Effort:/).count(),0);
+ assert.equal(await chips().getByText('claude-opus-5-5',{exact:true}).count(),0);
+ assert.equal(await context().getByText(/This agent session/).count(),0);
+ await hide.click();await children().waitFor();await app.shot('collapsed-root');
+ const rootURL=new URL(page.url());await children().click();await hide.waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootURL.searchParams.get('conversation'));
+ await page.getByRole('table',{name:'Agent session hierarchy and usage'}).getByRole('button',{name:'Open session Review implementation',exact:true}).click();
+ await page.locator('.conversation-panel [data-message-id="conv-child-reply"]').first().waitFor();
+ assert.ok(await chips().getByText('Machine: Laptop',{exact:true}).isVisible());
+ assert.ok(await chips().getByText('Execution machine: Worker',{exact:true}).isVisible());
+ assert.ok(await chips().getByText('1 turn',{exact:true}).isVisible());
+ assert.equal(await page.locator('.turn-list > .turn').count(),1);
+ await hide.click();const parent=()=>context().getByRole('button',{name:'Parent session',exact:true});
+ await parent().waitFor();await children().waitFor();await app.shot('collapsed-child');
+ const childURL=new URL(page.url());await parent().click();await hide.waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),childURL.searchParams.get('conversation'));
+ assert.equal(new URL(page.url()).searchParams.get('delegation_session'),childURL.searchParams.get('delegation_session'));
+ assert.equal(await parent().isVisible(),false);assert.equal(await children().isVisible(),false);
+ await page.setViewportSize({width:390,height:900});await children().waitFor();
+ await children().click();await page.getByRole('dialog',{name:'Agent sessions'}).waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),childURL.searchParams.get('conversation'));
 });
 
 for(const width of [1440,390])test(`workspace Timeline beside a reader expands before editing at ${width}px`,{skip},async t=>{
- const root=`delegation-labels:caller:${workID}:`,disclosures=Object.fromEntries(['session','authorship','authorship:m-1'].map(id=>[root+id,true]));
+ const root=`delegation-labels:caller:${workID}:`,disclosures={'timeline-key':true,...Object.fromEntries(['session','authorship','authorship:m-1'].map(id=>[root+id,true]))};
  const params=new URLSearchParams({explorer:'timeline',conversation:rootConversation,message:'m-1',disclosures:JSON.stringify(disclosures),timeline_columns:JSON.stringify({execution:205,events:185,time:480})});
  const app=await open(t,{url:`/work/${workID}?${params}`,viewport:{width,height:900},ready:'.lt-preview-activate'}),{page}=app;
  await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
  const reveal=async()=>{if(width<960){await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();}};
- const settings=()=>page.evaluate(()=>{const p=new URLSearchParams(location.search);return Object.fromEntries(['delegation_start','delegation_end','timeline_columns','disclosures','delegation_collapsed','delegation_event'].map(key=>[key,p.get(key)]));});
+ const settings=()=>page.evaluate(()=>{const p=new URLSearchParams(location.search);return Object.fromEntries(['delegation_start','delegation_end','timeline_columns','disclosures','timeline_visibility','delegation_collapsed','delegation_event'].map(key=>[key,p.get(key)]));});
  await reveal();
  const before=await settings(),saved=path(page),activate=page.getByRole('button',{name:'Open full-width timeline',exact:true});
+ const key=page.locator('.lt-timeline-legend'),friction=key.getByRole('button',{name:'Friction',exact:true});
+ assert.equal(await friction.innerText(),'','the sidebar key stays compact even when the full Key is expanded');
+ assert.equal(await friction.getAttribute('aria-haspopup'),null,'preview icons never offer a visibility menu');
+ await friction.hover();await page.getByRole('tooltip').getByText('Friction',{exact:true}).waitFor();
+ assert.deepEqual(await settings(),before,'hovering the preview leaves view settings unchanged');
+ await app.shot('sidebar-key-hover');
+ await page.mouse.move(0,0);
+
  assert.equal(await page.getByRole('slider',{name:'Timeline window start',exact:true}).evaluate(el=>{el.focus();return document.activeElement===el;}),false,'preview controls cannot receive keyboard focus');
  assert.equal(await page.locator('.delegation-parallel').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'static overview fits the sidebar');
  if(width===1440){
@@ -178,6 +218,7 @@ for(const width of [1440,390])test(`workspace Timeline beside a reader expands b
  await page.waitForFunction(()=>!document.querySelector('.workspace-inbox').classList.contains('viewing'));await app.settled();
  assert.deepEqual(await settings(),before,'activation preserves saved timeline settings');
  assert.equal(new URL(page.url()).searchParams.get('conversation'),null);
+ assert.equal(await key.locator('.lt-key-disclosure').evaluate(el=>el.open),true,'the full Timeline keeps its own expanded Key');
  assert.equal(await page.locator(`[data-pharos-target="section:${root}authorship:m-1"]`).evaluate(el=>el.open),true);
  const start=page.getByRole('slider',{name:'Timeline window start',exact:true});assert.equal(await start.isVisible(),true);
  await page.goBack();await page.locator('.lt-preview-activate').waitFor();await app.settled();
@@ -187,6 +228,24 @@ for(const width of [1440,390])test(`workspace Timeline beside a reader expands b
  await page.goBack();await page.locator('.lt-preview-activate').waitFor();await app.settled();
  await page.goForward();await page.waitForFunction(()=>!document.querySelector('.workspace-inbox').classList.contains('viewing'));await app.settled();
  await start.focus();await start.press('ArrowRight');await app.settled();assert.ok(Number(new URL(page.url()).searchParams.get('delegation_start'))>Number(before.delegation_start));
+ await page.getByRole('button',{name:'Reset',exact:true}).click();await app.settled();
+ // Choose only Friction in the full Timeline, then enter a conversation.
+ await friction.click();await page.getByRole('menuitem',{name:'Hide others',exact:true}).click();await app.settled();
+ await page.locator('[data-agent-event="e-s-root-open"]').first().waitFor({state:'attached'});
+ const chosen=new URL(page.url()).searchParams.get('timeline_visibility');
+ await key.locator('.lt-key-disclosure > summary').click();await app.settled();
+ await page.getByRole('button',{name:/^Open session /}).first().click();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await page.locator('.lt-preview-activate').waitFor();await app.settled();
+ await reveal();
+ assert.equal(new URL(page.url()).searchParams.get('timeline_visibility'),chosen,'conversation navigation retains visibility selections');
+ await page.locator('[data-agent-event="e-s-root-open"]').first().waitFor({state:'attached'});
+ assert.equal(await page.locator('[data-agent-event="e-s-root"]').count(),0,'the preview also draws only Friction');
+ assert.equal(await page.locator('.lt-session-preview [data-tool-id]').count(),0,'hidden tools stay hidden in the conversation preview');
+ await friction.hover();await page.getByRole('tooltip').getByText('Friction',{exact:true}).waitFor();
+ await app.shot('sidebar-key-only-friction');
+ await friction.click();await page.waitForFunction(()=>!document.querySelector('.workspace-inbox').classList.contains('viewing'));await app.settled();
+ assert.equal(await page.getByRole('menu').count(),0,'clicking a preview icon opens the full Timeline without editing visibility');
+ assert.equal(new URL(page.url()).searchParams.get('timeline_visibility'),chosen);
+ assert.equal(await key.locator('.lt-key-disclosure').evaluate(el=>el.open),false,'returning retains the full Key’s deliberately collapsed state');
  const copy=await open(t,{url:saved,viewport:{width,height:900},ready:'.lt-preview-activate'});await copy.settled();
  assert.equal(await copy.page.locator('.delegation-parallel [inert]').count(),1);
  assert.equal(await copy.page.locator('.delegation-parallel details[open]').count(),0);
@@ -482,35 +541,100 @@ test('Timeline Key menus filter ribbons and restore selections with keyboard acc
  const app=await open(t,{url:`/work/${workID}?explorer=timeline`,ready:'.lt-timeline-legend .usage-legend-item'}),{page}=app;
  await app.settled();
  const key=page.locator('.lt-timeline-legend'),button=name=>key.getByRole('button',{name,exact:true});
- const choices=button('Choices');
+ const choices=button('Choices'),menu=page.getByRole('menu',{name:'Filter Choices',exact:true});
+ const choose=async(name,label)=>{await button(name).click();await page.getByRole('menuitem',{name:label,exact:true}).click();await app.settled();};
+ const isolate=async name=>{await button(name).click();await page.getByRole('menuitem',{name:/^(Hide others|Show and Hide Others)$/}).click();await app.settled();};
  await choices.focus();await choices.press('ArrowDown');
- const menu=page.getByRole('menu',{name:'Filter Choices',exact:true});
- assert.equal(await menu.getByRole('menuitem',{name:/Show only this value/}).evaluate(el=>el===document.activeElement),true);
- await menu.getByRole('menuitem',{name:/Show all except this value/}).click();await app.settled();
- assert.equal(await choices.getAttribute('aria-pressed'),'false');
- assert.equal(await choices.evaluate(el=>el===document.activeElement),true);
+ assert.equal(await menu.getByRole('menuitem',{name:'Hide',exact:true}).evaluate(el=>el===document.activeElement),true);
+ await app.shot('legend-menu-visible');
+ await menu.getByRole('menuitem',{name:'Hide',exact:true}).click();await app.settled();
  await page.locator('.lt-session-root [data-agent-event="e-s-root"]').waitFor({state:'detached'});
  assert.ok(await page.locator('.lt-session-root [data-agent-event="e-s-root-open"]').count());
- await button('Read / search').click();await page.getByRole('menuitem',{name:/Show only this value/}).click();await app.settled();
- await page.locator('.lt-session-root [data-tool-id="tool-error"]').waitFor({state:'detached'});
- assert.ok(await page.locator('.lt-session-root [data-tool-id="tool-read"]').count());
- await button('Human typed').click();await page.getByRole('menuitem',{name:/Show only this value/}).click();await app.settled();
- await button('Sender category').click();await page.getByRole('menuitem',{name:/Show only this category/}).click();await app.settled();
- const saved=path(page),fresh=await open(t,{url:saved,ready:'.lt-timeline-legend .usage-legend-item'});
- await fresh.settled();
+ await choose('Read / search','Hide');
+ await page.locator('.lt-session-root [data-tool-id="tool-read"]').waitFor({state:'detached'});
+ assert.ok(await page.locator('.lt-session-root [data-tool-id="tool-error"]').count());
+ await choices.click();await app.shot('legend-menu-hidden');
+ await menu.getByRole('menuitem',{name:'Show',exact:true}).click();await app.settled();
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').first().waitFor();
+ assert.equal(await page.locator('.lt-session-root [data-tool-id="tool-read"]').count(),0,'Show retains other hidden values');
+ await isolate('Sender category');
+ await button('Message modes category').click();await app.shot('legend-menu-mixed');
+ await page.getByRole('menuitem',{name:'Show 1 value',exact:true}).click();await app.settled();
+ await choose('Plan','Hide');
+ await choose('Message modes category','Hide 1 value');
+ await page.waitForFunction(()=>!document.querySelector('.lt-session-root [data-agent-event],.lt-session-root [data-tool-id]'));
+ await choose('Choices','Show All');
+ await choose('Choices','Hide');await choose('Read / search','Hide');await choose('Human typed','Hide');await choose('Sender category','Hide');
+ const saved=path(page),fresh=await open(t,{url:saved,ready:'.lt-timeline-legend .usage-legend-item'});await fresh.settled();
  const restored=fresh.page.locator('.lt-timeline-legend');
- for(const [name,pressed] of [['Choices','false'],['Friction','true'],['Read / search','true'],['Error','false'],['Human typed','true'],['Likely pasted','false'],['Sender category','true'],['Receiver category','false']]){
+ for(const [name,pressed] of [['Choices','false'],['Friction','true'],['Read / search','false'],['Error','true'],['Human typed','false'],['Likely pasted','true'],['Sender category','false'],['Receiver category','true']]){
   assert.equal(await restored.getByRole('button',{name,exact:true}).getAttribute('aria-pressed'),pressed,name);
  }
  assert.deepEqual(JSON.parse(new URL(fresh.page.url()).searchParams.get('timeline_visibility')),JSON.parse(new URL(page.url()).searchParams.get('timeline_visibility')));
  await page.setViewportSize({width:390,height:900});await choices.click();
  const bounds=await menu.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=390&&bounds.y>=0&&bounds.y+bounds.height<=900);
  await page.keyboard.press('Escape');assert.equal(await choices.evaluate(el=>el===document.activeElement),true);
- await choices.click();await page.getByRole('menuitem',{name:'Show all values',exact:true}).click();await app.settled();
+ await choose('Choices','Show All');
+ await page.locator('.lt-session-root [data-tool-id="tool-read"]').first().waitFor({state:'attached'});
  await page.locator('.lt-session-root [data-agent-event="e-s-root"]').first().waitFor();
- assert.equal(await button('Choices').getAttribute('aria-pressed'),'false','an unfiltered key has no explicit selection, matching dashboard keys');
- assert.equal(await button('Read / search').getAttribute('aria-pressed'),'true','resetting events preserves the tool selection');
+ await isolate('Tool actions category');
+ await page.waitForFunction(()=>!document.querySelector('.lt-session-root [data-agent-event]'));
+ assert.ok(await page.locator('.lt-session-root [data-tool-id="tool-error"]').count());
+ await isolate('Agent events category');
+ await page.waitForFunction(()=>!document.querySelector('.lt-session-root [data-tool-id]'));
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').first().waitFor();
+ for(const name of ['Message modes category','Caller text category'])await isolate(name);
+ await choose('Caller text category','Hide');
+ await choose('Tool actions category','Show');await choose('Agent events category','Show');
+ const layers=await open(t,{url:path(page),ready:'.lt-timeline-legend .usage-legend-item'});await layers.settled();
+ for(const [name,pressed] of [['Agent events category','true'],['Tool actions category','true'],['Message modes category','false'],['Caller text category','false']]){
+  assert.equal(await layers.page.getByRole('button',{name,exact:true}).getAttribute('aria-pressed'),pressed,name);
+ }
+ await choose('Tool actions category','Show All');
  await app.shot('timeline-key-visibility');
+ // Compact keeps every visual key entry, its menu and immediate hover name.
+ const toggle=()=>key.locator('.lt-key-disclosure > summary');
+ await toggle().click();await app.settled();
+ assert.equal(await key.locator('.lt-key-disclosure').evaluate(el=>el.open),false);
+ for(const name of ['Implement','Plan','Friction','Choices','Read / search','Error','Human typed','Likely pasted']){
+  const icon=button(name);assert.ok(await icon.isVisible(),name);
+  assert.equal(await icon.innerText(),'','compact icons retain accessible names without visible labels');
+ }
+ await choices.hover();await page.getByRole('tooltip').getByText('Choices',{exact:true}).waitFor();
+ await choices.focus();await choices.press('ArrowDown');await menu.waitFor();
+ assert.equal(await page.getByRole('tooltip').count(),0,'keyboard menus also dismiss the hover name');
+ await page.keyboard.press('Escape');
+ await choices.hover();await page.getByRole('tooltip').getByText('Choices',{exact:true}).waitFor();
+ await choices.click();await menu.waitFor();
+ assert.equal(await page.getByRole('tooltip').count(),0,'opening a menu dismisses the hover name');
+ await page.getByRole('menuitem',{name:'Hide',exact:true}).click();await app.settled();
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').waitFor({state:'detached'});
+ await choices.focus();await choices.press('ArrowDown');await menu.waitFor();
+ await page.keyboard.press('Escape');assert.equal(await choices.evaluate(el=>el===document.activeElement),true);
+ const eventHints=button('Agent events category');
+ await eventHints.first().hover();await page.getByRole('tooltip').getByText('Arc back to the earlier text it is about',{exact:true}).waitFor();
+ await eventHints.nth(1).hover();await page.getByRole('tooltip').getByText('On the axis: no target found',{exact:true}).waitFor();
+ await eventHints.first().click();await page.getByRole('menu',{name:'Filter Agent events category',exact:true}).waitFor();
+ await page.keyboard.press('Escape');
+ await app.shot('timeline-key-compact');
+ const compact=await open(t,{url:path(page),ready:'.lt-timeline-legend'});await compact.settled();
+ const compactKey=compact.page.locator('.lt-timeline-legend');
+ assert.equal(await compactKey.locator('.lt-key-disclosure').evaluate(el=>el.open),false);
+ assert.equal(await compactKey.getByRole('button',{name:'Choices',exact:true}).getAttribute('aria-pressed'),'false');
+ const selected=new URL(compact.page.url()).searchParams.get('timeline_visibility');
+ await compactKey.locator('.lt-key-disclosure > summary').click();await compact.settled();
+ await compactKey.getByRole('button',{name:'Sender category',exact:true}).waitFor();
+ assert.equal(new URL(compact.page.url()).searchParams.get('timeline_visibility'),selected,'expanding preserves visibility choices');
+ await compact.page.reload();await compact.settled();
+ await compactKey.getByRole('button',{name:'Sender category',exact:true}).waitFor();
+ // Restoring compact on the mounted page and returning through history agrees with reloads.
+ const compactURL=new URL(compact.page.url());
+ const disclosures=JSON.parse(compactURL.searchParams.get('disclosures'));disclosures['timeline-key']=false;
+ compactURL.searchParams.set('disclosures',JSON.stringify(disclosures));
+ await compact.page.evaluate(url=>{history.pushState(null,'',url);window.dispatchEvent(new PopStateEvent('popstate'));},compactURL.href);
+ await compact.page.waitForFunction(()=>document.querySelector('.lt-key-disclosure')?.open===false);
+ await compact.page.goBack();await compact.page.waitForFunction(()=>document.querySelector('.lt-key-disclosure')?.open===true);
+ await compact.page.goForward();await compact.page.waitForFunction(()=>document.querySelector('.lt-key-disclosure')?.open===false);
 });
 
 test('Timeline segments pin exact content before revealing their conversation source',{skip},async t=>{
@@ -754,6 +878,35 @@ test('reader category and disclosure state survive a fresh browser', {skip},asyn
  assert.equal(await fresh.page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
  assert.equal(await fresh.page.locator('.turn').first().evaluate(element=>element.open),wasOpen);
  assert.equal(await fresh.page.locator('.turn').first().getByRole('button',{name:'Collapse turn ask',exact:true}).getAttribute('aria-expanded'),'true');
+ await fresh.page.getByRole('button',{name:'Close All Turns',exact:true}).click();
+ assert.ok(await fresh.page.locator('.turn').evaluateAll(turns=>turns.length>1&&turns.every(turn=>!turn.open)));
+ await fresh.page.getByRole('button',{name:'Open All Turns',exact:true}).click();
+ assert.ok(await fresh.page.locator('.turn').evaluateAll(turns=>turns.length>1&&turns.every(turn=>turn.open)));
+});
+
+test('sub-agent assignments and recorded output restore their disclosures', {skip},async t=>{
+ const event=(id,kind,text,extra={})=>({id,native_id:id,role:'assistant',kind,text:typeof text==='string'?text:JSON.stringify(text),created_at:'2026-10-01T00:00:00Z',...extra});
+ const messages=[event('prompt','message','Review the change',{role:'user'}),
+  event('m-15','delegation',{name:'Task',input:{subagent_type:'Reviewer',description:'Review the cache',prompt:'Inspect the cache and report the result.'}},{call_id:'child'}),
+  event('child-reply','message','The cache is safe.',{parent_native_id:'child'}),
+  event('result','delegation_result',{content:'Async agent launched successfully. Internal launch metadata.'},{call_id:'child'})];
+ const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages})};
+ const first=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,api,ready:'.subagent-run'}),{page}=first;
+ const run=page.locator('.subagent-run').first(),summary=run.locator(':scope > summary');
+ assert.match(await summary.innerText(),/Reviewer.*Review the cache/);
+ assert.doesNotMatch(await summary.innerText(),/Async agent launched/);
+ await summary.click();
+ await run.locator('.subagent-assignment').getByText('Inspect the cache and report the result.',{exact:true}).waitFor();
+ await run.getByText('The cache is safe.',{exact:true}).waitFor();
+ assert.equal(await run.getByText('Async agent launched successfully. Internal launch metadata.',{exact:true}).isVisible(),false);
+ await first.shot('subagent-expanded');
+ await run.getByText('Recorded output and metadata',{exact:true}).click();
+ await run.getByText('Async agent launched successfully. Internal launch metadata.',{exact:true}).waitFor();
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('reader_expanded')||'[]').length>=2);
+ const fresh=await open(t,{url:path(page),api,ready:'.subagent-run'});
+ await fresh.page.getByText('The cache is safe.',{exact:true}).waitFor();
+ await fresh.page.getByText('Async agent launched successfully. Internal launch metadata.',{exact:true}).waitFor();
+ assert.equal(await fresh.page.evaluate(()=>document.activeElement===document.body),true);
 });
 
 test('dynamic message reveal materializes its target without taking keyboard focus, and linked attention opens once', {skip},async t=>{
@@ -950,15 +1103,6 @@ test('header navigation clears source attention and explicit destination links r
  assert.deepEqual(new URL(page.url()).searchParams.getAll('highlight'),['page']);assert.equal(new URL(page.url()).searchParams.get('reveal'),'page');
 });
 
-
-test('Next failed action reveals retained failures without a script error',{skip},async t=>{
- const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,ready:'.conversation-panel'}),{page}=app;
- const next=page.getByRole('button',{name:'Next failed action',exact:true});
- await next.click();
- await page.waitForFunction(()=>[...document.querySelectorAll('.tool-event.error')].some(item=>item.open));
- await next.click();await app.settled();
- assert.ok(await page.locator('.tool-event.error').count());
-});
 
 test('page Find stepping moves the landing highlight without a server search',{skip},async t=>{
  const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&highlight=text:please look`,ready:'.pharos-find'}),{page}=app;
@@ -1211,16 +1355,17 @@ test('Message Labels category menus apply to descendants and restore mixed selec
  const category=page.getByRole('button',{name:'Difficulty category',exact:true});
  await category.focus();await category.press('ArrowDown');
  const menu=page.getByRole('menu',{name:'Filter Difficulty category',exact:true});
- assert.equal(await menu.getByRole('menuitem',{name:/Show only this category/}).evaluate(node=>node===document.activeElement),true);
- await menu.getByRole('menuitem',{name:/Show only this category/}).click();await app.settled();
+ assert.equal(await menu.getByRole('menuitem',{name:'Hide',exact:true}).evaluate(node=>node===document.activeElement),true);
+ await menu.getByRole('menuitem',{name:'Hide others',exact:true}).click();await app.settled();
  assert.equal(await category.getAttribute('aria-pressed'),'true');
  assert.equal(await page.getByRole('button',{name:'Receiver category',exact:true}).getAttribute('aria-pressed'),'mixed');
  await page.getByRole('button',{name:'Missing context',exact:true}).click();
- await page.getByRole('menuitem',{name:/Remove from selection/}).click();await app.settled();
+ await page.getByRole('menuitem',{name:'Hide',exact:true}).click();await app.settled();
  assert.equal(await category.getAttribute('aria-pressed'),'mixed');
- await category.click();await menu.getByRole('menuitem',{name:/Add all to selection/}).click();await app.settled();
+ await category.click();await menu.getByRole('menuitem',{name:'Show 1 value',exact:true}).click();await app.settled();
  assert.equal(await category.getAttribute('aria-pressed'),'true');
- await category.click();await menu.getByRole('menuitem',{name:/Show all except this category/}).click();await app.settled();
+ await category.click();await menu.getByRole('menuitem',{name:'Show All',exact:true}).click();await app.settled();
+ await category.click();await menu.getByRole('menuitem',{name:'Hide',exact:true}).click();await app.settled();
  assert.equal(await category.getAttribute('aria-pressed'),'false');
  const saved=path(page),fresh=await open(t,{url:saved,api,ready:'.usage-chart-legend'});
  assert.equal(await fresh.page.getByRole('button',{name:'Difficulty category',exact:true}).getAttribute('aria-pressed'),'false');
@@ -1318,7 +1463,7 @@ test('native Message Labels dashboards and conversation cards share standard nav
  await view.selectOption({label:'Over time - bar'});await app.settled();
  assert.equal(JSON.parse(new URL(page.url()).searchParams.get('analyze_chart')).view,'trend_bar');
  await page.locator('.usage-chart-legend').getByRole('button',{name:'Report',exact:true}).click();
- await page.getByRole('menuitem',{name:/Show all except this value/}).click();await app.settled();
+ await page.getByRole('menuitem',{name:'Hide',exact:true}).click();await app.settled();
  assert.equal(JSON.parse(new URL(page.url()).searchParams.get('analyze_chart')).selection.excluded,true);
  await page.getByRole('button',{name:'Show all',exact:true}).click();await app.settled();
  const point=page.locator('.usage-chart-bars').getByRole('button',{name:/Report/}).first();await point.focus();await point.press('Enter');

@@ -683,7 +683,7 @@ func (view *siteView) checkValue(name string, value any) string {
 				return "selection.values must be strings"
 			}
 		}
-		return ""
+		return validateAllHiddenSelection(object, values)
 	}
 	if hasNumeric && numeric.Min != nil {
 		number, ok := scalar(value).(float64)
@@ -1110,4 +1110,18 @@ func sameParamValue(key, a, b string) bool {
 		return sameJSONText(a, b)
 	}
 	return false
+}
+
+// An explicit empty drawing remains distinct from the default unfiltered Key.
+func validateAllHiddenSelection(selection map[string]any, values []any) string {
+	if raw, present := selection["allHidden"]; present {
+		hidden, ok := raw.(bool)
+		if !ok {
+			return "selection.allHidden must be true or false"
+		}
+		if hidden && (len(values) > 0 || selection["excluded"] == true) {
+			return "selection.allHidden needs empty values and excluded=false"
+		}
+	}
+	return ""
 }

@@ -430,15 +430,11 @@ controls, as a Population field before Range (`dashboard-population.ts`,
   editor reads it ("Active time (s) is not empty"). With none it reads "All
   sessions". A measure's own population (`where`) and a unit's are not
   chips: they belong to the measure, not to the dashboard.
-- **The legend adds terms.** A trend legend value's menu has "Count only this
-  value" and "Leave this value out" below its selection items. They write
-  ordinary Query Table terms on the breakdown's field (`withPopulationGroup`):
-  `{field, op: "=", value}`, or `{any: [{field, op: "!=", value}, {field,
-  op: "is_null"}]}` so sessions without the field stay counted; a missing
-  value left out is `is_not_null`. Count only replaces the field's slice;
-  Leave out narrows an inclusion or adds an exclusion. A combined breakdown's
-  group is one more term (`selectionWhere`). The term outlives the
-  breakdown: switch to another and it still counts.
+- **Legend menus change visibility.** Visible entries offer Hide and Hide
+  others; hidden entries offer Show and Show and Hide Others. Mixed categories
+  offer Show/Hide counts for their children. Show All follows a separator when
+  values are hidden. Every option is one line; population edits stay in the
+  Population control.
 - **A selection can become the population.** Where a selection's note shows
   "Show every group", "Make this the population" moves it into the filters
   and clears it (`selectionPopulation`).
@@ -457,7 +453,9 @@ site map's `filters` option says so for such dashboards
 `where` (`analyze_filters`) is the population and nothing else. A legend
 selection is the state's own `selection`, for every breakdown, single-field
 or combined; a single-field selection's values are the field's values (`""`
-for a missing one), a combined one's are JSON arrays of them.
+for a missing one), a combined one's are JSON arrays of them. An empty selection
+with `allHidden:true` and `excluded:false` explicitly draws no series; an
+ordinary empty selection keeps the default of drawing everything.
 
 - **Shares are of the population.** A filter on the breakdown's own field,
   such as a card filtered to `provider = codex` and broken down by provider,

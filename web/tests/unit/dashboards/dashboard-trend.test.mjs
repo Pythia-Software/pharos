@@ -158,6 +158,21 @@ test("shares divide by every series, after smoothing; a selection hides series w
   assert.ok(Math.abs(day.values.output_tokens - parts.reduce((n, row) => n + row.output_tokens, 0) / parts.reduce((n, row) => n + row.total_tokens, 0)) < 1e-12);
 });
 
+test('hiding the last series survives links, drawing and supporting queries',()=>{
+ const selection={values:[],excluded:false,allHidden:true},state={...base,metric:'tokens',split:'provider',selection};
+ assert.equal(validAnalysisState(catalog,state),true);
+ assert.equal(validAnalysisState(catalog,{...state,selection:{...selection,allHidden:'yes'}}),false);
+ const {built}=draw(state);
+ assert.equal(built.allHidden,true);
+ assert.ok(built.series.length,'all legend entries remain available');
+ const query=trendQuery(catalog,normalizeAnalysis(catalog,state),range,{now});
+ assert.equal(core.applyQuery(rows,query.supporting,schemas.usage,{now}).rows.length,0);
+ const analysis=analysisQuery(catalog,{...state,view:'compare',compareAs:'share'},range,{now});
+ const entry={id:'analysis',buckets:[{keys:['codex'],value:5,count:1}],groupCount:1};
+ assert.deepEqual(selectGroups(entry,analysis.selection).buckets,[]);
+ assert.equal(selectGroups(entry,analysis.selection).other,undefined);
+});
+
 test("values without zeroes leave out periods with nothing drawn, and zeroes from the norm", () => {
   const state = { ...base, metric: "tokens", split: "provider", selection: { values: ["codex"], excluded: false } };
   const all = draw(state).built, kept = draw({ ...state, nonzero: true }).built;

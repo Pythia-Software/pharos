@@ -12,7 +12,7 @@ declare global {
     pharosFeedback?: { annotations: () => PharosAnnotation[]; clear: (ids: string[]) => void; toast: (message: string) => void; annotate: () => void };
     pharosSendFeedback?: () => void;
     pharosMountAskFeedback?: (host: HTMLElement, draft: AskFeedbackDraft) => () => void;
-    uiFeedback?: { safeURL: typeof safeURL; capture: (element: HTMLElement, id: string) => Promise<Screenshot>; removeScreenshot: (id: string) => void };
+    uiFeedback?: { safeURL: typeof safeURL; capture: (element: HTMLElement, id: string) => Promise<Screenshot>; exportScreenshot: (id: string) => Promise<string>; removeScreenshot: (id: string) => void };
   }
 }
 type AskFeedbackDraft = { id: string; kind: "feature" | "bug" | "feedback"; comment: string };
@@ -115,7 +115,16 @@ async function capture(element: HTMLElement, id: string): Promise<Screenshot> {
   const data = image.split(",")[1]; if (!data || data.length > 2 * 1024 * 1024) throw new Error("This element is too large to attach. Select a smaller element.");
   const screenshot: Screenshot = { mime: "image/jpeg", data }; await stored("screenshots", id, "put", screenshot); return screenshot;
 }
-window.uiFeedback = { safeURL, capture, removeScreenshot: id => { void stored("screenshots", id, "delete").catch(() => {}); } };
+async function exportScreenshot(id: string): Promise<string> {
+  const screenshot = await stored<Screenshot>("screenshots", id, "get");
+  if (!screenshot) throw new Error("An attached screenshot is missing. Remove that annotation and capture it again.");
+  const res = await fetch("/api/feedback/screenshot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(screenshot), signal: AbortSignal.timeout(15000) });
+  const value = await res.json();
+  if (!res.ok) throw new Error(value.error || "Could not save the screenshot to temporary storage. Try again.");
+  if (typeof value.url !== "string" || !value.url.startsWith("file:///")) throw new Error("Could not confirm the saved screenshot file. Try again.");
+  return value.url;
+}
+window.uiFeedback = { safeURL, capture, exportScreenshot, removeScreenshot: id => { void stored("screenshots", id, "delete").catch(() => {}); } };
 
 // These buffers contain neither HTTP headers nor request/response bodies.
 let browserErrors = "", failedRequests = "";
