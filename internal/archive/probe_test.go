@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -284,16 +285,40 @@ func TestLoginShellEnvToleratesNoiseAndHangs(t *testing.T) {
 		t.Fatalf("noisy shell = %v, %v", values, err)
 	}
 	// Waiting for the shell would take 30 s; the deadline kills its whole
-	// process group, including the background job.
+	// process group, including the background job. The shell and the job
+	// inherit the write end of a FIFO, whose read end reaches EOF only once
+	// every holder has exited, whether or not anything has reaped them.
+	fifo := filepath.Join(dir, "hangs.fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Opening without blocking lets the shell's write open succeed at once.
+	held, err := os.OpenFile(fifo, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	// Reads then block until the holders write or every one has exited.
+	if err := syscall.SetNonblock(int(held.Fd()), false); err != nil {
+		t.Fatal(err)
+	}
 	started := time.Now()
-	hangs := script("hangs", "sleep 30 &\necho $! > "+filepath.Join(dir, "hangs.pid")+"\nsleep 30\n")
+	hangs := script("hangs", "exec 3>"+fifo+"\nprintf x >&3\nsleep 30 &\necho $! > "+filepath.Join(dir, "hangs.pid")+"\nsleep 30\n")
 	if _, err := loginShellEnv(hangs, probeEnvNames(), time.Second); err == nil || !strings.Contains(err.Error(), "did not finish within") || time.Since(started) > 10*time.Second {
 		t.Fatalf("hanging shell returned %v after %s", err, time.Since(started))
 	}
-	hung := child("hangs.pid")
-	waitUntil(t, 5*time.Second, "the timed-out shell's background job to exit", func() bool {
-		return errors.Is(syscall.Kill(hung, 0), syscall.ESRCH)
-	})
+	child("hangs.pid")
+	// The readiness byte shows the holders connected before the deadline.
+	read := make(chan []byte, 1)
+	go func() { data, _ := io.ReadAll(held); read <- data }()
+	select {
+	case data := <-read:
+		if string(data) != "x" {
+			t.Fatalf("the hanging shell never connected to the FIFO (read %q)", data)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the timed-out shell's background job kept the FIFO open")
+	}
 	// A background job holding stdout open must not hold up the probe: waiting
 	// for it would take until the 10 s timeout.
 	started = time.Now()
