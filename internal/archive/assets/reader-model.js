@@ -886,3 +886,55 @@ function sessionSignalAttention(search,chip){
   params.set('reveal','message:'+ids[index]);
   return params;
 }
+
+// Related work (peer_reader.go): top-level work linked to a workspace by
+// generic evidence, such as a review that read an implementation's diff and
+// whose findings were pasted back. A work page shows it as a strip of chips
+// (dashed when uncertain), certain work's sessions in its hierarchy, and
+// markers on the messages a hand-off is anchored on.
+const PEER_ROLE_LABELS={reviewer:'Reviewer',implementer:'Implementer',related:'Related work'};
+function peerRoleLabel(role){return PEER_ROLE_LABELS[role]||PEER_ROLE_LABELS.related}
+function peerCount(value,one,many){const n=Number(value)||0;return`${n.toLocaleString()} ${n===1?one:many}`}
+// One stored link as a sentence, from a page's point of view: names(id)
+// says "this workspace", "it" (the peer) or another title. Links are
+// directional: a read link's from side wrote the lines its to side saw; a
+// copy link's from side wrote the reply its to side's prompt quoted.
+function peerReasonText(reason,names=id=>id){
+  const d=reason?.details||{},certain=reason?.confidence==='high'?'':' (uncertain)',from=names(reason?.from_workspace_id),to=names(reason?.to_workspace_id);
+  const subject=name=>name.charAt(0).toUpperCase()+name.slice(1),possessive=name=>name==='it'?'its':`${name}’s`;
+  if(reason?.kind==='read_written_by'){
+    const timing=d.timing==='start'?`, starting as ${from} finished a turn`:d.timing==='return'?`; ${possessive(from)} next prompt followed`:'';
+    return`${subject(to)} saw ${peerCount(d.lines,'line','lines')} ${from} wrote, in ${d.basis==='diff'?'a diff':'files it read'}${timing}${certain}`;
+  }
+  if(reason?.kind==='copied_into')return`A prompt in ${to} quoted ${peerCount(d.words,'word','words')} of a reply in ${from}${certain}`;
+  if(reason?.kind==='tl1_candidate')return`Both are TL1 tasks on the same candidate${certain}`;
+  return`Related${certain}`;
+}
+// A peer's chip. page names the workspace shown; titles names other work.
+function peerChip(peer,{page='',titles={}}={},now=Date.now()){
+  const certain=peer.confidence==='high';
+  const names=id=>id===page?'this workspace':id===peer.workspace_id?'it':titles[id]||'other related work';
+  const reasons=(peer.evidence||[]).map(reason=>peerReasonText(reason,names));
+  if(peer.via)reasons.push(`Linked through ${titles[peer.via]||'other related work'}`);
+  return{
+    label:[peerRoleLabel(peer.role),peer.title||'Untitled work',peer.provider,relativeAge(peer.started_at,now)].filter(Boolean).join(' · '),
+    href:'/work/'+encodeURIComponent(peer.workspace_id),certain,reasons,
+    title:[certain?'Related work':'Possibly related work · uncertain',...reasons].join('\n'),
+  };
+}
+const HANDOFF_VERBS={'copied_into:in':'Quotes','copied_into:out':'Quoted in','read_written_by:in':'Shows lines from','read_written_by:out':'Read in'};
+// The markers a message carries, one per linked message, certain first.
+function handoffMarkers(message){
+  const markers=new Map();
+  for(const direction of['in','out'])for(const h of message?.['handoffs_'+direction]||[]){
+    const verb=HANDOFF_VERBS[`${h.kind}:${direction}`];if(!verb||!h.message_id)continue;
+    const key=`${direction}:${h.message_id}`,certain=h.confidence==='high',known=markers.get(key);
+    if(known&&(known.certain||!certain))continue;
+    const params=new URLSearchParams({message:h.message_id});
+    markers.set(key,{label:`${verb} ${h.title||'Untitled work'}`,certain,
+      workspace:h.workspace_id,conversation:h.conversation_id,message:h.message_id,
+      href:`/work/${encodeURIComponent(h.workspace_id)}/conversation/${encodeURIComponent(h.conversation_id)}?${params}`,
+      title:certain?'Hand-off between related work':'Possible hand-off between related work · uncertain'});
+  }
+  return[...markers.values()].sort((a,b)=>Number(b.certain)-Number(a.certain));
+}

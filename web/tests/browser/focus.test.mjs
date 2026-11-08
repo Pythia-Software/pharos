@@ -2178,6 +2178,7 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   });
   await finishMotion();
   const empty=await modal.boundingBox();
+  const emptyFrame=await modal.locator('.pharos-ai-frame').boundingBox();
   assert.ok(empty.y>0&&empty.y+empty.height<=height,'the empty overlay floats inside the viewport');
   await shot('empty-position');
   await modal.getByRole('button',{name:'History',exact:true}).click();await finishMotion();
@@ -2215,6 +2216,9 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
   await checkWindowControls();
+  const activeFrame=await modal.locator('.pharos-ai-frame').boundingBox();
+  if(width>1000)assert.ok(activeFrame.width>emptyFrame.width,'the active conversation uses the available width');
+  else assert.ok(activeFrame.x>=0&&activeFrame.x+activeFrame.width<=width,'the conversation fits a narrow viewport');
   finish();await page.getByRole('status').filter({hasText:'Your activity overview.'}).waitFor();await settled();await finishMotion();
   const expanded=await modal.boundingBox();
   assert.ok(expanded.height>empty.height&&expanded.y<empty.y,'the overlay expands into the space above the starting position');
@@ -2230,6 +2234,7 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   await checkWindowControls();
   await clear.click();await settled();await finishMotion();
   assert.ok((await modal.boundingBox()).y>expanded.y,'Clear returns the empty composer to its starting region');
+  assert.ok(Math.abs((await modal.locator('.pharos-ai-frame').boundingBox()).width-emptyFrame.width)<1,'Clear restores the empty composer width');
   await page.setViewportSize({width:320,height:350});await settled();await finishMotion();
   assert.ok(await editor.evaluate(fits),'the empty composer fits after shrinking the window');
   assert.ok(await page.getByRole('button',{name:'Close Ask Pharos',exact:true}).evaluate(fits),'Close stays reachable after shrinking the window');
@@ -2259,6 +2264,14 @@ async function openAskOverlay(t, width) {
 
 test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip}, async t => {
   const {page,shot,modal,editor}=await openAskOverlay(t,1440);
+  await page.evaluate(()=>{
+    const original=window.fetch;window.askDraftAttempts=0;
+    window.fetch=(input,options)=>{
+      if(String(input)==='/api/ask/session'&&options?.method==='POST'&&++window.askDraftAttempts===1)
+        return Promise.resolve(new Response(JSON.stringify({error:'Pharos is busy'}),{status:503,headers:{'Content-Type':'application/json'}}));
+      return original(input,options);
+    };
+  });
   assert.ok(await editor.evaluate(element=>element===document.activeElement));
   const fullscreen = modal.getByRole('button',{name:'Full screen',exact:true});
   await fullscreen.hover();
@@ -2270,6 +2283,10 @@ test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip},
   await page.locator('body>header .brand').evaluate(element=>element.focus());
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'the overlay must keep focus');
   await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
+  await page.waitForFunction(()=>window.askDraftAttempts>=1);
+  assert.ok(await modal.locator('.pharos-notice').isHidden(),'a retrying draft save does not show an error');
+  await page.waitForFunction(()=>window.askDraftAttempts>=2);
+  assert.ok(await modal.locator('.pharos-notice').isHidden(),'the recovered save leaves no error');
   const reachable=element=>{const box=element.getBoundingClientRect(),target=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return box.left>=0&&box.right<=innerWidth&&(element===target||element.contains(target));};
   const removeContext=modal.getByRole('button',{name:'Remove page context',exact:true});
   for(const name of ['Clear','Close Ask Pharos','Remove page context'])assert.ok(await modal.getByRole('button',{name,exact:true}).evaluate(reachable),name+' must stay reachable');
@@ -2472,6 +2489,8 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
     'POST /api/ask/send':async({body})=>{await response;return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:'clarification',message:'',elapsedMs:1000,reply:'',cards:[],clarification:{question:'Which metric?',options:['Tokens','Cost']}}]};},
   }});
   await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  const homeFrame=page.locator('#homeAskSearch .pharos-ai-frame');
+  const emptyHomeWidth=(await homeFrame.boundingBox()).width;
   await page.getByRole('textbox',{name:'Ask a question',exact:true}).fill('Break it down');
   await page.getByRole('button',{name:'Clear',exact:true}).click();
   assert.equal(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(element=>element.value),'');
@@ -2511,6 +2530,9 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   await page.keyboard.press('Escape');
   await page.locator('body>header .brand').click();
   await page.locator('#homeAskSearch').getByRole('button',{name:'A. Tokens',exact:true}).waitFor();
+  assert.ok((await homeFrame.boundingBox()).width>emptyHomeWidth,'a restored conversation uses more of the available Home width');
+  await page.locator('#homeAskSearch').getByRole('button',{name:'Clear',exact:true}).click();
+  assert.ok(Math.abs((await homeFrame.boundingBox()).width-emptyHomeWidth)<1,'clearing the conversation restores the Home composer width');
 });
 
 test('Ask Pharos blocking and reopened browsing overlays handle a ready destination', {skip}, async t => {

@@ -499,6 +499,9 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			}
 			return nil
 		}},
+		// Related conversations read the copied-text evidence authorship
+		// stores and the tool ledger (docs/peer-conversations-design.md).
+		{"peers", func(ctx context.Context) error { return s.Catalog.RefreshPeerLinks(ctx) }},
 		{"findings", func(ctx context.Context) error {
 			// A page or another explicit action may already be discovering
 			// findings. Wait before asking for this run's fresh pass.

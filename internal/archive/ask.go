@@ -424,7 +424,14 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		s.ask.mu.Lock()
 		defer s.ask.mu.Unlock()
 	}
-	fail := func(err error) { writeError(w, err, 400) }
+	fail := func(err error) {
+		var busy askBusyError
+		if errors.As(err, &busy) {
+			writeError(w, err, http.StatusServiceUnavailable)
+			return
+		}
+		writeError(w, err, http.StatusBadRequest)
+	}
 	switch r.URL.Path {
 	case "/api/ask/suggestions":
 		if r.Method != http.MethodGet {

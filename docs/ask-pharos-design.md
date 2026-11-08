@@ -377,7 +377,9 @@ Provider login remains the CLI's responsibility; Pharos accepts no API keys.
 
 Before inference, draft and question saves have a ten-second catalog-write
 deadline. A busy catalog returns a retryable explanation rather than leaving
-the composer waiting indefinitely before the CLI starts. Visit-history writes
+the composer waiting indefinitely before the CLI starts. Draft and visit-history
+saves retry transient failures in order before showing an error; question sends
+are never automatically repeated. Visit-history writes
 use that same deadline and run without Ask's chat-state lock, so they cannot
 block starting or canceling a question. Status, history and suggestion reads
 also run independently of that lock.
