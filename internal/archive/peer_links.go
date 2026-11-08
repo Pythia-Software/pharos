@@ -28,7 +28,7 @@ import (
 // becomes a peer.
 
 // peerLinksVersion names the derivation rules; a new version rebuilds.
-const peerLinksVersion = "peers-v1"
+const peerLinksVersion = "peers-v2"
 
 // Tunables are package variables so tests can lower them.
 var (
@@ -53,6 +53,10 @@ var (
 	// peerMinCopyWords is the fewest quoted words a copy link needs: the
 	// authorship minimum for a copied span.
 	peerMinCopyWords = 12
+	// peerCopyWords is the fewest quoted words a certain copy link needs.
+	peerCopyWords = 40
+	// peerCopyGap is the longest a reply can wait to be quoted and still link.
+	peerCopyGap = 24 * time.Hour
 	// peerMaxPeers caps the related work a page shows.
 	peerMaxPeers = 24
 )
@@ -295,7 +299,8 @@ func nullIfEmpty(value string) any {
 func (c *Catalog) derivePeerCopies(ctx context.Context, f *peerFamilies) ([]peerLink, error) {
 	// Only quoted agent output is a hand-off: a resent prompt is the person
 	// reusing their own words, and launch prompts and forms are generated.
-	rows, err := c.reader().QueryContext(ctx, `SELECT s.source_conversation_id,COALESCE(s.source_message_id,''),m.conversation_id,m.id,COALESCE(m.created_at,''),SUM(s.words)
+	rows, err := c.reader().QueryContext(ctx, `SELECT s.source_conversation_id,COALESCE(s.source_message_id,''),m.conversation_id,m.id,COALESCE(m.created_at,''),SUM(s.words),
+ COALESCE((SELECT created_at FROM messages WHERE id=s.source_message_id),'')
  FROM message_authorship_spans s JOIN messages m ON m.id=s.message_id
  WHERE s.source_conversation_id IS NOT NULL AND s.source_conversation_id<>'' AND s.category='quoted'
  GROUP BY s.source_conversation_id,s.source_message_id,m.id HAVING SUM(s.words)>=?`, peerMinCopyWords)
@@ -305,17 +310,32 @@ func (c *Catalog) derivePeerCopies(ctx context.Context, f *peerFamilies) ([]peer
 	defer rows.Close()
 	links := []peerLink{}
 	for rows.Next() {
-		var sourceConv, sourceMessage, conv, message, at string
+		var sourceConv, sourceMessage, conv, message, at, sourceAt string
 		var words int
-		if err := rows.Scan(&sourceConv, &sourceMessage, &conv, &message, &at, &words); err != nil {
+		if err := rows.Scan(&sourceConv, &sourceMessage, &conv, &message, &at, &words, &sourceAt); err != nil {
 			return nil, err
 		}
 		left, right := f.root[sourceConv], f.root[conv]
 		if left == "" || right == "" || left == right {
 			continue
 		}
-		links = append(links, peerLink{left: left, right: right, kind: "copied_into", confidence: peerHigh,
-			leftMessage: sourceMessage, rightMessage: message, at: at, evidence: map[string]any{"words": words}})
+		// Measured against Conductor workspaces and checkouts: a reply of 40
+		// or more words quoted within a day is the same work 0.89 of the
+		// time; shorter quotes 0.6; quotes after a day 0.19.
+		confidence := peerLow
+		evidence := map[string]any{"words": words}
+		if from, ok := parseTime(sourceAt); ok {
+			to, ok := parseTime(at)
+			if !ok || to.Sub(from) > peerCopyGap {
+				continue
+			}
+			evidence["minutes"] = int(to.Sub(from).Minutes())
+			if words >= peerCopyWords {
+				confidence = peerHigh
+			}
+		}
+		links = append(links, peerLink{left: left, right: right, kind: "copied_into", confidence: confidence,
+			leftMessage: sourceMessage, rightMessage: message, at: at, evidence: evidence})
 	}
 	return links, rows.Err()
 }
@@ -555,18 +575,21 @@ func (c *Catalog) peerReadLink(ctx context.Context, text *sql.Stmt, index *peerW
 		return nil, err
 	}
 	own := index.writtenBy(reader, t.firstRead)
-	// Measured against Conductor workspaces on a full library
-	// (peer_links_probe_test.go): a diff with the writer's next prompt
-	// following, or begun as the writer's turn ended by a reader that had
-	// written nothing itself, is the same work 0.87 of the time. Without
-	// timing, or for lines only read, it is near a coin flip at best, and
-	// file reads without timing are almost never related.
+	// Measured on a full library against Conductor workspaces and TL1 work
+	// items (peer_links_probe_test.go): a diff followed by the writer's next
+	// prompt is the same work 0.97 of the time; begun as the writer's turn
+	// ended, by a reader that wrote nothing itself and with a clear lead,
+	// 0.87. Without timing, or for lines only read, it is near a coin flip,
+	// and file reads without timing are almost never related.
 	reviewer := own < peerReaderOwnLines
 	lead := top >= peerRatio*second
 	confidence := ""
 	switch {
-	case basis == "diff" && (timing == "return" || timing == "start" && reviewer):
+	case basis == "diff" && (timing == "return" || timing == "start" && reviewer && lead):
 		confidence = peerHigh
+	case basis == "diff" && timing == "start" && reviewer:
+		// A close runner-up: 0.79.
+		confidence = peerLow
 	case !lead:
 	case basis == "diff" && (reviewer || timing != ""):
 		confidence = peerLow

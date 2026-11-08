@@ -22,21 +22,23 @@ decisions where they changed it.
 
 **Signals** (`peer_links.go`, stage `analysis.peers` after authorship)
 - `copied_into`: a user turn quoted at least 12 words of another family's
-  reply (`quoted` authorship spans with a source). High. Resent prompts
-  (the person reusing their own words), launch prompts and generated forms
-  are not hand-offs. A copy alone names no role: copies carry plans and
-  debugging output between tasks as often as review findings.
+  reply within a day (`quoted` authorship spans with a source). High from 40
+  words, low below. Resent prompts (the person reusing their own words),
+  launch prompts and generated forms are not hand-offs. A copy alone names no
+  role: copies carry plans and debugging output between tasks as often as
+  review findings.
 - `read_written_by`: a family that ran a diff (`git|gh|jj` `diff|show|pr`)
   saw lines another family wrote in edit calls within 7 days. Only lines one
   writer wrote count. The reader is the reviewer, the writer the implementer.
   - **High:** the lines were in a diff's added lines (≥ 3, more than the
     runner-up) and timing agrees: the writer's next prompt followed the
     reader's last reply within 30 minutes, or the reader began within 30
-    minutes of the writer's turn ending without having written any code of
-    its own.
-  - **Low:** a clear lead (≥ 3× the runner-up) with one supporting fact: a
-    diff read by a conversation that wrote nothing itself, a diff with timing,
-    or file reads with timing by a conversation that wrote nothing itself.
+    minutes of the writer's turn ending, wrote no code of its own, and leads
+    the runner-up 3×.
+  - **Low:** the same start timing with a closer runner-up, or a clear lead
+    (≥ 3× the runner-up) with one supporting fact: a diff read by a
+    conversation that wrote nothing itself, a diff with timing, or file reads
+    with timing by a conversation that wrote nothing itself.
   - Anything else is dropped, including file reads without timing.
 - `tl1_candidate`: each TL1 task on a candidate links to the candidate's first
   task (candidates hold up to 38 tasks). High.
@@ -44,25 +46,39 @@ decisions where they changed it.
   and branch, PRs (need the outcomes stack), Conductor attachments and diff
   comments.
 
-**Measured on a full library** (27,000 families, checked against Conductor
-workspaces with `peer_links_probe_test.go`; a link across Conductor workspaces
-is not always wrong, so these are lower bounds):
+**Measured on a full library** (27,000 families, `peer_links_probe_test.go`).
+The owner expects nearly all real links to fall inside one Conductor workspace
+or one TL1 work item, so a link is scored right when both sides share a
+Conductor workspace (by id, or by checkout folder in either the
+`conductor/workspaces/<repo>/<name>` or `<repo>/.conductor/<name>` layout) or
+a TL1 work item (candidate or root task), and wrong otherwise. About 4% of
+links can't be checked (a side with no Conductor folder or TL1 task) and are
+left out.
 
-| Links | Same Conductor workspace | Different |
-|---|---|---|
-| Diff + the writer's next prompt followed | 87 | 2 |
-| Diff + began as the writer's turn ended, reader wrote nothing | 367 | 63 |
-| Diff, no timing (now low or dropped) | 173 | 285 |
-| File reads, no timing (now dropped) | 38 | 492 |
-| Quoted copies, ≥ 12 words | 611 | 88 |
-| All spans with a source (the first rule) | 872 | 496 |
+| Links | Right | Wrong | Precision |
+|---|---|---|---|
+| Diff + the writer's next prompt followed | 103 | 4 | 0.96 |
+| Diff + began as the writer's turn ended, wrote nothing, clear lead | 522 | 78 | 0.87 |
+| Quoted copies within a day, ≥ 40 words | 757 | 93 | 0.89 |
+| **Related pairs shown solid and in the hierarchy** | **1,095** | **164** | **0.87** |
+| Related pairs shown dashed | 465 | 426 | 0.52 |
+| Dashed: diff, no timing, reader wrote nothing | 258 | 189 | 0.58 |
+| Dashed: diff + start timing, reader wrote code | 49 | 60 | 0.45 |
+| Dashed: file reads + start timing | 127 | 137 | 0.48 |
+| Dashed: quoted copies under 40 words | 56 | 36 | 0.61 |
+| Quoted copies after a day (dropped; earlier run) | 15 | 62 | 0.19 |
+| File reads, no timing (dropped; earlier run) | 44 | 492 | 0.08 |
+| TL1 candidate links | 7,063 | 0 | 1.00 |
 
-The first rules, tuned on review-titled sessions only, made diffs without
-timing high and counted resent prompts as copies; over all work about a third
-of their high links crossed Conductor workspaces. A full rebuild of read
-links takes about 2.5 minutes on that library (copies 0.3 s, TL1 0.4 s), so
-only a new rules version rebuilds everything; a day of new calls takes about
-2 seconds. Later runs derive again the readers with diff calls from
+A pair counts as certain when one link is high or a copy and a read agree
+(0.97 on their own). The first rules, tuned on review-titled sessions only,
+made diffs without timing high and counted resent prompts as copies; scored
+this way their solid pairs were 0.83.
+
+A full rebuild of read
+links takes 2.5–4 minutes on that library (copies 0.3–1.3 s, TL1 0.4 s), so
+only a new rules version rebuilds everything; a day of new calls takes 2–4
+seconds. Later runs derive again the readers with diff calls from
 `peerRecheck` (3 hours) before the earliest new tool call, so the
 implementer's next prompt can confirm a review that read nothing new, and drop
 links whose work joined another family.

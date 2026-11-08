@@ -126,7 +126,7 @@ func seedPeerReview(t *testing.T, c *Catalog) (string, []string) {
 	f.message("review-done", "review-c", "assistant", "message", "P1: the sort ignores ties between equal start times in the running list.", 20)
 	f.message("impl-fix", "impl-c", "user", "message", "Fix this: P1: the sort ignores ties between equal start times in the running list.", 24)
 	f.exec(`INSERT INTO message_authorship_spans(message_id,position,category,rule,reason,start_byte,end_byte,chars,words,source_conversation_id,source_message_id)
- VALUES('impl-fix',0,'quoted','agent-output','Matches recent agent output',10,80,70,14,'review-c','review-done')`)
+ VALUES('impl-fix',0,'quoted','agent-output','Matches recent agent output',10,80,70,60,'review-c','review-done')`)
 	// Eight days later the lines are too old to count. Its prompt reuses the
 	// implementation's prompt: a person resending their own words is no hand-off.
 	f.message("late-ask", "late-c", "user", "message", "Look at the diff. Sort the running rows by start time", 8*24*60)
@@ -279,12 +279,23 @@ func TestPeerLinkConfidence(t *testing.T) {
 	f.read("returner-c", 801, true, lines2...)
 	f.message("returner-done", "returner-c", "assistant", "message", "P2: rename it.", 805)
 	f.message("writer2-fix", "writer2-c", "user", "message", "Rename it", 810)
+	// A short quote is uncertain; a reply quoted days later is not linked.
+	for _, quote := range []struct {
+		id            string
+		minute, words int
+	}{{"short", 30, 14}, {"stale", 3 * 24 * 60, 120}} {
+		f.work(quote.id, quote.id)
+		f.message(quote.id+"-ask", quote.id+"-c", "user", "message", "Following up on: Written.", quote.minute)
+		f.exec(`INSERT INTO message_authorship_spans(message_id,position,category,rule,reason,start_byte,end_byte,chars,words,source_conversation_id,source_message_id)
+ VALUES(?,0,'quoted','agent-output','Matches recent agent output',0,20,20,?,'writer-c','writer-done')`, quote.id+"-ask", quote.words)
+	}
 	commitSeed(t, f.tx)
 	if err := c.RefreshPeerLinks(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	links := storedPeerLinks(t, c)
 	want := map[string]string{
+		"copied_into:writer>short":         peerLow + "/",
 		"read_written_by:writer>busy":      peerLow + "/start",
 		"read_written_by:writer>untimed":   peerLow + "/",
 		"read_written_by:writer2>returner": peerHigh + "/return",
