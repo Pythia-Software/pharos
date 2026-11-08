@@ -495,7 +495,9 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 		// commands writing this library itself (lease files, never a capture
 		// or index lock), and those of app-level commands naming it.
 		leases := []leaseProbe{}
-		if own == nil {
+		if own == nil || withResources {
+			// A managed service delegates sampling, so its snapshot has no
+			// process readings. Status still needs fresh CLI ownership.
 			leases = probeLeases(library.LeaseDirs)
 		}
 		for _, probe := range appLeases {
@@ -572,13 +574,15 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 // processes and the app-level Terminal commands, each process counted once.
 func (b *brokerOperations) libraryResources(entries []map[string]any, processes []resourceProcess) *resourceSummary {
 	if b.history != nil {
-		if summary, ok := b.history.latest(""); ok {
+		if summary, ok := b.history.latest(""); ok && coversResourceRoots(summary, processes) {
 			for _, entry := range entries {
 				id, _ := entry["id"].(string)
 				entry["resources"], _ = b.history.latest(id)
 			}
 			return summary
 		}
+		b.leases.stale.Store(true)
+		b.history.poke()
 	}
 	readings := b.resources.sample(processes)
 	byPID := map[int]resourceReading{}

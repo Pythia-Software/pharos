@@ -876,9 +876,14 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 	servicePID, commandPID, stuckPID := sleeper(), sleeper(), sleeper()
 	gpuSampler, gpuReads := readyGPU(commandPID, 62)
 	override(t, &processGPU, gpuSampler)
+	var delegated atomic.Bool
 	answering := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var resources any = map[string]any{"processes": []map[string]any{{"pid": servicePID, "role": "service"}, {"pid": commandPID, "role": "cli:ingest"}}}
+		if delegated.Load() {
+			resources = nil
+		}
 		writeJSON(w, map[string]any{"version": 1, "operations": []any{}, "eject": computeEjectVerdict(verdictInput{}), "attention": []any{},
-			"resources": map[string]any{"processes": []map[string]any{{"pid": servicePID, "role": "service"}, {"pid": commandPID, "role": "cli:ingest"}}}}, http.StatusOK)
+			"resources": resources}, http.StatusOK)
 	}))
 	defer answering.Close()
 	stuck := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "busy", http.StatusServiceUnavailable) }))
@@ -937,6 +942,35 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 	}
 	if _, ok := broker.statusDocumentChecked(context.Background(), true)["resources"]; ok {
 		t.Fatal("the eject check carries no resources")
+	}
+	// Scheduled services delegate sampling to the broker. A newly started
+	// CLI must still appear in status before the collector's idle lease
+	// interval expires, even though the child's resource summary is nil.
+	at := time.Now()
+	dir := filepath.Join(t.TempDir(), "leases")
+	broker.leases.probe([]string{appLeaseDir()}, at)
+	broker.leases.probe([]string{dir}, at)
+	lease, err := acquireProcessLease(dir, leaseInfo{Instance: "new-command", PID: commandPID, HostID: currentHost().ID, Process: "cli:ingest", Kinds: []string{"ingest.cli"}, StartedAt: now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(lease.release)
+	broker.libraries[0].LeaseDirs = []string{dir}
+	delegated.Store(true)
+	broker.history = newResourceHistory(broker.resources, processGPU, nil)
+	broker.history.running = true // a cached collector frame, without a loop
+	broker.history.record(at, resourceHistoryFrame{Scopes: []resourceHistoryScope{{Summary: &resourceSummary{Processes: []resourceReading{
+		{PID: os.Getpid(), Role: "broker"}, {PID: servicePID, Role: "service"}, {PID: stuckPID, Role: "service"},
+	}}}}})
+	fresh := broker.statusDocument(context.Background())
+	if !slices.Contains(pids(fresh["resources"]), commandPID) || !broker.leases.stale.Load() {
+		t.Fatalf("a cached collector hid fresh CLI ownership: %+v", fresh["resources"])
+	}
+	// The first (app) key consumes the invalidation, but the library key
+	// must expire too, so the next history tick discovers the same CLI.
+	broker.leases.probe([]string{appLeaseDir()}, at.Add(time.Second))
+	if probes := broker.leases.probe([]string{dir}, at.Add(time.Second)); !slices.ContainsFunc(probes, func(p leaseProbe) bool { return p.Live && p.Info != nil && p.Info.PID == commandPID }) {
+		t.Fatalf("status invalidated only the first history lease key: %+v", probes)
 	}
 }
 

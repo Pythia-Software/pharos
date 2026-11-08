@@ -64,8 +64,11 @@ func (c *resourceLeaseCache) probe(dirs []string, at time.Time) []leaseProbe {
 	if c.active {
 		every = resourceLeaseActive
 	}
+	if c.stale.Swap(false) {
+		clear(c.at) // the broker has one cache key per library, not just one
+	}
 	probed, known := c.at[key]
-	fresh := c.stale.Swap(false) || !known || at.Sub(probed) >= every || at.Before(probed)
+	fresh := !known || at.Sub(probed) >= every || at.Before(probed)
 	if fresh {
 		if c.probes == nil {
 			c.probes, c.at = map[string][]leaseProbe{}, map[string]time.Time{}

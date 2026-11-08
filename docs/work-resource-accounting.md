@@ -279,3 +279,10 @@ Their retained Go context is currently included in shared process memory,
 not a measured per-task buffer figure or an enforced context-memory grant.
 Quantifying and bounding that residency alongside model memory is still an
 activation gate; the CPU allowance does not imply a memory cap.
+
+Status keeps fresh lease ownership independently of diagnostic history in both
+the standalone service and the app broker. If that ownership includes a process
+missing from the cached collector summary, status samples it immediately and
+invalidates every collector lease key for the next tick. Managed services still
+delegate measurement to the broker; fresh broker status probes their lease
+metadata without starting a second collector.
