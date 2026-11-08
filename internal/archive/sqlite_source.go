@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gbdubs/pharos/internal/platform/fsinfo"
 	"modernc.org/sqlite"
 )
 
@@ -230,11 +231,17 @@ var (
 	sqliteCopyHook     func(path string)
 )
 
-// sqliteReadOnlyVolume says whether path is on a volume mounted read-only
-// (MNT_RDONLY, ST_RDONLY), the one place an unlocked read cannot see a write.
-var sqliteReadOnlyVolume = func(path string) bool {
-	var stat syscall.Statfs_t
-	return syscall.Statfs(path, &stat) == nil && stat.Flags&1 != 0
+// sqliteMountReadOnly observes path's native read-only mount flag; tests
+// replace it.
+var sqliteMountReadOnly = fsinfo.ReadOnlyMount
+
+// sqliteReadOnlyVolume says whether path is affirmatively on a volume
+// mounted read-only, the one place an unlocked read cannot see a write. A
+// mount that cannot be observed, or a platform that cannot observe one, is
+// not read-only here: its database takes the locked or copied path.
+func sqliteReadOnlyVolume(path string) bool {
+	readOnly, err := sqliteMountReadOnly(path)
+	return err == nil && readOnly
 }
 
 func sqliteURI(path string) string { return (&url.URL{Scheme: "file", Path: path}).String() }

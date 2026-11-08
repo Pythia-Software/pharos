@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/fsinfo"
 )
 
 // sqliteLadderTest lowers the live read's wait and keeps copies in a folder
@@ -273,14 +276,14 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		override(t, &sqliteReadOnlyVolume, func(string) bool { return true })
+		override(t, &sqliteMountReadOnly, func(string) (bool, error) { return true, nil })
 		if db, err := openSourceSQLite(context.Background(), crashed); err == nil {
 			db.Close()
 			t.Fatal("a database its crashed writer left half written was read")
 		} else if !errors.Is(err, errSQLiteWriteInProgress) || sqliteReadVia(crashed) != sqliteReadWaiting {
 			t.Fatalf("crashed writer: error %v via %s", err, sqliteReadVia(crashed))
 		}
-		sqliteReadOnlyVolume = func(string) bool { return false }
+		sqliteMountReadOnly = func(string) (bool, error) { return false, nil }
 		db, err := openSourceSQLite(context.Background(), path)
 		if err == nil {
 			db.Close()
@@ -353,14 +356,19 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 	t.Run("a database in a read-only folder is read from a copy, or on a read-only volume without locks", func(t *testing.T) {
 		for _, c := range []struct {
 			frames, readOnlyVolume bool
+			mountErr               error
 			via, bodies            string
 		}{
-			{false, false, sqliteReadCopy, "first"},
-			{false, true, sqliteReadImmutable, "first"},
-			{true, true, sqliteReadCopy, "first,second"},
+			{false, false, nil, sqliteReadCopy, "first"},
+			{false, true, nil, sqliteReadImmutable, "first"},
+			{true, true, nil, sqliteReadCopy, "first,second"},
+			// A mount that cannot be observed is no proof, whatever else
+			// the observation says.
+			{false, true, fsinfo.ErrUnsupported, sqliteReadCopy, "first"},
+			{false, true, syscall.EIO, sqliteReadCopy, "first"},
 		} {
 			frames := c.frames
-			override(t, &sqliteReadOnlyVolume, func(string) bool { return c.readOnlyVolume })
+			override(t, &sqliteMountReadOnly, func(string) (bool, error) { return c.readOnlyVolume, c.mountErr })
 			dir := filepath.Join(t.TempDir(), "readonly")
 			if err := os.Mkdir(dir, 0o755); err != nil {
 				t.Fatal(err)

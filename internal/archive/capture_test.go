@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/gbdubs/pharos/internal/platform/filelock"
+	"github.com/gbdubs/pharos/internal/platform/fsinfo"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -2698,5 +2700,85 @@ func TestCapturePreserveVerifiesWhatIsAlreadyAtTheName(t *testing.T) {
 				t.Fatal("a later capture failed", run)
 			}
 		})
+	}
+}
+
+func TestCaptureSpaceGuards(t *testing.T) {
+	dir := t.TempDir()
+	margin := uint64(captureFreeMargin)
+	t.Run("a capture write", func(t *testing.T) {
+		c := &sourceCapture{dir: dir}
+		asked := fakeCapacity(t, map[string]fsinfo.Space{dir: {AvailableBytes: margin + 4096}}, nil)
+		if err := c.ensureSpace(4096); err != nil {
+			t.Fatal("exactly the margin left:", err)
+		}
+		var destination destinationError
+		if err := c.ensureSpace(4097); !errors.As(err, &destination) {
+			t.Fatal(err)
+		}
+		if err := c.ensureSpace(-1); !errors.As(err, &destination) || !errors.Is(err, fsinfo.ErrRange) {
+			t.Fatal(err)
+		}
+		asked = fakeCapacity(t, nil, map[string]error{dir: syscall.EIO})
+		if err := c.ensureSpace(1); !errors.As(err, &destination) || !errors.Is(err, syscall.EIO) {
+			t.Fatal("an unknown capacity:", err)
+		}
+		if err := c.ensureSpace(0); err != nil || len(*asked) != 1 {
+			t.Fatal("writing nothing asked for the capacity:", err, *asked)
+		}
+	})
+	t.Run("a compressed file", func(t *testing.T) {
+		var out bytes.Buffer
+		w := &spaceCheckedWriter{w: &out, dir: dir}
+		asked := fakeCapacity(t, map[string]fsinfo.Space{dir: {AvailableBytes: margin + 8}}, nil)
+		if n, err := w.Write([]byte("abcd")); n != 4 || err != nil || len(*asked) != 1 {
+			t.Fatal("the first write:", n, err, *asked)
+		}
+		if n, err := w.Write([]byte("efgh")); n != 4 || err != nil {
+			t.Fatal(n, err)
+		}
+		// 64 MiB pending is always checked, and the margin refuses it.
+		checks := len(*asked)
+		w.pending = 64<<20 - 4
+		if _, err := w.Write([]byte("ijkl")); err == nil || len(*asked) != checks+1 || out.String() != "abcdefgh" {
+			t.Fatal("a write past the margin:", err, *asked, out.String())
+		}
+		if _, err := w.Write([]byte("m")); err == nil || out.String() != "abcdefgh" {
+			t.Fatal("a write after the refusal:", err, out.String())
+		}
+		// An unknown capacity refuses the write and every later one,
+		// keeping what was pending.
+		out.Reset()
+		w = &spaceCheckedWriter{w: &out, dir: dir}
+		fakeCapacity(t, map[string]fsinfo.Space{dir: {AvailableBytes: 1 << 50}}, map[string]error{dir: syscall.EIO})
+		if n, err := w.Write([]byte("abcd")); n != 0 || !errors.Is(err, syscall.EIO) || w.pending != 4 {
+			t.Fatal(n, err, w.pending)
+		}
+		fakeCapacity(t, map[string]fsinfo.Space{dir: {AvailableBytes: 1 << 50}}, nil)
+		if n, err := w.Write([]byte("efgh")); n != 0 || !errors.Is(err, syscall.EIO) || out.Len() != 0 {
+			t.Fatal("a write after the failed check:", n, err, out.Len())
+		}
+	})
+}
+
+func TestSpaceNeededRefusesWraparound(t *testing.T) {
+	for _, c := range []struct {
+		parts []int64
+		want  uint64
+		err   bool
+	}{
+		{nil, 0, false},
+		{[]int64{0, captureFreeMargin}, uint64(captureFreeMargin), false},
+		{[]int64{math.MaxInt64, math.MaxInt64}, math.MaxUint64 - 1, false},
+		{[]int64{math.MaxInt64, math.MaxInt64, 2}, 0, true},
+		{[]int64{5, -1}, 0, true},
+	} {
+		got, err := spaceNeeded(c.parts...)
+		if got != c.want || (err != nil) != c.err || err != nil && !errors.Is(err, fsinfo.ErrRange) {
+			t.Errorf("spaceNeeded(%v) = %d, %v", c.parts, got, err)
+		}
+	}
+	if displayBytes(math.MaxUint64) != math.MaxInt64 || displayBytes(7) != 7 {
+		t.Fatal("displayBytes")
 	}
 }

@@ -18,7 +18,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/gbdubs/pharos/internal/platform/filelock"
@@ -922,13 +921,16 @@ func (c *sourceCapture) ensureSpace(bytes int64) error {
 	if bytes == 0 {
 		return nil
 	}
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(c.dir, &stat); err != nil {
+	space, err := diskCapacity(c.dir)
+	if err != nil {
 		return toDestination(err)
 	}
-	free := int64(stat.Bavail) * int64(stat.Bsize)
-	if free-bytes < captureFreeMargin {
-		return destinationError{fmt.Errorf("needs %d bytes but only %d are free", bytes+captureFreeMargin, free)}
+	need, err := spaceNeeded(bytes, captureFreeMargin)
+	if err != nil {
+		return destinationError{err}
+	}
+	if space.AvailableBytes < need {
+		return destinationError{fmt.Errorf("needs %d bytes but only %d are free", need, space.AvailableBytes)}
 	}
 	return nil
 }
