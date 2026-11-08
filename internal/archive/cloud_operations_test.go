@@ -190,6 +190,44 @@ func TestCloudArchiveRoundTripAndChangedDownload(t *testing.T) {
 			if err = c.finishCloudVerification(ctx, config, &run, damaged, []byte("correct recovery password")); err == nil || run.Verified {
 				t.Fatal("changed downloaded bytes passed verification")
 			}
+			// An open failure keeps its cause: a missing archive says so and
+			// unsupported, permission and I/O failures stay distinct. None
+			// records verification or restores anything.
+			before = staged()
+			for _, test := range []struct {
+				name  string
+				cause error
+				open  func(string) (*os.File, error)
+			}{
+				{"missing", fs.ErrNotExist, nil},
+				{"unsupported", errors.ErrUnsupported, func(string) (*os.File, error) { return nil, errNonblockingOpenUnsupported }},
+				{"permission", fs.ErrPermission, func(path string) (*os.File, error) {
+					return nil, &fs.PathError{Op: "open", Path: path, Err: syscall.EACCES}
+				}},
+				{"I/O", syscall.EIO, func(path string) (*os.File, error) {
+					return nil, &fs.PathError{Op: "open", Path: path, Err: syscall.EIO}
+				}},
+			} {
+				t.Run("open "+test.name, func(t *testing.T) {
+					path := archive
+					if test.open == nil {
+						path = filepath.Join(t.TempDir(), "missing")
+					} else {
+						override(t, &openInputNonblocking, test.open)
+					}
+					err := c.finishCloudVerification(ctx, config, &run, path, []byte("correct recovery password"))
+					if !errors.Is(err, test.cause) || errors.Is(err, fs.ErrNotExist) != (test.open == nil) || run.Verified {
+						t.Fatalf("open failure: %v, verified %v", err, run.Verified)
+					}
+					failed, e := c.cloudRun(ctx, run.ID)
+					if e != nil || failed.Verified || failed.VerificationState != "failed" || failed.RestoredDirectory != "" {
+						t.Fatalf("an open failure recorded verification: %+v %v", failed, e)
+					}
+					if after := staged(); !slices.Equal(after, before) {
+						t.Fatalf("an open failure restored files: %v", after)
+					}
+				})
+			}
 			// Disaster recovery uses the archive's embedded bundle and manifest,
 			// without any destination or upload-ledger lookup.
 			input, e := os.Open(archive)
@@ -324,6 +362,63 @@ func TestCloudManifestRejectsEscapingPaths(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(config.StagingRoot, "outside")); !os.IsNotExist(err) {
 		t.Fatal("restore wrote outside its isolated directory")
+	}
+}
+
+func TestCloudSetupAndRestoreInputs(t *testing.T) {
+	setup, outside := t.TempDir(), t.TempDir()
+	writeSourceFile(t, filepath.Join(setup, "destination-draft.json"), `{"provider":"gcp"}`)
+	writeSourceFile(t, filepath.Join(setup, "oversize.json"), strings.Repeat("x", 1<<20+1))
+	writeSourceFile(t, filepath.Join(outside, "secret.json"), `{}`)
+	if err := os.Symlink(filepath.Join(outside, "secret.json"), filepath.Join(setup, "escape.json")); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := readCloudSetup(setup, "destination-draft.json"); err != nil || string(raw) != `{"provider":"gcp"}` {
+		t.Fatalf("setup file: %q %v", raw, err)
+	}
+	for _, name := range []string{"missing.json", "oversize.json", "escape.json", "../" + filepath.Base(outside) + "/secret.json"} {
+		if raw, err := readCloudSetup(setup, name); err == nil {
+			t.Fatalf("%s read %q", name, raw)
+		}
+	}
+	// The open stays relative to the setup folder's root, and an
+	// unsupported open refuses before reading anything.
+	var opened []string
+	override(t, &openInputNonblockingIn, func(root *os.Root, name string) (*os.File, error) {
+		opened = append(opened, root.Name(), name)
+		return nil, errNonblockingOpenUnsupported
+	})
+	if raw, err := readCloudSetup(setup, "destination-draft.json"); raw != nil || !errors.Is(err, errors.ErrUnsupported) || !slices.Equal(opened, []string{setup, "destination-draft.json"}) {
+		t.Fatalf("unsupported setup open: %q %v %v", raw, err, opened)
+	}
+
+	// cloud-restore checks its archive before creating the output folder.
+	_, _, _, _, archive := cloudFixture(t, false)
+	output := func() string { return filepath.Join(t.TempDir(), "recovered") }
+	refused := func(t *testing.T, err error, cause error, folder string) {
+		t.Helper()
+		if err == nil || (cause != nil && !errors.Is(err, cause)) {
+			t.Fatalf("restore input: %v", err)
+		}
+		if _, e := os.Lstat(folder); !errors.Is(e, fs.ErrNotExist) {
+			t.Fatalf("a refused restore created its output folder: %v", e)
+		}
+	}
+	folder := output()
+	refused(t, runCloudRestoreCLI([]string{filepath.Join(t.TempDir(), "missing"), folder}), fs.ErrNotExist, folder)
+	folder = output()
+	refused(t, runCloudRestoreCLI([]string{t.TempDir(), folder}), nil, folder)
+	t.Run("unsupported", func(t *testing.T) {
+		override(t, &openInputNonblocking, func(string) (*os.File, error) { return nil, errNonblockingOpenUnsupported })
+		folder := output()
+		refused(t, runCloudRestoreCLI([]string{archive, folder}), errors.ErrUnsupported, folder)
+	})
+	folder = output()
+	if err := runCloudRestoreCLI([]string{archive, folder}); err != nil {
+		t.Fatal(err)
+	}
+	if entries, err := os.ReadDir(folder); err != nil || len(entries) == 0 {
+		t.Fatalf("restore recovered nothing: %v", err)
 	}
 }
 

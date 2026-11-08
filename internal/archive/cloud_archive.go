@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"syscall"
 	"time"
 
 	"filippo.io/age"
@@ -366,9 +365,11 @@ func (c *Catalog) verifyCloudArchive(ctx context.Context, config Config, r *clou
 	if err := json.Unmarshal([]byte(raw), &expected); err != nil {
 		return "", errors.New("backup manifest is unavailable")
 	}
-	file, err := os.OpenFile(expandPath(path), os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return "", errors.New("downloaded archive not found; check the local file path")
+	file, err := openInputNonblocking(expandPath(path))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("downloaded archive not found; check the local file path: %w", err)
+	} else if err != nil {
+		return "", fmt.Errorf("could not open the downloaded archive: %w", err)
 	}
 	defer file.Close()
 	info, err := file.Stat()
