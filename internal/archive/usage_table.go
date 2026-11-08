@@ -55,7 +55,7 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 	if err != nil {
 		return nil, err
 	}
-	roots, err := c.usageConversationRoots(ledger)
+	roots, err := c.usageConversationRoots(context.Background(), ledger)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +166,17 @@ func attachUsageLineage(base []map[string]any, lineage *usageConversationAttribu
 		rows[i] = row
 		session := firstString(row["agent_session_id"])
 		row["session_role"] = nilIfEmpty(lineage.sessionRoles[session])
-		if root := lineage.roots[firstString(row["conversation_id"])]; root != nil {
+		conversation := firstString(row["conversation_id"])
+		if lineage.uncertain[conversation] || lineage.uncertain[session] {
+			// Equally strong evidence disagrees about how many executions these
+			// sources are: the row stays, its run and cohort counts do not.
+			row["run_identity"] = "uncertain"
+		}
+		if root := lineage.roots[conversation]; root != nil {
+			if row["run_identity"] == nil {
+				row["run_identity"] = "exact"
+			}
+			row["root_quality"] = nilIfEmpty(lineage.rootQuality[conversation])
 			row["root_conversation_id"], row["root_provider"] = root["id"], root["provider"]
 			row["root_title"], row["root_repository_name"] = root["root_title"], root["root_repository_name"]
 			row["root_model_family"] = modelFamily(firstString(root["model"]))
@@ -175,6 +185,7 @@ func attachUsageLineage(base []map[string]any, lineage *usageConversationAttribu
 			row["delegated_parent_session_id"] = nilIfEmpty(lineage.delegatedParents[session])
 			if depth, known := lineage.delegatedDepth[session]; known {
 				row["delegated_run_depth"] = depth
+				row["delegated_run_depth_quality"] = nilIfEmpty(lineage.depthQuality[session])
 				if depth > 0 {
 					row["run_role"] = "delegated"
 				} else if role := firstString(row["session_role"]); role == "parent" {
@@ -193,7 +204,7 @@ func usageNeedsLineage(fields libraryFields) bool {
 		return true
 	}
 	for field := range fields {
-		if strings.HasPrefix(field, "root_") || strings.HasPrefix(field, "delegated_") || field == "session_role" || field == "run_role" {
+		if strings.HasPrefix(field, "root_") || strings.HasPrefix(field, "delegated_") || field == "session_role" || field == "run_role" || field == "run_identity" {
 			return true
 		}
 	}
@@ -277,7 +288,7 @@ func (c *Catalog) localUsageRoots(ctx context.Context) (*usageConversationAttrib
 		if err != nil {
 			return nil, err
 		}
-		return c.usageConversationRootsContext(ctx, ledger)
+		return c.usageConversationRoots(ctx, ledger)
 	})
 }
 

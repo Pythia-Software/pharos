@@ -11,7 +11,7 @@ const { timelineSessionBranches } = await import("../../../src/timeline-label-mo
 const start = Date.parse("2026-09-24T12:00:00Z"), winter = Date.parse("2026-01-24T12:00:00Z");
 const metric = (value, quality = "observed") => ({ value, quality, known: value === null ? 0 : 1, total: 1 });
 const spec = (id, unit) => ({ id, label: id, unit, definition: `Definition for ${id}` });
-const session = (id, outline, child_count = 0) => ({ id, outline, depth: outline.split(".").length - 1, child_count });
+const session = (id, depth, child_count = 0) => ({ id, depth, child_count });
 
 
 test("new session columns join related metrics while preserving custom choices", () => {
@@ -24,7 +24,7 @@ test("new session columns join related metrics while preserving custom choices",
 });
 
 test("session timeline uses its own bounds and expands exactly one event level", () => {
-  const node = {...session('child', '1.1'), start: 100, end: 200, subtree_start: 50, subtree_end: 300};
+  const node = {...session('child', 1), start: 100, end: 200, subtree_start: 50, subtree_end: 300};
   const disclosures = {'delegation-labels:child:session': false, 'delegation-labels:child:events': true, 'delegation-labels:child:events:assumption': true, 'delegation-labels:other:events': true};
   assert.deepEqual(sessionTimelineState(node, disclosures), {range: [100, 200], disclosures: {'delegation-labels:other:events': true, 'delegation-labels:child:session': true}});
   assert.equal(disclosures['delegation-labels:child:events'], true);
@@ -121,7 +121,8 @@ test("timeline date headings follow local day changes and distinguish repeated D
 });
 
 test("session tree branches connect visible parents and continue only toward remaining siblings", () => {
-  const rows = [session("root", "1", 2), session("a", "1.1", 1), session("aa", "1.1.1"), session("b", "1.10", 1), session("ba", "1.10.1"), session("other", "2")];
+  const child = (id, parent_id, depth, child_count = 0) => ({ id, parent_id, depth, child_count });
+  const rows = [child("root", undefined, 0, 2), child("a", "root", 1, 1), child("aa", "a", 2), child("b", "root", 1, 1), child("ba", "b", 2), child("other", undefined, 0)];
   const branches = timelineSessionBranches(rows);
   assert.equal(branches.get("root").children, true);
   assert.equal(branches.get("root").parentDepth, undefined);
@@ -132,8 +133,6 @@ test("session tree branches connect visible parents and continue only toward rem
   assert.deepEqual(branches.get("other"), {parentDepth:undefined,rails:[],children:false});
   assert.equal(timelineSessionBranches(rows.filter(row=>row.id!=="aa")).get("a").children,false,"folded children do not leave dangling branches");
   assert.equal(timelineSessionBranches(rows.slice(1,3)).get("a").parentDepth,undefined,"off-page parents do not invent a connection");
-  const linked = timelineSessionBranches([rows[0],{...session("linked","9.4"),parent_id:"root"}]);
-  assert.equal(linked.get("linked").parentDepth,0,"recorded ownership takes precedence over outline text");
 });
 
 
@@ -181,6 +180,7 @@ test("token observations distinguish minima, unallocated branches and missing pr
   assert.equal(tableMetricText(metric(1000,"partial")),"1K+");
   assert.equal(tableMetricText(metric(null,"reported-minimum")),formatted(null));
   assert.equal(metricText(metric(1000,"partial")),"1K+");
+  assert.equal(metricText(metric(1000,"unverified")),"1K?","a value reached through an unverified link is not shown as observed");
   assert.equal(metricText(metric(null,"unknown")),formatted(null));
   const child={self:{tokens:metric(116837,"reported-minimum")},token_attribution:{direct_tokens:0,accounted_tokens:0,unallocated_tokens:0,observed_minimum_tokens:116837}};
   assert.match(tokenAttributionText(child),/Reported minimum.*last request/);

@@ -88,11 +88,21 @@ func (s *Server) postQueryV3(w http.ResponseWriter, r *http.Request, dataset str
 		qt.WriteQueryError(w, err)
 		return
 	}
+	// Agent-event rows resting on superseded execution evidence are left out
+	// (withheldAgentEvents); say how many, so absent rows read as pending.
+	var coverage map[string]any
+	if dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "agent_event_rates" {
+		if coverage, err = agentEventsCoverage(ctx, s.Catalog.reader()); err != nil {
+			qt.WriteQueryError(w, err)
+			return
+		}
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, struct {
 		qt.QueryResultV3
-		Find *libraryFindSummary `json:"find,omitempty"`
-	}{result, find}, http.StatusOK)
+		Find     *libraryFindSummary `json:"find,omitempty"`
+		Coverage map[string]any      `json:"coverage,omitempty"`
+	}{result, find, coverage}, http.StatusOK)
 }
 
 // Dependency discovery uses the same canonical definitions/revisions as execution.

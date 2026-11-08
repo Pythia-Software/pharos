@@ -2,13 +2,18 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func seedDelegation(t *testing.T, c *Catalog) {
@@ -20,8 +25,10 @@ func seedDelegation(t *testing.T, c *Catalog) {
 		}
 	}
 	run(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('delegation-work','claude','local','d','Delegated work','2026-01-01')`)
-	for _, cv := range []struct{ id, provider, native, parent string }{{"root", "claude", "root-native", ""}, {"child", "codex", "codex-native", "root"}, {"nested", "antigravity", "root:subagent:agent-exact-child", "root"}} {
-		run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id) VALUES(?,'delegation-work',?,'local',?,?)`, cv.id, cv.provider, cv.native, nilIfEmpty(cv.parent))
+	for _, cv := range []struct{ id, provider, native, parent string }{{"root", "claude", "root-native", ""}, {"child", "codex", "codex-native", "root"}, {"nested", "codex", "exact-child", "root"}} {
+		// Recorded children carry their agent depth; a Codex parent at depth zero
+		// is a continuation.
+		run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES(?,'delegation-work',?,'local',?,?,?)`, cv.id, cv.provider, cv.native, nilIfEmpty(cv.parent), min(1, len(cv.parent)))
 	}
 	for _, m := range []struct{ id, conv, kind, text, call string }{{"launch", "root", "delegation", `{"input":{"description":"Review with Codex"}}`, "launch-id"}, {"nested-launch", "child", "delegation", `{"input":{"description":"Check network"}}`, "nested-call"}, {"nested-result", "child", "delegation_result", `{"details":{"agentId":"exact-child"}}`, "nested-call"}, {"user", "root", "message", "Implement it", ""}} {
 		run(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,call_id,content_hash) VALUES(?,?,?,'user',?,?,?,?)`, m.id, m.conv, m.id, m.kind, m.text, nilIfEmpty(m.call), m.id)
@@ -34,7 +41,7 @@ func seedDelegation(t *testing.T, c *Catalog) {
 		{"launch-alias", "root", "launch-id", "root-session", "child", "launch", "claude", "in-child-conversation", "2026-01-01T00:00:01Z", "2026-01-01T00:00:01Z", 0},
 		{"child-session", "child", "main", "", "", "", "codex", "reported-reconciled", "2026-01-01T00:00:02Z", "2026-01-01T00:00:20Z", 200},
 		{"nested-alias", "child", "nested-call", "child-session", "", "nested-launch", "codex", "unavailable", "2026-01-01T00:00:04Z", "2026-01-01T00:00:04Z", 0},
-		{"nested-session", "nested", "main", "", "", "", "antigravity", "reported-reconciled", "2026-01-01T00:00:05Z", "2026-01-01T00:00:07Z", 300},
+		{"nested-session", "nested", "main", "", "", "", "codex", "reported-reconciled", "2026-01-01T00:00:05Z", "2026-01-01T00:00:07Z", 300},
 		{"embedded", "root", "other-execution", "root-session", "", "", "codex", "unavailable", "2026-01-01T00:01:00Z", "2026-01-01T00:01:05Z", 0},
 	} {
 		run(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,parent_id,child_conversation_id,delegation_message_id,kind,provider,usage_status,started_at,ended_at,total_tokens,input_tokens) VALUES(?,'delegation-work',?,?,?,?,?,'subagent',?,?,?,?,?,?)`, s.id, s.conv, s.native, nilIfEmpty(s.parent), nilIfEmpty(s.child), nilIfEmpty(s.message), s.provider, s.status, s.start, s.end, s.tokens, s.tokens)
@@ -58,7 +65,9 @@ func TestDelegationCanonicalHierarchyAndAccounting(t *testing.T) {
 		t.Fatalf("aliases must collapse: %d nodes, %v", len(s.Nodes), s.Aliases)
 	}
 	child, nested := s.ByID["child-session"], s.ByID["nested-session"]
-	if child.Provider != "codex" || nested.Provider != "antigravity" || child.ParentID != "root-session" || nested.ParentID != child.ID {
+	// The Claude root's launch names a Codex child through a persisted link; the
+	// Codex child's handle names its own child in the same provider namespace.
+	if root := s.ByID["root-session"]; root.Provider != "claude" || child.Provider != "codex" || child.ParentID != "root-session" || nested.ParentID != child.ID {
 		t.Fatalf("cross-provider nesting: %+v / %+v", child, nested)
 	}
 	if nested.ParentEvidence != "exact-delegation-handle" || nested.MessageID != "nested-launch" {
@@ -92,39 +101,6 @@ func TestDelegationCanonicalHierarchyAndAccounting(t *testing.T) {
 	}
 }
 
-func TestDelegationResultEvidenceKeepsConversationAndResultScope(t *testing.T) {
-	c, _ := testCatalog(t)
-	seedDelegation(t, c)
-	// A call ID can be reused in another conversation. Only result messages
-	// in the launch's own conversation can supply its exact child handle.
-	for _, message := range []struct{ id, conversation, kind, text string }{
-		{"root-result", "root", "tool_result", strings.Repeat("r", 9000)},
-		{"not-a-result", "child", "message", "must not match"},
-	} {
-		if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,call_id,content_hash)
-			VALUES(?,?,?,'tool',?,?,'nested-call',?)`, message.id, message.conversation, message.id, message.kind, message.text, message.id); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,call_id,content_hash)
-		VALUES('root-launch','root','root-launch','assistant','delegation','{}','nested-call','root-launch');
-		INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,delegation_message_id,kind,provider,usage_status)
-		VALUES('root-launch-session','delegation-work','root','reused-call','root-launch','subagent','codex','unavailable')`); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := queryMaps(c.DB, delegationResultEvidenceSQL, "delegation-work")
-	if err != nil {
-		t.Fatal(err)
-	}
-	byID := map[string]string{}
-	for _, row := range rows {
-		byID[firstString(row["id"])] = firstString(row["text"])
-	}
-	if len(rows) != 2 || byID["nested-alias"] != `{"details":{"agentId":"exact-child"}}` || byID["root-launch-session"] != strings.Repeat("r", 8192) {
-		t.Fatalf("match result kind, conversation and bounded body: %v", byID)
-	}
-}
-
 func TestDelegationMessageCountsRetainMembershipAndUnknownTimes(t *testing.T) {
 	c, _ := testCatalog(t)
 	seedDelegation(t, c)
@@ -133,25 +109,25 @@ func TestDelegationMessageCountsRetainMembershipAndUnknownTimes(t *testing.T) {
 		('root-session','user',0),('embedded','user',0),('child-session','nested-launch',0),('child-session','nested-result',1)`); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := queryMaps(c.DB, delegationMessageCountsSQL, "delegation-work", "delegation-work")
+	rows, err := queryMaps(c.DB, delegationMessageFactsSQL, "delegation-work", "delegation-work")
 	if err != nil {
 		t.Fatal(err)
 	}
-	byID := map[string]map[string]any{}
-	for _, row := range rows {
-		byID[firstString(row["agent_session_id"])] = row
+	if len(rows) != 4 {
+		t.Fatalf("read only recorded membership: %v", rows)
 	}
-	if len(rows) != 3 {
-		t.Fatalf("count only recorded membership: %v", rows)
+	s, err := c.readDelegationSnapshot(t.Context(), "delegation-work")
+	if err != nil {
+		t.Fatal(err)
 	}
 	for _, id := range []string{"root-session", "embedded"} {
-		row := byID[id]
-		if integer(row["messages"]) != 1 || integer(row["turns"]) != 1 || row["start"] != "2026-01-01T00:00:03Z" || row["end"] != row["start"] {
-			t.Fatalf("each session retains its own membership: %v", row)
+		n := s.ByID[id]
+		if !near(n.Self["messages"].Value, 1) || !near(n.Self["turns"].Value, 1) || n.Start == nil {
+			t.Fatalf("each session retains its own membership: %+v", n.Self)
 		}
 	}
-	if row := byID["child-session"]; integer(row["messages"]) != 2 || integer(row["turns"]) != 0 || row["start"] != nil || row["end"] != nil {
-		t.Fatalf("events with unknown timestamps still count: %v", row)
+	if child := s.ByID["child-session"]; !near(child.Self["messages"].Value, 2) || !near(child.Self["turns"].Value, 0) {
+		t.Fatalf("events with unknown timestamps still count: %+v", child.Self)
 	}
 }
 
@@ -176,6 +152,7 @@ func TestDelegationTopLevelConversationLabels(t *testing.T) {
 				}
 			}
 			run(`INSERT INTO conversation_documents(conversation_id,initiation,vector_json,model,indexed_at) VALUES('root','First root prompt','[]','test','2026-01-01')`)
+			run(`INSERT INTO conversation_documents(conversation_id,initiation,vector_json,model,indexed_at) VALUES('child','Child opening request','[]','test','2026-01-01')`)
 			if tc.parentOmitted {
 				run(`UPDATE conversations SET parent_id=NULL WHERE id='child'`)
 			}
@@ -192,25 +169,28 @@ func TestDelegationTopLevelConversationLabels(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "Delegated work"
-			if tc.second {
-				want = "First root prompt"
+			// Every row's label is the resolver's (one label in every
+			// projection); the work's title or the opening request is a
+			// subtitle, never a substitute.
+			for _, n := range s.Nodes {
+				if x := s.projection.res.Executions[n.execution]; x == nil || n.Label != x.Label.Text {
+					t.Fatalf("%s label %q is not the resolver's %+v", n.ID, n.Label, x)
+				}
 			}
-			if got := s.ByID["root-session"].Label; got != want {
-				t.Fatalf("first root label = %q, want %q", got, want)
+			if got, sub := s.ByID["root-session"].Label, s.ByID["root-session"].Subtitle; got != "root-native" || sub != "Delegated work" {
+				t.Fatalf("first root label = %q (%q)", got, sub)
 			}
 			if tc.second {
 				id := "conversation:root-two"
 				if tc.derived {
 					id = "root-two-session"
 				}
-				want = firstString(tc.secondPrompt, "root-two-native")
-				if got := s.ByID[id].Label; got != want {
-					t.Fatalf("second root label = %q, want %q", got, want)
+				if got, sub := s.ByID[id].Label, s.ByID[id].Subtitle; got != "root-two-native" || sub != "Delegated work" {
+					t.Fatalf("second root label = %q (%q)", got, sub)
 				}
 			}
-			if got := s.ByID["child-session"].Label; got != "Review with Codex" {
-				t.Fatalf("child assignment label changed: %q", got)
+			if got, sub := s.ByID["child-session"].Label, s.ByID["child-session"].Subtitle; got != "Review with Codex" || sub != "Child opening request" {
+				t.Fatalf("child label %q, subtitle %q: want the assignment, with its opening request as context", got, sub)
 			}
 		})
 	}
@@ -242,7 +222,8 @@ func TestDelegationAssignmentLabels(t *testing.T) {
 				args  []any
 			}{
 				{`UPDATE messages SET text=? WHERE id='launch'`, []any{tc.text}},
-				{`UPDATE agent_sessions SET delegation_message_id='launch' WHERE id='embedded'`, nil},
+				// Its own usage makes the launch an execution, not an attempt.
+				{`UPDATE agent_sessions SET delegation_message_id='launch',total_tokens=5,usage_status='reported-reconciled' WHERE id='embedded'`, nil},
 				{`UPDATE conversations SET agent_nickname='Parent nickname' WHERE id='root'`, nil},
 				{`UPDATE conversations SET agent_nickname='Child nickname' WHERE id='child'`, nil},
 				{`INSERT INTO conversation_documents(conversation_id,initiation,vector_json,model,indexed_at) VALUES('root','Parent request','[]','test','2026-01-01')`, nil},
@@ -330,6 +311,17 @@ func TestDelegationPaginationFilteringAndSnapshot(t *testing.T) {
 	_, collapsed := delegationGET(t, server, base+"?search=Check%20network&collapsed=root-session")
 	if collapsed["total"].(float64) != 1 {
 		t.Fatal("a filtered branch must still be collapsible")
+	}
+	// Saved links that name a launch handle restore on its execution. A
+	// canonical row ID needs no alias; an ID that names no row here is null,
+	// so the client keeps it unresolved rather than choosing a session.
+	_, legacy := delegationGET(t, server, base+"?collapsed=launch-alias&resolve=launch-alias&resolve=child-session&resolve=unknown")
+	_, canonical := delegationGET(t, server, base+"?collapsed=child-session")
+	if jsonText(legacy["aliases"]) != `{"child-session":"child-session","launch-alias":"child-session","unknown":null}` || legacy["total"] != canonical["total"] || canonical["total"].(float64) >= first["total"].(float64) {
+		t.Fatal("legacy session IDs must restore on their execution", legacy["aliases"], legacy["total"], canonical["total"])
+	}
+	if _, plain := delegationGET(t, server, base); plain["aliases"] != nil {
+		t.Fatal("aliases are answered only on request")
 	}
 	if jsonText(filtered["maxima"]) != jsonText(first["maxima"]) {
 		t.Fatal("filtering must preserve column maxima")
@@ -581,9 +573,16 @@ func TestDelegationTimelineMessageLabels(t *testing.T) {
 	if err := c.ensureLabelsSchema(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	// As a labels run records: the stored labels below rest on the current
+	// execution evidence.
+	digests, err := executionDependencyDigestsFor(t.Context(), c.DB, []string{"root"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	execTx(t, c.DB, `INSERT INTO message_labels_models(model,labels_json) VALUES('test','["P","P.request","P.request.work.implement"]');
  INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('root','test',1,'2026-01-01');
  DELETE FROM message_labels_dirty`)
+	execTx(t, c.DB, `UPDATE message_labels_conversations SET execution_digest='`+digests["root"]+`' WHERE conversation_id='root'`)
 	if _, err := c.DB.Exec(`INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at) VALUES('user','root','H-typed',7,?,1,1,'test','test','test','2026-01-01')`, encodeLabelProbs([]float32{1, .98, .95})); err != nil {
 		t.Fatal(err)
 	}
@@ -611,6 +610,208 @@ func TestDelegationTimelineMessageLabels(t *testing.T) {
 	if zoom["messages"].([]any)[0].(map[string]any)["id"] != "legacy" {
 		t.Fatal("preceding context crowded the visible message out of the cap")
 	}
+
+	// A fork whose window starts with history copied from its parent: the cap
+	// counts the fork's own messages, so the copies cannot hide them.
+	override(t, &delegationMessageLimit, 2)
+	execTx(t, c.DB, `INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES('fork','delegation-work','codex','local','fork-native','child',2);
+ INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,usage_status) VALUES('fork-session','delegation-work','fork','main','main','codex','unavailable');
+ INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES
+ ('child-c1','child','evt-c1','assistant','message','one','c1','2026-01-01T00:00:01Z'),('child-c2','child','evt-c2','assistant','message','two','c2','2026-01-01T00:00:01Z'),
+ ('child-c3','child','evt-c3','assistant','message','three','c3','2026-01-01T00:00:01Z'),
+ ('fork-c1','fork','evt-c1','assistant','message','one','c1','2026-01-01T00:00:01Z'),('fork-c2','fork','evt-c2','assistant','message','two','c2','2026-01-01T00:00:01Z'),
+ ('fork-c3','fork','evt-c3','assistant','message','three','c3','2026-01-01T00:00:01Z'),('fork-own','fork','evt-own','user','message','mine','own','2026-01-01T00:00:04Z')`)
+	forkLane := func() map[string]any {
+		t.Helper()
+		return read("sessions=fork-session&labels=1")["lanes"].([]any)[0].(map[string]any)
+	}
+	lane := forkLane()
+	if ids := lane["messages"].([]any); len(ids) != 1 || ids[0].(map[string]any)["id"] != "fork-own" || lane["messages_truncated"] != false || lane["inherited_messages"] != float64(3) {
+		t.Fatalf("copied prefix hid the fork's own message: %v", lane)
+	}
+	// Recorded ancestry without typed evidence: the lane says copies may
+	// remain, and why, although no single row is unresolved.
+	if lane["occurrence_partial"] != true || !slices.Contains(lane["occurrence_reasons"].([]any), any("untyped-ancestry/v1")) {
+		t.Fatalf("untyped fork lane coverage: %v %v", lane["occurrence_partial"], lane["occurrence_reasons"])
+	}
+	// A scan budget that ends before the window does is reported as truncation.
+	override(t, &delegationMessageScanBatches, 1)
+	if lane := forkLane(); len(lane["messages"].([]any)) != 0 || lane["messages_truncated"] != true {
+		t.Fatalf("a scan stopped early must say so: %v", lane)
+	}
+}
+
+// A transcript whose copied history the evidence cannot account for leaves
+// its execution's Self observation metrics and its lane partial, with the
+// reason, as quick stats does: untyped ancestry, retained rows without a
+// history declaration, and a declared copy source that is not retained.
+func TestDelegationConversationOccurrenceCoverage(t *testing.T) {
+	c, config := testCatalog(t)
+	seedDelegation(t, c)
+	execTx(t, c.DB, `UPDATE messages SET created_at='2026-01-01T00:00:03Z'`)
+	server := testServer(t, config, c)
+	check := func(step, reason string) {
+		t.Helper()
+		s, err := c.delegationSnapshot(t.Context(), "delegation-work")
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := s.ByID["child-session"]
+		if n.OccurrencePartial != reason {
+			t.Fatalf("%s: occurrence reason %q, want %q", step, n.OccurrencePartial, reason)
+		}
+		for _, metric := range []string{"messages", "clock"} {
+			if q := n.Self[metric].Quality; (reason != "") != (q == "partial") {
+				t.Fatalf("%s: %s quality %q", step, metric, q)
+			}
+		}
+		// The root's own transcript has no recorded ancestry: complete.
+		if root := s.ByID["root-session"]; root.OccurrencePartial != "" || root.Self["messages"].Quality != "observed" {
+			t.Fatalf("%s: root coverage %q %+v", step, root.OccurrencePartial, root.Self["messages"])
+		}
+		status, body := delegationGET(t, server, "/api/work/delegation-work/parallel?sessions=child-session&labels=1")
+		if status != 200 {
+			t.Fatal(status, body)
+		}
+		lane := body["lanes"].([]any)[0].(map[string]any)
+		if (lane["occurrence_partial"] == true) != (reason != "") || reason != "" && !slices.Contains(lane["occurrence_reasons"].([]any), any(reason)) {
+			t.Fatalf("%s: lane coverage %v %v", step, lane["occurrence_partial"], lane["occurrence_reasons"])
+		}
+	}
+	check("untyped", "untyped-ancestry/v1")
+	if _, err := c.DB.Exec(`INSERT INTO execution_evidence_state(conversation_id,version,input,id_policy) VALUES('child',?,'retained','line-locator/v1')`, executionEvidenceVersion); err != nil {
+		t.Fatal(err)
+	}
+	check("retained without a declaration", "retained-history-undeclared/v1")
+	execTx(t, c.DB, `UPDATE execution_evidence_state SET input='ingest' WHERE conversation_id='child';
+ INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule) VALUES('child','copy','record','history_copy','conversation','native:codex|local|gone','native','codex-session-meta/v1')`)
+	check("declared source not retained", "declared-copy-source-missing/v1")
+	execTx(t, c.DB, `DELETE FROM execution_claims WHERE conversation_id='child'`)
+	check("provider read declares no copy", "history-undeclared/v1")
+	// A lane that keeps no rows from a partial transcript (all copies, or
+	// none read) still says it is partial, as the Self metrics do.
+	execTx(t, c.DB, `DELETE FROM execution_evidence_state WHERE conversation_id='child';
+ DELETE FROM agent_session_messages WHERE message_id IN (SELECT id FROM messages WHERE conversation_id='child');
+ DELETE FROM messages WHERE conversation_id='child'`)
+	status, body := delegationGET(t, server, "/api/work/delegation-work/parallel?sessions=child-session&labels=1")
+	if status != 200 {
+		t.Fatal(status, body)
+	}
+	lane := body["lanes"].([]any)[0].(map[string]any)
+	if len(lane["messages"].([]any)) != 0 || lane["occurrence_partial"] != true || !slices.Contains(lane["occurrence_reasons"].([]any), any("untyped-ancestry/v1")) {
+		t.Fatalf("an empty lane from a partial transcript reads complete: %v %v %v", len(lane["messages"].([]any)), lane["occurrence_partial"], lane["occurrence_reasons"])
+	}
+}
+
+// An execution's span is its own activity. Copied history stays in the
+// transcript, but neither counts nor widens the span, whatever the stream's
+// recorded envelope (derived with the copies) says. Only a stream with no
+// timed observation keeps its envelope, as reported.
+func TestDelegationActivitySpanFollowsOwnActivity(t *testing.T) {
+	at := func(clock string) float64 {
+		v, err := time.Parse(time.RFC3339, "2026-01-01T"+clock+"Z")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return float64(v.UnixMilli())
+	}
+	message := func(id, clock string, usage bool) MessageRecord {
+		m := MessageRecord{NativeID: id, Role: "assistant", Kind: "message", Text: id, CreatedAt: "2026-01-01T" + clock + "Z", Selected: true}
+		if usage {
+			m.Text, m.RawText = "", `{"type":"assistant","message":{"id":"`+id+`","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":100,"output_tokens":10}}}`
+		}
+		return m
+	}
+	snapshot := func(t *testing.T, usage bool, child ...string) (*Catalog, *delegationSnapshot, string) {
+		t.Helper()
+		c, _ := testCatalog(t)
+		copied := message("native-old", "10:00:00", usage)
+		messages := []MessageRecord{}
+		for _, id := range child {
+			messages = append(messages, map[string]MessageRecord{"copy": copied, "own": message("native-own", "12:00:00", usage)}[id])
+		}
+		ingestRecordTx(t, c, WorkspaceRecord{SourceID: "span", SourceKind: "codex", Account: "local", Conversations: []ConversationRecord{
+			{NativeID: "root", Provider: "codex", Account: "local", Messages: []MessageRecord{copied}},
+			{NativeID: "child", Provider: "codex", Account: "local", ParentNativeID: "root", AgentDepth: 1, Messages: messages},
+		}})
+		var workspace, root string
+		if err := c.DB.QueryRow(`SELECT workspace_id,parent_id FROM conversations WHERE native_id='child'`).Scan(&workspace, &root); err != nil {
+			t.Fatal(err)
+		}
+		// A launched agent whose transcript is not retained: a handle with
+		// only its recorded envelope.
+		if _, err := c.DB.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,started_at,ended_at) VALUES('handle',?,'codex','local','handle',?,1,'2026-01-01T11:00:00Z','2026-01-01T11:30:00Z')`, workspace, root); err != nil {
+			t.Fatal(err)
+		}
+		s, err := c.readDelegationSnapshot(t.Context(), workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c, s, workspace
+	}
+	node := func(t *testing.T, c *Catalog, s *delegationSnapshot, native string) *delegationNode {
+		t.Helper()
+		var id string
+		if err := c.DB.QueryRow(`SELECT id FROM conversations WHERE native_id=?`, native).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range s.Nodes {
+			if n.ConversationID == id {
+				return n
+			}
+		}
+		t.Fatalf("no row for %s", native)
+		return nil
+	}
+	value := func(m delegationMetric) float64 {
+		if m.Value == nil {
+			return -1
+		}
+		return *m.Value
+	}
+	own := func(t *testing.T, n *delegationNode, requests float64) {
+		t.Helper()
+		if value(n.Self["messages"]) != 1 || value(n.Self["requests"]) != requests {
+			t.Fatalf("own activity: messages=%+v requests=%+v", n.Self["messages"], n.Self["requests"])
+		}
+		if n.Start == nil || n.End == nil || *n.Start != at("12:00:00") || *n.End != at("12:00:00") || value(n.Self["clock"]) != 0 {
+			t.Fatalf("copied history widened the span: start=%v end=%v clock=%+v", n.Start, n.End, n.Self["clock"])
+		}
+	}
+	t.Run("without requests", func(t *testing.T) {
+		c, s, _ := snapshot(t, false, "copy", "own")
+		own(t, node(t, c, s, "child"), 0)
+		// The handle has no timed observation: its envelope is its reported span.
+		handle := node(t, c, s, "handle")
+		if m := handle.Self["clock"]; value(m) != 30*60*1000 || m.Quality != "reported" {
+			t.Fatalf("handle envelope: %+v", m)
+		}
+	})
+	t.Run("with requests", func(t *testing.T) {
+		c, s, _ := snapshot(t, true, "copy", "own")
+		n := node(t, c, s, "child")
+		own(t, n, 1)
+		// Token facts are untouched: the copied request is not an occurrence of
+		// the child, but its row's usage still reconciles the stream's total.
+		var rows int
+		var tokens float64
+		if err := c.DB.QueryRow(`SELECT COUNT(*),COALESCE(SUM(total_tokens),0) FROM model_requests WHERE conversation_id=?`, n.ConversationID).Scan(&rows, &tokens); err != nil {
+			t.Fatal(err)
+		}
+		if rows != 2 {
+			t.Fatalf("fixture: %d request rows", rows)
+		}
+		if total := n.Self["tokens"]; total.Value != nil && value(n.Self["remainder"]) != max(0, *total.Value-tokens) {
+			t.Fatalf("remainder %+v of %+v excludes copied request usage (%v)", n.Self["remainder"], total, tokens)
+		}
+	})
+	t.Run("inherited only", func(t *testing.T) {
+		c, s, _ := snapshot(t, false, "copy")
+		n := node(t, c, s, "child")
+		if n.Start != nil || n.End != nil || n.Self["clock"].Value != nil || value(n.Self["messages"]) > 0 {
+			t.Fatalf("a copy-only stream has its own span: start=%v end=%v clock=%+v messages=%+v", n.Start, n.End, n.Self["clock"], n.Self["messages"])
+		}
+	})
 }
 
 func TestDelegationCostFollowsUsageModelAndHistoricalDate(t *testing.T) {
@@ -664,8 +865,11 @@ func TestDelegationLinksAcrossWorkspacesAndProviderBoundaries(t *testing.T) {
 		}
 	}
 	run(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('outside','antigravity','local','outside','Outside workspace','2026-01-01')`)
-	run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id) VALUES('outside-conversation','outside','antigravity','local','outside-native','child')`)
-	run(`UPDATE conversations SET parent_id='outside-conversation' WHERE id='root'`)
+	// An outside parent of the root, and a different outside child of the
+	// child (one transcript as both would be an ownership cycle).
+	run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('outside-parent','outside','antigravity','local','outside-parent-native')`)
+	run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES('outside-conversation','outside','antigravity','local','outside-native','child',1)`)
+	run(`UPDATE conversations SET parent_id='outside-parent',agent_depth=1 WHERE id='root'`)
 	run(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,parent_id,child_conversation_id,kind,provider,usage_status) VALUES('outside-link','delegation-work','child','outside-handle','child-session','outside-conversation','subagent','codex','in-child-conversation')`)
 	run(`INSERT INTO agent_session_token_evidence(agent_session_id,message_id,scope,total_tokens) VALUES('outside-link','nested-result','last-request',900)`)
 	snapshot, err := c.delegationSnapshot(context.Background(), "delegation-work")
@@ -674,10 +878,12 @@ func TestDelegationLinksAcrossWorkspacesAndProviderBoundaries(t *testing.T) {
 	}
 	root := snapshot.ByID["root-session"]
 	if root.ExternalParent == nil || root.ExternalParent.WorkspaceID != "outside" || root.ExternalParent.Provider != "antigravity" {
-		t.Fatal("outside parent must remain a navigable reference")
+		t.Fatal("outside parent must remain a navigable reference", root.Ancestry, root.ParentID)
 	}
-	link := snapshot.ByID["outside-link"]
-	if link.ExternalChild == nil || link.ExternalChild.ConversationID != "outside-conversation" || link.ExternalChild.Provider != "antigravity" {
+	// The launch handle is an alias of the outside child it created.
+	id, _ := snapshot.resolveAlias("outside-link")
+	link := snapshot.ByID[id]
+	if link == nil || link.ExternalChild == nil || link.ExternalChild.ConversationID != "outside-conversation" || link.ExternalChild.Provider != "antigravity" {
 		t.Fatal("child provider must come from its own transcript")
 	}
 	if link.Self["tokens"].Value != nil {
@@ -686,9 +892,28 @@ func TestDelegationLinksAcrossWorkspacesAndProviderBoundaries(t *testing.T) {
 	if *snapshot.Totals["tokens"].Value != 600 {
 		t.Fatal("external child observation entered this workspace's total")
 	}
+	// A stored parent of unknown provenance is shown as not verified; an
+	// acknowledged launch is not.
+	if root.ParentCertainty != "legacy" || snapshot.ByID["child-session"].ParentCertainty == "legacy" || snapshot.Coverage.UnverifiedParents == 0 {
+		t.Fatal("parent certainty must distinguish stored links from verified launches", root.ParentCertainty, snapshot.ByID["child-session"].ParentCertainty, snapshot.Coverage)
+	}
+	// Usage reported by the handle is only part of an execution whose
+	// transcript is read elsewhere: partial, never a complete total.
+	run(`UPDATE agent_sessions SET total_tokens=7,usage_status='reported-reconciled' WHERE id='outside-link'`)
+	snapshot, err = c.delegationSnapshot(context.Background(), "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	link = snapshot.ByID[id]
+	if m := link.Self["tokens"]; m.Value == nil || *m.Value != 7 || m.Quality != "partial" || snapshot.Coverage.Unqueried == 0 {
+		t.Fatal("usage of an execution read partly elsewhere must be partial", m, snapshot.Coverage)
+	}
+	if m := link.Self["messages"]; m.Quality == "observed" {
+		t.Fatal("unqueried activity must not be an observed count", m)
+	}
 }
 func TestDelegationOwnershipCyclesDoNotBreakAnalysis(t *testing.T) {
-	c, _ := testCatalog(t)
+	c, config := testCatalog(t)
 	seedDelegation(t, c)
 	if _, err := c.DB.Exec(`UPDATE agent_sessions SET parent_id='nested-session' WHERE id='root-session'`); err != nil {
 		t.Fatal(err)
@@ -698,7 +923,39 @@ func TestDelegationOwnershipCyclesDoNotBreakAnalysis(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(s.Warnings) == 0 || len(s.Nodes) != 4 {
-		t.Fatal("cycles must be excluded without losing sessions")
+		t.Fatal("cycles must not lose sessions", s.Warnings, s.Nodes)
+	}
+	// No member of the cycle becomes a known root or gets an observed depth,
+	// and neither does a descendant whose chain passes through it. No edge of
+	// the cycle is chosen to cut.
+	for _, n := range s.Nodes {
+		want, parent := "cycle", ""
+		if n.ID == "embedded" {
+			want, parent = "resolved", "root-session"
+		}
+		if n.Ancestry.State != want || n.Ancestry.Depth != nil || n.Self["depth"].Value != nil || n.ParentID != parent {
+			t.Fatalf("cyclic ownership became a resolved depth: %+v", n)
+		}
+	}
+	status, body := delegationGET(t, testServer(t, config, c), "/api/work/delegation-work/delegation?search=Check&collapsed=child-session")
+	if status != 200 || body["total"] == float64(0) {
+		t.Fatal("hierarchy filters must terminate on cycles", status, body)
+	}
+	// A recorded transcript parent that is no longer retained is missing
+	// ancestry, not a known root.
+	conn, err := c.DB.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(t.Context(), `PRAGMA foreign_keys=OFF; UPDATE agent_sessions SET parent_id=NULL WHERE id='root-session'; UPDATE conversations SET parent_id='deleted' WHERE id='root'; PRAGMA foreign_keys=ON`); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = c.readDelegationSnapshot(context.Background(), "delegation-work"); err != nil {
+		t.Fatal(err)
+	}
+	if root := s.ByID["root-session"]; root.Ancestry.State != "missing" || root.Ancestry.Depth != nil || s.ByID["child-session"].Ancestry.Depth != nil || len(s.ByID["nested-session"].AncestorIDs) != 2 {
+		t.Fatalf("missing ancestry became a root: root=%+v child=%+v", root, s.ByID["child-session"])
 	}
 }
 
@@ -756,7 +1013,9 @@ func TestDelegationFilesDeduplicateSuccessfulPaths(t *testing.T) {
 		{s.Totals["files"], 4, "partial"},
 		{s.ByID["root-session"].Self["filesRead"], 1, "partial"},
 		{s.ByID["child-session"].Self["filesRead"], 2, "partial"},
-		{s.ByID["nested-session"].Self["filesRead"], 1, "observed"},
+		// nested has recorded ancestry without typed evidence: copied
+		// history may be counted, so its observation metrics are partial.
+		{s.ByID["nested-session"].Self["filesRead"], 1, "partial"},
 		{s.ByID["root-session"].All["filesRead"], 3, "partial"},
 		{s.Totals["filesRead"], 3, "partial"},
 	} {
@@ -909,6 +1168,174 @@ func TestDelegationCategoryReadsShellCommands(t *testing.T) {
 		if got := delegationCategory(test.name, test.category, test.command); got != test.want {
 			t.Errorf("%s/%s/%s: %q, want %q", test.name, test.category, test.command, got, test.want)
 		}
+	}
+}
+
+// An acknowledged spawn and a native continuation disagree, with equal
+// authority, about how many executions two Codex threads make. The resolver
+// keeps both partitions; the explorer keeps both transcripts navigable and
+// does not present its session count as exact.
+func TestDelegationIdentityConflictCountIsNotExact(t *testing.T) {
+	c, config := testCatalog(t)
+	dir := t.TempDir()
+	parse := func(name string, lines ...string) WorkspaceRecord {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		adapter := jsonlAdapter{provider: "codex"}
+		record, ok, err := adapter.parse(path)
+		if err != nil || !ok {
+			t.Fatalf("parse %s: ok=%v err=%v", name, ok, err)
+		}
+		return record
+	}
+	ingestRecordTx(t, c, parse("rollout-parent.jsonl",
+		`{"type":"session_meta","payload":{"id":"thread-p"}}`,
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Split the work"}]}}`,
+		`{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","call_id":"spawn","arguments":"{\"message\":\"Review\"}"}}`,
+		`{"type":"response_item","payload":{"type":"function_call_output","call_id":"spawn","output":"{\"agent_id\":\"thread-t\"}"}}`))
+	ingestRecordTx(t, c, parse("rollout-child.jsonl",
+		`{"type":"session_meta","payload":{"id":"thread-t","forked_from_id":"thread-p","forked_from_ordinal_exclusive":1}}`,
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Review"}]}}`,
+		`{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","call_id":"spawn-g","arguments":"{\"message\":\"Check\"}"}}`,
+		`{"type":"response_item","payload":{"type":"function_call_output","call_id":"spawn-g","output":"{\"agent_id\":\"thread-g\"}"}}`))
+	// The grandchild's own link is exact; only its ancestor is conflicted.
+	ingestRecordTx(t, c, parse("rollout-grandchild.jsonl",
+		`{"type":"session_meta","payload":{"id":"thread-g","source":{"subagent":{"thread_spawn":{"parent_thread_id":"thread-t"}}}}}`,
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Check"}]}}`))
+	server := testServer(t, config, c)
+	conversations := map[string]bool{}
+	for _, native := range []string{"thread-p", "thread-t", "thread-g"} {
+		var cid, ws string
+		if err := c.DB.QueryRow(`SELECT id,workspace_id FROM conversations WHERE provider='codex' AND native_id=?`, native).Scan(&cid, &ws); err != nil {
+			t.Fatal(err)
+		}
+		status, body := delegationGET(t, server, "/api/work/"+url.PathEscape(ws)+"/delegation?limit=100")
+		if status != 200 {
+			t.Fatal(native, body)
+		}
+		if body["session_count_uncertain"].(float64) == 0 || body["coverage"].(map[string]any)["conflicts"].(float64) == 0 {
+			t.Fatalf("%s: a conflicted count reads as exact: uncertain=%v coverage=%v", native, body["session_count_uncertain"], body["coverage"])
+		}
+		// Counted in the scope usage marks run_identity uncertain: the session's
+		// own conflict or any ancestor's.
+		inherited, counted := 0, 0
+		for _, row := range body["rows"].([]any) {
+			ancestry, _ := row.(map[string]any)["ancestry"].(map[string]any)
+			if row.(map[string]any)["context_only"] == true {
+				continue
+			}
+			if ancestry["conflicted"] == true || ancestry["state"] == string(parentConflict) {
+				counted++
+				if ancestry["state"] != string(parentConflict) {
+					inherited++
+				}
+			}
+		}
+		if native == "thread-g" && (inherited == 0 || body["session_count_uncertain"].(float64) < float64(counted)) {
+			t.Fatalf("an ancestor's conflict is not counted: inherited=%d counted=%d uncertain=%v", inherited, counted, body["session_count_uncertain"])
+		}
+		for _, row := range append(body["rows"].([]any), body["ancestors"].([]any)...) {
+			conversations[firstString(row.(map[string]any)["conversation_id"])] = true
+		}
+		conversations[cid] = conversations[cid] || false
+	}
+	for cid, shown := range conversations {
+		if !shown {
+			t.Fatalf("conflicted transcript %s has no navigable row", cid)
+		}
+	}
+}
+
+// Events resting on execution evidence that changed elsewhere are withheld in
+// the explorer and its Timeline lanes, exactly as the Agent Experience
+// datasets withhold them, and the counts read as partial rather than a
+// confirmed number, until the ordinary events run rebuilds them.
+func TestDelegationEventsFollowAgentEventsFreshness(t *testing.T) {
+	ctx := t.Context()
+	c := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	run := func() {
+		t.Helper()
+		if stats, err := c.RunLabels(ctx, labels, LabelsRunOptions{}); err != nil || !stats.Complete {
+			t.Fatalf("labels: %+v %v", stats, err)
+		}
+		if stats, err := c.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{}); err != nil || !stats.Complete {
+			t.Fatalf("agent events: %+v %v", stats, err)
+		}
+	}
+	read := func() (delegationMetric, bool, int, bool) {
+		t.Helper()
+		s, err := c.delegationSnapshot(ctx, "ws-main")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var n *delegationNode
+		for _, row := range s.Nodes {
+			if row.ConversationID == "c-events" {
+				n = row
+			}
+		}
+		if n == nil {
+			t.Fatal("no row for c-events")
+		}
+		lanes, _, err := c.delegationTimelineMessages(ctx, s, []string{n.ID}, 0, 4e12)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lane := lanes[n.ID]
+		return n.Self["events"], n.EventsPending, len(lane["agent_events"].([]map[string]any)), lane["events_pending"] == true
+	}
+	run()
+	built, pending, laneEvents, lanePending := read()
+	if built.Value == nil || *built.Value == 0 || built.Quality == "partial" || pending || laneEvents == 0 || lanePending {
+		t.Fatalf("current events: %+v pending=%v lane=%d/%v", built, pending, laneEvents, lanePending)
+	}
+	// A writer that marks nothing moves c-child under c-events.
+	if err := c.writeTransaction(ctx, "repair", func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE conversations SET parent_id='c-events',agent_depth=1 WHERE id='c-child'`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stale, pending, laneEvents, lanePending := read()
+	if stale.Quality != "partial" || stale.Value == nil || *stale.Value != 0 || !pending || laneEvents != 0 || !lanePending {
+		t.Fatalf("stale events read as current: %+v pending=%v lane=%d/%v", stale, pending, laneEvents, lanePending)
+	}
+	// The response counts pending rows whatever a collapse leaves out, so the
+	// Timeline can announce sessions it draws no lane for.
+	server := testServer(t, Config{APIToken: "delegation-events"}, c)
+	pendingSessions := func(collapsed string) float64 {
+		t.Helper()
+		status, body := delegationGET(t, server, "/api/work/ws-main/delegation?mode=hierarchy&limit=100&collapsed="+url.QueryEscape(collapsed))
+		if status != 200 {
+			t.Fatal(body)
+		}
+		count, _ := body["events_pending_sessions"].(float64)
+		return count
+	}
+	s, err := c.delegationSnapshot(ctx, "ws-main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, marked := []string{}, 0
+	for _, n := range s.Nodes {
+		all = append(all, n.ID)
+		if n.EventsPending {
+			marked++
+		}
+	}
+	if open, folded := pendingSessions(""), pendingSessions(strings.Join(all, ",")); open == 0 || open != float64(marked) || folded != open {
+		t.Fatalf("pending sessions: open=%v collapsed=%v marked=%d", open, folded, marked)
+	}
+	run()
+	again, pending, laneEvents, lanePending := read()
+	if again.Value == nil || *again.Value != *built.Value || again.Quality == "partial" || pending || laneEvents == 0 || lanePending {
+		t.Fatalf("rebuilt events: %+v pending=%v lane=%d/%v", again, pending, laneEvents, lanePending)
+	}
+	if count := pendingSessions(""); count != 0 {
+		t.Fatalf("rebuilt events still count %v pending sessions", count)
 	}
 }
 

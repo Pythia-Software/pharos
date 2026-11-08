@@ -34,10 +34,7 @@ func (s *Server) workDefinitions(authority *workAuthority) ([]workDefinition, er
 			return c.estimateAuthorshipFor(ctx, ids, want, 100)
 		},
 	}
-	timing := &conversationWorkTask{server: s, kind: "maintenance.parallelism", cpus: 1, pending: c.parallelismPendingFor, filterFailures: true,
-		selectSQL: `SELECT conversation_id id,revision FROM parallelism_dirty WHERE conversation_id NOT IN (SELECT value FROM json_each(?)) ORDER BY conversation_id LIMIT ?`, step: func(ctx context.Context, ids []string, _ workAllocation) (workDomainStep, error) {
-			return c.refreshParallelismFor(ctx, ids)
-		}}
+	timing := s.parallelismWorkTask()
 	// Match the classic projector's adaptive publication budget. A kind runs
 	// one batch at a time, so its budget belongs to the adapter instance.
 	factsBudget := messageLabelFactsMessages
@@ -90,6 +87,18 @@ func (s *Server) workDefinitions(authority *workAuthority) ([]workDefinition, er
 }
 
 var workDomainWindow = 128
+
+// parallelismWorkTask times conversations. Execution evidence changes reach
+// stored activity through no trigger: each new execution source generation
+// is swept, as admitted preparation, before the queue is selected from.
+func (s *Server) parallelismWorkTask() *conversationWorkTask {
+	c := s.Catalog
+	return &conversationWorkTask{server: s, kind: "maintenance.parallelism", cpus: 1, pending: c.parallelismPendingFor, filterFailures: true,
+		prepareVersion: c.parallelismSweepVersion, prepare: c.prepareParallelism,
+		selectSQL: `SELECT conversation_id id,revision FROM parallelism_dirty WHERE conversation_id NOT IN (SELECT value FROM json_each(?)) ORDER BY conversation_id LIMIT ?`, step: func(ctx context.Context, ids []string, _ workAllocation) (workDomainStep, error) {
+			return c.refreshParallelismFor(ctx, ids)
+		}}
+}
 
 type conversationWorkTask struct {
 	server         *Server

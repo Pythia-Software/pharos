@@ -1,5 +1,5 @@
 {
-  "index_version": "copilot-v2",
+  "index_version": "copilot-v3-parent-fallback",
   "records": [
     {
       "SourceID": "sess-0",

@@ -21,6 +21,9 @@ import {splitTimelineCallers} from "./timeline-caller-model";
 import {cutAxisLabels,fromVirtual,idleGaps,laneBusy,timeScale,toVirtual,type IdleGap,type TimeScale} from "./timeline-idle-model";
 import {useTimelineColumns} from "./timeline-columns";
 import {timelineSessionBranches} from "./timeline-label-model";
+import {activeLaneRows,launchAttemptNote,laneCoverage,segmentPosition,type ExecutionSegment,type LaunchAttempt,type SessionAncestry} from "./delegation-ancestry";
+import {delegationAliasRequests,normalizeDelegationView,readerSelection,unresolvedAliases,type DelegationAliases} from "./delegation-aliases";
+import {coverageSummary,eventsPendingNote,occurrenceNote,omittedSegmentsNote,parentNote,qualityMark,sessionCountText,timelineEventsPending,timelineEventsPendingNote,type ExecutionCoverage,type ParentCertainty} from "./delegation-coverage";
 import {TimelineLegend,timelineLegendWindow} from "./timeline-legend";
 import {updateTimelineVisibility,type TimelineVisibility} from "./timeline-visibility";
 import {ribbonSourceURL,type RibbonObservation} from "./label-session-ribbon-model";
@@ -57,14 +60,32 @@ export type Session = {
   context_only?: boolean;
   // Certain related work shown beside the workspace's own sessions.
   peer?: { workspace_id: string; title: string; role: string };
+  /** The one label every reader shows for this execution. */
   label: string;
+  /** Local context (prompt, work title) that is not part of the label. */
+  subtitle?: string;
   provider: string;
   model: string;
   effort?: string;
   coverage: string;
   usage_status: string;
+  /** Layout indentation; semantic depth, when known, is in ancestry. */
   depth: number;
-  outline: string;
+  /** Resolved ancestors, nearest first, from the same snapshot. */
+  ancestor_ids?: string[];
+  ancestry?: SessionAncestry;
+  /** The execution's transcripts in segment order, when it has continuations. */
+  segments?: ExecutionSegment[];
+  /** Provenance of the resolved parent; legacy links are not verified. */
+  parent_certainty?: ParentCertainty;
+  /** Launches it issued that created no confirmed execution; not child rows. */
+  attempts?: LaunchAttempt[];
+  /** Why copied history may still be counted in this session's own metrics. */
+  occurrence_partial?: string;
+  /** Some of its agent events are withheld or awaiting a rebuild: the events count is provisional. */
+  events_pending?: boolean;
+  /** Resolved children not loaded at the family bound; delegation_relatives loads them. */
+  children_omitted?: number;
   order: number;
   child_count: number;
   start: number | null;
@@ -91,6 +112,10 @@ export type Analysis = {
   matched: Record<string, boolean>;
   total: number;
   session_count: number;
+  /** Counted sessions in an unresolved identity conflict: the counts are not exact. */
+  session_count_uncertain?: number;
+  /** Rows with withheld or rebuilding agent events, including rows a collapse or page leaves out. */
+  events_pending_sessions?: number;
   offset: number;
   next_cursor: string;
   metrics: Spec[];
@@ -102,6 +127,10 @@ export type Analysis = {
   end: number | null;
   density: number[];
   warnings: string[];
+  /** Resolution of the legacy session IDs this request asked about. */
+  aliases?: DelegationAliases;
+  /** What the resolution could not establish for this snapshot. */
+  coverage?: ExecutionCoverage;
 };
 type Span = { start: number; end: number };
 type Mark = Span & {
@@ -125,6 +154,20 @@ type Lane = {
   messages?: NativeTimelineMessage[];
   messages_truncated?: boolean;
   labels_pending?: boolean;
+  /** Copied history left out of this lane: it belongs to the session that produced it. */
+  inherited_messages?: number;
+  /** Sessions that own the originals of that copied history, when known. */
+  inherited_owners?: string[];
+  /** Copies of this session's own earlier segment, shown there once. */
+  repeated_messages?: number;
+  /** Some messages could not be told apart from copied history. */
+  occurrence_partial?: boolean;
+  /** Why copies could not be told apart, per conversation. */
+  occurrence_reasons?: string[];
+  /** Agent events of a transcript here are withheld or being rebuilt. */
+  events_pending?: boolean;
+  /** Continuation segments retained in other work, not shown in this lane. */
+  omitted_segments?: ExecutionSegment[];
 };
 export type Activity = Span & { snapshot: string; lanes: Lane[]; inference: string; taxonomy?: Taxonomy };
 type Props = {
@@ -301,7 +344,7 @@ export function metricText(metric: Metric | undefined, unit = "tokens") {
     const minimum = Math.floor(metric.value / scale * 10) / 10;
     return `≥${minimum.toLocaleString("en-US", {maximumFractionDigits: 1})}${scale === 1e9 ? "B" : scale === 1e6 ? "M" : scale === 1e3 ? "K" : ""}`;
   }
-  return metric?.value != null && metric.quality === "partial" ? `${value}+` : value;
+  return metric?.value != null ? `${value}${qualityMark(metric.quality)}` : value;
 }
 export function tableMetricText(metric: Metric | undefined, unit = "tokens") {
   return metricText(metric, unit) + (metric?.value != null && metric.quality === "reported-minimum" ? "*" : "");
@@ -506,6 +549,8 @@ export function DelegationExplorer({
     ),active,
   );
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set(initial.collapsed));
+  const [relatives, setRelatives] = useViewState<string[]>("delegation_relatives", [], active);
+  const relativesKey = [...new Set(relatives)].sort().join(",");
   const [pageIndex, setPageIndex] = useViewState("delegation_page", "0",active);
   const livePages = useRef(new CursorPagination());
   const [cursor, setCursor] = useState(""),
@@ -515,7 +560,12 @@ export function DelegationExplorer({
     [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0),
     [selected, setSelected] = useState(initial.selected);
+  // Saved IDs the server could not resolve to a session; never replaced by a guess.
+  const [unresolvedSelection, setUnresolvedSelection] = useState<ReadonlySet<string>>(new Set());
   const [range, setRange] = useState<Range | null>(null);
+  // Session IDs a restored URL names, resolved with the next page so saved
+  // selection, folds and disclosures follow an execution identity upgrade.
+  const aliasRequests = useRef<string[]>(delegationAliasRequests(new URLSearchParams(location.search)));
   const single = !!data && data.session_count === 1 && !data.rows.some(n => n.context_only || n.parent_id || n.external_parent || n.external_child);
   const timeline = single ? readerView === "timeline" : tab === "timeline";
   useEffect(() => {
@@ -526,6 +576,7 @@ export function DelegationExplorer({
     const restore = () => {
       const url = new URL(location.href);
       const route = readDelegationRoute(url.searchParams);
+      aliasRequests.current = delegationAliasRequests(url.searchParams);
       if (onWorkPage() && url.searchParams.get("explorer") === "parallel") {
         url.searchParams.set("explorer", route.tab);
         history.replaceState(history.state, "", url);
@@ -557,6 +608,7 @@ export function DelegationExplorer({
       direction,
       conversation,
       collapsed: collapsedKey,
+      ...(relativesKey ? {relatives: relativesKey} : {}),
       cursor,
       limit: "40",
     });
@@ -566,7 +618,10 @@ export function DelegationExplorer({
       const wanted = Math.max(0, Math.min(250, Number(pageIndex) || 0));
       const result = await livePages.current.load(execution, wanted, cursor => {
         params.set("cursor", cursor);
-        return readJSON<Analysis>(`${endpoint}/delegation?${params}`, controller.signal);
+        // Resolution does not change the page, so it stays out of the execution key.
+        const request = new URLSearchParams(params);
+        for (const id of aliasRequests.current) request.append("resolve", id);
+        return readJSON<Analysis>(`${endpoint}/delegation?${request}`, controller.signal);
       }, controller.signal);
       setPages(result.previous); setCursor(result.cursor);
       return result.body;
@@ -574,6 +629,10 @@ export function DelegationExplorer({
     loadPage()
       .then(
         (body) => {
+          if (body.aliases && aliasRequests.current.length) {
+            aliasRequests.current = [];
+            restoreAliases(body.aliases);
+          }
           setData(body);
           setRange((old) =>
             old && data?.snapshot === body.snapshot
@@ -610,6 +669,7 @@ export function DelegationExplorer({
     scope,
     direction,
     collapsedKey,
+    relativesKey,
     pageIndex,
     revision,
   ]);
@@ -640,6 +700,21 @@ export function DelegationExplorer({
     if (data && onHierarchy)
       onHierarchy(data.session_count > 1 || data.rows.some((n) => n.context_only || n.parent_id || n.external_parent || n.external_child));
   }, [data]);
+  function restoreAliases(aliases: DelegationAliases) {
+    setUnresolvedSelection(new Set(unresolvedAliases(aliases)));
+    const url = new URL(location.href);
+    const changes = normalizeDelegationView(url.searchParams, aliases);
+    if (!changes) return;
+    for (const [key, value] of Object.entries(changes)) {
+      if (value) url.searchParams.set(key, value);
+      else url.searchParams.delete(key);
+    }
+    const route = readDelegationRoute(url.searchParams);
+    setSelected(route.selected);
+    setCollapsed(new Set(route.collapsed));
+    history.replaceState(history.state, "", url);
+    window.dispatchEvent(new Event("pharos:uri-changed"));
+  }
   function resetPage() {
     livePages.current.reset();
     setCursor("");
@@ -691,6 +766,11 @@ export function DelegationExplorer({
     window.dispatchEvent(new Event("pharos:uri-changed"));
     if (splitReader) openOverview?.();
   }
+  // Loads the relatives a session's row left out at the family bound; durable in the URL.
+  function showRelatives(n: Session) {
+    resetPage();
+    setRelatives((old) => [...new Set([...old, n.id])].sort());
+  }
   function toggle(n: Session) {
     resetPage();
     setCollapsed((old) => {
@@ -720,30 +800,45 @@ export function DelegationExplorer({
   const specs = orderedMetrics.filter((m) => columns.includes(m.id));
   const reportedMinimumShown = rows.some(n => (compact || scope === "self" ? n.self : n.all).tokens?.quality === "reported-minimum");
   const sessionBranches = useMemo(() => timelineSessionBranches(rows), [rows]);
+  // A continuation transcript selects the execution it is a segment of.
   const current =
-    data?.focus.filter((n) => n.conversation_id === conversation) || [];
-  const shownSession = current.find((n) => n.id === selected) || current[0];
+    data?.focus.filter((n) => n.conversation_id === conversation || !!n.segments?.some((segment) => segment.conversation_id === conversation)) || [];
+  const selection = readerSelection(current, selected, unresolvedSelection);
+  const shownSession = selection.row;
   const currentSessionID = splitReader || single ? shownSession?.id : undefined;
   const conversationChildren =
     data?.focus.filter((n) => current.some((c) => c.id === n.parent_id)) || [];
   const childSessions = conversationChildren.filter(n => n.parent_id === shownSession?.id);
-  function externalURL(ref: Reference, message?: string) {
+  // Row IDs name executions in every workspace, so the destination selects
+  // the same session.
+  function externalURL(ref: Reference, message?: string, session?: string) {
     const params = new URLSearchParams({ conversation: ref.conversation_id });
     if (message) params.set("message", message);
+    if (session) params.set("delegation_session", session);
     return `/work/${encodeURIComponent(ref.workspace_id)}?${params}`;
   }
-  function openExternal(ref: Reference) {
-    const target = externalURL(ref, ref.message_id);
+  function openExternal(ref: Reference, session?: string) {
+    const target = externalURL(ref, ref.message_id, session);
     if (window.pharosNavigate) window.pharosNavigate(target);
     else location.assign(target);
   }
+  // Each continuation segment opens in the workspace that retains it, with
+  // the execution still selected.
+  function openSegment(n: Session, segment: ExecutionSegment) {
+    if (segment.workspace_id && segment.workspace_id !== workspace) {
+      openExternal({ conversation_id: segment.conversation_id, workspace_id: segment.workspace_id, label: n.label, provider: n.provider }, n.id);
+      return;
+    }
+    setSelected(n.id);
+    void openConversation(segment.conversation_id, undefined, n.id);
+  }
   const openNode = (n: Session, message?: string, sourceConversation?: string) => {
     if (n.navigation) {
-      openExternal(n.navigation);
+      openExternal(n.navigation, n.id);
       return;
     }
     if (n.external_child && !message) {
-      openExternal(n.external_child);
+      openExternal(n.external_child, n.id);
       return;
     }
     if (!message && n.id === currentSessionID) return;
@@ -816,19 +911,28 @@ export function DelegationExplorer({
     };
   }, [contextHost, data, conversation]);
   const headingHost = contextHost?.closest(".conversation-head")?.querySelector(".conversation-title-line");
-  const heading = shownSession && (
+  const unresolvedNote = selection.unresolved && (
+    <small className="delegation-truncation" role="note">
+      The saved session link no longer identifies one session{shownSession ? "; this transcript has only this session" : ". Choose a session in the hierarchy"}.
+    </small>
+  );
+  const heading = shownSession ? (
     <div
       className="delegation-session-heading"
       data-session={shownSession.id}
     >
       <h2>{shownSession.label}</h2>
       <small>
+        {shownSession.subtitle ? `${shownSession.subtitle} · ` : ""}
         {shownSession.provider} ·{" "}
         {shownSession.model || "model unknown"} ·{" "}
         {shownSession.effort || "unknown"}
+        {parentNote(shownSession) ? ` · ${parentNote(shownSession)}` : ""}
+        {occurrenceNote(shownSession.occurrence_partial) ? ` · ${occurrenceNote(shownSession.occurrence_partial)}` : ""}
       </small>
+      {unresolvedNote}
     </div>
-  );
+  ) : unresolvedNote ? <div className="delegation-session-heading">{unresolvedNote}</div> : null;
   const context =
     contextHost &&
     createPortal(
@@ -839,13 +943,23 @@ export function DelegationExplorer({
             .map((n) => (
               <button
                 key={n.id} data-session-id={n.id}
-                onClick={() => openExternal(n.external_parent!)}
+                onClick={() => openExternal(n.external_parent!, n.parent_id)}
                 title="Parent conversation in another workspace"
               >
                 ← Parent · {n.external_parent!.provider} ·{" "}
                 {n.external_parent!.label}
               </button>
             ))}
+          {shownSession && (() => {
+            const position = segmentPosition(shownSession.segments, conversation);
+            return position && (
+              <span className="delegation-segments" title="This session continues across several transcripts">
+                {position.previous && <button type="button" onClick={() => openSegment(shownSession, position.previous!)}>← Earlier segment</button>}
+                {" "}Segment {position.index + 1} of {position.total}{" "}
+                {position.next && <button type="button" onClick={() => openSegment(shownSession, position.next!)}>Later segment →</button>}
+              </span>
+            );
+          })()}
           {shownSession && (
             <span title="Usage attributed to the selected agent session. Aggregate branch remainders are shown separately.">
               {metricText(shownSession.self.tokens)} tokens · This agent session
@@ -885,6 +999,10 @@ export function DelegationExplorer({
     );
   const totals = data && (
     <div className="delegation-totals">
+      <span title={data.session_count_uncertain ? "Some sessions' identity evidence is in an unresolved conflict, so this count is not exact." : "Sessions in this work."}>
+        <small>Sessions</small>
+        <strong>{data.session_count_uncertain ? "≈" : ""}{data.session_count.toLocaleString()}</strong>
+      </span>
       {["tokens", "cost", "calls", "clock", "total"].map((key) => {
         const spec = data.metrics.find((m) => m.id === key)!;
         return (
@@ -892,7 +1010,7 @@ export function DelegationExplorer({
             <small>{spec.label}</small>
             <strong>
               {formatted(data.totals[key].value, spec.unit)}
-              {data.totals[key].quality === "partial" ? "+" : ""}
+              {qualityMark(data.totals[key].quality)}
             </strong>
           </span>
         );
@@ -1010,6 +1128,7 @@ export function DelegationExplorer({
                   collapsed={collapsed}
                   toggle={toggle}
                   openNode={openNode}
+                  showRelatives={showRelatives}
                 />
               ) : !single && tab === "table" ? (
                 <>
@@ -1059,7 +1178,7 @@ export function DelegationExplorer({
                                   <div className="delegation-node">
                                     <SessionIdentity
                                       name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`}
-                                      metadata={<>{peerPrefix(n)}{n.provider} · {n.model || "model unknown"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}<SessionAge start={n.start} prefix=" · " /></>}
+                                      metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{n.provider} · {n.model || "model unknown"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{n.events_pending ? ` · ${eventsPendingNote}` : ""}<SessionAge start={n.start} prefix=" · " /></>}
                                       title={`${n.id} · ${n.coverage} coverage · ${n.parent_evidence || "root"}`}
                                       depth={mode === "hierarchy" ? n.depth : 0}
                                       branch={mode === "hierarchy" ? sessionBranches.get(n.id) : undefined}
@@ -1074,6 +1193,7 @@ export function DelegationExplorer({
                                       aria-expanded={!collapsed.has(n.id)}
                                       onClick={() => toggle(n)}
                                     ><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
+                                    <RelativesButton node={n} show={showRelatives} />
                                   </div>
                                 </td>
                                 {specs.map((m) => {
@@ -1116,6 +1236,7 @@ export function DelegationExplorer({
                         </tbody>
                       </table>
                       {!rows.length && <p>No agent sessions match these filters.</p>}
+                      {coverageSummary(data.coverage).counts && <small className="delegation-truncation" role="note">{coverageSummary(data.coverage).counts}</small>}
                     </div>
                   </div>
                 </>
@@ -1127,6 +1248,7 @@ export function DelegationExplorer({
                   previewOnly={splitReader}
                   openOverview={openOverview}
                   endpoint={endpoint}
+                  relatives={relativesKey}
                   data={data}
                   rows={rows}
                   range={range}
@@ -1148,7 +1270,7 @@ export function DelegationExplorer({
                   <span>
                     {loading
                       ? "Loading…"
-                      : `${data.offset + (data.rows.length ? 1 : 0)}–${data.offset + data.rows.length} of ${data.total} sessions`}
+                      : `${data.offset + (data.rows.length ? 1 : 0)}–${data.offset + data.rows.length} of ${sessionCountText(data.total, data.session_count_uncertain)}`}
                     {data.ancestors.length
                       ? ` · ${data.ancestors.length} ancestors retained as context`
                       : ""}
@@ -1188,6 +1310,9 @@ export function DelegationExplorer({
                 {data.warnings.map((warning, i) => (
                   <p key={i}>{warning}</p>
                 ))}
+                {coverageSummary(data.coverage).notes.map((note) => (
+                  <p key={note}>{note}</p>
+                ))}
                 <dl>
                   {data.metrics.map((m) => (
                     <React.Fragment key={m.id}>
@@ -1206,26 +1331,33 @@ export function DelegationExplorer({
   );
 }
 
+function RelativesButton({ node, show }: { node: Session; show: (node: Session) => void }) {
+  if (!node.children_omitted) return null;
+  return <button type="button" className="delegation-inline-link delegation-relatives" data-view-field="delegation_relatives" aria-label={`Show ${node.children_omitted} more related session${node.children_omitted === 1 ? "" : "s"} of ${node.label}`} onClick={() => show(node)}>+{node.children_omitted.toLocaleString()} more</button>;
+}
+
 // Related work's sessions name their role first.
 const peerPrefix = (n: Session) => n.peer ? `${peerRoleLabel(n.peer.role)} · ` : "";
 
-function InboxSessions({ rows, data, shown, collapsed, toggle, openNode }: {
+function InboxSessions({ rows, data, shown, collapsed, toggle, openNode, showRelatives }: {
   rows: Session[];
   data: Analysis;
   shown: string;
   collapsed: Set<string>;
   toggle: (node: Session) => void;
   openNode: (node: Session) => void;
+  showRelatives: (node: Session) => void;
 }) {
   const branches = timelineSessionBranches(rows);
   // Self usage keeps each session comparable; parallel children do not inflate its run time.
   const metrics = ["cost", "clock"].map(id => data.metrics.find(spec => spec.id === id)).filter((spec): spec is Spec => !!spec);
   return <div className="delegation-inbox-list" role="table" aria-label="Agent session hierarchy and usage">
-    <div className="delegation-inbox-heading" role="row"><span role="columnheader">Agent session</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Run time" : spec.label}</span>)}</div>
+    <div className="delegation-inbox-heading" role="row"><span role="columnheader" title={sessionCountText(data.session_count, data.session_count_uncertain)}>Agent session{data.session_count_uncertain ? " ≈" : ""}</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Run time" : spec.label}</span>)}</div>
     {rows.map(n => <div key={n.id} role="row" data-session-id={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }}>
       <div role="cell" className="delegation-inbox-session">
-        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{peerPrefix(n)}{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}{n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens)} tokens unallocated in branch` : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
+        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens)} tokens unallocated in branch` : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
         {!!n.child_count && <button className="delegation-chevron session-fold" style={{left: sessionBranchX(n.depth) - 8}} aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} title={collapsed.has(n.id) ? "Expand sessions" : "Collapse sessions"} aria-expanded={!collapsed.has(n.id)} onClick={() => toggle(n)}><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
+        <RelativesButton node={n} show={showRelatives} />
       </div>
       {metrics.map(spec => {
         const value = n.self[spec.id];
@@ -1458,6 +1590,7 @@ function TimelineOverview({
 
 export function ParallelActivity({
   endpoint,
+  relatives = "",
   data,
   rows,
   range,
@@ -1472,6 +1605,8 @@ export function ParallelActivity({
   previewOnly?:boolean;openOverview?:()=>void;
   timeline?:boolean;single?:boolean;compact?:boolean;
   endpoint: string;
+  /** The explorer's loaded relatives; lanes must name the same snapshot. */
+  relatives?: string;
   data: Analysis;
   rows: Session[];
   range: Range;
@@ -1564,6 +1699,7 @@ export function ParallelActivity({
       sessions: ids,
       width: String(trackWidth),
       ...(timeline ? {labels:"1"} : {}),
+      ...(relatives ? {relatives} : {}),
     });
     readJSON<Activity>(`${endpoint}/parallel?${params}`, controller.signal)
       .then(setActivity, (e) => {
@@ -1573,7 +1709,7 @@ export function ParallelActivity({
         if (!controller.signal.aborted) setPending(false);
       });
     return () => controller.abort();
-  }, [endpoint, ids, data.snapshot, range, trackWidth,timeline]);
+  }, [endpoint, relatives, ids, data.snapshot, range, trackWidth,timeline]);
   const visibleActivity =
     activity?.start === range[0] && activity?.end === range[1]
       ? activity
@@ -1583,10 +1719,10 @@ export function ParallelActivity({
     if (!timeline || !skipIdle || wholeWindow) return;
     if (wholeActivity?.snapshot === data.snapshot && wholeActivity.start === full[0] && wholeActivity.end === full[1] && (wholeActivity as Activity & { sessions?: string }).sessions === ids) return;
     const controller = new AbortController();
-    const params = new URLSearchParams({ snapshot: data.snapshot, start: String(full[0]), end: String(full[1]), sessions: ids, width: "1000", labels: "1" });
+    const params = new URLSearchParams({ snapshot: data.snapshot, start: String(full[0]), end: String(full[1]), sessions: ids, width: "1000", labels: "1", ...(relatives ? {relatives} : {}) });
     readJSON<Activity>(`${endpoint}/parallel?${params}`, controller.signal).then(value => setWholeActivity({ ...value, sessions: ids } as Activity), () => {});
     return () => controller.abort();
-  }, [timeline, skipIdle, wholeWindow, endpoint, ids, data.snapshot, full[0], full[1]]);
+  }, [timeline, skipIdle, wholeWindow, endpoint, relatives, ids, data.snapshot, full[0], full[1]]);
   const idleSource = wholeWindow ? visibleActivity : wholeActivity?.snapshot === data.snapshot && wholeActivity.start === full[0] && wholeActivity.end === full[1] ? wholeActivity : null;
   const gaps = useMemo<IdleGap[]>(() => {
     if (!timeline || !idleSource) return [];
@@ -1599,10 +1735,10 @@ export function ParallelActivity({
   const fullScale = useMemo(() => timeScale(full, shownGaps), [full[0], full[1], shownGaps]);
   const windowScale = useMemo(() => timeScale(range, shownGaps), [range[0], range[1], shownGaps]);
   const shownLaneRows=useMemo(()=>{
-    const active=rows.filter(node=>node.start!=null&&node.end!=null&&node.start<=range[1]&&node.end>=range[0]);
-    return laneRows.filter(node=>active.some(other=>other.id===node.id||other.outline.startsWith(`${node.outline}.`)));
+    return activeLaneRows(rows,laneRows,range);
   },[rows,laneRows,range[0],range[1]]);
   const sessionBranches=useMemo(()=>timelineSessionBranches(shownLaneRows),[shownLaneRows]);
+  const coverage=useMemo(()=>laneCoverage(rows,shownLaneRows),[rows,shownLaneRows]);
   const legend=useMemo(()=>timelineLegendWindow([
     {id:`caller:${data.rows[0]?.workspace_id??endpoint}`,caller:true,messages:actors.caller,marks:visibleActivity?.lanes.flatMap(lane=>lane.marks)??[],neighbors:allMessages},
     ...shownLaneRows.map(node=>({id:node.id,messages:actors.messages.get(node.id)??[],marks:visibleActivity?.lanes.find(lane=>lane.session===node.id)?.marks??[],neighbors:nativeLabels.messages.get(node.id)})),
@@ -1690,6 +1826,8 @@ export function ParallelActivity({
   const ticks = timelineTickLabels(range,Math.max(2,Math.min(6,Math.floor((clockWidth||350)/100))),windowScale.compressed?windowScale.time:undefined);
   const cutLabels = cutAxisLabels(ticks.map((_,i)=>i/Math.max(1,ticks.length-1)),windowScale.cuts,clockWidth||350);
   const lanes = new Map(visibleActivity?.lanes.map((l) => [l.session, l]));
+  // Withheld events are left out of every lane; say so even for sessions with no lane drawn.
+  const eventsPendingStatus = timelineEventsPendingNote(timelineEventsPending(rows, lanes, shownLaneRows, data.events_pending_sessions));
   const sourceHref=(node:Session,item:RibbonObservation)=>ribbonSourceURL(item,{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href);
   const eventHref=(node:Session,e:AgentEventLink)=>withEventLink(ribbonSourceURL({id:e.id,start:0,end:0,title:"",color:"",thinking:false,message:{id:e.message_id} as LabelMessage},{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href),e);
   return (
@@ -1788,7 +1926,7 @@ export function ParallelActivity({
             n.start <= range[1] &&
             n.end >= range[0];
           if(recursive&&labelData)return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
-            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${peerPrefix(n)}${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
+            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${peerPrefix(n)}${n.provider} · ${n.model||"model not recorded"}${parentNote(n)?` · ${parentNote(n)}`:""}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
               openSession={timeline?()=>openNode(n):undefined}
               sourceHref={timeline?item=>sourceHref(n,item):undefined}
               events={timeline?nativeLabels.events.get(n.id):undefined} eventCounts={eventCounts} eventHref={timeline?e=>eventHref(n,e):undefined}
@@ -1797,6 +1935,17 @@ export function ParallelActivity({
               select={(item,anchor)=>{if(item.message){setEventID("label:"+item.message.id);openNode(n,item.message.id,item.message.conversation_id);}else if(item.mark){setEventID(JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category]));setMark({node:n,mark:item.mark,anchor});}}}/>
             {lane?.truncated?<small className="delegation-truncation">Showing first 2,400 marks; zoom in for remaining events.</small>:null}
             {lane?.messages_truncated?<small className="delegation-truncation">Message display is limited to 2,400 observations per session. Zoom in to see more.</small>:null}
+            {lane?.inherited_messages||lane?.repeated_messages||lane?.occurrence_partial||lane?.omitted_segments?.length||lane?.events_pending?(()=>{
+              // Copies link to the session that owns the original when it is loaded.
+              const owners=(lane.inherited_owners??[]).map(id=>data.focus.find(row=>row.id===id)??rows.find(row=>row.id===id)).filter((row):row is Session=>!!row);
+              const parts:React.ReactNode[]=[];
+              if(lane.inherited_messages)parts.push(<React.Fragment key="inherited">{lane.inherited_messages.toLocaleString()} copied message{lane.inherited_messages===1?"":"s"} belong{lane.inherited_messages===1?"s":""} to {owners.length?owners.map((owner,i)=><React.Fragment key={owner.id}>{i?", ":""}<button type="button" className="delegation-inline-link" onClick={()=>openNode(owner)}>{owner.label}</button></React.Fragment>):lane.inherited_owners?.length?"another session":"a session whose original is not retained"}</React.Fragment>);
+              if(lane.repeated_messages)parts.push(`${lane.repeated_messages.toLocaleString()} message${lane.repeated_messages===1?" repeats":"s repeat"} this session's earlier segment`);
+              if(lane.occurrence_partial)parts.push((lane.occurrence_reasons??[]).map(occurrenceNote).find(Boolean)||"some messages may repeat copied history");
+              if(lane.omitted_segments?.length)parts.push(omittedSegmentsNote(lane.omitted_segments));
+              if(lane.events_pending)parts.push(eventsPendingNote);
+              return <small className="delegation-truncation">{parts.map((part,i)=><React.Fragment key={i}>{i?" · ":""}{part}</React.Fragment>)}</small>;
+            })():null}
           </div>;
           return (
             <div
@@ -1832,9 +1981,7 @@ export function ParallelActivity({
                   className="delegation-name" data-overflow-title=""
                   onClick={() => openNode(n)}
                 >
-                  <strong>
-                    {n.label}
-                  </strong>
+                  <strong>{n.label}</strong>
                   <small>
                     {n.provider} · {n.model || "unknown model"}
                     {` · ${n.effort || "unknown"}`}
@@ -1925,6 +2072,13 @@ export function ParallelActivity({
           );
         })}
       </div>
+      {eventsPendingStatus ? <small className="delegation-truncation" role="status">{eventsPendingStatus}</small> : null}
+      {!previewOnly && (coverage.omitted.length > 0 || coverage.unresolved.length > 0) && (
+        <small className="delegation-truncation" role="note">
+          {[coverage.omitted.length ? `${coverage.omitted.length} parent session${coverage.omitted.length === 1 ? "" : "s"} not loaded on this page` : "",
+            coverage.unresolved.length ? `${coverage.unresolved.length} session${coverage.unresolved.length === 1 ? " has" : "s have"} unresolved parentage` : ""].filter(Boolean).join(" · ")}
+        </small>
+      )}
       {!previewOnly && mark && (
         <ActivityPopover
           key={`${mark.node.id}:${mark.mark.start}:${mark.mark.name}`}

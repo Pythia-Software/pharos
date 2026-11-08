@@ -5,6 +5,9 @@ import {join} from 'node:path';
 import vm from 'node:vm';
 import {transformSync} from 'esbuild';
 import {assets, loadClassicScript, plain} from '../helpers/classic-script.mjs';
+import {discoverHostSources, findHostBypasses, shellScripts} from '../../../host-boundaries.mjs';
+import {mkdtempSync, mkdirSync, writeFileSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 
 const load = globals => loadClassicScript('host-services.js', globals).window;
 const rejected = (code, message) => error => {
@@ -161,9 +164,64 @@ test('textarea fallback copies inside an active modal instead of its inert backg
 });
 
 test('feature scripts keep host transport access inside the adapter', () => {
-  for (const name of ['library.js', 'status-panel.js', 'menu-bar.js', 'onboarding.js', 'application.html', 'ui.py']) {
-    assert.doesNotMatch(readFileSync(join(assets, name), 'utf8'), /\bmessageHandlers\b|\bpostMessage\s*\(/, name);
+  assert.deepEqual(findHostBypasses(discoverHostSources(join(assets, '../../..'))), []);
+});
+
+test('host boundary syntax catches aliases, destructuring and computed native access', () => {
+  const check = text => findHostBypasses([{file: 'web/src/new-feature.tsx', name: 'web/src/new-feature.tsx', text}]);
+  for (const text of [
+    `window.webkit.messageHandlers.pharosClipboard.postMessage('x');`,
+    `const win = globalThis; const key = 'web' + 'kit'; const bridge = win[key];`,
+    `const {webkit: bridge} = window; bridge['messageHandlers'][channel].postMessage('x');`,
+    `const {webkit: {messageHandlers: handlers}} = window;`,
+    `const {navigator: nav} = window; const {clipboard: board} = nav; board.writeText('x');`,
+    `const nav = navigator; const key = 'clip' + 'board'; nav[key].writeText('x');`,
+    `const copy = document.execCommand; copy('copy');`,
+    `window.chrome['webview'].postMessage('x');`,
+    `window.external.invoke('x');`,
+    `import {invoke} from '@tauri-apps/api/core';`,
+    `const native = await import('electron');`,
+  ]) assert.ok(check(text).length, text);
+  for (const text of [
+    `worker.postMessage('x'); window.postMessage('x', '*');`,
+    `window.pharosHost.clipboard.writeText('x'); window.pharosCopyText('x');`,
+    `document.execCommand('insertText', false, 'a');`,
+    `const text = 'window.webkit.messageHandlers'; // navigator.clipboard`,
+    `const {clipboard} = window.pharosHost; clipboard.writeText('x');`,
+  ]) assert.deepEqual(check(text), [], text);
+  assert.ok(check(`window[` ).length, 'syntax errors cannot silently exclude a source');
+});
+
+test('host source discovery covers new nested scripts and executable shell fragments', t => {
+  const root = mkdtempSync(join(tmpdir(), 'pharos-host-boundaries-'));
+  t.after(() => rmSync(root, {recursive: true, force: true}));
+  for (const dir of ['web/src/new', 'internal/archive/assets/new', 'internal/uifeedback/assets']) mkdirSync(join(root, dir), {recursive: true});
+  writeFileSync(join(root, 'web/src/new/feature.tsx'), `const bridge = window['webkit'];`);
+  writeFileSync(join(root, 'internal/archive/assets/new/shell.html'), `<script type="application/json">{"data":"webkit"}</script><script>window.webkit</script><button onclick="window[&quot;webkit&quot;]">Go</button>`);
+  writeFileSync(join(root, 'internal/archive/assets/new/shell.py'), `HTML = r'''<script>navigator.clipboard.writeText('x')</script>'''`);
+  writeFileSync(join(root, 'internal/uifeedback/assets/new.js'), `window.webkit`);
+  writeFileSync(join(root, 'internal/archive/assets/query-tables.js'), `not valid authored JS`);
+  writeFileSync(join(root, 'web/src/new/host.d.ts'), `ignored declaration`);
+  const entries = discoverHostSources(root), findings = findHostBypasses(entries);
+  for (const file of ['web/src/new/feature.tsx', 'internal/archive/assets/new/shell.html', 'internal/archive/assets/new/shell.py', 'internal/uifeedback/assets/new.js']) assert.ok(findings.some(finding => finding.file === file), file);
+  assert.equal(entries.filter(entry => entry.file.endsWith('shell.html')).length, 2, 'JSON is data; scripts and event handlers are code');
+  assert.deepEqual(shellScripts('external.html', `<script src="host-services.js"></script><script type="application/ld+json">{}</script>`), []);
+  for (const attributes of [
+    `data-src="unused"`,
+    `data-type="application/json"`,
+    `data-note='src="unused" type="application/json"'`,
+    `data-note="quoted > character" data-type="application/json"`,
+    `data-type="application/json" TYPE="text/javascript"`,
+  ]) {
+    const scripts = shellScripts('attributes.html', `<script ${attributes}>navigator.clipboard.writeText('x')</script>`);
+    assert.equal(scripts.length, 1, attributes);
+    assert.ok(findHostBypasses(scripts).length, attributes);
   }
+  assert.deepEqual(shellScripts('external-attributes.html', `<script data-src="unused" SRC="host-services.js">window.webkit</script><script data-type="text/javascript" TYPE="application/json">{}</script>`), []);
+  assert.ok(findHostBypasses(shellScripts('handler.html', `<button onclick=window.webkit>Go</button>`)).length);
+  assert.equal(shellScripts('valid.html', `<script>let onload = () => 1;</script>`).length, 1, 'JS assignments are not HTML event attributes');
+  assert.deepEqual(shellScripts('inert.html', `<!-- <script>window.webkit</script> --><button title="example onclick='window.webkit'">Go</button>`), [], 'comments and quoted prose are not executable handlers');
+  assert.throws(() => shellScripts('broken.html', `<script>window.webkit`), /unclosed executable script/);
 });
 
 test('onboarding picker purposes preserve legacy source and export panel modes', async () => {

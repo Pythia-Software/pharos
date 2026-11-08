@@ -1,39 +1,10 @@
 # Work execution across platforms
 
-The execution model is portable policy over domain work. Native observations
-and native actions stay at the edges. This is preparation for future ports;
-it does not enable a new supported operating system or change the scheduled
+The execution model keeps domain policy portable and native observations and
+native actions at the edges. The [portability guide](portability.md) describes
+repository-wide boundaries, compatibility rules and checks. This document
+covers execution and measurement contracts; it does not change the scheduled
 engine's production activation gates.
-
-## Follow the existing boundaries
-
-The November 7–8 portability changes establish the pattern this stack uses:
-
-- [#508](https://github.com/Pythia-Software/pharos/pull/508), #515–#525 and
-  #537 put advisory locking in `internal/platform/filelock`. An unavailable
-  lock is an error, distinct from contention. File lifetime and durable work
-  ownership remain with the caller.
-- [#535](https://github.com/Pythia-Software/pharos/pull/535),
-  [#538](https://github.com/Pythia-Software/pharos/pull/538) and
-  [#543](https://github.com/Pythia-Software/pharos/pull/543) provide
-  `filesync`, `localidentity` and `fsinfo`. Native facts carry availability;
-  shared callers decide whether a safe fallback exists. A display can omit
-  capacity; a write requiring known free space must refuse.
-- [#540](https://github.com/Pythia-Software/pharos/pull/540) and
-  [#548](https://github.com/Pythia-Software/pharos/pull/548) separate resource
-  arithmetic from native accounting. Every reading declares its counters;
-  missing counters and resets cannot become measured zeroes.
-- [#533](https://github.com/Pythia-Software/pharos/pull/533),
-  [#541](https://github.com/Pythia-Software/pharos/pull/541) and
-  [#552](https://github.com/Pythia-Software/pharos/pull/552) separate process
-  isolation, identity and liveness. Unknown liveness is not absence, and
-  presence alone proves neither ownership nor identity across PID reuse.
-
-Use small functions and platform-tagged files, with private helpers beside
-archive callers unless a primitive is shared across packages. Do not add an
-all-purpose OS interface, a platform service object, or a second resource
-sampler. The existing native implementation and unsupported implementation
-must obey the same narrowly stated contract.
 
 ## Three independent responsibilities
 

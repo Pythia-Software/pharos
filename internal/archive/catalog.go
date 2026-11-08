@@ -39,6 +39,8 @@ type Catalog struct {
 	find         libraryFindCache
 	transcripts  transcriptFindCache
 	derived      derivedCache
+	// execution caches execution resolution per source generation (execution_revision.go).
+	execution    executionCache
 	fingerprints fingerprintWorker
 	// Initialized under derived.mu; caps simultaneous workload fits.
 	thinkingFitSlots chan struct{}
@@ -296,6 +298,7 @@ func (c *Catalog) Initialize() error {
 		{"source_item_states", "indexed_by", "ALTER TABLE source_item_states ADD COLUMN indexed_by TEXT NOT NULL DEFAULT 'intentional'"},
 		{"source_states", "index_version", "ALTER TABLE source_states ADD COLUMN index_version TEXT"},
 		{"messages", "raw_text", "ALTER TABLE messages ADD COLUMN raw_text TEXT"},
+		{"execution_claims", "authority", "ALTER TABLE execution_claims ADD COLUMN authority TEXT NOT NULL DEFAULT ''"},
 		{"messages", "source_order", "ALTER TABLE messages ADD COLUMN source_order INTEGER"},
 		{"messages", "model", "ALTER TABLE messages ADD COLUMN model TEXT"},
 		{"messages", "effort", "ALTER TABLE messages ADD COLUMN effort TEXT"},
@@ -308,6 +311,8 @@ func (c *Catalog) Initialize() error {
 		{"model_requests", "speed", "ALTER TABLE model_requests ADD COLUMN speed TEXT NOT NULL DEFAULT 'standard'; DROP INDEX IF EXISTS model_requests_timing_idx"},
 		{"model_requests", "service_tier", "ALTER TABLE model_requests ADD COLUMN service_tier TEXT; DROP INDEX IF EXISTS model_requests_timing_idx"},
 		{"model_requests", "speed_source", "ALTER TABLE model_requests ADD COLUMN speed_source TEXT NOT NULL DEFAULT 'assumed_standard'; DROP INDEX IF EXISTS model_requests_timing_idx"},
+		{"model_requests", "source_message_id", "ALTER TABLE model_requests ADD COLUMN source_message_id TEXT"},
+		{"model_requests", "final_message_id", "ALTER TABLE model_requests ADD COLUMN final_message_id TEXT"},
 		{"tool_calls", "effort", "ALTER TABLE tool_calls ADD COLUMN effort TEXT"},
 		{"tool_usage_daily", "effort", "ALTER TABLE tool_usage_daily ADD COLUMN effort TEXT"},
 		{"messages", "previous_native_id", "ALTER TABLE messages ADD COLUMN previous_native_id TEXT"},
@@ -391,6 +396,7 @@ func (c *Catalog) Initialize() error {
 		// Cover the timing projection so request reads never visit large
 		// conversation bodies or sort the entire ledger's window partitions.
 		"CREATE INDEX IF NOT EXISTS conversations_timing_idx ON conversations(id,workspace_id,provider,harness,agent_depth)",
+		"CREATE INDEX IF NOT EXISTS model_requests_source_message_idx ON model_requests(source_message_id) WHERE source_message_id IS NOT NULL",
 		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,speed,service_tier,speed_source,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
 		"CREATE INDEX IF NOT EXISTS messages_timing_metadata_idx ON messages(conversation_id,source_order) WHERE kind='metadata'",
 		// Ask Pharos's compaction signal reads only requests after a
@@ -614,6 +620,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureQueryCacheGeneration(); err != nil {
 		return fmt.Errorf("initialize query cache invalidation: %w", err)
+	}
+	if err := c.ensureExecutionSourceGeneration(); err != nil {
+		return fmt.Errorf("initialize execution source generation: %w", err)
 	}
 	if err := c.ensureQueryPlannerStatistics(context.Background()); err != nil {
 		return fmt.Errorf("initialize query planner statistics: %w", err)

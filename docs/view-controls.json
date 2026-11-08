@@ -65,6 +65,10 @@
     },
     {
       "file": "web/src/delegation.tsx",
+      "field": "delegation_relatives"
+    },
+    {
+      "file": "web/src/delegation.tsx",
       "field": "delegation_scope"
     },
     {
@@ -5196,15 +5200,6 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "013ab4580c16d789:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "button",
-      "control": "onClick={() => openExternal(n.external_parent!)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
       "key": "2562bc8689ddb3ca:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5243,6 +5238,15 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
+      "key": "5eba9ec1822f23d8:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "onClick={() => openExternal(n.external_parent!, n.parent_id)}",
+      "contract": "delegation",
+      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+    },
+    {
       "key": "7387f1cf2fb13437:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5259,6 +5263,15 @@
       "control": "onClick={showHierarchy}",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+    },
+    {
+      "key": "902f5581e7baef79:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "onClick={() => openSegment(shownSession, position.next!)}",
+      "contract": "delegation",
+      "reason": "Segment navigation opens the segment's canonical conversation route (in its own workspace) with delegation_session naming the same execution."
     },
     {
       "key": "9525c695db1669f6:0",
@@ -5320,6 +5333,15 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
+      "key": "ef8df6715bf8aa5d:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "onClick={() => openSegment(shownSession, position.previous!)}",
+      "contract": "delegation",
+      "reason": "Segment navigation opens the segment's canonical conversation route (in its own workspace) with delegation_session naming the same execution."
+    },
+    {
       "key": "f3d7994222b73250:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5357,6 +5379,15 @@
       "control": "onClick={event => { if (!(event.target as HTMLElement).closest(\"button\")) openNode(n); }}",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+    },
+    {
+      "key": "22244af318ff404e:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "ParallelActivity",
+      "tag": "button",
+      "control": "onClick={()=>openNode(owner)}",
+      "contract": "delegation",
+      "reason": "Session navigation writes the canonical conversation route and delegation_session through the shared explorer openNode handler; the current session has no navigation control."
     },
     {
       "key": "3531eb64a70fc13d:0",
@@ -5454,6 +5485,16 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
+    },
+    {
+      "key": "ff63ef509697c36b:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "RelativesButton",
+      "tag": "button",
+      "control": "data-view-field=\"delegation_relatives\" aria-label={`Show ${node.children_omitted} more related session${node.children_omitted === 1 ? \"\" : \"s\"} of ${node.label}`} onClick={() => show(node)}",
+      "binding": "delegation_relatives",
+      "contract": "view.delegation_relatives",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "188d8c8a1103f46e:0",
@@ -7545,6 +7586,17 @@
       "control": "onClick={() => void refresh()}",
       "contract": "editing",
       "reason": "Requests an explicit background refresh; does not change view state."
+    },
+    {
+      "key": "7b453e50dd2c9c68:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyTableContext",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`safety-check:${focus.rule}:questions`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "0f43a5c72d8a7da5:0",

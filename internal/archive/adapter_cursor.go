@@ -40,7 +40,7 @@ type cursorAdapter struct {
 }
 
 // cursorExtractor versions the parser; bump it when parsing changes.
-const cursorExtractor = "cursor-v1"
+const cursorExtractor = "cursor-v3-bounded-copies"
 
 func (a *cursorAdapter) partExtractor() string { return cursorExtractor }
 
@@ -530,6 +530,9 @@ type cursorThread struct {
 	// calls are the tool calls of its own messages, by call ID, and
 	// copiedCalls those of the messages a fork copied from its parent.
 	calls, copiedCalls map[string]bool
+	// evidence is what reading left out, kept as typed claims: the copy a
+	// fork starts with, and the records left out as echoes of another.
+	evidence []EvidenceRecord
 }
 
 // complete reports whether every message the headers name was read.
@@ -574,22 +577,28 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 		inCopy := map[string]bool{}
 		forked := firstString(info["forkedFromComposerId"])
 		inherited, _ := number(info["conversationLengthAtSpawn"])
-		if n := int(inherited); forked != "" && n > 0 && n <= thread.known {
-			parent, gone := byID[forked], false
-			if parent == nil {
-				var held int
-				err := tx.QueryRowContext(a.context(), `SELECT COUNT(*) FROM cursorDiskKV WHERE key=? AND value IS NOT NULL`, "composerData:"+forked).Scan(&held)
-				if err != nil {
-					return nil, err
-				}
-				gone = held == 0
+		if n := int(inherited); forked != "" && n > thread.known {
+			// More copied than the headers place (a lost header chunk, or a
+			// count past them): the copies stay in the fork, and the claim says
+			// which are placed copies and which may be.
+			parent, gone, err := a.forkParent(tx, byID, forked)
+			if err != nil {
+				return nil, err
 			}
-			if parent == nil || n <= len(parent.ids) && slices.Equal(thread.ids[:n], parent.ids[:n]) {
+			thread.evidence = append(thread.evidence, cursorUnmappedCopyEvidence(a.config.Account, forked, thread.ids, thread.known, n, parent != nil, gone))
+		} else if n > 0 && forked != "" {
+			parent, gone, err := a.forkParent(tx, byID, forked)
+			if err != nil {
+				return nil, err
+			}
+			mapped := parent == nil || n <= len(parent.ids) && slices.Equal(thread.ids[:n], parent.ids[:n])
+			if mapped {
 				for _, id := range thread.ids[:n] {
 					inCopy[id] = true
 					delete(thread.missing, id)
 				}
 			}
+			thread.evidence = append(thread.evidence, cursorCopyEvidence(a.config.Account, forked, thread.ids[:n], parent != nil, gone, mapped))
 			if gone {
 				if len(copies[forked]) < n {
 					copies[forked] = thread.ids[:n]
@@ -621,6 +630,12 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 			}
 			return !own
 		})
+		if len(thread.copiedCalls) > 0 && len(thread.evidence) > 0 {
+			// The copy's tool calls are its parent's: its own transcript leaves
+			// them out, and the claim says which they were.
+			last := &thread.evidence[len(thread.evidence)-1]
+			last.Detail["copied_calls"] = slices.Sorted(maps.Keys(thread.copiedCalls))
+		}
 		threads = append(threads, thread)
 		byID[member.id] = thread
 	}
@@ -628,6 +643,10 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 		// Partial: Cursor held more of it than a fork copied.
 		copy := &cursorThread{member: cursorComposer{id: id, place: copiedFrom[id]}, data: map[string]any{}, ids: copies[id], missing: map[string]bool{}, short: true,
 			calls: map[string]bool{}, copiedCalls: map[string]bool{}}
+		// Cursor deleted this composer: every message here is a surviving
+		// copy a fork made, at the fork's time, of an original that is gone.
+		copy.evidence = []EvidenceRecord{{Kind: evidenceCopyReconstruction, Subject: "conversation", Origin: evidenceNative.String(), Rule: "cursor-deleted-parent-copy/v1",
+			IDKind: idKindNativeEvent, Detail: map[string]any{"copied": len(copies[id]), "copied_at": copiedAt[id]}}}
 		for _, header := range copy.ids {
 			if bubble := copied[id][header]; bubble != nil {
 				copy.bubbles = append(copy.bubbles, bubble)
@@ -642,6 +661,9 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 	var record *WorkspaceRecord
 	depth := map[string]int{}
 	echoes := map[string]bool{}
+	// suppressed are the echoes left out, by the composer each copies (or
+	// "" when only its echoed parent is known), for their claims.
+	suppressed := map[string][]EvidenceRecord{}
 	for _, thread := range threads {
 		member := thread.member
 		info := mapValueDefault(thread.data["subagentInfo"])
@@ -649,20 +671,28 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 		if member.parent != "" && byID[member.parent] != nil {
 			if echoes[member.parent] {
 				echoes[member.id] = true
+				suppressed[""] = append(suppressed[""], cursorEchoEvidence(a.config.Account, member, spawn, "", "echoed-parent"))
 				continue
 			}
 			// A fork's copy of its parent's messages starts its own copies of
 			// the subagents those messages started: a subagent started by a
 			// copied call, or by a call that is not its parent's, is one of
 			// these, left out while the subagent it copies is read whole.
-			owned, original := false, false
+			owned, original := false, ""
 			for _, other := range threads {
 				owned = owned || other.member.id != member.parent && other.calls[spawn]
-				original = original || other != thread && !echoes[other.member.id] && other.complete() &&
-					firstString(mapValueDefault(other.data["subagentInfo"])["toolCallId"]) == spawn
+				if original == "" && other != thread && !echoes[other.member.id] && other.complete() &&
+					firstString(mapValueDefault(other.data["subagentInfo"])["toolCallId"]) == spawn {
+					original = other.member.id
+				}
 			}
-			if spawn != "" && original && (byID[member.parent].copiedCalls[spawn] || !byID[member.parent].calls[spawn] && owned) {
+			if spawn != "" && original != "" && (byID[member.parent].copiedCalls[spawn] || !byID[member.parent].calls[spawn] && owned) {
 				echoes[member.id] = true
+				reason := "copied-spawn-call"
+				if !byID[member.parent].copiedCalls[spawn] {
+					reason = "spawn-call-of-another"
+				}
+				suppressed[original] = append(suppressed[original], cursorEchoEvidence(a.config.Account, member, spawn, original, reason))
 				continue
 			}
 		}
@@ -671,6 +701,7 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 			continue
 		}
 		_, conversation.Copy = copies[member.id]
+		conversation.Evidence = append(conversation.Evidence, thread.evidence...)
 		// Linked to its composer even when that is not read with it: deleted
 		// in Cursor, or not selected.
 		if member.parent != "" {
@@ -711,6 +742,15 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 	}
 	if record == nil {
 		return nil, nil
+	}
+	// Each left-out echo is recorded on the subagent it copies, or, when
+	// only its echoed parent is known, on the composer that started the work.
+	for index := range record.Conversations {
+		conversation := &record.Conversations[index]
+		conversation.Evidence = append(conversation.Evidence, suppressed[conversation.NativeID]...)
+		if index == 0 {
+			conversation.Evidence = append(conversation.Evidence, suppressed[""]...)
+		}
 	}
 	observe(record, version)
 	// A copy is as new as the newest fork that made it, so a read of the
@@ -1092,4 +1132,64 @@ func cursorProbeStats(database string) (probeStats, error) {
 		stats.oldest, stats.newest = time.UnixMilli(oldest.Int64), time.UnixMilli(newest.Int64)
 	}
 	return stats, nil
+}
+
+// forkParent is the composer a fork copied, if read here, and whether
+// Cursor deleted it.
+func (a *cursorAdapter) forkParent(tx *sql.Tx, byID map[string]*cursorThread, forked string) (*cursorThread, bool, error) {
+	if parent := byID[forked]; parent != nil {
+		return parent, false, nil
+	}
+	var held int
+	err := tx.QueryRowContext(a.context(), `SELECT COUNT(*) FROM cursorDiskKV WHERE key=? AND value IS NOT NULL`, "composerData:"+forked).Scan(&held)
+	return nil, held == 0, err
+}
+
+// cursorCopyEvidence is a fork's copy of its parent's first messages, as
+// conversationLengthAtSpawn bounds it. Cursor names copied bubbles with the
+// parent's own IDs; mapped says those IDs matched the parent's headers (or
+// the parent was not read here), so the copies were left out of the fork.
+// Unmapped copies stay in the fork and the claim keeps the doubt.
+func cursorCopyEvidence(account, parent string, ids []string, parentRead, gone, mapped bool) EvidenceRecord {
+	mapping := "shared-native-ids"
+	if !mapped {
+		mapping = "unverified"
+	}
+	detail := map[string]any{"copied": len(ids), "boundary_ordinal": len(ids), "mapping": mapping, "parent_read": parentRead, "parent_deleted": gone,
+		"ids_hash": hashBytes([]byte(strings.Join(ids, "\n")))[:16]}
+	if len(ids) > 0 {
+		detail["first_id"], detail["last_id"] = ids[0], ids[len(ids)-1]
+	}
+	if !mapped {
+		// The copies stay in the fork: which bubbles they are, so a reader
+		// bounds them exactly whatever of the fork was captured.
+		detail["ids"] = slices.Clone(ids)
+	}
+	return EvidenceRecord{Kind: evidenceHistoryCopy, Subject: "conversation", Object: executionNativeKey("cursor", account, parent), Origin: evidenceNative.String(),
+		Rule: "cursor-fork-length-at-spawn/v1", IDKind: idKindNativeEvent, Detail: detail}
+}
+
+// cursorUnmappedCopyEvidence is a fork whose reported copy length (n) is
+// more than its headers place (known): lost headers moved the rest, or the
+// count is past them. Which of the first n held messages are copies is not
+// established, so each may be one (suspected) and none is proven.
+func cursorUnmappedCopyEvidence(account, parent string, ids []string, known, n int, parentRead, gone bool) EvidenceRecord {
+	detail := map[string]any{"copied": n, "boundary_ordinal": n, "known": known, "mapping": "unmapped", "parent_read": parentRead, "parent_deleted": gone,
+		"ids": []string{}, "suspected": slices.Clone(ids[:min(n, len(ids))])}
+	if len(ids) > 0 {
+		detail["first_id"] = ids[0]
+	}
+	return EvidenceRecord{Kind: evidenceHistoryCopy, Subject: "conversation", Object: executionNativeKey("cursor", account, parent), Origin: evidenceNative.String(),
+		Rule: "cursor-fork-length-at-spawn/v1", IDKind: idKindNativeEvent, Detail: detail}
+}
+
+// cursorEchoEvidence is a subagent record a fork's copy re-created, left out
+// while the subagent it copies (original) is read whole.
+func cursorEchoEvidence(account string, member cursorComposer, spawn, original, reason string) EvidenceRecord {
+	detail := map[string]any{"reason": reason, "echo_parent": member.parent}
+	if spawn != "" {
+		detail["spawn_call"] = spawn
+	}
+	return EvidenceRecord{Kind: evidenceSuppressedRecord, Subject: "composer:" + member.id, Object: executionNativeKey("cursor", account, original), Origin: evidenceNative.String(),
+		Rule: "cursor-echo-subagent/v1", IDKind: idKindNativeEvent, Locator: "composer:" + member.id, Detail: detail}
 }

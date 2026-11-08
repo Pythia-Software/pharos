@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,7 +60,23 @@ func (s *Server) getQueryItem(w http.ResponseWriter, r *http.Request, dataset st
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	if len(result.Rows) == 0 {
-		writeJSON(w, map[string]any{"row": nil}, 200)
+		body := map[string]any{"row": nil}
+		if dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "agent_event_rates" {
+			// A saved event whose conversation is withheld until its events are
+			// rebuilt (withheldAgentEvents) is pending, not gone.
+			pending, err := agentEventItemPending(ctx, s.Catalog.reader(), dataset, id)
+			if err != nil {
+				writeError(w, err, 400)
+				return
+			}
+			coverage, err := agentEventsCoverage(ctx, s.Catalog.reader())
+			if err != nil {
+				writeError(w, err, 400)
+				return
+			}
+			body["pending"], body["coverage"] = pending, coverage
+		}
+		writeJSON(w, body, 200)
 		return
 	}
 	row := result.Rows[0]
@@ -75,6 +92,39 @@ func (s *Server) getQueryItem(w http.ResponseWriter, r *http.Request, dataset st
 		}
 	}
 	writeJSON(w, map[string]any{"row": row}, 200)
+}
+
+// agentEventItemPending is whether an agent-event item the dataset leaves out
+// is still stored, with its conversation withheld (agentEventsWithheld) until
+// the ordinary events run rebuilds it.
+func agentEventItemPending(ctx context.Context, q queryer, dataset, id string) (bool, error) {
+	present, err := agentEventsLedgerPresent(ctx, q)
+	if err != nil || !present {
+		return false, err
+	}
+	var rows []map[string]any
+	switch dataset {
+	case "agent_events":
+		event, parseErr := strconv.ParseInt(strings.TrimPrefix(id, "e"), 10, 64)
+		if parseErr != nil || !strings.HasPrefix(id, "e") {
+			return false, nil
+		}
+		rows, err = queryMapsContext(ctx, q, `SELECT conversation_id FROM agent_events WHERE id=? AND probability>=?`, event, agentEventThreshold)
+	case "agent_event_messages":
+		rows, err = queryMapsContext(ctx, q, `SELECT conversation_id FROM agent_event_messages WHERE message_id=?`, id)
+	case "agent_event_rates":
+		// A rate row is message_id:family (agentEventRateDataset).
+		cut := strings.LastIndex(id, ":")
+		if cut < 0 {
+			return false, nil
+		}
+		rows, err = queryMapsContext(ctx, q, `SELECT conversation_id FROM agent_event_facts WHERE message_id=?`, id[:cut])
+	}
+	if err != nil || len(rows) == 0 {
+		return false, err
+	}
+	withheld, err := agentEventsWithheld(ctx, q)
+	return slices.Contains(withheld, firstString(rows[0]["conversation_id"])), err
 }
 
 func querySourceFields(schema qt.Schema) []string {

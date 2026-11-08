@@ -83,16 +83,79 @@ func (step *workDomainStep) classify(ids []string, attempted, pending map[string
 
 const parallelismPendingSQL = `SELECT conversation_id id FROM parallelism_dirty WHERE conversation_id IN (SELECT value FROM json_each(?))`
 
+// Stored activity an execution evidence change made stale is marked dirty
+// only by the sweep (sweepParallelism), which no trigger runs.
+const parallelismStoredSQL = `SELECT conversation_id id FROM parallelism_occurrences WHERE conversation_id IN (SELECT value FROM json_each(?))`
+
 // parallelismPendingFor is which selected conversations' stored activity is
-// pending: an indexed lookup, for a selector.
+// pending: indexed lookups, for a selector. Until the sweep has reached the
+// execution source generation, a selected conversation with stored activity
+// is pending too, since the change may have made it stale unmarked.
 func (c *Catalog) parallelismPendingFor(ctx context.Context, ids []string) ([]string, error) {
-	pending, err := workDomainPending(ctx, c.reader(), parallelismPendingSQL, workDomainIDs(ids))
+	pending, err := c.parallelismPending(ctx, workDomainIDs(ids))
 	return sortedKeys(pending), err
 }
 
+func (c *Catalog) parallelismPending(ctx context.Context, ids []string) (map[string]bool, error) {
+	if len(ids) == 0 {
+		return map[string]bool{}, nil
+	}
+	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	pending, err := workDomainPending(ctx, tx, parallelismPendingSQL, ids)
+	if err != nil {
+		return nil, err
+	}
+	if due, err := parallelismSweepDue(ctx, tx); err != nil || !due {
+		return pending, err
+	}
+	stored, err := workDomainPending(ctx, tx, parallelismStoredSQL, ids)
+	for id := range stored {
+		pending[id] = true
+	}
+	return pending, err
+}
+
+// parallelismSweepDue reports whether the execution source generation has
+// moved past the one stored activity was last swept against (as
+// parallelismStale decides it); untracked, never.
+func parallelismSweepDue(ctx context.Context, q queryer) (bool, error) {
+	generation, tracked, err := executionSourceGeneration(ctx, q)
+	if err != nil || !tracked {
+		return false, err
+	}
+	meta, err := queryMapsContext(ctx, q, "SELECT CAST(value AS INTEGER) swept FROM meta WHERE key=?", parallelismExecutionKey)
+	return err == nil && (len(meta) == 0 || integer(meta[0]["swept"]) < generation), err
+}
+
+// parallelismSweepVersion is the execution source generation the timing
+// task's admitted preparation sweeps to (empty when untracked).
+func (c *Catalog) parallelismSweepVersion(ctx context.Context) (string, error) {
+	generation, tracked, err := executionSourceGeneration(ctx, c.reader())
+	if err != nil || !tracked {
+		return "", err
+	}
+	return fmt.Sprint(generation), nil
+}
+
+// prepareParallelism is the timing task's admitted preparation: the sweep
+// marks the stored activity execution evidence changes made stale, so the
+// queue a selection reads is complete.
+func (c *Catalog) prepareParallelism(ctx context.Context, _ string) error {
+	if !c.parallelismMu.TryLock() {
+		return errWorkDomainBusy
+	}
+	defer c.parallelismMu.Unlock()
+	return c.sweepParallelism(ctx)
+}
+
 // refreshParallelismFor stores the activity of at most parallelismBatch
-// selected dirty conversations: refreshParallelism's derivation in one read
-// snapshot and its revision-guarded publication. It is serial (one CPU).
+// selected dirty conversations: refreshParallelism's sweep, its derivation in
+// one read snapshot and its revision-guarded publication. It is serial (one
+// CPU).
 func (c *Catalog) refreshParallelismFor(ctx context.Context, ids []string) (workDomainStep, error) {
 	var step workDomainStep
 	ids = workDomainIDs(ids)
@@ -103,12 +166,17 @@ func (c *Catalog) refreshParallelismFor(ctx context.Context, ids []string) (work
 		return step, errWorkDomainBusy
 	}
 	defer c.parallelismMu.Unlock()
+	// Selected stored activity an execution evidence change made stale is
+	// dirty before the derivation reads the queue.
+	if err := c.sweepParallelism(ctx); err != nil {
+		return step, err
+	}
 	_, _, cutoff := parallelismPeriod(c.clock())
 	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return step, err
 	}
-	batch, err := deriveParallelismBatch(ctx, tx, cutoff, parallelismBatch, ids)
+	batch, err := deriveParallelismBatch(ctx, tx, c.parallelismIndexAt(ctx, tx), cutoff, parallelismBatch, ids, true)
 	_ = tx.Rollback()
 	if err != nil {
 		return step, err
@@ -122,7 +190,7 @@ func (c *Catalog) refreshParallelismFor(ctx context.Context, ids []string) (work
 			return step, err
 		}
 	}
-	pending, err := workDomainPending(ctx, c.reader(), parallelismPendingSQL, ids)
+	pending, err := c.parallelismPending(ctx, ids)
 	step.classify(ids, attempted, pending)
 	return step, err
 }

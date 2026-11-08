@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {messageLabelFingerprintCache} from '../../../src/message-label-results-model';
+import {messageLabelFingerprintCache,messageLabelRibbonNotes} from '../../../src/message-label-results-model';
 import {test} from 'node:test';
 import {EMPTY_QUERY,loadSchema,readFieldValue,toServerQuery,toQueryRequestV3,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
 import {withFingerprintColumn} from '../../../src/fingerprint-columns';
@@ -541,4 +541,12 @@ test('agent events sit at their sentence\'s share of the message span, as messag
  // The tree's event rows and the overlay share the clock.
  const tree=sessionRibbonTree([prompt,thinking,reply,next],[],[],discoveryTaxonomy,[0,400],true,false,undefined,undefined,[event('a','think',.25),event('c','reply',.5)]);
  assert.deepEqual(tree.children.find(child=>child.id==='events').items.map(item=>item.start).sort((x,y)=>x-y),[25,200]);
+});
+
+test('a ribbon reports events left out for changed evidence apart from labels still being produced',()=>{
+ assert.deepEqual(messageLabelRibbonNotes({truncated:false,pending:false,events_pending:0}),[]);
+ assert.deepEqual(messageLabelRibbonNotes({events_pending:2}).map(n=>n.badge),['Events pending']);
+ assert.match(messageLabelRibbonNotes({events_pending:1})[0].note,/^Events for 1 conversation are left out until they are rebuilt/);
+ assert.deepEqual(messageLabelRibbonNotes({pending:true}).map(n=>n.badge),['Labeling']);
+ assert.deepEqual(messageLabelRibbonNotes({truncated:true,pending:true,events_pending:3}).map(n=>n.badge),['Sample','Labeling','Events pending']);
 });

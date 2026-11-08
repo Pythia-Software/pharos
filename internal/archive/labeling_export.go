@@ -195,6 +195,7 @@ type labelingExportProvenance struct {
 	CanonicalID         string           `json:"canonical_conversation_id"`
 	WorkspaceID         string           `json:"workspace_id"`
 	RootConversationID  string           `json:"root_conversation_id"`
+	RootQuality         string           `json:"root_quality,omitempty"`
 	RunID               string           `json:"run_id"`
 	SessionID           string           `json:"session_id"`
 	SessionRole         string           `json:"session_role"`
@@ -755,12 +756,20 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 	merges := map[string]*labelingExportUnit{}
 	itemsWritten := 0
 
+	// root_quality came with typed execution ancestry; older datasets lack it.
+	rootQuality := "''"
+	var qualified int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('units') WHERE name='root_quality'`).Scan(&qualified); err != nil {
+		return nil, err
+	} else if qualified > 0 {
+		rootQuality = "COALESCE(u.root_quality,'')"
+	}
 	itemRows, err := tx.QueryContext(ctx, `SELECT i.id,i.unit_id,i.chunk_index,i.chunk_count,i.visible_start,i.visible_end,i.text,i.chars,i.source_ranges,i.target_hash,
 		i.cross_split_duplicate,i.seen_in_train,i.common_short_text,u.message_id,u.conversation_id,COALESCE(u.canonical_conversation_id,''),u.workspace_id,
 		COALESCE(u.root_conversation_id,''),COALESCE(u.run_id,''),u.depth,u.depth_status,COALESCE(u.session_id,''),COALESCE(u.session_role,''),u.cohort,u.actor_kind,
 		u.sender_role,u.provider,u.kind,u.channel,u.reasoning_format,COALESCE(u.created_at,''),COALESCE(u.content_hash,''),u.message_sha256,u.message_text,
 		COALESCE(u.authorship_reason,''),u.visible_text,u.marker_ranges,u.length_bucket,u.context_prompt,u.context_excerpt,u.context_refs,COALESCE(u.duplicate_of,''),
-		COALESCE(u.duplicate_relation,''),COALESCE(u.family_id,''),COALESCE(u.split,'') FROM items i JOIN units u ON u.id=i.unit_id ORDER BY i.id`)
+		COALESCE(u.duplicate_relation,''),COALESCE(u.family_id,''),COALESCE(u.split,''),`+rootQuality+` FROM items i JOIN units u ON u.id=i.unit_id ORDER BY i.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -777,7 +786,7 @@ func writeLabelingExport(ctx context.Context, tx *sql.Tx, datasetManifestBytes [
 			&prov.CanonicalID, &prov.WorkspaceID, &prov.RootConversationID, &prov.RunID, &depth, &prov.DepthStatus, &prov.SessionID, &prov.SessionRole,
 			&input.Cohort, &input.ActorKind, &input.Sender, &input.Provider, &input.Kind, &input.Channel, &reasoning, &prov.CreatedAt, &prov.ContentHash,
 			&prov.MessageSHA256, &message, &prov.AuthorshipReason, &visible, &markerRanges, &prov.LengthBucket, &input.Context, &input.ContextExcerpt,
-			&contextRefs, &prov.DuplicateOf, &prov.DuplicateRelation, &prov.FamilyID, &input.Split); err != nil {
+			&contextRefs, &prov.DuplicateOf, &prov.DuplicateRelation, &prov.FamilyID, &input.Split, &prov.RootQuality); err != nil {
 			return nil, err
 		}
 		if !wanted[input.ItemID] {

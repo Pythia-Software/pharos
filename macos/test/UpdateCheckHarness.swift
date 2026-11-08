@@ -346,6 +346,52 @@ final class FakeFolderPicker: ArchiveFolderPicker {
         }
         expect(page.contextTarget?.reference == "main" && page.contextFile?.url.path == "/tmp/main" && page.pageActions, "iframe messages cannot change main-document context state")
         expect(page.underPageBackgroundColor == ArchiveWebView.Coordinator.color(css: "rgb(10, 20, 30)"), "iframe messages cannot change the page background")
+
+        func evaluate(_ script: String) {
+            var finished = false
+            page.evaluateJavaScript(script + "\n; true;") { _, error in
+                expect(error == nil, "context menu fixture script succeeds: \(String(describing: error))")
+                finished = true
+            }
+            until("context menu fixture script did not finish") { finished }
+        }
+        evaluate("""
+        document.body.innerHTML = '<header><div class="brand"><svg><path id="mark"></path></svg></div><nav class="tabs"><button data-view="home"><span id="home">Home</span></button><button id="other">Search</button></nav></header>';
+        window.loadingIndicator = true;
+        window.pharosLighthouseLoadingIndicator = () => window.loadingIndicator;
+        window.pharosPageAction = action => { if (action === 'lighthouse-loading') window.loadingIndicator = !window.loadingIndicator; };
+        """)
+        evaluate(ArchiveWebView.windowChromeScript)
+        func rightClick(_ selector: String) {
+            let count = recorder.senders.count
+            evaluate("document.querySelector('\(selector)').dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, button:2}))")
+            until("context menu target was not reported") { recorder.senders.count > count }
+        }
+        let event = NSEvent.mouseEvent(with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!
+        for selector in ["#mark", "#home"] {
+            rightClick(selector)
+            expect(page.contextLighthouseLoading == true, "\(selector) reports the enabled loading indicator")
+            let menu = NSMenu()
+            page.willOpenMenu(menu, with: event)
+            guard let item = menu.item(withTitle: "Lighthouse Loading Indicator") else { fatalError("the Lighthouse menu item is missing") }
+            expect(item.state == .on && item.isEnabled, "the Lighthouse menu item is checked and enabled")
+            _ = NSApp.sendAction(item.action!, to: item.target, from: item)
+            evaluate("void 0")
+            rightClick(selector)
+            expect(page.contextLighthouseLoading == false, "the Lighthouse action updates the next menu")
+            let disabledMenu = NSMenu()
+            page.willOpenMenu(disabledMenu, with: event)
+            let disabledItem = disabledMenu.item(withTitle: "Lighthouse Loading Indicator")!
+            expect(disabledItem.state == .off, "the menu shows the disabled indicator")
+            _ = NSApp.sendAction(disabledItem.action!, to: disabledItem.target, from: disabledItem)
+            evaluate("void 0")
+        }
+        rightClick("#other")
+        expect(page.contextLighthouseLoading == nil, "other navigation items do not offer the Lighthouse setting")
+        let otherMenu = NSMenu()
+        page.willOpenMenu(otherMenu, with: event)
+        expect(otherMenu.item(withTitle: "Lighthouse Loading Indicator") == nil, "the Lighthouse menu item is limited to its targets")
+        page.didCloseMenu(otherMenu, with: event)
         page.stopLoading()
         print("Real WKWebView main-document and same-origin iframe sender checks passed")
     }

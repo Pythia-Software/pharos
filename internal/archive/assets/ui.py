@@ -1800,6 +1800,7 @@ function buildUsageSummaryTable(layout,preview=false){
       else if(field==='tool_time_ms')cell.title=`${bucket.timed_tool_calls||0} of ${bucket.tool_calls||0} calls have recorded durations. Durations can overlap and include approval waits.`;
       else if(format==='percent'&&value==null)cell.title='No calls in this window';
       else if(value!=null&&format!=='percent'){const exact=carbon?`${Number(value).toLocaleString(undefined,{maximumFractionDigits:3})} g CO₂e`:prefix?pharosCurrency.formatUSD(Number(value)):Number(value).toLocaleString();if(exact!==cell.textContent)cell.title=exact;}
+      const occurrence=value!=null?(quickStatsOccurrenceCoverage(field,bucket)||quickStatsAncestryCoverage(field,bucket)):null;if(occurrence){cell.textContent=occurrence.mark+cell.textContent;cell.title=[cell.title,occurrence.note].filter(Boolean).join('\n')}
       const href=usageSummaryLinks&&usageSummaryData?window.pharosQueryTables?.summaryURL(field,bucket.key,bucket.until||usageSummaryData.generated_at||new Date().toISOString(),undefined,bucket.from):null;
       if(href){const target=node('a','',cell.textContent);target.href=href;target.dataset.summaryMetric=field;target.dataset.summaryWindow=bucket.key;target.setAttribute('aria-label',`${label}, ${USAGE_SUMMARY_COLUMNS[bucket.key]||bucket.key}: ${cell.textContent}`);target.onclick=event=>{if(event.defaultPrevented||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||event.button)return;event.preventDefault();setUsageSummaryOpen(false);openHistoryEntry(href)};if(preview){target.removeAttribute('href');target.onclick=null;target.tabIndex=-1;target.draggable=false}cell.replaceChildren(target)}
       row.append(cell);
@@ -1910,7 +1911,8 @@ window.pharosOpenDetail=detail;
 // React pages navigate through the shell so history, bookmarks, and the navigator stay in step.
 window.pharosNavigate=openHistoryEntry;
 // The Mac app's context menu (PharosApp.swift) runs these.
-window.pharosPageAction=action=>{if(action==='logs')openHistoryEntry('/settings/logs');else if(action==='feedback')window.pharosSendFeedback?.();else if(action==='annotate')window.pharosFeedback?.annotate()};
+window.pharosLighthouseLoadingIndicator=()=>brandOption('#lighthouseLoadingIndicator');
+window.pharosPageAction=action=>{if(action==='logs')openHistoryEntry('/settings/logs');else if(action==='feedback')window.pharosSendFeedback?.();else if(action==='annotate')window.pharosFeedback?.annotate();else if(action==='lighthouse-loading'){const option=BRAND_OPTIONS.find(option=>option.toggle==='#lighthouseLoadingIndicator');setBrandOption(option,!option.on)}};
 window.addEventListener('pharos:bookmarks',()=>{syncBookmarkState();if($('#bookmarksDrawer').classList.contains('open'))renderBookmarks()});
 document.querySelector('button[data-view=tools]')?.remove();window.pharosNameVisit=page=>recordVisit(true,page);
 // Query Table renders its own SVG controls. Keep its React-owned nodes intact:

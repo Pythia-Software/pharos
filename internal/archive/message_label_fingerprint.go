@@ -212,13 +212,26 @@ func (c *Catalog) messageLabelFingerprintInput(ctx context.Context, id string, w
 	conversation["sessions"] = sessions
 	// Every represented conversation contributes its sampled agent events,
 	// resolved against its own earlier text, including in workspace ribbons.
-	events := []map[string]any{}
+	// Events resting on superseded execution evidence are left out, as the
+	// Agent Experience datasets leave them out, and reported separately from
+	// label freshness; the conversation reader still shows them, marked pending.
+	withheld, dirty, err := delegationEventFreshness(ctx, c.reader())
+	if err != nil {
+		return nil, err
+	}
+	events, eventsPending := []map[string]any{}, []string{}
 	for _, key := range keys {
+		if withheld[key] || dirty[key] {
+			eventsPending = append(eventsPending, key)
+		}
+		if withheld[key] {
+			continue
+		}
 		found, err := c.agentEventLinksForMessages(ctx, key, byConversation[key])
 		if err != nil {
 			return nil, err
 		}
 		events = append(events, found...)
 	}
-	return map[string]any{"conversation": conversation, "taxonomy": taxonomy, "truncated": truncated, "pending": pending, "agent_events": events}, nil
+	return map[string]any{"conversation": conversation, "taxonomy": taxonomy, "truncated": truncated, "pending": pending, "agent_events": events, "events_pending": len(eventsPending), "events_pending_conversations": eventsPending}, nil
 }

@@ -1141,6 +1141,8 @@ final class ArchiveWKWebView: WKWebView {
         }
     }
     var contextFile: ContextFile?
+    /// The loading indicator's state when the Lighthouse or Home was clicked.
+    var contextLighthouseLoading: Bool?
     /// Whether the page offers `window.pharosPageAction` (the main page does;
     /// setup windows do not).
     var pageActions = false
@@ -1173,7 +1175,15 @@ final class ArchiveWKWebView: WKWebView {
             item.representedObject = action
             return item
         }
-        var items = [copy, highlight, .separator()] + actions
+        var items = [copy, highlight]
+        if let enabled = contextLighthouseLoading {
+            let lighthouse = NSMenuItem(title: "Lighthouse Loading Indicator", action: #selector(runPageAction(_:)), keyEquivalent: "")
+            lighthouse.target = self
+            lighthouse.representedObject = "lighthouse-loading"
+            lighthouse.state = enabled ? .on : .off
+            items.append(lighthouse)
+        }
+        items += [.separator()] + actions
         if index > 0 { items.insert(.separator(), at: 0) }
         if index < menu.items.count, !menu.items[index].isSeparatorItem { items.append(.separator()) }
         for item in items { menu.insertItem(item, at: index); index += 1 }
@@ -1273,6 +1283,7 @@ final class ArchiveWKWebView: WKWebView {
         super.didCloseMenu(menu, with: event)
         contextTarget = nil
         contextFile = nil
+        contextLighthouseLoading = nil
         pageActions = false
     }
 
@@ -1434,13 +1445,15 @@ struct ArchiveWebView: NSViewRepresentable {
       matchMedia('(prefers-color-scheme: dark)').addEventListener('change', reportBackground);
       reportBackground();
       // The native context menu offers to highlight what was right-clicked,
-      // and Open With for a link to a local file.
+      // Open With for a local file, and the Lighthouse setting on Home.
       document.addEventListener('contextmenu', event => {
         const element = event.target instanceof Element ? event.target : null;
         const target = element ? window.pharosView?.contextTarget?.(element) : null;
         const link = element?.closest('.markdown-link[data-file-path]');
         const file = link ? {path: link.dataset.filePath, launchable: link.dataset.fileLaunchable !== 'false'} : false;
-        window.webkit.messageHandlers.\(windowMessageName).postMessage({contextTarget: target ?? false, contextFile: file, pageActions: typeof window.pharosPageAction === 'function'});
+        const lighthouse = element?.closest('body > header .brand, body > header .tabs button[data-view="home"]');
+        const lighthouseLoading = lighthouse && typeof window.pharosLighthouseLoadingIndicator === 'function' ? window.pharosLighthouseLoadingIndicator() : null;
+        window.webkit.messageHandlers.\(windowMessageName).postMessage({contextTarget: target ?? false, contextFile: file, lighthouseLoading, pageActions: typeof window.pharosPageAction === 'function'});
       }, true);
     })();
     """
@@ -1703,6 +1716,7 @@ struct ArchiveWebView: NSViewRepresentable {
                 if let body = message.body as? [String: Any], body.keys.contains("contextTarget") {
                     webView.contextTarget = ArchiveWKWebView.ContextTarget(body["contextTarget"])
                     webView.contextFile = ArchiveWKWebView.ContextFile(body["contextFile"])
+                    webView.contextLighthouseLoading = body["lighthouseLoading"] as? Bool
                     webView.pageActions = body["pageActions"] as? Bool == true
                     return
                 }

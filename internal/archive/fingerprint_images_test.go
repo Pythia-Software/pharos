@@ -126,6 +126,40 @@ func TestFingerprintImagesAPI(t *testing.T) {
 	if images != 8 || blobs != 4 {
 		t.Fatalf("identical variants not deduplicated: images=%d blobs=%d", images, blobs)
 	}
+	// Withheld events: the events appearance counts the entity's
+	// conversations whose events are left out, and is stale; the event-hidden
+	// one, once drawn, is neither. A workspace counts its conversations.
+	if err := c.ensureAgentEventsSchema(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ensureAgentEventsLedger(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if m := request(true); m.EventsPending != 0 {
+		t.Fatal("events pending without withheld events", m)
+	}
+	execTx(t, c.DB, `INSERT INTO agent_events_execution_stale(conversation_id) VALUES('fp-a')`)
+	renderFingerprintTestEntity(t, c, "conversation", "fp-a") // event-hidden; the events appearance waits
+	if hidden := request(false); hidden.State != "ready" || hidden.Stale || hidden.EventsPending != 0 {
+		t.Fatal("the event-hidden image reported withheld events", hidden)
+	}
+	if shown := request(true); shown.State == "ready" || !shown.Stale || len(shown.Images) != 2 || shown.EventsPending != 1 {
+		t.Fatal("withheld events were not reported on the events image", shown)
+	}
+	workspace := func(events bool) fingerprintMetadata {
+		t.Helper()
+		w := apiCall(t, srv, config.APIToken, http.MethodPost, "/api/fingerprints", map[string]any{"items": []any{map[string]any{"entity": "workspace", "id": "fp-w", "profile": "wide"}}, "events": events})
+		var body struct {
+			Items []fingerprintMetadata `json:"items"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil || len(body.Items) != 1 {
+			t.Fatalf("workspace metadata: %d %s", w.Code, w.Body.String())
+		}
+		return body.Items[0]
+	}
+	if shown, hidden := workspace(true), workspace(false); shown.EventsPending != 1 || hidden.EventsPending != 0 {
+		t.Fatal("workspace withheld events", shown, hidden)
+	}
 	items := make([]any, 251)
 	for i := range items {
 		items[i] = map[string]any{"entity": "conversation", "id": "fp-a", "profile": "wide"}
