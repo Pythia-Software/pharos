@@ -366,7 +366,7 @@ test('history keeps server matches from later messages and only adds the current
   assert.deepEqual(entries({current}).map(session=>session.id),['initial','newer']);
   assert.deepEqual(entries({query:'later topic',current,sessions:[]}),[],'an unmatched current chat must not leak into search results');
 });
-test('history rows name their turns and models and group by when the chat was last active', () => {
+test('history rows name their turns, models and when the chat was last active', () => {
   const now=new Date(2026,10,7,15,30).getTime(),at=(month,day,hour=9,year=2026)=>new Date(year,month,day,hour).getTime();
   const summary={id:'s',createdAt:at(10,7,8),updatedAt:at(10,7,14),questionCount:3,selection:{provider:'Codex',model:'gpt'},conversation:[{prompt:'Where did time go?',cli:'Codex'}],
     models:[{cli:'Claude',model:'opus',label:'Opus'},{cli:'Codex',model:'gpt',label:''}]};
@@ -374,7 +374,7 @@ test('history rows name their turns and models and group by when the chat was la
   assert.equal(row.title,'Where did time go?');
   assert.equal(row.turns,'3 turns');
   assert.deepEqual(row.models.map(use=>use.label),['Opus','GPT-5'],'summaries keep their most recent model first and fill missing labels from the catalog');
-  assert.equal(row.group,'Today');
+  assert.equal(row.stamp,new Date(summary.updatedAt).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}));
   assert.match(row.when,/^Last active .* · Started /);
   // The open chat has full turns and no summary list.
   const open={id:'o',createdAt:at(10,6),updatedAt:at(10,6),selection:{provider:'Claude',model:'opus'},conversation:[
@@ -382,16 +382,12 @@ test('history rows name their turns and models and group by when the chat was la
   const openRow=plain(model.askHistoryRow(open,{now}));
   assert.deepEqual(openRow.models.map(use=>use.cli),['Codex','Claude']);
   assert.equal(openRow.turns,'3 turns');
-  assert.equal(openRow.group,'Yesterday');
+  assert.equal(openRow.stamp,new Date(open.updatedAt).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}));
   assert.ok(!openRow.when.includes('Started'),'an unchanged start date is not repeated');
   const draft=plain(model.askHistoryRow({id:'d',updatedAt:at(10,2),draft:'Half a thought',selection:{provider:'Claude',model:'opus'},conversation:[]},{now,labels:{Claude:{opus:'Opus'}}}));
-  assert.deepEqual([draft.title,draft.turns,draft.modelSummary,draft.group],['Half a thought','Draft','Opus','Previous 7 days'],'a draft names the model it will ask');
+  assert.deepEqual([draft.title,draft.turns,draft.modelSummary],['Half a thought','Draft','Opus'],'a draft names the model it will ask');
   assert.equal(model.askHistoryRow({...summary,questionCount:1},{now}).turns,'1 turn');
-  assert.equal(model.askHistoryGroup(at(9,20),now),'Previous 30 days');
-  assert.ok(model.askHistoryGroup(at(8,1),now).length&&!/\d/.test(model.askHistoryGroup(at(8,1),now)),'older chats this year group by month');
-  assert.match(model.askHistoryGroup(at(11,1,9,2025),now),/2025/,'earlier years name the year');
   assert.match(model.askHistoryStamp(at(0,3,9,2025),now),/2025/);
-  assert.equal(model.askHistoryGroup(0,now),'Earlier');
 });
 test('private visit writes preserve deletion order and recover after a failed update', async () => {
   const events=[];
