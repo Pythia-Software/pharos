@@ -1,3 +1,4 @@
+import "./reader-key-filter";
 import { optimizeTableTitle, optimizeTableSchemas, type OptimizeTableSchemas } from "./optimize-table-title";
 import messagesDocument from "../../schemas/messages.schema.json";
 import { DataReadinessModal, HeaderDataReadiness, BackgroundProcessingWorkload, DataReadinessEmpty, DataReadinessIndicator } from "./data-readiness";

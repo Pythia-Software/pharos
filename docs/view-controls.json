@@ -309,11 +309,7 @@
     },
     {
       "file": "internal/archive/assets/ui.py",
-      "field": "reader_filter"
-    },
-    {
-      "file": "internal/archive/assets/ui.py",
-      "field": "reader_filter_level"
+      "field": "reader_highlight_hidden"
     },
     {
       "file": "internal/archive/assets/ui.py",
@@ -3792,33 +3788,6 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "9b7112adc6a77699:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "transcriptFilterControl",
-      "tag": "input",
-      "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "a3a31b47b70f603a:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "transcriptFilterControl",
-      "tag": "button",
-      "control": "'button', '', label",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "a2396c325479ce5c:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "transcriptHighlightControl",
-      "tag": "input",
-      "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Each Highlight checkbox writes its own boolean view field (reader_writing, reader_events, reader_labels) through the view contract; its saved preference is only the fallback when a link carries none."
-    },
-    {
       "key": "0e18c887173fcc9b:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "xmlTreeView",
@@ -4278,77 +4247,77 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
-      "key": "0557a80e0404a490:0",
+      "key": "084b544a6f18eb2b:0",
       "file": "web/src/chart-legend-chip.tsx",
       "owner": "ChartLegendChip",
+      "tag": "button",
+      "control": "onClick={() => choose(() => onPopulation!(\"keep\"))}",
+      "contract": "transient",
+      "reason": "Shared legend and whole-key menus keep only transient openness and keyboard focus. Value actions delegate to canonical dashboard, timeline or reader fields; menu navigation does not create a durable disclosure."
+    },
+    {
+      "key": "09f969309cdabf7c:0",
+      "file": "web/src/chart-legend-chip.tsx",
+      "owner": "ChartLegendChip",
+      "tag": "button",
+      "control": "onClick={() => choose(() => onAction(\"only\"))}",
+      "contract": "transient",
+      "reason": "Shared legend and whole-key menus keep only transient openness and keyboard focus. Value actions delegate to canonical dashboard, timeline or reader fields; menu navigation does not create a durable disclosure."
+    },
+    {
+      "key": "0d99e1602b82e3c5:0",
+      "file": "web/src/chart-legend-chip.tsx",
+      "owner": "ChartLegendChip",
+      "tag": "button",
+      "control": "onClick={() => choose(() => onAction(\"exclude\"))}",
+      "contract": "transient",
+      "reason": "Shared legend and whole-key menus keep only transient openness and keyboard focus. Value actions delegate to canonical dashboard, timeline or reader fields; menu navigation does not create a durable disclosure."
+    },
+    {
+      "key": "0ec420a365944374:0",
+      "file": "web/src/chart-legend-chip.tsx",
+      "owner": "ChartLegendChip",
+      "tag": "button",
+      "control": "onClick={() => choose(() => onAction(\"clear\"))}",
+      "contract": "transient",
+      "reason": "Shared legend and whole-key menus keep only transient openness and keyboard focus. Value actions delegate to canonical dashboard, timeline or reader fields; menu navigation does not create a durable disclosure."
+    },
+    {
+      "key": "9bbd019acf537f14:0",
+      "file": "web/src/chart-legend-chip.tsx",
+      "owner": "ChartLegendChip",
+      "tag": "button",
+      "control": "onClick={() => choose(() => onPopulation!(\"drop\"))}",
+      "contract": "transient",
+      "reason": "Shared legend and whole-key menus keep only transient openness and keyboard focus. Value actions delegate to canonical dashboard, timeline or reader fields; menu navigation does not create a durable disclosure."
+    },
+    {
+      "key": "ca535c654a728e9f:0",
+      "file": "web/src/chart-legend-chip.tsx",
+      "owner": "ChartLegendChip",
+      "tag": "button",
+      "control": "onClick={() => choose(() => onAction(\"toggle\"))}",
+      "contract": "transient",
+      "reason": "Shared legend and whole-key menus keep only transient openness and keyboard focus. Value actions delegate to canonical dashboard, timeline or reader fields; menu navigation does not create a durable disclosure."
+    },
+    {
+      "key": "8a2a6260ebee6269:0",
+      "file": "web/src/chart-legend-chip.tsx",
+      "owner": "LegendMenu",
+      "tag": "div",
+      "control": "id={menuId} aria-label={menuLabel} onKeyDown={event => { const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role^=\"menuitem\"]:not(:disabled)') ?? [])]; const index = entries.indexOf(document.activeElement as HTMLButtonElement); if (event.key === \"Tab\") { close(true); return; } if (![\"ArrowDown\", \"ArrowUp\", \"Home\", \"End\"].includes(event.key)) return; event.preventDefault(); const next = event.key === \"Home\" ? 0 : event.key === \"End\" ? entries.length - 1 : (index + (event.key === \"ArrowDown\" ? 1 : -1) + entries.length) % entries.length; entries[next]?.focus(); }}",
+      "contract": "transient",
+      "reason": "Shared legend and whole-key menus keep only transient openness and keyboard focus. Value actions delegate to canonical dashboard, timeline or reader fields; menu navigation does not create a durable disclosure."
+    },
+    {
+      "key": "f9d35b07ec48e017:0",
+      "file": "web/src/chart-legend-chip.tsx",
+      "owner": "LegendMenu",
       "tag": "button",
       "control": "aria-label={name} onClick={() => { firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => { if (event.key !== \"ArrowDown\" && event.key !== \"ArrowUp\") return; event.preventDefault(); firstFocus.current = event.key === \"ArrowUp\" ? -1 : 0; setOpen(true); }}",
       "disclosure": true,
       "contract": "transient",
-      "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard or timeline owner and persist as analyze_chart.selection or timeline_visibility; opening or navigating the menu is not a durable disclosure."
-    },
-    {
-      "key": "072b3e8bd51c0252:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "div",
-      "control": "id={menuId} aria-label={`Filter ${name}`} onKeyDown={event => { const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role=\"menuitem\"]:not(:disabled)') ?? [])]; const index = entries.indexOf(document.activeElement as HTMLButtonElement); if (event.key === \"Tab\") { close(true); return; } if (![\"ArrowDown\", \"ArrowUp\", \"Home\", \"End\"].includes(event.key)) return; event.preventDefault(); const next = event.key === \"Home\" ? 0 : event.key === \"End\" ? entries.length - 1 : (index + (event.key === \"ArrowDown\" ? 1 : -1) + entries.length) % entries.length; entries[next]?.focus(); }}",
-      "contract": "transient",
-      "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard or timeline owner and persist as analyze_chart.selection or timeline_visibility; opening or navigating the menu is not a durable disclosure."
-    },
-    {
-      "key": "0f737b763b98a950:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "button",
-      "control": "onClick={() => choose(\"toggle\")}",
-      "contract": "dashboard",
-      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
-    },
-    {
-      "key": "1d7ed15ec5b22f13:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "button",
-      "control": "onClick={() => choose(\"only\")}",
-      "contract": "dashboard",
-      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
-    },
-    {
-      "key": "32cadca8241ea727:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "button",
-      "control": "onClick={() => filter(\"keep\")}",
-      "contract": "dashboard",
-      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
-    },
-    {
-      "key": "dd11cf44075d571a:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "button",
-      "control": "onClick={() => choose(\"exclude\")}",
-      "contract": "dashboard",
-      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
-    },
-    {
-      "key": "ef1a8d29a62b9643:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "button",
-      "control": "onClick={() => filter(\"drop\")}",
-      "contract": "dashboard",
-      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
-    },
-    {
-      "key": "f1cb74ebedc04532:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "button",
-      "control": "onClick={() => choose(\"clear\")}",
-      "contract": "dashboard",
-      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
+      "reason": "Shared legend and whole-key menus keep only transient openness and keyboard focus. Value actions delegate to canonical dashboard, timeline or reader fields; menu navigation does not create a durable disclosure."
     },
     {
       "key": "f416fb38a053b52a:0",
@@ -7389,6 +7358,15 @@
       "control": "onClick={onReset}",
       "contract": "action",
       "reason": "Retry/reset execute query actions; reset writes the resulting definition."
+    },
+    {
+      "key": "96486fd1fcf4b75b:0",
+      "file": "web/src/reader-key-filter.tsx",
+      "owner": "ReaderKeyDefaults",
+      "tag": "button",
+      "control": "onClick={() => choose(() => onChoose(preset.id))}",
+      "contract": "reader",
+      "reason": "A whole-key default atomically writes reader_filter_level, reader_filter, reader_writing, reader_events, reader_labels and reader_highlight_hidden through the classic reader owner; its selected radio is derived from those fields."
     },
     {
       "key": "110c067b8fa806e8:0",

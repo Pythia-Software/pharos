@@ -4,10 +4,12 @@ import type { LegendAction } from "./chart-selection";
 import type { PopulationAction } from "./dashboard-population";
 import { Icon } from "./icons";
 
-// A legend value's menu. The selection only chooses what is drawn; where the
-// dashboard has a population (onPopulation), the last two items filter every
-// view and breakdown instead.
-export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSelection, onAction, groupSize, mixed = false, swatch, onPopulation }: { item: ChartSeries; active: boolean; dimmed: boolean; selectionActive: boolean; soleSelection: boolean; onAction: (action: LegendAction) => void; groupSize?: number; mixed?: boolean; swatch?: React.ReactNode; onPopulation?: (action: PopulationAction) => void }) {
+// Shared positioning, dismissal and keyboard navigation for value and preset menus.
+export function LegendMenu({ name, label, menuLabel, title, heading, marker, suffix, active, dimmed = false, mixed = false, category = false, children }: {
+  name: string; label: React.ReactNode; menuLabel: string; title: string; heading: React.ReactNode;
+  marker?: React.ReactNode; suffix?: React.ReactNode; active?: boolean; dimmed?: boolean; mixed?: boolean; category?: boolean;
+  children: (choose: (action: () => void) => void) => React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLDivElement>(null);
   const firstFocus = useRef(0);
@@ -25,7 +27,7 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
     const top = Math.max(8, Math.min(preferredTop, window.innerHeight - panel.offsetHeight - 8));
     panel.style.left = `${left - anchor.left}px`;
     panel.style.top = `${top - anchor.top}px`;
-    const entries = panel.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)');
+    const entries = panel.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)');
     entries[firstFocus.current === -1 ? entries.length - 1 : 0]?.focus();
   }, [open]);
   useEffect(() => {
@@ -56,29 +58,19 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
       window.removeEventListener("scroll", dismiss, true);
     };
   }, [open]);
-  function choose(action: LegendAction) {
-    close(true);
-    onAction(action);
-  }
-  function filter(action: PopulationAction) {
-    close(true);
-    onPopulation!(action);
-  }
-  const remove = selectionActive && active;
-  const category = groupSize !== undefined, name = category ? `${item.label} category` : item.label;
-  const marker = swatch === undefined ? !category ? <span className="usage-swatch" style={{ background: item.color }} /> : null : swatch;
+  function choose(action: () => void) { close(true); action(); }
   return <span className={`usage-legend-chip${category ? " is-category" : ""}`}>
     <button ref={trigger} type="button" className={`usage-legend-item${category ? " usage-legend-category" : ""}${dimmed ? " dimmed" : ""}`} aria-label={name} aria-pressed={mixed ? "mixed" : active} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined}
-      title="Filter this series" onClick={() => { firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => {
+      title={title} onClick={() => { firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => {
         if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
         event.preventDefault();
         firstFocus.current = event.key === "ArrowUp" ? -1 : 0;
         setOpen(true);
       }}>
-      {marker}{item.label}<Icon name="chevron-down" className="usage-legend-caret" />
+      {marker}{label}{suffix}<Icon name="chevron-down" className="usage-legend-caret" />
     </button>
-    {open ? <div ref={menu} id={menuId} className="usage-legend-menu" role="menu" aria-label={`Filter ${name}`} onKeyDown={event => {
-      const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    {open ? <div ref={menu} id={menuId} className="usage-legend-menu" role="menu" aria-label={menuLabel} onKeyDown={event => {
+      const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)') ?? [])];
       const index = entries.indexOf(document.activeElement as HTMLButtonElement);
       if (event.key === "Tab") { close(true); return; }
       if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
@@ -86,16 +78,30 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
       const next = event.key === "Home" ? 0 : event.key === "End" ? entries.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + entries.length) % entries.length;
       entries[next]?.focus();
     }}>
-      <div className="usage-legend-menu-heading" data-overflow-title="">{marker}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</div>
-      {/* With nothing selected, adding to the selection is the same as showing only this value. */}
-      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("only")}><span>{category ? "Show only this category" : "Show only this value"}</span><small>{selectionActive ? "Replace the current selection" : "Then add others from their menus"}</small></button>
-      {selectionActive ? <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("toggle")}><span>{category ? remove ? "Remove all from selection" : "Add all to selection" : remove ? "Remove from selection" : "Add to selection"}</span><small>{soleSelection ? "Show all values again" : "Keep the rest of your selection"}</small></button> : null}
-      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("exclude")}><span>{category ? "Show all except this category" : "Show all except this value"}</span><small>{category ? "Include every label outside this category" : "Include every other value, even in Other"}</small></button>
-      <button type="button" role="menuitem" tabIndex={-1} className="usage-legend-menu-reset" disabled={!selectionActive} onClick={() => choose("clear")}>Show all values</button>
-      {onPopulation ? <>
-        <button type="button" role="menuitem" tabIndex={-1} className="usage-legend-menu-population" onClick={() => filter("keep")}><span>Count only this value</span><small>Population filter: every view and breakdown</small></button>
-        <button type="button" role="menuitem" tabIndex={-1} onClick={() => filter("drop")}><span>Leave this value out</span><small>Population filter: every view and breakdown</small></button>
-      </> : null}
+      <div className="usage-legend-menu-heading" data-overflow-title="">{heading}</div>
+      {children(choose)}
     </div> : null}
   </span>;
+}
+
+// Value actions change the drawn series; population actions filter every view.
+export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSelection, onAction, groupSize, mixed = false, swatch, suffix, onPopulation }: { item: ChartSeries; active: boolean; dimmed: boolean; selectionActive: boolean; soleSelection: boolean; onAction: (action: LegendAction) => void; groupSize?: number; mixed?: boolean; swatch?: React.ReactNode; suffix?: React.ReactNode; onPopulation?: (action: PopulationAction) => void }) {
+  const remove = selectionActive && active;
+  const category = groupSize !== undefined, name = category ? `${item.label} category` : item.label;
+  const marker = swatch === undefined ? !category ? <span className="usage-swatch" style={{ background: item.color }} /> : null : swatch;
+  return <LegendMenu name={name} label={item.label} menuLabel={`Filter ${name}`} title="Filter this series"
+    heading={<>{marker}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</>}
+    marker={marker} suffix={suffix} active={active} dimmed={dimmed} mixed={mixed} category={category}>
+    {choose => <>
+      {/* With nothing selected, adding to the selection is the same as showing only this value. */}
+      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose(() => onAction("only"))}><span>{category ? "Show only this category" : "Show only this value"}</span><small>{selectionActive ? "Replace the current selection" : "Then add others from their menus"}</small></button>
+      {selectionActive ? <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose(() => onAction("toggle"))}><span>{category ? remove ? "Remove all from selection" : "Add all to selection" : remove ? "Remove from selection" : "Add to selection"}</span><small>{soleSelection ? "Show all values again" : "Keep the rest of your selection"}</small></button> : null}
+      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose(() => onAction("exclude"))}><span>{category ? "Show all except this category" : "Show all except this value"}</span><small>{category ? "Include every label outside this category" : "Include every other value, even in Other"}</small></button>
+      <button type="button" role="menuitem" tabIndex={-1} className="usage-legend-menu-reset" disabled={!selectionActive} onClick={() => choose(() => onAction("clear"))}>Show all values</button>
+      {onPopulation ? <>
+        <button type="button" role="menuitem" tabIndex={-1} className="usage-legend-menu-population" onClick={() => choose(() => onPopulation!("keep"))}><span>Count only this value</span><small>Population filter: every view and breakdown</small></button>
+        <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose(() => onPopulation!("drop"))}><span>Leave this value out</span><small>Population filter: every view and breakdown</small></button>
+      </> : null}
+    </>}
+  </LegendMenu>;
 }

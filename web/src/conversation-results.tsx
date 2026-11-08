@@ -129,7 +129,7 @@ export function ResultMessage({ label, message: given, kind, compact = false, wo
 }
 
 // The reader's Highlight row (transcriptHighlightControl in ui.py) for one
-// session. Its boxes toggle show-<kind> classes on the panel holding the
+// session. Its keys toggle show-<kind> classes on the panel holding the
 // session's messages, which must be keyed by session so its pointer listeners
 // go with it; the control's own window listeners go with this effect.
 function TranscriptHighlights({ panel, conversation }: { panel: React.RefObject<HTMLDivElement | null>; conversation: Row }) {

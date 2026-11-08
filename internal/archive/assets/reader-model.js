@@ -696,10 +696,37 @@ function readerHighlightOptions(conversation,messages,taxonomy=[]){
   }
   return options;
 }
+// Whole-key defaults apply content visibility and all highlight kinds together.
+// Existing visibility and highlight fields remain the canonical linked state.
+const READER_KEY_PRESETS=[
+  {id:'default',label:'Default',note:'All content. Highlight human writing.',level:'all',highlights:['writing']},
+  {id:'reading',label:'Read replies',note:'Prompts and final responses. Highlight human writing.',level:'primary',highlights:['writing']},
+  {id:'reasoning',label:'Follow reasoning',note:'Prompts, replies and thinking. Highlight agent events and message labels.',level:'thought',highlights:['events','labels']},
+  {id:'review',label:'Review',note:'Everything except token usage. Highlight human writing, agent events and message labels.',level:'all-minus-usage',highlights:['writing','events','labels']},
+  {id:'plain',label:'Plain transcript',note:'All content with highlights off.',level:'all',highlights:[]}
+];
+function readerKeyPresetValues(id){
+  const preset=READER_KEY_PRESETS.find(preset=>preset.id===id);if(!preset)return null;
+  return{reader_filter_level:preset.level,reader_filter:[...transcriptShown({level:preset.level})],
+    ...Object.fromEntries(READER_HIGHLIGHTS.map(option=>[option.field,preset.highlights.includes(option.id)])),reader_highlight_hidden:[]};
+}
+function readerKeyPresetID(state,highlights,hidden=[]){
+  if(hidden.length)return null;const shown=transcriptShown(state);
+  return READER_KEY_PRESETS.find(preset=>{
+    const expected=transcriptShown({level:preset.level});
+    return shown.size===expected.size&&[...shown].every(key=>expected.has(key))
+      &&READER_HIGHLIGHTS.every(option=>Boolean(highlights[option.field])===preset.highlights.includes(option.id));
+  })?.id||null;
+}
 // The ids of the highlights shown: a linked value (true or false) wins, then
 // the saved choice, then the option's fallback. One with nothing to show is off.
 function readerHighlightsShown(options,linked=()=>null,saved=(pref,fallback)=>fallback){
   return new Set(options.filter(option=>{if(!option.available)return false;const value=linked(option.field);return typeof value==='boolean'?value:saved(option.pref,option.fallback)===true}).map(option=>option.id));
+}
+// A sentence can carry several event groups. Its hue and tooltip follow the
+// likeliest remaining event when a group is hidden, without changing its text.
+function readerEventHighlights(events,shown){
+  return events.filter(event=>shown.has('events:'+eventGroupClass(event.group))).sort((a,b)=>(b.probability??0)-(a.probability??0));
 }
 function markdownText(text,mask=''){
   if(!/[^0]/.test(mask))return [text];

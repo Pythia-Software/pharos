@@ -652,7 +652,7 @@ test('automatic oversized query references resolve in a fresh browser with no lo
 });
 
 test('conversation result links restore their session, matched message and inline agent without taking focus',{skip},async t=>{
- const message=(id,role,text)=>({id,native_id:id,role,kind:'message',text});
+ const message=(id,role,text)=>({id,native_id:id,role,kind:'message',text,...(role==='user'?{authorship:{spans:[{category:'typed',start:0,end:text.length}]}}:{})});
  const api={
   'POST /api/query/library/:operation':request=>{
    const result=defaultApi['* /api/query/:dataset/:operation']({...request,params:{dataset:'library',operation:request.params.operation}});
@@ -681,6 +681,8 @@ test('conversation result links restore their session, matched message and inlin
  await preview.getByText('Final reply',{exact:true}).waitFor();
  await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).waitFor();
  assert.equal(await preview.evaluate(element=>element.contains(document.activeElement)),false);
+ await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).click();
+ await preview.getByText('First session prompt',{exact:true}).waitFor();
  await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/Sub-agent · Timing auditor/}).click();
  await preview.getByText('Timing checked.',{exact:true}).waitFor();
  const fresh=await open(t,{url:path(app.page),api,ready:'.conversation-result-card'});
@@ -708,7 +710,8 @@ test('copied Cards view overrides preferences in a fresh context and follows Bac
 
 test('reader category and disclosure state survive a fresh browser', {skip},async t=>{
  const first=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,ready:'.transcript-filter'});
- await first.page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).click();
+ await first.page.getByRole('button',{name:'Key',exact:true}).click();
+ await first.page.getByRole('menuitemradio',{name:/^Read replies/}).click();
  await first.page.waitForFunction(()=>new URLSearchParams(location.search).get('reader_filter_level')==='primary');
  const turn=first.page.locator('.turn').first();
  await turn.locator(':scope > summary').click();
@@ -718,7 +721,8 @@ test('reader category and disclosure state survive a fresh browser', {skip},asyn
  await summary.click();
  await first.page.waitForFunction(()=>Object.keys(JSON.parse(new URLSearchParams(location.search).get('reader_content')||'{}')).some(key=>key.endsWith(':turn-summary-prompt')));
  const fresh=await open(t,{url:path(first.page),ready:'.transcript-filter'});
- assert.equal(await fresh.page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
+ await fresh.page.getByRole('button',{name:'Key',exact:true}).click();
+ assert.equal(await fresh.page.getByRole('menuitemradio',{name:/^Read replies/}).getAttribute('aria-checked'),'true');await fresh.page.keyboard.press('Escape');
  assert.equal(await fresh.page.locator('.turn').first().evaluate(element=>element.open),wasOpen);
  assert.equal(await fresh.page.locator('.turn').first().getByRole('button',{name:'Collapse turn ask',exact:true}).getAttribute('aria-expanded'),'true');
 });
@@ -880,9 +884,10 @@ test('reader disclosure history restores empty overrides to native defaults, and
  const turn=page.locator('.turn').first(),id=await turn.getAttribute('data-pharos-disclosure');
  assert.ok(id);
  await page.evaluate(id=>{const url=new URL(location.href);url.searchParams.delete('reader_filter');url.searchParams.delete('reader_expanded');url.searchParams.set('reader_filter_level','primary');url.searchParams.set('reader_collapsed',JSON.stringify([id]));window.pharosNavigate(url.pathname+url.search);},id);
- await page.waitForFunction(()=>document.querySelector('.transcript-levels button[aria-pressed="true"]')?.textContent==='Primary only'&&!document.querySelector('.turn').open);
+ await page.waitForFunction(()=>document.querySelector('.reader-key-current')?.textContent==='Read replies'&&!document.querySelector('.turn').open);
  await app.settled();
- assert.equal(await page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
+ await page.getByRole('button',{name:'Key',exact:true}).click();
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Read replies/}).getAttribute('aria-checked'),'true');await page.keyboard.press('Escape');
  assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')),[id]);
  assert.equal(await page.evaluate(()=>window.__sameDocument),true,'the reader did not reload the document');
 });
@@ -1452,17 +1457,69 @@ test('message card labels and sentence events restore independently in the reade
  assert.match(await page.getByRole('tooltip').textContent(),/Plan/);
  await page.mouse.move(0,0);
  await app.shot('message-card-tints-dark');
- await page.getByRole('checkbox',{name:'Message labels',exact:true}).uncheck();await app.settled();
+ const choose=async(name,action)=>{await page.locator('.transcript-highlights').getByRole('button',{name,exact:true}).click();await page.getByRole('menuitem',{name:action}).click();await app.settled();};
+ await choose('Message labels category',/^Show all except this category/);
  assert.equal(new URL(page.url()).searchParams.get('reader_labels'),'0');
- await page.getByRole('checkbox',{name:'Message labels',exact:true}).check();
- await page.getByRole('checkbox',{name:'Agent events',exact:true}).uncheck();await app.settled();
+ await choose('Message labels category',/^Add all to selection/);
+ await choose('Agent events category',/^Show all except this category/);
  const copied=await open(t,{api,url:path(page),ready:'.conversation-panel.show-labels'});
- assert.equal(await copied.page.getByRole('checkbox',{name:'Agent events',exact:true}).isChecked(),false);
+ assert.equal(await copied.page.locator('.transcript-highlights').getByRole('button',{name:'Agent events category',exact:true}).getAttribute('aria-pressed'),'false');
  assert.match(await copied.page.locator('.thinking-card').textContent(),/quoted cell/);
- await page.getByRole('checkbox',{name:'Agent events',exact:true}).check();
+ await choose('Agent events category',/^Add all to selection/);
+ // The shared menu owns keyboard navigation and restores focus after a choice.
+ const report=page.locator('.transcript-highlights').getByRole('button',{name:'Report',exact:true});
+ await report.focus();await page.keyboard.press('ArrowDown');
+ assert.equal(await page.getByRole('menuitem',{name:/Show only this value/}).evaluate(el=>el===document.activeElement),true);
+ await page.keyboard.press('Escape');assert.equal(await report.evaluate(el=>el===document.activeElement),true);
+ await choose('Receiver category',/^Show only this category/);
+ const familyURL=path(page);
+ await choose('Deliberation',/^Remove from selection/);
+ const familyCopy=await open(t,{api,url:path(page),ready:'.conversation-panel.show-labels'});
+ assert.equal(await familyCopy.page.locator('.transcript-highlights').getByRole('button',{name:'Deliberation',exact:true}).getAttribute('aria-pressed'),'false');
+ await page.locator('.thinking-card').hover();assert.equal(await page.getByRole('tooltip').isVisible(),false);
+ await app.shot('reader-key-filters-hidden');
+ // In-document history restoration updates the mounted keys as well.
+ await page.evaluate(url=>window.pharosNavigate(url),familyURL);await app.settled();
+ assert.equal(await page.locator('.transcript-highlights').getByRole('button',{name:'Deliberation',exact:true}).getAttribute('aria-pressed'),'true');
+ await choose('Agent events category',/^Add all to selection/);
+ await choose('Friction',/^Show only this value/);
+ await choose('Friction',/^Remove from selection/);
+ assert.equal(new URL(page.url()).searchParams.get('reader_events'),'0');
+ await choose('Friction',/^Show all values$/);
+ const key=page.getByRole('region',{name:'Conversation key',exact:true}).getByRole('button',{name:'Key',exact:true});
+ const defaults=async name=>{await key.click();await page.getByRole('menuitemradio',{name}).click();await app.settled();};
+ await key.focus();await page.keyboard.press('ArrowDown');
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Default/}).evaluate(el=>el===document.activeElement),true);
+ await page.keyboard.press('End');
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Plain transcript/}).evaluate(el=>el===document.activeElement),true);
+ await page.keyboard.press('Enter');await app.settled();
+ assert.equal(await key.evaluate(el=>el===document.activeElement),true);
+ assert.equal(await page.locator('.conversation-panel').evaluate(el=>el.classList.contains('show-labels')||el.classList.contains('show-events')),false);
+ await defaults(/^Follow reasoning/);
+ const presetCopy=await open(t,{api,url:path(page),preferences:{'pharos-reader-writing':true,'pharos-reader-events':false,'pharos-reader-labels':false,'pharos-reader-highlight-hidden':['events:event-friction','labels:C.deliberation']},ready:'.conversation-panel.show-labels.show-events'});
+ await presetCopy.page.getByRole('button',{name:'Key',exact:true}).click();
+ assert.equal(await presetCopy.page.getByRole('menuitemradio',{name:/^Follow reasoning/}).getAttribute('aria-checked'),'true');
+ await choose('Report',/^Show only this value/);
+ assert.match(await key.textContent(),/Custom/);
+ await defaults(/^Review/);
+ await app.shot('reader-key-filters-desktop');
+ await key.click();await page.getByRole('menu',{name:'Key defaults',exact:true}).waitFor();
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Review/}).getAttribute('aria-checked'),'true');
+ await app.shot('reader-key-defaults-menu');await page.keyboard.press('Escape');
  await page.evaluate(()=>document.documentElement.dataset.theme='light');
  await app.shot('message-card-tints-light');
  await page.setViewportSize({width:390,height:844});
+ await key.scrollIntoViewIfNeeded();
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await report.click();
+ const menu=page.getByRole('menu',{name:'Filter Report',exact:true});
+ await menu.waitFor();
+ assert.equal(await menu.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight}),true);
+ await app.shot('reader-key-filters-phone');
+ await page.keyboard.press('Escape');await key.click();
+ await page.getByRole('menu',{name:'Key defaults',exact:true}).waitFor();
+ await app.shot('reader-key-defaults-phone');
+ await page.keyboard.press('Escape');
  await page.locator('.thinking-card').scrollIntoViewIfNeeded();
  await app.shot('message-card-tints-phone');
 });

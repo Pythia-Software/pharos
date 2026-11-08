@@ -185,3 +185,20 @@ Bookmark identity and saved bookmark URLs exclude `overlay`, `history_search`, `
 6. Cover parsing/building/time transitions in node/Go. Use browser tests for real restoration, materialization, scrolling/focus and a fresh context without a local snapshot cache.
 
 `npm --prefix web run check` includes the source-control review gate, manifest freshness, type checks and unit tests. Do not run a frontend bundle build concurrently with Go compilation: Go embeds the generated bundles.
+
+The **Key** label opens whole-key defaults. Each choice sets content visibility
+and all three highlight switches together, clears individual hue exclusions,
+and saves the same choices as the fallback for unlinked readers. Default shows
+all content with human writing highlighted; Read replies shows prompts and final
+responses with human writing; Follow reasoning shows prompts, replies and thinking
+with agent events and message labels; Review shows everything except token usage
+with every highlight enabled; Plain transcript shows all content without marks.
+Individual highlight keys still use Timeline's grouped legend menus. Changing a
+key can produce a Custom setup; applying a default resets the whole key again.
+
+These choices write existing canonical fields together: `reader_filter_level`,
+`reader_filter`, `reader_writing`, `reader_events`, `reader_labels`, and
+`reader_highlight_hidden`. The displayed default is derived from those fields,
+so old visibility links, custom categories, copied links and history still restore
+without a separate preset-name field. The standalone Show row is removed; Page
+Find can still reveal hidden content through its existing Show action.
