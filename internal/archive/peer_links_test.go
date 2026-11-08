@@ -198,11 +198,10 @@ func TestPeerLinksFromReadDiffsCopiesAndTL1(t *testing.T) {
 	}
 
 	// The implementer's next prompt follows the second review: the review is
-	// derived again and becomes certain, though it read nothing new.
+	// derived again and becomes certain, though no tool call is new.
 	f = newPeerFixture(t, c.DB)
 	f.seq = 200
 	f.message("impl-next", "impl-c", "user", "message", "Rename the helper", 40)
-	f.edit("impl-c", 41, "\trenamed := helperWithAMuchClearerName(value, options.Threshold)")
 	commitSeed(t, f.tx)
 	if err := c.RefreshPeerLinks(ctx); err != nil {
 		t.Fatal(err)
@@ -265,7 +264,7 @@ func TestPeerLinksFromReadDiffsCopiesAndTL1(t *testing.T) {
 func TestPeerLinkConfidence(t *testing.T) {
 	c, _ := testCatalog(t)
 	f := newPeerFixture(t, c.DB)
-	for _, id := range []string{"writer", "busy", "untimed", "busy-late", "reader", "rival", "tied", "writer2", "returner", "writer3", "rereader"} {
+	for _, id := range []string{"writer", "busy", "untimed", "busy-late", "reader", "rival", "tied", "writer2", "returner", "writer3", "rereader", "compound"} {
 		f.work(id, id)
 	}
 	lines := peerLines("Writer", 6)
@@ -315,6 +314,11 @@ func TestPeerLinkConfidence(t *testing.T) {
 	f.message("rereader-ask", "rereader-c", "user", "message", "Review the third part", 903)
 	f.read("rereader-c", 903, false, lines3...)
 	rediff := f.read("rereader-c", 904, true, lines3...)
+	// A diff after another command in one call still shows changes.
+	f.message("compound-ask", "compound-c", "user", "message", "Check the third part", 905)
+	compound := f.read("compound-c", 905, true, lines3...)
+	f.exec(`UPDATE tool_calls SET subcommand='status',command_count=2 WHERE id=?`, compound)
+	f.exec(`INSERT INTO tool_commands(tool_call_id,position,command,program,subcommand) VALUES(?,0,'git status --short','git','status'),(?,1,'git diff','git','diff')`, compound, compound)
 	// A short quote is uncertain; a reply quoted days later is not linked.
 	for _, quote := range []struct {
 		id            string
@@ -336,6 +340,7 @@ func TestPeerLinkConfidence(t *testing.T) {
 		"read_written_by:writer>untimed":   peerLow + "/",
 		"read_written_by:writer2>returner": peerHigh + "/return",
 		"read_written_by:writer3>rereader": peerHigh + "/start",
+		"read_written_by:writer3>compound": peerHigh + "/start",
 	}
 	if l := links["read_written_by:writer3>rereader"]; l.rightMessage != rediff {
 		t.Fatalf("a diff link is anchored on %q, not the diff %q", l.rightMessage, rediff)

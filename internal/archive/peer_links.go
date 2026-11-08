@@ -28,7 +28,7 @@ import (
 // becomes a peer.
 
 // peerLinksVersion names the derivation rules; a new version rebuilds.
-const peerLinksVersion = "peers-v3"
+const peerLinksVersion = "peers-v4"
 
 // Tunables are package variables so tests can lower them.
 var (
@@ -67,8 +67,10 @@ const (
 )
 
 // peerDiffCall selects ledger calls that show changes: their added lines are
-// unmerged work.
-const peerDiffCall = `t.program IN ('git','gh','jj') AND t.subcommand IN ('diff','show','pr')`
+// unmerged work. A call's program is its first command's, so a compound call
+// (`git status && git diff`) is checked command by command.
+const peerDiffCall = `(t.program IN ('git','gh','jj') AND t.subcommand IN ('diff','show','pr') OR t.command_count>1 AND EXISTS(SELECT 1 FROM tool_commands tc
+ WHERE tc.tool_call_id=t.id AND tc.program IN ('git','gh','jj') AND tc.subcommand IN ('diff','show','pr')))`
 
 // peerFamilies maps conversations to the representative workspace of their
 // family's top-level conversation.
@@ -208,6 +210,30 @@ func (c *Catalog) RefreshPeerLinks(ctx context.Context) error {
 	if !full && updated.Valid && (!since.Valid || updated.String < since.String) {
 		since = updated
 	}
+	// Timing comes from prompts and replies, so one that arrives without a
+	// tool call (the writer's next prompt after a review) rechecks too.
+	var lastMessage, maxMessage int64
+	if !full {
+		stored, err := c.metaValue(ctx, "peer_links_message_rowid")
+		if err != nil {
+			return err
+		}
+		fmt.Sscan(stored, &lastMessage)
+		var said sql.NullString
+		if err := c.reader().QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid),0),MIN(CASE WHEN +kind='message' THEN created_at END) FROM messages WHERE rowid>?`, lastMessage).Scan(&maxMessage, &said); err != nil {
+			return err
+		}
+		if at, ok := parseTime(said.String); ok && said.Valid {
+			if current, ok := parseTime(since.String); !since.Valid || !ok || at.Before(current) {
+				since = sql.NullString{String: formatTime(at), Valid: true}
+			}
+		}
+	} else if err := c.reader().QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid),0) FROM messages`).Scan(&maxMessage); err != nil {
+		return err
+	}
+	if maxMessage < lastMessage {
+		maxMessage = lastMessage
+	}
 	readsDirty := full || since.Valid
 	contentDirty := full || builtAuthorship != authorship || builtTL1 != tl1
 	if !readsDirty && !contentDirty {
@@ -294,7 +320,7 @@ func (c *Catalog) RefreshPeerLinks(ctx context.Context) error {
 				return err
 			}
 		}
-		for key, value := range map[string]string{"peer_links_version": want, "peer_links_tool_rowid": fmt.Sprint(maxRow), "peer_links_authorship": authorship, "peer_links_tl1": tl1, "peer_links_built_at": now()} {
+		for key, value := range map[string]string{"peer_links_version": want, "peer_links_tool_rowid": fmt.Sprint(maxRow), "peer_links_message_rowid": fmt.Sprint(maxMessage), "peer_links_authorship": authorship, "peer_links_tl1": tl1, "peer_links_built_at": now()} {
 			if err := setMeta(tx, key, value); err != nil {
 				return err
 			}

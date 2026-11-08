@@ -27,7 +27,8 @@ decisions where they changed it.
   launch prompts and generated forms are not hand-offs. A copy alone names no
   role: copies carry plans and debugging output between tasks as often as
   review findings.
-- `read_written_by`: a family that ran a diff (`git|gh|jj` `diff|show|pr`)
+- `read_written_by`: a family that ran a diff (`git|gh|jj` `diff|show|pr`,
+  also as a later command of a compound call)
   saw lines another family wrote in edit calls within 7 days. Only lines one
   writer wrote count. The reader is the reviewer, the writer the implementer.
   - **High:** the lines were in a diff's added lines (≥ 3, more than the
@@ -57,14 +58,14 @@ left out.
 
 | Links | Right | Wrong | Precision |
 |---|---|---|---|
-| Diff + the writer's next prompt followed | 105 | 4 | 0.96 |
-| Diff + began as the writer's turn ended, wrote nothing, clear lead | 543 | 84 | 0.87 |
+| Diff + the writer's next prompt followed | 123 | 6 | 0.95 |
+| Diff + began as the writer's turn ended, wrote nothing, clear lead | 647 | 95 | 0.87 |
 | Quoted copies within a day, ≥ 40 words | 757 | 93 | 0.89 |
-| **Related pairs shown solid and in the hierarchy** | **1,115** | **170** | **0.87** |
-| Related pairs shown dashed | 466 | 454 | 0.51 |
-| Dashed: diff, no timing, reader wrote nothing | 262 | 217 | 0.55 |
-| Dashed: diff + start timing, reader wrote code | 49 | 60 | 0.45 |
-| Dashed: file reads + start timing | 122 | 133 | 0.48 |
+| **Related pairs shown solid and in the hierarchy** | **1,196** | **182** | **0.87** |
+| Related pairs shown dashed | 553 | 507 | 0.52 |
+| Dashed: diff, no timing, reader wrote nothing | 334 | 258 | 0.56 |
+| Dashed: diff + start timing, reader wrote code | 55 | 63 | 0.47 |
+| Dashed: file reads + start timing | 148 | 136 | 0.52 |
 | Dashed: quoted copies under 40 words | 56 | 36 | 0.61 |
 | Quoted copies after a day (dropped; earlier run) | 15 | 62 | 0.19 |
 | File reads, no timing (dropped; earlier run) | 44 | 492 | 0.08 |
@@ -75,13 +76,13 @@ A pair counts as certain when one link is high or a copy and a read agree
 made diffs without timing high and counted resent prompts as copies; scored
 this way their solid pairs were 0.83.
 
-A full rebuild of read
-links takes 2.5–4 minutes on that library (copies 0.3–1.3 s, TL1 0.4 s), so
-only a new rules version rebuilds everything; a day of new calls takes 2–4
-seconds. Later runs derive again the readers with diff calls from
-`peerRecheck` (3 hours) before the earliest new tool call, so the
-implementer's next prompt can confirm a review that read nothing new, and drop
-links whose work joined another family.
+A full rebuild of read links takes 3–5.5 minutes on that library (copies
+0.3–1.3 s, TL1 0.4 s), so only a new rules version rebuilds everything. Later
+runs derive again the readers with diff calls from `peerRecheck` (3 hours)
+before the earliest new tool call, prompt or reply, or call whose output
+arrived late; a day of new work takes 2–11 seconds (every affected reader is
+read again in full). A prompt alone can confirm a review that read nothing
+new, and links whose work joined another family are dropped.
 
 **Storage**: `work_peer_links`, directed edges between the mirror
 representatives of each family's root workspace, with message anchors and
