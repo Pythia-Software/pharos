@@ -93,7 +93,7 @@ func (c *resourceLeaseCache) probe(dirs []string, at time.Time) []leaseProbe {
 	probes := slices.Clone(c.probes[key])
 	for i := range probes {
 		probe := &probes[i]
-		if !probe.Live || probe.Info == nil || probe.Info.HostID != currentHost().ID {
+		if !probe.Live || probe.Info == nil || probe.Info.PID == os.Getpid() || probe.Info.HostID != currentHost().ID {
 			continue
 		}
 		usage, err := read(probe.Info.PID)

@@ -268,6 +268,20 @@ func TestResourceLeaseProbesAreReused(t *testing.T) {
 		t.Fatal("confirmed process absence is not missing coverage")
 	}
 
+	// The collector already samples itself directly. Its own lease needs no
+	// external-process identity reader, which may be unavailable on this OS.
+	cache = resourceLeaseCache{
+		probes: map[string][]leaseProbe{path: {{Path: lease, Live: true, Info: &leaseInfo{PID: os.Getpid(), HostID: currentHost().ID}}}},
+		at:     map[string]time.Time{path: at},
+		read: func(int) (processUsage, error) {
+			t.Fatal("own lease was read as an external process")
+			return processUsage{}, nil
+		},
+	}
+	if !cache.probe([]string{path}, at.Add(time.Second))[0].Live || len(cache.omitted) != 0 {
+		t.Fatal("the collector's own lease created a false coverage gap")
+	}
+
 	// Standalone collection must use the same idle-drive policy as the
 	// app broker, rather than its status reader's one-second lease cache.
 	servicePath := filepath.Join(t.TempDir(), "leases")
