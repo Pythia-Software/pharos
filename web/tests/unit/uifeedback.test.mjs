@@ -3,9 +3,100 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import vm from "node:vm";
+import { transformSync } from "esbuild";
 import { assets, loadClassicScript } from "./helpers/classic-script.mjs";
 import { safeURL, boundedLog, changeTags, pendingSubmission, normalizeEntry } from "../../src/uifeedback/model.ts";
 import { annotationForUpload, createAskFeedbackSender, feedbackReceipt, restoreReview } from "../../src/uifeedback/pharos-model.ts";
+
+test('annotation screenshot export reads the stored image and requires a confirmed local file', async () => {
+  const source = readFileSync(join(assets, '../../../web/src/uifeedback/pharos-client.tsx'), 'utf8');
+  const code = transformSync(source.slice(source.indexOf('async function exportScreenshot('), source.indexOf('\nwindow.uiFeedback =')) + ';exportScreenshot', {loader:'ts'}).code;
+  const screenshot = {mime:'image/jpeg',data:'captured raster'};
+  for (const outcome of ['saved', 'missing', 'write-failed', 'invalid-reply', 'network-failed']) {
+    const requests = [];
+    const exportScreenshot = vm.runInNewContext(code, {
+      stored: async (store, id, operation) => {assert.deepEqual([store,id,operation], ['screenshots','attached','get']); return outcome === 'missing' ? undefined : screenshot;},
+      AbortSignal,
+      fetch: async (path, request) => {
+        requests.push({path,request});
+        if (outcome === 'network-failed') throw Error('Network unavailable');
+        return {ok:outcome !== 'write-failed',json:async () => outcome === 'write-failed' ? {error:'Temporary storage is full'} : {url:outcome === 'invalid-reply' ? 'https://example.test/image.jpg' : 'file:///tmp/pharos-annotation-example/screenshot.jpg'}};
+      },
+    });
+    if (outcome === 'saved') assert.equal(await exportScreenshot('attached'), 'file:///tmp/pharos-annotation-example/screenshot.jpg');
+    else await assert.rejects(exportScreenshot('attached'), {missing:/screenshot is missing/, 'write-failed':/storage is full/, 'invalid-reply':/confirm/, 'network-failed':/Network unavailable/}[outcome]);
+    assert.equal(requests.length, outcome === 'missing' ? 0 : 1);
+    if (requests.length) {
+      assert.equal(requests[0].path, '/api/feedback/screenshot');
+      assert.equal(requests[0].request.method, 'POST');
+      assert.deepEqual(JSON.parse(requests[0].request.body), screenshot);
+    }
+  }
+});
+
+function annotationCopyHarness({exportScreenshot, writeText, clear = false, annotations} = {}) {
+  const source = readFileSync(join(assets, 'ui.py'), 'utf8');
+  const notices = [], deleted = [], writes = [];
+  const context = vm.createContext({
+    feedbackAnnotations: annotations ?? [], feedbackCopying: false,
+    $: () => ({checked:clear}), updateFeedbackCopyButtons() {}, saveFeedback() {},
+    feedbackToast: notice => notices.push(notice),
+    window: {
+      uiFeedback: {exportScreenshot, removeScreenshot:id => deleted.push(id)},
+      pharosHost: {clipboard:{writeText:async text => {writes.push(text); await writeText?.(text);}}},
+    },
+  });
+  vm.runInContext(source.slice(source.indexOf('function feedbackMarkdownInline('), source.indexOf('\nfunction feedbackToast(')), context);
+  return {context, notices, deleted, writes, copy:() => context.copyFeedback()};
+}
+const copyAnnotation = (id, screenshot = true) => ({id,has_screenshot:screenshot,note:`Change ${id}`,view:{title:'Settings',id:'settings'},label:'Heading',tag:'h1',selector:'h1',bounds:{x:0,y:0,width:10,height:20},viewport:{width:390,height:844,device_pixel_ratio:2},source:'ui.py',styles:{}});
+
+test('annotation copy associates each screenshot link with its annotation and clears only after clipboard success', async () => {
+  const exported = [], transfer = Promise.withResolvers(), copying = Promise.withResolvers();
+  const app = annotationCopyHarness({clear:true,annotations:[copyAnnotation('first'),copyAnnotation('text-only',false),copyAnnotation('last')],
+    exportScreenshot:async id => {exported.push(id); return `file:///tmp/pharos-annotation-${id}/screenshot.jpg`;},
+    writeText:() => {copying.resolve(); return transfer.promise;}});
+  const pending = app.copy();
+  await app.copy();
+  await copying.promise;
+  assert.deepEqual(exported, ['first','last']);
+  const sections = app.writes[0].split('## Annotation ').slice(1);
+  assert.match(sections[0], /Change first[\s\S]*\[Open screenshot\]\(<file:\/\/\/tmp\/pharos-annotation-first\/screenshot.jpg>\)/);
+  assert.doesNotMatch(sections[1], /Screenshot:/);
+  assert.match(sections[2], /Change last[\s\S]*pharos-annotation-last/);
+  assert.equal(app.context.feedbackAnnotations.length, 3);
+  assert.deepEqual(app.deleted, []); assert.deepEqual(app.notices, []);
+  app.context.feedbackAnnotations.push(copyAnnotation('added-later',false));
+  transfer.resolve(); await pending;
+  assert.deepEqual(app.deleted, ['first','text-only','last']);
+  assert.deepEqual(Array.from(app.context.feedbackAnnotations, a => a.id), ['added-later']);
+  assert.equal(app.context.feedbackCopying, false);
+  assert.match(app.notices.at(-1), /Copied 3 annotations and cleared/);
+});
+
+test('annotation copy preserves screenshots on export or clipboard failure and can retry', async () => {
+  for (const outcome of ['export-failed','clipboard-failed','unavailable']) {
+    let fail = true;
+    const app = annotationCopyHarness({clear:true,annotations:[copyAnnotation('attached')],
+      exportScreenshot:outcome === 'unavailable' ? undefined : async () => {if(fail && outcome === 'export-failed')throw Error('Temporary storage is full'); return 'file:///tmp/screenshot.jpg';},
+      writeText:async () => {if(fail && outcome === 'clipboard-failed')throw Error('Clipboard denied');}});
+    await app.copy();
+    assert.equal(app.context.feedbackAnnotations.length, 1);
+    assert.deepEqual(app.deleted, []);
+    assert.match(app.notices.at(-1), /Could not copy feedback/);
+    assert.equal(app.context.feedbackCopying, false);
+    assert.equal(app.writes.length, outcome === 'clipboard-failed' ? 1 : 0);
+    if (outcome !== 'unavailable') {
+      fail = false; await app.copy();
+      assert.equal(app.context.feedbackAnnotations.length, 0);
+      assert.deepEqual(app.deleted, ['attached']);
+    }
+  }
+  const app = annotationCopyHarness({annotations:[copyAnnotation('text-only',false)]});
+  await app.copy();
+  assert.equal(app.writes.length, 1);
+  assert.equal(app.context.feedbackAnnotations.length, 1);
+});
 
 test('report copy runs once while pending, settles before reporting and allows a retry', async () => {
   const source=readFileSync(join(assets,'../../../web/src/uifeedback/inbox.tsx'),'utf8');

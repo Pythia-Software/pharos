@@ -13,6 +13,13 @@ never go into preference values or localStorage. Credentials and known token
 parameters are excluded from captured URLs; other query parameters are visible
 in the report preview.
 
+**Copy feedback** also exports each attached screenshot to a private directory
+in the service's OS temporary storage (`$TMPDIR` on macOS, or `/tmp`) and includes
+a `file://` link beside that annotation in the copied Markdown. The image files
+remain available after **Clear on Copy**; the OS may eventually remove temporary
+files. Export or clipboard failures preserve the annotations for retry. Copying
+does not send a report to the hosted inbox.
+
 The send dialog defaults to a bug report and lists every included annotation and
 screenshot compactly; users may exclude annotations from this report. The
 optional contact email is the **Contact email for feedback** app preference
