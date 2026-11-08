@@ -9,7 +9,7 @@ import {createAttentionRegistry,parseJsonInspections} from '@pythia-software/que
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
-import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView,viewPageForURL} from '../../../src/view-contract';
+import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView,retainNavigationView,viewPageForURL} from '../../../src/view-contract';
 import {portableQueryLinks} from '../../../src/portable-query-link';
 import {viewRequestURL} from '../../../src/query-request';
 import {withSearchDateWindow,emptyTextSearch,refreshSearchToday,readTextSearch} from '../../../src/text-search-model';
@@ -328,6 +328,23 @@ test('changing a window preserves unrelated datetime constraints and pinned Toda
  assert.equal(queryFromURL(updateQueryWindowURL(url,'today')).window.timezone,'Asia/Tokyo');
 });
 
+
+test('workspace navigation scopes selections while retaining presentation and stable content identities',()=>{
+ const url=path=>new URL(path,'http://pharos.test');
+ const source=url('/work/first/conversation/one');
+ const selections={conversation:'one',message:'m1',call:'c1',at:'2026-11-08',delegation_session:'session',delegation_start:'100',delegation_end:'200',delegation_collapsed:'session',delegation_page:'2',delegation_expanded:'["session"]',delegation_relatives:'["session"]',delegation_event:'event-1',reader_event_link:'e1',reader_expanded:'["call:c1"]',reader_collapsed:'["message:m1"]',highlight:'message:m1',reveal:'message:m1',find:'previous page'};
+ const state={...selections,reader_content:'{"loaded:m1":true}',disclosures:'{"work:first:files":true}',reader_writing:'1',sidebar_width:'490',delegation_scope:'self',delegation_mode:'rank',nav_collapsed:'1',q_library:'saved-query'};
+ const same=new URLSearchParams(state);retainNavigationView(same,url('/work/first'),source);
+ assert.equal(same.get('conversation'),'one');assert.equal(same.get('delegation_start'),'100');
+ const changed=new URLSearchParams(state);retainNavigationView(changed,url('/work/second'),source);
+ for(const key of Object.keys(selections))assert.equal(changed.has(key),false,key);
+ for(const key of ['reader_content','disclosures','reader_writing','sidebar_width','delegation_scope','delegation_mode','nav_collapsed','q_library'])assert.equal(changed.get(key),state[key],key);
+ const search=new URLSearchParams(state);retainNavigationView(search,url('/library'),source);
+ for(const key of ['conversation','message','call','at','delegation_session','delegation_start','delegation_mode','reader_event_link'])assert.equal(search.has(key),false,key);
+ assert.equal(search.get('reader_content'),state.reader_content);assert.equal(search.get('q_library'),'saved-query');
+ const reopened=new URLSearchParams(state);retainNavigationView(reopened,url('/work/second'),url('/library'));
+ assert.equal(reopened.has('conversation'),false,'old library URLs cannot inject a selection');
+});
 
 test('page navigation drops source attention while preserving global view controls',()=>{
  const params=new URLSearchParams({highlight:'text:quorum',reveal:'message:old',nav_collapsed:'1',reader_content:'{"old":true}'});

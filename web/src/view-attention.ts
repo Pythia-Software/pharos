@@ -1,6 +1,6 @@
 import { libraryHostParameters } from "./host-query-state";
 import { readViewState, readClassicViewState, writeViewState, writeViewStates, installClassicDisclosures } from "./view-state";
-import { attentionTargets, viewContract, viewFields, retainPageView, viewPageForURL } from "./view-contract";
+import { attentionTargets, viewContract, viewFields, retainNavigationView } from "./view-contract";
 import { adoptTextTargets, installPageFind } from "./page-find";
 import { preferences } from "./preferences";
 import { attentionMutationMatters, attentionReferenceAt, attentionTargetNoun, createDetailLanding, toggleAttentionTarget, type AttentionNode } from "./view-attention-model";
@@ -107,7 +107,7 @@ function update() {
 function schedule(){if(!frame) frame=requestAnimationFrame(update);}
 export function installViewAttention() {
   const restoreDisclosures=installClassicDisclosures();
-  window.pharosView={restoreDisclosures,read:readClassicViewState,write:writeViewState,writeAll:writeViewStates,register:registerAttentionResolver,contract:viewContract,refresh:schedule,globalParameters:()=>Object.values(viewFields).filter(field=>field.pages.includes("*")).map(field=>field.param),retainPage:(params,path)=>retainPageView(params,viewPageForURL(new URL(path,location.origin)),path.startsWith("/work/")?libraryHostParameters:[]),contextTarget,hasAttention,clearAttention,toggleAttention};
+  window.pharosView={restoreDisclosures,read:readClassicViewState,write:writeViewState,writeAll:writeViewStates,register:registerAttentionResolver,contract:viewContract,refresh:schedule,globalParameters:()=>Object.values(viewFields).filter(field=>field.pages.includes("*")).map(field=>field.param),retainPage:(params,path)=>retainNavigationView(params,new URL(path,location.origin),new URL(location.href),path.startsWith("/work/")?libraryHostParameters:[]),contextTarget,hasAttention,clearAttention,toggleAttention};
   // The Mac app adds the action to its native menu. In a browser, offer the
   // same action while attention is present, including on empty page space.
   let menu: HTMLElement | undefined, menuOrigin: HTMLElement | null = null;

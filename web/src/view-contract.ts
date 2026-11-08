@@ -9,6 +9,7 @@ import { sessionSignals } from "./session-shape-model";
 import {validTimelineVisibility} from "./timeline-visibility";
 import { dataGuideSelectionKeys, dataSources } from "./data-taxonomy-model";
 import { syncSchemas } from "./sync-table-model";
+import { readerParams } from "./site-routes";
 // One contract for host-owned view state. Query Table owns q_* and its
 // composite controls; the site map exports this contract verbatim to agents.
 export type ViewField = { param: string; pages: string[]; kind: "text" | "boolean" | "enum" | "json" | "strings"; description: string; values?: readonly string[]; default?: unknown; details?: Record<string,unknown>; captureEntries?: boolean };
@@ -242,6 +243,19 @@ export function retainPageView(params: URLSearchParams, page: string, nativePara
   if(sourcePage!==page)for(const name of pageAttentionParameters)params.delete(name);
   const allowed=new Set([...Object.values(fieldsForPage(page)).map(field=>field.param),...nativeParameters]);
   for(const field of Object.values(viewFields))if(!field.param.includes("{dataset}")&&!allowed.has(field.param))params.delete(field.param);
+}
+
+// Native reader references are selections, not presentation preferences. A
+// workspace opened from Search must not inherit another workspace's transcript,
+// local event IDs, timeline window or page. Stable-identity maps can travel.
+const workspaceSelections = [...readerParams.map(field => field.name), "delegation_session", "delegation_collapsed", "delegation_start", "delegation_end", "delegation_page", "delegation_expanded", "delegation_relatives", "delegation_event", "reader_event_link", "reader_expanded", "reader_collapsed"];
+const workspacePresentation = ["explorer", "delegation_mode", "delegation_sort", "delegation_scope", "delegation_direction", "delegation_search", "delegation_matching"];
+export function retainNavigationView(params: URLSearchParams, target: URL, source: URL, nativeParameters: readonly string[] = []) {
+  const workspace = (url: URL) => { try { const id = url.pathname.match(/^\/work\/([^/]+)(?:\/|$)/)?.[1]; return id ? decodeURIComponent(id) : null; } catch { return null; } };
+  const next = workspace(target);
+  retainPageView(params, viewPageForURL(target), nativeParameters, viewPageForURL(source));
+  if (!next || next !== workspace(source)) for (const name of [...workspaceSelections, ...pageAttentionParameters]) params.delete(name);
+  if (!next) for (const name of workspacePresentation) params.delete(name);
 }
 
 /** Canonical page identity for route-scoped bindings retained in the shell. */
