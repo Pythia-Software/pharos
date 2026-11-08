@@ -10,7 +10,7 @@ import { viewContract } from "./view-contract";
 import { supportsToday } from "./curiosity-data";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, isFilterable, loadSchema, opsForField, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
-import { percentileLabel, percentileLevels, type PercentileLevel, type ResolvedAnalysis, isTrendView, analysisCycles, analysisDefaults, analysisReductions, analysisVersion, allAnalysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { singleSeries, percentileLabel, percentileLevels, type PercentileLevel, type ResolvedAnalysis, isTrendView, analysisCycles, analysisDefaults, analysisReductions, analysisVersion, allAnalysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
 import { defaultThinking, thinkingBreakdowns, thinkingRangeDays, thinkingViews } from "./thinking-model";
 import { chartPeriods } from "./chart-period";
@@ -149,7 +149,10 @@ export function canonicalChart(defaults: Record<string, unknown>, change: Record
 // A given option's value is its drawn value when its rule comes earlier, its
 // merged value (or "(absent)") otherwise. multiple_periods is derived from the
 // merge over fill_defaults: period hours with hours > 1, or days with
-// days > 1; "self" is the option's own merged value.
+// days > 1. single_selection is whether the legend selection draws one
+// group alone (selection.values holds one value and excluded is not true),
+// so a measure without a total across groups has its levels; "self" is the
+// option's own merged value.
 // The generator enumerates every combination of option values, absent ones
 // included, and checks that the rules reproduce the page's drawing and
 // verdict on each.
@@ -181,6 +184,9 @@ const multiple = (merged: Record<string, unknown>) => {
   const state = { ...fillDefaults, ...merged };
   return state.period === "hours" && Number(state.hours) > 1 || state.period === "days" && Number(state.days) > 1;
 };
+const single = (merged: Record<string, unknown>) => singleSeries(merged as AnalysisState);
+// Derived givens: settings a rule reads that are not options of their own.
+const derived = (name: string, merged: Record<string, unknown>) => name === "multiple_periods" ? key(multiple(merged)) : name === "single_selection" ? key(single(merged)) : undefined;
 
 function candidates(catalog: AnalysisCatalog, option: string): Scalar[] {
   const measures = Object.keys(catalog.measures);
@@ -219,7 +225,7 @@ const lookup = (table: unknown, keys: string[]) => keys.reduce<unknown>((node, n
 export type ViewRules = { keys: string[]; domains: Record<string, Scalar[]>; numeric: Record<string, { min: number; max?: number; integer: boolean } | { max_values: number }>; rules: Rule[] };
 export function drawChart(view: ViewRules, merged: Record<string, unknown>): Record<string, unknown> {
   const drawn: Record<string, unknown> = {};
-  const value = (name: string, self: unknown) => name === "self" ? key(self) : name === "multiple_periods" ? key(multiple(merged)) : key(name in drawn ? drawn[name] : merged[name]);
+  const value = (name: string, self: unknown) => name === "self" ? key(self) : derived(name, merged) ?? key(name in drawn ? drawn[name] : merged[name]);
   for (const rule of view.rules) {
     if (rule.list) {
       const asked = merged[rule.option];
@@ -320,7 +326,7 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
   // Each rule from the drawings: what stays, what replaces it, and the fill.
   const rules: Rule[] = [];
   for (const { option, constraints: givens, fallback: fallbackGiven } of drawShapes(topic, view)) {
-    const context = (item: typeof drawing[number], name: string) => name === "self" ? key(item.merged[option]) : name === "multiple_periods" ? key(multiple(item.merged)) : key(rules.some(rule => rule.option === name) ? item.drawn[name] : item.merged[name]);
+    const context = (item: typeof drawing[number], name: string) => name === "self" ? key(item.merged[option]) : derived(name, item.merged) ?? key(rules.some(rule => rule.option === name) ? item.drawn[name] : item.merged[name]);
     const allowed = givens.map(() => ({} as Record<string, unknown>)), fallbacks: Record<string, unknown> = {};
     let coerced = false;
     for (const item of drawing) {
@@ -373,8 +379,9 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
       if (json(value) !== json(item.drawn[option])) fail(`${topic} ${view}: the rules draw ${option} of ${json(item.chart)} as ${json(value)}, the page as ${json(item.drawn[option])}`);
     }
   }
-  for (const item of drawing) for (const probe of levelProbes) {
-    const chart = { ...item.chart, percentiles: probe }, merged = { ...item.merged, percentiles: probe };
+  for (const item of drawing) for (const variant of selectionVariants(item)) for (const probe of levelProbes) {
+    const selection = variant === item ? {} : { selection: singleSelectionProbe };
+    const chart = { ...item.chart, ...selection, percentiles: probe }, merged = { ...variant.merged, percentiles: probe };
     if (!keys.includes("percentiles")) break;
     const page = (normalizeAnalysis(peopleMessageLabelCatalog(catalog, merged as AnalysisState), merged as AnalysisState) as Record<string, unknown>).percentiles, drawn = drawChart(facts, merged).percentiles;
     if (json(page) !== json(drawn)) fail(`${topic} ${view}: the rules draw percentiles ${json(probe)} of ${json(item.chart)} as ${json(drawn)}, the page as ${json(page)}`);
@@ -389,19 +396,24 @@ const listKeys = ["percentiles"];
 const levelProbes: PercentileLevel[][] = [["mean", "p50", "p90"], ["p99", "p75"], ["mean"], ["p95"], []];
 // The levels each context draws: a catalog that chooses its charts draws
 // them by measure and breakdown; any other by display, shares, and measure
-// and breakdown. Built from every drawing asked for each level alone.
+// and breakdown. A measure without a total across groups draws them for one
+// group the legend selects (single_selection). Built from every drawing
+// asked for each level alone, with and without one group selected.
+export const singleSelectionProbe = { values: ["(one group)"], excluded: false };
+const selectionVariants = (item: { merged: Record<string, unknown> }) => [item, { ...item, merged: { ...item.merged, selection: singleSelectionProbe } }];
 function levelRule(topic: UsageTopic, drawing: Array<{ merged: Record<string, unknown>; drawn: Record<string, unknown> }>, rules: Rule[]): Rule {
-  const catalog = analysisCatalogs[topic]!, givens = presents(topic) ? [["metric", "split"]] : [["display"], ["share"], ["metric", "split"]];
-  const context = (item: typeof drawing[number], name: string) => key(rules.some(rule => rule.option === name) ? item.drawn[name] : item.merged[name]);
+  const catalog = analysisCatalogs[topic]!, givens = presents(topic) ? [["metric", "split", "single_selection"]] : [["display"], ["share"], ["metric", "split", "single_selection"]];
+  const context = (item: { merged: Record<string, unknown>; drawn: Record<string, unknown> }, name: string) => derived(name, item.merged) ?? key(rules.some(rule => rule.option === name) ? item.drawn[name] : item.merged[name]);
   const allowed = givens.map(() => ({} as Record<string, unknown>));
-  for (const item of drawing) for (const level of percentileLevels) {
+  const probed = drawing.flatMap(item => selectionVariants(item).map(variant => ({ ...item, merged: variant.merged })));
+  for (const item of probed) for (const level of percentileLevels) {
     const probe = { ...item.merged, percentiles: [level] } as AnalysisState, drawn = (normalizeAnalysis(peopleMessageLabelCatalog(catalog, probe), probe) as ResolvedAnalysis).percentiles;
     if (!drawn.includes(level)) continue;
     givens.forEach((given, index) => nest(allowed[index], ["all", ...given.map(name => context(item, name))], leaf => (leaf as Scalar[] | undefined)?.includes(level) ? leaf : [...(leaf as Scalar[] ?? []), level]));
   }
   const rule: Rule = { option: "percentiles", list: true, constraints: givens.map((given, index) => ({ given, allowed: allowed[index].all ?? [] })) };
   // Keep a constraint only where it removes a level somewhere.
-  rule.constraints = rule.constraints.filter(constraint => drawing.some(item => percentileLevels.some(level => !((lookup(constraint.allowed, constraint.given.map(name => context(item, name))) as Scalar[] | undefined)?.includes(level) ?? false))));
+  rule.constraints = rule.constraints.filter(constraint => probed.some(item => percentileLevels.some(level => !((lookup(constraint.allowed, constraint.given.map(name => context(item, name))) as Scalar[] | undefined)?.includes(level) ?? false))));
   return rule;
 }
 

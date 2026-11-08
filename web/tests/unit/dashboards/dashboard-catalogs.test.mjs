@@ -12,9 +12,10 @@ import { cardDashboardURL } from "../../../src/saved-card-model";
 import { usageDashboardReturn, usageWorkspaceURL } from "../../../src/usage-workspace-model";
 import { dashboardQueryLinks } from "../../../src/dashboard-query-links";
 import { groupedDashboardQuery } from "../../../src/usage-dashboard-model";
-import { normalizedDashboardChart } from "../../../src/analysis-catalogs";
+import { analysisCatalogs, normalizedDashboardChart } from "../../../src/analysis-catalogs";
+import { trendHeatmap } from "../../../src/dashboard-heatmap-model";
 import { now, toolCalls, toolsRollup, mcpCalls, skillUsages } from "../helpers/record-ledgers.mjs";
-import { isTrendView, analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, nativeCycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
+import { heatmapAxis, heatmapSource, percentileLimit, isTrendView, analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, nativeCycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catalog";
@@ -502,4 +503,50 @@ test("compaction charts count boundaries and retain unknown triggers through ser
   assert.equal(core.evaluateMetrics(records, distinct.query, schemas.compactions, { now }).metrics[0].buckets[0].value, 1);
   assert.equal(compaction.labels.trigger("human"), "Human triggered");
   assert.equal(compaction.labels.trigger("machine"), "Machine triggered");
+});
+
+test("every trend draws each %ile level it offers: reference lines over earlier points, and a heatmap's traces", () => {
+  const levels = ["mean", "p50", "p75", "p90", "p95", "p99"], data = new Map();
+  const rowsOf = dataset => { if (!data.has(dataset)) data.set(dataset, population(schemas[dataset], { now, count: 160 })); return data.get(dataset); };
+  let drawnLines = 0, drawnTraces = 0, picked = 0;
+  for (const [topic, shape] of Object.entries(analysisCatalogs)) {
+    if (!shape.measures || topic === "carbon" || topic === "parallelism") continue;
+    const splits = ["none", ...Object.keys(shape.breakdowns)].filter((split, index, all) => fullMatrix || index < 2 || index === all.length - 1);
+    for (const metric of Object.keys(shape.measures)) for (const split of splits) for (const display of ["interval", "heatmap"]) {
+      const asked = { view: "trend", metric, split, display, period: "day", nonzero: true, percentiles: levels };
+      const catalog = peopleMessageLabelCatalog(shape, asked), schema = schemas[catalog.dataset];
+      const view = normalizeAnalysis(catalog, asked), label = `${topic} ${display} ${view.metric} by ${view.split}`;
+      if (!schema || view.display !== display) continue;
+      const limit = percentileLimit(catalog, view, "p50");
+      // A level a chart offers is drawn; one it cannot draw is never asked for.
+      assert.deepEqual(view.percentiles, limit ? [] : display === "heatmap" ? levels.slice(1) : levels, label);
+      const source = heatmapSource(catalog, view), query = trendQuery(source.catalog, source.state, month(catalog), { now });
+      const results = core.evaluateMetrics(rowsOf(catalog.dataset), query.query, schema, { now }).metrics;
+      const built = trendSeries(source.catalog, display === "heatmap" ? { ...source.state, nonzero: false } : source.state, query, results, { now });
+      if (built.error || !built.buckets.length) continue;
+      if (display === "heatmap") {
+        const heatmap = trendHeatmap(built.buckets, built.series, heatmapAxis(catalog, view).bins.scheme, view.percentiles);
+        assert.deepEqual(heatmap.levels, view.percentiles, label);
+        for (const column of heatmap.columns) if (column.total > 0) {
+          const values = column.levels.map(level => level?.value);
+          assert.ok(values.every(Number.isFinite) && values.every((value, index) => !index || value >= values[index - 1] - 1e-9), `${label}: ${values}`);
+          drawnTraces++;
+        }
+      } else if (!limit && built.normPoints) {
+        assert.deepEqual(built.references?.map(item => item.level), view.percentiles, label);
+        const values = built.references.slice(1).map(item => item.value);
+        assert.ok(values.every(Number.isFinite) && values.every((value, index) => !index || value >= values[index - 1] - 1e-9), `${label}: ${values}`);
+        drawnLines++;
+      } else if (limit && view.split !== "none" && !view.share) {
+        // Without a total across groups, one group the legend picks has its own.
+        const value = built.series.find(item => item.value !== undefined && !item.hiddenCount)?.value;
+        if (value === undefined) continue;
+        const one = normalizeAnalysis(catalog, { ...asked, selection: { values: [value], excluded: false } });
+        if (percentileLimit(catalog, one, "p50")) continue;
+        const chosen = trendQuery(catalog, one, month(catalog), { now }), again = trendSeries(catalog, one, chosen, core.evaluateMetrics(rowsOf(catalog.dataset), chosen.query, schema, { now }).metrics, { now });
+        if (again.normPoints) { assert.deepEqual(again.references?.map(item => item.level), levels, `${label}: ${value} alone`); picked++; }
+      }
+    }
+  }
+  assert.ok(drawnLines > 50 && drawnTraces > 10 && picked > 10, `${drawnLines} reference charts, ${drawnTraces} traced columns, ${picked} single groups`);
 });
