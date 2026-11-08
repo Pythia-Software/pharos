@@ -381,7 +381,8 @@ const ROUTES = [
       assert.equal(await unmeasured.getAttribute('aria-valuenow'), null, 'unknown work is accessible without a fabricated percentage');
     },
   },
-  { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
+  { name: "Home", url: "/", ready: ".home-recent-grid .conversation-result-card" },
+  { name: "Home without recent conversations", url: "/", ready: ".home-recent-empty", api: { "GET /api/library/recent-conversations": { items: [] } } },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",
     check: page => page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input")) },
   { name: "Home search before date", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).click(); await page.getByRole("combobox", { name: "Date comparison", exact: true }).selectOption("to"); }, shown: ".home-search-disclosure.is-expanded" },
@@ -494,6 +495,9 @@ const ROUTES = [
   // cycle) not drawn above.
   { name: "MCP dashboard weekday cycle", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "cycle", cycle: "weekday", metric: "time", split: "none", reduce: "mean" }))}`, ready: `.usage-mcp-dashboard ${analysisReady}`,
     check: async page => assert.deepEqual(await page.locator(".usage-mcp-dashboard [role=alert], .usage-mcp-dashboard .query-table-error").allTextContents(), [], "the dashboard reports an error") },
+  { name: "Analyze Work Hours dashboard", url: "/analyze?analyze_topic=work_hours", ready: ".usage-work-hours-dashboard .usage-chart" },
+  { name: "Analyze habits punchcard", url: "/analyze?analyze_topic=habits&habits_view=punchcard", ready: '[data-pharos-target="section:habits-punchcard"]' },
+  { name: "Analyze habits daily schedule", url: "/analyze?analyze_topic=habits&habits_view=days", ready: ".habits-days-chart" },
   { name: "Analyze habits dashboard", url: "/analyze?analyze_topic=habits&habits_day=" + new Date(Date.now() - 86400000).toISOString().slice(0, 10), ready: ".habits-panel .habits-day" },
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
@@ -1186,6 +1190,19 @@ test("dashboard catalog stays readable while a preview is pending", { skip }, as
     await settled();
     await page.unroute('**/api/query/tl1_attempts/*', hold);
   }
+});
+
+test('Recent conversation links open the selected conversation and search', { skip }, async t => {
+  const { page, settled, calls } = await open(t, { url: '/', ready: '.home-recent-grid .conversation-result-card' });
+  assert.equal(calls.some(call => /\/api\/work\/.+\/conversations\//.test(call.path)), false, 'previews do not load transcripts');
+  await page.locator('.home-recent-grid .conversation-result-title').first().click();
+  await page.waitForURL(url => url.pathname === `/work/${workID}/conversation/${rootConversation}`);
+  await page.locator('#detail .conversation-panel:not(.conversation-loading)').first().waitFor();
+  await settled();
+  await page.goBack();
+  await page.locator('.home-recent-search').click();
+  await page.waitForURL(url => url.pathname === '/library' && url.searchParams.get('view') === 'conversation');
+  await page.locator('#queryTableLibrary .conversation-result-card').first().waitFor();
 });
 
 test('pages without section menus use the full window', { skip }, async t => {

@@ -664,7 +664,7 @@ func TestAskSavesAnswerPastABusyCatalog(t *testing.T) {
 			go func() { response <- askCall(t, s, http.MethodPost, action, askInput()) }()
 			select {
 			case result := <-response:
-				if result.Code != http.StatusBadRequest || !strings.Contains(result.Body.String(), "Pharos is busy saving library changes") || strings.Contains(result.Body.String(), "deadline") {
+				if result.Code != http.StatusServiceUnavailable || !strings.Contains(result.Body.String(), "Pharos is busy saving library changes") || strings.Contains(result.Body.String(), "deadline") {
 					t.Fatalf("unhelpful persistence failure: %d %s", result.Code, result.Body.String())
 				}
 			case <-time.After(2 * time.Second):

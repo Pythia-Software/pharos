@@ -24700,7 +24700,9 @@
       "action": "Explore Habits",
       "habits": {
         "target": "habits-streaks",
-        "view": {},
+        "view": {
+          "habits_view": "calendar"
+        },
         "window": "Today",
         "kind": "Summary",
         "loading": {
@@ -24725,7 +24727,8 @@
       "habits": {
         "target": "habits-streaks",
         "view": {
-          "habits_streak": "weekdays"
+          "habits_streak": "weekdays",
+          "habits_view": "calendar"
         },
         "window": "Today",
         "kind": "Summary",
@@ -24750,7 +24753,9 @@
       "action": "Explore Habits",
       "habits": {
         "target": "habits-calendar",
-        "view": {},
+        "view": {
+          "habits_view": "calendar"
+        },
         "window": "Past 17 weeks",
         "kind": "Calendar",
         "loading": {
@@ -24775,7 +24780,8 @@
       "habits": {
         "target": "habits-calendar",
         "view": {
-          "habits_calendar": "agents"
+          "habits_calendar": "agents",
+          "habits_view": "calendar"
         },
         "window": "Past 17 weeks",
         "kind": "Calendar",
@@ -24800,7 +24806,9 @@
       "action": "Explore Habits",
       "habits": {
         "target": "habits-punchcard",
-        "view": {},
+        "view": {
+          "habits_view": "punchcard"
+        },
         "window": "Past 90 days",
         "kind": "Distribution",
         "loading": {
@@ -24825,7 +24833,8 @@
       "habits": {
         "target": "habits-punchcard",
         "view": {
-          "habits_punchcard": "unattended"
+          "habits_punchcard": "unattended",
+          "habits_view": "punchcard"
         },
         "window": "Past 90 days",
         "kind": "Distribution",
@@ -24850,7 +24859,9 @@
       "action": "Explore Habits",
       "habits": {
         "target": "habits-days",
-        "view": {},
+        "view": {
+          "habits_view": "days"
+        },
         "window": "Past 28 days",
         "kind": "Timeline",
         "loading": {
@@ -24874,7 +24885,9 @@
       "action": "Explore Habits",
       "habits": {
         "target": "habits-pace",
-        "view": {},
+        "view": {
+          "habits_view": "calendar"
+        },
         "window": "Past 28 days",
         "kind": "Summary",
         "loading": {
@@ -24899,7 +24912,8 @@
       "habits": {
         "target": "habits-automations",
         "view": {
-          "habits_punchcard_days": "30"
+          "habits_punchcard_days": "30",
+          "habits_view": "punchcard"
         },
         "window": "Past 30 days",
         "kind": "Ranking",

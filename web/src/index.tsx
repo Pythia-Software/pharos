@@ -27,7 +27,7 @@ import { dataSources } from "./data-taxonomy-model";
 import { DataTaxonomyModal, openDataTaxonomy, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
-import { ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary, openableProps, type ResultTarget } from "./conversation-results";
+import { ConversationCard, ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary, openableProps, type ResultTarget } from "./conversation-results";
 import { TextSearchEditor } from "./text-search-editor";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
 import { usageDetailsSchema } from "./usage-row-model";
@@ -115,7 +115,7 @@ import { Icon } from "./icons";
 import {  CategoryPill, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { startConcurrencySummary } from "./concurrency-store";
-import { HabitsPanels } from "./habits";
+import { HabitsDashboard } from "./habits";
 import { sessionShapeAnalysisCatalog } from "./session-shape-analysis-catalog";
 import { SessionShapeDefinitions, SessionsToRead, SignalTable, revealDefinitions } from "./session-shape-panels";
 import { formatSeconds } from "./session-shape-model";
@@ -788,17 +788,13 @@ function ConversationResultCard({ row, api, renderers, find }: { row: Row; api: 
     const message = item.kind === "first" ? firstInput : latestResponse;
     return message ? <ResultMessage key={item.message_id} label={label} message={message} kind={item.kind === "first" ? "human" : "assistant"} compact onOpen={() => browseTo(item.message_id, item.conversation_id)} /> : null;
   };
-  return <article className="conversation-result-card" data-pharos-target={`row:${row.id}`}>
-    <div className="conversation-result-head">
-      <div className="conversation-result-summary">
-        <button className="conversation-result-title" type="button" onClick={() => window.pharosOpenDetail?.(String(row.id))}>{String(row.title ?? "Untitled workspace")}</button>
-        <ConversationFacts row={row} fields={api.visibleFields} query={api.query} renderers={renderers} />
-      </div>
-      <div className="conversation-result-actions">
+  return <ConversationCard data-pharos-target={`row:${row.id}`}
+    title={<button className="conversation-result-title" type="button" onClick={() => window.pharosOpenDetail?.(String(row.id))}>{String(row.title ?? "Untitled workspace")}</button>}
+    facts={<ConversationFacts row={row} fields={api.visibleFields} query={api.query} renderers={renderers} />}
+    actions={<>
         <button type="button" onClick={() => window.pharosOpenDetail?.(String(row.id))}>Open <Icon name="arrow-right" /></button>
         <button type="button" ref={browserToggle} data-view-field="search_cards" className="conversation-browser-toggle" onClick={() => { setHasBrowsed(true); setBrowse(value => !value); }} aria-expanded={browse} aria-controls={browserID}><Icon name="tree" />{browse ? "Collapse turns" : "Browse"}<Icon name="chevron-down" /></button>
-      </div>
-    </div>
+    </>}>
     {!browse && matches ? <div className="conversation-result-preview joined">
       {summaryEntries(matches, count).map((entry, index) => entry.type === "message" ? summaryMessage(entry.item, entry.label)
         : <button key={`gap:${index}`} type="button" data-view-field="search_cards" className="conversation-preview-browse" title={`Browse turns: ${activitySummary}`} aria-label={`${entry.label}. Browse turns: ${activitySummary}`} aria-expanded={browse} aria-controls={browserID} onClick={openBrowser}>
@@ -815,7 +811,7 @@ function ConversationResultCard({ row, api, renderers, find }: { row: Row; api: 
     <div id={browserID} className={`conversation-browser-disclosure${browse ? " is-expanded" : ""}`} aria-hidden={!browse} ref={element => { if (element) element.inert = !browse; }}>
       <div className="conversation-browser-content">{hasBrowsed || browse ? <ResultConversationBrowser workspaceID={String(row.id)} readJSON={readerJSON} target={target} /> : null}</div>
     </div>
-  </article>;
+  </ConversationCard>;
 }
 
 function ConversationResults({ api, searching, failed, renderers }: { api: QueryTableApi<Row>; searching: boolean; failed: boolean; renderers: RenderRegistry<Row> }) {
@@ -1105,7 +1101,8 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "tokens") return <TokenUsageDashboard />;
   if (topic === "human") return <HumanUsageDashboard />;
   if (topic === "parallelism") return <ParallelismUsageDashboard />;
-  if (topic === "habits") return <HabitsDashboard />;
+  if (topic === "habits") return <DashboardCardSourceContext.Provider value={{ page: true, schema: schemas.rhythm }}><HabitsDashboard /></DashboardCardSourceContext.Provider>;
+  if (topic === "work_hours") return <CatalogDashboard catalog={habitsAnalysisCatalog} dataset="rhythm" name="work-hours" defaults={dashboardDefaults.work_hours} />;
   if (topic === "tools") return <ToolsUsageDashboard />;
   if (topic === "mcp") return <MCPUsageDashboard />;
   if (topic === "carbon") return <CarbonDashboard />;
@@ -1126,17 +1123,6 @@ function CarbonDashboard() {
   const carbon = useCarbonCatalog();
   return <CatalogDashboard catalog={carbon.catalog ?? carbonCatalogShape} dataset="usage" name="carbon" defaults={dashboardDefaults.carbon}
     frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonImpact>} />;
-}
-
-// Habits: summary panels surround the standard catalog dashboard, as the
-// Parallelism ribbon does. The chart keeps its own title below the panels.
-function HabitsDashboard() {
-  const headline = useDashboardHeadline();
-  return <HabitsPanels>{(before, after) => <CatalogDashboard catalog={habitsAnalysisCatalog} dataset="rhythm" name="habits" defaults={dashboardDefaults.habits} chartHeadline={false}
-    before={<>
-      {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>Habits</h2></div>, headline) : null}
-      {before}
-    </>} after={after} />}</HabitsPanels>;
 }
 
 // Parallelism's views follow the saved counting and gap, with which the

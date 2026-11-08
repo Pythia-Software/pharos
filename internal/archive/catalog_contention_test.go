@@ -51,6 +51,7 @@ func TestInteractiveReadDemand(t *testing.T) {
 		{http.MethodPost, "/api/query/library/query-v3", true},
 		{http.MethodGet, "/api/search", true},
 		{http.MethodGet, "/api/library/find", true},
+		{http.MethodGet, "/api/library/recent-conversations", true},
 		{http.MethodPost, "/api/search/text", true},
 		{http.MethodGet, "/api/work/id/conversations/id", true},
 		{http.MethodGet, "/api/usage/parallelism", true},

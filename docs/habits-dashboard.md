@@ -344,13 +344,14 @@ provisional; existing ideas are reused where they fit.
 - Service: `internal/archive/rhythm.go` (the `rhythm` dataset: one record per
   local hour × actor × top-level conversation) and `internal/archive/habits.go`
   (`/api/habits`: days, streaks, windows, punchcard, automations).
-- Page: `web/src/habits.tsx` over `web/src/habits-model.ts` supplies the
-  summary and automation/settings panels through `CatalogDashboard`'s
-  `before`/`after` slots. `habitsAnalysisCatalog` drives the standard chart
-  between them, independently of summary loading or failure. Chart styles,
-  inspection, range dragging, legend selection and supporting-query links
-  come from the shared dashboard components; panel button styles apply only
-  to vacation actions.
+- Pages: **Work Hours** (`analyze_topic=work_hours`) uses `habitsAnalysisCatalog`
+  over `rhythm` in the standard catalog dashboard, with its shared controls,
+  filters, inspection and supporting-query links. **Habits**
+  (`analyze_topic=habits`, `web/src/habits.tsx`) has one control row: View
+  selects the activity calendar (`habits_view=calendar`), weekday × hour
+  punchcard (`punchcard`), or daily schedule (`days`), and exposes that view's
+  selectors. Streak cards sit above the chart; work/rest cards and automations
+  sit below. All summary views share `/api/habits` and `habits-model.ts`.
 - Settings: `pharos-habits-v1` (vacations, thresholds, engaged gap, day start), shared by the page, the menu bar and the `rhythm` records.
 - Cards: each section (streaks, calendar, punchcard, your days, pace,
   automatic runs) is a dashboard card target (`web/src/habits-card.ts`),
@@ -358,7 +359,7 @@ provisional; existing ideas are reused where they fit.
   (`web/src/habits-card-recipes.ts`): your streak, weekday streak, your active
   days, days with agents you started, when you work, when agents work while
   you're away, your days, your pace and automatic runs. Each template is the
-  Habits page at its selectors plus `reveal=section:<target>`, so it opens on
+  Habits page at its explicit `habits_view` and selectors plus `reveal=section:<target>`, so it opens on
   its section; it draws, and is collected, as that dashboard card. The landing
   also tells apart templates that share the page's default address, which is
   why the site map reader matches a card's own `reveal`. These supersede the

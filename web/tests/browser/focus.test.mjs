@@ -395,9 +395,8 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   assert.ok(libraryScopes.length>0&&libraryScopes.every(scope=>scope==='source-review-library'),'source setup requests lost their library binding');
 });
 
-// Habits surrounds the shared chart with its own panels; exercise that page
-// at both widths so panel styles cannot break chart hit targets or gestures.
-for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 'cumulative', 1440], ['habits', 'interval', 1440], ['habits', 'interval', 390]]) test(`Dashboard ${topic} ${display} inspection at ${width}px focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
+// Work Hours uses the shared chart; exercise inspection at both widths.
+for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 'cumulative', 1440], ['work_hours', 'interval', 1440], ['work_hours', 'interval', 390]]) test(`Dashboard ${topic} ${display} inspection at ${width}px focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
   const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }) })}`, viewport: { width, height: 900 }, ready: '.usage-chart-bars:not(.loading) > button' });
   const chart = page.locator('.usage-dashboard .usage-chart').first();
   const bar = display === 'cumulative' ? chart.locator('.usage-chart-bars > button').last() : chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first();
@@ -1222,6 +1221,47 @@ test("the findings prompt review takes focus, keeps it and returns it on Escape"
   await settled();
   await holdsFocus(page, dialog, review);
 });
+
+for (const scenario of [
+  { name: "Risky action", url: "/findings?optimize_area=safety&view=table&safety_case=safety_sample", api: "/api/findings/safety", id: "safety_sample", collection: "cases", detail: ".safety-detail", remove: "In prompt · Remove", add: "Add to prompt" },
+  { name: "Fix", url: "/findings?optimize_area=fixes&view=table&fixes_item=fix_sample", api: "/api/findings/fixes", id: "fix_sample", collection: "items", detail: ".fixes-detail", remove: "In prompt · Remove", add: "Add to prompt" },
+  { name: "Efficiency finding", url: "/findings?finding=failure%3Arepo%3Arepo_explo%3Adef", api: "/api/findings", id: "failure:repo:repo_explo:def", collection: "findings", detail: ".findings-detail", remove: "Remove from prompt", add: "Add to Prompt Cart" },
+]) {
+  test(`${scenario.name} detail keeps its prompt cart usable`, { skip }, async t => {
+    const overview = structuredClone(defaultApi[`GET ${scenario.api}`]);
+    const card = overview[scenario.collection].find(item => item.id === scenario.id);
+    const membership = structuredClone(card.cart);
+    const cart = structuredClone(overview.cart);
+    const initialDetail = defaultApi[`GET ${scenario.api}/:id`]({ params: { id: scenario.id } });
+    const api = {
+      [`GET ${scenario.api}`]: () => overview,
+      [`GET ${scenario.api}/:id`]: () => ({ ...initialDetail, cart: card.cart }),
+      [`POST ${scenario.api}/:id/action`]: ({ body }) => {
+        if (body.action === "cart_remove") { card.cart = null; overview.cart = []; }
+        if (body.action === "cart_add") { card.cart = membership; overview.cart = structuredClone(cart); }
+        return { ok: true };
+      },
+    };
+    const { page, shot } = await open(t, { url: scenario.url, viewport: { width: 1920, height: 1050 }, api, ready: scenario.detail });
+    const cartPanel = page.locator(".findings-cart:visible");
+    await cartPanel.locator("li").waitFor();
+    assert.equal(await cartPanel.count(), 1, "the detail has one visible prompt cart");
+    assert.equal(await page.locator("#findingsCart").count(), 1, "the hidden table does not duplicate the cart");
+    await shot("cart");
+    await cartPanel.locator("button.primary").click();
+    const dialog = page.locator('.findings-dialog[role="dialog"]');
+    await dialog.waitFor();
+    await dialog.getByRole("button", { name: "Keep in cart" }).click();
+    await page.locator(scenario.detail).getByRole("button", { name: scenario.remove, exact: true }).click();
+    await cartPanel.locator(".findings-cart-empty").waitFor();
+    await page.locator(scenario.detail).getByRole("button", { name: scenario.add, exact: true }).click();
+    await cartPanel.locator("li").waitFor();
+    await page.setViewportSize({ width: 320, height: 800 });
+    await cartPanel.scrollIntoViewIfNeeded();
+    assert.equal(await cartPanel.isVisible(), true, "the cart remains accessible on a narrow screen");
+    await shot("phone-cart");
+  });
+}
 
 test("page Find inside an ARIA modal searches only the modal and Escape closes Find before the modal", { skip }, async t => {
   const { page, settled } = await open(t, { url: "/findings", ready: ".findings-card" });
@@ -2264,10 +2304,29 @@ async function openAskOverlay(t, width) {
 
 test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip}, async t => {
   const {page,shot,modal,editor}=await openAskOverlay(t,1440);
+  await page.evaluate(()=>{
+    const original=window.fetch;window.askDraftAttempts=0;
+    window.fetch=(input,options)=>{
+      if(String(input)==='/api/ask/session'&&options?.method==='POST'&&++window.askDraftAttempts===1)
+        return Promise.resolve(new Response(JSON.stringify({error:'Pharos is busy'}),{status:503,headers:{'Content-Type':'application/json'}}));
+      return original(input,options);
+    };
+  });
   assert.ok(await editor.evaluate(element=>element===document.activeElement));
+  const fullscreen = modal.getByRole('button',{name:'Full screen',exact:true});
+  await fullscreen.hover();
+  await page.waitForFunction(() => {
+    const button = document.querySelector('.pharos-fullscreen');
+    const tooltip = getComputedStyle(button, '::after');
+    return tooltip.content === '"Full screen"' && tooltip.visibility === 'visible';
+  }, null, {timeout: 3000});
   await page.locator('body>header .brand').evaluate(element=>element.focus());
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'the overlay must keep focus');
   await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
+  await page.waitForFunction(()=>window.askDraftAttempts>=1);
+  assert.ok(await modal.locator('.pharos-notice').isHidden(),'a retrying draft save does not show an error');
+  await page.waitForFunction(()=>window.askDraftAttempts>=2);
+  assert.ok(await modal.locator('.pharos-notice').isHidden(),'the recovered save leaves no error');
   const reachable=element=>{const box=element.getBoundingClientRect(),target=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return box.left>=0&&box.right<=innerWidth&&(element===target||element.contains(target));};
   const removeContext=modal.getByRole('button',{name:'Remove page context',exact:true});
   for(const name of ['Clear','Close Ask Pharos','Remove page context'])assert.ok(await modal.getByRole('button',{name,exact:true}).evaluate(reachable),name+' must stay reachable');
