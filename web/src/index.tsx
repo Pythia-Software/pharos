@@ -1,3 +1,4 @@
+import "./reader-key-filter";
 import scatterDocument from "../../schemas/scatter.schema.json";
 import { scatterAnalysisCatalog } from "./scatter-analysis-catalog";
 import { ribbonQueryContext } from "./dashboard-query-adapters";

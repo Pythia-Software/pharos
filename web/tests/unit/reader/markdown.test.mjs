@@ -223,6 +223,10 @@ test("the reader offers each highlight the conversation has marks for, each show
   assert.deepEqual(plain(plainOptions.map(option => [option.id, option.available, option.note])),
     [['events', false, '0 events in 0 of 3 agent messages read'], ['labels', false, 'Not labeled yet']]);
   assert.deepEqual(shown(() => true), ['events', 'labels', 'writing']);
+  const overlapping=[{group:'Friction',probability:.9},{group:'Reactions and learning',probability:.8}];
+  assert.deepEqual(plain(reader.readerEventHighlights(overlapping,new Set(['events:event-learning']))),[overlapping[1]],'hiding the strongest group leaves the other hue and hover content');
+  assert.equal(reader.readerEventHighlights(overlapping,new Set()).length,0);
+
   assert.equal(reader.readerHighlightsShown(plainOptions, () => true).size, 0);
   assert.deepEqual(plain(reader.readerHighlightOptions({}, [human]).map(option => option.id)), ['writing']);
   assert.deepEqual(plain(reader.readerHighlightOptions({}, [agent])), []);

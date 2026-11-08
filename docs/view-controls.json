@@ -313,11 +313,7 @@
     },
     {
       "file": "internal/archive/assets/ui.py",
-      "field": "reader_filter"
-    },
-    {
-      "file": "internal/archive/assets/ui.py",
-      "field": "reader_filter_level"
+      "field": "reader_highlight_hidden"
     },
     {
       "file": "internal/archive/assets/ui.py",
@@ -3764,33 +3760,6 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "9b7112adc6a77699:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "transcriptFilterControl",
-      "tag": "input",
-      "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "a3a31b47b70f603a:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "transcriptFilterControl",
-      "tag": "button",
-      "control": "'button', '', label",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "a2396c325479ce5c:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "transcriptHighlightControl",
-      "tag": "input",
-      "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Each Highlight checkbox writes its own boolean view field (reader_writing, reader_events, reader_labels) through the view contract; its saved preference is only the fallback when a link carries none."
-    },
-    {
       "key": "0e18c887173fcc9b:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "xmlTreeView",
@@ -4241,32 +4210,32 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
-      "key": "072b3e8bd51c0252:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "div",
-      "control": "id={menuId} aria-label={`Filter ${name}`} onKeyDown={event => { const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role=\"menuitem\"]:not(:disabled)') ?? [])]; const index = entries.indexOf(document.activeElement as HTMLButtonElement); if (event.key === \"Tab\") { close(true); return; } if (![\"ArrowDown\", \"ArrowUp\", \"Home\", \"End\"].includes(event.key)) return; event.preventDefault(); const next = event.key === \"Home\" ? 0 : event.key === \"End\" ? entries.length - 1 : (index + (event.key === \"ArrowDown\" ? 1 : -1) + entries.length) % entries.length; entries[next]?.focus(); }}",
-      "contract": "transient",
-      "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard or timeline owner and persist as analyze_chart.selection or timeline_visibility; opening or navigating the menu is not a durable disclosure."
-    },
-    {
-      "key": "1a4ecd4deabc1ba0:0",
+      "key": "18cf0ff1194b7edb:0",
       "file": "web/src/chart-legend-chip.tsx",
       "owner": "ChartLegendChip",
       "tag": "button",
-      "control": "onClick={()=>choose(option.action)}",
+      "control": "onClick={() => choose(() => onAction(option.action))}",
       "contract": "dashboard",
-      "reason": "Shared one-line Show, Hide, Hide others and Show All legend actions update presentation selections through the dashboard or Timeline Key owner. Mixed categories use their current visible/hidden value counts; menu openness is transient."
+      "reason": "Shared Show, Hide, Hide others and Show All actions delegate visibility to the canonical dashboard, Timeline or reader key owner, including mixed category counts."
     },
     {
-      "key": "c098be32207684ba:0",
+      "key": "8a2a6260ebee6269:0",
       "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
+      "owner": "LegendMenu",
+      "tag": "div",
+      "control": "id={menuId} aria-label={menuLabel} onKeyDown={event => { const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role^=\"menuitem\"]:not(:disabled)') ?? [])]; const index = entries.indexOf(document.activeElement as HTMLButtonElement); if (event.key === \"Tab\") { close(true); return; } if (![\"ArrowDown\", \"ArrowUp\", \"Home\", \"End\"].includes(event.key)) return; event.preventDefault(); const next = event.key === \"Home\" ? 0 : event.key === \"End\" ? entries.length - 1 : (index + (event.key === \"ArrowDown\" ? 1 : -1) + entries.length) % entries.length; entries[next]?.focus(); }}",
+      "contract": "transient",
+      "reason": "Shared legend and whole-key menus keep only transient openness and keyboard focus. Value actions delegate to canonical dashboard, timeline or reader fields; menu navigation does not create a durable disclosure."
+    },
+    {
+      "key": "dba99e0958087a57:0",
+      "file": "web/src/chart-legend-chip.tsx",
+      "owner": "LegendMenu",
       "tag": "button",
       "control": "aria-label={name} onClick={() => { if(readOnly){onActivate?.();return;} firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => { if(readOnly)return; if (event.key !== \"ArrowDown\" && event.key !== \"ArrowUp\") return; event.preventDefault(); firstFocus.current = event.key === \"ArrowUp\" ? -1 : 0; setOpen(true); }}",
       "disclosure": true,
       "contract": "transient",
-      "reason": "Legend triggers open a transient visibility menu in editable charts. In the read-only conversation sidebar, the same icons expose hover names and navigate to the full Timeline; they cannot open or apply a visibility menu."
+      "reason": "Shared legend and whole-key triggers own transient menu openness and keyboard focus. Read-only sidebar icons navigate to the Timeline without opening a menu; choices delegate to their canonical view-state owner."
     },
     {
       "key": "e260ca71089def06:0",
@@ -7307,6 +7276,15 @@
       "control": "onClick={onReset}",
       "contract": "action",
       "reason": "Retry/reset execute query actions; reset writes the resulting definition."
+    },
+    {
+      "key": "96486fd1fcf4b75b:0",
+      "file": "web/src/reader-key-filter.tsx",
+      "owner": "ReaderKeyDefaults",
+      "tag": "button",
+      "control": "onClick={() => choose(() => onChoose(preset.id))}",
+      "contract": "reader",
+      "reason": "A whole-key default atomically writes reader_filter_level, reader_filter, reader_writing, reader_events, reader_labels and reader_highlight_hidden through the classic reader owner; its selected radio is derived from those fields."
     },
     {
       "key": "5c536168277a2959:0",
