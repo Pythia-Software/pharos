@@ -612,13 +612,15 @@ def process_table():
     return table
 
 
-def _still_present(pid):
-    """Whether pid still exists; a process this user may not signal exists too."""
+def _not_confirmed_gone(pid):
+    """Only no-such-process proves absence; refused or failed observations are unknown."""
+    if pid <= 0:
+        return True
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    except PermissionError:
+    except OSError:
         return True
     return True
 
@@ -652,6 +654,7 @@ class TreeSampler(threading.Thread):
         # present processes) per sample, so a run's own phase boundaries can scope memory,
         # disk and noise afterwards.
         self.series = []
+        self.gaps = []  # Unix times of failed whole-sample observations.
         # Present processes that could not be read (up to five named), and counters that went backwards.
         self.unreadable, self.counter_resets = {"samples": 0, "readings": 0, "examples": []}, 0
 
@@ -680,7 +683,7 @@ class TreeSampler(threading.Thread):
             if self.libc is None or self.libc.proc_pid_rusage(pid, 4, ctypes.byref(info)) != 0 \
                     or not info.proc_start_abstime:
                 # A vanished child is the normal sampling lower bound; a present one is a gap.
-                if self.libc is not None and _still_present(pid):
+                if self.libc is not None and _not_confirmed_gone(pid):
                     unreadable += 1
                     if len(self.unreadable["examples"]) < 5:
                         self.unreadable["examples"].append({"name": table[pid][3], "at_seconds": now})
@@ -713,6 +716,7 @@ class TreeSampler(threading.Thread):
             try:
                 self.sample()
             except Exception as error:  # a sampling gap is reported, never fatal
+                self.gaps.append(time.time())
                 if len(self.errors) < 5:
                     self.errors.append(f"{type(error).__name__}: {error}")
             self.stop_event.wait(self.interval)
@@ -737,12 +741,14 @@ class TreeSampler(threading.Thread):
         inside = [sample for sample in self.series if start <= sample[0] <= end]
         if not inside:
             return {"basis": "unavailable", "reason": "no process-tree sample fell inside this window"}
-        before, edge_unreadable = {}, 0
+        before, edge_unreadable, edge_at = {}, 0, float("-inf")
         for at, readings, _other, unreadable in self.series:
             if at > start:
                 break
             before.update(readings)
-            edge_unreadable = unreadable
+            edge_unreadable, edge_at = unreadable, at
+        edge_gaps = sum(edge_at < gap <= start for gap in self.gaps)
+        inside_gaps = sum(start <= gap <= end for gap in self.gaps)
         previous, last, resets = dict(before), {}, 0
         for _at, readings, _other, _unreadable in inside:
             for key, reading in readings.items():
@@ -751,8 +757,8 @@ class TreeSampler(threading.Thread):
                     resets += 1
                 previous[key] = last[key] = reading
         unreadable = sum(sample[3] for sample in inside)
-        memory_complete = unreadable == 0
-        disk_complete = memory_complete and edge_unreadable == 0 and resets == 0
+        memory_complete = unreadable == 0 and inside_gaps == 0
+        disk_complete = memory_complete and edge_unreadable == 0 and edge_gaps == 0 and resets == 0
         disk = lambda index: sum(reading[index] - before.get(key, (0, 0, 0))[index]
                                  for key, reading in last.items()) if disk_complete else None
         noise = [sample[2] for sample in inside]
@@ -763,7 +769,7 @@ class TreeSampler(threading.Thread):
                 "coverage": {"basis": COVERAGE_BASIS, "memory": "complete" if memory_complete else "incomplete",
                              "disk": "complete" if disk_complete else "incomplete",
                              "unreadable_readings": unreadable, "unreadable_at_start": edge_unreadable,
-                             "counter_resets": resets},
+                             "counter_resets": resets, "sampling_gaps": inside_gaps, "start_edge_gaps": edge_gaps},
                 "peak_footprint_bytes": peak if memory_complete else None,
                 "disk_read_bytes": disk(1), "disk_written_bytes": disk(2),
                 "host_noise": {"other_cpu_percent_mean": sum(noise) / len(noise), "other_cpu_percent_max": max(noise),
@@ -781,9 +787,9 @@ class TreeSampler(threading.Thread):
             "samples": self.samples, "errors": self.errors,
             # Recorded, never gated: whole-process figures beside an incomplete coverage are lower bounds.
             "coverage": {"basis": COVERAGE_BASIS,
-                         "memory": "incomplete" if self.unreadable["readings"] else "complete",
-                         "disk": "incomplete" if self.unreadable["readings"] or self.counter_resets else "complete",
-                         "unreadable": self.unreadable, "counter_resets": self.counter_resets},
+                         "memory": "incomplete" if self.unreadable["readings"] or self.gaps else "complete",
+                         "disk": "incomplete" if self.unreadable["readings"] or self.counter_resets or self.gaps else "complete",
+                         "unreadable": self.unreadable, "counter_resets": self.counter_resets, "sampling_gaps": len(self.gaps)},
             "peak_simultaneous": self.peak,
             "max_process_lifetime_footprint_bytes": max(
                 (p["lifetime_max_footprint_bytes"] for p in self.processes.values()), default=0),

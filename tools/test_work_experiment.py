@@ -995,7 +995,7 @@ class ProbeArmTests(Fixture):
         sampler = work.TreeSampler(root)
         sampler.libc = types.SimpleNamespace(proc_pid_rusage=proc_pid_rusage)
         with mock.patch.object(work, "process_table", return_value=table), \
-                mock.patch.object(work, "_still_present", side_effect=lambda pid: pid != gone):
+                mock.patch.object(work, "_not_confirmed_gone", side_effect=lambda pid: pid != gone):
             sampler.sample()  # the child is present but unreadable; git exited before its read
             readings[child] = (0, 500, 0, 0)  # identity unreadable
             sampler.sample()
@@ -1011,10 +1011,35 @@ class ProbeArmTests(Fixture):
         sampler = work.TreeSampler(root)
         sampler.libc = types.SimpleNamespace(proc_pid_rusage=proc_pid_rusage)
         with mock.patch.object(work, "process_table", return_value=table), \
-                mock.patch.object(work, "_still_present", return_value=False):
+                mock.patch.object(work, "_not_confirmed_gone", return_value=False):
             sampler.sample()
         self.assertEqual(sampler.summary()["coverage"]["disk"], "complete")
         self.assertEqual(sampler.window(0, sampler.series[0][0] + 1)["coverage"]["memory"], "complete")
+
+    def test_whole_sample_failures_invalidate_their_windows(self):
+        sampler = work.TreeSampler(100)
+        sampler.libc = object()
+        sampler.series = [(10.0, {"probe": (100, 5, 5)}, 0.0, 0),
+                          (13.0, {"probe": (200, 10, 10)}, 0.0, 0)]
+        sampler.samples = 2
+        with mock.patch.object(sampler, "sample", side_effect=OSError("process table unavailable")), \
+                mock.patch.object(work.time, "time", return_value=12.0), \
+                mock.patch.object(sampler.stop_event, "wait", side_effect=lambda _timeout: sampler.stop_event.set()):
+            sampler.run()
+        window = sampler.window(10.5, 13.5)
+        self.assertIsNone(window["peak_footprint_bytes"])
+        self.assertIsNone(window["disk_read_bytes"])
+        self.assertEqual(window["coverage"]["sampling_gaps"], 1)
+        edge = sampler.window(12.5, 13.5)
+        self.assertEqual(edge["peak_footprint_bytes"], 200)
+        self.assertIsNone(edge["disk_written_bytes"])
+        self.assertEqual(edge["coverage"]["start_edge_gaps"], 1)
+        self.assertEqual(sampler.summary()["coverage"]["memory"], "incomplete")
+        for error, unknown in ((ProcessLookupError(), False), (PermissionError(), True), (OSError("failed"), True)):
+            with mock.patch.object(work.os, "kill", side_effect=error):
+                self.assertEqual(work._not_confirmed_gone(100), unknown)
+        with mock.patch.object(work.os, "kill", side_effect=AssertionError("not a process ID")):
+            self.assertTrue(work._not_confirmed_gone(0))
 
     def test_hosts_without_posix_supervision_are_refused_before_any_launch(self):
         master = self.master()

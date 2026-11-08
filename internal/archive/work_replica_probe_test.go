@@ -985,8 +985,14 @@ func (start replicaCPU) until(end replicaCPU) map[string]any {
 		}
 		return sum
 	}
-	return map[string]any{"wall_seconds": end.at.Sub(start.at).Seconds(), "cpu_seconds": total(end) - total(start),
-		"cpu_complete": start.complete && end.complete, "until_unix": replicaUnix(end.at)}
+	delta := total(end) - total(start)
+	complete := start.complete && end.complete && delta >= 0
+	result := map[string]any{"wall_seconds": end.at.Sub(start.at).Seconds(), "cpu_seconds": nil,
+		"cpu_complete": complete, "until_unix": replicaUnix(end.at)}
+	if complete {
+		result["cpu_seconds"] = delta
+	}
+	return result
 }
 
 func replicaUnix(at time.Time) float64 { return float64(at.UnixNano()) / 1e9 }
@@ -1164,6 +1170,22 @@ func TestWorkReplicaCPUPolicy(t *testing.T) {
 // A window's CPU counts children the probe reaps inside it, and only the part
 // of a running child's CPU spent after the window opened.
 func TestWorkReplicaCPUWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		before, after float64
+		known         bool
+	}{
+		{"unavailable", 100, 1, false}, {"counter reset", 100, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := replicaCPU{at: time.Now(), usage: map[string]float64{"self": tc.before}, complete: true}
+			end := replicaCPU{at: start.at.Add(time.Second), usage: map[string]float64{"self": tc.after}, complete: tc.known}
+			window := start.until(end)
+			if window["cpu_seconds"] != nil || window["cpu_complete"] != false {
+				t.Fatalf("unavailable CPU must be null, not a lower or negative total: %v", window)
+			}
+		})
+	}
 	// date has whole seconds, so this burns between seconds and seconds+1.
 	busy := func(seconds int) *exec.Cmd {
 		return exec.Command("/bin/sh", "-c", fmt.Sprintf(`end=$(($(date +%%s) + %d + 1)); while [ "$(date +%%s)" -lt "$end" ]; do :; done`, seconds))

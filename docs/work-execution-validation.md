@@ -337,3 +337,12 @@ memory is recorded separately. These changes do not extend native OS support.
 The production-copy measurements above remain evidence for their recorded
 source commits. No performance trial was rerun for this integration, and no
 performance acceptance or production activation is implied.
+
+New harness reports identify per-window memory and disk coverage as
+`tree-coverage-v1`. Failed process reads, missing identity, whole-sample gaps
+and counter resets make the affected measurements unavailable for comparison.
+Earlier reports remain readable, but missing coverage cannot establish a pass;
+recorded trial reports have not been rewritten. The present harness supervises
+its original POSIX process group; detached, reparented descendants are outside
+that cleanup guarantee and require a separate validated supervisor before a
+workload that creates them can be admitted.
