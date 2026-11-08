@@ -486,6 +486,114 @@ func TestCaptureExportEmptyCapture(t *testing.T) {
 	if _, err := h.export(); err == nil || !strings.Contains(err.Error(), "mapped root") {
 		t.Fatalf("mapped root over a file: %v", err)
 	}
+
+	// Only files may be mapped without a latest member below it. Any other
+	// unmatched root is refused, alone or beside valid members, whether or not
+	// the capture holds an empty directory there; nothing is invented for it.
+	for name, setup := range map[string]func(f *exportFixture){
+		"missing alone": func(f *exportFixture) {},
+		"missing beside members": func(f *exportFixture) {
+			f.file("files/a.jsonl", exportContent("a"), false)
+		},
+		"undeclared empty dir": func(f *exportFixture) {
+			f.manifest.PathMap[1].Captured = "files/empty"
+			os.MkdirAll(filepath.Join(f.dir, "files/empty"), 0o700)
+		},
+		"undeclared empty dir beside members": func(f *exportFixture) {
+			f.file("files/a.jsonl", exportContent("a"), false)
+			f.manifest.PathMap[1].Captured = "files/empty"
+			os.MkdirAll(filepath.Join(f.dir, "files/empty"), 0o700)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newExportFixture(t, "codex")
+			f.manifest.PathMap = append(f.manifest.PathMap, capturePathMapping{Original: "/nowhere/state.sqlite", Captured: "files/missing.sqlite"})
+			setup(f)
+			f.save()
+			before := treeState(t, f.root)
+			if _, err := f.export(); err == nil || !strings.Contains(err.Error(), "mapped root") {
+				t.Fatalf("export: %v", err)
+			}
+			if entries := entriesOf(t, f.out); len(entries) != 0 {
+				t.Fatalf("outbox holds %v", entries)
+			}
+			if after := treeState(t, f.root); !mapsEqual(before, after) {
+				t.Fatal("the capture changed")
+			}
+		})
+	}
+	// Mappings to a latest member and to directories holding one stay valid.
+	v := newExportFixture(t, "claude")
+	v.file("files/projects/p/a.jsonl", exportContent("a"), false)
+	v.manifest.PathMap = append(v.manifest.PathMap,
+		capturePathMapping{Original: "/nowhere/projects", Captured: "files/projects"},
+		capturePathMapping{Original: "/nowhere/a.jsonl", Captured: "files/projects/p/a.jsonl"})
+	v.save()
+	if _, err := VerifyCaptureExport(context.Background(), v.published(v.mustExport())); err != nil {
+		t.Fatal(err)
+	}
+
+	// The verifier applies the same rule to an export whose hashes and id are
+	// consistent but whose manifest maps a root it does not hold.
+	d := newExportFixture(t, "codex")
+	d.save()
+	final := d.published(d.mustExport())
+	resealExport(t, final, func(m map[string]any) {
+		m["path_map"] = append(m["path_map"].([]any), map[string]any{"original": "/nowhere/state.sqlite", "captured": "files/missing.sqlite"})
+	})
+	if err := os.Mkdir(filepath.Join(final, "captures/host-a/main/files/missing.sqlite"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyCaptureExport(context.Background(), final); err == nil || !strings.Contains(err.Error(), "mapped root") {
+		t.Fatalf("verify a dangling mapped root: %v", err)
+	}
+}
+
+// resealExport rewrites a published export's manifest through edit and then
+// its envelope, so that every size, digest and the id agree again.
+func resealExport(t *testing.T, final string, edit func(map[string]any)) {
+	t.Helper()
+	manifestFile := filepath.Join(final, "captures/host-a/main/manifest.json")
+	raw, err := os.ReadFile(manifestFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := map[string]any{}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatal(err)
+	}
+	edit(value)
+	if raw, err = json.MarshalIndent(value, "", " "); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(final, captureExportEnvelope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := parseExportEnvelope(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range envelope.Files {
+		if envelope.Files[i].Path == "captures/host-a/main/manifest.json" {
+			envelope.Files[i].Size, envelope.Files[i].SHA256 = int64(len(raw)), exportSum(raw)
+		}
+	}
+	if envelope.ID, err = envelope.computeID(); err != nil {
+		t.Fatal(err)
+	}
+	if data, err = envelope.canonical(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseExportEnvelope(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(final, captureExportEnvelope), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestCaptureExportManifestVersions(t *testing.T) {
@@ -773,6 +881,72 @@ func TestCaptureExportVerifierRejectsDamage(t *testing.T) {
 			t.Fatalf("after %s, restoring failed: %v", name, err)
 		}
 	}
+
+	// The permitted tree comes from the metadata, so an undeclared directory
+	// is refused without being listed, however wide or deep it is, and extras
+	// beside declared files are refused as they are met.
+	scanned := []string{}
+	override(t, &captureExportHook, func(step, rel string) error {
+		if step == "scan" {
+			scanned = append(scanned, rel)
+		}
+		return nil
+	})
+	for name, extra := range map[string]func(){
+		"wide undeclared dir": func() {
+			for i := range 300 {
+				os.MkdirAll(filepath.Join(final, "captures/host-a/main/files/wide"), 0o700)
+				os.WriteFile(filepath.Join(final, fmt.Sprintf("captures/host-a/main/files/wide/%03d", i)), nil, 0o600)
+			}
+		},
+		"deep undeclared dir": func() {
+			os.MkdirAll(filepath.Join(final, "captures/host-a/main/history/deep"+strings.Repeat("/d", 40)), 0o700)
+		},
+		"wide extras beside members": func() {
+			for i := range 300 {
+				os.WriteFile(filepath.Join(final, fmt.Sprintf("captures/host-a/main/files/projects/p/extra-%03d", i)), nil, 0o600)
+			}
+		},
+	} {
+		scanned = scanned[:0]
+		extra()
+		if _, err := VerifyCaptureExport(context.Background(), final); err == nil {
+			t.Errorf("%s: verified", name)
+		}
+		for _, rel := range scanned {
+			if strings.Contains(rel, "/wide") || strings.Contains(rel, "/deep") {
+				t.Errorf("%s: listed %s", name, rel)
+			}
+		}
+		copyTree(filepath.Join(pristine, "x"), final)
+	}
+	// Bounds lowered below what the export holds refuse it as out of scope.
+	inspection, limits := captureExportInspection, captureExportLimits
+	for name, set := range map[string]func(){
+		"entries": func() { captureExportInspection.Entries = 5 },
+		"depth":   func() { captureExportInspection.Depth = 5 },
+		"path":    func() { captureExportLimits.PathBytes = 40 },
+	} {
+		set()
+		if _, err := VerifyCaptureExport(context.Background(), final); !errors.Is(err, errCaptureExportScope) {
+			t.Errorf("%s: %v", name, err)
+		}
+		captureExportInspection, captureExportLimits = inspection, limits
+	}
+	// Cancelled while a declared directory is listed.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	override(t, &captureExportHook, func(step, rel string) error {
+		if step == "scan" && rel == "captures/host-a/main/files/projects/p" {
+			cancel()
+		}
+		return nil
+	})
+	if _, err := VerifyCaptureExport(ctx, final); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled verify: %v", err)
+	}
+	captureExportHook = nil
+
 	stage := filepath.Join(f.out, captureExportStagePrefix+"abc")
 	copyTree(final, stage)
 	if _, err := VerifyCaptureExport(context.Background(), stage); err == nil {
@@ -953,12 +1127,104 @@ func TestCaptureExportLimits(t *testing.T) {
 			}
 		})
 	}
+
+	// Inspecting the source is bounded by the names it examines, kept or not,
+	// by depth and by path length, whatever the manifest declares; passing a
+	// bound fails rather than skipping what is left.
+	inspection := captureExportInspection
+	for name, tc := range map[string]struct {
+		setup  func(f *exportFixture)
+		limits captureExportInspectionLimits
+		paths  int
+	}{
+		"wide leftovers": {func(f *exportFixture) {
+			for i := range 12 {
+				f.put(fmt.Sprintf("files/left/%02d.jsonl.pharos-tmp", i), []byte("x"))
+			}
+		}, captureExportInspectionLimits{Entries: 10, Depth: inspection.Depth}, limits.PathBytes},
+		"deep leftovers": {func(f *exportFixture) {
+			f.put("files/d/d/d/d/d/x.pharos-tmp", []byte("x"))
+		}, captureExportInspectionLimits{Entries: inspection.Entries, Depth: 6}, limits.PathBytes},
+		"deep member": {func(f *exportFixture) {
+			f.file("files/d/d/d/d/a.jsonl", exportContent("d"), false)
+		}, captureExportInspectionLimits{Entries: inspection.Entries, Depth: 6}, limits.PathBytes},
+		"long leftover": {func(f *exportFixture) {
+			f.put("files/left/"+strings.Repeat("x", 40), []byte("x"))
+		}, inspection, 50},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := build(t)
+			tc.setup(f)
+			f.save()
+			// The same capture exports under the default bounds.
+			f.mustExport()
+			os.RemoveAll(f.out)
+			os.Mkdir(f.out, 0o700)
+			override(t, &captureExportInspection, tc.limits)
+			lowered := limits
+			lowered.PathBytes = tc.paths
+			override(t, &captureExportLimits, lowered)
+			if _, err := f.export(); !errors.Is(err, errCaptureExportScope) {
+				t.Fatalf("export: %v", err)
+			}
+			if entries := entriesOf(t, f.out); len(entries) != 0 {
+				t.Fatalf("outbox holds %v", entries)
+			}
+		})
+	}
+
+	// Cancelled while a wide directory is being listed: the export returns
+	// at once, closes every handle and removes its stage.
+	t.Run("cancelled wide scan", func(t *testing.T) {
+		f := build(t)
+		for i := range 40 {
+			f.put(fmt.Sprintf("files/wide/%02d.jsonl.pharos-tmp", i), []byte("x"))
+		}
+		f.save()
+		f.mustExport() // settles the runtime's own descriptors
+		os.RemoveAll(f.out)
+		os.Mkdir(f.out, 0o700)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		visited := 0
+		override(t, &captureExportHook, func(step, rel string) error {
+			if step == "scan" && rel == "files/wide" {
+				visited++
+				cancel()
+			}
+			return nil
+		})
+		before := openExportDescriptors(t)
+		if _, err := ExportCapture(ctx, f.root, f.host, f.source, f.out); !errors.Is(err, context.Canceled) {
+			t.Fatalf("export: %v", err)
+		}
+		if visited != 1 {
+			t.Fatalf("the wide directory was listed %d times", visited)
+		}
+		if after := openExportDescriptors(t); after != before {
+			t.Fatalf("%d descriptors open before, %d after", before, after)
+		}
+		if entries := entriesOf(t, f.out); len(entries) != 0 {
+			t.Fatalf("outbox holds %v", entries)
+		}
+	})
+
 	if got := addBounded(1<<62, 1<<62, 1<<63-1); got != -1 {
 		t.Fatalf("overflow: %d", got)
 	}
 	if got := addBounded(5, 5, 10); got != 10 {
 		t.Fatalf("addBounded = %d", got)
 	}
+}
+
+// openExportDescriptors counts this process's open file descriptors.
+func openExportDescriptors(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/dev/fd")
+	if err != nil {
+		t.Skip("no /dev/fd to count descriptors")
+	}
+	return len(entries)
 }
 
 func TestCaptureExportPathRules(t *testing.T) {
@@ -1257,9 +1523,10 @@ func TestCaptureExportPublication(t *testing.T) {
 		}
 	})
 	t.Run("cancelled", func(t *testing.T) {
-		// Cancelled while copying, after verification (before the flush) and
-		// just before the rename: nothing is published.
-		for _, step := range []string{"copy", "flush", "rename"} {
+		// Cancelled while copying, while rereading members at the end of the
+		// freeze, after verification (before the flush) and just before the
+		// rename: nothing is published.
+		for _, step := range []string{"copy", "recheck", "flush", "rename"} {
 			f := claudeFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			override(t, &captureExportHook, func(at, rel string) error {
@@ -1294,6 +1561,78 @@ func TestCaptureExportPublication(t *testing.T) {
 			t.Fatalf("cancelled retry: %v", err)
 		}
 		cancel()
+	})
+	t.Run("source changed", func(t *testing.T) {
+		// The first of two members changes while the second is copied. Each
+		// change is caught before the freeze ends, even one that keeps the
+		// file's inode, size and nanosecond mtime; only the unpublished stage
+		// is removed, and the changed capture is left as it is.
+		for name, change := range map[string]func(t *testing.T, file string){
+			"same inode, size and mtime": func(t *testing.T, file string) {
+				info, err := os.Lstat(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				w, err := os.OpenFile(file, os.O_WRONLY, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = w.WriteAt([]byte("Z"), 3); err != nil {
+					t.Fatal(err)
+				}
+				w.Close()
+				if err := os.Chtimes(file, info.ModTime(), info.ModTime()); err != nil {
+					t.Fatal(err)
+				}
+				after, _ := os.Lstat(file)
+				if !after.ModTime().Equal(info.ModTime()) || after.Size() != info.Size() || !os.SameFile(info, after) {
+					t.Fatal("the change did not keep the file's identity, size and mtime")
+				}
+			},
+			"replaced inode": func(t *testing.T, file string) {
+				data, _ := os.ReadFile(file)
+				os.WriteFile(file+".new", data, 0o600)
+				if err := os.Rename(file+".new", file); err != nil {
+					t.Fatal(err)
+				}
+			},
+			"grown": func(t *testing.T, file string) {
+				w, _ := os.OpenFile(file, os.O_WRONLY|os.O_APPEND, 0)
+				w.Write([]byte("\n"))
+				w.Close()
+			},
+			"touched": func(t *testing.T, file string) {
+				info, _ := os.Lstat(file)
+				later := info.ModTime().Add(1)
+				if err := os.Chtimes(file, later, later); err != nil {
+					t.Fatal(err)
+				}
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				f := newExportFixture(t, "claude")
+				f.file("files/a.jsonl", exportContent("a"), false)
+				f.file("files/b.jsonl", exportContent("b"), true)
+				f.save()
+				first := filepath.Join(f.dir, "files/a.jsonl")
+				override(t, &captureExportHook, func(step, rel string) error {
+					if step == "copy" && rel == "files/b.jsonl" {
+						change(t, first)
+					}
+					return nil
+				})
+				before := treeState(t, f.root)
+				if _, err := f.export(); err == nil || !strings.Contains(err.Error(), "changed while it was exported") {
+					t.Fatalf("export: %v", err)
+				}
+				if entries := entriesOf(t, f.out); len(entries) != 0 {
+					t.Fatalf("outbox holds %v", entries)
+				}
+				if after := treeState(t, f.root); mapsEqual(before, after) {
+					t.Fatal("the source change was reverted")
+				}
+			})
+		}
 	})
 	for _, step := range []string{"copy", "staged", "flush", "rename"} {
 		t.Run(step+" failure", func(t *testing.T) {

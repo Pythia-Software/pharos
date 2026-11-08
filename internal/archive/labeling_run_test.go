@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -35,10 +36,24 @@ const (
 
 const fakeLabel = "P.request.work.investigate"
 
+// labelingFakeHolder is the argument that runs the fake CLI as a descendant
+// holding the CLI's stdout (the "descendant" scenario).
+const labelingFakeHolder = "hold-stdout"
+
 func labelingFakeCLI() int {
 	args := os.Args[1:]
 	if len(args) == 1 && args[0] == "--version" {
 		fmt.Println("9.9.9 (fake)")
+		return 0
+	}
+	if len(args) == 1 && args[0] == labelingFakeHolder {
+		// A descendant of the CLI holding its stdout: it ignores SIGTERM,
+		// then says it is ready on descriptor 3.
+		signal.Ignore(syscall.SIGTERM)
+		ready := os.NewFile(3, "ready")
+		ready.Write([]byte{1})
+		ready.Close()
+		time.Sleep(30 * time.Second)
 		return 0
 	}
 	if len(args) == 2 && args[0] == "mcp" && args[1] == "list" {
@@ -327,6 +342,22 @@ func labelingFakeCLI() int {
 		time.Sleep(30 * time.Second)
 	case "crash-after":
 		time.Sleep(30 * time.Second)
+	case "descendant":
+		// The CLI exits once its child, which keeps stdout open, is ready.
+		ready, readyW, err := os.Pipe()
+		if err != nil {
+			return 2
+		}
+		binary, _ := os.Executable()
+		child := exec.Command(binary, labelingFakeHolder)
+		child.Stdout, child.Stderr, child.ExtraFiles = os.Stdout, os.Stderr, []*os.File{readyW}
+		if err := child.Start(); err != nil {
+			return 2
+		}
+		readyW.Close()
+		if _, err := ready.Read(make([]byte, 1)); err != nil {
+			return 2
+		}
 	}
 	return 0
 }
@@ -790,9 +821,54 @@ func TestLabelingRunCleansUpWithoutResending(t *testing.T) {
 	if requestStates(t, db) != "completed" || fakeCalls(t, calls) != 1 || !strings.Contains(cleanup, "lingering after its terminal event") || !strings.Contains(cleanup, "killed") {
 		t.Fatalf("states %s, calls %d, cleanup %s", requestStates(t, db), fakeCalls(t, calls), cleanup)
 	}
-	if pid := int(integer(attempt["pid"])); syscall.Kill(-pid, 0) == nil {
+	if pid := int(integer(attempt["pid"])); labelingGroupRuns(pid) {
 		t.Fatal("the CLI's process group survived")
 	}
+	// A descendant that keeps stdout open after the CLI exits is part of the
+	// attempt: its group is terminated, then killed when it ignores SIGTERM.
+	t.Run("descendant", func(t *testing.T) {
+		override(t, &labelingLingerGrace, 5*time.Second)
+		attempt, calls := runLabelingCleanupScenario(t, "descendant")
+		cleanup := labelingCleanupEntries(attempt)
+		if fakeCalls(t, calls) != 1 || len(cleanup) != 2 || cleanup[0]["reason"] != "process group outlived the CLI" || cleanup[0]["signal"] != labelingActionLabel(labelingTerminate) ||
+			cleanup[1]["reason"] != "process group still running after SIGTERM" || cleanup[1]["signal"] != labelingActionLabel(labelingForceKill) ||
+			cleanup[0]["error"] != nil || cleanup[1]["error"] != nil {
+			t.Fatalf("%d calls, cleanup %v", fakeCalls(t, calls), cleanup)
+		}
+		if labelingGroupRuns(int(integer(attempt["pid"]))) {
+			t.Fatal("the descendant survived")
+		}
+	})
+	// A signal the platform refuses is recorded with its error, not as
+	// sent, and escalation continues.
+	t.Run("signal refused", func(t *testing.T) {
+		send := labelingSignalGroup
+		override(t, &labelingSignalGroup, func(pid int, action labelingAction) error {
+			if action == labelingTerminate {
+				return errors.New("injected: not permitted")
+			}
+			return send(pid, action)
+		})
+		attempt, calls := runLabelingCleanupScenario(t, "linger")
+		cleanup := labelingCleanupEntries(attempt)
+		if fakeCalls(t, calls) != 1 || len(cleanup) != 2 || cleanup[0]["signal"] != labelingActionLabel(labelingTerminate) || cleanup[0]["error"] != "injected: not permitted" ||
+			cleanup[1]["signal"] != labelingActionLabel(labelingForceKill) || cleanup[1]["error"] != nil {
+			t.Fatalf("%d calls, cleanup %v", fakeCalls(t, calls), cleanup)
+		}
+	})
+	// A group whose status cannot be read after the CLI exits is noted as
+	// unknown, neither signalled nor taken as gone; the result stands.
+	t.Run("status unknown", func(t *testing.T) {
+		override(t, &labelingLingerGrace, 5*time.Second)
+		override(t, &labelingObserveGroup, func(int) (labelingGroupState, error) {
+			return labelingGroupUnknown, errors.New("injected: not permitted")
+		})
+		attempt, calls := runLabelingCleanupScenario(t, "ok")
+		cleanup := labelingCleanupEntries(attempt)
+		if fakeCalls(t, calls) != 1 || len(cleanup) != 1 || cleanup[0]["group"] != "unknown" || cleanup[0]["signal"] != nil || cleanup[0]["error"] != "injected: not permitted" {
+			t.Fatalf("%d calls, cleanup %v", fakeCalls(t, calls), cleanup)
+		}
+	})
 	// A hang ends unknown at the timeout, and so does a crash before any
 	// output: both count as possibly charged and are not re-sent until
 	// reconcile re-queues them explicitly.
@@ -841,6 +917,46 @@ func TestLabelingRunCleansUpWithoutResending(t *testing.T) {
 	}
 }
 
+// runLabelingCleanupScenario runs one request through a fake CLI scenario,
+// expects it completed, and returns its attempt and the call counter.
+func runLabelingCleanupScenario(t *testing.T, scenario string) (map[string]any, string) {
+	t.Helper()
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	cli, calls, _ := fakeLabelingCLI(t, scenario)
+	opts := labelingTestOptions(dir, cli, io.Discard)
+	opts.Spec.LimitItems, opts.Concurrency = 4, 1
+	if err := runLabelingJob(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	db := openFixtureLedger(t, dir)
+	if got := requestStates(t, db); got != requestCompleted {
+		t.Fatalf("%s: states %s", scenario, got)
+	}
+	attempt, err := labelingAttemptRecord(db, "pilot:000001/1")
+	if err != nil || attempt == nil {
+		t.Fatalf("attempt = %v, %v", attempt, err)
+	}
+	return attempt, calls
+}
+
+// labelingCleanupEntries is an attempt record's cleanup list.
+func labelingCleanupEntries(attempt map[string]any) []map[string]any {
+	entries := []map[string]any{}
+	list, _ := attempt["cleanup"].([]any)
+	for _, entry := range list {
+		if entry, ok := entry.(map[string]any); ok {
+			entries = append(entries, entry)
+		}
+	}
+	return entries
+}
+
+// labelingGroupRuns is whether the real group led by pid still runs.
+func labelingGroupRuns(pid int) bool {
+	state, _ := observeLabelingGroup(pid)
+	return state == labelingGroupPresent
+}
+
 // TestLabelingHelperRunner is the runner process the crash test kills.
 func TestLabelingHelperRunner(t *testing.T) {
 	dir := os.Getenv("PHAROS_LABELING_HELPER_DIR")
@@ -857,12 +973,17 @@ func TestLabelingHelperRunner(t *testing.T) {
 
 func TestLabelingRunResumesFromTheSavedStream(t *testing.T) {
 	quickLabelingTimers(t)
-	for _, route := range []string{labelingRouteClaude, labelingRouteCodex} {
-		t.Run(route, func(t *testing.T) { testLabelingResume(t, route) })
+	// Through claude the orphaned CLI is identified and killed; through
+	// codex its recorded start time is stale; and where the group's status
+	// cannot be read, recovery signals nothing. Each completes from the
+	// saved stream without re-sending.
+	for _, check := range []struct{ name, route, mode string }{{"claude", labelingRouteClaude, "identified"},
+		{"codex", labelingRouteCodex, "stale"}, {"status-unknown", labelingRouteClaude, "unknown"}} {
+		t.Run(check.name, func(t *testing.T) { testLabelingResume(t, check.route, check.mode) })
 	}
 }
 
-func testLabelingResume(t *testing.T, route string) {
+func testLabelingResume(t *testing.T, route, mode string) {
 	dir := writeLabelingFixture(t, labelingFixtureUnits())
 	cli, calls, _ := fakeLabelingCLI(t, "crash-after")
 	binary, err := os.Executable()
@@ -896,14 +1017,25 @@ func testLabelingResume(t *testing.T, route string) {
 	}
 	attempt, _ := labelingAttemptRecord(db, "pilot:000001/1")
 	pid := int(integer(attempt["pid"]))
-	// Through codex, the recorded start time is made stale: the group then
-	// is not the recorded CLI, and recovery only notes it.
-	foreign := route == labelingRouteCodex
-	if foreign {
+	if !labelingGroupRuns(pid) {
+		t.Fatal("the orphaned CLI is not running")
+	}
+	want := "orphaned by an earlier runner"
+	switch mode {
+	case "stale":
+		// The group then is not the recorded CLI, and recovery only notes it.
 		if _, err := db.Exec(`UPDATE attempts SET process_start='Thu Jan  1 00:00:00 1970'`); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { syscall.Kill(-pid, syscall.SIGKILL) })
+		want = "possibly_orphaned"
+	case "unknown":
+		override(t, &labelingObserveGroup, func(int) (labelingGroupState, error) {
+			return labelingGroupUnknown, errors.New("injected: not permitted")
+		})
+		want = "group_status_unknown"
+	}
+	if mode != "identified" {
+		t.Cleanup(func() { signalLabelingGroup(pid, labelingForceKill) })
 	}
 	opts := labelingTestOptions(dir, cli, io.Discard)
 	opts.Create = false
@@ -911,27 +1043,98 @@ func testLabelingResume(t *testing.T, route string) {
 		t.Fatal(err)
 	}
 	attempt, _ = labelingAttemptRecord(db, "pilot:000001/1")
-	want := "orphaned by an earlier runner"
-	if foreign {
-		want = "possibly_orphaned"
-	}
 	if cleanup := compactJSON(attempt["cleanup"]); !strings.Contains(cleanup, want) {
 		t.Fatalf("cleanup = %s", cleanup)
 	}
-	if foreign {
-		if syscall.Kill(-pid, 0) != nil {
+	if mode != "identified" {
+		if !labelingGroupRuns(pid) {
 			t.Fatal("recovery signalled a process group it could not identify")
 		}
-		syscall.Kill(-pid, syscall.SIGKILL)
-		for deadline := time.Now().Add(5 * time.Second); syscall.Kill(-pid, 0) == nil && time.Now().Before(deadline); {
+		signalLabelingGroup(pid, labelingForceKill)
+		for deadline := time.Now().Add(5 * time.Second); labelingGroupRuns(pid) && time.Now().Before(deadline); {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	if got := requestStates(t, db); got != requestCompleted || fakeCalls(t, calls) != 1 || attempt["recovered"] != int64(1) || attempt["outcome"] != requestCompleted {
 		t.Fatalf("after resume: %s, %d calls, attempt %v", got, fakeCalls(t, calls), attempt)
 	}
-	if syscall.Kill(-pid, 0) == nil {
+	if labelingGroupRuns(pid) {
 		t.Fatal("the orphaned CLI still runs")
+	}
+}
+
+// Recovery signals an earlier attempt's group only when its leader still has
+// the recorded start identity; otherwise it notes why and sends nothing.
+// Injected operations stand in for the platform; no process runs.
+func TestLabelingRecoverGroup(t *testing.T) {
+	const pid, start = 4242, "Sat Nov  7 12:00:00 2026"
+	var (
+		state     labelingGroupState
+		observeIn error
+		identity  string
+		readIn    error
+		signalIn  error
+		signals   []string
+	)
+	override(t, &labelingObserveGroup, func(got int) (labelingGroupState, error) {
+		if got != pid {
+			t.Fatalf("observed %d", got)
+		}
+		return state, observeIn
+	})
+	override(t, &labelingReadProcessStart, func(int) (string, error) { return identity, readIn })
+	override(t, &labelingSignalGroup, func(got int, action labelingAction) error {
+		signals = append(signals, fmt.Sprintf("%d:%d", got, action))
+		return signalIn
+	})
+	notPermitted := errors.New("injected: not permitted")
+	gone := fmt.Errorf("%w: injected", errLabelingGroupAbsent)
+	for _, step := range []struct {
+		name               string
+		state              labelingGroupState
+		observe            error
+		recorded, identity string
+		read, signal       error
+		reason, err        string
+		signalled          bool
+	}{
+		{name: "group gone", state: labelingGroupAbsent, recorded: start, identity: start},
+		{name: "status unknown", state: labelingGroupUnknown, observe: notPermitted, recorded: start, identity: start, reason: "group_status_unknown", err: notPermitted.Error()},
+		{name: "nothing recorded", state: labelingGroupPresent, identity: start, reason: "possibly_orphaned"},
+		{name: "identity unreadable", state: labelingGroupPresent, recorded: start, read: notPermitted, reason: "possibly_orphaned", err: notPermitted.Error()},
+		{name: "identity changed", state: labelingGroupPresent, recorded: start, identity: "Sun Nov  8 09:00:00 2026", reason: "possibly_orphaned"},
+		{name: "identified", state: labelingGroupPresent, recorded: start, identity: start, reason: "orphaned by an earlier runner", signalled: true},
+		{name: "gone before the signal", state: labelingGroupPresent, recorded: start, identity: start, signal: gone, signalled: true},
+		{name: "signal refused", state: labelingGroupPresent, recorded: start, identity: start, signal: notPermitted,
+			reason: "orphaned by an earlier runner", err: notPermitted.Error(), signalled: true},
+	} {
+		state, observeIn, identity, readIn, signalIn, signals = step.state, step.observe, step.identity, step.read, step.signal, nil
+		cleanup := labelingRecoverGroup(pid, step.recorded)
+		wantSignals := "[]"
+		if step.signalled {
+			wantSignals = fmt.Sprintf("[%d:%d]", pid, labelingForceKill)
+		}
+		if fmt.Sprint(signals) != wantSignals {
+			t.Fatalf("%s: signals %v", step.name, signals)
+		}
+		if step.reason == "" {
+			if len(cleanup) != 0 {
+				t.Fatalf("%s: cleanup %v", step.name, cleanup)
+			}
+			continue
+		}
+		var gotErr string
+		if len(cleanup) == 1 {
+			gotErr, _ = cleanup[0]["error"].(string)
+		}
+		if len(cleanup) != 1 || cleanup[0]["reason"] != step.reason || gotErr != step.err ||
+			(cleanup[0]["signal"] != nil) != step.signalled {
+			t.Fatalf("%s: cleanup %v", step.name, cleanup)
+		}
+	}
+	signals = nil
+	if cleanup := labelingRecoverGroup(0, start); len(cleanup) != 0 || len(signals) != 0 {
+		t.Fatalf("no pid: cleanup %v, signals %v", cleanup, signals)
 	}
 }
 
@@ -1344,6 +1547,54 @@ func TestLabelingRunnerDiesBeforeTheResult(t *testing.T) {
 	attempt, _ := labelingAttemptRecord(db, "pilot:000001/1")
 	if requestStates(t, db) != requestUnknown || fakeCalls(t, calls) != 1 || attempt["recovered"] != int64(1) || attempt["usage_missing"] != int64(1) {
 		t.Fatalf("states %s after %d calls, attempt %v", requestStates(t, db), fakeCalls(t, calls), attempt)
+	}
+	// The first resume killed the hanging CLI it identified.
+	if cleanup := labelingCleanupEntries(attempt); len(cleanup) != 1 || cleanup[0]["signal"] != "SIGKILL" || cleanup[0]["reason"] != "orphaned by an earlier runner" || cleanup[0]["error"] != nil {
+		t.Fatalf("cleanup %v", cleanup)
+	}
+	if labelingGroupRuns(int(integer(attempt["pid"]))) {
+		t.Fatal("the orphaned CLI still runs")
+	}
+}
+
+// Where a CLI cannot get its own process group it is never started: every
+// pipe is closed, the attempt fails as not sent, and the CLI is not called.
+func TestLabelingRunRefusesWithoutAProcessGroup(t *testing.T) {
+	quickLabelingTimers(t)
+	var pipes []*os.File
+	override(t, &labelingPipe, func() (*os.File, *os.File, error) {
+		r, w, err := os.Pipe()
+		if err == nil {
+			pipes = append(pipes, r, w)
+		}
+		return r, w, err
+	})
+	override(t, &labelingConfigureProcess, func(*exec.Cmd) error { return errLabelingProcessUnsupported })
+	cli, calls, _ := fakeLabelingCLI(t, "ok")
+	var mu sync.Mutex
+	started := false
+	result := runLabelingProcess(cli, nil, nil, t.TempDir(), "prompt", &failingReceipt{}, nil, newLabelingStream(labelingRouteClaude), &mu,
+		time.Second, nil, func(int) { started = true })
+	if result.StartError != errLabelingProcessUnsupported.Error() || result.PID != 0 || result.ExitCode != nil || started || result.Duration <= 0 || len(result.Cleanup) != 0 {
+		t.Fatalf("result %+v, started %v", result, started)
+	}
+	if len(pipes) != 4 {
+		t.Fatalf("%d pipe ends", len(pipes))
+	}
+	for _, pipe := range pipes {
+		if err := pipe.Close(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("%s left open: %v", pipe.Name(), err)
+		}
+	}
+
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	opts := labelingTestOptions(dir, cli, io.Discard)
+	opts.Spec.LimitItems, opts.Concurrency = 4, 1
+	err := runLabelingJob(context.Background(), opts)
+	db := openFixtureLedger(t, dir)
+	attempt, _ := labelingAttemptRecord(db, "pilot:000001/1")
+	if err != nil || requestStates(t, db) != requestFailed || fakeCalls(t, calls) != 0 || attempt == nil || attempt["not_sent"] != int64(1) || !strings.Contains(firstString(attempt["error"]), errLabelingProcessUnsupported.Error()) {
+		t.Fatalf("run = %v after %d calls, states %s, attempt %v", err, fakeCalls(t, calls), requestStates(t, db), attempt)
 	}
 }
 

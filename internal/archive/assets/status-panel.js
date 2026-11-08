@@ -410,8 +410,8 @@
   // one row (in the app, every Pharos process on this Mac). CPU is % of one core,
   // as Activity Monitor shows it; I/O is what the processes read and write
   // per second, and Storage what the library keeps on its drive (from the
-  // last drive check). A figure not measured yet is a dash, and I/O stays
-  // out for a service that does not measure it. GPU uses counters from
+  // last drive check). A figure not measured yet, or not measurable here,
+  // is a dash, and I/O stays out for a service that does not measure it. GPU uses counters from
   // the same Pharos process tree; WAL is shown only above 1 GB.
   function loadModel(resources, storage = null, wal = null, sizesStale = false) {
     if (!resources || typeof resources !== 'object') return null;
@@ -427,10 +427,12 @@
     metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? `${sizesStale ? 'last ' : ''}${size(storage)}` : '—'});
     if (Number.isFinite(wal) && wal > 1e9) metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: `${sizesStale ? 'last ' : ''}${size(wal)}`});
     for (const metric of metrics) {
-      const partial = metric.id === 'cpu' ? resources.cpu_partial : metric.id === 'gpu' ? gpu?.partial : metric.id === 'io' ? resources.disk_partial : false;
+      const partial = metric.id === 'cpu' ? resources.cpu_partial : metric.id === 'gpu' ? gpu?.partial
+        : metric.id === 'io' ? resources.disk_partial : metric.id === 'memory' ? resources.memory_partial : false;
       if (partial && metric.value !== '—') {
         metric.value = '≥' + metric.value;
-        metric.warning = 'Some processes or clients are still waiting for another sample; this reading may undercount usage.';
+        metric.warning = metric.id === 'memory' ? 'Some processes’ memory could not be read; this reading may undercount usage.'
+          : 'Some processes or clients are still waiting for another sample, or could not be read; this reading may undercount usage.';
       }
     }
     return {metrics};
@@ -439,14 +441,14 @@
   // ---- resource history (docs/work-resource-accounting.md)
   // Four separate series on one time axis, each in its own unit: CPU as % of
   // one core (it can exceed 100%), GPU as the driver's GPU-time share, RAM
-  // as physical footprint and I/O as bytes per second. A missing reading, a
+  // with the reader's memory basis and I/O as bytes per second. A missing reading, a
   // segment boundary (start, restart, gap) or a sample interval longer than
   // HISTORY_BREAK_MS breaks the line; nothing is interpolated or drawn as
   // zero. GPU samples keep their own times.
   const HISTORY_SERIES = [
     {id: 'cpu', label: 'CPU', source: 'cpu', unit: '% of one core'},
     {id: 'gpu', label: 'GPU', source: 'gpu', unit: 'driver GPU-time share'},
-    {id: 'memory', label: 'RAM', source: 'memory', unit: 'physical footprint'},
+    {id: 'memory', label: 'RAM', source: 'memory', unit: 'bytes'},
     {id: 'io', label: 'I/O', source: 'disk', unit: 'read and written per second'},
   ];
   const HISTORY_BREAK_MS = 25000;
@@ -456,7 +458,7 @@
   function historyColumns(history, id) {
     const samples = history.samples || {};
     if (id === 'gpu') return {t: history.gpu?.t || [], value: history.gpu?.value || [], partial: history.gpu?.partial || []};
-    if (id === 'memory') return {t: samples.t || [], value: samples.memory || [], partial: []};
+    if (id === 'memory') return {t: samples.t || [], value: samples.memory || [], partial: samples.memory_partial || []};
     if (id === 'io') return {t: samples.t || [], value: samples.disk || [], partial: samples.disk_partial || []};
     return {t: samples.t || [], value: samples.cpu || [], partial: samples.cpu_partial || []};
   }
@@ -502,7 +504,8 @@
       const partial = points.some(point => point.partial);
       const gaps = runs.length > 1 || points.some(point => point.value === null);
       const summary = `${spec.label} (${spec.unit}): now ${current}${peak !== null ? `, peak ${historyText(spec.id, peak)}` : ''} over the last ${minutes} min`
-        + `${gaps ? ', with gaps' : ''}${partial ? ', some samples are lower bounds' : ''}.`;
+        + `${gaps ? ', with gaps' : ''}${partial ? ', some samples are lower bounds' : ''}.`
+        + (history.series?.[spec.source]?.note ? ` ${history.series[spec.source].note}` : '');
       series.push({id: spec.id, label: spec.label, unit: spec.unit, current: latest?.partial && latest.value !== null ? `≥${current}` : current,
         peak: peak !== null ? historyText(spec.id, peak) : null, paths, gaps, partial, summary, basis: history.series?.[spec.source]?.basis || ''});
     }

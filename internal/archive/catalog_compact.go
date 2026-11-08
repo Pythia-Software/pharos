@@ -41,7 +41,8 @@ const (
 var compactProgressEvery = 2 * time.Second
 
 // compactSpaceNeeded is the free space a copy of live bytes needs: VACUUM
-// INTO can write a little more than the pages it keeps.
+// INTO can write a little more than the pages it keeps. Storage shows it;
+// CompactLibrary adds the same parts with spaceNeeded, which cannot wrap.
 func compactSpaceNeeded(live int64) int64 {
 	return live + live/10 + compactMarginBytes
 }
@@ -50,10 +51,11 @@ func compactSpaceNeeded(live int64) int64 {
 // to end; tests shorten it.
 var compactLeaseWait = 10 * time.Second
 
-// compactDiskFree is the free space on path's volume; tests replace it.
-var compactDiskFree = func(path string) uint64 {
-	_, free := diskUsage(path)
-	return free
+// compactDiskFree is the space available on path's volume, or why it cannot
+// be observed; tests replace it.
+var compactDiskFree = func(path string) (uint64, error) {
+	space, err := diskCapacity(path)
+	return space.AvailableBytes, err
 }
 
 // compactFingerprint reads what the check compares, compactLink keeps the
@@ -140,8 +142,16 @@ func CompactLibrary(ctx context.Context, config Config, progress func(phase stri
 		return receipt, nil
 	}
 	live := (pages - free) * pageSize
-	if need := compactSpaceNeeded(live); compactDiskFree(filepath.Dir(path)) < uint64(need) {
-		return receipt, fmt.Errorf("compacting needs %s free on the library's drive for the new copy; free up space and compact again", humanBytes(need))
+	need, err := spaceNeeded(live, live/10, compactMarginBytes)
+	if err != nil {
+		return receipt, err
+	}
+	available, err := compactDiskFree(filepath.Dir(path))
+	if err != nil {
+		return receipt, fmt.Errorf("compacting cannot tell how much space is free on the library's drive: %w", err)
+	}
+	if available < need {
+		return receipt, fmt.Errorf("compacting needs %s free on the library's drive for the new copy; free up space and compact again", humanBytes(displayBytes(need)))
 	}
 
 	report("Recording what the catalog holds", 0, 0)

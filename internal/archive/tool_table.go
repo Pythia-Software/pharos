@@ -149,6 +149,8 @@ func sqlDatasetFor(dataset string) (sqlDataset, bool) {
 		return agentEventDataset, true
 	case "agent_event_messages":
 		return agentEventMessageDataset, true
+	case "agent_event_rates":
+		return agentEventRateDataset, true
 	}
 	return sqlDataset{}, false
 }

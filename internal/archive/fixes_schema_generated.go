@@ -29,6 +29,8 @@ func PharosFixesSchema() querytable.Schema {
 			"in_prompt":     {Name: "in_prompt", Kind: querytable.FieldBool, Expr: "r.\"in_prompt\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"in_prompt\""},
 			"first_seen":    {Name: "first_seen", Kind: querytable.FieldText, Expr: "r.\"first_seen\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"first_seen\""},
 			"last_seen":     {Name: "last_seen", Kind: querytable.FieldText, Expr: "r.\"last_seen\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"last_seen\""},
+			"first_seen_at": {Name: "first_seen_at", Kind: querytable.FieldDatetime, Expr: "r.\"first_seen_at\"", Synthetic: false, SQLiteDatetimeFormat: "rfc3339", Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"first_seen_at\""},
+			"last_seen_at":  {Name: "last_seen_at", Kind: querytable.FieldDatetime, Expr: "r.\"last_seen_at\"", Synthetic: false, SQLiteDatetimeFormat: "rfc3339", Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"last_seen_at\""},
 			"handed_at":     {Name: "handed_at", Kind: querytable.FieldDatetime, Expr: "r.\"handed_at\"", Synthetic: false, SQLiteDatetimeFormat: "rfc3339", Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"handed_at\""},
 			"fix_count":     {Name: "fix_count", Kind: querytable.FieldNumber, Expr: "r.\"fix_count\"", Synthetic: false, ExpressionNumeric: true, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"fix_count\""},
 		},

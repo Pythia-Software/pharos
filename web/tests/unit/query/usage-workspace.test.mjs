@@ -21,6 +21,7 @@ import mcpCalls from "../../../../schemas/mcp_calls.schema.json";
 import agentEvents from "../../../../schemas/agent_events.schema.json";
 import sessionShape from "../../../../schemas/session_shape.schema.json";
 import agentEventMessages from "../../../../schemas/agent_event_messages.schema.json";
+import agentEventRates from "../../../../schemas/agent_event_rates.schema.json";
 import { queryURL, queryFromURL, readRollingWindow, resolveRollingQuery } from "../../../src/query-links";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
 import { toolSummaryCallFilters } from "../../../src/tools-dashboard-model.ts";
@@ -247,7 +248,7 @@ test("focused dashboard queries execute group thresholds and weighted measures",
 });
 
 test("the live audit provides 25 valid, distinct queries per dataset and dashboard", () => {
-  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, session_shape: sessionShape };
+  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, agent_event_rates: agentEventRates, session_shape: sessionShape };
   const capabilities = { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), cases = queryCases(dataset, document, []);
@@ -277,7 +278,7 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
   const originalLocation = globalThis.location;
   globalThis.location = new URL("http://localhost/");
   t.after(() => { globalThis.location = originalLocation; });
-  const schemas = {people_message_labels:peopleMessageLabels, compactions, message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, session_shape: sessionShape };
+  const schemas = {people_message_labels:peopleMessageLabels, compactions, message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, agent_event_rates: agentEventRates, session_shape: sessionShape };
   for (const [dataset, target] of Object.entries(usageDatasets)) assert.ok(schemas[dataset].fields.some(field => field.name === target.field), `${dataset}'s search entry point belongs to its own schema`);
   for (const dataset of Object.keys(usageDatasets)) for (const mode of ["query", "search"]) {
     const url = new URL(usageWorkspaceURL({ mode, dataset }), "http://localhost");
@@ -667,6 +668,12 @@ test("Usage source links retain exact messages, encoded identity and distinct ev
   assert.deepEqual(tool.itemDetails.active, { id: "tool", mode: "modal" });
   assert.deepEqual(tool.where, [{ field: "id", op: "=", value: "tool" }]);
   assert.equal(primaryUsageSource("writing_messages", { ...row, id: "human" }).includes("message=human"), true);
+  // An agent event's message opens with the reader's Events marks on.
+  const event = new URL(usageRowLinks("agent_event_rates", { ...row, message_id: "read /#+" })[0].href, "http://localhost");
+  assert.equal(event.searchParams.get("message"), "read /#+");
+  assert.equal(event.searchParams.get("reader_events"), "1");
+  assert.equal(decodeURIComponent(event.pathname.slice(6)), row.workspace_id);
+  assert.equal(new URL(primaryUsageSource("tool_calls", row), "http://localhost").searchParams.has("reader_events"), false);
   assert.equal(conversationRowURL({}, "missing"), undefined);
   assert.deepEqual(usageRowLinks("skill_usages", {}), []);
   assert.equal(usageRowLinks("parallelism", { unit_id: "/worktree", counting: "workspace" }).length, 0);

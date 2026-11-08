@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 // fixesFixture builds in-scope events: one per (workspace, sentence).
@@ -407,6 +410,32 @@ func TestFixesProjectionTriageAndHandoff(t *testing.T) {
 	if s := state(); s["state"] != "open" || s["recurred"] != true {
 		t.Fatalf("a recurrence after the handoff reopens it: %v", s)
 	}
+	// The Weekly digest's date ranges, as the client resolves the last 7
+	// days: first seen on the 20th and again on the 26th, it is new in the
+	// week to the 22nd, and back, not new, in the week to the 28th.
+	digestServer := testServer(t, config, c)
+	digest := func(day string, returning bool) bool {
+		t.Helper()
+		now, _ := time.ParseInLocation("2006-01-02 15:04", day+" 12:00", time.Local)
+		start := now.AddDate(0, 0, -7).UTC().Format(time.RFC3339)
+		where := []qt.WhereTerm{{Field: "first_seen_at", Op: ">=", Value: start}}
+		if returning {
+			where = []qt.WhereTerm{{Field: "first_seen_at", Op: "<", Value: start}, {Field: "last_seen_at", Op: ">=", Value: start}}
+		}
+		request := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: now.UnixMilli(), Rows: true,
+			Result: qt.WireQuery{Where: where, Select: []string{"id"}, Limit: 50}}
+		w := apiCall(t, digestServer, config.APIToken, http.MethodPost, "/api/query/fixes/query-v3", request)
+		if w.Code != http.StatusOK {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		return strings.Contains(w.Body.String(), id)
+	}
+	if !digest("2026-10-22", false) || digest("2026-10-28", false) {
+		t.Fatal("new problems are the ones first seen in the window")
+	}
+	if !digest("2026-10-28", true) || digest("2026-10-22", true) {
+		t.Fatal("returning problems were first seen before the window and again in it")
+	}
 	if err := c.FixesAction(t.Context(), []string{id}, map[string]any{"action": "dismiss"}); err != nil {
 		t.Fatal(err)
 	}
@@ -440,6 +469,13 @@ func TestFixesProjectionTriageAndHandoff(t *testing.T) {
 	for _, row := range rows {
 		if row["id"] == id {
 			listed = row["shown"] == "rare" && row["state"] == "open" && row["work_items"] == state()["work_items"]
+		}
+		// Its days are also local-day timestamps, for date ranges.
+		for _, field := range []string{"first_seen", "last_seen"} {
+			at, err := time.Parse(time.RFC3339, fmt.Sprint(row[field+"_at"]))
+			if err != nil || at.Local().Format("2006-01-02") != row[field] || at.Local().Hour() != 0 {
+				t.Fatalf("%s_at starts the local day of %s: %v %v", field, field, row[field+"_at"], row[field])
+			}
 		}
 	}
 	if len(rows) != len(overview["items"].([]map[string]any)) || !listed {

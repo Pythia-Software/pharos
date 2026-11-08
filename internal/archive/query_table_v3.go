@@ -286,7 +286,9 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	// ephemeral CTE B-trees otherwise write pages even with a temp cache. Keep the
 	// full raw tool ledger and message payloads on the spill-capable path. The
 	// executor still enforces the same staging-byte budget before any copy.
-	memoryScratch := dataset == "tools" || dataset == "skill_usages" || dataset == "message_labels" && !slices.Contains(required, "text") || !sqlBacked && len(rows) <= 100_000
+	// Agent event rates hold a few narrow rows per kind for each message read:
+	// file scratch made a distinct share over them take seconds, not a tenth.
+	memoryScratch := dataset == "tools" || dataset == "skill_usages" || dataset == "agent_event_rates" || dataset == "message_labels" && !slices.Contains(required, "text") || !sqlBacked && len(rows) <= 100_000
 	mode := 1
 	if memoryScratch {
 		mode = 2

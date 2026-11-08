@@ -16,9 +16,9 @@ func (d *exportDir) sub(string) (*exportDir, error) {
 func (d *exportDir) stat(string) (exportStat, bool, error) {
 	return exportStat{}, false, errCaptureExportUnsupported
 }
-func exportStatPath(string) (exportStat, error) { return exportStat{}, errCaptureExportUnsupported }
-func (d *exportDir) self() (exportStat, error)  { return exportStat{}, errCaptureExportUnsupported }
-func (d *exportDir) entries() ([]string, error) { return nil, errCaptureExportUnsupported }
+func exportStatPath(string) (exportStat, error)   { return exportStat{}, errCaptureExportUnsupported }
+func (d *exportDir) self() (exportStat, error)    { return exportStat{}, errCaptureExportUnsupported }
+func (d *exportDir) list() (*exportLister, error) { return nil, errCaptureExportUnsupported }
 func (d *exportDir) openRead(string) (*os.File, exportStat, error) {
 	return nil, exportStat{}, errCaptureExportUnsupported
 }

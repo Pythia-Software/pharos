@@ -2,6 +2,7 @@ package archive
 
 import (
 	"errors"
+	"io"
 	"os"
 )
 
@@ -95,46 +96,60 @@ func (d *exportDir) walkParent(rel string) (*exportDir, string, error) {
 	return current, parts[len(parts)-1], nil
 }
 
-// subPath opens the directory rel below d (d itself for "").
-func (d *exportDir) subPath(rel string) (*exportDir, error) {
-	if rel == "" {
-		return d.sub(".")
+// exportListBatch is how many names one directory read returns at most.
+const exportListBatch = 256
+
+// exportLister reads a directory's names a batch at a time, so that no
+// listing holds every name of a directory at once.
+type exportLister struct{ f *os.File }
+
+// next returns up to n more names, and io.EOF once there are none.
+func (l *exportLister) next(n int) ([]string, error) { return l.f.Readdirnames(n) }
+
+func (l *exportLister) Close() error {
+	if l == nil || l.f == nil {
+		return nil
 	}
-	parent, name, err := d.walkParent(rel)
-	if err != nil {
-		return nil, err
-	}
-	if parent != d {
-		defer parent.Close()
-	}
-	return parent.sub(name)
+	return l.f.Close()
 }
 
 // removeTree removes name, below d, and everything under it, without
-// following links. It removes only what the export staged itself.
+// following links. It removes only what the export staged itself, one
+// batch of names at a time from a fresh listing, so removing never relies
+// on a listing that the removal itself changes.
 func (d *exportDir) removeTree(name string) error {
 	st, ok, err := d.stat(name)
 	if err != nil || !ok {
 		return err
 	}
-	if st.isDir() {
-		sub, err := d.sub(name)
+	if !st.isDir() {
+		return d.unlink(name, false)
+	}
+	sub, err := d.sub(name)
+	if err != nil {
+		return err
+	}
+	defer sub.Close()
+	for {
+		lister, err := sub.list()
 		if err != nil {
 			return err
 		}
-		names, err := sub.entries()
+		names, err := lister.next(exportListBatch)
+		lister.Close()
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		if len(names) == 0 {
+			break
+		}
 		for _, child := range names {
-			if err == nil {
-				err = sub.removeTree(child)
+			if err := sub.removeTree(child); err != nil {
+				return err
 			}
 		}
-		sub.Close()
-		if err != nil {
-			return err
-		}
-		return d.unlink(name, true)
 	}
-	return d.unlink(name, false)
+	return d.unlink(name, true)
 }
 
 func splitSlash(rel string) []string {

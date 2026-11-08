@@ -198,6 +198,13 @@ test("the broker load remains visible during a service timeout, and partial rate
   assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["≥12%", "2.0 GB", "≥4.0 MB/s", "last 48 GB"]);
   for (const id of ["cpu", "io"]) assert.match(unavailable.load.metrics.find(metric => metric.id === id).warning, /waiting for another sample.*may undercount/);
   assert.equal(unavailable.load.metrics.find(metric => metric.id === "memory").warning, undefined);
+  // A process whose memory could not be read makes the total a lower bound;
+  // memory nobody could read is a dash, not zero.
+  const memory = resources => model(view({ resources })).load.metrics.find(metric => metric.id === "memory");
+  const partial = memory({ cpu_percent: 1, memory_bytes: 2e9, memory_partial: true });
+  assert.equal(partial.value, "≥2.0 GB");
+  assert.match(partial.warning, /memory could not be read.*may undercount/);
+  assert.equal(memory({ cpu_percent: 1, memory_bytes: null, memory_partial: true }).value, "—");
 });
 
 test("GPU load is scoped to Pharos processes, including idle and unavailable states", () => {
@@ -491,6 +498,18 @@ test("history draws separate series, breaking lines at gaps and missing readings
   assert.match(series("cpu").summary, /% of one core/);
   assert.match(series("cpu").summary, /gaps/);
   assert.match(series("cpu").summary, /lower bounds/);
+
+  const runtimeOnly = history();
+  runtimeOnly.series.cpu.available = false;
+  runtimeOnly.gpu = null;
+  runtimeOnly.series.memory = { available: true, basis: "go-runtime", note: "Go runtime-managed memory; not RSS." };
+  runtimeOnly.samples.memory_partial = runtimeOnly.samples.t.map(() => true);
+  const runtimeStrip = plain(panel.historyModel(runtimeOnly));
+  assert.deepEqual(runtimeStrip.series.map(entry => entry.id), ["memory"], "unavailable CPU and GPU do not gain rows");
+  assert.match(runtimeStrip.series[0].summary, /Go runtime-managed memory/);
+  assert.match(runtimeStrip.series[0].summary, /lower bounds/);
+  assert.equal(runtimeStrip.series[0].current, "≥1.0 GB");
+  assert.equal(plain(panel.historyInspect(runtimeOnly, ago_(16))).values.find(entry => entry.id === "memory").text, "≥1.0 GB");
   // No history (classic execution, an older service): no strip.
   assert.equal(panel.historyModel({ version: 1, available: false }), null);
   assert.equal(panel.historyModel(null), null);
@@ -637,16 +656,18 @@ const store = loadClassicScript("status-store.js").window.pharosStatusStore;
 
 test("history fetched with since= appends without repeating a time and drops what left the window", () => {
   const N = historyNow;
-  const columns = (t, cpu) => ({ t, cpu, memory: t.map(() => 1e9), disk: t.map(() => null), cpu_partial: t.map(() => false), disk_partial: t.map(() => false), processes: t.map(() => 1) });
+  const columns = (t, cpu) => ({ t, cpu, memory: t.map(() => 1e9), disk: t.map(() => null), cpu_partial: t.map(() => false), disk_partial: t.map(() => false), memory_partial: t.map(() => false), processes: t.map(() => 1) });
   const previous = { version: 1, available: true, library: "", now: N, window_seconds: 60, samples: columns([N - 50e3, N - 10e3], [1, 2]),
     gpu: { t: [N - 45e3], value: [5], partial: [false] }, segments: [{ t: N - 50e3, reason: "started" }],
     coverage: [{ t: N - 50e3, covered: [{ pid: 1 }], omitted: [] }], markers: [{ t: N - 55e3, event: "start", id: "old", kind: "k" }] };
   const next = { version: 1, available: true, library: "", since: N - 10e3, now: N + 20e3, window_seconds: 60,
     samples: columns([N - 10e3, N + 5e3], [99, 3]), gpu: { t: [N + 2e3], value: [7], partial: [false] }, segments: [], coverage: [],
     markers: [{ t: N + 1e3, event: "start", id: "x", kind: "k" }] };
+  previous.samples.memory_partial[1] = true;
   const merged = plain(store.mergeHistory(previous, next));
   assert.deepEqual(merged.samples.t, [N - 10e3, N + 5e3]);
   assert.deepEqual(merged.samples.cpu, [2, 3], "a repeated time keeps the first reading");
+  assert.deepEqual(merged.samples.memory_partial, [true, false], "incremental history preserves memory coverage");
   assert.deepEqual(merged.gpu.t, [N + 2e3], "GPU samples merge on their own times");
   assert.deepEqual(merged.segments.map(segment => segment.reason), ["started"], "the segment in effect at the window's start stays");
   assert.equal(merged.coverage.length, 1);
