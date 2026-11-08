@@ -12,6 +12,7 @@ import { tokenTypes } from "../../../src/token-chart-request";
 import { runAnalysisQuery } from "../../../src/analysis-request";
 import { dashboardQueryLinks } from "../../../src/dashboard-query-links";
 import { usageDashboardReturn } from "../../../src/usage-workspace-model";
+import { analysisCatalogs } from "../../../src/analysis-catalogs";
 
 const { rows, hourly } = usageLedger(), schema = schemas.usage;
 const base = { period: "day", hours: 6, days: 3, rollingPeriods: 0, scale: "linear", display: "interval" };
@@ -170,6 +171,35 @@ test("values without zeroes leave out periods with nothing drawn, and zeroes fro
   const [zeroes, without] = [draw(normed).built, draw({ ...normed, nonzero: true }).built];
   assert.ok(without.normPoints < zeroes.normPoints && without.references?.[0]?.value > zeroes.references?.[0]?.value);
   assert.equal(validAnalysisState(catalog, { ...state, nonzero: "yes" }), false);
+});
+
+test("every %ile level asked for is drawn, in order, and a resolved state reads as itself", () => {
+  const levels = ["mean", "p50", "p75", "p90", "p95", "p99"];
+  // The series builder and the card previews normalize the dashboard's
+  // resolved state again; its norm (whether it draws levels) is not the
+  // older single mean.
+  for (const [topic, shape] of Object.entries(analysisCatalogs)) for (const metric of Object.keys(shape.measures)) for (const split of ["none", ...Object.keys(shape.breakdowns).slice(0, 2)]) {
+    const resolved = normalizeAnalysis(shape, { ...base, metric, split, view: "trend", percentiles: levels });
+    assert.deepEqual(normalizeAnalysis(shape, resolved), resolved, `${topic} ${metric} by ${split}`);
+  }
+  const asked = ["p50", "mean", "p90"], built = draw({ ...base, metric: "tokens", split: "none", percentiles: asked }).built;
+  assert.deepEqual(built.references?.map(item => item.level), ["mean", "p50", "p90"]);
+  assert.ok(built.references[1].value <= built.references[2].value, "the median is at most the 90th %ile");
+  // Older links' norm is the mean alone.
+  assert.deepEqual(draw({ ...base, metric: "tokens", split: "none", norm: true }).built.references?.map(item => item.level), ["mean"]);
+});
+
+test("a measure without a total across groups has levels for one group the legend picks, never the first of several", () => {
+  const state = { ...base, metric: "conversations", split: "provider", percentiles: ["p50", "p90"] };
+  assert.match(trendLimits(catalog, normalizeAnalysis(catalog, state)).norm ?? "", /one group in the legend/);
+  assert.equal(draw(state).built.references, undefined);
+  const one = { ...state, selection: { values: ["codex"], excluded: false } };
+  assert.equal(trendLimits(catalog, normalizeAnalysis(catalog, one)).norm, undefined);
+  const picked = draw(one).built, alone = draw({ ...state, split: "none", where: undefined }, { where: [...range, { field: "provider", op: "=", value: "codex" }] }).built;
+  assert.deepEqual(picked.references?.map(item => item.level), ["p50", "p90"]);
+  assert.deepEqual(picked.references?.map(item => item.value), alone.references?.map(item => item.value), "the group's levels are its own");
+  // Leaving one group out still draws several.
+  assert.ok(trendLimits(catalog, normalizeAnalysis(catalog, { ...one, selection: { values: ["codex"], excluded: true } })).norm);
 });
 
 test("whole periods drop the current day and a partial first period, also from running totals", () => {

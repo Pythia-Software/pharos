@@ -67,6 +67,16 @@ function chartCases(map: SiteMap): ChartCase[] {
         const item: ChartCase = { topic, view, chart, verdict };
         cases.push(verdict === "valid" ? linked(item) : item);
       }
+      // %ile levels of a measure without a total across groups, drawn only
+      // for one group the legend selects, and the same levels for several.
+      const levelled = judged.filter(item => item.verdict === "valid" && item.chart.split !== "none" && item.chart.share !== true && Array.isArray(item.chart.percentiles)).find(item => {
+        const measure = analysisCatalogs[topic]!.measures[String(item.chart.metric)];
+        return measure && !measure.additive;
+      });
+      if (levelled) for (const selection of [{ values: ["(one group)"], excluded: false }, { values: ["(one group)"], excluded: true }, { values: ["a", "b"], excluded: false }]) {
+        const chart = { ...levelled.chart, selection, percentiles: ["mean", "p50", "p90"] };
+        cases.push({ topic, view, chart, verdict: chartVerdict(topic, chart) });
+      }
       // Partial charts, which the page merges over the topic's defaults: one
       // option at each of its values, and the view's defaults less one key.
       const partial: Record<string, unknown>[] = [

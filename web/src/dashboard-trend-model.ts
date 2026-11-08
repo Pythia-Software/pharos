@@ -261,7 +261,9 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   const nonzero = state.nonzero && !state.share;
   const selected = series.filter(item => item.value !== undefined && picked.includes(item.value)).map(item => item.key);
   const drawn = selected.length ? series.filter(item => chosen.excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
-  if (drawsLevels(state) && trend.normFrom && trend.normTo) {
+  // Additive series add up to the drawn total; any other measure has levels
+  // only when one series is drawn, never the first of several.
+  if (drawsLevels(state) && trend.normFrom && trend.normTo && (additive || drawn.length === 1)) {
     const from = trend.normFrom.getTime(), to = trend.normTo.getTime();
     const points = buckets.filter(bucket => bucket.date.getTime() >= from && bucket.date.getTime() < to).map(bucket => additive ? drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0)
       : kind === "ratio" ? bucket.values[drawn[0]?.key] : bucket.values[drawn[0]?.key] ?? 0).filter((value): value is number => typeof value === "number" && !(nonzero && value === 0));

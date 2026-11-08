@@ -730,6 +730,14 @@ func (site *siteMap) multiplePeriods(merged map[string]any) bool {
 	return period == "hours" && jsNumber(state["hours"]) > 1 || period == "days" && jsNumber(state["days"]) > 1
 }
 
+// singleSelection: the legend selection draws one group alone, so a measure
+// without a total across groups has %ile levels (singleSeries).
+func singleSelection(merged map[string]any) bool {
+	selection, _ := merged["selection"].(map[string]any)
+	values, _ := selection["values"].([]any)
+	return len(values) == 1 && selection["excluded"] != true
+}
+
 // ruleContext evaluates given option names for a rule, as drawChart does.
 type ruleContext struct {
 	site   *siteMap
@@ -750,6 +758,8 @@ func (c ruleContext) value(name string, self any, selfPresent bool) string {
 		return c.key(self, selfPresent)
 	case "multiple_periods":
 		return strconv.FormatBool(c.site.multiplePeriods(c.merged))
+	case "single_selection":
+		return strconv.FormatBool(singleSelection(c.merged))
 	}
 	if value, ok := c.drawn[name]; ok {
 		return c.key(value, value != nil)
@@ -846,6 +856,12 @@ func (site *siteMap) allowedHere(view *siteView, merged map[string]any, option s
 						givens = append(givens, "each period spans several hours or days")
 					} else {
 						givens = append(givens, "each period is one unit")
+					}
+				case "single_selection":
+					if singleSelection(merged) {
+						givens = append(givens, "the legend selects one group")
+					} else {
+						givens = append(givens, "the legend selects no single group")
 					}
 				default:
 					givens = append(givens, fmt.Sprintf("%s is %s", name, context.value(name, nil, false)))
