@@ -659,13 +659,27 @@ function renderFeedback(){
   renderFeedbackPins();restoreFeedbackLayout()
 }
 function feedbackMarkdownInline(value){return String(value||'').replace(/`/g,'\\`').replace(/\s+/g,' ').trim()}
-function feedbackMarkdown(){
+function feedbackMarkdown(annotations=feedbackAnnotations,screenshots={}){
   const lines=['# Pharos UI feedback','',`Generated: ${new Date().toISOString()}`,'','Please address each annotation below and verify the result in the rendered UI.',''];
-  feedbackAnnotations.forEach((item,index)=>{lines.push(`## Annotation ${index+1}`,'',`- Feedback: ${JSON.stringify(item.note)}`,`- View: ${item.view.title} (\`#${feedbackMarkdownInline(item.view.id)}\`)`,`- Element: ${item.label} (\`<${item.tag}>\`)`,`- Selector: \`${feedbackMarkdownInline(item.selector)}\``,`- Bounds: x=${item.bounds.x}, y=${item.bounds.y}, width=${item.bounds.width}, height=${item.bounds.height}`,`- Viewport: ${item.viewport.width} × ${item.viewport.height} @ ${item.viewport.device_pixel_ratio}x`,`- Source hint: \`${item.source}\``);if(item.text)lines.push(`- Element text: ${JSON.stringify(item.text)}`);if(item.selected_text)lines.push(`- Selected text: ${JSON.stringify(item.selected_text)}`);lines.push(`- Computed styles: \`${feedbackMarkdownInline(JSON.stringify(item.styles))}\``,'')});return lines.join('\n')
+  annotations.forEach((item,index)=>{lines.push(`## Annotation ${index+1}`,'',`- Feedback: ${JSON.stringify(item.note)}`,`- View: ${item.view.title} (\`#${feedbackMarkdownInline(item.view.id)}\`)`,`- Element: ${item.label} (\`<${item.tag}>\`)`,`- Selector: \`${feedbackMarkdownInline(item.selector)}\``,`- Bounds: x=${item.bounds.x}, y=${item.bounds.y}, width=${item.bounds.width}, height=${item.bounds.height}`,`- Viewport: ${item.viewport.width} × ${item.viewport.height} @ ${item.viewport.device_pixel_ratio}x`,`- Source hint: \`${item.source}\``);if(screenshots[item.id])lines.push(`- Screenshot: [Open screenshot](<${screenshots[item.id]}>)`);if(item.text)lines.push(`- Element text: ${JSON.stringify(item.text)}`);if(item.selected_text)lines.push(`- Selected text: ${JSON.stringify(item.selected_text)}`);lines.push(`- Computed styles: \`${feedbackMarkdownInline(JSON.stringify(item.styles))}\``,'')});return lines.join('\n')
 }
 async function copyFeedbackText(text){return window.pharosHost.clipboard.writeText(text)}
 function clearFeedback(){if(!feedbackAnnotations.length)return;for(const item of feedbackAnnotations)window.uiFeedback?.removeScreenshot(item.id);feedbackAnnotations=[];saveFeedback();feedbackToast('Feedback cleared')}
-async function copyFeedback(){if(!feedbackAnnotations.length||feedbackCopying)return;const count=feedbackAnnotations.length,clearAfterCopy=$('#feedbackClearOnCopy').checked;feedbackCopying=true;updateFeedbackCopyButtons();try{await copyFeedbackText(feedbackMarkdown());if(clearAfterCopy){for(const item of feedbackAnnotations)window.uiFeedback?.removeScreenshot(item.id);feedbackAnnotations=[];saveFeedback()}feedbackToast(`Copied ${count} annotation${count===1?'':'s'}${clearAfterCopy?' and cleared':''}`)}catch{feedbackToast('Could not copy feedback. Check clipboard access and try again.')}finally{feedbackCopying=false;updateFeedbackCopyButtons()}}
+async function copyFeedback(){
+  if(!feedbackAnnotations.length||feedbackCopying)return;
+  const originals=feedbackAnnotations.slice(),annotations=originals.map(item=>({...item})),count=annotations.length,clearAfterCopy=$('#feedbackClearOnCopy').checked,screenshots={};
+  feedbackCopying=true;updateFeedbackCopyButtons();
+  try{
+    for(const item of annotations)if(item.has_screenshot){
+      if(!window.uiFeedback?.exportScreenshot)throw new Error('Screenshot export is unavailable. Reload Pharos and try again.');
+      screenshots[item.id]=await window.uiFeedback.exportScreenshot(item.id)
+    }
+    await copyFeedbackText(feedbackMarkdown(annotations,screenshots));
+    if(clearAfterCopy){for(const item of originals)window.uiFeedback?.removeScreenshot(item.id);feedbackAnnotations=feedbackAnnotations.filter(item=>!originals.includes(item));saveFeedback()}
+    feedbackToast(`Copied ${count} annotation${count===1?'':'s'}${clearAfterCopy?' and cleared':''}`)
+  }catch(error){feedbackToast(`Could not copy feedback. ${error.message||'Check clipboard access and try again.'}`)}
+  finally{feedbackCopying=false;updateFeedbackCopyButtons()}
+}
 function feedbackToast(message){const toast=$('#feedbackToast');$('#feedbackToastMessage').textContent=message;toast.classList.add('visible');restoreFeedbackLayout();clearTimeout(feedbackToastTimer);feedbackToastTimer=setTimeout(()=>toast.classList.remove('visible'),1800)}
 addEventListener('pharos:session-save-error',()=>feedbackToast('Could not save the view settings. Keep Pharos open and retry before quitting.'));
 makeFeedbackDraggable($('.feedback-toolbar'),$('.feedback-toolbar-controls'),'toolbar');

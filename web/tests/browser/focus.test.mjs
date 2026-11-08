@@ -1604,6 +1604,13 @@ test("annotated element screenshots render, the annotation surfaces stay on scre
   await page.setViewportSize({ width: 360, height: 420 });
   const box = await onScreen(page.locator(".feedback-toolbar"));
   assert.equal(box, true, `expanded toolbar at [${box}] in 360×420`);
+  // The browser adapter may ask for clipboard permission; use its acknowledged
+  // transfer boundary while exercising real capture, IndexedDB and export.
+  await page.evaluate(() => { window.pharosHost.clipboard.writeText = async () => {}; });
+  const exported = page.waitForResponse(response => response.url().endsWith('/api/feedback/screenshot'));
+  await page.locator('#feedbackCopy').click();
+  await exported;
+  await page.waitForFunction(() => document.getElementById('feedbackToastMessage').textContent.startsWith('Copied 1 annotation'));
   await page.locator("#feedbackSend").click();
   const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
   await dialog.waitFor();
