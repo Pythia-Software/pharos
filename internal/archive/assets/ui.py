@@ -1565,7 +1565,18 @@ let delegationExplorer=null,workspaceInbox=null,workspaceLocation=null;
 async function renderDetail(id,fromLocation){
 workspaceInbox?.destroy();workspaceInbox=null;workspaceLocation=null;
 delegationExplorer?.destroy();delegationExplorer=null;
-const w=await api('/api/work/'+encodeURIComponent(id));show('detail',true);if(!fromLocation)setRoute('/work/'+encodeURIComponent(id));recordVisit(false,w.title||'Untitled workspace');conversationMapCleanups.splice(0).forEach(cleanup=>cleanup());
+const w=await api('/api/work/'+encodeURIComponent(id));
+const routeConversation=()=>{const parts=location.pathname.split('/');return parts.length===5&&parts[3]==='conversation'?decodeURIComponent(parts[4]):new URLSearchParams(location.search).get('conversation')||''};
+const requestedConversation=fromLocation?routeConversation():'',missingConversation=requestedConversation&&![...(w.conversations||[]),...(w.peer_conversations||[])].some(c=>c.id===requestedConversation);
+// Saved links can pair a conversation with an outdated workspace. Resolve its stable
+// identity before mounting a merged reader, which otherwise hides the overview
+// without ever loading the requested conversation.
+if(missingConversation){
+ const references=await api('/api/query-object-references',{method:'POST',body:JSON.stringify({references:[{objectType:'pharos_conversations',key:{id:requestedConversation}}]})});
+ const target=references[0]?.href&&new URL(references[0].href,location.href),workspace=target?.pathname.match(/^\/work\/([^/]+)\/conversation\//)?.[1];
+ if(workspace&&decodeURIComponent(workspace)!==id){target.search=location.search;history.replaceState(null,'',target.pathname+target.search);return renderDetail(decodeURIComponent(workspace),true)}
+}
+show('detail',true);if(!fromLocation)setRoute('/work/'+encodeURIComponent(id));recordVisit(false,w.title||'Untitled workspace');conversationMapCleanups.splice(0).forEach(cleanup=>cleanup());
 const root=$('#detailBody');root.replaceChildren();
 for(const key of ['prs','attempts','handoffs','changes','metrics','conversations','identity_links'])w[key] ||= [];
 const disclosure=(label,className)=>{const d=node('details',className);d.append(node('summary','',label));return d};
@@ -1651,10 +1662,10 @@ if(paths.size){const files=disclosure(`Files · ${paths.size}`,'work-disclosure 
 for(const [path,{changes,conversation}] of paths){const row=node('div','file-index-row'),button=node('button','file-index-link',path);button.title='Find actions for this file in the conversation';button.disabled=!conversations.length;
 button.onclick=async()=>{let index=conversations.findIndex(c=>c.id===conversation);if(index<0)index=(await findConversations(path))[0]??-1;if(index<0){button.disabled=true;button.title='No retained conversation mentions this file';return}files.open=false;await selectConversation(index);window.pharosFind?.open(path);host.scrollIntoView({behavior:'smooth',block:'start'})};row.append(button);if(changes.length)row.append(node('span','meta',changes.map(c=>[c.classification,c.status,c.complete?'':'excerpt/incomplete'].filter(Boolean).join(' · ')).join('; ')));files.append(row)}controls.append(files)}
 if(controls.childNodes.length)header.append(controls);root.append(header);
+if(missingConversation){const notice=node('p','coverage-warning','The linked conversation is no longer available in this workspace.'+(conversations.length===1&&!conversations[0].parent_id?' Showing the retained conversation.':conversations.length?' Choose a retained agent session below.':''));notice.setAttribute('role','status');root.append(notice)}
 const warnings=conversations.filter(c=>/partial|incomplete|missing|truncat|failed/i.test(c.coverage||''));
 if(warnings.length)root.append(node('div','coverage-warning',`Transcript coverage: ${warnings.map(c=>`${c.provider||'Agent'} · ${c.coverage}`).join('; ')}. Some activity may be unavailable.`));
 if(/partial|incomplete|failed/i.test(w.preservation_completeness||''))root.append(node('div','coverage-warning',`Preservation · ${w.preservation_completeness}. See Archive details.`));
-const routeConversation=()=>{const parts=location.pathname.split('/');return parts.length===5&&parts[3]==='conversation'?decodeURIComponent(parts[4]):new URLSearchParams(location.search).get('conversation')||''};
 const focus=new URLSearchParams(location.search),focusIndex=conversations.findIndex(c=>c.id===routeConversation()),matchedIndex=focusIndex<0?await matchingLibraryConversation(focus.get('search')||''):-1,initialIndex=Math.max(0,focusIndex,matchedIndex);
 const explorer=node('div','delegation-host');
 root.append(explorer,host,archive);
@@ -1675,10 +1686,10 @@ if(activeIndex>=0&&routeConversation()){
 workspaceInbox.setViewer(true);
 const index=activeIndex,params=new URLSearchParams(location.search);
 if(host.querySelector('.conversation-panel:not(.conversation-loading)'))void mount(index).then(()=>{if(index===activeIndex&&routeConversation()===conversations[index].id)void selectConversation(index,{message:params.get('message')||'',at:params.get('at')||'',call:params.get('call')||'',session:params.get('delegation_session')||'',historyMode:'replace',focusReader:false})});
-}else if(workspaceInbox.merged&&!routeConversation()&&matchedIndex<0)void selectConversation(0,{historyMode:'replace',focusReader:false});
+}else if(workspaceInbox.merged&&(!routeConversation()||missingConversation)&&matchedIndex<0)void selectConversation(0,{historyMode:'replace',focusReader:false});
 };
 mountExplorer();if(!window.pharosDelegation)addEventListener('pharos:delegation-ready',mountExplorer,{once:true});
-workspaceLocation=async()=>{window.dispatchEvent(new Event('pharos:workspace-history'));const routed=conversations.findIndex(c=>c.id===routeConversation()),index=routed<0&&workspaceInbox?.merged?0:routed;if(index>=0)await selectConversation(index,{message:new URLSearchParams(location.search).get('message')||'',at:new URLSearchParams(location.search).get('at')||'',call:new URLSearchParams(location.search).get('call')||'',session:new URLSearchParams(location.search).get('delegation_session')||'',historyMode:'replace'});else{rememberReader();workspaceInbox?.setViewer(false)}};
+workspaceLocation=async()=>{if(routeConversation()&&!conversations.some(c=>c.id===routeConversation()))return renderDetail(id,true);window.dispatchEvent(new Event('pharos:workspace-history'));const routed=conversations.findIndex(c=>c.id===routeConversation()),index=routed<0&&workspaceInbox?.merged?0:routed;if(index>=0)await selectConversation(index,{message:new URLSearchParams(location.search).get('message')||'',at:new URLSearchParams(location.search).get('at')||'',call:new URLSearchParams(location.search).get('call')||'',session:new URLSearchParams(location.search).get('delegation_session')||'',historyMode:'replace'});else{rememberReader();workspaceInbox?.setViewer(false)}};
 if(conversations.length){if(focusIndex>=0||matchedIndex>=0)await selectConversation(initialIndex,{message:focus.get('message')||'',at:focus.get('at')||'',call:focus.get('call')||'',session:focus.get('delegation_session')||'',historyMode:'replace',focusReader:false})}else{const notice=empty('No conversation was retained for this workspace.');archive.before(notice)};
 if(!conversations.length&&w.summary){const summary=node('section','panel');summary.append(node('h2','','Retained account · transcript unavailable'));for(const key of ['initiation','outcome','failures'])if(w.summary[key]){summary.append(node('div','meta',key),contentView(w.summary[key]))}archiveBody.prepend(summary)}
 }
