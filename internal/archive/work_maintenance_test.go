@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -368,12 +369,15 @@ func useWorkDefinitions(t *testing.T, s *Server, defs ...workDefinition) {
 // reported without holding back the others, and a caller that gives up
 // withdraws its demand.
 func TestRunLibraryReportsEachKindAndWithdrawsOnCancel(t *testing.T) {
+	var ranMu sync.Mutex
 	ran := map[string]int{}
 	entered := make(chan struct{}, 1)
 	task := func(kind string, step func(context.Context) error) workDefinition {
 		return workDefinition{Kind: kind, Coarse: true, Task: &maintenanceTask{kind: kind, phase: "pass",
 			step: func(ctx context.Context, _ workAllocation) (bool, int64, error) {
+				ranMu.Lock()
 				ran[kind]++
+				ranMu.Unlock()
 				return false, 1, step(ctx)
 			}}}
 	}
@@ -387,8 +391,11 @@ func TestRunLibraryReportsEachKindAndWithdrawsOnCancel(t *testing.T) {
 		}))
 	w := s.work
 	err := w.runLibraryMode(t.Context(), []string{kindTools, kindGit}, false, triggerChained, workModePass)
-	if err == nil || !strings.Contains(err.Error(), kindGit) || strings.Contains(err.Error(), kindTools) || ran[kindTools] != 1 || ran[kindGit] != 1 {
-		t.Fatalf("err %v, ran %v", err, ran)
+	ranMu.Lock()
+	counts := map[string]int{kindTools: ran[kindTools], kindGit: ran[kindGit]}
+	ranMu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), kindGit) || strings.Contains(err.Error(), kindTools) || counts[kindTools] != 1 || counts[kindGit] != 1 {
+		t.Fatalf("err %v, ran %v", err, counts)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
