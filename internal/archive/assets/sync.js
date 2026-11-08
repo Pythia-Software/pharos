@@ -202,6 +202,9 @@
     const dashboard = document.getElementById('syncDashboard');
     if (!dashboard || !status?.settings || (dashboard.contains(document.activeElement) && document.activeElement.matches('input,select'))) return;
     const focused = dashboard.contains(document.activeElement) ? document.activeElement.dataset.syncFocus : null;
+    // Scheduled work yields to manual maintenance. Older services only expose
+    // the shared busy flag, so retain that guard when the new field is absent.
+    const maintenanceBusy = status.maintenance_busy ?? Boolean(status.busy);
     // Keep the React tables and activity panel attached. Detaching a host
     // resets its scroll containers even when the React root is retained.
     const retained = new Set(['backgroundProcessingWorkload', 'backgroundSchedule', 'syncHistoryTables', 'syncSourceTables', 'syncDiagnosticTables'].map(id => document.getElementById(id)));
@@ -211,13 +214,13 @@
     repairs.append(node('p', 'Verify all & repair mismatches checks every available input, reindexes only confirmed mismatches, then verifies them again. Inputs that pass stay untouched. Full verification can take a long time and can be stopped.', 'muted'));
     const actions = node('div', '', 'sync-actions');
     actions.append(button('Verify all & repair mismatches', () => verify(true)), button('Verify all retained inputs', () => verify(false)), button('Full recapture & reindex…', () => recovery('full')), button('Reindex from stored messages…', () => recovery('retained')));
-    for (const action of actions.children) action.disabled = Boolean(status.busy);
+    for (const action of actions.children) action.disabled = maintenanceBusy;
     repairs.append(actions);
     if (verificationRun?.verification) dashboard.append(node('p', verificationSummary(verificationRun), 'sync-verification-summary'));
     for (const job of status.recovery_jobs || []) {
       const line = node('p', `${job.mode} repair: ${job.state} · last progress ${when(job.updated_at)}${job.error ? ` · ${job.error}` : ''}`);
       const resume = button('Resume repair', () => recovery(job.mode, undefined, job.id));
-      resume.disabled = Boolean(status.busy);
+      resume.disabled = maintenanceBusy;
       line.append(resume); repairs.append(line);
     }
     for (const source of status.source_states || []) {
@@ -226,7 +229,9 @@
       if (state === 'untracked') continue;
       const labels = {pending: preservation.error ? 'Acquisition failed; inputs remain pending' : 'Newer inputs pending', indexed: 'Latest retained acquisition indexed'};
       const line = node('p', `${source.source_name} · ${labels[state]} `);
-      line.append(button('Repair this source…', () => recovery('full', [source.source_name])));
+      const repair = button('Repair this source…', () => recovery('full', [source.source_name]));
+      repair.disabled = maintenanceBusy;
+      line.append(repair);
       repairs.append(line);
     }
     dashboard.append(repairs);
@@ -234,7 +239,11 @@
       const warning = node('div', '', 'sync-warning');
       warning.append(node('strong', 'Verifying indexed changes found a mismatch.'), node('p', `${issue.source_name} · ${issue.unit}`), node('p', 'Verify this source again to check whether the mismatch still exists. Repair reindexes only inputs that still mismatch and clears each warning after verification passes.'));
       const issueActions = node('div', '', 'sync-actions');
-      issueActions.append(button('Verify this source again', () => verify(false, [issue.source_name])), button('Verify & repair this source', () => verify(true, [issue.source_name])), button('View details / copy diagnostics', async () => {
+      const verifyAgain = button('Verify this source again', () => verify(false, [issue.source_name]));
+      const repair = button('Verify & repair this source', () => verify(true, [issue.source_name]));
+      const recapture = button('Full recapture & reindex…', () => recovery('full', [issue.source_name]));
+      for (const action of [verifyAgain, repair, recapture]) action.disabled = maintenanceBusy;
+      issueActions.append(verifyAgain, repair, button('View details / copy diagnostics', async () => {
         const data = await call('/api/sync/issues');
         const details = data.issues.find(item => item.id === issue.id);
         const dialog = node('dialog', '', 'sync-dialog');
@@ -253,8 +262,7 @@
         };
         dialog.append(node('h2', 'Index integrity issue'), node('pre', JSON.stringify(details, null, 2)), copy, copyStatus, button('Close', () => dialog.close()));
         dialog.addEventListener('close', () => dialog.remove()); document.body.append(dialog); dialog.showModal();
-      }), button('Full recapture & reindex…', () => recovery('full', [issue.source_name])));
-      for (const action of issueActions.children) action.disabled = Boolean(status.busy);
+      }), recapture);
       warning.append(issueActions);
       dashboard.prepend(warning);
     }

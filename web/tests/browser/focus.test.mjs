@@ -540,7 +540,7 @@ test('Reader file copying keeps keyboard focus through delayed success, failure 
 test('Sync diagnostics copying keeps keyboard focus through delayed success, failure and retry', {skip}, async t=>{
   const issue={id:'mismatch',source_name:'codex',unit:'/sessions/rollout.jsonl'};
   const {page}=await open(t,{url:'/settings/sync',ready:'.sync-warning',api:{
-    'GET /api/sync/status':{...defaultApi['GET /api/sync/status'],issues:[issue]},
+    'GET /api/sync/status':{...defaultApi['GET /api/sync/status'],busy:true,maintenance_busy:true,issues:[issue]},
     'GET /api/sync/issues':{issues:[issue]},
   }});
   await page.getByRole('button',{name:'View details / copy diagnostics',exact:true}).click();
