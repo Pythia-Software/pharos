@@ -80,6 +80,32 @@ func TestQueryV3LibraryDefersDisplayFieldsUntilAfterPaging(t *testing.T) {
 	}
 }
 
+func TestQueryV3ReleasesAdmissionAfterExecutionError(t *testing.T) {
+	gate := &queryAdmission{limit: 1}
+	override(t, &heavyQueries, gate)
+	override(t, &queryV3MaxGroups, 1)
+	catalog, config := testCatalog(t)
+	seedToolCalls(t, catalog, 3)
+	publishProjections(t, catalog)
+	server := testServer(t, config, catalog)
+	q := groupRequest("id", qt.SummaryColumn{ID: "calls", Op: "count"})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, _, err := server.executeQueryV3(ctx, "tool_calls", nil, PharosToolCallsSchema(), q); err == nil || !strings.Contains(err.Error(), "tool_calls query:") {
+		t.Fatalf("expected an execution-time group budget error: %v", err)
+	}
+	gate.mu.Lock()
+	active, queued := gate.active, gate.wait.Len()
+	gate.mu.Unlock()
+	if active != 0 || queued != 0 || catalog.reader().Stats().InUse != 0 {
+		t.Fatalf("failed execution retained a slot or connection: active=%d queued=%d readers=%d", active, queued, catalog.reader().Stats().InUse)
+	}
+	q.Source.Where = []qt.WhereTerm{{Field: "id", Op: "=", Value: "call-0"}}
+	if _, _, err := server.executeQueryV3(ctx, "tool_calls", nil, PharosToolCallsSchema(), q); err != nil {
+		t.Fatalf("query after a failed execution could not use admission: %v", err)
+	}
+}
+
 func TestQueryV3LargeSourceHavingMetricsAndPaging(t *testing.T) {
 	override(t, &queryV3MaxRows, 100)
 	// A source larger than the row budget.
@@ -605,6 +631,9 @@ func TestQueryV3RecordKeywordsOnMapRowsAndMatchingOptions(t *testing.T) {
 // cycles, calendar grouping keys, distinct and summed minimums, and OR-of-AND
 // source filters, over a SQL dataset and over staged map rows.
 func TestQueryV3RunsEveryAdvertisedShape(t *testing.T) {
+	// Even one slot must handle cold staged sources and hour-dependent Usage
+	// metrics: their cache dependencies cannot wait inside an admitted query.
+	override(t, &heavyQueries, &queryAdmission{limit: 1})
 	previous := time.Local
 	time.Local = time.UTC
 	t.Cleanup(func() { time.Local = previous })

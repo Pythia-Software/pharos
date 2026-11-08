@@ -247,6 +247,23 @@ func isWarmOnly(ctx context.Context) bool { return ctx.Value(warmOnlyKey{}) == t
 // derivedValue is cachedValue without a type. A request marks the value as
 // used, which keeps it warm.
 func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(context.Context) (any, error), request bool) (any, error) {
+	if parent, _ := ctx.Value(derivedAdmissionKey{}).(*derivedAdmission); parent != nil {
+		// Do not hold a heavy slot while waiting for a shared dependency. A
+		// queue of parents waiting on queued children would otherwise deadlock.
+		parent.release()
+		ctx = context.WithValue(ctx, derivedAdmissionKey{}, (*derivedAdmission)(nil))
+		value, err := c.derivedValueUnadmitted(ctx, key, compute, request)
+		release, admissionErr := parent.gate.acquire(ctx)
+		if admissionErr != nil {
+			return nil, admissionErr
+		}
+		parent.release = release
+		return value, err
+	}
+	return c.derivedValueUnadmitted(ctx, key, compute, request)
+}
+
+func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, compute func(context.Context) (any, error), request bool) (any, error) {
 	// Attribution is published by writers (see ensureOrigins); publication
 	// advances the generation, so values computed from older origins are
 	// recomputed.
@@ -277,7 +294,7 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			if isWarmOnly(ctx) {
 				return nil, errDerivedCold
 			}
-			return compute(ctx)
+			return computeDerived(ctx, compute)
 		}
 		cache.version = version
 		if isWarmOnly(ctx) {
@@ -416,7 +433,7 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 					cache.pruneDelegationEntries(cache.version, time.Now())
 					cache.pruneThinkingEntries(cache.version, time.Now())
 				}()
-				value, err = compute(work)
+				value, err = computeDerived(work, compute)
 			}()
 		} else if request {
 			entry.usedAt = time.Now()
