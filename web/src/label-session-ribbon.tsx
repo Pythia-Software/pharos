@@ -191,5 +191,5 @@ export function RecursiveSessionRibbon(props:Props){
   return {events:props.events.filter(event=>timelineEventVisible(props.visibility??{},event)),position:(e:AgentEventLink)=>{const f=fraction(times.at(e));return f===null||f<0||f>1?null:f;},targetPosition:(e:AgentEventLink)=>{const f=fraction(times.targetAt(e));return f===null||f<0?null:Math.min(1,f);},href:props.eventHref};
  },[props.visibility,props.events,props.messages,props.boundaryMessages,props.boundaryMarks,props.marks,props.range[0],props.range[1],props.scale,props.eventHref]);
  props={...props,eventLayer};
- return <div className="lt-session-tree">{props.foldControl?<div className="lt-session-fold-anchor"><div className="lt-session-fold" style={{left:branchX(props.depth)-10}}>{props.foldControl}</div></div>:null}<RecursiveRibbonRow node={tree} props={props}/>{untimed?<small className="lt-session-untimed">{untimed} messages without timestamps cannot be placed on this clock.</small>:null}</div>;
+ return <div className="lt-session-tree">{props.foldControl?<div className="lt-session-fold-anchor"><div className="lt-session-fold" style={{left:branchX(props.depth)-8}}>{props.foldControl}</div></div>:null}<RecursiveRibbonRow node={tree} props={props}/>{untimed?<small className="lt-session-untimed">{untimed} messages without timestamps cannot be placed on this clock.</small>:null}</div>;
 }

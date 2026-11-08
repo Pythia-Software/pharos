@@ -1119,8 +1119,8 @@ button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--
 .lt-session-gutter{background:var(--panel)}
 .lt-session-fold-anchor{position:sticky;left:0;width:var(--lt-execution,175px);height:0;z-index:3;pointer-events:none}
 .lt-session-branches{position:absolute;left:0;top:0;fill:none;stroke:color-mix(in srgb,var(--muted) 55%,transparent);stroke-width:1;pointer-events:none}
-.lt-session-fold{top:9px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;pointer-events:auto}
-.lt-session-fold button,.lt-session-fold .lt-preview-fold{width:20px;height:20px;min-width:0;padding:2px;background:transparent}
+.lt-session-fold{top:11px;width:16px;height:16px;display:flex;align-items:center;justify-content:center;pointer-events:auto}
+.lt-session-fold .lt-preview-fold{width:16px;height:16px;min-width:0;padding:2px;background:transparent}
 .lt-session-fold .app-icon{width:13px;height:13px}
 .is-preview .lt-session-fold-anchor{z-index:12}
 .is-preview .lt-session-fold{pointer-events:none}
@@ -1148,6 +1148,8 @@ button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--
 .delegation-table tbody .delegation-label-cell{padding-top:0;padding-bottom:0}
 .delegation-node .lt-session-identity{position:relative;width:100%;max-width:330px}
 .session-fold{z-index:3;position:absolute;top:13px;width:20px;height:20px;box-sizing:border-box;padding:2px;background:var(--panel);border:1px solid var(--line);border-radius:3px}
+.delegation-inbox-session .session-fold,.lt-session-fold button{width:16px;height:16px;min-width:0;box-sizing:border-box;padding:2px;background:var(--panel);border:1px solid var(--line);border-radius:3px}
+.delegation-inbox-session .session-fold .app-icon,.lt-session-fold button .app-icon{width:10px;height:10px}
 .lt-session-identity[aria-current="true"]{cursor:default}
 .lt-session-root>summary,.lt-session-preview,.lt-session-empty-root{position:relative}
 .delegation-inbox-row.current::after,.delegation-lane-current .lt-session-root>summary::after,.delegation-lane-current .lt-session-preview::after,.delegation-lane-current .lt-session-empty-root::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 0 1px var(--accent);pointer-events:none;z-index:13}
