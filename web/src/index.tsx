@@ -1527,7 +1527,7 @@ function MCPSettingsPage() {
   }
 
   async function copy(label: string, value: string) {
-    try { if (window.pharosCopyText) await window.pharosCopyText(value); else await navigator.clipboard.writeText(value); setCopied(label); window.setTimeout(() => setCopied(""), 2000); }
+    try { await copyText(value); setCopied(label); window.setTimeout(() => setCopied(""), 2000); }
     catch { setError("Could not copy to clipboard. Select the text and copy it manually."); }
   }
 

@@ -324,19 +324,16 @@ unavailable measurement or contaminated comparison stays unresolved.
 All production activation and comparison-path retirement decisions remain gated
 by those results. See [the acceptance protocol](work-execution-acceptance.md).
 
-## Portability integration after the trials
+## Measurement coverage and portability
 
-The stack now includes the November 7–8 platform adapters through master
-`e0d34885`. [The portability contract](work-portability.md) separates portable
-scheduling and cooperative CPU grants from native observations and actions.
-Task accounting and resource history preserve unavailable counters, verified
-process identity and memory lower bounds. The two manual probes share one
-physical-memory sampler: missing physical counters are null, while Go runtime
-memory is recorded separately. These changes do not extend native OS support.
+[The execution contract](work-portability.md) separates portable scheduling and
+cooperative CPU grants from native observations and actions. The manual probes
+share one physical-memory sampler: missing physical counters are null, while
+Go runtime memory is recorded separately.
 
-The production-copy measurements above remain evidence for their recorded
-source commits. No performance trial was rerun for this integration, and no
-performance acceptance or production activation is implied.
+Production-copy measurements remain evidence for their recorded source commits.
+Integrating new platform adapters does not validate performance for a newer
+binary, another OS or a different measurement basis.
 
 New harness reports identify per-window memory and disk coverage as
 `tree-coverage-v1`. Failed process reads, missing identity, whole-sample gaps
@@ -345,27 +342,6 @@ Earlier reports remain readable, but missing coverage cannot establish a pass;
 recorded trial reports have not been rewritten. The present harness supervises
 its original POSIX process group; detached, reparented descendants are outside
 that cleanup guarantee and require a separate validated supervisor before a
-workload that creates them can be admitted.
-
-Portability integration checks on the final code passed:
-
-- Go fast and full suites (archive package: 38.40 s and 48.03 s).
-- Focused resource-accounting race checks, plus five repeated race runs of
-  the lease, helper-counter and concurrent-maintenance fixtures.
-- Actual retained-binary recovery/publication fixtures, probe memory/CPU
-  fixtures and lifecycle guard/report/verdict fixtures.
-- Node 24 web checks and full matrix: 1,560 passed, three skipped in each.
-- Both focused background-control/activity-panel browser cases passed.
-- All 39 Python experiment-harness tests passed.
-- Linux amd64 archive test-binary cross-compilation, including manual probes,
-  and Windows amd64 production-source cross-compilation passed with cgo off.
-  Windows archive test compilation still stops on existing `syscall.Flock`
-  uses in `app_update_test.go`; that file is unchanged by this stack. No
-  native Linux or Windows execution or support is claimed.
-
-The first full-suite attempt exposed an unsynchronized call-count map shared
-by the concurrent fake tasks in `TestRunLibraryReportsEachKindAndWithdrawsOnCancel`.
-That fixture now synchronizes its writes and snapshot; the repeated race
-checks and subsequent full suite passed. The independent review's unverified
-self-lease, helper-note and incomplete probe-CPU findings were also resolved.
-Private logs and review receipts remain under `.context/portability/`.
+workload that creates them can be admitted. Cross-compilation establishes build
+compatibility only; new native adapters need target-OS lifecycle and acceptance
+tests before their results can be treated as equivalent.
