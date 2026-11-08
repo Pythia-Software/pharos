@@ -17,9 +17,10 @@ package archive
 // (sameCallCopies); those on a cycle are no longer copies either.
 // v6: a launch whose result ends in a validated harness usage footer
 // (readLegacyLaunchOutcome) created the agent it names, retained or not.
-// v7: scoped source names and first human/request excerpts replace native-ID
+// v7: a Workflow's acknowledged run links each child to its issuing session.
+// v8: scoped source names and first human/request excerpts replace native-ID
 // labels, consistently across mirrored and continued recordings.
-const executionResolverVersion = "execution-v7"
+const executionResolverVersion = "execution-v8"
 
 // sourceKind names what a sourceRef locates.
 type sourceKind string

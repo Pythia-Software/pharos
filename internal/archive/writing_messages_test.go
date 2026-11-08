@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -115,6 +116,18 @@ func TestWritingMessagesFilterBySpanAndSplitText(t *testing.T) {
 		t.Fatalf("work filter kept %d rows", len(byWork))
 	}
 	server := testServer(t, config, catalog)
+	// The Human Words heatmap first asks for each conversation's words per
+	// local day. Exercise the real V3 calendar grouping used by the chart.
+	heatmap := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(),
+		Source: qt.WireQuery{Where: []qt.WhereTerm{{Field: "conversation_id", Op: "is_not_null"}, {Field: "conversation_id", Op: "!=", Value: ""}}},
+		Result: qt.WireQuery{Select: []string{"id"}, Limit: 1},
+		Metrics: []qt.AggSpec{{ID: "trend", Op: "sum", Field: "typed_words", GroupBy: []string{"sent_at", "conversation_id"}, GroupLimit: 10000,
+			DateGrouping: &qt.MetricDateGrouping{Field: "sent_at", Interval: "day", TimeZone: "America/Denver", Range: "query"}}}}
+	w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/writing_messages/query-v3", heatmap)
+	var heatResult qt.QueryResultV3
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &heatResult) != nil || len(heatResult.Metrics) != 1 || len(heatResult.Metrics[0].Buckets) != 3 {
+		t.Fatalf("conversation-day heatmap inputs: %d %s", w.Code, w.Body.String())
+	}
 	for _, sample := range []struct {
 		field, value string
 		count        int

@@ -43,6 +43,9 @@ export type AnalysisMeasure = {
   // a measure without a band of its own: Distribution draws its histogram
   // on those bins (distributionBins). A band implies it.
   valueBins?: string;
+  // A distribution of this measure after aggregating records per unit and
+  // period, rather than a value already stored on each record.
+  heatmapUnit?: { unit: string; bins: AxisBins };
   // Why a distribution of this measure says nothing, such as a count of
   // rare events that nearly every record has none of. Distribution then
   // does not offer it.
@@ -141,6 +144,8 @@ export type AnalysisCatalog = {
   // count names the measure that counts records, which a distribution
   // heatmap draws (heatmapSource).
   records: { label: string; plural: string; note: string; count?: string };
+  // Internal source for a heatmap whose observations are grouped units.
+  trendHeatmapUnit?: { scheme: BinScheme };
   // The calendar keys each cycle folds, and how they name their slots
   // (CycleKey). Without any, no cycle view; without one, that cycle is
   // offered disabled.
@@ -481,11 +486,12 @@ export const trendDrawing = (catalog: AnalysisCatalog, state: ResolvedAnalysis):
 // additive measure) in it. Without a breakdown, a measure with a binned band
 // of its own draws its records' distribution; by a binned band, an additive
 // measure draws its total over the band's value.
-export type HeatmapAxis = { breakdown: string; bins: AxisBins; counted: boolean };
+export type HeatmapAxis = { breakdown: string; bins: AxisBins; counted: boolean; unit?: string };
 export function heatmapAxis(catalog: AnalysisCatalog, state: Pick<AnalysisState, "metric" | "split">): HeatmapAxis | undefined {
   const measure = catalog.measures[state.metric];
   if (!measure) return;
   if (state.split === noSplit) {
+    if (measure.heatmapUnit && typeof catalog.units[measure.heatmapUnit.unit]?.key === "string" && catalog.timestamp && measure.additive && measure.op === "sum" && !measure.ratio) return { breakdown: noSplit, bins: measure.heatmapUnit.bins, counted: true, unit: measure.heatmapUnit.unit };
     const bins = measure.band ? catalog.breakdowns[measure.band]?.bins : undefined;
     return bins && catalog.records.count ? { breakdown: measure.band!, bins, counted: true } : undefined;
   }
@@ -508,6 +514,17 @@ export const heatmapBins = "heatmap:bins";
 export function heatmapSource<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): { catalog: AnalysisCatalog; state: T } {
   const axis = state.display === "heatmap" ? heatmapAxis(catalog, state) : undefined;
   if (!axis) return { catalog, state };
+  if (axis.unit) {
+    const unit = catalog.units[axis.unit], key = unit.key;
+    if (typeof key !== "string") return { catalog, state };
+    const measure = catalog.measures[state.metric];
+    return {
+      catalog: { ...catalog, present: undefined, trend: { ...catalog.trend, allSeries: true }, trendHeatmapUnit: { scheme: axis.bins.scheme },
+        measures: { ...catalog.measures, [state.metric]: { ...measure, where: [...measure.where ?? [], ...unit.where] } },
+        breakdowns: { ...catalog.breakdowns, [heatmapBins]: { label: axis.bins.label, fields: [key] } } },
+      state: { ...state, split: heatmapBins, selection: undefined, norm: false, percentiles: [], rollingOp: "mean" },
+    };
+  }
   const measure = catalog.measures[state.metric], valued = { field: axis.bins.field, op: "is_not_null" as const, value: "" };
   const weight: AnalysisMeasure = axis.counted ? { ...catalog.measures[catalog.records.count!], where: [...measure.where ?? [], valued] } : { ...measure, where: [...measure.where ?? [], valued] };
   return {
@@ -1075,6 +1092,10 @@ export function analysisNote(catalog: AnalysisCatalog, input: AnalysisState): st
       ? `One observation is one whole ${per} in your time zone in the range, idle ${per}s included${idle}. ${per === "hour" ? "Partial first and last hours, and the current hour," : "A partial first day, and the current day,"} are left out. A slot opens the records of its whole ${per}s; in a range without a start, or with more than about 48 of them, it has no single drill-down. The grouped query lists the ${per === "hour" ? "hourly" : "daily"} totals.`
       : state.cycle === "hour" ? `One observation is one complete clock hour in the range, placed at its hour in your time zone, idle hours included${idle}. Partial first and last hours are left out. An hour bar spans many dates, so it has no single drill-down; hourly usage cannot yet open as a grouped query, so the link opens the records.`
       : `One observation is one complete recorded day in the range, idle days included${idle}. Days are the dates the recording Mac assigned in its own time zone. The range starts at your next local midnight; the current day is left out. When the recording Mac's time zone differs from yours, a date just before your first date can be returned with part of its records; it is left out and reported. Select the grouped query for the daily totals; a weekday bar spans many dates, so it has no single drill-down.`);
+  }
+  else if (isTrendView(state.view) && state.display === "heatmap" && measure.heatmapUnit && state.split === noSplit) {
+    const heatUnit = catalog.units[measure.heatmapUnit.unit];
+    parts.push(`Each period counts ${heatUnit.plural.toLowerCase()} by their total ${measure.label.toLowerCase()} in that period, using only matching messages. A ${heatUnit.label.toLowerCase()} active in several periods appears in each.`);
   }
   else if (unit) parts.push(`${unit.note} One observation is one ${unit.label.toLowerCase()}: its ${measure.label.toLowerCase()} over all its matching records in the range.`);
   else parts.push(`One observation is one ${catalog.records.label.toLowerCase()}. ${catalog.records.note}`);

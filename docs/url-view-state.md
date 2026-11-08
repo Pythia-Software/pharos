@@ -111,6 +111,22 @@ Caller-source filtering preserves each run's original portion of the message.
 
 ## Agent interface
 
+Workspace navigation scopes native `conversation`, `message`, `call`, and `at`
+references to their source workspace. Opening a different workspace or leaving
+the reader drops those selections, local event IDs, session selections, timeline
+bounds, and pagination. Presentation preferences and maps keyed by stable content
+identities can survive navigation; Back/Forward restores the original URL.
+Explicit copied links retain their own selections. A mismatched saved link
+resolves the conversation's current workspace before mounting the reader, and
+an unavailable conversation or message is reported visibly.
+
+Conversation-only `/conversation/{id}` links use the service's current-workspace
+redirect. Source-message links use the source message's recorded workspace;
+when only its conversation identity is known, they use that redirect rather
+than borrowing a containing conversation's workspace. Pending workspace reads
+are cancelled when another page or workspace takes ownership of the view, so
+late overview, resolution and transcript responses cannot replace it.
+
 On work pages, **Hierarchy & usage** uses `delegation_scope=self|all` for both its visible metrics and sorting (`all`, or **Self + children**, is the default). The selection survives returning from a ranking to the hierarchy. Each session's **Timeline** button sets `explorer=timeline`, `delegation_session`, `delegation_start`/`delegation_end` to that session's own evidence span, and `delegation_page` to its hierarchy page. It opens `disclosures["delegation-labels:<session ID>:session"]` and resets deeper event disclosures for that session, showing one event level. Session names continue to open the conversation reader.
 
 Ask Pharos uses the existing MCP CLI-style interface:
@@ -154,7 +170,7 @@ cached geometry; scrolling does not remeasure transcript elements.
 
 ## Attention
 
-`highlight` is repeatable; `reveal` names one landing target. Reveal means **scroll and distinctive persistent highlighting**, without moving browser/keyboard focus. Ordinary tabbing and scrolling never change these parameters. Clear highlights removes the instructions.
+`highlight` is repeatable; `reveal` names one landing target. Reveal means **scroll and distinctive persistent highlighting**, without moving browser/keyboard focus. Ordinary tabbing and scrolling never change these parameters. Clear highlights removes the instructions. The right-click menu offers Clear Highlights anywhere on the page while highlights are present. Escape also clears them by default, after active dialogs and editors have handled it; the shortcut can be disabled in Settings → App preferences.
 
 Targets include the page, controls, named sections, card definition IDs, message/tool-call IDs, session IDs, records in the current result page, and literal text. IDs refer to data/semantic identity rather than DOM order. A row target highlights its actual rendered row through public table extension points. It does not open a modal or broaden a query.
 

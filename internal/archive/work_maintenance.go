@@ -548,8 +548,10 @@ var errWorkHeld = errors.New("held")
 
 // workRequestHold is a blocker a waiting caller should yield to. A model
 // pass has only tried its invocation lock: another pass owns it, so the
-// chain skips this turn as classic did. Other writer waits remain ordinary
-// waits; an independent API request has no awaiter to withdraw its demand.
+// chain skips this turn as classic did. A fingerprint pass waiting for
+// analysis also yields the coordinator, retaining its retry in the background
+// loop. Other writer waits remain ordinary waits; an independent API request
+// has no awaiter to withdraw its demand.
 func workRequestHold(facts workRequestFacts) *workBlocker {
 	if opTerminal(facts.State) {
 		return nil
@@ -564,7 +566,8 @@ func workRequestHold(facts workRequestFacts) *workBlocker {
 		// Nothing of it runs and one of its kinds is held: it cannot end.
 		for _, task := range facts.Tasks {
 			model := task.Kind == kindLabels || task.Kind == kindAgentEvents
-			if holds(task.Blocker) || model && task.Blocker != nil && task.Blocker.Reason == workBlockedWriter {
+			fingerprints := task.Kind == kindFingerprints && task.Blocker != nil && task.Blocker.Reason == workBlockedDependency
+			if holds(task.Blocker) || model && task.Blocker != nil && task.Blocker.Reason == workBlockedWriter || fingerprints {
 				return task.Blocker
 			}
 		}
@@ -602,7 +605,11 @@ func (w *workService) await(ctx context.Context, id uint64, record *workOperatio
 			default:
 			}
 			w.runner.Cancel(id)
-			return facts, fmt.Errorf("work request %d %w: %s", id, errWorkHeld, defaultString(hold.Detail, hold.Reason))
+			cause := errWorkHeld
+			if hold.Reason == workBlockedDependency {
+				cause = errFingerprintWaiting
+			}
+			return facts, fmt.Errorf("work request %d %w: %s", id, cause, defaultString(hold.Detail, hold.Reason))
 		}
 	}
 }

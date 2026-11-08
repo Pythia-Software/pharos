@@ -113,7 +113,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     const guides = (axis.bins.edges ?? []).flatMap((edge, index) => index === 0 || !band.order?.[index] ? [] : [{ value: edge, label: band.values?.[band.order[index]] ?? band.order[index] }]);
     return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
       <DataReadinessEmpty id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty}><TrendHeatmap title={title} controls={controls} action={action} titleSlot={links && titled ? headline : undefined} heatmap={trendHeatmap(built.buckets, built.series, axis.bins.scheme, view.percentiles)}
-        period={view.period} noun={axis.counted ? catalog.records.plural.toLowerCase() : weight.unit} label={axis.bins.label} format={value} amount={weight.op === "count" ? undefined : amount => format(amount, weight)}
+        period={view.period} noun={axis.unit ? catalog.units[axis.unit].plural.toLowerCase() : axis.counted ? catalog.records.plural.toLowerCase() : weight.unit} label={axis.bins.label} format={value} amount={axis.counted || weight.op === "count" ? undefined : amount => format(amount, weight)}
         rollingPeriods={view.rollingPeriods} guides={guides} loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} /></DataReadinessEmpty>
       {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
       {children}

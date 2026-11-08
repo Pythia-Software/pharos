@@ -36,6 +36,185 @@ func findClaim(claims []storedExecutionClaim, kind, subject string) *storedExecu
 	return nil
 }
 
+func workflowAck(root, run string) string {
+	return jsonText(map[string]any{"tool": "Workflow", "details": map[string]any{
+		"runId": run, "status": "async_launched", "taskType": "local_workflow",
+		"transcriptDir": "/logs/" + root + "/subagents/workflows/" + run,
+	}})
+}
+
+func TestClaudeWorkflowAcknowledgement(t *testing.T) {
+	ack := workflowAck("root", "wf_run")
+	for _, tc := range []struct {
+		name, native, result string
+		want                 bool
+	}{
+		{"root launcher", "root", ack, true},
+		{"nested launcher", "root:subagent:agent-owner", ack, true},
+		{"different session", "other", ack, false},
+		{"failed launch", "root", strings.Replace(ack, `"tool":"Workflow"`, `"tool":"Workflow","is_error":true`, 1), false},
+		{"report from Bash", "root", strings.Replace(ack, `"tool":"Workflow"`, `"tool":"Bash"`, 1), false},
+		{"prose quoting acknowledgement", "root", jsonText(map[string]any{"tool": "Workflow", "content": ack}), false},
+		{"different run directory", "root", strings.Replace(ack, `"runId":"wf_run"`, `"runId":"wf_other"`, 1), false},
+		{"missing session directory", "root", `{"tool":"Workflow","details":{"runId":"wf_run","status":"async_launched","taskType":"local_workflow"}}`, false},
+		{"invalid run", "root", workflowAck("root", "../wf_run"), false},
+		{"unknown status", "root", strings.Replace(ack, "async_launched", "failed", 1), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := claudeWorkflowAcknowledgement(tc.native, tc.result); (got != "") != tc.want {
+				t.Fatalf("acknowledgement = %q, accepted want %v", got, tc.want)
+			}
+		})
+	}
+	for _, native := range []string{
+		"root:subagent:workflows/wf_run/agent-one/nested/agent-two",
+		"root:subagent:workflows/wf_run/agent-",
+		"root:subagent:agent-one",
+	} {
+		if _, _, ok := claudeWorkflowOf(native); ok {
+			t.Fatalf("not an immediate workflow member: %s", native)
+		}
+	}
+}
+
+func TestClaudeWorkflowEvidenceIngestAndBackfill(t *testing.T) {
+	c, _ := testCatalog(t)
+	root, owner := "workflow-root", "workflow-root:subagent:agent-owner"
+	id := func(native string) string { return stableID("conversation", "claude", "local", native) }
+	record := WorkspaceRecord{SourceID: root, SourceKind: "claude", Account: "local", Conversations: []ConversationRecord{
+		{NativeID: root, Provider: "claude", Account: "local", Messages: []MessageRecord{
+			{NativeID: "launch-owner", Role: "assistant", Kind: "delegation", CallID: "owner-call", Text: `{"tool":"Agent","input":{"prompt":"Check tools"}}`},
+			{NativeID: "owner-ack", Role: "tool", Kind: "delegation_result", CallID: "owner-call", Text: `{"tool":"Agent","details":{"agentId":"owner"}}`},
+		}},
+		{NativeID: owner, ParentNativeID: root, Provider: "claude", Account: "local", AgentDepth: 1, Messages: []MessageRecord{
+			{NativeID: "assignment", Role: "agent", Kind: "message", Text: "Check tools"},
+			{NativeID: "workflow-call", Role: "assistant", Kind: "tool_call", CallID: "wf-call", Text: `{"tool":"Workflow","input":{"script":"return parallel([agent('one'), agent('two')])"}}`},
+			{NativeID: "workflow-result", Role: "tool", Kind: "tool_result", CallID: "wf-call", Text: workflowAck(root, "wf_run")},
+		}},
+	}}
+	children := []string{}
+	for _, agent := range []string{"one", "two"} {
+		native := root + ":subagent:workflows/wf_run/agent-" + agent
+		children = append(children, id(native))
+		record.Conversations = append(record.Conversations, ConversationRecord{NativeID: native, ParentNativeID: root, Provider: "claude", Account: "local", AgentDepth: 1,
+			Messages: []MessageRecord{{NativeID: "task-" + agent, Role: "agent", Kind: "message", Text: "[Workflow harness — computed task] " + agent}}})
+	}
+	reconcileClaudeLineage(&record)
+	ingestRecordTx(t, c, record)
+	check := func(stage string) {
+		t.Helper()
+		r := fixtureResolution(t, c)
+		for _, child := range children {
+			binding := r.BindConversation(child)
+			x := r.Execution(binding.ExecutionID)
+			if x == nil || binding.ExecutionID != executionID("conversation:"+child) || x.Parent.State != parentResolved ||
+				x.Parent.ParentID != executionID("conversation:"+id(owner)) || x.Parent.Certainty < evidenceDerived {
+				t.Fatalf("%s child %s = %+v", stage, child, x)
+			}
+			if ancestry := r.Ancestry(x.ID); !ancestry.Known || ancestry.Depth != 2 {
+				t.Fatalf("%s ancestry = %+v", stage, ancestry)
+			}
+		}
+	}
+	check("ingest")
+	claim := findClaim(executionClaimsOf(t, c.DB, id(owner)), evidenceWorkflowLaunch, "launch:wf-call")
+	if claim == nil || claim.Authority != authorityVerified || claim.Object != claudeWorkflowKey("local", root, "wf_run") {
+		t.Fatalf("workflow claim = %+v", claim)
+	}
+	// A Workflow is an orchestration call, not an extra child execution or a
+	// single launch handle that could merge its two independently retained agents.
+	var handles int
+	if err := c.DB.QueryRow(`SELECT count(*) FROM agent_sessions WHERE conversation_id=? AND native_id='wf-call'`, id(owner)).Scan(&handles); err != nil || handles != 0 {
+		t.Fatalf("workflow launch handles = %d (%v)", handles, err)
+	}
+	fixtureExec(t, c, `DELETE FROM execution_claims`)
+	fixtureExec(t, c, `DELETE FROM execution_evidence_state`)
+	check("legacy rows")
+	if _, err := c.BackfillExecutionEvidence(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	check("retained backfill")
+	if claim := findClaim(executionClaimsOf(t, c.DB, id(owner)), evidenceWorkflowLaunch, "launch:wf-call"); claim == nil || claim.Authority != authorityVerified {
+		t.Fatalf("backfilled workflow claim = %+v", claim)
+	}
+	before := sourceGeneration(t, c)
+	if n, err := c.BackfillExecutionEvidence(t.Context(), 100); err != nil || n != 0 || sourceGeneration(t, c) != before {
+		t.Fatalf("repeat backfill: n=%d err=%v", n, err)
+	}
+}
+
+func TestRetainedWorkflowEvidenceFollowsCallChanges(t *testing.T) {
+	for _, tc := range []struct{ name, change string }{
+		{"deleted call", `DELETE FROM messages WHERE id='workflow-call'`},
+		{"renamed tool", `UPDATE messages SET text='{"tool":"Bash"}' WHERE id='workflow-call'`},
+		{"malformed call", `UPDATE messages SET text='invalid JSON' WHERE id='workflow-call'`},
+		{"changed call ID", `UPDATE messages SET call_id='other-call' WHERE id='workflow-call'`},
+		{"cleared call ID", `UPDATE messages SET call_id='' WHERE id='workflow-call'`},
+		{"changed kind", `UPDATE messages SET kind='reasoning' WHERE id='workflow-call'`},
+		{"duplicate call", `INSERT INTO messages(id,conversation_id,native_id,role,kind,call_id,text,content_hash)
+		 VALUES('duplicate','root','duplicate','assistant','tool_call','call','{"tool":"Workflow"}','duplicate')`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := executionFixture(t, executionFixtureConversation{id: "root", provider: "claude"},
+				executionFixtureConversation{id: "child", depth: 1, provider: "claude"})
+			fixtureExec(t, c, `UPDATE conversations SET native_id='root:subagent:workflows/wf_run/agent-child' WHERE id='child'`)
+			insertCall := func() {
+				fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,call_id,text,content_hash)
+				 VALUES('workflow-call','root','workflow-call','assistant','tool_call','call','{"tool":"Workflow"}','call')`)
+			}
+			insertCall()
+			fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,call_id,text,content_hash)
+			 VALUES('result','root','result','tool','tool_result','call',?,'result')`, workflowAck("root", "wf_run"))
+			backfill := func() int {
+				t.Helper()
+				n, err := c.BackfillExecutionEvidence(t.Context(), 100)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return n
+			}
+			checkParent := func(want parentState) {
+				t.Helper()
+				r := fixtureResolution(t, c)
+				x := r.Execution(r.BindConversation("child").ExecutionID)
+				if x == nil || x.Parent.State != want || want == parentResolved && x.Parent.ParentID != "conversation:root" {
+					t.Fatalf("child parent = %+v, want %s", x, want)
+				}
+			}
+			backfill()
+			checkParent(parentResolved) // warm the cache with the saved claim
+			fixtureExec(t, c, tc.change)
+			var version string
+			if err := c.DB.QueryRow(`SELECT version FROM execution_evidence_state WHERE conversation_id='root'`).Scan(&version); err != nil {
+				t.Fatal(err)
+			}
+			if version != executionEvidenceStale+executionEvidenceVersion {
+				t.Fatalf("changed Workflow call left evidence current: %s", version)
+			}
+			checkParent(parentMissing)
+			if backfill() == 0 {
+				t.Fatal("backfill skipped the changed Workflow call")
+			}
+			checkParent(parentMissing)
+			if claim := findClaim(executionClaimsOf(t, c.DB, "root"), evidenceWorkflowLaunch, ""); claim != nil {
+				t.Fatalf("repair retained an obsolete workflow claim: %+v", claim)
+			}
+			if backfill() != 0 {
+				t.Fatal("repaired evidence did not stay current")
+			}
+			// Inserting the valid call again must also invalidate the repaired
+			// state, so the acknowledgement can regain its parent link.
+			fixtureExec(t, c, `DELETE FROM messages WHERE id IN ('workflow-call','duplicate')`)
+			insertCall()
+			checkParent(parentResolved)
+			if backfill() == 0 {
+				t.Fatal("backfill skipped the restored Workflow call")
+			}
+			checkParent(parentResolved)
+		})
+	}
+}
+
 // stampExecutionDigests records on seeded ledger rows the execution
 // dependency digest a run would have built them at, and propagates, as a
 // fixture that stands for built derivatives needs: a row without a digest
@@ -460,6 +639,8 @@ func TestRetainedEvidenceFollowsStoredRows(t *testing.T) {
 	// A deletion of the result leaves no acknowledgement, before and after
 	// re-derivation; an unrelated message changes nothing.
 	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('note','root','note','assistant','reasoning','thinking','note')`)
+	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,call_id,text,content_hash)
+	 VALUES('unrelated-call','root','unrelated-call','assistant','tool_call','unrelated','{"tool":"Bash"}','bash')`)
 	if version("root") != executionEvidenceVersion {
 		t.Fatalf("an unread message marked the evidence stale: %s", version("root"))
 	}

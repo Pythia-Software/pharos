@@ -106,6 +106,25 @@ test('every dashboard topic retains its requested chart and dataset in a saved U
   }
 });
 
+test('Human Words heatmap cards retain the conversation distribution and describe their controls', async t => {
+  fixture(t);
+  const human = analysisCatalogs.human;
+  const state = { ...dashboardDefaults.human, metric: 'typed', split: 'none', display: 'heatmap', period: 'day', rollingPeriods: 0, scale: 'logarithmic' };
+  const filters = [{ field: 'sent_at', op: '>=', value: '-30d' }, { field: 'sent_at', op: '<', value: '+0s' }];
+  const url = dashboardCardURL('/analyze?analyze_topic=human', human, state, filters);
+  const restored = readDashboardCard(url);
+  assert.equal(restored.state.display, 'heatmap');
+  const copy = dashboardCardMetadata(url, 'chart', schemas.writing_messages);
+  assert.match(copy.title, /conversations per day by typed words per conversation/i);
+  assert.match(copy.description, /heatmap values per day/i);
+  assert.doesNotMatch(copy.description, /logarithmic scale/i, 'the retained trend scale does not control the heatmap');
+  const preview = await loadDashboardCardPreview(url, schemas.writing_messages, undefined, undefined, now);
+  assert.equal(preview.state, 'ready');
+  assert.ok(preview.grid.cells.some(row => row.some(cell => cell !== null)));
+  assert.match(preview.note, /conversation.*period/i);
+  assert.match(preview.grid.values.flat().filter(Boolean).join(' '), /conversations/);
+});
+
 test('every dashboard creation target supplies bounded default copy from its own controls and filters', t => {
   fixture(t);
   const check = (url, schema) => {

@@ -781,6 +781,11 @@ export const defaultApi = {
     for (const key of body?.delete ?? []) delete state.preferences[key];
     return { values: state.preferences };
   },
+  "POST /api/session-preferences": ({ body, state }) => {
+    Object.assign(state.preferences, body?.set);
+    for (const key of body?.delete ?? []) delete state.preferences[key];
+    return { buffered: true };
+  },
   "PUT /api/query-snapshots": ({body,query,state}) => {
     state.querySnapshots ??= {};
     state.querySnapshots[`${query.get("dataset")}:${body.code}`]=body;

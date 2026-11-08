@@ -4,6 +4,7 @@ import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabe
 import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart } from "./chart-range";
 import { otherSeriesColor } from "./chart-colors";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, withoutZeroes, type ChartBucket, type ChartSeries } from "./chart-series";
+import { binOf } from "./value-bins";
 import { drawsLevels, isTrendView, heatmapAxis, trendDrawing, aggregate, completeStart, partClause, predicateCount, selectionWhere, periodField, measureExpression, normalizeAnalysis, percentileFraction, trendKind, unique, type AnalysisCatalog, type PercentileLevel, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
 
 // Over time, driven by a catalog: any measure, over its own population, by
@@ -47,7 +48,7 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   // Days, weeks and months are recorded calendar fields. Hours of a
   // timestamped dataset group the timestamp by UTC hour, as the hour cycle
   // does, and the chart places each at the viewer's hour.
-  const interval = periodField(state.period), hourly = timestampHours(catalog, state), timestamped = !catalog.periods[interval] && Boolean(catalog.timestamp);
+  const interval = periodField(state.period), hourly = timestampHours(catalog, state), timestamped = Boolean(catalog.timestamp) && (Boolean(catalog.trendHeatmapUnit) || !catalog.periods[interval]);
   const count = trendPeriodCount(state), field = timestamped ? catalog.timestamp! : catalog.periods[interval]!, cumulative = state.display === "cumulative";
   const dateGrouping = timestamped ? { dateGrouping: { field, interval, timeZone: hourly ? "UTC" : zone, includeEmpty: false, range: "query" as const } } : {};
   const slice = breakdown?.fields.length === 1 ? breakdown.fields[0] : undefined;
@@ -70,7 +71,7 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   const clauses: AggregationClause[] = (derived ? derived.inputs.fields.map(input => ({ id: `trend:input:${input}`, op: "sum" as const, field: input, groupBy: [field, ...derived.inputs.groupBy], label: input }))
     : components ? components.parts.map(part => ({ id: `trend:${part.key}`, op: "sum" as const, field: part.field, groupBy: [field], label: part.label }))
     : measure.ratio ? [{ id: "trend", ...partClause(measure.ratio[0]), groupBy, label: `${measure.label}: numerator` }, { id: "trend:denominator", ...partClause(measure.ratio[1]), groupBy, label: `${measure.label}: denominator` }]
-    : [{ id: "trend", ...aggregate(measure), groupBy, label: measure.label }]).map(clause => ({ ...clause, ...dateGrouping }));
+    : [{ id: "trend", ...aggregate(measure), groupBy, label: measure.label }]).map(clause => ({ ...clause, ...dateGrouping, ...catalog.trendHeatmapUnit ? { groupLimit: 10000 } : {} }));
   if(state.share&&measure.populationShare)clauses.push({id:'trend:population',...aggregate(measure),groupBy:[field],label:'All messages in interval',...dateGrouping});
   const supporting = measure.ratio ? [{ id: "trend:ratio", op: "sum" as const, expression: measureExpression(measure), groupBy, label: measure.label, ...dateGrouping }, ...clauses] : clauses.filter(clause=>clause.id!=="trend:population");
   // The supporting query covers what is drawn: with whole periods, from the
@@ -135,6 +136,9 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
       return { ...empty, error: found?.buckets.find(bucket => bucket.error)?.error ?? "The trend needs complete totals for every period. Choose a shorter range or a longer time bucket." };
     }
   }
+  if (catalog.trendHeatmapUnit && results.some(result => result.buckets.some(bucket => bucket.keys[1] == null || bucket.keys[1] === "" || bucket.value == null || !Number.isFinite(Number(bucket.value))))) {
+    return { ...empty, error: "The heatmap needs a word total and conversation for every period." };
+  }
   const result = (id: string) => results.find(item => item.id === id)?.buckets ?? [];
 
   const bounds = timeBounds(trend.range, catalog.time, now);
@@ -155,7 +159,22 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   const first = amounts[0]?.key;
   const plotted = (value: unknown) => { const key = periodKey(parseDay(String(value)), state.period, count); return cumulative && first && key < first ? first : key; };
   const name = (bucketKeys: unknown[]) => !breakdown ? total : breakdown.fields.length === 1 ? String(bucketKeys[0] ?? "") : JSON.stringify(bucketKeys);
-  const rows = (id: string): Rows => result(id).map(bucket => [plotted(bucket.keys[0]), name(bucket.keys.slice(1)), Number(bucket.value) || 0]);
+  const rows = (id: string): Rows => {
+    const unit = catalog.trendHeatmapUnit;
+    if (unit && id === "trend") {
+      // Combine the same conversation across a multi-day/hour period before
+      // placing its total in a bin. Each conversation contributes once.
+      const totals = new Map<string, { period: string; value: number }>();
+      for (const bucket of result(id)) {
+        const period = plotted(bucket.keys[0]), identity = JSON.stringify([period, bucket.keys[1]]);
+        const entry = totals.get(identity) ?? { period, value: 0 };
+        entry.value += Number(bucket.value) || 0;
+        totals.set(identity, entry);
+      }
+      return [...totals.values()].flatMap(({ period, value }) => { const bin = binOf(value, unit.scheme); return bin === null ? [] : [[period, String(bin), 1] as [string, string, number]]; });
+    }
+    return result(id).map(bucket => [plotted(bucket.keys[0]), name(bucket.keys.slice(1)), Number(bucket.value) || 0]);
+  };
   const byKey = (buckets: ChartBucket[]) => new Map(buckets.map(bucket => [bucket.key, bucket]));
   const valueLabel = (field: string, value: unknown) => value === null || value === undefined || value === "" ? breakdown?.empty ?? "Unknown" : breakdown?.values?.[String(value)] ?? catalog.labels?.[field]?.(String(value)) ?? label(field, value);
   const seriesLabel = (text: string) => breakdown!.fields.length === 1 ? valueLabel(breakdown!.fields[0], text) : (JSON.parse(text) as unknown[]).map((value, index) => valueLabel(breakdown!.fields[index], value)).join(" · ");
@@ -299,7 +318,7 @@ export function trendTitle(catalog: AnalysisCatalog, input: AnalysisState): stri
   // A heatmap counts the records, or totals the measure, by the value its
   // bins hold: "Sessions per day by messages per session".
   const heatmap = state.display === "heatmap" ? heatmapAxis(catalog, state) : undefined;
-  if (heatmap) return `${heatmap.counted ? catalog.records.plural : measure.label} per ${periodLabel(state.period, trendPeriodCount(state))} by ${heatmap.bins.label.toLowerCase()}`;
+  if (heatmap) return `${heatmap.unit ? catalog.units[heatmap.unit].plural : heatmap.counted ? catalog.records.plural : measure.label} per ${periodLabel(state.period, trendPeriodCount(state))} by ${heatmap.bins.label.toLowerCase()}`;
   const cumulative = state.display === "cumulative", name = state.share ? `Share of ${measure.label.replace(/ \(USD\)$/, "").replace(/^(?!API)\w/, letter => letter.toLowerCase())}` : measure.label;
   return `${cumulative ? "Cumulative " : ""}${cumulative ? name[0].toLowerCase() + name.slice(1) : name}${cumulative ? "" : ` per ${periodLabel(state.period, trendPeriodCount(state))}`}${split ? ` by ${split.toLowerCase()}` : ""}`;
 }

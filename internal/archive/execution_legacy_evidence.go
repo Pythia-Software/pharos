@@ -121,6 +121,7 @@ type executionSourceRows struct {
 	launches      map[string][]executionLaunchRow
 	origins       map[string][]executionOriginRow
 	results       map[string][]executionResultRow
+	workflows     map[string][]EvidenceRecord
 	copies        map[string][]executionCopyRow
 	// typed digests each conversation's stored typed claims and evidence
 	// state, which registered claim sources read: equal digests and equal
@@ -146,7 +147,7 @@ func fetchExecutionSourceRows(ctx context.Context, q queryer, scope, copyScope [
 	}
 	out := &executionSourceRows{conversations: map[string]*executionConversationRow{}, sessions: map[string][]executionSessionRow{},
 		links: map[string][]executionLinkRow{}, launches: map[string][]executionLaunchRow{}, origins: map[string][]executionOriginRow{},
-		results: map[string][]executionResultRow{}, copies: map[string][]executionCopyRow{}, typed: map[string]string{}}
+		results: map[string][]executionResultRow{}, workflows: map[string][]EvidenceRecord{}, copies: map[string][]executionCopyRow{}, typed: map[string]string{}}
 	typed, args, err := executionTypedState(ctx, q, "c.id")
 	if err != nil {
 		return nil, err
@@ -228,6 +229,14 @@ func fetchExecutionSourceRows(ctx context.Context, q queryer, scope, copyScope [
 			return nil, err
 		}
 	}
+	if out.workflows, err = retainedWorkflowEvidence(ctx, q, scope); err != nil {
+		return nil, err
+	}
+	for id := range out.workflows {
+		if cv := out.conversations[id]; cv != nil && cv.typed {
+			delete(out.workflows, id)
+		}
+	}
 	if legacyExecutionScans["copied-launches"] {
 		if err := fetchLegacyCopiedLaunches(ctx, q, copyScope, out); err != nil {
 			return nil, err
@@ -241,7 +250,8 @@ func fetchExecutionSourceRows(ctx context.Context, q queryer, scope, copyScope [
 func (rows *executionSourceRows) merge(fresh *executionSourceRows, scope, copyScope []string) *executionSourceRows {
 	out := &executionSourceRows{conversations: maps.Clone(rows.conversations), sessions: maps.Clone(rows.sessions), links: maps.Clone(rows.links),
 		launches: maps.Clone(rows.launches), origins: maps.Clone(rows.origins), results: maps.Clone(rows.results), copies: maps.Clone(rows.copies),
-		typed: maps.Clone(rows.typed)}
+		workflows: maps.Clone(rows.workflows),
+		typed:     maps.Clone(rows.typed)}
 	for _, id := range scope {
 		delete(out.typed, id)
 		delete(out.conversations, id)
@@ -250,6 +260,7 @@ func (rows *executionSourceRows) merge(fresh *executionSourceRows, scope, copySc
 		delete(out.launches, id)
 		delete(out.origins, id)
 		delete(out.results, id)
+		delete(out.workflows, id)
 	}
 	for _, id := range copyScope {
 		delete(out.copies, id)
@@ -261,6 +272,7 @@ func (rows *executionSourceRows) merge(fresh *executionSourceRows, scope, copySc
 	maps.Copy(out.launches, fresh.launches)
 	maps.Copy(out.origins, fresh.origins)
 	maps.Copy(out.results, fresh.results)
+	maps.Copy(out.workflows, fresh.workflows)
 	maps.Copy(out.copies, fresh.copies)
 	return out
 }
@@ -274,7 +286,7 @@ func (rows *executionSourceRows) sameEvidence(fresh *executionSourceRows, scope,
 		if (a == nil) != (b == nil) || a != nil && !reflect.DeepEqual(*a, *b) || rows.typed[id] != fresh.typed[id] ||
 			!slices.Equal(rows.sessions[id], fresh.sessions[id]) || !slices.Equal(rows.links[id], fresh.links[id]) ||
 			!slices.Equal(rows.launches[id], fresh.launches[id]) || !slices.Equal(rows.origins[id], fresh.origins[id]) ||
-			!reflect.DeepEqual(rows.results[id], fresh.results[id]) {
+			!reflect.DeepEqual(rows.results[id], fresh.results[id]) || !reflect.DeepEqual(rows.workflows[id], fresh.workflows[id]) {
 			return false
 		}
 	}
@@ -528,6 +540,13 @@ func (rows *executionSourceRows) assemble() *executionEvidence {
 	rows.addRetainedNativeParents(e)
 	rows.addLegacyLaunchResults(e)
 	rows.addLegacyCopiedLaunches(e)
+	appendWorkflowParents := workflowParentAppender(e)
+	for _, id := range slices.Sorted(maps.Keys(rows.workflows)) {
+		for _, claim := range rows.workflows[id] {
+			message := strings.TrimPrefix(claim.Locator, "message:")
+			appendWorkflowParents(id, claim.Object, sourceRef{sourceMessage, messageCatalogID(id, message)}, evidenceDerived)
+		}
+	}
 	return e
 }
 

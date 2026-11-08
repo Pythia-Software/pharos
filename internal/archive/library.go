@@ -515,6 +515,13 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 		settle(&names, false, nil)
 	}()
 	var originsAt time.Time
+	var resumeProjections func()
+	var projectionWaitReason string
+	defer func() {
+		if resumeProjections != nil {
+			resumeProjections()
+		}
+	}()
 	for {
 		workCtx := ctx
 		for _, active := range []*daemonPass{view, previews, parallelism, shape, names} {
@@ -531,12 +538,30 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			originsAt = time.Now()
 		}
 		if c.projectionBatches.Load() > 0 || c.libraryRefreshStopped() {
+			// These passes can have committed a batch before the index took
+			// over. Keep that progress, but do not present the time spent
+			// waiting through its analysis chain as active measurement.
+			reason, detail := "ingest-busy", "source indexing and its follow-up analysis to finish"
+			if c.libraryRefreshStopped() {
+				reason, detail = "search-stopped", "the Search view refresh to resume"
+			}
+			if resumeProjections == nil || projectionWaitReason != reason {
+				if resumeProjections != nil {
+					resumeProjections()
+				}
+				resumeProjections = waitForDaemonPasses(reason, detail, view, previews, parallelism, shape, names)
+				projectionWaitReason = reason
+			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(100 * time.Millisecond):
 				continue
 			}
+		}
+		if resumeProjections != nil {
+			resumeProjections()
+			resumeProjections = nil
 		}
 		pass, done, running := c.libraryPass(ctx)
 		if !running {

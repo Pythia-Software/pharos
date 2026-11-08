@@ -12,6 +12,25 @@ import messageLabelsDocument from '../../../schemas/message_labels.schema.json' 
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
+test('a pending background history save does not hold up navigation',{skip},async t=>{
+ let release, observed, block=false;const blocked=new Promise(resolve=>{release=resolve});const requested=new Promise(resolve=>{observed=resolve});
+ t.after(()=>release());
+ const managedSession={preferences:'pharos-session:0123456789abcdef0123456789abcdef:',storage:'library:instance:',legacy:'library:'};
+ const app=await open(t,{url:'/library?view=table',ready:'#queryTableLibrary .qt-row',managedSession,preferences:{'pharos-header-tools-v1':['navigator','settings']},api:{'POST /api/session-preferences':()=>{if(!block)return {buffered:true};observed();return blocked}}}),{page}=app;
+ await page.evaluate(()=>localStorage.setItem('pharos-history-v1',JSON.stringify([{url:'/library',title:'Search',at:Date.now()}])));
+ await activateHeaderTool(page,'navigatorToggle');
+ await page.locator('#historyToggle').click();
+ const cleared=page.waitForResponse(response=>response.url().endsWith('/api/preferences')&&response.request().postDataJSON()?.set?.[managedSession.preferences+'pharos-history-v1']==='[]');
+ await page.locator('#historyClear').click();await cleared;await page.locator('#historyClose').click();
+ block=true;
+ await page.evaluate(()=>localStorage.setItem('pharos-history-v1','[]'));
+ await requested;
+ await page.evaluate(()=>{const link=document.createElement('a');link.href='/app';link.textContent='Open library';document.body.append(link)});
+ await page.getByRole('link',{name:'Open library',exact:true}).click();
+ await page.waitForURL('**/app');
+ release({buffered:true});
+});
+
 test('workspace fingerprints restore across views and show agent events despite an old preference',{skip},async t=>{
  const requests=[];
  const api={'POST /api/fingerprints':request=>{
@@ -204,8 +223,10 @@ test('workspace sidebar visibility and width restore without leaving the selecte
  await hide.click();await children().waitFor();await app.shot('collapsed-root');
  const rootURL=new URL(page.url());await children().click();await hide.waitFor();
  assert.equal(new URL(page.url()).searchParams.get('conversation'),rootURL.searchParams.get('conversation'));
+ await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('reader_event_link','e7');history.replaceState(null,'',url)});
  await page.getByRole('table',{name:'Agent session hierarchy and usage'}).getByRole('button',{name:'Open session Review implementation',exact:true}).click();
  await page.locator('.conversation-panel [data-message-id="conv-child-reply"]').first().waitFor();
+ assert.equal(new URL(page.url()).searchParams.has('reader_event_link'),false,'event IDs belong to their source conversation');
  assert.ok(await chips().getByText('Machine: Laptop',{exact:true}).isVisible());
  assert.ok(await chips().getByText('Execution machine: Worker',{exact:true}).isVisible());
  assert.ok(await chips().getByText('1 turn',{exact:true}).isVisible());
@@ -397,6 +418,104 @@ test('workspace Timeline message links preserve source transcripts across canoni
  assert.equal(new URL(app.page.url()).searchParams.get('conversation'),'conv-child');
  assert.equal(new URL(app.page.url()).searchParams.get('message'),'conv-child-reply');
  await app.page.locator('.conversation-panel [data-message-id="conv-child-reply"]').first().waitFor();
+});
+
+test('moved conversation links resolve their workspace and unavailable links keep the reader usable',{skip},async t=>{
+ const work=defaultApi['GET /api/work/:id']({params:{id:workID}}),base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const analysis={...base,rows:[{...base.rows[0],child_count:0}],focus:[{...base.rows[0],child_count:0}],session_count:1,total:1};
+ const api={
+  'GET /api/work/:id':({params})=>({...work,id:params.id,conversations:[{...work.conversations[0],id:params.id===workID?rootConversation:'other-conversation'}]}),
+  'GET /api/work/:id/conversations/:conversation':request=>request.params.id===workID?defaultApi['GET /api/work/:id/conversations/:conversation'](request):{...defaultApi['GET /api/work/:id/conversations/:conversation']({params:{id:workID,conversation:rootConversation}}),id:request.params.conversation,workspace_id:request.params.id},
+  'GET /api/work/:id/conversations/:conversation/signals':({params})=>({conversation_id:params.conversation,signals:[]}),
+  'GET /api/work/:id/delegation':analysis,
+  'POST /api/query-object-references':({body})=>body.references.map(reference=>({reference,...reference.key.id===rootConversation?{href:`/work/${workID}/conversation/${rootConversation}`}:{}})),
+ };
+ const params=new URLSearchParams({conversation:rootConversation,message:'m-1',reader_view:'conversation',reader_content:JSON.stringify({'message:m-1':true}),sidebar_width:'490'});
+ const app=await open(t,{url:'/work/former-work?'+params,api,ready:'.conversation-panel:not(.conversation-loading)'}),{page}=app;
+ await app.settled();
+ assert.equal(new URL(page.url()).pathname,`/work/${workID}/conversation/${rootConversation}`);
+ for(const [key,value] of params)assert.equal(new URL(page.url()).searchParams.get(key),value);
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ // Search and Home must not keep a native conversation selection, and opening
+ // another workspace through the Library entry point selects its own reader.
+ await page.getByRole('button',{name:'Back to Search',exact:true}).click();await page.locator('#library.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.has('conversation'),false);
+ await page.evaluate(()=>{void window.pharosOpenDetail('former-work')});
+ await page.waitForURL(url=>url.searchParams.get('conversation')==='other-conversation');
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ await page.goBack();await page.locator('#library.active').waitFor();await app.settled();
+ await page.goForward();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),'other-conversation');
+ // Re-enter through the path form while the original workspace is mounted.
+ await page.evaluate(()=>window.pharosNavigate('/work/former-work'));
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/former-work/conversation/${rootConversation}?reader_view=conversation`);
+ await page.waitForURL(url=>url.pathname===`/work/${workID}/conversation/${rootConversation}`);
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ // A deleted conversation cannot resolve; show the one retained conversation.
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}?conversation=missing&reader_view=conversation`);
+ await page.getByRole('status').filter({hasText:'linked conversation'}).waitFor();await app.settled();
+ assert.equal(await page.getByRole('heading',{name:work.title,level:1,exact:true}).isVisible(),true);
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
+ const missingMessage=`/work/${workID}/conversation/${rootConversation}?message=missing-message`;
+ await page.getByRole('button',{name:'Back to Search',exact:true}).focus();
+ await page.evaluate(url=>window.pharosNavigate(url),missingMessage);
+ await page.getByRole('status').filter({hasText:'linked message or tool call'}).waitFor();
+ assert.equal(await page.getByRole('button',{name:'Back to Search',exact:true}).evaluate(element=>element===document.activeElement),true,'restoring a message target leaves keyboard focus alone');
+ await page.reload();await page.getByRole('status').filter({hasText:'linked message or tool call'}).waitFor();
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}/conversation/${rootConversation}?message=m-1`);
+ await page.getByRole('status').filter({hasText:'linked message or tool call'}).waitFor({state:'hidden'});
+ await page.locator('.conversation-panel [data-message-id="m-1"]').first().waitFor();await app.settled();
+ // Conversation-only references use the service's current-workspace redirect,
+ // including links opened through the shared in-app navigation entry point.
+ await page.route('**/conversation/conv-root?*',route=>route.fulfill({status:302,headers:{location:`/work/${workID}/conversation/${rootConversation}?message=m-1`}}));
+ await page.evaluate(()=>window.pharosNavigate('/conversation/conv-root?message=m-1'));
+ await page.waitForURL(url=>url.pathname===`/work/${workID}/conversation/${rootConversation}`);
+ await page.locator('.conversation-panel [data-message-id="m-1"]').first().waitFor();await app.settled();
+});
+
+test('leaving a workspace cancels pending overview, transcript and conversation resolution loads',{skip},async t=>{
+ const deferred=()=>{let resolve;const promise=new Promise(done=>resolve=done);return{promise,resolve}};
+ const overviewStarted=deferred(),overviewRelease=deferred(),transcriptStarted=deferred(),transcriptRelease=deferred();
+ const resolutionStarted=deferred(),resolutionRelease=deferred();
+ t.after(()=>{overviewRelease.resolve();transcriptRelease.resolve();resolutionRelease.resolve()});
+ const work=defaultApi['GET /api/work/:id']({params:{id:workID}}),base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const analysis={...base,rows:[{...base.rows[0],child_count:0}],focus:[{...base.rows[0],child_count:0}],session_count:1,total:1};
+ let holdOverview=true;
+ const api={
+  'GET /api/work/:id':async({params})=>{if(params.id==='delayed-work'&&holdOverview){overviewStarted.resolve();await overviewRelease.promise}return{...work,id:params.id,conversations:[{...work.conversations[0],workspace_id:params.id}]};},
+  'GET /api/work/:id/delegation':analysis,
+  'GET /api/work/:id/conversations/:conversation':async request=>{if(request.params.id==='delayed-work'){transcriptStarted.resolve();await transcriptRelease.promise}return{...defaultApi['GET /api/work/:id/conversations/:conversation']({...request,params:{...request.params,id:workID}}),workspace_id:request.params.id};},
+  'GET /api/work/:id/conversations/:conversation/signals':({params})=>({conversation_id:params.conversation,signals:[]}),
+  'POST /api/query-object-references':async({body})=>{resolutionStarted.resolve();await resolutionRelease.promise;return body.references.map(reference=>({reference,href:`/work/resolved-work/conversation/${rootConversation}`}));},
+ };
+ const app=await open(t,{url:`/work/${workID}`,api,ready:'.conversation-panel:not(.conversation-loading)'}),{page}=app;
+ const cancelled=path=>page.waitForEvent('requestfailed',{predicate:request=>new URL(request.url()).pathname===path});
+ let aborted=cancelled('/api/work/delayed-work');
+ await page.evaluate(()=>{void window.pharosOpenDetail('delayed-work')});await overviewStarted.promise;
+ await page.evaluate(()=>window.pharosNavigate('/cards'));await aborted;
+ overviewRelease.resolve();holdOverview=false;await page.locator('#cards.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/cards');
+ aborted=cancelled(`/api/work/delayed-work/conversations/${rootConversation}`);
+ await page.evaluate(()=>{void window.pharosOpenDetail('delayed-work')});await transcriptStarted.promise;
+ await page.evaluate(id=>{void window.pharosOpenDetail(id)},workID);await aborted;
+ transcriptRelease.resolve();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,`/work/${workID}/conversation/${rootConversation}`);
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ assert.equal(await page.locator('html').evaluate(element=>element.classList.contains('page-loading')),false);
+ aborted=cancelled('/api/query-object-references');
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}?conversation=elsewhere`);await resolutionStarted.promise;
+ await page.evaluate(()=>window.pharosNavigate('/settings/preferences'));await aborted;
+ resolutionRelease.resolve();await page.locator('#settings.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/settings/preferences');
+ assert.equal(await page.locator('#detail').isVisible(),false,'the obsolete resolution cannot mount its reader');
+ // A late redirect must not replace the destination's history entry either.
+ await page.goBack();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ await page.goForward();await page.locator('#settings.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/settings/preferences');
 });
 
 for(const width of [1440,390])test(`single-agent Conversation and Timeline share the actual reader at ${width}px`,{skip},async t=>{
@@ -970,6 +1089,40 @@ test('dynamic message reveal materializes its target without taking keyboard foc
  await page.evaluate(()=>window.pharosView.refresh());await opened.settled();
  assert.equal(await page.evaluate(()=>window.linkedDisclosure.open),false);
  assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')||'[]').length>0);
+});
+
+test('right-click and Escape clear linked highlights, with a saved shortcut preference', {skip},async t=>{
+ const app=await open(t,{url:'/settings/preferences',ready:'#escapeClearsHighlights'}),{page}=app;
+ const toggle=page.getByRole('switch',{name:'Escape clears highlights'});
+ assert.equal(await toggle.getAttribute('aria-checked'),'true');
+ await page.evaluate(()=>{
+  const target=document.createElement('p');target.id='attention-fixture';target.textContent='Attention fixture';document.querySelector('#optionalBehaviors').append(target);
+ });
+ const mark=async()=>{
+  await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('reveal','section:attention-fixture');url.searchParams.append('highlight','page');history.replaceState(history.state,'',url);window.dispatchEvent(new Event('pharos:uri-changed'));});
+  await page.waitForFunction(()=>document.querySelector('#attention-fixture')?.classList.contains('pharos-reveal'));
+ };
+ const cleared=async()=>page.waitForFunction(()=>!new URLSearchParams(location.search).has('highlight')&&!new URLSearchParams(location.search).has('reveal')&&!document.querySelector('.pharos-reveal,.pharos-highlight'));
+ await mark();
+ await page.locator('#attention-fixture').click({button:'right'});
+ await page.getByRole('button',{name:'Clear highlights',exact:true}).last().click();await cleared();
+ await mark();
+ await page.locator('#settingsPageHeading').click({button:'right'});
+ await page.getByRole('button',{name:'Clear highlights',exact:true}).last().click();await cleared();
+ await mark();
+ await page.locator('#feedbackContactEmail').focus();await page.keyboard.press('Escape');
+ assert.equal(new URL(page.url()).searchParams.has('reveal'),true,'editing keeps its Escape behavior');
+ await page.evaluate(()=>{document.activeElement.blur();const dialog=document.createElement('dialog');dialog.id='attention-dialog';document.body.append(dialog);dialog.showModal();});
+ await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('#attention-dialog').open);
+ assert.equal(new URL(page.url()).searchParams.has('reveal'),true,'closing a dialog does not also clear attention');
+ await page.evaluate(()=>document.activeElement.blur());await page.keyboard.press('Escape');await cleared();
+ await toggle.click();assert.equal(await toggle.getAttribute('aria-checked'),'false');
+ await mark();await page.locator('#settingsPageHeading').click();await page.keyboard.press('Escape');
+ assert.equal(new URL(page.url()).searchParams.has('reveal'),true,'disabled shortcut preserves attention');
+ await page.reload();await page.locator('#escapeClearsHighlights').waitFor();
+ assert.equal(await toggle.getAttribute('aria-checked'),'false','the preference survives reload');
+ await page.keyboard.press('Escape');assert.equal(new URL(page.url()).searchParams.has('reveal'),true);
+ await toggle.click();await page.locator('#settingsPageHeading').click();await page.keyboard.press('Escape');await cleared();
 });
 
 test('agent event links restore both ends from the URL, opening folded prose without taking focus', {skip},async t=>{

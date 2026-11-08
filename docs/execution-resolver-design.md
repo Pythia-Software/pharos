@@ -467,7 +467,7 @@ The resolver chooses presentation metadata once:
   launch/request assignment, readable nickname or explicitly scoped task context.
   A missing retained request is stated explicitly; native IDs remain metadata,
   never primary labels. [Naming and backfill](conversation-naming.md) describe
-  the compact cache and source freshness rules used by resolver `execution-v7`.
+  the compact cache and source freshness rules used by resolver `execution-v8`.
   Nicknames remain available as metadata. The same agent is not renamed merely
   because its transcript is now selected.
 - **Order:** return a deterministic total sibling key from originating launch

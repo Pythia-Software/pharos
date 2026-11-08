@@ -413,7 +413,7 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
 
 // Work Hours uses the shared chart; exercise inspection at both widths.
 for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 'cumulative', 1440], ['work_hours', 'interval', 1440], ['work_hours', 'interval', 390]]) test(`Dashboard ${topic} ${display} inspection at ${width}px focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
-  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }) })}`, viewport: { width, height: 900 }, ready: '.usage-chart-bars:not(.loading) > button' });
+  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }), highlight: 'page' })}`, viewport: { width, height: 900 }, ready: '.usage-chart-bars:not(.loading) > button' });
   const chart = page.locator('.usage-dashboard .usage-chart').first();
   const bar = display === 'cumulative' ? chart.locator('.usage-chart-bars > button').last() : chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first();
   await bar.focus();
@@ -424,6 +424,7 @@ for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 
   assert.ok(await details.evaluate(element => element.contains(document.activeElement)), 'keyboard inspection focuses a reachable detail link');
   await page.keyboard.press('Escape');
   await details.waitFor({ state: 'hidden' });
+  assert.equal(new URL(page.url()).searchParams.get('highlight'), 'page', 'closing the chart details preserves linked highlights');
   assert.ok(await bar.evaluate(element => element === document.activeElement), 'Escape returns focus to the inspected period');
   await bar.click();
   await details.waitFor();
@@ -539,7 +540,7 @@ test('Reader file copying keeps keyboard focus through delayed success, failure 
 test('Sync diagnostics copying keeps keyboard focus through delayed success, failure and retry', {skip}, async t=>{
   const issue={id:'mismatch',source_name:'codex',unit:'/sessions/rollout.jsonl'};
   const {page}=await open(t,{url:'/settings/sync',ready:'.sync-warning',api:{
-    'GET /api/sync/status':{...defaultApi['GET /api/sync/status'],issues:[issue]},
+    'GET /api/sync/status':{...defaultApi['GET /api/sync/status'],busy:true,maintenance_busy:true,issues:[issue]},
     'GET /api/sync/issues':{issues:[issue]},
   }});
   await page.getByRole('button',{name:'View details / copy diagnostics',exact:true}).click();
@@ -1141,7 +1142,7 @@ test("grouped results' Detail takes focus, keeps it and returns it on Escape", {
 });
 
 test('header editing keeps keyboard focus on the handle being changed', { skip }, async t => {
-  const { page, settled, shot } = await open(t, { url: '/settings/header', ready: '#headerActive .header-tool' });
+  const { page, settled, shot } = await open(t, { url: '/settings/header?highlight=page', ready: '#headerActive .header-tool' });
   const guideButton=page.locator('#dataGuideToggle');
   assert.equal(await guideButton.isVisible(),false,'the Data Guide shortcut starts in the toolbox');
   const add = page.getByRole('button', { name: 'Add Navigation bar', exact: true });
@@ -1149,6 +1150,10 @@ test('header editing keeps keyboard focus on the handle being changed', { skip }
   await press(add);
   await page.waitForFunction(element => document.activeElement === element, await handle.elementHandle());
   await press(handle);
+  await page.locator('#headerToolMenu:popover-open').waitFor();
+  await page.getByRole('button', { name: 'Move left Navigation bar', exact: true }).click({ button: 'right' });
+  await page.locator('.pharos-attention-menu button').click();
+  assert.equal(new URL(page.url()).searchParams.has('highlight'), false, 'clear highlights is clickable above the native popover');
   await page.locator('#headerToolMenu:popover-open').waitFor();
   await page.keyboard.press('Escape');
   await page.waitForFunction(element => document.activeElement === element, await handle.elementHandle());
@@ -1205,6 +1210,10 @@ test("Home search button focuses its input", { skip }, async t => {
   const { page } = await open(t, { url: "/", ready: ".home-belt-row .query-card" });
   await press(page.getByRole("button", { name: "Search past work", exact: true }));
   await page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input"));
+  const composer = page.getByRole("region", { name: "Search composer", exact: true });
+  await composer.getByRole("combobox", { name: "Date comparison", exact: true }).selectOption("all");
+  const add = composer.locator(".text-query-tools").getByRole("button", { name: "Add condition", exact: true });
+  await page.waitForFunction(element => document.activeElement === element, await add.elementHandle());
 });
 
 test("All Cards moves focus to its content and browser history returns Home", { skip }, async t => {
@@ -1229,12 +1238,18 @@ test("All Cards moves focus to its content and browser history returns Home", { 
 });
 
 test("the findings prompt review takes focus, keeps it and returns it on Escape", { skip }, async t => {
-  const { page, settled } = await open(t, { url: "/findings", ready: ".findings-card" });
+  const { page, settled } = await open(t, { url: "/findings?highlight=page", ready: ".findings-card" });
   const review = page.locator(".findings-cart button.primary").first();
   await press(review);
   const dialog = page.locator('.findings-dialog[role="dialog"]');
   await dialog.waitFor();
   await settled();
+  await dialog.getByRole('heading').first().click({ button: 'right' });
+  await page.locator('.pharos-attention-menu button').waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await dialog.isVisible(), true, 'Escape dismisses only the context menu');
+  assert.equal(await page.locator('.pharos-attention-menu').count(), 0);
+  assert.equal(new URL(page.url()).searchParams.get('highlight'), 'page');
   await holdsFocus(page, dialog, review);
 });
 

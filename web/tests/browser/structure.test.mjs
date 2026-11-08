@@ -533,6 +533,7 @@ const ROUTES = [
     check: async page => assert.equal(await page.locator(".usage-session-shape-dashboard .dashboard-population-chip").count(), 1, "the population is not shown beside the controls") },
   { name: "Analyze binned distribution", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "distribution", metric: "active_time", split: "none" }))}`, ready: '.usage-analysis-dashboard[aria-busy="false"]' },
   { name: "Analyze trend heatmap", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "sessions", split: "autonomy_band", display: "heatmap", period: "day" }))}`, ready: '.usage-session-shape-dashboard section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
+  { name: "Human Words conversation heatmap", url: `/analyze?analyze_topic=human&analyze_days=30&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "typed", split: "none", display: "heatmap", period: "day" }))}`, ready: 'section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
   // A card's relative range, replaced by custom dates and times in the
   // dashboard's inline range picker.
   { name: "Dashboard custom date and time range", url: `/analyze?${new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "tokens",
@@ -1307,7 +1308,8 @@ test('Recent conversation links open the selected conversation and search', { sk
 });
 
 test('Habits daily bars use the available width when the window and range change', { skip }, async t => {
-  const app = await open(t, { url: '/analyze?analyze_topic=habits&habits_view=days', viewport: { width: 1920, height: 1050 }, ready: '.habits-days-chart .habits-span' });
+  const app = await open(t, { url: '/analyze?analyze_topic=habits&habits_view=days', viewport: { width: 1920, height: 1050 }, ready: '.habits-days-chart .habits-span',
+    api: {'GET /api/status/stream': eventStream(busyStatus), 'GET /api/status': busyStatus} });
   const { page } = app, chart = page.locator('.habits-days-chart'), bar = chart.locator('.habits-span').first();
   await page.waitForFunction(() => {
     const chart = document.querySelector('.habits-days-chart'), svg = chart?.querySelector('svg');
@@ -1323,6 +1325,19 @@ test('Habits daily bars use the available width when the window and range change
   await page.getByRole('combobox', { name: 'Your days range', exact: true }).selectOption('7');
   await page.waitForFunction(previous => document.querySelector('.habits-days-chart .habits-span')?.getBoundingClientRect().width > previous, narrow);
   assert.ok((await bar.boundingBox()).width > narrow, 'fewer days get wider bars');
+  await page.setViewportSize({ width: 1920, height: 1050 });
+  await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
+  await activateHeaderTool(page, 'pharosDrive');
+  const panel = page.getByRole('dialog', { name: 'Library drive', exact: true });
+  const settings = panel.getByRole('button', { name: 'Open Background Processing settings', exact: true });
+  await settings.waitFor();
+  await panel.getByRole('button', { name: 'Stop', exact: true }).waitFor();
+  await panel.locator('#pharosStatusEject').waitFor();
+  await app.shot('background-processing-panel');
+  await settings.click();
+  await page.waitForURL(url => url.pathname === '/settings/sync');
+  await page.locator('#backgroundSchedule .bg-col').first().waitFor();
+  assert.equal(await panel.count(), 0, 'opening settings closes the panel');
 });
 
 test('pages without section menus use the full window', { skip }, async t => {

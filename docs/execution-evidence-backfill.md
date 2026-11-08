@@ -17,10 +17,10 @@ they do not rewrite source transcripts or discard reported usage.
 
 | Change | Existing-catalog effect |
 | --- | --- |
-| Resolver `execution-v6` | Supersedes earlier labels/events execution digests once. Attribution and membership rebuild; inference can be reused when its complete inputs still match. Pending results remain visibly qualified. |
+| Resolver `execution-v8` | Supersedes earlier labels/events execution digests once, including Workflow run parentage and conversation names. Attribution and membership rebuild; inference can be reused when its complete inputs still match. Pending results remain visibly qualified. |
 | Request ledger `tools-v13-request-sources` | Adds first/last usage-message links and rebuilds request rows from stored messages. Request identities and reconciled accounting are preserved. |
-| Parallelism stored version `4/execution-v6` | Re-derives cached activity with the shared resolver occurrence index, including copied launches. Source-generation changes trigger a fingerprint sweep; a resolver-version change forces the existing one-time rebuild even when source data is unchanged. Corrected native-ID, locator and ancestry triggers are installed on existing catalogs too. |
-| Origins stored version `2/execution-v6`, execution-generation/fingerprint metadata | Recomputes origins once on a resolver upgrade, including when source data is unchanged; subsequent opens stay idle and source changes republish only when shared lineage changes. |
+| Parallelism stored version `4/execution-v8` | Re-derives cached activity with the shared resolver occurrence index, including copied launches. Source-generation changes trigger a fingerprint sweep; a resolver-version change forces the existing one-time rebuild even when source data is unchanged. Corrected native-ID, locator and ancestry triggers are installed on existing catalogs too. |
+| Origins stored version `2/execution-v8`, execution-generation/fingerprint metadata | Recomputes origins once on a resolver upgrade, including when source data is unchanged; subsequent opens stay idle and source changes republish only when shared lineage changes. |
 | Retained evidence inputs corrected or removed | Marks reconstructed evidence stale, withholds unsupported group claims and weakens materialized inference copies to hints. Ordinary backfill repairs the current claims; independent provider assertions are preserved. |
 
 Parallelism shares the resolver's complete occurrence index for activity and
@@ -61,16 +61,16 @@ data migration runs then.
 | Column | Meaning |
 | --- | --- |
 | `source` | the writer that owns the row: `record` (derived from the conversation's record or rows), `adapter` (retained by the adapter before filtering), `claude-group` (Claude group lineage). A writer replaces only its own rows. |
-| `kind` | `parent`, `launch_outcome`, `history_copy`, `copy_reconstruction`, `suppressed_record` |
+| `kind` | `parent`, `launch_outcome`, `workflow_launch`, `history_copy`, `copy_reconstruction`, `suppressed_record` |
 | `subject` | relative to the owning conversation: `conversation`, `launch:<call id>`, `composer:<id>` |
-| `object` | a lookup key: `native:<provider>\|<account>\|<native id>`, `claude-agent:<account>\|<root>\|<agent id>`, `task-path:<path>` (scoped to the owner's children), or empty |
+| `object` | a lookup key: `native:<provider>\|<account>\|<native id>`, `claude-agent:<account>\|<root>\|<agent id>`, `claude-workflow:<account>\|<root>\|<run id>` (all immediate members of a run), `task-path:<path>` (scoped to the owner's children), or empty |
 | `origin` | how the claim was extracted: `native` (a field the provider recorded), `derived` (a named parser rule read it), `legacy` (stored, provenance unknown), `synthesized` (a fallback an extractor chose; a hint, never proof) |
 | `authority` | what the claim establishes, apart from its origin: `verified` (the provider's record, or an envelope that verifies the outcome: a structured handle or refusal, a Claude launch acknowledgement), `corroborated` (a derived reading another observation confirms, such as a text acknowledgement whose assignment matched), `inferred`, `unverified` (legacy), `fallback` (synthesized). A verified acknowledgement parsed by a rule is `derived`/`verified`, so contradictory continuation metadata does not outrank it: resolution reports an identity conflict. |
 | `rule` | rule and version, for example `claude-launch-ack/v1`, `claude-root-fallback/v1`, `copilot-session-fallback/v1`, `copilot-retained-session-parent/v1`, `launch-envelope/v1`, `codex-session-meta/v1`, `cursor-fork-length-at-spawn/v1`, `cursor-echo-subagent/v1` |
 | `namespace`, `id_kind`, `locator`, `detail_json` | identifier namespace (`provider/account`), identifier kind (`native-event`, `call-id`, `locator`), the supporting observation, and rule-specific detail (outcome and handle, fallback reason, copy boundary and mapping, copied calls) |
 
 `meta.execution_evidence_generation` advances on every claim change. Extractor
-version: `execution-evidence-v4`. v2 recorded authorities and marked Codex
+version: `execution-evidence-v5`. v2 recorded authorities and marked Codex
 `forked_from` history; v3 records provider parent fallbacks (Copilot) and
 bounded Cursor copy regions; v4 recognizes validated harness usage footers on
 completed `Agent`/`Task` delegation results. That footer establishes the named
@@ -80,7 +80,17 @@ stored consumer projections. Scoped reported usage remains evidence rather than
 additional aggregate usage. Each is derivable from retained rows only as far
 as the manifest says. A provider read from an earlier version still counts as
 complete (`input='ingest'`), except for Copilot, VS Code Copilot and Cursor:
-their v3 evidence needs the adapter.
+their v3 evidence needs the adapter. v5 adds `workflow_launch` claims, recovered
+from retained Workflow calls and their structured results. Resolver
+`execution-v7` matches the account, root session ID and run ID in each child's
+native transcript identity. A run can have several children: each keeps its own
+execution and accounting while gaining the launching conversation as parent.
+The result's `transcriptDir` must agree with its `runId` and root session, and
+its status/type must identify a successfully launched local workflow. Report
+prose and printed journal entries are not acknowledgements. Competing callers
+remain ambiguous. Retained-row resolution uses the same rule before backfill;
+later children and corrected or removed acknowledgements invalidate dependent
+views through the run's lookup key. This does not rewrite stored parent fields.
 
 Origin and authority stay distinct. A claim's strength is its origin capped
 by its authority: `inferred` caps it at derived, `unverified` at legacy and

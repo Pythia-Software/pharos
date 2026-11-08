@@ -124,6 +124,7 @@
 .text-filter-clause > .text-select > select[aria-label^="Filter operator"] { color: inherit; }
 .text-filter-clause > :is(.text-condition-options, .text-remove) { margin-left: auto; }
 .text-filter-clause > .text-condition-options + .text-remove { margin-left: 0; }
+.text-search-editor > form .text-all-time { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .text-filter-clause > .text-saved-filter-value { gap: 2px; padding-left: 8px; border-radius: 6px; background: var(--query-hover); }
 .text-search-editor button.text-workspace-filter { width: 100%; min-height: var(--query-row); justify-content: flex-start; gap: 6px; padding: 3px 3px 3px 12px; border: 1px solid var(--query-border); border-radius: var(--query-radius); background: var(--query-field); color: var(--ink); font-weight: 400; text-align: left; }
 .text-search-editor button.text-workspace-filter:hover:not(:disabled) { background: var(--query-field); border-color: var(--muted); }
