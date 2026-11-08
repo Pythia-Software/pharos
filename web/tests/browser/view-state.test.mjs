@@ -1481,7 +1481,7 @@ test('message card labels and sentence events restore independently in the reade
  await reasoning.locator('summary').click();
  await page.locator('.thinking-card mark.agent-event').waitFor();
  assert.equal(await page.getByText(sentence,{exact:false}).count()>0,true);
- await page.locator('.thinking-card').hover();await page.getByRole('tooltip').waitFor();
+ await page.locator('.thinking-card').hover({position:{x:5,y:5}});await page.getByRole('tooltip').waitFor();
  assert.match(await page.getByRole('tooltip').textContent(),/Plan/);
  await page.mouse.move(0,0);
  await app.shot('message-card-tints-dark');

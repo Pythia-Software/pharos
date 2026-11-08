@@ -1356,7 +1356,7 @@ test("conversation navigation focuses the requested reader unless focus moved wh
   assert.equal(await page.locator(".work-heading h1").evaluate(element => { element.focus(); return element === document.activeElement; }), false, "returning to the overview leaves its title unfocusable");
 });
 
-for (const merged of [false, true]) test(`transcript rails follow layout changes in ${merged ? "merged" : "split"} workspaces`, { skip }, async t => {
+for (const merged of [false, true]) test(`transcript navigators follow layout changes in ${merged ? "merged" : "split"} workspaces`, { skip }, async t => {
   const api = merged ? {
     "GET /api/work/:id": call => {
       const work = defaultApi["GET /api/work/:id"](call);
@@ -1367,18 +1367,43 @@ for (const merged of [false, true]) test(`transcript rails follow layout changes
       return { ...data, rows: data.rows.slice(0, 1), focus: data.focus.slice(0, 1), session_count: 1, total: 1 };
     },
   } : {};
-  const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", api, preferences: { "pharos-show-nav-button": true } });
+  const { page, settled, shot } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", api, preferences: { "pharos-show-nav-button": true } });
   await activateHeaderTool(page, "navigatorToggle");
   await page.locator("#navigator.open").waitFor();
   await page.evaluate(() => document.querySelector("main").scrollTo(0, 1200));
-  await page.locator(".conversation-map.visible").waitFor();
+  await page.locator('.reader-navigator').waitFor();
+  for(const name of ['Timeline','Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).isChecked(),true,'all navigators are shown by default');
+  await page.getByRole('checkbox', {name:'Turns',exact:true}).check();
+  await page.getByRole('checkbox', {name:'Context',exact:true}).check();
+  await page.locator('.turn').nth(6).evaluate(turn=>turn.scrollIntoView({block:'center',behavior:'instant'}));
   await settled();
   const tops = await page.evaluate(() => {
     const header = document.querySelector("body > header").getBoundingClientRect().bottom;
-    return { header, rails: [...document.querySelectorAll(".conversation-map, .token-map, .conversation-map-window")].filter(rail => rail.getClientRects().length).map(rail => [rail.className, rail.getBoundingClientRect().top]) };
+    return { header, rails: [...document.querySelectorAll(".reader-navigator-host")].filter(rail => rail.getClientRects().length).map(rail => [rail.className, rail.getBoundingClientRect().top]) };
   });
   assert.ok(tops.rails.length, "the rails are shown");
   for (const [name, top] of tops.rails) assert.ok(top >= tops.header - 1, `${name} starts at ${top}, above the header's bottom at ${tops.header}`);
+
+  await shot('session-navigator');
+  const navigator = page.locator('.reader-navigator');
+  await page.getByRole('checkbox', {name:'Timeline',exact:true}).uncheck();
+  assert.equal(await navigator.locator('.reader-navigator-timeline').count(),0);
+  await page.getByRole('checkbox', {name:'Context',exact:true}).uncheck();
+  await page.getByRole('checkbox', {name:'Turns',exact:true}).uncheck();
+  assert.equal(await navigator.locator('.reader-navigator-track').count(),0);
+  await page.getByRole('checkbox', {name:'Timeline',exact:true}).check();
+  await page.getByRole('checkbox', {name:'Turns',exact:true}).check();
+  await navigator.getByRole('button', {name:'Browse session timeline'}).focus();
+  await page.keyboard.press('End');
+  await settled();
+  assert.ok(await navigator.getByRole('button', {name:'Browse session timeline'}).evaluate(button=>button===document.activeElement),'revealing a message keeps keyboard focus in the navigator');
+  const saved = page.url();
+  await page.reload();
+  await page.locator('.reader-navigator-timeline').waitFor();
+  await settled();
+  assert.equal(await page.getByRole('checkbox', {name:'Turns',exact:true}).isChecked(),true);
+  assert.equal(await page.getByRole('checkbox', {name:'Context',exact:true}).isChecked(),false);
+  assert.equal(new URL(page.url()).searchParams.get('reader_navigator'),new URL(saved).searchParams.get('reader_navigator'));
 
   if (merged) {
     // The overview grows without resizing the transcript or its scrollport.
@@ -1389,14 +1414,73 @@ for (const merged of [false, true]) test(`transcript rails follow layout changes
       await settled();
       await page.locator(".turn").nth(6).evaluate(turn => turn.scrollIntoView({ block: "center", behavior: "instant" }));
       await page.waitForFunction(() => {
-        const turns = [...document.querySelectorAll(".conversation-map-turn")];
-        const marker = turns[6], band = document.querySelector(".conversation-map-viewport");
-        if (!marker.classList.contains("current")) return false;
-        const bounds = marker.getBoundingClientRect(), viewport = band.getBoundingClientRect(), middle = (bounds.top + bounds.bottom) / 2;
-        return middle >= viewport.top && middle <= viewport.bottom;
+        const turns = [...document.querySelectorAll(".reader-navigator-turn")];
+        const marker = turns[6], band = document.querySelector(".reader-navigator-window");
+        const bounds = marker.getBoundingClientRect(), viewport = band.getBoundingClientRect(), middle = (bounds.left + bounds.right) / 2;
+        return middle >= viewport.left && middle <= viewport.right;
       });
     }
   }
+});
+
+test('session navigator scrolling reuses transcript geometry on a long session', {skip}, async t=>{
+  const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root?reader_navigator=${encodeURIComponent(JSON.stringify(['timeline','context','turns']))}`,ready:'.reader-navigator-turn',api:{
+    'GET /api/work/:id/conversations/:conversation':call=>{
+      const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
+      if(call.params.conversation!=='conv-root')return body;
+      return {...body,messages:Array.from({length:160},(_,turn)=>Array.from({length:12},(_,index)=>{
+        const context=index%2===1;
+        return {id:`nav-${turn}-${index}`,native_id:`nav-${turn}-${index}`,role:index===0?'user':context?'system':'assistant',kind:context?'metadata':'message',
+          text:context?JSON.stringify({type:'token_count',info:{total_token_usage:{total_tokens:(turn*12+index)*20000},last_token_usage:{input_tokens:12000+turn*100+index*20,output_tokens:500}}}):`Turn ${turn+1}, message ${index+1}: `+'Retained transcript text. '.repeat(5),
+          created_at:new Date(Date.UTC(2026,9,1)+turn*60000+index*1000).toISOString()};
+      })).flat()};
+    },
+  }});
+  assert.equal(await page.locator('.token-marker').count(),960,'the fixture exercises hundreds of context profiles');
+  await page.getByRole('button',{name:'Close turns',exact:true}).click();
+  await settled();
+  // Warm the sticky transition before instrumenting the scroll path.
+  await page.locator('.turn').nth(2).evaluate(turn=>turn.scrollIntoView({block:'start',behavior:'instant'}));
+  await settled();
+  const measureScroll=()=>page.evaluate(async()=>{
+    const scroller=document.querySelector('.workspace-reader-content'),list=document.querySelector('.turn-list'),maximum=scroller.scrollHeight-scroller.clientHeight;
+    const original=Element.prototype.getBoundingClientRect;let transcriptReads=0;const gaps=[];
+    Element.prototype.getBoundingClientRect=function(){if(this===list||list.contains(this))transcriptReads++;return original.call(this);};
+    const frame=()=>new Promise(resolve=>requestAnimationFrame(resolve));
+    try{for(let i=1;i<=20;i++){const start=performance.now();scroller.scrollTop=maximum*i/20;await frame();await frame();gaps.push(performance.now()-start);}}
+    finally{Element.prototype.getBoundingClientRect=original;}
+    return{transcriptReads,maxFramePair:Math.round(Math.max(...gaps)),slowFramePairs:gaps.filter(gap=>gap>50).length};
+  });
+  const measurements=await measureScroll();
+  assert.equal(measurements.transcriptReads,0,'scrolling must not remeasure transcript targets');
+  t.diagnostic(JSON.stringify({fixture:'160 turns / 1,920 messages / 960 context samples, collapsed',...measurements}));
+  await page.getByRole('button',{name:'Open turns',exact:true}).click();
+  await settled();
+  const expanded=await measureScroll();
+  assert.equal(expanded.transcriptReads,0,'expanded history also reuses cached geometry');
+  t.diagnostic(JSON.stringify({fixture:'160 turns / 1,920 messages / 960 context samples, expanded',...expanded}));
+  t.diagnostic(JSON.stringify({fixture:'same expanded transcript, all navigators, repeat traversal',...await measureScroll()}));
+  await page.getByRole('checkbox',{name:'Context',exact:true}).uncheck();
+  await settled();
+  t.diagnostic(JSON.stringify({fixture:'same expanded transcript, timeline and turns',...await measureScroll()}));
+  await page.getByRole('checkbox',{name:'Turns',exact:true}).uncheck();
+  await settled();
+  t.diagnostic(JSON.stringify({fixture:'same expanded transcript, timeline only',...await measureScroll()}));
+  for(const name of ['Timeline','Context','Turns'])await page.getByRole('checkbox',{name,exact:true}).uncheck();
+  await settled();
+  t.diagnostic(JSON.stringify({fixture:'same expanded transcript, all navigators hidden',...await measureScroll()}));
+  await page.getByRole('checkbox',{name:'Timeline',exact:true}).check();
+  await settled();
+  await page.locator('.turn').nth(80).evaluate(turn=>turn.scrollIntoView({block:'center',behavior:'instant'}));
+  await page.waitForFunction(()=>!document.querySelector('.reader-navigator-window').hidden);
+  // Opening and closing content must refresh the layout without relocating focus.
+  await page.locator('.turn').nth(80).locator(':scope > summary').click();
+  await settled();
+  assert.ok(await page.locator('.reader-navigator-position').textContent());
+  await page.setViewportSize({width:390,height:844});
+  await settled();
+  assert.ok(await page.locator('.reader-navigator').isVisible());
+  assert.ok(await page.locator('.workspace-reader-content').evaluate(element=>element.scrollWidth<=element.clientWidth+1),'navigator fits a narrow reader');
 });
 
 for (const trigger of ["context jump", "scroll"]) test(`a ${trigger} reaches a paginated event and its child conversation link`, { skip }, async t => {
@@ -1408,18 +1492,21 @@ for (const trigger of ["context jump", "scroll"]) test(`a ${trigger} reaches a p
       const event = (id, kind, text, extra = {}) => ({ id, native_id: id, kind, role: "assistant", text: typeof text === "string" ? text : JSON.stringify(text), created_at: "2026-10-01T00:00:00Z", ...extra });
       return { ...body, messages: [
         event("prompt", "message", "Review the changes", { role: "user" }),
+        event("multiblock", "message", {message:{role:'assistant',content:[{type:'text',text:'First retained block.'},{type:'text',text:'Second retained block.'},{type:'tool_use',id:'multi-read-1',name:'Read',input:{file_path:'a.go'}},{type:'tool_use',id:'multi-read-2',name:'Read',input:{file_path:'b.go'}}]}}),
         ...Array.from({ length: 52 }, (_, i) => event(`call-${i}`, "tool_call", { name: "Bash", input: { command: `check ${i}` } }, { call_id: `call-${i}` })),
         event("m-15", "delegation", { name: "Task", input: { description: "Review implementation", subagent_type: "Reviewer" } }, { call_id: "child" }),
         event("context", "metadata", { type: "token_count", info: { total_token_usage: { total_tokens: 40000 }, last_token_usage: { input_tokens: 30000, output_tokens: 500 } } }),
       ] };
     } },
   });
+  await page.locator(".delegation-inbox-heading").waitFor();
   assert.equal(calls.filter(call => call.path.endsWith("/delegation")).length, 1, "the deep link loads delegation analysis once for the selected conversation");
   if (trigger === "scroll") {
     await page.evaluate(() => { const scroller = document.querySelector(".workspace-reader-content"); scroller.scrollTop = scroller.scrollHeight; });
     await page.getByRole("button", { name: /codex.*Open child/ }).waitFor();
   }
-  await page.locator(".token-marker").last().evaluate(marker => marker.click());
+  await page.getByRole('checkbox', {name:'Context',exact:true}).check();
+  await page.locator(".token-marker").last().click();
   await page.waitForFunction(() => {
     const target = document.querySelector(".token-highlight");
     const bounds = target?.getBoundingClientRect();

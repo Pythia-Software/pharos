@@ -76,7 +76,7 @@ function EventFocusBand({node,x}:{node:RibbonNode;x:(at:number)=>number}){
  if(!focus)return null;
  return <g pointerEvents="none">{[[focus.target,'is-target'],[focus.message,'is-observation']].flatMap(([id,kind])=>{const span=id?spans.get(id):undefined;if(!span)return [];const left=x(span[0]),right=Math.max(left+4,x(span[1]));return [<rect key={kind} className={`event-link-band ${kind}`} x={left-2} y={1} width={right-left+4} height={30} vectorEffect="non-scaling-stroke"/>];})}</g>;
 }
-function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,sourceHref,disabled=false,eventLayer,visibility}:{visibility?:TimelineVisibility;clock:TimeScale;eventLayer?:EventLayer;node:RibbonNode;range:TimeRange;brushHandlers:Props["brushHandlers"];preview:TimeRange|null;caller?:boolean;inspector:ReturnType<typeof useRibbonInspector>;sourceHref?:Props["sourceHref"];disabled?:boolean}){
+export function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,sourceHref,disabled=false,eventLayer,visibility}:{visibility?:TimelineVisibility;clock:TimeScale;eventLayer?:EventLayer;node:RibbonNode;range:TimeRange;brushHandlers:Props["brushHandlers"];preview:TimeRange|null;caller?:boolean;inspector:ReturnType<typeof useRibbonInspector>;sourceHref?:Props["sourceHref"];disabled?:boolean}){
  const pattern=useId().replace(/:/g,''),container=useRef<HTMLDivElement>(null);
  const [scale,setScale]=useState({x:1,y:1});
  useEffect(()=>{inspector.close();},[range[0],range[1],node.id,visibility]);

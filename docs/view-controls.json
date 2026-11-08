@@ -320,6 +320,10 @@
       "field": "reader_labels"
     },
     {
+      "file": "web/src/reader-navigator.tsx",
+      "field": "reader_navigator"
+    },
+    {
       "file": "web/src/delegation.tsx",
       "field": "reader_view"
     },
@@ -3670,24 +3674,6 @@
       "disclosure": true,
       "contract": "transient",
       "reason": "Address-bar visibility is a transient navigation editor."
-    },
-    {
-      "key": "ee5d557122c20749:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationMap",
-      "tag": "button",
-      "control": "'button', `conversation-map-turn ${turn.dataset.human==='true'?'human':''}`",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "186a193e3b10cdc4:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupTokenOverview",
-      "tag": "button",
-      "control": "'button', 'token-marker '+(sample.compact?'compaction-marker'+(sample.trigger?' '+sample.trigger+'-compaction':''):'event-marker')",
-      "contract": "action",
-      "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
     },
     {
       "key": "5a0abc4e1c9b4583:0",
@@ -7389,6 +7375,52 @@
       "control": "onClick={onReset}",
       "contract": "action",
       "reason": "Retry/reset execute query actions; reset writes the resulting definition."
+    },
+    {
+      "key": "5c536168277a2959:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "button",
+      "control": "aria-label=\"Browse session timeline\" onFocus={event=>{const band=host.current?.querySelector<HTMLElement>('.reader-navigator-window');event.currentTarget.dataset.position=band?.dataset.position||'0';}} onClick={event=>{event.stopPropagation();jump(Number(event.currentTarget.dataset.position??0));}} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const button=event.currentTarget,previous=Number(button.dataset.position??0),next=event.key==='Home'?0:event.key==='End'?1:Math.max(0,Math.min(1,previous+(event.key==='ArrowLeft'?-.02:.02)));button.dataset.position=String(next);jump(next);}}",
+      "contract": "transient",
+      "reason": "Source navigation scrolls and highlights through the existing reader materialization handlers without taking keyboard focus. Keyboard browsing and the automatic window are transient scroll state; navigator choices bind reader_navigator."
+    },
+    {
+      "key": "7465388f7cf601a9:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "div",
+      "control": "aria-label=\"Session timeline. Click to reveal a message.\" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width);}}",
+      "contract": "transient",
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
+    },
+    {
+      "key": "79fbf467b09870f1:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "button",
+      "control": "onClick={()=>{const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}",
+      "contract": "transient",
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
+    },
+    {
+      "key": "889adb994f9d4635:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "input",
+      "control": "data-view-field=\"reader_navigator\" checked={shown.includes(choice)} onChange={event=>{const checked=event.currentTarget.checked;setShown(previous=>choices.filter(item=>item===choice?checked:previous.includes(item)));}}",
+      "binding": "reader_navigator",
+      "contract": "view.reader_navigator",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "e4dc3a33e88064d4:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "button",
+      "control": "onClick={()=>data.jumpContext(entry)}",
+      "contract": "transient",
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
     },
     {
       "key": "110c067b8fa806e8:0",

@@ -806,6 +806,19 @@ func validSearchDuration(duration string) bool {
 func validateViewShape(name string, value any) error {
 	object, _ := value.(map[string]any)
 	switch name {
+	case "reader_navigator":
+		values, ok := value.([]any)
+		if !ok {
+			return fmt.Errorf("needs session navigator names")
+		}
+		seen := map[string]bool{}
+		for _, value := range values {
+			name, ok := value.(string)
+			if !ok || !slices.Contains([]string{"timeline", "context", "turns"}, name) || seen[name] {
+				return fmt.Errorf("unknown or repeated session navigator")
+			}
+			seen[name] = true
+		}
 	case "timeline_visibility":
 		if object == nil {
 			return fmt.Errorf("needs timeline visibility selections by section")
