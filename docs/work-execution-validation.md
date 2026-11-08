@@ -99,8 +99,9 @@ same kind/batch, and per-kind failure counts must not grow.
 | Full label-pipeline paired settlement | Deferred at the representative performance gate |
 | Actual arrivals prioritized during unfinished history | Deferred at the representative performance gate |
 | Arrival readiness behind an already-running indivisible relational pass | Pending |
-| Abrupt process death followed by real-catalog recovery | Real FP32 publication and kill exercised; integrity/recovery in progress |
-| Sustained resource retention | Two-minute samples complete; eleven-minute session-expiry diagnostic running |
+| Abrupt process death followed by real-catalog recovery | Passed: real FP32 publication, kill, full integrity check and retained-binary partial resume |
+| Sustained resource retention | Two- and eleven-minute samples complete; residual retention attribution unresolved |
+| Global projection readiness | Missing publication found and fixed in ordinary scheduling; production-copy rerun remains outstanding |
 | Realistic throughput acceptance | Rejected on representative workload; remaining workloads gated |
 
 The lifecycle trial completed in 727.58 seconds. Its concrete observations:
@@ -163,7 +164,7 @@ quiet-machine ratios:
 
 | Metric | Classic | Scheduled | Ratio |
 | --- | ---: | ---: | ---: |
-| Full demanded settlement | 264.28 s | 303.39 s | 1.148 |
+| Declared queue settlement | 264.28 s | 303.39 s | 1.148 |
 | Process-tree CPU | 377.95 s | 874.79 s | **2.315** |
 | Read bytes | 36.19 GB | 44.19 GB | **1.221** |
 | Write bytes | 1.47 GB | 1.06 GB | 0.725 |
@@ -193,14 +194,16 @@ declared semantic digest and the pinned product result matched again:
 
 | Metric | Classic | Scheduled | Ratio |
 | --- | ---: | ---: | ---: |
-| Full demanded settlement | 260.02 s | 260.17 s | 1.001 |
+| Declared queue settlement | 260.02 s | 260.17 s | 1.001 |
 | Process-tree CPU | 370.44 s | 693.21 s | **1.871** |
 | Read bytes | 37.58 GB | 43.04 GB | 1.145 |
 | Write bytes | 1.57 GB | 0.96 GB | 0.612 |
 | Peak simultaneous footprint | 3.45 GB | 3.41 GB | 0.987 |
 | Recent product usable | 23.69 s | 29.53 s | **1.247** |
 
-The adaptive facts budget reduced scheduled facts batches from 1,552 to 646.
+Each arm showed one native model-worker start at the one-second sampling
+resolution; no repeated model loading was observed. The adaptive facts budget
+reduced scheduled facts batches from 1,552 to 646.
 The corrected run improves on the first candidate, but still rejects on CPU,
 first correctness and usable recent-query latency. Other host activity averaged
 about 3.2–3.3 cores during work, so the exact ratios remain contaminated. The
@@ -220,14 +223,46 @@ for ten minutes after last use, independently of native worker expiry. The
 runner checks that expiry on its reconciliation tick. Finite request membership
 is released when the request ends; the authority's zero reserved request bytes
 does not include model preparation or SQLite's connection page caches.
-An eleven-minute idle diagnostic is running to observe the actual context
-expiry. It overlaps the recovery integrity scan and supplies no throughput
-evidence. Source ownership explains a possible cause, not a measured allocation
-of the retained bytes to that context.
+A separate eleven-minute idle diagnostic completed with about 421 MiB of
+process footprint retained above work start, including about 40 MiB of Go heap
+in use. It retained no native model children. This is lower than the shorter
+candidate observation, but the remaining difference from classic still needs
+attribution. It overlapped the recovery integrity scan and supplies no
+throughput evidence. Source ownership explains a possible cause, not a measured
+allocation of the retained bytes to that context or proof of its exact expiry.
 
 Reverse-order repetitions and hours-long full label/replay workloads were
 stopped/deferred at this gate. Safety and recovery trials continue separately;
 passing those cannot make the performance result acceptable.
+
+## Global projection completion defect
+
+Inspection of the completed catalogs found a completion state that the declared
+pending-row checks did not cover. Classic published the current
+`message_label_facts_ready` value; the scheduled finite-only run left it absent.
+The final product-query sample was about 53 ms for classic and 1,164 ms for
+scheduled. Query rows matched, but scheduled kept using the live fallback.
+The settlement numbers above therefore describe the declared queues, not proof
+of equivalent global projection completion.
+
+The missing publication also affected ordinary production scheduling: the
+scheduled adapter never called the native whole-queue finalizer, and the
+coordinator stopped requesting work once the dirty table became empty.
+Commit `185f8705` repairs this with the existing library cleanup phase and
+domain-native generation/publication guard. The coordinator keeps demand while
+the queue is empty but readiness remains unpublished. Finite selections still
+make no global readiness claim. A dirty row arriving before cleanup is handled
+by the native refresh before any readiness publication.
+
+Real-adapter tests cover selected partial and whole drains, ordinary library
+completion, no resubmission once ready, and a newly dirty row before cleanup.
+Independent review found no correctness issue. The Go fast/full suites, web
+checks and full JavaScript matrix passed after this fix.
+
+The measured FP32 binaries predate this ordinary-library fix. Their finite-only
+path is unchanged, and no new throughput acceptance is claimed. Future
+whole-library benchmarks must drive the ordinary completion path and check the
+native readiness marker as well as empty queues and matching rows.
 
 ## Focused sharing trial
 
@@ -245,6 +280,37 @@ was bounded to 12,182 bytes and the ledger to 13 tasks in this trial.
 The configuration pinned FP32, but this sharing proof used real timing work;
 it does not establish native-model sharing or rerun the earlier Stop/Resume,
 CPU-change and graceful-restart checks. Crash recovery is a separate trial.
+
+## Actual crash and retained-binary resume
+
+On another fresh full-invalidation copy, the scheduled FP32 worker committed
+259 labels while 48,577 conversations remained label-pending. The harness then
+sent SIGKILL to its verified isolated process group, observed exit status -9
+and confirmed the group had drained. The committed label count and pending
+count were identical after the kill.
+
+The harness recovered/checkpointed that copy and ran a full SQLite
+`quick_check`: `ok`, in 1,316.46 seconds. It then opened the same copy with the
+actual retained service and frozen FP32 model. The retained process exited
+successfully in 21.23 seconds and published one further label, with zero
+reported message or conversation failures. Labels increased from 259 to 260;
+canonical counts stayed at 7,910,748 messages and 48,581 conversations.
+
+The retained command deliberately used `--limit 1` and reported a partial run;
+this is resumability evidence, not full historical settlement. No snapshot
+restore or canonical-record reimport occurred between the candidate and
+retained writer. The earlier deterministic dependency/publication recovery
+fixtures cover the additional affected-dependent and subsequent-edit cases.
+
+## Remaining release gates
+
+Production stays on classic. The representative CPU and recent-readiness
+regressions remain blockers. Remaining evidence includes reverse-order/quiet
+calibration, full label and full derived settlement, the ordinary projection
+completion path on the production copy, actual source-arrival priority,
+responsiveness behind an already-running relational pass, and attribution of
+residual retained memory. Real authorship/refinement, disable/re-enable,
+global pause and Retry were not exercised by these production-copy trials.
 
 ## Decision rule
 
