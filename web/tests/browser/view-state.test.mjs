@@ -445,7 +445,7 @@ test('moved conversation links resolve their workspace and unavailable links kee
  await page.locator('.conversation-panel [data-message-id="m-1"]').first().waitFor();await app.settled();
 });
 
-test('leaving a workspace cancels pending overview and transcript loads',{skip},async t=>{
+test('leaving a workspace cancels pending overview, transcript and conversation resolution loads',{skip},async t=>{
  const deferred=()=>{let resolve;const promise=new Promise(done=>resolve=done);return{promise,resolve}};
  const overviewStarted=deferred(),overviewRelease=deferred(),transcriptStarted=deferred(),transcriptRelease=deferred();
  const resolutionStarted=deferred(),resolutionRelease=deferred();
@@ -458,7 +458,7 @@ test('leaving a workspace cancels pending overview and transcript loads',{skip},
   'GET /api/work/:id/delegation':analysis,
   'GET /api/work/:id/conversations/:conversation':async request=>{if(request.params.id==='delayed-work'){transcriptStarted.resolve();await transcriptRelease.promise}return{...defaultApi['GET /api/work/:id/conversations/:conversation']({...request,params:{...request.params,id:workID}}),workspace_id:request.params.id};},
   'GET /api/work/:id/conversations/:conversation/signals':({params})=>({conversation_id:params.conversation,signals:[]}),
-  'POST /api/query-object-references':async({body})=>{resolutionStarted.resolve();await resolutionRelease.promise;return body.references.map(reference=>({reference,href:`/work/${workID}/conversation/${rootConversation}`}));},
+  'POST /api/query-object-references':async({body})=>{resolutionStarted.resolve();await resolutionRelease.promise;return body.references.map(reference=>({reference,href:`/work/resolved-work/conversation/${rootConversation}`}));},
  };
  const app=await open(t,{url:`/work/${workID}`,api,ready:'.conversation-panel:not(.conversation-loading)'}),{page}=app;
  const cancelled=path=>page.waitForEvent('requestfailed',{predicate:request=>new URL(request.url()).pathname===path});
@@ -476,9 +476,14 @@ test('leaving a workspace cancels pending overview and transcript loads',{skip},
  assert.equal(await page.locator('html').evaluate(element=>element.classList.contains('page-loading')),false);
  aborted=cancelled('/api/query-object-references');
  await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}?conversation=elsewhere`);await resolutionStarted.promise;
- await page.evaluate(()=>window.pharosNavigate('/cards'));await aborted;
- resolutionRelease.resolve();await page.locator('#cards.active').waitFor();await app.settled();
- assert.equal(new URL(page.url()).pathname,'/cards');
+ await page.evaluate(()=>window.pharosNavigate('/settings/preferences'));await aborted;
+ resolutionRelease.resolve();await page.locator('#settings.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/settings/preferences');
+ assert.equal(await page.locator('#detail').isVisible(),false,'the obsolete resolution cannot mount its reader');
+ // A late redirect must not replace the destination's history entry either.
+ await page.goBack();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ await page.goForward();await page.locator('#settings.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/settings/preferences');
 });
 
 for(const width of [1440,390])test(`single-agent Conversation and Timeline share the actual reader at ${width}px`,{skip},async t=>{

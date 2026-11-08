@@ -1486,7 +1486,10 @@ const requestedConversation=routeConversation(),missingConversation=requestedCon
 // identity before mounting a merged reader, which otherwise hides the overview
 // without ever loading the requested conversation.
 if(missingConversation){
- const references=await api('/api/query-object-references',{method:'POST',body:JSON.stringify({references:[{objectType:'pharos_conversations',key:{id:requestedConversation}}]}),signal});if(signal.aborted)return;
+ const resolutionPath=location.pathname;
+ const references=await api('/api/query-object-references',{method:'POST',body:JSON.stringify({references:[{objectType:'pharos_conversations',key:{id:requestedConversation}}]}),signal});
+ // A completed lookup may only redirect or mount the route that requested it.
+ if(signal.aborted||workspaceLoad!==load||location.pathname!==resolutionPath||routeConversation()!==requestedConversation)return;
  const target=references[0]?.href&&new URL(references[0].href,location.href),workspace=target?.pathname.match(/^\/work\/([^/]+)\/conversation\//)?.[1];
  if(workspace&&decodeURIComponent(workspace)!==id){target.search=location.search;history.replaceState(null,'',target.pathname+target.search);return renderDetail(decodeURIComponent(workspace))}
 }
