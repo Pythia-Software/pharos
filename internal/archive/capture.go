@@ -1006,7 +1006,7 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 	if err := os.Chtimes(temporary, mtime, mtime); err != nil {
 		return abandon(toDestination(err))
 	}
-	if err := syscall.Fsync(int(out.Fd())); err != nil {
+	if err := syncFileData(out); err != nil {
 		return abandon(toDestination(err))
 	}
 	if err := out.Close(); err != nil {
@@ -1385,7 +1385,7 @@ func syncPath(file string) (os.FileInfo, error) {
 		return nil, err
 	}
 	defer handle.Close()
-	if err := syscall.Fsync(int(handle.Fd())); err != nil {
+	if err := syncFileData(handle); err != nil {
 		return nil, err
 	}
 	return handle.Stat()

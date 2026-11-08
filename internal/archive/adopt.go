@@ -802,7 +802,7 @@ func copyFileSynced(src, dst string, info fs.FileInfo) error {
 	_, err = io.Copy(out, in)
 	if err == nil {
 		// Written through to the drive; library.toml's full flush comes last.
-		err = syscall.Fsync(int(out.Fd()))
+		err = syncFileData(out)
 	}
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
