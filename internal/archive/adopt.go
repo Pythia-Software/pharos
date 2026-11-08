@@ -705,7 +705,8 @@ func insideByInode(path, dir string) bool {
 // copyPreserved copies the planned archive into the library's preserved/ and
 // verifies each file's size. A file already there with the same size is kept;
 // hard links (packages link their blobs) stay links, also between files kept
-// and files copied. What it creates is appended to created.
+// and files copied, where the platform reports link identity; without it each
+// file is copied on its own. What it creates is appended to created.
 func copyPreserved(ctx context.Context, plan *preservedCopy, to string, created *[]string) error {
 	if plan.Real == "" {
 		return nil
@@ -715,7 +716,7 @@ func copyPreserved(ctx context.Context, plan *preservedCopy, to string, created 
 	if err != nil {
 		return err
 	}
-	links := map[[2]uint64]string{}
+	links := map[fileKey]string{}
 	return filepath.WalkDir(plan.Real, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -757,14 +758,15 @@ func copyPreserved(ctx context.Context, plan *preservedCopy, to string, created 
 		plan.Files++
 		plan.Bytes += info.Size()
 		first := ""
-		var inode [2]uint64
-		if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
-			inode = [2]uint64{uint64(stat.Dev), stat.Ino}
+		var inode fileKey
+		linked := false
+		if observed, err := observeFile(info); err == nil && observed.links > 1 {
+			inode, linked = observed.key, true
 			first = links[inode]
 		}
 		if existing, err := os.Lstat(dest); err == nil && existing.Mode().IsRegular() && existing.Size() == info.Size() {
 			if first == "" {
-				if inode != ([2]uint64{}) {
+				if linked {
 					links[inode] = dest
 				}
 				return nil
@@ -780,7 +782,7 @@ func copyPreserved(ctx context.Context, plan *preservedCopy, to string, created 
 			if err := copyFileSynced(path, dest, info); err != nil {
 				return err
 			}
-			if inode != ([2]uint64{}) {
+			if linked {
 				links[inode] = dest
 			}
 		}
@@ -824,9 +826,13 @@ func copyFileSynced(src, dst string, info fs.FileInfo) error {
 	return err
 }
 
+// sameDevice reports whether a and b are known to be on one device. A device
+// that cannot be observed answers false: callers take false only as
+// "same-volume placement is not established" and fall back to copying or
+// refusing, never to a placement that needs one volume.
 func sameDevice(a, b string) bool {
-	var statA, statB syscall.Stat_t
-	return syscall.Stat(a, &statA) == nil && syscall.Stat(b, &statB) == nil && statA.Dev == statB.Dev
+	same, err := observeSameDevice(a, b)
+	return err == nil && same
 }
 
 // syncFile flushes a file through the drive's own cache: os.File.Sync is

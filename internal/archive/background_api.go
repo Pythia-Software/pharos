@@ -668,6 +668,7 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 	_, views := s.operationsDocumentViews(r.Context(), false)
 	freshness := s.freshness(r.Context(), views, false)
 	writeJSON(w, map[string]any{
+		"work":         s.workSettings(),
 		"labels":       s.labelsSettings(),
 		"agent_events": s.agentEventsSettings(r.Context()),
 		"settings": map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "interval_seconds": settings.Interval,
@@ -847,6 +848,9 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		writeError(w, err, 500)
 		return
+	}
+	if s.work != nil {
+		s.work.runner.readPause(context.WithoutCancel(r.Context()))
 	}
 	s.wakeBackground()
 	s.getBackground(w, r)

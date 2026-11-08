@@ -24,8 +24,9 @@ subprocess dependency at runtime.
 
 The TypeScript model remains the browser/prototype reference. Shared synthetic
 fixtures check both implementations' exact SVG hashes and the original 0.8.9
-Goja renderer's PNG hashes, including both event appearances. Native sources are
-hashed into the renderer version, so changes automatically requeue cached images.
+Goja renderer's PNG hashes, including both event appearances. The renderer
+version is the digest of those expected PNGs, so a change to the pixels requeues
+cached images and a refactor that draws the same pixels does not.
 See [native renderer parity and performance](fingerprint-native-renderer.md).
 
 All state lives in the library's SQLite catalog:
@@ -55,11 +56,13 @@ fresh random generation prevents a render for a deleted ID from publishing onto
 an entity later recreated with that same ID. Rolled-back source writes have no
 cache effect.
 
-Opening a catalog adds queue metadata for existing entities. A changed embedded
-layout hash or native rasterizer version requeues existing images while retaining
-the last good PNGs. Library opening and HTTP handlers never render. Full retained
-histories are loaded by the background worker; the older bounded evidence
-endpoint keeps its existing contract.
+Opening a catalog adds queue metadata for existing entities. A changed renderer
+version requeues existing images while retaining the last good PNGs, unless
+`fingerprintSameImages` records that the earlier renderer drew the same images:
+then they are restamped and only entities missing current images stay queued.
+Library opening and HTTP handlers never render. Full retained histories are
+loaded by the background worker; the older bounded evidence endpoint keeps its
+existing contract.
 
 Full-speed continuous processing uses two workers, each with bounded reusable
 native raster/PNG scratch.
@@ -112,9 +115,10 @@ native `fingerprint_layout.go`. The native input projection and SVG encoder are
 `fingerprint_prepare.go` and `fingerprint_svg.go`; `fingerprint_render.go` owns
 rasterization and versioning. Extend both profile definitions and the Go
 `fingerprintProfiles` registry when adding a profile, then update request/component
-types and the shared parity corpus. All four native source files participate in
-the automatic renderer-version hash. Browser-only experimental widths and budgets
-are outside the native renderer's domain.
+types and the shared parity corpus. `TestFingerprintRendererVersion` fails when
+the corpus's expected PNGs change until `fingerprintVersion` is set to their new
+digest; a change the corpus cannot see needs a case there. Browser-only
+experimental widths and budgets are outside the native renderer's domain.
 
 The [100-conversation backfill profile](fingerprint-backfill-profile.md) records
 the measured speedup, storage/durability conditions and reproduction commands.

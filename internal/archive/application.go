@@ -94,6 +94,9 @@ func newApplicationManager(ctx context.Context, application string) (*applicatio
 	}
 	m := &applicationManager{registry: r, id: installationID(application), token: randomToken(), children: map[string]*applicationChild{}, suspended: map[string]bool{}, missing: map[string]bool{}, ctx: ctx,
 		client: &http.Client{Timeout: 2 * time.Minute, Transport: &http.Transport{Proxy: nil}}, starts: map[string]int{}, leaseDirCache: map[string][]string{}, canonicalCache: map[string]string{}}
+	// The broker collects resource history only under the process-start
+	// scheduled engine, which its services inherit; app start reads no
+	// library's config.
 	m.operations = newBrokerOperations(brokerOperationsPath(m.id))
 	m.publishLocked()
 	return m, nil
@@ -169,21 +172,7 @@ func runApplicationCLI(args []string) error {
 		_ = server.Shutdown(shutdown)
 	}()
 	if pid, _ := strconv.Atoi(os.Getenv(parentEnv)); pid > 0 {
-		go func() {
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					if syscall.Kill(pid, 0) != nil {
-						cancel()
-						return
-					}
-				}
-			}
-		}()
+		go watchApplicationParent(ctx, pid, cancel)
 	}
 	m.operations.start(ctx)
 	go m.maintain()
@@ -202,6 +191,29 @@ func runApplicationCLI(args []string) error {
 		return nil
 	}
 	return err
+}
+
+// applicationParentInterval is how often the broker checks its parent.
+var applicationParentInterval = time.Second
+
+// watchApplicationParent cancels the broker once its parent cannot be seen
+// running: absent, or unknown because the observation failed or is
+// unsupported. A broker that depends on its parent must not outlive it
+// unnoticed. It returns when ctx ends or after cancelling.
+func watchApplicationParent(ctx context.Context, pid int, cancel context.CancelFunc) {
+	ticker := time.NewTicker(applicationParentInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if state, _ := observeProcess(pid); state != processPresent {
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 func (m *applicationManager) childLocked(id string) (*applicationChild, error) {
@@ -262,6 +274,11 @@ func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, c
 	_ = os.Remove(path)
 	cmd := exec.Command(runningExecutable(), "--config", config.Path, "serve", "--dynamic", "--endpoint", path, "--application", m.registry.Application)
 	cmd.Env = append(os.Environ(), parentEnv+"="+strconv.Itoa(os.Getpid()))
+	// Only a broker that collects history owns it; otherwise each service
+	// keeps its own collector and its /api/status resources.
+	if m.operations.history != nil {
+		cmd.Env = append(cmd.Env, "PHAROS_RESOURCE_OWNER=broker")
+	}
 	cmd.Stderr = os.Stderr
 	// The service's output also goes to its log, from here: a panic is
 	// written by the runtime to the process's stderr, past any copy the
@@ -532,6 +549,10 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/app/status/stream" && r.Method == http.MethodGet {
 		m.operations.serveStatusStream(w, r)
+		return
+	}
+	if r.URL.Path == "/api/app/resources/history" && r.Method == http.MethodGet {
+		serveResourceHistory(w, r, m.operations.history, r.URL.Query().Get("library"))
 		return
 	}
 	if r.Method == "POST" && !sameOrigin(r) {
@@ -1116,7 +1137,12 @@ func applicationRPC(client *http.Client, application string, request map[string]
 	if err = json.Unmarshal(b, &endpoint); err != nil {
 		return nil, err
 	}
-	if endpoint.PID <= 0 || syscall.Kill(endpoint.PID, 0) != nil {
+	// Only a running publisher may receive the token. Liveness is not
+	// authentication: the token and the broker's own checks still apply.
+	if state, err := observeProcess(endpoint.PID); state != processPresent {
+		if err != nil {
+			return nil, fmt.Errorf("Pharos is offline; open this copy of Pharos (%w)", err)
+		}
 		return nil, fmt.Errorf("Pharos is offline; open this copy of Pharos")
 	}
 	payload, _ := json.Marshal(request)

@@ -478,6 +478,43 @@ func TestSyncMeterKeepsUnavailableMeasurementsMissing(t *testing.T) {
 	if sample.Phases[0].CPUSeconds != nil || sample.Phases[1].CPUSeconds == nil || *sample.Phases[1].CPUSeconds != 1.5 {
 		t.Fatalf("phase deltas across and after a reset: %v %v", sample.Phases[0].CPUSeconds, sample.Phases[1].CPUSeconds)
 	}
+
+	// Ordinary growth in both counters: the run's CPU and its one-core
+	// percent over the 2 seconds.
+	m = meter([]rssReading{ok(1)}, at(10, 20, 5, 5), at(12, 23, 6, 6))
+	if sample = m.finish(); sample.CPUSeconds == nil || *sample.CPUSeconds != 5 || sample.CPUPercent == nil || *sample.CPUPercent != 250 {
+		t.Fatalf("a monotonic run: %+v", sample)
+	}
+
+	// One counter resets while the other grows by more, so the total still
+	// rises: each counter is checked on its own. Own CPU resets in the
+	// first phase and across the run; the zero phase and the next phase are
+	// known, and so are the run's block counts, which did not reset.
+	m = meter([]rssReading{ok(1)}, at(10, 20, 5, 5), at(10, 20, 5, 5), at(9, 25, 6, 6), at(9, 25, 6, 6), at(9, 25, 6, 6), at(9, 25, 6, 6), at(9.5, 27, 7, 8), at(9.5, 27, 7, 8))
+	m.endPhase(m.beginPhase("source"))
+	m.endPhase(m.beginPhase("index"))
+	m.endPhase(m.beginPhase("audit"))
+	sample = m.finish()
+	if sample.CPUSeconds != nil || sample.CPUPercent != nil || sample.ReadBlocks == nil || *sample.ReadBlocks != 2 || sample.WrittenBlocks == nil || *sample.WrittenBlocks != 3 {
+		t.Fatalf("a masked own-CPU reset across the run: %+v", sample)
+	}
+	phases := sample.Phases
+	if phases[0].CPUSeconds != nil || phases[1].CPUSeconds == nil || *phases[1].CPUSeconds != 0 || phases[2].CPUSeconds == nil || *phases[2].CPUSeconds != 2.5 {
+		t.Fatalf("phase deltas across and after a masked own-CPU reset: %v %v %v", phases[0].CPUSeconds, phases[1].CPUSeconds, phases[2].CPUSeconds)
+	}
+
+	// Completed-child CPU resets while own CPU grows by more: the phase
+	// across it and the run are unavailable, the next phase recovers.
+	m = meter([]rssReading{ok(1)}, at(10, 20, 5, 5), at(10, 20, 5, 5), at(15, 19, 6, 6), at(15, 19, 6, 6), at(16, 19, 7, 7), at(16, 19, 7, 7))
+	m.endPhase(m.beginPhase("source"))
+	m.endPhase(m.beginPhase("audit"))
+	sample = m.finish()
+	if sample.CPUSeconds != nil || sample.CPUPercent != nil || sample.ReadBlocks == nil || *sample.ReadBlocks != 2 {
+		t.Fatalf("a masked child-CPU reset across the run: %+v", sample)
+	}
+	if sample.Phases[0].CPUSeconds != nil || sample.Phases[1].CPUSeconds == nil || *sample.Phases[1].CPUSeconds != 1 {
+		t.Fatalf("phase deltas across and after a masked child-CPU reset: %v %v", sample.Phases[0].CPUSeconds, sample.Phases[1].CPUSeconds)
+	}
 }
 
 // Statistics count a sample's elapsed time always, its CPU and RSS only

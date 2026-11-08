@@ -11,7 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -80,6 +83,32 @@ func TestLibraryRegistryAssignmentAndCopies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The v1 descriptor keeps its fields, and directory_inode is the library
+	// directory's native inode.
+	written, err := os.ReadFile(descriptorPath(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err = json.Unmarshal(written, &fields); err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	if strings.Join(keys, " ") != "directory_inode id instance name version" || string(fields["version"]) != "1" {
+		t.Fatalf("descriptor fields changed: %s", written)
+	}
+	info, err := os.Stat(filepath.Dir(a.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inode, err := libraryDirectoryInode(info)
+	if err != nil || original.Inode != inode || string(fields["directory_inode"]) != strconv.FormatUint(inode, 10) {
+		t.Fatalf("directory_inode %s, want %d (%v)", fields["directory_inode"], inode, err)
+	}
 	moved := filepath.Join(filepath.Dir(filepath.Dir(a.Path)), "renamed")
 	if err = os.Rename(filepath.Dir(a.Path), moved); err != nil {
 		t.Fatal(err)
@@ -89,8 +118,11 @@ func TestLibraryRegistryAssignmentAndCopies(t *testing.T) {
 		t.Fatal(err)
 	}
 	descriptor, err := readLibraryDescriptor(cfg)
-	if err != nil || descriptor.ID != original.ID {
+	if err != nil || descriptor != original {
 		t.Fatal("directory rename lost identity", err)
+	}
+	if after, err := os.ReadFile(descriptorPath(cfg)); err != nil || string(after) != string(written) {
+		t.Fatalf("reading a moved library rewrote its descriptor: %s", after)
 	}
 	copyDir := filepath.Join(t.TempDir(), "copy")
 	if _, err = retainedTree(context.Background(), moved, copyDir, "", false); err != nil {
@@ -100,8 +132,8 @@ func TestLibraryRegistryAssignmentAndCopies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = readLibraryDescriptor(copied); err == nil {
-		t.Fatal("unmanaged writable copy was accepted")
+	if _, err = readLibraryDescriptor(copied); err == nil || errors.Is(err, errLibraryDirectoryUnobserved) || !strings.Contains(err.Error(), "copied library") {
+		t.Fatal("unmanaged writable copy was accepted", err)
 	}
 	stable, err := RecoverLibrary(context.Background(), copyDir, filepath.Join(t.TempDir(), "independent"), nil)
 	if err != nil {
@@ -110,6 +142,68 @@ func TestLibraryRegistryAssignmentAndCopies(t *testing.T) {
 	recovered, err := readLibraryDescriptor(stable)
 	if err != nil || recovered.Instance == original.Instance || recovered.RecoveredFrom != original.ID {
 		t.Fatal("recovery lost copy lineage", err)
+	}
+
+	// A directory whose inode cannot be observed is neither accepted nor
+	// treated as missing a descriptor, so nothing writes or repairs one,
+	// even when the cause is os.ErrNotExist.
+	dir := filepath.Dir(b.Path)
+	kept, err := os.ReadFile(descriptorPath(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unobserved := func(step string, err error, cause error) {
+		t.Helper()
+		if !errors.Is(err, errLibraryDirectoryUnobserved) || !errors.Is(err, cause) || libraryDescriptorMissing(err) {
+			t.Fatalf("%s: %v; want an unobserved directory caused by %v", step, err, cause)
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		stat  func(string) (os.FileInfo, error)
+		cause error
+	}{
+		{"missing directory", func(path string) (os.FileInfo, error) {
+			return nil, &os.PathError{Op: "stat", Path: path, Err: syscall.ENOENT}
+		}, os.ErrNotExist},
+		{"nil metadata", func(string) (os.FileInfo, error) { return nil, nil }, errFileObservationUnavailable},
+		{"foreign metadata", func(path string) (os.FileInfo, error) {
+			info, err := os.Stat(path)
+			return foreignMetadataInfo{info}, err
+		}, errFileObservationUnavailable},
+	} {
+		override(t, &statLibraryDirectory, tc.stat)
+		_, err := readLibraryDescriptor(b)
+		unobserved(tc.name+": read", err, tc.cause)
+		_, err = ensureLibraryDescriptor(b, "")
+		unobserved(tc.name+": ensure", err, tc.cause)
+		unobserved(tc.name+": protect", protectPendingEvidence(b), tc.cause)
+		unobserved(tc.name+": check", b.checkLibrary(testIdentity), tc.cause)
+		_, err = r.register(b, "")
+		unobserved(tc.name+": register", err, tc.cause)
+		if after, err := os.ReadFile(descriptorPath(b)); err != nil || string(after) != string(kept) {
+			t.Fatalf("%s: descriptor rewritten: %s", tc.name, after)
+		}
+	}
+	// A library without a descriptor gets none until its inode is observed.
+	if err = os.Remove(descriptorPath(b)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = ensureLibraryDescriptor(b, "")
+	unobserved("new descriptor", err, errFileObservationUnavailable)
+	if _, err = os.Stat(descriptorPath(b)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a descriptor was written without a directory inode", err)
+	}
+	override(t, &statLibraryDirectory, os.Stat)
+	created, err := ensureLibraryDescriptor(b, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err = os.Stat(dir); err != nil {
+		t.Fatal(err)
+	}
+	if inode, err = libraryDirectoryInode(info); err != nil || created.Inode != inode || created.Version != libraryFormatVersion {
+		t.Fatalf("new descriptor %+v, directory inode %d (%v)", created, inode, err)
 	}
 }
 func TestLibraryTransferRetainedEvidence(t *testing.T) {
@@ -594,6 +688,7 @@ func TestLibraryTransferRejectsNewerCatalogAndBusySource(t *testing.T) {
 		t.Fatal("target modified before compatibility check", err)
 	}
 }
+
 // leaseLockFailures are adapter results a lease's consumers must tell apart:
 // only the adapter's contention, however wrapped or joined, is another
 // holder. A raw errno is not the adapter's contract.
@@ -781,6 +876,139 @@ func TestApplicationMCPConnectionAndLateResponse(t *testing.T) {
 	m.mu.Unlock()
 	if _, err = m.mcp(context.Background(), request); err == nil {
 		t.Fatal("offline MCP directly opened a catalog")
+	}
+}
+
+// The broker outlives its parent only while the parent is seen running:
+// absent, refused, invalid and unsupported observations all stop it. Once
+// its context ends the watcher stops observing.
+func TestApplicationParentWatcher(t *testing.T) {
+	const parent = 4242
+	override(t, &applicationParentInterval, time.Millisecond)
+	for name, answer := range livenessCases(parent) {
+		if answer.state == processPresent {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			stubProcessLiveness(t, map[int]livenessAnswer{parent: answer})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan struct{})
+			go func() { watchApplicationParent(ctx, parent, cancel); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the broker kept running after its parent became " + name)
+			}
+			if ctx.Err() == nil {
+				t.Fatal("the watcher returned without cancelling the broker")
+			}
+		})
+	}
+	t.Run("present until cancelled", func(t *testing.T) {
+		observed := stubProcessLiveness(t, map[int]livenessAnswer{parent: {processPresent, nil}})
+		observed.seen = make(chan int)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancelledByWatcher := false
+		done := make(chan struct{})
+		go func() {
+			watchApplicationParent(ctx, parent, func() { cancelledByWatcher = true; cancel() })
+			close(done)
+		}()
+		for range 3 {
+			if pid := <-observed.seen; pid != parent {
+				t.Fatalf("observed %d, not the parent", pid)
+			}
+		}
+		cancel()
+		// Drain an observation already under way, then the watcher returns.
+		for waiting := true; waiting; {
+			select {
+			case <-observed.seen:
+			case <-done:
+				waiting = false
+			case <-time.After(10 * time.Second):
+				t.Fatal("the watcher outlived its context")
+			}
+		}
+		if cancelledByWatcher {
+			t.Fatal("a running parent stopped the broker")
+		}
+	})
+	t.Run("already cancelled", func(t *testing.T) {
+		override(t, &applicationParentInterval, time.Hour)
+		observed := stubProcessLiveness(t, map[int]livenessAnswer{parent: {processAbsent, nil}})
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		watchApplicationParent(ctx, parent, func() { t.Error("cancelled again") })
+		if got := observed.observed(); len(got) != 0 {
+			t.Fatalf("observed after cancellation: %v", got)
+		}
+	})
+}
+
+// The saved endpoint's token goes only to a publisher seen running. Every
+// other observation answers offline without a request, keeping the cause.
+func TestApplicationRPCRequiresLiveEndpoint(t *testing.T) {
+	const publisher = 4242
+	application := filepath.Join(t.TempDir(), "Pharos.app")
+	runtime := applicationRuntimePath(installationID(application))
+	if err := os.MkdirAll(filepath.Dir(runtime), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var authorizations []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		mu.Unlock()
+		writeJSON(w, map[string]any{"result": "answered"}, 200)
+	}))
+	defer server.Close()
+	requests := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), authorizations...)
+	}
+	request := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call"}
+	save := func(pid int) {
+		t.Helper()
+		if err := durableJSON(runtime, applicationEndpoint{URL: server.URL, Token: "secret", PID: pid}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, answer := range livenessCases(publisher) {
+		t.Run(name, func(t *testing.T) {
+			stubProcessLiveness(t, map[int]livenessAnswer{publisher: answer})
+			save(publisher)
+			before := len(requests())
+			got, err := applicationRPC(server.Client(), application, request)
+			sent := requests()[before:]
+			if answer.state == processPresent {
+				if err != nil || got["result"] != "answered" || len(sent) != 1 || sent[0] != "Bearer secret" {
+					t.Fatalf("a running publisher: %v, %v, %v", got, err, sent)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "Pharos is offline") || len(sent) != 0 {
+				t.Fatalf("%s publisher: %v, %v; sent %v", name, got, err, sent)
+			}
+			if answer.err != nil && !errors.Is(err, answer.err) {
+				t.Fatalf("the observation's cause was lost: %v", err)
+			}
+		})
+	}
+	// Saved IDs that name no single process are refused as invalid.
+	for _, pid := range []int{0, -1} {
+		observed := stubProcessLiveness(t, nil)
+		save(pid)
+		before := len(requests())
+		if _, err := applicationRPC(server.Client(), application, request); !errors.Is(err, errProcessIDInvalid) || len(requests()) != before {
+			t.Fatalf("endpoint PID %d: %v, %d requests", pid, err, len(requests())-before)
+		}
+		if got := observed.observed(); len(got) != 1 || got[0] != pid {
+			t.Fatalf("observations = %v", got)
+		}
 	}
 }
 

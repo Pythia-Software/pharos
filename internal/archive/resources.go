@@ -29,7 +29,11 @@ import (
 // Disk is the change in bytes the process read and wrote over the same
 // wall time (its own: the kernel keeps no count for exited children).
 // Attribution stops at the process: which operation used the CPU is not
-// measured.
+// measured here (work_resources.go records what a task can honestly claim).
+//
+// Under the scheduled engine one owner per process tree also runs a history
+// collector (resources_history.go) on this same sampler. While it runs,
+// snapshots reuse its latest readings instead of sampling again.
 //
 // Each reading names the counters it has (processUsage.Known). On Linux a
 // process reads only itself, through getrusage and the Go runtime
@@ -133,6 +137,25 @@ type resourceSampler struct {
 	byPID map[int]*resourceTrack
 	// reads counts system calls, for tests.
 	reads int
+	// staleGap overrides resourceStaleGap while a history collector reads
+	// at its idle cadence (0: resourceStaleGap).
+	staleGap time.Duration
+	// history is the collector sharing this sampler, if one was made.
+	history *resourceHistory
+}
+
+// gap is the longest interval that still gives a rate. Callers hold r.mu.
+func (r *resourceSampler) gap() time.Duration {
+	if r.staleGap > 0 {
+		return r.staleGap
+	}
+	return resourceStaleGap
+}
+
+func (r *resourceSampler) setStaleGap(gap time.Duration) {
+	r.mu.Lock()
+	r.staleGap = gap
+	r.mu.Unlock()
 }
 
 type resourceTrack struct {
@@ -171,10 +194,12 @@ type resourceReading struct {
 	// Text is the server's line for the process ("Library service · 12% of
 	// one core · 340 MB").
 	Text string `json:"text"`
-	// exact values, before rounding for the document.
+	// exact values, before rounding for the document; started identifies
+	// the process across PID reuse (0: unknown).
 	cpu, disk *float64
 	memory    *uint64
 	at        time.Time
+	started   uint64
 	// cpuUnavailable is a CPU that cannot be read, as opposed to one
 	// waiting for its second reading.
 	cpuUnavailable bool
@@ -265,7 +290,7 @@ func (r *resourceSampler) sampleWithTable(processes []resourceProcess, table []p
 				}
 			case track == nil || track.err != nil || track.usage.Started != usage.Started:
 				track = &resourceTrack{at: now, usage: usage}
-			case now.Sub(track.at) > resourceStaleGap:
+			case now.Sub(track.at) > r.gap():
 				// An average over a long gap is not the current load.
 				track = &resourceTrack{at: now, usage: usage}
 			default:
@@ -303,7 +328,7 @@ func (r *resourceSampler) sampleWithTable(processes []resourceProcess, table []p
 			memory = new(track.usage.Footprint)
 		}
 		reading := resourceReading{PID: process.PID, Role: process.Role, Library: process.Library, Basis: r.basis,
-			cpu: track.percent, disk: track.disk, memory: memory, at: track.at, cpuUnavailable: !track.usage.cpuKnown(process.OwnOnly)}
+			cpu: track.percent, disk: track.disk, memory: memory, at: track.at, started: track.usage.Started, cpuUnavailable: !track.usage.cpuKnown(process.OwnOnly)}
 		reading.CPUPercent, reading.MemoryBytes, reading.SampledAt = roundedPercent(track.percent), roundedMemory(memory), formatTime(track.at)
 		reading.DiskBytesPerSecond = roundedRate(track.disk)
 		reading.Text = strings.Join(slices.DeleteFunc([]string{resourceRoleLabel(process), loadWords(track.percent, memory)}, func(s string) bool { return s == "" }), " · ")
@@ -549,6 +574,8 @@ func resourceRoleLabel(process resourceProcess) string {
 	switch {
 	case process.Role == "broker":
 		return "Pharos app"
+	case process.Role == "native-app":
+		return "Pharos (Mac app)"
 	case process.Role == "service" && process.LibraryName != "":
 		return "Library service (" + process.LibraryName + ")"
 	case process.Role == "service":
@@ -616,10 +643,58 @@ func compactBytes(value uint64) string {
 // their PID is read from the lease file while its lock is held). Leases of
 // another Mac's processes (a library on a shared drive) are not this Mac's
 // to read.
+//
+// While a history collector runs on this service's sampler, its latest
+// summary is the snapshot's, so the two never read the processes twice. The
+// leases are still status's own fresh probe: the collector rereads lease
+// files only every resourceLeaseIdle when idle, so a summary missing a live
+// lease (a command just started in Terminal) is not used, and the collector
+// is told to probe again.
 func (s *Server) serviceResources() *resourceSummary {
-	processes := []resourceProcess{{PID: os.Getpid(), Role: "service"}}
-	processes = append(processes, leaseProcesses(s.leases.probe(false), "", "")...)
+	if s.resourceBrokerOwned {
+		return nil
+	}
+	processes := s.serviceResourceProcesses()
+	if latest, ok := s.resources.history.latest(""); ok {
+		if coversResourceRoots(latest, processes) {
+			return latest
+		}
+		s.historyLeases.stale.Store(true)
+		s.resources.history.poke()
+	}
 	return withProcessGPU(summarizeResources("Pharos", s.resources.sample(processes)))
+}
+
+// coversResourceRoots reports whether summary read every root besides this
+// process (a nil summary read none).
+func coversResourceRoots(summary *resourceSummary, roots []resourceProcess) bool {
+	for _, root := range roots {
+		if root.PID == os.Getpid() {
+			continue
+		}
+		if summary == nil || !slices.ContainsFunc(summary.Processes, func(reading resourceReading) bool { return reading.PID == root.PID }) {
+			return false
+		}
+	}
+	return true
+}
+
+// serviceResourceProcesses are the roots a service samples: itself and its
+// library's live leases on this Mac.
+func (s *Server) serviceResourceProcesses() []resourceProcess {
+	processes := []resourceProcess{{PID: os.Getpid(), Role: "service"}}
+	return append(processes, leaseProcesses(s.leases.probe(false), "", "")...)
+}
+
+// serviceHistoryProcesses uses the history collector's slower lease cache.
+// Status and lifecycle checks retain their existing fresh leaseWatch policy
+// (serviceResources).
+func (s *Server) serviceHistoryProcesses(at time.Time) []resourceProcess {
+	processes := []resourceProcess{{PID: os.Getpid(), Role: "service"}}
+	if s.leases.dirs != nil {
+		processes = append(processes, leaseProcesses(s.historyLeases.probe(s.leases.dirs(), at), "", "")...)
+	}
+	return processes
 }
 
 // leaseProcesses are the live leases' processes on this Mac.

@@ -17,7 +17,11 @@ enum Harbor {
 // traffic lights share one band. AppKit keeps the lights 14pt from the top of
 // a 28pt title bar and resets them whenever it lays the title bar out again,
 // so they are re-centered on the header's row after each resize or focus
-// change. An empty toolbar would center them too, but it swallows the clicks
+// change, and whenever AppKit resizes the title bar's container. A Light/Dark
+// appearance change (Auto switches at sunrise and sunset, usually while the
+// window sits in the background) shrinks the container back to its standard
+// height but leaves the buttons where they were, clipping their tops. An
+// empty toolbar would center them too, but it swallows the clicks
 // meant for the header's tabs and search. The page reports where its row's
 // center falls, in window points, so the lights follow it at any page zoom.
 struct WindowChrome: NSViewRepresentable {
@@ -31,6 +35,9 @@ struct WindowChrome: NSViewRepresentable {
     final class ChromeView: NSView {
         private var observers: [NSObjectProtocol] = []
         private var headerCenter = WindowChrome.titlebarHeight / 2
+        /// The title bar container whose frame changes are observed.
+        private weak var observedContainer: NSView?
+        private var containerObserver: NSObjectProtocol?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -58,15 +65,33 @@ struct WindowChrome: NSViewRepresentable {
             placeTrafficLights()
         }
 
-        deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+        deinit {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            containerObserver.map(NotificationCenter.default.removeObserver)
+        }
+
+        /// Re-places the lights after any title bar layout that resizes their
+        /// container, whatever caused it. The placement waits for AppKit to
+        /// finish that layout, which may move the buttons after the container.
+        private func observeContainer(_ container: NSView) {
+            guard container !== observedContainer else { return }
+            containerObserver.map(NotificationCenter.default.removeObserver)
+            observedContainer = container
+            container.postsFrameChangedNotifications = true
+            containerObserver = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: container, queue: .main) { [weak self] _ in
+                DispatchQueue.main.async { self?.placeTrafficLights() }
+            }
+        }
 
         private func placeTrafficLights() {
             // In full screen macOS owns the title bar that slides in on hover.
             guard let window, !window.styleMask.contains(.fullScreen),
                   let close = window.standardWindowButton(.closeButton),
                   let container = close.superview?.superview else { return }
+            observeContainer(container)
             let height = max(headerCenter * 2, close.frame.height)
-            container.frame = NSRect(x: container.frame.minX, y: window.frame.height - height, width: container.frame.width, height: height)
+            let frame = NSRect(x: container.frame.minX, y: window.frame.height - height, width: container.frame.width, height: height)
+            if container.frame != frame { container.frame = frame }
             let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
             for (index, type) in buttons.enumerated() {
                 guard let button = window.standardWindowButton(type), let bar = button.superview else { continue }

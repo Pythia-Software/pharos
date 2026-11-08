@@ -783,6 +783,28 @@ func TestLabelsIsolateAnItemThatCrashesTheWorker(t *testing.T) {
 	if err != nil || stats.MessagesFailed != 1 || stats.Complete || labelCount(t, catalog, "WHERE message_id='m-think'") != 0 || labelCount(t, catalog, "") < 20 {
 		t.Fatalf("run with a poison item: %+v %v", stats, err)
 	}
+	// A session step under a message limit reports the poisoned conversation
+	// failed, not cut by the limit, so the scheduler backs off instead of
+	// reselecting it forever.
+	var poisoned string
+	if err := catalog.DB.QueryRow(`SELECT conversation_id FROM messages WHERE id='m-think'`).Scan(&poisoned); err != nil {
+		t.Fatal(err)
+	}
+	session, err := catalog.newLabelsSession(settings, workAllocation{CPUs: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	step, err := session.Run(t.Context(), []string{poisoned}, labelsChainLimit)
+	session.Close()
+	// Its crashes count against the warm pool's restarts; start the
+	// stage below from fresh workers.
+	catalog.labelerManager(settings).Retire()
+	if err != nil || !slices.Equal(step.Failed, []string{poisoned}) || len(step.Remaining) != 0 {
+		t.Fatalf("a limited step over a poison item: %+v %v", step, err)
+	}
 	// The background stage keeps a failed message pending, so the schedule
 	// retries it rather than completing the stage around it.
 	config.Labels = settings
@@ -993,6 +1015,134 @@ func TestLabelerBudgetFitsBothModels(t *testing.T) {
 	if got := labelsBudget(events).Threads; got != max(6, runtime.NumCPU()/2) {
 		t.Fatalf("agent events' budget %d", got)
 	}
+}
+
+// Under a work grant the CPU authority is the one thread budget (M1): on
+// battery both models' runners start side by side within their grants, where
+// the manager's own battery budget would refuse the second. Memory (the model
+// cache) is still bounded, and a caller without a grant keeps its budget.
+func TestAdmittedLabelerLeavesThreadsToTheAuthority(t *testing.T) {
+	c, _ := testCatalog(t)
+	plugged := labelsTestSettings(t, "ok")
+	plugged.Threads = 4
+	settings, _ := labelsForPower(plugged, powerState{Battery: true, OnBattery: true})
+	if got := labelsBudget(admittedLabeler(t.Context(), settings)); got != labelsBudget(settings) || got.Threads != labelsBatteryThreads {
+		t.Fatalf("a caller without a grant: %+v", got)
+	}
+	admitted := withWorkAdmission(t.Context(), newWorkAuthority(8), workAllocation{CPUs: 4})
+	if got := labelsBudget(admittedLabeler(admitted, settings)); got.Threads != 0 || got.MemoryMB != settings.MemoryBudgetMB {
+		t.Fatalf("an admitted caller's manager budget: %+v", got)
+	}
+	model, err := labelrt.LoadModel(settings.ModelDir, settings.Variant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := labelrt.RunnerConfig{Worker: settings.Worker, Workers: 1, Threads: settings.Threads}
+	events := labels
+	events.InFlight = 1 // another runner key: the other model's resident workers
+	_, release, err := c.labelerRunner(admitted, admittedLabeler(admitted, settings), model, labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	_, releaseEvents, err := c.labelerRunner(admitted, admittedLabeler(admitted, settings), model, events)
+	if err != nil {
+		t.Fatalf("a granted second model was refused by the manager's thread budget: %v", err)
+	}
+	defer releaseEvents()
+	classic := labels
+	classic.MaxBatch = 1
+	if _, _, err := c.labelerRunner(t.Context(), settings, model, classic); !errors.Is(err, labelrt.ErrBudget) {
+		t.Fatalf("a classic caller lost its own budget: %v", err)
+	}
+	// Admission is no saved value: a labels_thread_budget of -1 is the
+	// classic default, as any value below one is.
+	saved, unset := plugged, plugged
+	saved.ThreadBudget, unset.ThreadBudget = -1, 0
+	if got := labelsBudget(saved); got != labelsBudget(unset) || got.Threads <= 0 {
+		t.Fatalf("a saved budget of -1: %+v", got)
+	}
+
+	// RunLabels under an authority admits discovery at one slot, outside the
+	// labeling grant, and labeling at the worker's threads beside
+	// preparation. Its worker answers to the authority's budget, not the
+	// saved one that would refuse it.
+	catalog := labeledCatalog(t)
+	run := labelsTestSettings(t, "ok")
+	run.Threads, run.ThreadBudget = 2, 1
+	hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
+	t.Setenv(labelertest.FakeHelloEnv, hellos)
+	authority := newWorkAuthority(4)
+	discovered, discoverySlots := -1, -1
+	lock := lockFileLease
+	override(t, &lockFileLease, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+		if strings.HasSuffix(file.Name(), ".labels.lock") {
+			discoverySlots = authority.facts().CPUAllocated
+		}
+		return lock(file, mode, wait)
+	})
+	progress := labelsProgressFunc(func(line string) {
+		if strings.Contains(line, "to rebuild") {
+			discovered = authority.facts().CPUAllocated
+		}
+	})
+	stats, err := catalog.RunLabels(withWorkAuthority(t.Context(), authority), run, LabelsRunOptions{Progress: progress})
+	if err != nil || !stats.Complete || stats.MessagesLabeled == 0 {
+		t.Fatalf("an admitted run: %+v %v", stats, err)
+	}
+	if discoverySlots != 1 || discovered != 0 || authority.facts().CPUAllocated != 0 {
+		t.Fatalf("slots during discovery %d, after discovery %d, after run %d", discoverySlots, discovered, authority.facts().CPUAllocated)
+	}
+	if threads := labelerHelloThreads(t, hellos); !slices.Equal(threads, []int{2}) {
+		t.Fatalf("an admitted run's workers: %v threads", threads)
+	}
+	// GPU-only inference needs one CPU beside at most four preparation
+	// workers. Do not reserve unused CPUs for a long pass.
+	gpuAuthority := newWorkAuthority(8)
+	gpu, err := acquireLabelerCPU(withWorkAuthority(t.Context(), gpuAuthority), nil, 4, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(gpu.Release)
+	if gpu.Allocation.CPUs != 5 {
+		t.Fatalf("GPU-only pipeline reserved %d CPUs for five workers", gpu.Allocation.CPUs)
+	}
+	gpu.Release()
+
+	// A cap lowered while a larger pipeline waits retries at the new cap.
+	a := newWorkAuthority(8)
+	ctx := withWorkAuthority(t.Context(), a)
+	occupied, err := acquireWorkCPU(ctx, nil, 8, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Release()
+	done := make(chan *workCPUGrant, 1)
+	failure := make(chan error, 1)
+	go func() {
+		grant, err := acquireLabelerCPU(ctx, nil, 4, false)
+		done <- grant
+		failure <- err
+	}()
+	waitUntil(t, 5*time.Second, "labeling to wait for its grant", func() bool { return a.facts().CPUWaiters == 1 })
+	a.SetCPUs(2)
+	occupied.Release()
+	grant := <-done
+	if err := <-failure; err != nil {
+		t.Fatal(err)
+	}
+	defer grant.Release()
+	if grant.Allocation.CPUs != 2 {
+		t.Fatalf("pipeline did not adopt the lowered allowance: %+v", grant.Allocation)
+	}
+}
+
+// labelsProgressFunc receives each progress line.
+type labelsProgressFunc func(string)
+
+func (f labelsProgressFunc) Write(p []byte) (int, error) {
+	f(string(p))
+	return len(p), nil
 }
 
 // A backlog continues as its own run only when plugged in; on battery the
@@ -1350,6 +1500,26 @@ func TestMessageLabelFacts(t *testing.T) {
  INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('facts-a','test',2,'2026-01-01'),('facts-b','test',1,'2026-01-01');
  DELETE FROM message_labels_dirty`)
 	parity()
+	// A selected batch publishes only its conversations and claims no
+	// readiness; an empty selection publishes nothing.
+	execTx(t, c.DB, `DELETE FROM meta WHERE key='message_label_facts_ready'`)
+	if step, next, err := c.refreshMessageLabelFactsFor(ctx, nil, 0); err != nil || len(step.Done)+len(step.Remaining) != 0 || next != messageLabelFactsMessages {
+		t.Fatalf("an empty selection: %+v %d %v", step, next, err)
+	}
+	if pending, err := c.messageLabelFactsPendingFor(ctx, []string{"facts-a", "facts-b"}); err != nil || !slices.Equal(pending, []string{"facts-a", "facts-b"}) {
+		t.Fatalf("pending facts: %v %v", pending, err)
+	}
+	// A batch that publishes under the target hold grows the next budget as
+	// the daemon's does; one that stores nothing keeps it.
+	override(t, &messageLabelFactsTarget, time.Hour)
+	step, next, err := c.refreshMessageLabelFactsFor(ctx, []string{"facts-b"}, 100)
+	if err != nil || !slices.Equal(step.Done, []string{"facts-b"}) || scalar(`SELECT COUNT(*) FROM message_label_facts_dirty WHERE conversation_id='facts-a'`) != 1 ||
+		scalar(`SELECT COUNT(*) FROM meta WHERE key='message_label_facts_ready'`) != 0 || next != 200 {
+		t.Fatalf("a selected batch: %+v %d %v", step, next, err)
+	}
+	if step, next, err = c.refreshMessageLabelFactsFor(ctx, []string{"facts-b"}, 200); err != nil || !slices.Equal(step.Done, []string{"facts-b"}) || next != 200 {
+		t.Fatalf("a published selection: %+v %d %v", step, next, err)
+	}
 	flush()
 	parity()
 	// The dashboard and table consume different field subsets. Pruning the
@@ -1418,7 +1588,7 @@ func TestMessageLabelFacts(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer read.Rollback()
-		build, err := prepareMessageLabelFacts(ctx, read, messageLabelFactsMessages)
+		build, err := prepareMessageLabelFacts(ctx, read, messageLabelFactsMessages, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1784,5 +1954,599 @@ func TestLabelsParallelPreparationMatchesSerial(t *testing.T) {
 		} else if len(rows) == 0 || !reflect.DeepEqual(rows, want) {
 			t.Fatalf("parallel preparation changed stored labels: %v, want %v", rows, want)
 		}
+	}
+}
+
+// labelsDirtyToken is a conversation's labels dirty token ("" when clean).
+func labelsDirtyToken(t *testing.T, catalog *Catalog, id string) string {
+	t.Helper()
+	var token string
+	if err := catalog.DB.QueryRow(`SELECT COALESCE((SELECT token FROM message_labels_dirty WHERE conversation_id=?),'')`, id).Scan(&token); err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+// A recent source with historical forks and a re-sender outside the
+// selection: the selected step stores only the source, every dependent keeps
+// a durable mark through each interruption, and classic discovery alone (a
+// new process, no session) reaches what a full run reaches.
+func TestLabelsSessionKeepsDependentsOutsideTheSelection(t *testing.T) {
+	catalog := labeledCatalog(t)
+	settings := labelsTestSettings(t, "ok")
+	if stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{}); err != nil || !stats.Complete {
+		t.Fatalf("reference run: %+v %v", stats, err)
+	}
+	built, _ := catalog.metaValue(t.Context(), "labels_built_at")
+	dependents := []string{"c-other", "c-late"}
+	rows, err := queryMapsContext(t.Context(), catalog.DB, `SELECT id FROM conversations WHERE parent_id='c-root'`)
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("the fixture has no forks: %v", err)
+	}
+	for _, row := range rows {
+		dependents = append(dependents, firstString(row["id"]))
+	}
+	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-s1','c-root','m-s1','assistant','message','Shipped the recent change.','hash-m-s1','2026-09-01T15:00:00.000Z',1200)`)
+	session, err := catalog.newLabelsSession(settings, workAllocation{CPUs: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Interrupted before discovery commits: nothing durable changed.
+	stopped, stop := context.WithCancel(t.Context())
+	stop()
+	if err := session.Discover(stopped); err == nil || session.Discovered() {
+		t.Fatalf("a stopped discovery succeeded: %v", err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range dependents {
+		if labelsDirtyToken(t, catalog, id) == "" {
+			t.Fatalf("discovery stored no mark for %s before any selected label", id)
+		}
+	}
+	// Interrupted after the dependents' marks, before the source's labels.
+	ctx, cancel := context.WithCancel(t.Context())
+	session.beforeRun = func(context.Context) { cancel() }
+	step, err := session.Run(ctx, []string{"c-root"}, 0)
+	if !errors.Is(err, context.Canceled) || !slices.Equal(step.Remaining, []string{"c-root"}) || labelsDirtyToken(t, catalog, "c-root") == "" || labelCount(t, catalog, "WHERE message_id='m-s1'") != 0 {
+		t.Fatalf("an interrupted step: %+v %v", step, err)
+	}
+	session.beforeRun = nil
+	step, err = session.Run(t.Context(), []string{"c-root"}, 0)
+	if err != nil || !slices.Equal(step.Done, []string{"c-root"}) || labelCount(t, catalog, "WHERE message_id='m-s1'") != 1 || labelsDirtyToken(t, catalog, "c-root") != "" {
+		t.Fatalf("the selected source: %+v %v", step, err)
+	}
+	// Its publication is no claim about the library, and its dependents stay
+	// pending for whoever runs next.
+	if after, _ := catalog.metaValue(t.Context(), "labels_built_at"); after != built {
+		t.Fatalf("a selected step completed the ledger: %q to %q", built, after)
+	}
+	for _, id := range dependents {
+		if labelsDirtyToken(t, catalog, id) == "" {
+			t.Fatalf("the source's step cleared %s", id)
+		}
+	}
+	if pending, err := session.PendingFor(t.Context(), dependents); err != nil || len(pending) != len(dependents) {
+		t.Fatalf("pending dependents: %v %v", pending, err)
+	}
+	// Interrupted after the source's output: the session is gone, and a new
+	// process recovers the dependents from the ledger alone.
+	session.Close()
+	reopened, err := OpenCatalog(catalog.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	recovered, err := reopened.RunLabels(t.Context(), settings, LabelsRunOptions{})
+	if err != nil || !recovered.Complete || recovered.ConversationsBuilt < len(dependents) {
+		t.Fatalf("classic recovery: %+v %v", recovered, err)
+	}
+	full, err := reopened.RunLabels(t.Context(), settings, LabelsRunOptions{Full: true})
+	if err != nil || full.MessagesLabeled != 0 || full.MessagesRemoved != 0 {
+		t.Fatalf("recovery differs from a full run: %+v %v", full, err)
+	}
+	// Labels lost behind the ledger's back: discovery wants the conversation
+	// again but marks neither it nor its dependents, so a classic run
+	// restores it alone, as it would without the session.
+	execTx(t, reopened.DB, `DELETE FROM message_labels WHERE message_id='m-s1'`)
+	lost, err := reopened.newLabelsSession(settings, workAllocation{CPUs: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lost.Close()
+	if err := lost.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range append([]string{"c-root"}, dependents...) {
+		if labelsDirtyToken(t, reopened, id) != "" {
+			t.Fatalf("lost labels marked %s as changed", id)
+		}
+	}
+	if pending, err := lost.PendingFor(t.Context(), []string{"c-root"}); err != nil || len(pending) != 1 {
+		t.Fatalf("the conversation that lost labels: pending %v %v", pending, err)
+	}
+	healed, err := reopened.RunLabels(t.Context(), settings, LabelsRunOptions{})
+	if err != nil || !healed.Complete || healed.ConversationsBuilt != 1 || healed.MessagesLabeled != 1 {
+		t.Fatalf("restoring lost labels after a session's discovery: %+v %v", healed, err)
+	}
+}
+
+// One session labels in steps with one context, one discovery and one warm
+// worker. Changes after discovery are adopted only with their followers
+// marked, a new conversation joins the context, and a revision arriving
+// during a step survives it.
+func TestLabelsSessionFollowsLaterChangesWithItsWarmContext(t *testing.T) {
+	catalog := labeledCatalog(t)
+	settings := labelsTestSettings(t, "ok")
+	hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
+	t.Setenv(labelertest.FakeHelloEnv, hellos)
+	session, err := catalog.newLabelsSession(settings, workAllocation{CPUs: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step, err := session.Run(t.Context(), []string{"c-root"}, 0); err != nil || !step.Rediscover {
+		t.Fatalf("a step before discovery: %+v %v", step, err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMapsContext(t.Context(), catalog.DB, `SELECT id FROM conversations ORDER BY started_at DESC,id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := []string{}
+	for _, row := range rows {
+		all = append(all, firstString(row["id"]))
+	}
+	if pending, err := session.PendingFor(t.Context(), all); err != nil || len(pending) != len(all) {
+		t.Fatalf("an unlabeled library: %v pending of %d (%v)", pending, len(all), err)
+	}
+	if step, err := session.Run(t.Context(), nil, 0); err != nil || len(step.Done)+len(step.Remaining) != 0 {
+		t.Fatalf("an empty selection did work: %+v %v", step, err)
+	}
+	first, err := session.Run(t.Context(), all[:3], 0)
+	if err != nil || len(first.Done) != 3 {
+		t.Fatalf("the newest three: %+v %v", first, err)
+	}
+	pids := session.last.WorkerPIDs
+	rest, err := session.Run(t.Context(), all[3:], 0)
+	if err != nil || len(rest.Done) != len(all)-3 || !slices.Equal(session.last.WorkerPIDs, pids) {
+		t.Fatalf("the rest: %+v %v (workers %v, then %v)", rest, err, pids, session.last.WorkerPIDs)
+	}
+	if ready, err := catalog.labelsReadyFor(t.Context(), all, session.Identity()); err != nil || len(ready) != len(all) {
+		t.Fatalf("ready after both steps: %v %v", ready, err)
+	}
+
+	// A change after discovery: the followers are marked before the source's
+	// new token is taken. When marking them fails, the session forgets what
+	// it adopted and discovers again, so the change is never taken unmarked.
+	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-s2','c-root','m-s2','assistant','message','Merged it.','hash-m-s2','2026-09-01T15:00:00.000Z',1200)`,
+		`CREATE TRIGGER fail_follower_mark BEFORE INSERT ON message_labels_dirty WHEN NEW.conversation_id='c-fork' BEGIN SELECT RAISE(ABORT,'test mark failure'); END`)
+	if _, err := session.Run(t.Context(), []string{"c-root"}, 0); err == nil || session.Discovered() {
+		t.Fatalf("a failed follower mark kept the session's adopted change: %v", err)
+	}
+	execTx(t, catalog.DB, `DROP TRIGGER fail_follower_mark`)
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if step, err := session.Run(t.Context(), []string{"c-root"}, 0); err != nil || !slices.Equal(step.Done, []string{"c-root"}) {
+		t.Fatalf("a later change: %+v %v", step, err)
+	}
+	for _, id := range []string{"c-fork", "c-other", "c-late"} {
+		if labelsDirtyToken(t, catalog, id) == "" {
+			t.Fatalf("%s lost its reason to be relabeled", id)
+		}
+	}
+	// A conversation created after discovery is built, not reported current.
+	execTx(t, catalog.DB,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,agent_depth,started_at) VALUES('c-session-new','ws-main','codex','local','c-session-new',0,'2026-09-05T12:00:00.000Z')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-sn1','c-session-new','m-sn1','assistant','message','Started a new session.','hash-m-sn1','2026-09-05T12:00:00.000Z',1300)`)
+	if step, err := session.Run(t.Context(), []string{"c-session-new"}, 0); err != nil || !slices.Equal(step.Done, []string{"c-session-new"}) || labelCount(t, catalog, "WHERE message_id='m-sn1'") != 1 {
+		t.Fatalf("a new conversation: %+v %v", step, err)
+	}
+	// A revision during the step: its labels are stored, its newer mark stays.
+	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-sn2','c-session-new','m-sn2','assistant','message','Added a test.','hash-m-sn2','2026-09-05T12:10:00.000Z',1301)`)
+	session.beforeRun = func(context.Context) {
+		execTx(t, catalog.DB, `UPDATE messages SET text='Added two tests.',content_hash='hash-m-sn2b' WHERE id='m-sn2'`)
+	}
+	if step, err := session.Run(t.Context(), []string{"c-session-new"}, 0); err != nil || !slices.Equal(step.Superseded, []string{"c-session-new"}) || labelsDirtyToken(t, catalog, "c-session-new") == "" {
+		t.Fatalf("a superseded step: %+v %v", step, err)
+	}
+	session.beforeRun = nil
+	if step, err := session.Run(t.Context(), []string{"c-session-new"}, 0); err != nil || !slices.Equal(step.Done, []string{"c-session-new"}) {
+		t.Fatalf("after the newer revision: %+v %v", step, err)
+	}
+	if session.contexts != 2 || session.discoveries != 2 {
+		t.Fatalf("small steps rebuilt the context %d times, discovered %d times", session.contexts, session.discoveries)
+	}
+	if threads := labelerHelloThreads(t, hellos); len(threads) != 1 {
+		t.Fatalf("workers started %d times across steps: %v", len(threads), threads)
+	}
+	// The classic run finishes the followers; a full run then changes nothing.
+	if stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{}); err != nil || !stats.Complete {
+		t.Fatalf("classic run: %+v %v", stats, err)
+	}
+	if full, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{Full: true}); err != nil || full.MessagesLabeled != 0 || full.MessagesRemoved != 0 {
+		t.Fatalf("session steps differ from a full run: %+v %v", full, err)
+	}
+}
+
+func TestLabelsSessionAllocations(t *testing.T) {
+	// A worker that may fall back to the CPU (auto) is charged its threads
+	// like a CPU worker; only one that cannot (mlx) runs at one thread.
+	for _, c := range []struct {
+		cpus, threads   int
+		gpuOnly         bool
+		prep, inference int
+		serial          bool
+	}{
+		{1, 4, false, 1, 1, true}, {2, 4, false, 1, 1, false}, {4, 4, false, 1, 3, false}, {8, 4, false, 4, 4, false},
+		{3, 1, false, 2, 1, false}, {1, 4, true, 1, 1, true}, {2, 4, true, 1, 1, false}, {6, 4, true, 4, 1, false},
+	} {
+		prep, inference, serial := labelsSplit(c.cpus, c.threads, c.gpuOnly)
+		if prep != c.prep || inference != c.inference || serial != c.serial {
+			t.Fatalf("%+v: prep %d, inference %d, serial %v", c, prep, inference, serial)
+		}
+	}
+	for cpus := 1; cpus <= 16; cpus++ {
+		for threads := 1; threads <= 8; threads++ {
+			for _, gpuOnly := range []bool{false, true} {
+				prep, inference, serial := labelsSplit(cpus, threads, gpuOnly)
+				if !serial && prep+inference > cpus || prep < 1 || inference < 1 || serial != (cpus == 1) {
+					t.Fatalf("%d CPUs, %d threads (GPU only %v): prep %d + inference %d, serial %v", cpus, threads, gpuOnly, prep, inference, serial)
+				}
+			}
+		}
+	}
+	// One CPU still labels everything, alternating preparation and inference
+	// with a one-thread worker; a message limit cuts a step without losing work.
+	catalog := labeledCatalog(t)
+	settings := labelsTestSettings(t, "ok")
+	settings.Threads = 4
+	hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
+	t.Setenv(labelertest.FakeHelloEnv, hellos)
+	session, err := catalog.newLabelsSession(settings, workAllocation{CPUs: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMapsContext(t.Context(), catalog.DB, `SELECT id FROM conversations ORDER BY started_at DESC,id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := []string{}
+	for _, row := range rows {
+		all = append(all, firstString(row["id"]))
+	}
+	cut, err := session.Run(t.Context(), all, 2)
+	if err != nil || session.last.MessagesLabeled != 2 || len(cut.Remaining) == 0 || len(cut.Failed) != 0 || !cut.Progress {
+		t.Fatalf("a limited step: %+v %v (%+v)", cut, err, session.last)
+	}
+	done, err := session.Run(t.Context(), all, 0)
+	if err != nil || len(done.Done) != len(all) {
+		t.Fatalf("the rest at one CPU: %+v %v", done, err)
+	}
+	if pending, err := session.PendingFor(t.Context(), all); err != nil || len(pending) != 0 {
+		t.Fatalf("still pending: %v %v", pending, err)
+	}
+	if !session.serial || session.settings.Threads != 1 || !slices.Equal(labelerHelloThreads(t, hellos), []int{1}) {
+		t.Fatalf("one CPU used workers with threads %v (serial %v)", labelerHelloThreads(t, hellos), session.serial)
+	}
+	if generation, _ := catalog.metaValue(t.Context(), "labels_generation"); generation != "" {
+		t.Fatalf("selected steps recorded a ledger generation: %q", generation)
+	}
+}
+
+// labelsSessionConversations is every conversation, newest first.
+func labelsSessionConversations(t *testing.T, catalog *Catalog) []string {
+	t.Helper()
+	rows, err := queryMapsContext(t.Context(), catalog.DB, `SELECT id FROM conversations ORDER BY started_at DESC,id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := []string{}
+	for _, row := range rows {
+		all = append(all, firstString(row["id"]))
+	}
+	return all
+}
+
+// labelsStepDone runs a session step and requires every selected
+// conversation done, each current by the ledger alone.
+func labelsStepDone(t *testing.T, catalog *Catalog, session *labelsSession, ids ...string) {
+	t.Helper()
+	step, err := session.Run(t.Context(), ids, 0)
+	if err != nil || len(step.Done) != len(workDomainIDs(ids)) {
+		t.Fatalf("step over %v: %+v %v", ids, step, err)
+	}
+	current, err := catalog.labelsCurrentFor(t.Context(), step.Done, session.Identity())
+	if err != nil || len(current) != len(step.Done) {
+		t.Fatalf("done but not current: %v of %v (%v)", current, step.Done, err)
+	}
+}
+
+// A model switch wants every conversation (another model's labels remain),
+// and only that view of the ledger wants a dependent the new model already
+// labeled: the last old-model source's step turns it off. Discovery gives
+// every wanted conversation its own mark first, so the dependents of the
+// source's change survive each interruption and a new process with the
+// classic run alone finishes what a full run would.
+func TestLabelsSessionModelSwitchKeepsDependentsOfTheLastOldSource(t *testing.T) {
+	catalog := labeledCatalog(t)
+	plain := labelsTestSettings(t, "ok")
+	pooled := labelsTestSettings(t, "ok", map[string]any{"name": "fake-pool", "input_contract": labelrt.InputContractIDsAttentionPool})
+	if stats, err := catalog.RunLabels(t.Context(), plain, LabelsRunOptions{}); err != nil || !stats.Complete {
+		t.Fatalf("first model: %+v %v", stats, err)
+	}
+	all := labelsSessionConversations(t, catalog)
+	rest := slices.DeleteFunc(slices.Clone(all), func(id string) bool { return id == "c-root" })
+	if _, err := catalog.RunLabels(t.Context(), pooled, LabelsRunOptions{Conversations: rest}); err != nil {
+		t.Fatal(err)
+	}
+	model, _ := labelrt.LoadModel(pooled.ModelDir, "int8")
+	identity := labelsModelIdentity(model)
+	if old := labelCount(t, catalog, "WHERE model<>?", identity); old == 0 || old != labelCount(t, catalog, "WHERE conversation_id='c-root'") {
+		t.Fatalf("the mixed ledger: %d old-model labels", old)
+	}
+	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-s1','c-root','m-s1','assistant','message','Shipped the recent change.','hash-m-s1','2026-09-01T15:00:00.000Z',1200)`)
+	dependents := []string{"c-other", "c-late"}
+	rows, err := queryMapsContext(t.Context(), catalog.DB, `SELECT id FROM conversations WHERE parent_id='c-root'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		dependents = append(dependents, firstString(row["id"]))
+	}
+	session, err := catalog.newLabelsSession(pooled, workAllocation{CPUs: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped, stop := context.WithCancel(t.Context())
+	stop()
+	if err := session.Discover(stopped); err == nil {
+		t.Fatal("a stopped discovery succeeded")
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range all {
+		if session.builder.p.conversations[id] == nil {
+			continue // not labeled at all
+		}
+		if labelsDirtyToken(t, catalog, id) == "" {
+			t.Fatalf("discovery wanted %s for the model switch and left it no mark", id)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	session.beforeRun = func(context.Context) { cancel() }
+	if step, err := session.Run(ctx, []string{"c-root"}, 0); !errors.Is(err, context.Canceled) || len(step.Done) != 0 {
+		t.Fatalf("an interrupted step: %+v %v", step, err)
+	}
+	session.beforeRun = nil
+	labelsStepDone(t, catalog, session, "c-root")
+	if old := labelCount(t, catalog, "WHERE model<>?", identity); old != 0 {
+		t.Fatalf("%d old-model labels after the last old source", old)
+	}
+	for _, id := range dependents {
+		if labelsDirtyToken(t, catalog, id) == "" {
+			t.Fatalf("the last old source's step cleared %s's only reason", id)
+		}
+	}
+	if ready, err := catalog.labelsReadyFor(t.Context(), dependents, identity); err != nil || len(ready) != 0 {
+		t.Fatalf("dependents reported ready: %v %v", ready, err)
+	}
+	session.Close()
+	reopened, err := OpenCatalog(catalog.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	recovered, err := reopened.RunLabels(t.Context(), pooled, LabelsRunOptions{})
+	if err != nil || !recovered.Complete || recovered.ConversationsBuilt < len(dependents) {
+		t.Fatalf("classic recovery: %+v %v", recovered, err)
+	}
+	if full, err := reopened.RunLabels(t.Context(), pooled, LabelsRunOptions{Full: true}); err != nil || full.MessagesLabeled != 0 || full.MessagesRemoved != 0 {
+		t.Fatalf("recovery differs from a full run: %+v %v", full, err)
+	}
+}
+
+// Links made after discovery cannot lose a historical consumer: a re-sender
+// or fork a step built follows its source, a re-sender another run built
+// sends the session back to discovery, and a deleted conversation is
+// removed by discovery before it is reported done.
+func TestLabelsSessionFollowsLinksMadeAfterDiscovery(t *testing.T) {
+	catalog := labeledCatalog(t)
+	settings := labelsTestSettings(t, "ok")
+	reused := "Please add retry logic with exponential backoff to the upload client and cover the timeout path with a regression test"
+	execTx(t, catalog.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('ws-reuse','claude','local','ws-reuse','ws-reuse','2026-10-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,agent_depth,started_at) VALUES('c-src','ws-reuse','claude','local','c-src',0,'2026-09-10T12:00:00.000Z')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-src','c-src','m-src','user','message','`+reused+`','hash-m-src','2026-09-10T12:00:00.000Z',1001)`)
+	if err := catalog.RebuildAuthorship(t.Context(), "test-src"); err != nil {
+		t.Fatal(err)
+	}
+	session, err := catalog.newLabelsSession(settings, workAllocation{CPUs: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	all := labelsSessionConversations(t, catalog)
+	labelsStepDone(t, catalog, session, all...)
+	resend := func(id string) {
+		t.Helper()
+		execTx(t, catalog.DB,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,agent_depth,started_at) VALUES('`+id+`','ws-reuse','claude','local','`+id+`',0,'2026-10-12T12:00:00.000Z')`,
+			`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-`+id+`','`+id+`','m-`+id+`','user','message','`+reused+`','hash-m-`+id+`','2026-10-12T12:00:00.000Z',1400)`)
+		if err := catalog.RebuildAuthorship(t.Context(), "test-"+id); err != nil {
+			t.Fatal(err)
+		}
+		reusers, err := catalog.labelsReusers(t.Context())
+		source := "c-src"
+		if id == "c-reuse2" {
+			source = "c-reuse" // copied text follows its immediate source transitively
+		}
+		if err != nil || !slices.Contains(reusers[source], id) {
+			t.Fatalf("the fixture's %s re-sends nothing of c-src: %v %v", id, reusers, err)
+		}
+	}
+	change := func(id, message string) {
+		t.Helper()
+		if _, err := catalog.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES(?,?,?,'assistant','message','One more thing.',?,'2026-09-10T15:00:00.000Z',1500)`, message, id, message, "hash-"+message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clean := func() {
+		t.Helper()
+		rows, err := queryMapsContext(t.Context(), catalog.DB, `SELECT conversation_id FROM message_labels_dirty`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending := []string{}
+		for _, row := range rows {
+			pending = append(pending, firstString(row["conversation_id"]))
+		}
+		if len(pending) > 0 {
+			labelsStepDone(t, catalog, session, pending...)
+		}
+	}
+
+	// A re-sender recorded after discovery and built by a step.
+	resend("c-reuse")
+	labelsStepDone(t, catalog, session, "c-reuse")
+	clean()
+	change("c-src", "m-src-more")
+	labelsStepDone(t, catalog, session, "c-src")
+	if labelsDirtyToken(t, catalog, "c-reuse") == "" {
+		t.Fatal("a change of c-src left its late re-sender without a mark")
+	}
+	clean()
+	// A fork recorded after discovery and built by a step.
+	execTx(t, catalog.DB,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,started_at) VALUES('c-fork-late','ws-main','codex','local','c-fork-late','c-root',0,'2026-09-02T13:00:00.000Z')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-fork-late','c-fork-late','m-fork-late','user','message','continue later','hash-m-fork-late','2026-09-02T13:00:00.000Z',1600)`)
+	labelsStepDone(t, catalog, session, "c-fork-late")
+	clean()
+	if _, err := catalog.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-root-more','c-root','m-root-more','assistant','message','One more thing.','hash-m-root-more','2026-09-01T15:00:00.000Z',1501)`); err != nil {
+		t.Fatal(err)
+	}
+	labelsStepDone(t, catalog, session, "c-root")
+	if labelsDirtyToken(t, catalog, "c-fork-late") == "" {
+		t.Fatal("a change of c-root left its late fork without a mark")
+	}
+	clean()
+	if session.discoveries != 1 {
+		t.Fatalf("%d discoveries before another run wrote", session.discoveries)
+	}
+
+	// A re-sender another run built: the session's graph lacks it.
+	resend("c-reuse2")
+	if stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{}); err != nil || !stats.Complete {
+		t.Fatalf("a classic run between steps: %+v %v", stats, err)
+	}
+	change("c-src", "m-src-more2")
+	if step, err := session.Run(t.Context(), []string{"c-src"}, 0); err != nil || !step.Rediscover || session.Discovered() || len(step.Done) != 0 {
+		t.Fatalf("a step after another run: %+v %v", step, err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	labelsStepDone(t, catalog, session, "c-src")
+	if labelsDirtyToken(t, catalog, "c-reuse2") == "" {
+		t.Fatal("another run's re-sender lost its reason to follow c-src")
+	}
+	clean()
+
+	// A deleted conversation: discovery removes its labels first.
+	execTx(t, catalog.DB, `DELETE FROM messages WHERE conversation_id='c-daily2'`, `DELETE FROM conversations WHERE id='c-daily2'`)
+	if step, err := session.Run(t.Context(), []string{"c-daily2"}, 0); err != nil || !step.Rediscover || len(step.Done) != 0 {
+		t.Fatalf("a deleted conversation: %+v %v", step, err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	labelsStepDone(t, catalog, session, "c-daily2")
+	if n := labelCount(t, catalog, "WHERE conversation_id='c-daily2'"); n != 0 {
+		t.Fatalf("a deleted conversation kept %d labels", n)
+	}
+	if stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{}); err != nil || !stats.Complete {
+		t.Fatalf("classic run: %+v %v", stats, err)
+	}
+	if full, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{Full: true}); err != nil || full.MessagesLabeled != 0 || full.MessagesRemoved != 0 {
+		t.Fatalf("session steps differ from a full run: %+v %v", full, err)
+	}
+}
+
+// The library queue pages discovery's order without the session's locks:
+// excluded and finished conversations drop out, a re-enrolled one returns to
+// its place, and a change the queue does not hold asks for discovery.
+func TestLabelsSessionPendingPage(t *testing.T) {
+	catalog := labeledCatalog(t)
+	settings := labelsTestSettings(t, "ok")
+	session, err := catalog.newLabelsSession(settings, workAllocation{CPUs: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := func(after string, limit int, excluded ...string) workDomainPage {
+		t.Helper()
+		got, err := session.PendingPage(t.Context(), after, limit, func(m workMember) bool { return slices.Contains(excluded, m.ID) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := page("", 3); !got.Rediscover || len(got.IDs()) != 0 {
+		t.Fatalf("before discovery: %+v", got)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	all := slices.DeleteFunc(labelsSessionConversations(t, catalog), func(id string) bool { return session.builder.p.conversations[id] == nil })
+	if got := page("", 3); !slices.Equal(got.IDs(), all[:3]) || got.Rediscover {
+		t.Fatalf("the first page: %+v, want %v", got, all[:3])
+	}
+	if got := page(all[2], 3, all[3]); !slices.Equal(got.IDs(), all[4:7]) {
+		t.Fatalf("the next page without an excluded one: %+v", got)
+	}
+	if got := page("", 3); !slices.Equal(got.IDs(), all[:3]) {
+		t.Fatalf("paging claimed work: %+v", got)
+	}
+	labelsStepDone(t, catalog, session, all[:3]...)
+	if got := page("", 3); !slices.Equal(got.IDs(), all[3:6]) {
+		t.Fatalf("after a step: %+v", got)
+	}
+	labelsStepDone(t, catalog, session, all...)
+	if got := page("", 3); len(got.IDs()) != 0 || got.Rediscover {
+		t.Fatalf("a current library: %+v", got)
+	}
+	// A change after discovery: the queue does not hold it, so the page
+	// offers its mark for a step's refresh to enroll, without rediscovery.
+	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-page','c-new','m-page','assistant','message','Done.','hash-m-page','2026-10-20T14:00:00.000Z',1700)`)
+	if got := page("", 3); !slices.Equal(got.IDs(), []string{"c-new"}) || got.Units[0].Revision != labelsDirtyToken(t, catalog, "c-new") || got.Rediscover {
+		t.Fatalf("a change the queue lacks: %+v", got)
+	}
+	if got := page("", 3, "c-new"); len(got.IDs()) != 0 || got.Rediscover {
+		t.Fatalf("an excluded late change: %+v", got)
+	}
+	// A step's refresh enrolls it again, in its place, though interrupted.
+	ctx, cancel := context.WithCancel(t.Context())
+	session.beforeRun = func(context.Context) { cancel() }
+	if _, err := session.Run(ctx, []string{"c-new"}, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("an interrupted step: %v", err)
+	}
+	session.beforeRun = nil
+	if got := page("", 3); !slices.Equal(got.IDs(), []string{"c-new"}) {
+		t.Fatalf("a re-enrolled conversation: %+v", got)
+	}
+	if got := page("", 3, "c-new"); len(got.IDs()) != 0 || got.Rediscover {
+		t.Fatalf("only an excluded candidate left: %+v", got)
+	}
+	labelsStepDone(t, catalog, session, "c-new")
+	if got := page("", 3); len(got.IDs()) != 0 || got.Rediscover {
+		t.Fatalf("after the change: %+v", got)
 	}
 }

@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/gbdubs/pharos/internal/platform/fsinfo"
@@ -213,9 +212,11 @@ func volumeIdentity(path string) string {
 		}
 		resolved = parent
 	}
-	var stat syscall.Stat_t
-	if err := syscall.Stat(path, &stat); err == nil {
-		return fmt.Sprintf("device:%d", stat.Dev)
+	// The legacy fallback keeps the native spelling: signed on Darwin.
+	if info, err := statDevice(path); err == nil {
+		if label, err := legacyDeviceLabel(info); err == nil {
+			return label
+		}
 	}
 	return "unavailable"
 }

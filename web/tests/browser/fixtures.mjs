@@ -594,6 +594,32 @@ export const temporaryBackgroundDocument = {
     note: "Temporary schedule; your usual schedule resumes after one week.",
   } : item), idleBackground.headline),
 };
+// Shared work (docs/work-execution-plan.md §10): a scheduled service's CPU
+// allowance, and GET /api/work with a recent request waiting on a
+// dependency, a running task, a held task with a long failure and a
+// finished request, so the Work card draws every row kind.
+export const workBackgroundDocument = {
+  ...backgroundDocument,
+  work: { available: true, engine: "scheduled", cpu_slots: 4, max_cpu_slots: 10, scope: "this process", can_change: true },
+};
+export const workInspection = () => ({ engine: "scheduled", scope: "this process", state: {
+  at: iso(0), authority: { cpu_cap: 4, cpu_allocated: 2, cpu_waiters: 1, memory_reserved: 0, memory_limit: 134217728, request_memory_limit: 33554432, explicit_request_limit: 8 },
+  requests: [
+    { id: 7, scope: "recent", key: `recent:${(now - 2 * day) * 1e6}:${now * 1e6}:[analysis.authorship analysis.labels]`, trigger: "user", kinds: ["analysis.authorship", "analysis.labels"], priority: "foreground", explicit: true,
+      state: "running", requested_at: iso(300000), membership_frozen_at: iso(290000), members: 40, sealed: 12, failed: 1, unfinished: 27, bytes: 4096,
+      tasks: [{ kind: "analysis.authorship", state: "running", covered: 12 }, { kind: "analysis.labels", state: "blocked", covered: 0, blocker: { reason: "dependency", depends_on: "analysis.authorship" } }] },
+    { id: 8, key: "library", kinds: ["maintenance.parallelism"], priority: "live", state: "queued", library: true, requested_at: iso(60000), members: 0, sealed: 0, unfinished: 0, bytes: 0 },
+  ],
+  ended: [{ id: 5, scope: "backfill", key: "explicit-backfill:[analysis.labels]", kinds: ["analysis.labels"], priority: "backfill", explicit: true, state: "interrupted", reason: "inputs-keep-changing",
+    requested_at: iso(3 * 3600000), members: 900, sealed: 880, unfinished: 20, bytes: 0 }],
+  tasks: [
+    { kind: "analysis.authorship", state: "running", running: { kind: "analysis.authorship", batch: 3, units: 12, cpus: 2, demanders: [7] }, batches: 3, committed_units: 30, work: 30, active_ns: 4e9, select_ns: 1e6 },
+    { kind: "analysis.labels", state: "blocked", blocker: { reason: "held", detail: "stopped until Resume or a service restart" }, batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0, failures: 1,
+      failure_examples: [{ kind: "analysis.labels", unit: { id: "c1", revision: "r1" }, attempts: 3, error: "labeler worker exited: /Users/someone/Library/Application Support/Pharos/models/a-model-with-a-very-long-name-that-has-to-wrap.onnx", exhausted: true }] },
+    { kind: "maintenance.parallelism", batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0 },
+  ],
+  decisions: [], decisions_total: 0,
+} });
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
   eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
@@ -614,7 +640,15 @@ export const busyStatus = {
     statusOperation("op-index", { step: { index: 3, count: 6, name: "Indexing a source with a very long name that has to wrap somewhere", source: "Claude Code", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },
       time: { state: "estimating", low_seconds: 180, high_seconds: 360, label: "about 3–6 min" },
       children: [statusOperation("op-chain", { kind: "analysis.chain", label: "Update analyses", state_label: "Updating analyses", stoppable: false, stop: undefined })], children_count: 2 }),
-    statusOperation("op-view", { kind: "maintenance.library-view", label: "Index the Search view", state_label: "Indexing the Search view", priority: "background", stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-view" } }, step: { index: 1, count: null, name: "Search view", unit: "workspace", done: 2, total: 40, fraction: 0.05 } }),
+    statusOperation("op-view", { kind: "maintenance.library-view", label: "Index the Search view", state_label: "Indexing the Search view", priority: "background", stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-view" } }, step: { index: 1, count: null, name: "Search view", unit: "workspace", done: 2, total: 40, fraction: 0.05 },
+      // A task resource record (docs/work-resource-accounting.md), so the
+      // panel draws the resource line, its export and the profile link.
+      resources: { version: 1, allocation: { current: { cpu_slots: 2, gpu: 0 } }, time: { active: { value: 95, unit: "seconds", basis: "measured" } },
+        waits: { capacity: { value: 12, unit: "seconds", basis: "measured" }, writer: { value: 3, unit: "seconds", basis: "measured" } },
+        cpu: { go_process: { value: null, unit: "cpu_seconds", basis: "shared", coverage: "Go work shares the service process with other tasks." } },
+        memory: { process: { value: null, unit: "bytes", basis: "shared" }, owned_buffers_peak_bytes: { value: 48e6, unit: "bytes", basis: "counted" } },
+        gpu: { time: { value: null, unit: "gpu_seconds", basis: "unavailable" } },
+        io: { logical_read_bytes: { value: 310e6, unit: "bytes", basis: "counted", coverage: "Instrumented logical bytes only; coverage is partial." }, logical_written_bytes: { value: 22e6, unit: "bytes", basis: "counted" } } } }),
     statusOperation("op-backup", { kind: "backup.local", label: "Back up", state: "blocked", state_label: "Waiting", priority: "background", stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-backup" } }, detail: "Waiting for a capture to finish" }),
     statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
   ],
@@ -645,6 +679,27 @@ export const managedStatus = snapshot => ({
     ...snapshot.resources.processes.map(process => ({ ...process, library: "local" })),
     { pid: 4300, role: "service", library: "archive", cpu_percent: 5, memory_bytes: 210e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service (Archive) · ~5% of one core · 210 MB" }]),
 });
+
+// Resource history (docs/work-resource-accounting.md): a few minutes of
+// samples with a gap, irregular GPU samples, a task marker and an omission,
+// so the panel's strip draws every case. A since= request gets the same
+// document; the store merges it without repeating a time.
+export const resourceHistory = (scope = "this library service") => {
+  const t = Array.from({ length: 60 }, (_, index) => now - (240 - index * 4) * 1000).filter((_, index) => index < 30 || index > 34);
+  const wave = index => Math.round((60 + 50 * Math.sin(index / 4)) * 10) / 10;
+  return {
+    version: 1, available: true, scope, instance: "fixture", generated_at: iso(0), now, window_seconds: 900, active: true,
+    cadence: { active_seconds: 2, idle_seconds: 10, gpu_seconds: 5 },
+    series: { cpu: { label: "CPU", unit: "percent_one_core", basis: "proc_pid_rusage", available: true, max: 1000 }, memory: { label: "RAM", unit: "bytes", basis: "proc_pid_rusage", available: true },
+      disk: { label: "I/O", unit: "bytes_per_second", basis: "proc_pid_rusage", available: true }, gpu: { label: "GPU", unit: "percent_driver_time", basis: "IOAccelerator.AppUsage.accumulatedGPUTime", available: true } },
+    samples: { t, cpu: t.map((_, index) => index === 0 ? null : wave(index)), memory: t.map((_, index) => 1.2e9 + index * 4e6), disk: t.map((_, index) => index === 0 ? null : 2e6 + index * 1e5),
+      cpu_partial: t.map((_, index) => index === 1), disk_partial: t.map(() => false), processes: t.map(() => 2) },
+    gpu: { t: Array.from({ length: 40 }, (_, index) => now - (238 - index * 6) * 1000), value: Array.from({ length: 40 }, (_, index) => index === 20 ? null : 20 + index), partial: Array.from({ length: 40 }, () => false) },
+    segments: [{ t: t[0], reason: "started", detail: "fixture" }, { t: t[30], reason: "gap", detail: "No samples for 24 s" }],
+    coverage: [{ t: t[0], covered: [{ pid: 4100, role: "service" }, { pid: 4200, role: "worker:pharos-labeler-ort" }], omitted: ["Pharos Mac app: ownership is not verified, so it is not measured"] }],
+    markers: [{ t: t[10], event: "start", id: "op-index", kind: "index.changes.manual" }, { t: t[40], event: "end", id: "op-index", kind: "index.changes.manual", observed: true }],
+  };
+};
 
 // Synthetic numeric timing fixture: UI/layout tests never read a user library.
 export function thinkingFixture(query) {
@@ -769,6 +824,8 @@ export const defaultApi = {
   "GET /api/status/stream": eventStream(idleStatus),
   "GET /api/app/status": managedStatus(idleStatus),
   "GET /api/app/status/stream": eventStream(managedStatus(idleStatus)),
+  "GET /api/resources/history": () => resourceHistory(),
+  "GET /api/app/resources/history": () => resourceHistory("Pharos app (covered processes)"),
   "POST /api/operations/stop": { stopping: true },
   "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
@@ -814,6 +871,10 @@ export const defaultApi = {
     labels: { ...backgroundDocument.labels, ...('enabled' in body ? {enabled:body.enabled, status:body.enabled ? 'On, waiting for the labeling model.' : 'Off.'} : {}), ...('threads' in body ? {threads:body.threads} : {}) },
     agent_events: { ...backgroundDocument.agent_events, ...('agent_events_threads' in body ? {threads:body.agent_events_threads} : {}) } }),
   "POST /api/background/run": ({ body }) => ({ accepted: true, items: [body?.item].filter(Boolean) }),
+  "GET /api/work": { engine: "classic", available: false },
+  "POST /api/work": ({ body }) => ["recent", "backfill"].includes(body?.action) ? { request_id: 9, operation_id: "op-work-9", scope: body.action, state: "queued" }
+    : body?.action === "cancel" ? { cancelled: true } : { changed: true, kind: body?.kind, action: body?.action },
+  "POST /api/work/settings": ({ body }) => ({ ...workBackgroundDocument, work: { ...workBackgroundDocument.work, cpu_slots: body.cpu_slots } }),
   "GET /api/backup": { active: false, run: null, runs: [], last_success: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day) }, record: "/Volumes/Pharos SSD/Pharos/backups.json", suggested_destination: "/Users/someone/Pharos Backup" },
 
   // Findings and MCP.

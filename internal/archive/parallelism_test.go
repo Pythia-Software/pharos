@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -572,6 +573,18 @@ func TestParallelismIncremental(t *testing.T) {
 	if dirty := countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty"); dirty != 9 {
 		t.Fatalf("a page stored activity: %d dirty", dirty)
 	}
+	// A selected step stores only its conversations; an empty one, none.
+	if step, err := c.refreshParallelismFor(t.Context(), []string{}); err != nil || len(step.Done) != 0 || countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty") != 9 {
+		t.Fatal("an empty selection did work", step, err)
+	}
+	if pending, err := c.parallelismPendingFor(t.Context(), []string{"cv-n1", "cv-a2", "gone"}); err != nil || !slices.Equal(pending, []string{"cv-a2", "cv-n1"}) {
+		t.Fatal(pending, err)
+	}
+	step, err := c.refreshParallelismFor(t.Context(), []string{"cv-n1", "cv-a2"})
+	if err != nil || !slices.Equal(step.Done, []string{"cv-a2", "cv-n1"}) || countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty") != 7 ||
+		countRows(t, c, "SELECT COUNT(*) FROM parallelism_activity WHERE conversation_id IN ('cv-n1','cv-a2')") != 2 {
+		t.Fatal("selected activity", step, err)
+	}
 	if _, err := c.refreshParallelism(t.Context(), 100, false); err != nil {
 		t.Fatal(err)
 	}
@@ -652,9 +665,10 @@ func TestParallelismIncremental(t *testing.T) {
 	// Maintenance leaves the work to a page that is already doing it.
 	c.parallelismMu.Lock()
 	count, err := c.refreshParallelism(t.Context(), 100, false)
+	_, busy := c.refreshParallelismFor(t.Context(), []string{"cv-n1"})
 	c.parallelismMu.Unlock()
-	if count != 0 || err != nil {
-		t.Fatal(count, err)
+	if count != 0 || err != nil || !errors.Is(busy, errWorkDomainBusy) {
+		t.Fatal(count, err, busy)
 	}
 }
 

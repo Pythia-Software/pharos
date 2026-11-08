@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -507,6 +508,63 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 			t.Fatalf("this process's copy was removed: %v", err)
 		}
 		os.RemoveAll(own)
+	})
+	t.Run("only absence or a reused ID removes a copy", func(t *testing.T) {
+		// Stubbed observations: no real process is named. Each ID made one
+		// copy an hour ago.
+		const live, gone, refused, invalid, unsupported, reused, owner = 4242, 4343, 4444, 4545, 4646, 4747, 4848
+		cases := livenessCases(0)
+		answers := map[int]livenessAnswer{live: cases["present"], gone: cases["absent"], refused: cases["permission"],
+			invalid: cases["invalid"], unsupported: cases["unsupported"], reused: cases["permission"], owner: cases["present"]}
+		observed := stubProcessLiveness(t, answers)
+		made := time.Now().Add(-time.Hour)
+		var asked []int
+		override(t, &sqliteCopyProcessStart, func(pid int) (time.Time, bool) {
+			asked = append(asked, pid)
+			switch pid {
+			case reused:
+				return made.Add(time.Minute), true // started after the copy
+			case owner:
+				return made.Add(-time.Minute), true // started before: may own it
+			}
+			return time.Time{}, false
+		})
+		dir := func(name string) string { return filepath.Join(copies, name) }
+		kept := []string{dir("4242-a"), dir("4444-a"), dir("4545-a"), dir("4646-a"), dir("4848-a"),
+			// Not named for a single positive process ID.
+			dir("0-a"), dir("+4343-a"), dir("04343-a"), dir("copy-a")}
+		removed := []string{dir("4343-a"), dir("4747-a")}
+		for _, path := range append(append([]string(nil), kept...), removed...) {
+			if err := os.MkdirAll(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "copy.db"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(path, made, made); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sweepSQLiteCopies()
+		for _, path := range kept {
+			if _, err := os.Stat(filepath.Join(path, "copy.db")); err != nil {
+				t.Fatalf("a copy without proof its process ended was removed: %s, %v", path, err)
+			}
+		}
+		for _, path := range removed {
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("an ended process's copy is left: %s, %v", path, err)
+			}
+		}
+		for _, pid := range append(observed.observed(), asked...) {
+			if _, ok := answers[pid]; !ok {
+				t.Fatalf("a folder not named for a process was probed as %d", pid)
+			}
+		}
+		if slices.Contains(asked, gone) {
+			t.Fatal("positive absence still read a start time")
+		}
+		os.RemoveAll(copies)
 	})
 	t.Run("a cancelled reader stops before the ladder", func(t *testing.T) {
 		root := t.TempDir()

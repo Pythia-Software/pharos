@@ -374,7 +374,7 @@ var (
 func beginCapture(config Config) (*captureSession, error) {
 	if d, err := readLibraryDescriptor(config); err == nil {
 		config.PendingCapture = config.PendingCapture || d.RetainPendingEvidence
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if !libraryDescriptorMissing(err) {
 		return nil, err
 	}
 	root := config.CaptureRoot

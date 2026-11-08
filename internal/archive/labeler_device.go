@@ -99,8 +99,67 @@ func (c *Catalog) labelerRunner(ctx context.Context, settings LabelerSettings, m
 	if err == nil {
 		pool := runner.Pool()
 		c.labelerWorkers.Store(model.Path, labelerWorkerObservation{labelerDeviceKey(settings, model.Path), func() labelrt.WorkerInfo { return pool.Ready().Worker }})
+		if c.ops != nil && c.ops.telemetry {
+			release = c.observeLabelerUse(ctx, runner, model, cfg.GPU, release)
+		}
 	}
 	return runner, release, err
+}
+
+// Every inference caller uses labelerRunner. Track leases, including callers
+// without telemetry, so overlapping users cannot claim one helper's CPU as
+// their own. Intervals begin after Ready and end before releasing the lease;
+// model loading and later idle residency remain process-level context.
+type labelerUse struct{ helpers []*taskHelperScope }
+
+func (c *Catalog) observeLabelerUse(ctx context.Context, runner *labelrt.Runner, model *labelrt.Model, gpu bool, release func()) func() {
+	c.labelerUsesMu.Lock()
+	if c.labelerUses == nil {
+		c.labelerUses = map[*labelrt.Runner][]*labelerUse{}
+	}
+	users := c.labelerUses[runner]
+	for _, user := range users {
+		for _, helper := range user.helpers {
+			helper.shared()
+		}
+	}
+	use := &labelerUse{}
+	pids := runner.Pool().PIDs()
+	resources := taskResourcesFrom(ctx)
+	grant := taskAllocation{MemoryEstimateBytes: uint64(max(0, model.MemoryMB)) * (1 << 20) * uint64(len(pids))}
+	if gpu {
+		grant.GPU = 1
+	}
+	endAllocation := resources.allocate(grant)
+	for _, pid := range pids {
+		use.helpers = append(use.helpers, resources.helperStart(pid, "labeler:"+model.Manifest.Name, len(users) == 0))
+	}
+	c.labelerUses[runner] = append(users, use)
+	c.labelerUsesMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			c.labelerUsesMu.Lock()
+			for _, helper := range use.helpers {
+				helper.end()
+			}
+			users := c.labelerUses[runner]
+			for index, user := range users {
+				if user == use {
+					users = append(users[:index], users[index+1:]...)
+					break
+				}
+			}
+			if len(users) == 0 {
+				delete(c.labelerUses, runner)
+			} else {
+				c.labelerUses[runner] = users
+			}
+			c.labelerUsesMu.Unlock()
+			endAllocation()
+			release()
+		})
+	}
 }
 
 func (s *Server) labelerDevice(settings LabelerSettings) labelerDevice {

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -374,16 +376,87 @@ func TestMCPAnswersAFaultedCallAndRestarts(t *testing.T) {
 	server := newMCPServer(config.Path)
 	server.identity = testIdentity
 	server.answer = faultingAnswer(t)
-	restarts := 0
-	server.restart = func([]byte) error { restarts++; return errors.New("no restart in this test") }
+	// The restart goes through restartMCP to a replacement that fails, as
+	// on a platform that cannot replace a process.
+	type replacement struct {
+		executable string
+		argv, env  []string
+	}
+	var replacements []replacement
+	override(t, &replaceProcess, func(executable string, argv, env []string) error {
+		replacements = append(replacements, replacement{executable, argv, env})
+		return errProcessReplaceUnsupported
+	})
+	executable := runningExecutable()
 	call := startMCP(t, server)
 	text, isError := toolText(t, call("tools/call", map[string]any{"name": "search_work", "arguments": map[string]any{"query": "fault-now"}}))
 	if !isError || !strings.Contains(text, "Pharos library disconnected") {
 		t.Fatalf("faulted call: %v %s", isError, text)
 	}
 	// Were the restart to fail, the process would still answer.
-	if text, isError := toolText(t, call("tools/call", map[string]any{"name": "search_work", "arguments": map[string]any{"query": "parser"}})); isError || !strings.Contains(text, "Parser maintenance") || restarts != 1 {
-		t.Fatalf("call after the fault: %v %s, %d restarts", isError, text, restarts)
+	if text, isError := toolText(t, call("tools/call", map[string]any{"name": "search_work", "arguments": map[string]any{"query": "parser"}})); isError || !strings.Contains(text, "Parser maintenance") || len(replacements) != 1 {
+		t.Fatalf("call after the fault: %v %s, %d restarts", isError, text, len(replacements))
+	}
+	// The replacement is this executable with these arguments and this
+	// environment plus the input read ahead: none here, one request a write.
+	got := replacements[0]
+	if got.executable != executable || !slices.Equal(got.argv, os.Args) || !slices.Equal(got.env, append(os.Environ(), mcpPendingEnv+"=")) {
+		t.Fatalf("replacement %q %q, environment ends %q", got.executable, got.argv, got.env[len(got.env)-1])
+	}
+
+	// Input read ahead of a faulted call reaches the replacement exactly.
+	request := func(id int, query string) string {
+		payload, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": "tools/call",
+			"params": map[string]any{"name": "search_work", "arguments": map[string]any{"query": query}}})
+		return string(payload) + "\n"
+	}
+	answers := func(output *bytes.Buffer) (ids []float64, texts []string) {
+		t.Helper()
+		for decoder := json.NewDecoder(output); decoder.More(); {
+			var response map[string]any
+			if err := decoder.Decode(&response); err != nil {
+				t.Fatal(err)
+			}
+			text, _ := toolText(t, response)
+			ids, texts = append(ids, response["id"].(float64)), append(texts, text)
+		}
+		return ids, texts
+	}
+	readAhead := request(2, "parser") + request(3, "parser")
+	replacements = nil
+	server = newMCPServer(config.Path)
+	server.identity = testIdentity
+	server.answer = faultingAnswer(t)
+	var output bytes.Buffer
+	if err := server.run(strings.NewReader(request(1, "fault-now")+readAhead), &output); err != nil {
+		t.Fatal(err)
+	}
+	// A failed replacement drops nothing: this process answers on.
+	if ids, texts := answers(&output); !slices.Equal(ids, []float64{1, 2, 3}) || !strings.Contains(texts[0], "Pharos library disconnected") || !strings.Contains(texts[2], "Parser maintenance") {
+		t.Fatalf("answers after a failed replacement: %v %q", ids, texts)
+	}
+	if len(replacements) != 1 {
+		t.Fatalf("%d replacements", len(replacements))
+	}
+	pending, ok := strings.CutPrefix(replacements[0].env[len(replacements[0].env)-1], mcpPendingEnv+"=")
+	if decoded, err := base64.StdEncoding.DecodeString(pending); !ok || err != nil || string(decoded) != readAhead {
+		t.Fatalf("pending input %q (%q, %v)", pending, decoded, err)
+	}
+	// Had it succeeded, the replacement starts from that environment and
+	// answers the read-ahead requests once, then the client's next input.
+	t.Setenv(mcpPendingEnv, pending)
+	replaced := newMCPServer(config.Path)
+	replaced.identity = testIdentity
+	replaced.answer = faultingAnswer(t)
+	output.Reset()
+	if err := replaced.run(strings.NewReader(request(4, "parser")), &output); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := answers(&output); !slices.Equal(ids, []float64{2, 3, 4}) {
+		t.Fatalf("replacement answered %v", ids)
+	}
+	if _, set := os.LookupEnv(mcpPendingEnv); set {
+		t.Fatal("the replacement passed its pending input on")
 	}
 }
 

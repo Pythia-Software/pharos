@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -474,6 +475,27 @@ func TestFingerprintInvalidationAndRecovery(t *testing.T) {
 	}
 	c.fingerprints.renderer = renderer
 	renderFingerprintTestEntity(t, c, "conversation", "fp-a")
+	// An earlier renderer that drew the same images hands them over, even after
+	// a version (0.9.0's) requeued everything; an entity without them still renders.
+	override(t, &fingerprintSameImages, map[string][]string{fingerprintVersion: {"same-renderer"}})
+	execTx(t, c.DB, `UPDATE fingerprint_images SET renderer='same-renderer';UPDATE fingerprint_entities SET dirty=1;UPDATE meta SET value='same-renderer' WHERE key='fingerprint_renderer'`)
+	if err := c.ensureFingerprintImages(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := c.fingerprintMetadata(t.Context(), fingerprintRequest{"conversation", "fp-a", "wide"}, true); err != nil || m.State != "ready" {
+		t.Fatal("identical renderer's images were not adopted", m, err)
+	}
+	var adopted, queued int
+	c.DB.QueryRow(`SELECT dirty FROM fingerprint_entities WHERE entity='conversation' AND id='fp-a'`).Scan(&adopted)
+	c.DB.QueryRow(`SELECT dirty FROM fingerprint_entities WHERE entity='workspace' AND id='fp-other'`).Scan(&queued)
+	if adopted != 0 || queued != 1 {
+		t.Fatalf("adoption settled the wrong entities: fp-a dirty=%d, fp-other dirty=%d", adopted, queued)
+	}
+	var stamped string
+	c.DB.QueryRow(`SELECT value FROM meta WHERE key='fingerprint_renderer'`).Scan(&stamped)
+	if stamped != fingerprintVersion {
+		t.Fatalf("adoption left the renderer version %q, so every open adopts again", stamped)
+	}
 	execTx(t, c.DB, `UPDATE fingerprint_images SET renderer='older-renderer';UPDATE meta SET value='older-renderer' WHERE key='fingerprint_renderer'`)
 	if err := c.ensureFingerprintImages(t.Context()); err != nil {
 		t.Fatal(err)
@@ -688,6 +710,40 @@ func fingerprintRenderCases(tb testing.TB) []fingerprintRenderCase {
 	}
 	return cases
 }
+
+// The renderer version names the corpus's images, so a refactor that draws the
+// same pixels keeps stored PNGs and one that changes them requeues the cache.
+func TestFingerprintRendererVersion(t *testing.T) {
+	digest := sha256.New()
+	for _, sample := range fingerprintRenderCases(t) {
+		for _, image := range sample.Images {
+			fmt.Fprintf(digest, "%s %s %s %t %s\n", sample.Name, image.Profile, image.Theme, image.Events, image.PNGHash)
+		}
+	}
+	if version := hex.EncodeToString(digest.Sum(nil)); version != fingerprintVersion {
+		t.Fatalf("the parity corpus's images changed: set fingerprintVersion to %s", version)
+	}
+}
+
+func TestFingerprintWorkersShareOnePass(t *testing.T) {
+	c := &Catalog{ops: newOpRegistry("service")}
+	shared := &c.fingerprints.pass
+	first, second := shared.join(t.Context(), c), shared.join(t.Context(), c)
+	if first != second || len(c.ops.running()) != 1 {
+		t.Fatal("workers opened separate operations")
+	}
+	shared.worked(2)
+	shared.worked(3)
+	shared.leave(nil)
+	if len(c.ops.running()) != 1 {
+		t.Fatal("the first worker to finish ended the other's pass")
+	}
+	shared.leave(nil)
+	if views := c.ops.views(); len(c.ops.running()) != 0 || len(views) != 1 || views[0].Step.Done != 5 {
+		t.Fatalf("one pass with both workers' count: %+v", views)
+	}
+}
+
 func TestFingerprintRendererParity(t *testing.T) {
 	slowTest(t)
 	renderer, err := newFingerprintRenderer()
@@ -802,6 +858,65 @@ func BenchmarkFingerprintRender(b *testing.B) {
 					}
 				}
 			})
+		}
+	}
+}
+
+// Under population execution one admitted batch keeps both renderer slots
+// busy when its grant has two CPUs, renders one image at a time with one,
+// and drains every eligible entity without a gap between images.
+func TestFingerprintBatchUsesItsAllocation(t *testing.T) {
+	c, _ := seedFingerprintLibrary(t)
+	renderer, err := newFingerprintRenderer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := renderer.Render(t.Context(), fingerprintTestInput(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cpus := range []int{2, 1} {
+		execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=0;
+UPDATE fingerprint_entities SET dirty=1,priority=100,next_attempt=0 WHERE entity='conversation'`)
+		var mu sync.Mutex
+		active, peak := 0, 0
+		release := make(chan struct{})
+		started := make(chan struct{}, 16)
+		engine := fingerprintRenderFunc(func(ctx context.Context, _ any, _ int) (fingerprintRendered, error) {
+			mu.Lock()
+			active++
+			peak = max(peak, active)
+			mu.Unlock()
+			defer func() { mu.Lock(); active--; mu.Unlock() }()
+			started <- struct{}{}
+			select {
+			case <-release:
+				return result, nil
+			case <-ctx.Done():
+				return fingerprintRendered{}, ctx.Err()
+			}
+		})
+		c.fingerprints.renderer, c.fingerprints.secondary = engine, engine
+		type outcome struct {
+			rendered int64
+			more     bool
+			err      error
+		}
+		done := make(chan outcome, 1)
+		go func() {
+			rendered, more, err := c.renderFingerprintBatch(t.Context(), workAllocation{CPUs: cpus}, false, time.Minute)
+			done <- outcome{rendered, more, err}
+		}()
+		for range cpus {
+			<-started
+		}
+		close(release)
+		got := <-done
+		if got.err != nil || got.more || got.rendered < 2 || peak != cpus {
+			t.Fatalf("%d CPUs: %+v, peak %d", cpus, got, peak)
+		}
+		if pending := countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1 AND next_attempt<=unixepoch()`); pending != 0 {
+			t.Fatalf("%d CPUs left %d entities", cpus, pending)
 		}
 	}
 }

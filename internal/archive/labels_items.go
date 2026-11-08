@@ -35,7 +35,7 @@ func newLabelsItemBuilder(ctx context.Context, db labelingReader) (*labelsItemBu
 	byConversation := map[string][]string{}
 	for _, row := range sessions {
 		conversation := firstString(row["conversation_id"])
-		byConversation[conversation] = append(byConversation[conversation], firstString(row["id"])+":"+firstString(row["kind"])+":"+firstString(row["child"])+":"+firstString(row["delegation"]))
+		byConversation[conversation] = append(byConversation[conversation], labelsSessionEntry(row))
 	}
 	for _, list := range byConversation {
 		sort.Strings(list)
@@ -46,6 +46,12 @@ func newLabelsItemBuilder(ctx context.Context, db labelingReader) (*labelsItemBu
 		return loadStoredAuthorship(ctx, db, `SELECT m.id,m.conversation_id,m.text,a.spans_json,a.total_chars FROM message_authorship a JOIN messages m ON m.id=a.message_id WHERE a.message_id=?`, id)
 	}
 	return &labelsItemBuilder{p: p, sessions: byConversation}, nil
+}
+
+// labelsSessionEntry is how a structure fingerprint lists one agent session
+// (a row of loadLabelingPass's sessions query).
+func labelsSessionEntry(row map[string]any) string {
+	return firstString(row["id"]) + ":" + firstString(row["kind"]) + ":" + firstString(row["child"]) + ":" + firstString(row["delegation"])
 }
 
 // fork shares only the catalog-wide read-only inputs. Conversation caches,

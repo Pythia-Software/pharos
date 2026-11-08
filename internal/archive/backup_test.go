@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -666,6 +667,21 @@ func TestBackupFollowsSymlinkedRootsAndNeverPrunesAnEmptyListing(t *testing.T) {
 	if second.FilesPruned != 0 || second.FilesCopied != 0 || !backupFileExists(t, filepath.Join(dest, "preserved", "link.json")) {
 		t.Fatalf("second backup: %+v", second)
 	}
+	// An earlier copy where the library has a symlink that cannot be
+	// identified keeps the item's earlier backup whole.
+	stale := filepath.Join(dest, "preserved", "stale.json")
+	writeSourceFile(t, stale, "gone from the library")
+	earlier := identityOf(t, filepath.Join(dest, "preserved", "link.json"))
+	t.Run("unidentified earlier copy", func(t *testing.T) {
+		hideIdentities(t, func(observed fileObservation) bool { return observed.key == earlier })
+		run := runBackup(t, config, dest, true)
+		if run.FilesPruned != 0 || !backupFileExists(t, stale) || !backupFileExists(t, filepath.Join(dest, "preserved", "link.json")) {
+			t.Fatalf("unidentified earlier copy: %+v", run)
+		}
+	})
+	if run := runBackup(t, config, dest, true); run.FilesPruned != 1 || backupFileExists(t, stale) || !backupFileExists(t, filepath.Join(dest, "preserved", "link.json")) {
+		t.Fatalf("identified earlier copy: %+v", run)
+	}
 	// archive_root now lists nothing (an unmounted drive's empty mount
 	// point, say): its backup is kept, with a warning.
 	if err := os.RemoveAll(filepath.Join(elsewhere, "preserved")); err != nil {
@@ -708,6 +724,72 @@ func TestBackupPruneKeepsFilesTheDestinationNamesDifferently(t *testing.T) {
 		if readText(t, filepath.Join(dest, "preserved", name)) != name {
 			t.Fatalf("%s is gone from the backup", name)
 		}
+	}
+
+	// A destination file the run accounts for but cannot identify might be
+	// any differently named entry, so nothing of the item is pruned.
+	stale, staleDir := filepath.Join(dest, "preserved", "stale.json"), filepath.Join(dest, "preserved", "old")
+	writeSourceFile(t, stale, "gone from the library")
+	writeSourceFile(t, filepath.Join(staleDir, "gone.json"), "gone too")
+	accounted := identityOf(t, filepath.Join(dest, "preserved", decomposed[0]))
+	t.Run("unidentified copy", func(t *testing.T) {
+		hideIdentities(t, func(observed fileObservation) bool { return observed.key == accounted })
+		run := runBackup(t, config, dest, true)
+		if run.FilesPruned != 0 || !backupFileExists(t, stale) || !strings.Contains(strings.Join(run.Warnings, " "), "could not all be identified") {
+			t.Fatalf("pruned with an unidentified copy: %+v", run)
+		}
+	})
+	// A destination entry that cannot be identified is kept, a directory
+	// with everything in it; what can be is still pruned.
+	old := identityOf(t, staleDir)
+	t.Run("unidentified directory", func(t *testing.T) {
+		hideIdentities(t, func(observed fileObservation) bool { return observed.key == old })
+		run := runBackup(t, config, dest, true)
+		if run.FilesPruned != 1 || backupFileExists(t, stale) || !backupFileExists(t, filepath.Join(staleDir, "gone.json")) {
+			t.Fatalf("unidentified directory: %+v", run)
+		}
+	})
+	run = runBackup(t, config, dest, true)
+	if run.FilesPruned != 1 || backupFileExists(t, filepath.Join(staleDir, "gone.json")) {
+		t.Fatalf("identified again: %+v", run)
+	}
+	for _, name := range composed {
+		if readText(t, filepath.Join(dest, "preserved", name)) != name {
+			t.Fatalf("%s is gone from the backup", name)
+		}
+	}
+}
+
+// Without file identities a backup copies hard-linked files on their own,
+// and --prune deletes nothing it cannot account for.
+func TestBackupWithoutFileIdentitiesCopiesAndKeeps(t *testing.T) {
+	config, dest := backupFixture(t)
+	blob, link := filepath.Join(config.ArchiveRoot, "blobs", "ab"), filepath.Join(config.ArchiveRoot, "package", "ab.json")
+	writeSourceFile(t, blob, "evidence")
+	if err := os.Link(blob, link); err != nil {
+		t.Skip("no hard links here:", err)
+	}
+	linked := runBackup(t, config, dest, false)
+	first, firstErr := os.Stat(filepath.Join(dest, "preserved", "blobs", "ab"))
+	second, secondErr := os.Stat(filepath.Join(dest, "preserved", "package", "ab.json"))
+	if _, err := observeFile(first); err == nil && (firstErr != nil || secondErr != nil || !os.SameFile(first, second)) {
+		t.Fatalf("hard link not kept: %+v", linked)
+	}
+
+	override(t, &observeFile, func(fs.FileInfo) (fileObservation, error) { return fileObservation{}, errFileIdentityUnsupported })
+	plain := filepath.Join(t.TempDir(), "plain")
+	stubBackupDrives(t, canonical(filepath.Dir(plain)), nil)
+	run := runBackup(t, config, plain, false)
+	first, firstErr = os.Stat(filepath.Join(plain, "preserved", "blobs", "ab"))
+	second, secondErr = os.Stat(filepath.Join(plain, "preserved", "package", "ab.json"))
+	if firstErr != nil || secondErr != nil || os.SameFile(first, second) || readText(t, filepath.Join(plain, "preserved", "package", "ab.json")) != "evidence" || run.FilesCopied != linked.FilesCopied {
+		t.Fatalf("copies without identity: %+v %v %v", run, firstErr, secondErr)
+	}
+	stale := filepath.Join(plain, "preserved", "stale.json")
+	writeSourceFile(t, stale, "gone from the library")
+	run = runBackup(t, config, plain, true)
+	if run.FilesPruned != 0 || !backupFileExists(t, stale) || run.FilesCopied != 0 {
+		t.Fatalf("pruned without identities: %+v", run)
 	}
 }
 
