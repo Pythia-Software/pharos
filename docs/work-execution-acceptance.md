@@ -25,7 +25,7 @@ is due no later than the next normal release after acceptance.
 The retained comparison baseline is main commit
 `108c0367bab0b94466fb0f1c8114029e8d4d4a3d` (schema 24, without the
 executor), recorded in the [task inventory](work-task-inventory.json).
-The stack is rebased onto main `bbec0bab`; the retained baseline stays fixed.
+The stack is rebased onto main `269374e5`; the retained baseline stays fixed.
 Main now uses the native fingerprint renderer and shared file locks. A retained
 service and both probes must be rebuilt from this baseline and the same common
 probe bytes, with hashes recorded privately, before paired measurements count
