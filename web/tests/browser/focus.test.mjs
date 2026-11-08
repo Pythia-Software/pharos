@@ -1437,7 +1437,7 @@ test('session navigator scrolling reuses transcript geometry on a long session',
     },
   }});
   assert.equal(await page.locator('.token-marker').count(),960,'the fixture exercises hundreds of context profiles');
-  await page.getByRole('button',{name:'Close turns',exact:true}).click();
+  await page.getByRole('button',{name:/^Close (All )?Turns$/i}).click();
   await settled();
   // Warm the sticky transition before instrumenting the scroll path.
   await page.locator('.turn').nth(2).evaluate(turn=>turn.scrollIntoView({block:'start',behavior:'instant'}));
@@ -1454,7 +1454,7 @@ test('session navigator scrolling reuses transcript geometry on a long session',
   const measurements=await measureScroll();
   assert.equal(measurements.transcriptReads,0,'scrolling must not remeasure transcript targets');
   t.diagnostic(JSON.stringify({fixture:'160 turns / 1,920 messages / 960 context samples, collapsed',...measurements}));
-  await page.getByRole('button',{name:'Open turns',exact:true}).click();
+  await page.getByRole('button',{name:/^Open (All )?Turns$/i}).click();
   await settled();
   const expanded=await measureScroll();
   assert.equal(expanded.transcriptReads,0,'expanded history also reuses cached geometry');
