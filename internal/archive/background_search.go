@@ -85,6 +85,7 @@ func (c *Catalog) backgroundSearchView(ctx context.Context) error {
 		return func(ctx context.Context) (bool, error) { count, err := fn(ctx); return count > 0, err }
 	}
 	return c.runSearchBatches(ctx, []searchBatch{
+		{kindNames, countBatch(func(ctx context.Context) (int, error) { return c.refreshConversationNames(ctx, 25) })},
 		{"maintenance.origins", func(ctx context.Context) (bool, error) { return c.publishOrigins(ctx) }},
 		{"maintenance.library-view", countBatch(func(ctx context.Context) (int, error) {
 			count, err := c.RefreshLibrary(ctx, 10)

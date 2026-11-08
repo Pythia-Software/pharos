@@ -587,6 +587,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.backfillChildSessionKinds(); err != nil {
 		return err
 	}
+	if err := c.ensureConversationNames(); err != nil {
+		return err
+	}
 	if err := c.ensureWorkspaceNames(); err != nil {
 		return err
 	}

@@ -78,6 +78,8 @@ type executionConversationRow struct {
 	depth                                                                     int
 	mainSession, mainParent                                                   string
 	typed                                                                     bool // typed evidence is current for the transcript
+	name, nameSource, humanName, requestName, contextName                     string
+	nameRank                                                                  int
 }
 
 type executionSessionRow struct {
@@ -164,6 +166,9 @@ func fetchExecutionSourceRows(ctx context.Context, q queryer, scope, copyScope [
 			typed: integer(cv["typed"]) != 0}
 		_ = json.Unmarshal([]byte(firstString(cv["aliases_json"])), &row.aliases)
 		out.conversations[row.id] = row
+	}
+	if err := loadExecutionNames(ctx, q, scope, out); err != nil {
+		return nil, err
 	}
 	// Only identity fields: no transcript bodies besides the clipped assignment.
 	where, args = executionScope("a.conversation_id", scope)
@@ -407,7 +412,8 @@ func (rows *executionSourceRows) assemble() *executionEvidence {
 		cv := rows.conversations[id]
 		e.Streams = append(e.Streams, executionStream{Ref: conversationRef(id), ConversationID: id, WorkspaceID: cv.workspace,
 			Provider: cv.provider, Account: cv.account, NativeID: cv.native, MainSessionID: cv.mainSession, RecordedDepth: cv.depth, Subagent: cv.depth > 0,
-			Nickname: cv.nickname, AgentPath: cv.path, At: cv.started, SourcePosition: -1, Observed: true, Typed: cv.typed})
+			Nickname: cv.nickname, AgentPath: cv.path, At: cv.started, SourcePosition: -1, Observed: true, Typed: cv.typed,
+			AuthoredName: cv.name, NameSource: cv.nameSource, NameRank: cv.nameRank, HumanName: cv.humanName, RequestName: cv.requestName, ContextName: cv.contextName})
 		namespace := cv.provider + "/" + cv.account
 		claudeRoot, familyRule := "", ""
 		switch cv.provider {

@@ -462,8 +462,12 @@ they do not occupy falsely confirmed agent rows.
 
 The resolver chooses presentation metadata once:
 
-- **Label:** preserve supported authored names; otherwise use the originating
-  launch's assignment, then agent nickname, then a provider/native-ID fallback.
+- **Label:** preserve supported source names and overrides in their conversation
+  scope; otherwise use the first classified human-written words, then a recorded
+  launch/request assignment, readable nickname or explicitly scoped task context.
+  A missing retained request is stated explicitly; native IDs remain metadata,
+  never primary labels. [Naming and backfill](conversation-naming.md) describe
+  the compact cache and source freshness rules used by resolver `execution-v7`.
   Nicknames remain available as metadata. The same agent is not renamed merely
   because its transcript is now selected.
 - **Order:** return a deterministic total sibling key from originating launch

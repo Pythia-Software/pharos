@@ -19,6 +19,7 @@ var queryCacheTables = []string{
 	"repositories", "workspaces", "workspace_names", "work_items", "conversations",
 	"messages", "message_authorship", "message_authorship_spans", "conversation_launches", "work_peer_links",
 	"conversation_documents", "conversation_identity_links", "conversation_group_membership",
+	"conversation_name_candidates", "authorship_message_state",
 	"declared_native_aliases", "agent_sessions", "agent_session_usage", "agent_session_messages",
 	"agent_session_token_evidence", "usage_attribution_state",
 	"model_requests", "tool_calls", "tool_ledger_state", "tool_commands", "tool_urls",

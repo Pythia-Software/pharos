@@ -366,6 +366,7 @@ operation.
 | `maintenance.fingerprints` | Render fingerprints · Rendering fingerprints | schedule, user, read | svc | D:w W:w | — | — | Stops during rendering; unfinished images stay queued and resume next time. | record | >10 s | bg |
 | `maintenance.library-view` | Index the Search view · Indexing the Search view | chained (dirty workspaces), version | svc | D:w W:w | view | view | Stops; the batch in progress is abandoned, and it carries on when Pharos next opens the library or on Resume. | record | >15 s (today's `libraryCatchUpShown`) | bg |
 | `maintenance.previews` | Fill in previews · Filling in previews | daemon pass | svc | D:w W:w | view | — | Stops; it carries on later. | record | never | bg |
+| `maintenance.conversation-names` | Name conversations · Naming conversations | daemon pass | svc | D:w W:w | view | — | Stops between batches; unfinished names carry on later. | record | never | bg |
 | `maintenance.parallelism` | Measure parallel work · Measuring parallel work | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
 | `maintenance.session-shape` | Measure session shape · Measuring session shape | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
 | `maintenance.cache-warm` | Warm page caches · Warming page caches | daemon pass | svc | D:r | — | — | Stops. | record | never | bg |

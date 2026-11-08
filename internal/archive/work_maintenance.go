@@ -229,6 +229,7 @@ const (
 	kindOrigins        = "maintenance.origins"
 	kindLibraryView    = "maintenance.library-view"
 	kindPreviews       = "maintenance.previews"
+	kindNames          = "maintenance.conversation-names"
 	kindSubstring      = "maintenance.search.substring"
 	kindToolOutput     = "maintenance.search.tool-output"
 	kindTextSearch     = "maintenance.search.text"
@@ -253,11 +254,11 @@ const (
 
 // searchKinds are what the Search item (and the continuous Frequently
 // schedule) keeps current: the stored projection, then the index backfills.
-var searchKinds = []string{kindOrigins, kindLibraryView, kindPreviews, kindParallelism, kindSessionShape, kindSubstring, kindToolOutput, kindTextSearch, kindToolSearch, kindQueryText}
+var searchKinds = []string{kindOrigins, kindLibraryView, kindNames, kindPreviews, kindParallelism, kindSessionShape, kindSubstring, kindToolOutput, kindTextSearch, kindToolSearch, kindQueryText}
 
 // projectionKinds are held by the Library refresh's Stop, as the classic
 // maintainLibrary pass that ran them was.
-var projectionKinds = []string{kindOrigins, kindLibraryView, kindPreviews, kindParallelism, kindSessionShape}
+var projectionKinds = []string{kindOrigins, kindLibraryView, kindNames, kindPreviews, kindParallelism, kindSessionShape}
 
 // stageKinds maps the analysis chain's stage names to their task kinds.
 var stageKinds = map[string]string{"identities": kindIdentities, "git": kindGit, "tools": kindTools, "authorship": kindAuthorship,
@@ -360,6 +361,11 @@ func (s *Server) maintenanceWorkDefinitions(_ *workAuthority) ([]workDefinition,
 					AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)`)
 			},
 			step: libraryStep(func(ctx context.Context) (int, error) { return c.refreshPreviews(ctx, 25) })},
+		{kind: kindNames, phase: "name", hold: projectionHold, loop: true,
+			probe: func(ctx context.Context) (bool, error) {
+				return catalogExists(ctx, c, "SELECT 1 FROM conversation_names_state WHERE dirty=1")
+			},
+			step: libraryStep(func(ctx context.Context) (int, error) { return c.refreshConversationNames(ctx, 25) })},
 		{kind: kindSubstring, phase: "build", once: true, loop: true, step: cursorStep(c.indexSubstringBatch)},
 		{kind: kindToolOutput, phase: "remove", once: true, loop: true, step: cursorStep(func(ctx context.Context) (bool, error) { return migration.step(ctx, c) })},
 		{kind: kindTextSearch, phase: "build", once: true, loop: true, step: cursorStep(c.indexTextSearchBatch)},

@@ -17,7 +17,9 @@ package archive
 // (sameCallCopies); those on a cycle are no longer copies either.
 // v6: a launch whose result ends in a validated harness usage footer
 // (readLegacyLaunchOutcome) created the agent it names, retained or not.
-const executionResolverVersion = "execution-v6"
+// v7: scoped source names and first human/request excerpts replace native-ID
+// labels, consistently across mirrored and continued recordings.
+const executionResolverVersion = "execution-v7"
 
 // sourceKind names what a sourceRef locates.
 type sourceKind string
@@ -152,6 +154,11 @@ type executionStream struct {
 	Subagent      bool // recorded as a subagent stream
 	// Presentation inputs, chosen once by the resolver.
 	AuthoredName string // a supported user/provider-authored name
+	NameSource   string // source, linked or override (never an automated request)
+	NameRank     int    // native conversation (0) before app session (1)
+	HumanName    string // first classified human-written words
+	RequestName  string // recorded automated/agent assignment excerpt
+	ContextName  string // explicitly scoped task/attempt context
 	Assignment   string // the originating launch's task (launch streams)
 	Nickname     string
 	AgentPath    string
@@ -300,7 +307,7 @@ func (a executionAncestry) DepthQuality() string {
 
 type executionLabel struct {
 	Text   string
-	Source string // authored, assignment, nickname, agent_path, native_id
+	Source string // authored, override, typed, assignment, nickname, context, unavailable
 }
 
 // executionOrderKey is the total sibling order, derived before any projection.

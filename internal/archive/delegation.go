@@ -96,13 +96,15 @@ type delegationNode struct {
 	// Label is the execution's one name in every reader and projection
 	// (delegationProjection.label). Subtitle is local context, such as the
 	// workspace title, that never replaces it.
-	Label    string `json:"label"`
-	Subtitle string `json:"subtitle,omitempty"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	Effort   string `json:"effort"`
-	Coverage string `json:"coverage"`
-	Usage    string `json:"usage_status"`
+	Label       string `json:"label"`
+	LabelSource string `json:"label_source"`
+	NativeID    string `json:"native_id,omitempty"`
+	Subtitle    string `json:"subtitle,omitempty"`
+	Provider    string `json:"provider"`
+	Model       string `json:"model"`
+	Effort      string `json:"effort"`
+	Coverage    string `json:"coverage"`
+	Usage       string `json:"usage_status"`
 	// Depth is layout indentation within this snapshot. Ancestry carries the
 	// semantic parent state; its depth is absent unless the chain reaches a
 	// known root. AncestorIDs are the resolved chain, nearest first.
@@ -480,6 +482,12 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		if x != nil {
 			n.execution = x.ID
 			n.Label = x.Label.Text
+			n.LabelSource = x.Label.Source
+			if stream := res.Stream(sourceRef{sourceConversation, x.Conversation}); stream != nil {
+				n.NativeID = stream.NativeID
+			} else {
+				n.NativeID = firstString(lead["native_id"])
+			}
 			if len(x.Segments) > 1 {
 				n.Segments = p.segments(x)
 			}
@@ -550,7 +558,10 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		}
 		meta := metas[cid]
 		n := &delegationNode{ID: p.nodeID(id), execution: id, ConversationID: cid, WorkspaceID: firstString(meta.WorkspaceID, x.WorkspaceID), Provider: firstString(meta.Provider, x.Provider),
-			Model: meta.Model, Coverage: meta.Coverage, Label: x.Label.Text, Usage: "unavailable", ContextOnly: true, Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
+			Model: meta.Model, Coverage: meta.Coverage, Label: x.Label.Text, LabelSource: x.Label.Source, Usage: "unavailable", ContextOnly: true, Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
+		if stream := res.Stream(sourceRef{sourceConversation, cid}); stream != nil {
+			n.NativeID = stream.NativeID
+		}
 		if x.Conversation != "" && meta.Title != n.Label {
 			n.Subtitle = meta.Title
 		}
@@ -1600,7 +1611,7 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 	nodes := []*delegationNode{}
 	matched := map[string]bool{}
 	for _, n := range snapshot.Nodes {
-		if (provider == "" || n.Provider == provider) && (search == "" || strings.Contains(strings.ToLower(n.Label+" "+n.Provider+" "+n.Model), search)) {
+		if (provider == "" || n.Provider == provider) && (search == "" || strings.Contains(strings.ToLower(n.Label+" "+n.Provider+" "+n.Model+" "+n.NativeID+" "+n.ID+" "+n.ConversationID), search)) {
 			matched[n.ID] = true
 		}
 	}

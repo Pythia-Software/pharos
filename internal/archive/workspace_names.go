@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -14,6 +15,8 @@ import (
 // cannot mistake a borrowed or authored label for the provider's own name.
 const workspaceNamesVersion = "workspace-names-v1/" + authorshipVersion
 
+var identifierNamePattern = regexp.MustCompile(`(?i)^(?:[0-9a-f]{8,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:workspace|conversation|agent-session|session|message|thread|ask|conductor)[_:-][0-9a-f-]+)(?::.*)?$`)
+
 func meaningfulWorkspaceTitle(title, sourceID string) bool {
 	title = strings.TrimSpace(title)
 	switch strings.ToLower(title) {
@@ -23,8 +26,17 @@ func meaningfulWorkspaceTitle(title, sourceID string) bool {
 	if title == sourceID {
 		return false
 	}
+	if identifierNamePattern.MatchString(strings.Trim(title, "{}")) || strings.HasPrefix(title, "gAAAA") {
+		return false
+	}
+	if !strings.ContainsAny(title, " \t\n") && (strings.HasPrefix(title, "/") || strings.HasPrefix(title, "~/") || strings.HasPrefix(title, "./") || strings.HasSuffix(title, ".jsonl")) {
+		return false
+	}
 	for _, label := range []string{"Codex", "Claude", "Conductor", "ChatGPT", "Antigravity", "Antigravity CLI", "Antigravity IDE", "Cursor", "Zed"} {
 		if title == label+" "+short(sourceID) {
+			return false
+		}
+		if rest, ok := strings.CutPrefix(title, label+" "); ok && identifierNamePattern.MatchString(rest) {
 			return false
 		}
 	}
@@ -40,7 +52,13 @@ func authoredWorkspaceTitle(text string, spans []authorSpan) string {
 			parts = append(parts, text[span.Start:span.End])
 		}
 	}
-	words := strings.Fields(strings.Join(parts, " "))
+	return nameExcerpt(strings.Join(parts, " "))
+}
+
+// A presentation bound, shared by human excerpts and recorded assignments;
+// clipping a request does not classify its authorship.
+func nameExcerpt(text string) string {
+	words := strings.Fields(text)
 	if len(words) == 0 {
 		return ""
 	}
@@ -118,6 +136,7 @@ func invalidateWorkspaceAuthorship(tx *sql.Tx, id string, merged bool) error {
 type workspaceName struct {
 	id, kind, scope, nativeID, current, source, display, override, authored, message, sentAt string
 	origin, from                                                                             string
+	request, requestKind                                                                     string
 }
 
 type workspaceNameEdge struct{ left, right string }
@@ -206,7 +225,7 @@ func refreshWorkspaceNames(tx *sql.Tx, ids []string) error {
 	}
 	query := `SELECT w.id,w.source_kind,w.source_id,w.title,n.source_title,n.source_scope,n.display_title,n.display_source,n.display_workspace_id,n.override_title,
 		CASE WHEN m.content_hash=n.authored_hash AND n.authored_version=? THEN n.authored_title END authored_title,
-		n.authored_message_id,n.authored_at FROM workspaces w JOIN workspace_names n ON n.workspace_id=w.id
+		n.authored_message_id,n.authored_at,` + workspaceRequestCandidateSQL + ` request_candidate FROM workspaces w JOIN workspace_names n ON n.workspace_id=w.id
 		LEFT JOIN messages m ON m.id=n.authored_message_id`
 	args := []any{workspaceNamesVersion}
 	if ids != nil {
@@ -229,6 +248,9 @@ func refreshWorkspaceNames(tx *sql.Tx, ids []string) error {
 			current: firstString(row["title"]), source: firstString(row["source_title"]), display: firstString(row["display_title"]),
 			origin: firstString(row["display_source"]), from: firstString(row["display_workspace_id"]),
 			override: firstString(row["override_title"]), authored: firstString(row["authored_title"]), message: firstString(row["authored_message_id"]), sentAt: firstString(row["authored_at"])}
+		var request struct{ Title, Kind string }
+		_ = json.Unmarshal([]byte(asString(row["request_candidate"])), &request)
+		n.request, n.requestKind = request.Title, request.Kind
 		// An explicit catalog rename wins over every automatic name, including
 		// source renames. The previous applied title makes it distinguishable.
 		if n.current != n.display && meaningfulWorkspaceTitle(n.current, n.nativeID) {
@@ -308,6 +330,8 @@ func refreshWorkspaceNames(tx *sql.Tx, ids []string) error {
 				}
 				if chosen.authored != "" {
 					title, origin, from = chosen.authored, "typed", chosen.id
+				} else if n.request != "" {
+					title, origin, from = n.request, n.requestKind, id
 				}
 			}
 		}

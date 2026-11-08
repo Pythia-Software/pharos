@@ -158,6 +158,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops; the batch in progress is abandoned, and it carries on when Pharos next opens the library or on Resume.", Latency: "record", Journal: journalLonger(15 * time.Second), Priority: priorityBackground},
 	{Kind: "maintenance.previews", Class: workClassPartition, Label: "Fill in previews", Verb: "Filling in previews", Holds: "D:w W:w", Affects: "view",
 		OnEject: "Stops; it carries on later.", Latency: "record", Journal: journalNever, Priority: priorityBackground},
+	{Kind: "maintenance.conversation-names", Class: workClassPartition, Label: "Name conversations", Verb: "Naming conversations", Holds: "D:w W:w", Affects: "view",
+		OnEject: "Stops between batches; unfinished names carry on later.", Latency: "record", Journal: journalNever, Priority: priorityBackground},
 	{Kind: "maintenance.parallelism", Class: workClassPopulation, Label: "Measure parallel work", Verb: "Measuring parallel work", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops; it carries on later.", Latency: "record", Journal: journalNever, Priority: priorityBackground},
 	{Kind: "maintenance.session-shape", Class: workClassPopulation, Label: "Measure session shape", Verb: "Measuring session shape", Holds: "D:w W:w", Affects: "—",
