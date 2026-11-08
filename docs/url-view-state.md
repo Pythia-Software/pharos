@@ -170,7 +170,7 @@ cached geometry; scrolling does not remeasure transcript elements.
 
 ## Attention
 
-`highlight` is repeatable; `reveal` names one landing target. Reveal means **scroll and distinctive persistent highlighting**, without moving browser/keyboard focus. Ordinary tabbing and scrolling never change these parameters. Clear highlights removes the instructions.
+`highlight` is repeatable; `reveal` names one landing target. Reveal means **scroll and distinctive persistent highlighting**, without moving browser/keyboard focus. Ordinary tabbing and scrolling never change these parameters. Clear highlights removes the instructions. The right-click menu offers Clear Highlights anywhere on the page while highlights are present. Escape also clears them by default, after active dialogs and editors have handled it; the shortcut can be disabled in Settings → App preferences.
 
 Targets include the page, controls, named sections, card definition IDs, message/tool-call IDs, session IDs, records in the current result page, and literal text. IDs refer to data/semantic identity rather than DOM order. A row target highlights its actual rendered row through public table extension points. It does not open a modal or broaden a query.
 

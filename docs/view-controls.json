@@ -2452,6 +2452,15 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
+      "key": "html:6c593b43c068b90b:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"escapeClearsHighlights\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"escapeClearsHighlightsTitle\" aria-describedby=\"escapeClearsHighlightsDescription\" aria-checked=\"true\">",
+      "contract": "settings",
+      "reason": "Library preference for the Escape shortcut; it does not change the linked view."
+    },
+    {
       "key": "html:6ee22a83547c6076:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -9052,6 +9061,15 @@
       "control": "onClick={() => setAttempt(value => value + 1)}",
       "contract": "action",
       "reason": "Retry resolves the retained card source again and replaces the URL with its canonical dashboard state; the attempt count is transient."
+    },
+    {
+      "key": "514fb9b45bb95972:0",
+      "file": "web/src/view-attention.ts",
+      "owner": "installViewAttention",
+      "tag": "button",
+      "control": "\"button\"",
+      "contract": "action",
+      "reason": "Transient context menu action clears linked attention from the URL."
     },
     {
       "key": "a77d7bde4338f61f:0",
