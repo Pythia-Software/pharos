@@ -480,6 +480,9 @@ const ROUTES = [
   // cycle) not drawn above.
   { name: "MCP dashboard weekday cycle", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "cycle", cycle: "weekday", metric: "time", split: "none", reduce: "mean" }))}`, ready: `.usage-mcp-dashboard ${analysisReady}`,
     check: async page => assert.deepEqual(await page.locator(".usage-mcp-dashboard [role=alert], .usage-mcp-dashboard .query-table-error").allTextContents(), [], "the dashboard reports an error") },
+  { name: "Analyze Work Hours dashboard", url: "/analyze?analyze_topic=work_hours", ready: ".usage-work-hours-dashboard .usage-chart" },
+  { name: "Analyze habits punchcard", url: "/analyze?analyze_topic=habits&habits_view=punchcard", ready: '[data-pharos-target="section:habits-punchcard"]' },
+  { name: "Analyze habits daily schedule", url: "/analyze?analyze_topic=habits&habits_view=days", ready: ".habits-days-chart" },
   { name: "Analyze habits dashboard", url: "/analyze?analyze_topic=habits&habits_day=" + new Date(Date.now() - 86400000).toISOString().slice(0, 10), ready: ".habits-panel .habits-day" },
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },

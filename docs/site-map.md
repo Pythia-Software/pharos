@@ -56,7 +56,7 @@ routes. Legacy aliases are not offered; only canonical routes are.
 | Home | Carousel state, card identities, disclosures and shared navigation controls |
 | Cards | Filters and sort, and every card (see Cards) |
 | Library | Applied text searches and scope, result presentation, and full native `q_library` |
-| Analyze dashboards | Every topic, with chart, filters and window |
+| Analyze dashboards | Catalog charts, filters and windows; Habits chart selectors and their per-view ranges in the view contract |
 | Analyze query | Each dataset, with full native `q_<dataset>` |
 | Findings | List, finding, tab, repo, and the table view with full native `q_findings` |
 | Work and reader | IDs, conversation, message, and the delegation explorer's options |
