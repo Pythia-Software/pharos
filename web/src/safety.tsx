@@ -4,12 +4,14 @@ import { CartPanel, ReviewDialog, type CartGroup, type Target } from "./findings
 import { useViewState } from "./view-state";
 import { ViewDisclosure } from "./view-disclosure";
 import { OptimizePlaceFilter, OptimizeRank } from "./optimize-controls";
-import { safetyShortName, safetyDashboardPlaces, safetyDashboardChecks, safetyDangerLabels, safetyRankLabels, safetyRankExplanations, safetyPromptLimit, safetyCartChecks, type SafetyCheckSummary, type SafetyDanger, type SafetyRank } from "./safety-dashboard-model";
+import { safetyShortName, safetyDashboardPlaces, safetyDashboardChecks, safetyDangerLabels, safetyRankLabels, safetyRankExplanations, safetyPromptLimit, safetyCartChecks, safetyEventRule, safetyEventsFreshness, type SafetyCheckSummary, type SafetyDanger, type SafetyRank } from "./safety-dashboard-model";
 import { OptimizeCard, OptimizeCart, OptimizeSelectionBar } from "./optimize-shared";
 import { type SafetyView, safetyURL, safetyCheckTableURL, safetyStateLabels, safetyTableFocus } from "./safety-route";
-import type { QueryState } from "@pythia-software/query-table-core";
+import { predicatesOf, type QueryState, type WhereClause } from "@pythia-software/query-table-core";
+import { optimizeTableRemainder, type OptimizeTableSchemas } from "./optimize-table-title";
 import { useSelection, type SelectionApi } from "@pythia-software/query-table-react";
 import { onSafetyChange } from "./dataset-refresh";
+import type { AgentEventsCoverage } from "./agent-events-freshness";
 
 const api = "/api/findings/safety";
 type State = "open" | "handed_off" | "dismissed";
@@ -17,7 +19,7 @@ type Card = { id: string; rule: string; danger: SafetyDanger; subject: string; t
 // quote evidence is an agent's own sentence (a safeguard check) rather than a command.
 type Evidence = { id: string; call_id: string; message_id: string; at: string; command: string; cwd: string; cwd_basis: string; status: string; outcome: string; conditional: boolean; path: string; quote?: boolean };
 type Detail = Card & { questions: string[]; evidence: Evidence[] };
-type Overview = { cases: Card[]; summary: Record<State, number>; cart: CartGroup[]; targets: Target[]; built_at: string | null; scanned_calls: string; coverage: string };
+type Overview = { cases: Card[]; summary: Record<State, number>; cart: CartGroup[]; targets: Target[]; built_at: string | null; scanned_calls: string; coverage: string; events_freshness?: AgentEventsCoverage };
 
 async function request<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -68,6 +70,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
   const group = overview?.cart.find(item => item.target === review);
   const places = safetyDashboardPlaces(overview?.cases ?? []);
   const checks = safetyDashboardChecks(overview?.cases ?? [], list, place, rank);
+  const freshness = safetyEventsFreshness(overview?.events_freshness);
   // Ticking a check card selects every notice it summarizes, so a whole check
   // goes into one prompt (one per location) or is closed at once.
   const listed = useMemo(() => checks.flatMap(check => check.ids), [overview, list, place]);
@@ -82,7 +85,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
     </> : <button className="findings-button" onClick={() => void act(card.id, { action: "restore" }, "Brought back to Open.")}>Bring back</button>}
   </div>;
   return <div className="findings-page safety-page">
-    <div className="view-heading findings-heading"><div><h1>{view === "settings" ? "Risky action settings" : view === "table" && !selected ? "Risky actions table" : "Risky actions"}</h1><p className="muted">{view === "settings" ? "Choose which checks raise risky action notices. Your choices follow the library between Macs." : view === "table" && !selected ? "Risky action notices, with their selected resources, locations, and handoff state. Tick rows to act on several at once; filter, group, and chart them like any table." : selected ? "Questions about consequential agent actions. Collect a prompt and let your agent investigate." : "A risky action is an agent operation that could expose credentials, rewrite shared history, delete data outside its work, or alter a system. Pharos raises a notice only where a command is likely to deserve your attention, and skips an agent's own scratch, build output and work in progress; a notice alone does not establish harm. Each card is one check; the most dangerous come first. Tick a card to copy a prompt asking your agent to investigate its notices and recommend fixes, or to dismiss expected activity, or open its table to look at each notice. Copying the prompt records a handoff."}</p></div>{view !== "settings" && view !== "table" ? <DataReadinessIndicator id="safety:overview" title="Risky actions" dataset="safety" query={{view,selected}} /> : null}</div>
+    {view !== "table" || selected ? <div className="view-heading findings-heading"><div><h1>{view === "settings" ? "Risky action settings" : "Risky actions"}</h1><p className="muted">{view === "settings" ? "Choose which checks raise risky action notices. Your choices follow the library between Macs." : selected ? "Questions about consequential agent actions. Collect a prompt and let your agent investigate." : "A risky action is an agent operation that could expose credentials, rewrite shared history, delete data outside its work, or alter a system. Pharos raises a notice only where a command is likely to deserve your attention, and skips an agent's own scratch, build output and work in progress; a notice alone does not establish harm. Each card is one check; the most dangerous come first. Tick a card to copy a prompt asking your agent to investigate its notices and recommend fixes, or to dismiss expected activity, or open its table to look at each notice. Copying the prompt records a handoff."}</p></div>{view !== "settings" && view !== "table" ? <DataReadinessIndicator id="safety:overview" title="Risky actions" dataset="safety" query={{view,selected}} /> : null}</div> : null}
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
     {notice ? <p className="safety-notice" role="status">{notice}</p> : null}
     {view === "settings" ? <SafetySettings refreshDiscovery={refreshDiscovery} /> : !overview ? <p>Loading risky action notices…</p> : <>
@@ -114,11 +117,12 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
           <OptimizePlaceFilter places={places} value={place} onChange={setPlace} label="Show risky actions for" viewField="safety_place" />
           <OptimizeRank value={rank} onChange={setRank} options={safetyRankLabels} explanations={safetyRankExplanations} viewField="safety_rank" />
         </div>
+        {freshness.note ? <p className="findings-muted" role="status">{freshness.note}</p> : null}
         {list === "handed_off" ? <p className="findings-muted">You have handed these notices to an agent. Repeats accumulate here; a new target, broader operation, or stronger execution evidence can need fresh attention.</p> : null}
         <div className="findings-layout with-cart">
           {checks.length ? <section className="safety-check-cards" aria-label="Risky actions by check">
             <SafetySelectionBar selection={selection} copy={copy} />
-            <div className="safety-check-grid">{checks.map(check => <SafetyCheckCard key={check.rule} check={check} place={place} selection={selection} href={safetyCheckTableURL(check.rule, { state: list, target: place })} />)}</div>
+            <div className="safety-check-grid">{checks.map(check => <SafetyCheckCard key={check.rule} check={check} mark={safetyEventRule(check.rule) ? freshness.mark : ""} place={place} selection={selection} href={safetyCheckTableURL(check.rule, { state: list, target: place })} />)}</div>
           </section> : <div className="findings-empty"><strong>{place ? "No notices for this location." : list === "open" ? "No open risky action notices." : list === "handed_off" ? "Nothing handed off yet." : "Nothing closed."}</strong><p>{place ? "Choose Everywhere to see every notice in this list." : list === "open" ? "Supported commands have not raised an open notice. Coverage and uncertainties are below." : "Your notices will appear here."}</p></div>}
           <SafetyCheckCart cart={overview.cart} onReview={next => setReview(next.target)} />
         </div>
@@ -185,24 +189,32 @@ function useSafetyOverview() {
 type Rule = Settings["rules"][number];
 // When the table holds one check's notices, say which, where, and what to look
 // for, so the rows read as that check's list of selected resources.
-export function SafetyTableContext({ query, total }: { query: QueryState; total: number | null | undefined }) {
+export function SafetyTableContext({ query, schemas, total, fallback }: { query: QueryState; schemas: OptimizeTableSchemas; total: number | null | undefined; fallback: React.ReactNode }) {
   const focus = safetyTableFocus(query);
   const overview = useSafetyOverview();
   const [rules, setRules] = useState<Rule[]>([]);
   useEffect(() => { let current = true; void request<Settings>(`${api}/settings`).then(value => { if (current) setRules(value.rules); }).catch(() => {}); return () => { current = false; }; }, []);
   const rule = focus && rules.find(item => item.id === focus.rule);
-  if (!focus || !rule) return null;
-  // A location-filtered table omits its location columns, so name it from the
-  // notices themselves.
-  const place = focus.target ? overview?.cases.find(card => card.target === focus.target)?.target_label ?? "one location" : focus.place ?? "every location";
-  const state = focus.state ? stateLabel[focus.state as State] ?? focus.state : "every state";
-  return <section className="findings-panel safety-check-context" data-pharos-target={`safety-check:${focus.rule}`}>
-    <p className="findings-muted">Risky actions · {state} · {place}</p>
-    <h2>{rule.title}</h2>
-    <p>{rule.explanation}</p>
-    <p>{typeof total === "number" ? `${total.toLocaleString()} ${total === 1 ? "notice" : "notices"}. ` : ""}Each row is one path or resource the check selected, sorted by path, with the latest command that selected it. Tick rows to acknowledge and close expected activity, or to copy a prompt asking your agent to investigate them.</p>
-    {rule.questions?.length ? <><h3>Questions for each notice</h3><ul>{rule.questions.map(question => <li key={question}>{question}</li>)}</ul></> : null}
-  </section>;
+  if (!focus || !rule) return <>{fallback}</>;
+  const source = query.grouping?.source ?? query;
+  const hasFilter = (...names: string[]) => source.where.some(term => predicatesOf(term).some(clause => names.includes(clause.field)));
+  const named: Pick<WhereClause, "field" | "op" | "value">[] = [{ field: "rule", op: "=", value: focus.rule }];
+  if (focus.state) named.push({ field: "state", op: "=", value: focus.state });
+  if (focus.target) named.push({ field: "target", op: "=", value: focus.target });
+  else if (focus.place) named.push({ field: "target_label", op: "=", value: focus.place });
+  // A location-filtered table omits its location column, so name it from the notices.
+  const place = focus.target ? overview?.cases.find(card => card.target === focus.target)?.target_label ?? "one location" : focus.place ?? (!hasFilter("target", "target_label") ? "every location" : "");
+  const state = focus.state ? stateLabel[focus.state as State] ?? focus.state : !hasFilter("state") ? "every state" : "";
+  const count = typeof total === "number" ? `${total.toLocaleString()} ${query.grouping ? total === 1 ? "group" : "groups" : total === 1 ? "notice" : "notices"}` : "";
+  const remainder = optimizeTableRemainder(schemas.source, query, named, schemas.result);
+  return <div className="optimize-table-context" data-pharos-target={`safety-check:${focus.rule}`}>
+    <h1 className="optimize-table-title">{rule.title}</h1>
+    <p className="optimize-table-meta">{["Risky actions", state, place, count, remainder].filter(Boolean).join(" · ")}</p>
+    <p className="optimize-table-explanation">{rule.explanation}</p>
+    {rule.questions?.length ? <ViewDisclosure viewKey={`safety-check:${focus.rule}:questions`} className="optimize-table-questions" summary="Questions for each notice">
+      <ul>{rule.questions.map(question => <li key={question}>{question}</li>)}</ul>
+    </ViewDisclosure> : null}
+  </div>;
 }
 
 // Actions on the table's selected notices (optimize-shared.tsx).
@@ -218,13 +230,13 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString
 // One check's notices at a glance: what they share (one location, one
 // directory, a recurring resource) before what varies, then when, how much,
 // and what is new. The checkbox selects every notice on the card.
-function SafetyCheckCard({ check, place, selection, href }: { check: SafetyCheckSummary; place: string; selection: SelectionApi; href: string }) {
+function SafetyCheckCard({ check, mark, place, selection, href }: { check: SafetyCheckSummary; mark: string; place: string; selection: SelectionApi; href: string }) {
   const where = place ? null : check.locations === 1 ? `${check.count === 1 ? "In" : "All in"} ${check.places[0]?.label}`
     : `${check.places.map(item => `${item.label} ${item.count}`).join(" · ")}${check.morePlaces ? ` · ${plural(check.morePlaces, "more location")}` : ""}`;
   const single = check.count === 1;
   const facts = [range(check.first_seen_at, check.last_seen_at), plural(check.calls, "call"), check.fresh ? `${check.fresh.toLocaleString()} with new evidence` : "", check.inPrompt ? `${check.inPrompt.toLocaleString()} in a prompt` : ""].filter(Boolean);
   const chips = <>{check.danger ? <DangerChip danger={check.danger} /> : null}{check.recent ? <span className="findings-chip safety-recent">Recent</span> : null}</>;
-  return <OptimizeCard ids={check.ids} selection={selection} className="safety-check-card" target={`safety-check:${check.rule}`} count={check.count} countLabel={plural(check.count, "notice")}
+  return <OptimizeCard ids={check.ids} selection={selection} className="safety-check-card" target={`safety-check:${check.rule}`} count={check.count} countLabel={mark + plural(check.count, "notice")}
     label={`Select ${single ? "the notice" : `all ${check.count.toLocaleString()} notices`}: ${check.title}`}>
     <div className="safety-check-head"><strong className="safety-check-title">{check.title}</strong>{chips}</div>
     {where ? <span className="safety-check-where">{where}</span> : null}

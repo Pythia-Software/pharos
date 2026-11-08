@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { defaultApi, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection } from "./fixtures.mjs";
+import { defaultApi, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const missingPrices = { ...defaultApi['GET /api/pricing'], unpriced_tokens: 5000,
@@ -460,6 +460,7 @@ const ROUTES = [
   {name:'Message Labels bars',url:'/analyze?'+new URLSearchParams({analyze_topic:'labels',analyze_chart:JSON.stringify({view:'trend_bar',metric:'messages',split:'family'})}),ready:'.usage-labels-dashboard .usage-chart'},
   {name:'Message Labels comparison',url:'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'labels',analyze_data:'message_labels',analyze_chart:JSON.stringify({view:'compare',metric:'messages',split:'family'})}),ready:'.usage-labels-dashboard'},
   {name:'Message label conversation cards',url:'/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'message_labels',analyze_topic:'labels',label_results:'cards',q_message_labels:encodeQuery({...EMPTY_QUERY,limit:40,grouping:{source:EMPTY_QUERY,keys:['fingerprint'],summaries:[{id:'conversation_title',op:'row',field:'title'},{id:'conversation_workspace',op:'row',field:'workspace_id'},{id:'conversation_repository',op:'row',field:'repository_name'},{id:'matching_messages',op:'count_distinct',field:'message_id'},{id:'last_match',op:'max',field:'occurred_at'},{id:'source_message',op:'row',field:'message_id'}],representative:{orderBy:[{field:'occurred_at',dir:'desc'}]}}})}),ready:'.message-label-result-card'},
+  {name:'Message label conversation cards with events pending',url:'/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'message_labels',analyze_topic:'labels',label_results:'cards',q_message_labels:encodeQuery({...EMPTY_QUERY,limit:40,grouping:{source:EMPTY_QUERY,keys:['fingerprint'],summaries:[{id:'conversation_title',op:'row',field:'title'},{id:'conversation_workspace',op:'row',field:'workspace_id'},{id:'conversation_repository',op:'row',field:'repository_name'},{id:'matching_messages',op:'count_distinct',field:'message_id'},{id:'last_match',op:'max',field:'occurred_at'},{id:'source_message',op:'row',field:'message_id'}],representative:{orderBy:[{field:'occurred_at',dir:'desc'}]}}})}),api:pendingEvidenceApi,ready:'.message-label-result-card .fingerprint-sampled'},
   {name:'Message label conversation rows',url:'/analyze?analyze_mode=query&analyze_data=message_labels&analyze_topic=labels&label_results=table',ready:'.qt-row'},
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
   { name: "Human Words component shares", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "compare", metric: "words", split: "category", compareAs: "share" }))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations' },
@@ -503,6 +504,8 @@ const ROUTES = [
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   { name: "Analyze workspace agent experience dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", ready: `.usage-agent-experience-dashboard ${overTimeReady}` },
+  { name: "Agent experience dashboard with events pending", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", api: pendingEvidenceApi, ready: ".usage-agent-experience-dashboard .dashboard-stats[aria-busy=false]", check: page => page.locator(".usage-agent-experience-dashboard .usage-dashboard-note[role=status]").first().waitFor() },
+  { name: "Agent events query with events pending", url: "/analyze?analyze_mode=query&analyze_data=agent_events", api: pendingEvidenceApi, ready: ".usage-workspace-table .usage-dashboard-note[role=status]" },
   // Agent Events opens on Compare; its trend is the stacked kind chart.
   { name: "Agent Events dashboard", url: "/analyze?analyze_topic=agent_event_rates", ready: `.usage-agent-events-dashboard ${analysisReady}`,
     check: async page => assert.deepEqual(await page.locator(".usage-agent-events-dashboard [role=alert], .usage-agent-events-dashboard .query-table-error").allTextContents(), [], "the dashboard reports an error") },
@@ -547,6 +550,8 @@ const ROUTES = [
   { name: "Findings", url: "/findings", ready: ".findings-card" },
   { name: "Safety notices", url: "/findings?optimize_area=safety", ready: ".safety-check-card", open: page => page.locator(".safety-check-card input[type=checkbox]").first().check(), shown: ".safety-check-cards .safety-selection-toolbar" },
   { name: "Safety table", url: "/findings?optimize_area=safety&view=table", ready: ".safety-table .findings-cart li", open: page => page.locator(".safety-table .qt-row input[type=checkbox]").first().check(), shown: ".safety-selection-toolbar" },
+  { name: "Safety check table", url: `/findings?${new URLSearchParams({ optimize_area: "safety", view: "table", q_safety: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "rule", op: "=", value: "credentials" }, { field: "state", op: "=", value: "open" }] }) })}`, ready: ".optimize-table-questions", open: page => page.locator(".optimize-table-questions summary").click(), shown: ".optimize-table-questions[open]" },
+  { name: "Safety grouped check table", url: `/findings?${new URLSearchParams({ optimize_area: "safety", view: "table", q_safety: encodeQuery({ ...EMPTY_QUERY, grouping: { source: { ...EMPTY_QUERY, where: [{ field: "rule", op: "=", value: "credentials" }, { field: "danger", op: "=", value: "high" }] }, keys: ["target_label"], summaries: [{ id: "notice_count", op: "count", label: "Notices" }], representative: null } }) })}`, ready: ".optimize-table-questions" },
   { name: "Safety settings", url: "/findings?optimize_area=safety&view=settings", ready: ".safety-check" },
   { name: "Safety evidence", url: "/findings?optimize_area=safety&safety_case=safety_sample", ready: ".safety-detail", open: async page => { await page.locator('.safety-evidence summary').click(); }, shown: '.safety-evidence[open] pre' },
   { name: "Safety prompt", url: "/findings?optimize_area=safety", ready: ".safety-check-card", open: async page => { await page.getByRole('button', { name: 'Review prompt (1 notice)' }).click(); }, shown: '.findings-dialog' },
@@ -554,7 +559,12 @@ const ROUTES = [
   { name: "Fixes prompt", url: "/findings?optimize_area=fixes", ready: ".fixes-card", open: async page => { await page.getByRole("button", { name: "Review prompt (1 fix)" }).click(); }, shown: ".findings-dialog input[name=fixesMode]" },
   { name: "Fix detail", url: "/findings?optimize_area=fixes&fixes_item=fix_sample", ready: ".fixes-detail .fixes-quotes", open: async page => { await page.locator(".fixes-members summary").click(); }, shown: ".fixes-members[open] .fixes-quotes" },
   { name: "Fixes settings", url: "/findings?optimize_area=fixes&view=settings", ready: ".fixes-bounds select" },
+  { name: "Fixes with events pending", url: "/findings?optimize_area=fixes", api: pendingEvidenceApi, ready: ".fixes-card", check: page => page.locator("[role=status].findings-muted").first().waitFor() },
+  { name: "Safety with events pending", url: "/findings?optimize_area=safety", api: pendingEvidenceApi, ready: ".safety-check-card", check: page => page.locator("[role=status].findings-muted").first().waitFor() },
   { name: "Fixes table", url: "/findings?optimize_area=fixes&view=table", ready: ".safety-table .findings-cart li", open: page => page.locator(".safety-table .qt-row input[type=checkbox]").first().check(), shown: ".safety-selection-toolbar" },
+  { name: "Fixes hidden table", url: `/findings?${new URLSearchParams({ optimize_area: "fixes", view: "table", q_fixes: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "state", op: "=", value: "open" }, { field: "shown", op: "!=", value: "shown" }] }) })}`, ready: '[data-pharos-target="section:fixes-hidden"]' },
+  { name: "Fixes grouped table", url: `/findings?${new URLSearchParams({ optimize_area: "fixes", view: "table", q_fixes: encodeQuery({ ...EMPTY_QUERY, grouping: { source: { ...EMPTY_QUERY, where: [{ field: "shown", op: "=", value: "stale" }, { field: "category", op: "=", value: "env" }] }, keys: ["target_label"], summaries: [{ id: "fix_count", op: "count", label: "Fixes" }], representative: null } }) })}`, ready: ".optimize-table-title" },
+  { name: "Fixes grouped hidden table", url: `/findings?${new URLSearchParams({ optimize_area: "fixes", view: "table", q_fixes: encodeQuery({ ...EMPTY_QUERY, grouping: { source: { ...EMPTY_QUERY, where: [{ field: "state", op: "=", value: "open" }, { field: "shown", op: "!=", value: "shown" }, { field: "category", op: "=", value: "env" }] }, keys: ["target_label"], summaries: [{ id: "fix_count", op: "count", label: "Fixes" }], representative: null } }) })}`, ready: '[data-pharos-target="section:fixes-hidden"]' },
   { name: "Findings table", url: "/findings?view=table", ready: ".findings-table .qt-row" },
   { name: "Findings settings", url: "/findings?view=settings", ready: ".findings-settings .findings-panel" },
   { name: "Finding detail", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-detail svg" },
@@ -670,6 +680,10 @@ const ROUTES = [
       assert.ok(await page.evaluate(() => !document.activeElement?.closest(".conversation-panel")), "following a hand-off moved focus into the reader");
     } },
   { name: "Workspace Timeline skipping idle time, agent events expanded", url: `${work}?explorer=timeline&disclosures=${idleTimelineDisclosures}`, api: idleTimelineAPI, ready: ".lt-session-node .lt-session-row-label svg.event-link-glyph", open: page => page.locator(".lt-session-ribbon .lt-idle-cut-line").first().waitFor({ state: "attached" }), shown: ".lt-clock-heading .lt-idle-cut time" },
+  // Unsettled evidence: an ≈ session count, "+N more" relatives and pending events.
+  { name: "Workspace overview with pending evidence", url: work, api: pendingEvidenceApi, ready: ".delegation-table .delegation-relatives" },
+  { name: "Workspace Timeline with pending events", url: `${work}?explorer=timeline`, api: pendingEvidenceApi, ready: ".lt-recursive-lane .delegation-truncation", check: page => page.locator("[role=status].delegation-truncation").first().waitFor() },
+  { name: "Workspace sessions sidebar with pending evidence", url: `${work}/conversation/${rootConversation}`, api: pendingEvidenceApi, ready: ".delegation-inbox-heading" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, api: tokenEvidenceAPI, ready: ".conversation-panel .turn" },
   // A signal chip reveals its message in a collapsed turn without taking focus,

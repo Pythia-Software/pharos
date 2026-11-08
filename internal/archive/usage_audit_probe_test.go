@@ -242,25 +242,10 @@ func TestUsageCostAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conversations, err := queryMaps(tx, "SELECT * FROM conversations")
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspaceConversations, workspaceSessions := map[string][]map[string]any{}, map[string][]map[string]any{}
-	roots, bySession := map[string]string{}, map[string]map[string]any{}
-	for _, conversation := range conversations {
-		workspace := firstString(conversation["workspace_id"])
-		workspaceConversations[workspace] = append(workspaceConversations[workspace], conversation)
-	}
-	for _, session := range sessions {
-		workspace := firstString(session["workspace_id"])
-		workspaceSessions[workspace] = append(workspaceSessions[workspace], session)
-		bySession[firstString(session["id"])] = session
-		if firstString(session["native_id"]) == "main" {
-			roots[firstString(session["conversation_id"])] = firstString(session["id"])
-		}
-	}
-	linksByWorkspace := map[string]*delegationLinks{}
+	// A launch's child transcript, in or outside its workspace, and a refused
+	// launch come from the shared execution resolution of tx's rows, resolved
+	// once when the first unlinked launch needs it.
+	var resolution *executionResolution
 	ledger, err := queryMaps(tx, `SELECT u.*,u.model AS usage_model,s.model AS session_model,c.model AS conversation_model
 		FROM agent_session_usage u JOIN agent_sessions s ON s.id=u.agent_session_id
 		JOIN conversations c ON c.id=s.conversation_id`)
@@ -311,22 +296,21 @@ func TestUsageCostAudit(t *testing.T) {
 		child := firstString(session["child_conversation_id"])
 		failed := false
 		if integer(session["total_tokens"]) == 0 && child == "" && firstString(session["native_id"]) != "main" {
-			workspace := firstString(session["workspace_id"])
-			links, known := linksByWorkspace[workspace]
-			if !known {
-				links, err = loadDelegationLinks(context.Background(), tx, workspace, workspaceConversations[workspace], workspaceSessions[workspace], roots)
-				if err != nil {
+			if resolution == nil {
+				if resolution, err = resolveExecutionsFrom(context.Background(), tx); err != nil {
 					t.Fatal(err)
 				}
-				linksByWorkspace[workspace] = links
 			}
-			if alias := links.aliases[id]; alias != "" {
-				child = firstString(bySession[alias]["conversation_id"])
+			// As usage attribution binds a launch: a resolved or inherited
+			// execution whose transcript is not the launching conversation.
+			if b := resolution.BindSession(id); b.ExecutionID != "" && (b.State == bindingResolved || b.State == bindingInherited) {
+				if x := resolution.Executions[b.ExecutionID]; x != nil && x.Conversation != firstString(session["conversation_id"]) {
+					child = x.Conversation
+				}
 			}
-			if external := links.external[id]; external != nil {
-				child = external.ConversationID
+			if a := resolution.Attempts[sourceRef{sourceSession, id}]; a != nil {
+				failed = a.Outcome == attemptRejected
 			}
-			failed = links.failed[id]
 			if child != "" {
 				session["resolved_child_conversation_id"] = child
 			}

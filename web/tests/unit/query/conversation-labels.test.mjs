@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {messageLabelFingerprintCache} from '../../../src/message-label-results-model';
+import {messageLabelFingerprintCache,messageLabelRibbonNotes} from '../../../src/message-label-results-model';
 import {test} from 'node:test';
 import {EMPTY_QUERY,loadSchema,readFieldValue,toServerQuery,toQueryRequestV3,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
 import {withFingerprintColumn} from '../../../src/fingerprint-columns';
@@ -63,7 +63,7 @@ test('a pre-refresh fingerprint failure leaves the replacement request cached',a
  assert.equal(cache.read('same'),current);assert.equal(requests,2);
 });
 
-import {timelinePreviewText} from '../../../src/timeline-preview.ts';
+import {timelinePreviewText,trimTimelineSnippet} from '../../../src/timeline-preview.ts';
 
 import {nativeTimelineLabels} from '../../../src/label-timeline-overlay.tsx';
 
@@ -426,6 +426,8 @@ test('Caller span inspection uses the actual run excerpt even after the message 
  assert.deepEqual(authorshipSegments(full).map(part=>authorshipExcerpt(full,part)),[{text:'é😎',truncated:false},{text:'done',truncated:false}]);
  const missing={...full,text:'é',truncated:true};
  assert.equal(authorshipExcerpt(missing,authorshipSegments(missing)[1]),null);
+ const paddedText='\n'.repeat(300)+'Review this\n  Keep indentation\n\n',padded=message('padded','P.request',{text:paddedText,authorship:[{category:'template',bytes:Buffer.byteLength(paddedText)}]});
+ assert.deepEqual(authorshipExcerpt(padded,authorshipSegments(padded)[0]),{text:'Review this\n  Keep indentation',truncated:false});
 });
 
 test('timeline column widths are bounded, portable and preserve automatic chart width',()=>{
@@ -471,6 +473,7 @@ test('timeline legends follow drawn intervals, errors and the visible portion of
 });
 
 test('timeline previews unwrap content and nested arguments without losing domain JSON or literal caller text',()=>{
+ assert.equal(trimTimelineSnippet('\n  Review this\n  Keep indentation\n\n'),'Review this\n  Keep indentation');
  for(const [body,expected,options] of [
   [JSON.stringify({content:[{text:'Async agent launched successfully.\nWorking in the background.'}],details:{agentId:'opaque'},tool:'Task'}),'Async agent launched successfully.\nWorking in the background.'],
   [JSON.stringify({message:{content:[{type:'output_text',text:'First'},{type:'text',text:'Second'}]},usage:{tokens:9}}),'First\n\nSecond'],
@@ -587,4 +590,12 @@ test('agent events sit at their sentence\'s share of the message span, as messag
  // The tree's event rows and the overlay share the clock.
  const tree=sessionRibbonTree([prompt,thinking,reply,next],[],[],discoveryTaxonomy,[0,400],true,false,undefined,undefined,[event('a','think',.25),event('c','reply',.5)]);
  assert.deepEqual(tree.children.find(child=>child.id==='events').items.map(item=>item.start).sort((x,y)=>x-y),[25,200]);
+});
+
+test('a ribbon reports events left out for changed evidence apart from labels still being produced',()=>{
+ assert.deepEqual(messageLabelRibbonNotes({truncated:false,pending:false,events_pending:0}),[]);
+ assert.deepEqual(messageLabelRibbonNotes({events_pending:2}).map(n=>n.badge),['Events pending']);
+ assert.match(messageLabelRibbonNotes({events_pending:1})[0].note,/^Events for 1 conversation are left out until they are rebuilt/);
+ assert.deepEqual(messageLabelRibbonNotes({pending:true}).map(n=>n.badge),['Labeling']);
+ assert.deepEqual(messageLabelRibbonNotes({truncated:true,pending:true,events_pending:3}).map(n=>n.badge),['Sample','Labeling','Events pending']);
 });

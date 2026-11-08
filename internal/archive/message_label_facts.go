@@ -73,8 +73,19 @@ func messageLabelWithoutLedger(table sqlDataset) sqlDataset {
 	return table
 }
 
-func messageLabelStoredFrom(ledger bool, fields []string) string {
-	live := messageLabelLiveDataset("SELECT conversation_id FROM message_label_facts_dirty")
+// unmarked is executionUnmarkedSQL for the labels ledger.
+func messageLabelStoredFrom(ledger bool, fields []string, unmarked string) string {
+	// Conversations with unmarked execution changes are projected live like
+	// dirty ones, where their labels read as pending. Without a ledger there
+	// are no labels to hold back.
+	pending, hold := "SELECT conversation_id FROM message_label_facts_dirty", ""
+	if ledger {
+		pending += " UNION " + unmarked
+		hold = "\n AND stored.conversation_id NOT IN (" + unmarked + ")"
+	} else {
+		unmarked = ""
+	}
+	live := messageLabelLiveDatasetFor(pending, unmarked)
 	if !ledger {
 		live = messageLabelWithoutLedger(live)
 	}
@@ -94,7 +105,7 @@ func messageLabelStoredFrom(ledger bool, fields []string) string {
 	return `FROM (SELECT ` + strings.Join(stored, ",") + ` FROM message_label_facts stored
  JOIN message_label_memberships membership ON membership.message_rowid=stored.rowid
  JOIN message_label_names name ON name.id=membership.label_id
- WHERE NOT EXISTS(SELECT 1 FROM message_label_facts_dirty dirty WHERE dirty.conversation_id=stored.conversation_id)
+ WHERE NOT EXISTS(SELECT 1 FROM message_label_facts_dirty dirty WHERE dirty.conversation_id=stored.conversation_id)` + hold + `
  UNION ALL ` + liveSQL + `) f
  LEFT JOIN conversations c ON c.id=f.conversation_id
  LEFT JOIN workspaces w ON w.id=c.workspace_id
@@ -102,7 +113,7 @@ func messageLabelStoredFrom(ledger bool, fields []string) string {
  LEFT JOIN messages body ON body.id=f.message_id`
 }
 
-func messageLabelStoredDataset(ledger bool) sqlDataset {
+func messageLabelStoredDataset(ledger bool, unmarked string) sqlDataset {
 	fields := append(slices.Clone(messageLabelFactFields), messageLabelNameFields...)
 	columns := map[string]string{}
 	for _, field := range fields {
@@ -121,7 +132,7 @@ func messageLabelStoredDataset(ledger bool) sqlDataset {
 	for field := range columns {
 		covered[field] = field != "text"
 	}
-	return sqlDataset{from: messageLabelStoredFrom(ledger, fields), columns: columns, projectFrom: func(consumed []string) string {
+	return sqlDataset{from: messageLabelStoredFrom(ledger, fields, unmarked), columns: columns, projectFrom: func(consumed []string) string {
 		needed := []string{"conversation_id", "message_id"}
 		for _, field := range fields {
 			if field == "conversation_id" || field == "message_id" {
@@ -134,7 +145,7 @@ func messageLabelStoredDataset(ledger bool) sqlDataset {
 				}
 			}
 		}
-		return messageLabelStoredFrom(ledger, needed)
+		return messageLabelStoredFrom(ledger, needed, unmarked)
 	}, optionalJoins: map[string]string{
 		"c":    " LEFT JOIN conversations c ON c.id=f.conversation_id",
 		"w":    " LEFT JOIN workspaces w ON w.id=c.workspace_id",
@@ -273,7 +284,9 @@ var messageLabelFactsTarget = 250 * time.Millisecond
 var errMessageLabelFactsStale = errors.New("message label query inputs changed during preparation")
 
 func messageLabelFactsSource(selector string, ledger bool) sqlDataset {
-	live := messageLabelLiveDataset(selector)
+	// Stored facts keep the labels as built; readers hold back the
+	// conversations whose execution changes are unmarked (messageLabelStoredFrom).
+	live := messageLabelLiveDatasetFor(selector, "")
 	// These indexes are installed on writable catalogs. Keep the ordinary live
 	// dataset compatible with older read-only snapshots that do not have them.
 	live.from = strings.Replace(live.from, "INDEXED BY messages_conversation_idx", "INDEXED BY messages_label_conversation_idx", 1)

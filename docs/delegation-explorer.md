@@ -48,7 +48,15 @@ are eligible; opaque encrypted messages and unrecognized JSON payloads are omitt
 before the 180-character display bound, so a task name following a long message
 is still available. Embedded sessions without an assignment use their execution
 ID instead of borrowing the parent conversation's nickname or request. Labels
-resolve from retained launch messages without reindexing.
+resolve from retained launch messages without reindexing. Every view
+(hierarchy, inbox, Timeline lane, reader heading, parent context) shows the
+resolver's one label (`execution.Label`). Local context goes in `subtitle` on
+the metadata line, never in place of the label: the work title of a
+user-started session, a context row's conversation title, or otherwise the
+execution's own opening request.
+Separately archived children keep that same assignment when opened. Spawn calls
+copied from the parent into a fork's history do not create additional hierarchy
+rows unless the copied session has independently reported usage.
 
 A **Workspace Sessions** toolbar selects the transcript, replacing the
 conversation dropdown. A single button beside the sliding
@@ -104,6 +112,11 @@ accounted, unallocated and observed-minimum tokens and source-message references
 The read API still supports filtering and matching-only accounting for analysis.
 
 The timeline retains a full-workspace density overview while detail is zoomed.
+Zoom keeps the current page of session rows visible, with empty lanes where no
+evidence falls in the window. Hierarchy & usage also keeps those rows; cells
+for sessions (or branches in Self + children scope) known to be outside the
+window are blank. Other usage values still cover whole sessions, not just the
+selected window, and unknown bounds do not remove usage.
 Drag across the timeline lanes or axis to zoom into a range, with a shared
 selection preview in every lane and the overview. Tool events remain clickable.
 Drag the overview window to pan without changing its duration, drag its edges
@@ -202,7 +215,7 @@ model-processing, or background-process time.
 ## Read API and evidence
 
 `GET /api/work/{workspace}/delegation` accepts `mode` (`hierarchy` or `rank`), `sort`, `scope` (`self`/`all`), `direction`, `search`, `provider`,
-`collapsed`, `only_matching`, `conversation`, `limit`, and an opaque `cursor`.
+`collapsed`, `relatives`, `only_matching`, `conversation`, `limit`, and an opaque `cursor`.
 It returns a bounded page, separate ancestor context, conversation navigation
 context, metric definitions, workspace totals/maxima (and `group_totals` with
 related work), and full-range density.
@@ -210,6 +223,68 @@ Incoming ancestor rows carry `context_only` and a `navigation` reference.
 `session_count` excludes them; `total` counts the displayed hierarchy rows.
 Cursor continuations are bound to both the content snapshot and query; changes
 return HTTP 409 rather than silently reordering a later page.
+
+Rows come from the shared execution resolution
+([execution-resolver-design.md](execution-resolver-design.md)). Each row has
+`parent_certainty` (`native`, `derived` or `legacy`); a legacy or inferred
+parent is shown as not verified, never as confirmed ancestry. It also has
+`segments` (the transcripts of one execution, such as a Codex continuation in
+another workspace, each with its workspace) and, for a launching row,
+`attempts`. `coverage` counts unresolved and unverified parents, identity
+conflicts, sessions whose other-workspace activity is not counted
+(`unqueried`; their metrics are partial), and missing evidence capabilities.
+`resolve=` returns `aliases`, which maps a requested ID to its canonical row
+(itself for a current row), or to null when no row answers it. Session IDs can
+contain colons, so a saved disclosure key moves with the longest prefix that
+resolves, and a current session whose ID extends a moved one keeps its key. The reader then says the selection is
+unresolved rather than showing another session. Timeline lanes leave out copied
+history and report `inherited_messages` (with `inherited_owners`, the rows that
+own the originals), `repeated_messages` (copies of the execution's own earlier
+segment), and `occurrence_partial` with `occurrence_reasons` when copies could
+not be told apart. A whole conversation is partial when it was indexed before
+its provenance was typed (`untyped-ancestry/v1`), when its retained history
+declaration was not read again (`retained-history-undeclared/v1`), when its
+provider read does not declare whether it copied history (`history-undeclared/v1`),
+or when the conversation it declares it copied is not retained
+(`declared-copy-source-missing/v1`). The row then carries the same reason as
+`occurrence_partial`, and its own message, event, count and clock metrics are
+partial, matching quick stats. A lane reads each segment of the execution in
+this work, with the agent events of each, and lists segments retained in other
+work as `omitted_segments`. Copies are excluded before the 2,400-message cap:
+the lane scans in bounded batches and sets `messages_truncated` whenever its
+own messages may continue past what it read.
+
+The execution family around this work's sessions is loaded nearest first, up to
+`delegationFamilyLimit` related rows: ancestor chains always, then parents,
+children and detached members breadth first. `family_complete` is false when
+relatives were left out, and each row reports `children_omitted`. Its
+**+N more** control adds the row to the `delegation_relatives` view field,
+sent as `relatives`, which loads that row's children and detached members
+within the 10,000-row analysis limit. Opening a related session reads its own
+nearest relatives, so every member stays reachable. Lane requests must send the
+same `relatives` so they name the same snapshot.
+
+`ancestry.depth` counts resolved parent links. `ancestry.certainty`,
+`depth_quality`, `root_quality` and `conflicted` are the resolver's ancestry
+quality (`executionAncestry`), never an explorer policy. The depth metric is
+`observed` only when every link is native or derived, `inferred` through an
+inferred command launch, and `unverified` through a legacy link (`?` in the
+tables). Indentation still follows the resolved tree. `session_count_uncertain`
+counts sessions in an unresolved identity conflict, their own or an
+ancestor's (the scope usage marks `run_identity` uncertain), and the header,
+inbox and pagination show the count as approximate (≈).
+
+Agent events that the Agent Experience datasets withhold (built on superseded
+execution evidence, `agentEventsWithheld`), or that await a rebuild, are not
+counted. Those rows' events metric is partial and carries `events_pending`, and
+Timeline lanes leave the events out and report `events_pending`. The delegation
+response also returns `events_pending_sessions` across the full snapshot,
+including rows omitted by collapse or pagination. The Timeline and its compact
+reader preview show a summary even when affected sessions have no drawn lane.
+Conversation
+and workspace ribbons (`/api/labels/...`) leave the same events out and report
+`events_pending` and `events_pending_conversations`, apart from label
+`pending`.
 
 `GET /api/work/{workspace}/parallel` accepts that `snapshot`, a bounded list of
 `sessions`, absolute millisecond `start`/`end`, and viewport `width`. It returns
@@ -221,7 +296,13 @@ workspace snapshots, evicts the least recently requested snapshot, and expires
 snapshots after five idle minutes during requests or cache maintenance. Catalog
 changes drop outdated snapshots; delegation snapshots rebuild only on demand
 and are excluded from background cache warming. Concurrent requests share
-in-flight work, which may temporarily exceed the completed-snapshot limit. Analysis currently
+in-flight work, which may temporarily exceed the completed-snapshot limit.
+A snapshot is also keyed by the execution source generation, so typed
+evidence written without other catalog changes (a backfill, late claims)
+produces a new snapshot. With `labels=1`, lane messages, their occurrence
+ownership and the resolution are read in one transaction; if that resolution
+is not the snapshot's, the request returns HTTP 409 `snapshot_changed` rather
+than pairing an older graph with newer rows, and the client refreshes. Analysis currently
 limits a workspace to 10,000 sessions/conversations (including its linked
 conversation family) and 500,000 tool/request
 observations; pages, ancestor context, and lane requests are capped at 100;
@@ -230,7 +311,7 @@ truncation above 2,400 marks and requests a narrower window. Conversation
 navigation context reports truncation above 100 references.
 
 Metric values carry quality and known/total retained coverage. `—` means unknown;
-`+` indicates partial coverage, and API cost is an estimate using the existing
+`+` indicates partial coverage, `?` an unverified or inferred value, and API cost is an estimate using the existing
 historical pricing book. Clock span, summed session spans, global tool union,
 summed per-session tool unions, and summed recorded durations remain distinct.
 Cache and reasoning components are subsets, not additional total tokens.

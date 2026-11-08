@@ -6,8 +6,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -127,23 +129,21 @@ func seedLabelingCatalog(t *testing.T, catalog *Catalog) {
 	long := strings.Repeat("we should check how the layout behaves on narrow screens today ", 60) + "\n```\nfunc main() {}\n```\n" +
 		strings.Repeat("then compare the result with the desktop version and report back ", 55)
 	message("m-n2", "c-new", "user", "message", long, "2026-10-20T13:00:00.000Z", nil)
-	// A fork copies the root's history, then continues.
+	// Forks repeat the root's text and send times, with nothing proving one
+	// occurrence: another provider, no shared event IDs, no declared copy.
+	// They are not proven copies, so their records stay units and the
+	// transcripts read partial (TestLabelingUnitsFollowSharedOccurrences has
+	// proven copies).
 	message("m-fork-1", "c-fork", "user", "message", "<system-reminder>\nBe brief.\n</system-reminder>\n"+request, at(1, 0), nil)
 	message("m-fork-2", "c-fork", "assistant", "message", "I will look into the export button.", at(1, 1), nil)
 	message("m-fork-3", "c-fork", "user", "message", "continue", at(2, 1), nil)
-	// A fork taken from an earlier point that lacks one of the parent's
-	// records; the person then types what the parent later had.
 	message("m-f2-1", "c-fork2", "user", "message", "<system-reminder>\nBe brief.\n</system-reminder>\n"+request, at(1, 0), nil)
 	message("m-f2-2", "c-fork2", "user", "message", "?", at(1, 8), nil)
 	message("m-f2-3", "c-fork2", "user", "message", "continue", at(2, 2), nil)
-	// Without times, the copy is found in order.
 	message("m-f3-1", "c-fork3", "user", "message", "<system-reminder>\nBe brief.\n</system-reminder>\n"+request, at(1, 0), nil)
 	message("m-f3-2", "c-fork3", "user", "message", "Another idea entirely", at(2, 3), nil)
-	// A catalog that stamps copies when it forks: found in order, too.
 	message("m-f4-1", "c-fork4", "user", "message", "<system-reminder>\nBe brief.\n</system-reminder>\n"+request, at(2, 5), nil)
 	message("m-f4-2", "c-fork4", "user", "message", "Fresh question here", at(2, 6), nil)
-	// A copy whose first record differs from the parent's: later copies are
-	// still marked as duplicates.
 	message("m-f5-1", "c-fork5", "user", "message", "Regenerated instructions for this fork", at(2, 10), nil)
 	message("m-f5-2", "c-fork5", "user", "message", "<system-reminder>\nBe brief.\n</system-reminder>\n"+request, at(2, 11), nil)
 	message("m-f5-3", "c-fork5", "user", "message", "?", at(2, 12), nil)
@@ -251,7 +251,9 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 		"m-h2": "human", "m-auto": "agent_in_user_role", "m-a2": "agent_reply", "m-c1": "agent_in_user_role", "m-c2": "agent_reply",
 		"m-o1": "human", "m-n1": "human", "m-n2": "human", "m-o3": "agent_reply", "m-fork-3": "human", "m-h3": "human",
 		"m-sub1": "agent_in_user_role", "m-sub2": "agent_reply", "m-o4": "human", "m-o5": "agent_reply", "m-o6": "human", "m-n3": "human",
-		"m-d1": "agent_in_user_role", "m-d2": "agent_in_user_role", "m-f2-3": "human", "m-f3-2": "human", "m-f4-2": "human", "m-f5-1": "human", "m-f5-2": "human", "m-f5-3": "human", "m-o7": "human",
+		"m-d1": "agent_in_user_role", "m-d2": "agent_in_user_role", "m-f2-3": "human",
+		// Unproven fork copies stay units.
+		"m-fork-1": "human", "m-fork-2": "agent_reply", "m-f2-1": "human", "m-f2-2": "human", "m-f3-1": "human", "m-f4-1": "human", "m-f3-2": "human", "m-f4-2": "human", "m-f5-1": "human", "m-f5-2": "human", "m-f5-3": "human", "m-o7": "human",
 	}
 	for message, cohort := range want {
 		if units[message]["cohort"] != cohort {
@@ -271,7 +273,7 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 	if integer(units["m-a1"]["depth"]) != 0 || integer(units["m-c2"]["depth"]) != 1 || units["m-c2"]["depth_status"] != "resolved" {
 		t.Errorf("depths: root %v, child %v (%v)", units["m-a1"]["depth"], units["m-c2"]["depth"], units["m-c2"]["depth_status"])
 	}
-	if units["m-c2"]["root_conversation_id"] != "c-root" || units["m-c2"]["family_id"] != units["m-a1"]["family_id"] {
+	if units["m-c2"]["root_conversation_id"] != "c-root" || units["m-c2"]["family_id"] != units["m-a1"]["family_id"] || units["m-c2"]["root_quality"] != ancestryObserved {
 		t.Errorf("child lineage: %v", units["m-c2"])
 	}
 	// A copy links the later conversation into the same family; the recent one is fresh.
@@ -296,7 +298,8 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 	if context := firstString(units["m-c2"]["context_text"]); context != "Previous user request:\nFind the CSS rule that hides the export button" {
 		t.Errorf("sub-agent context = %q", context)
 	}
-	// A fork's copied history is excluded; the fork joins the root's family.
+	// The fork joins the root's family; its repeated history, unproven, is its
+	// own units, which say their transcript's coverage is partial.
 	if units["m-fork-3"]["family_id"] != units["m-h1"]["family_id"] {
 		t.Errorf("fork family %v, root %v", units["m-fork-3"]["family_id"], units["m-h1"]["family_id"])
 	}
@@ -344,11 +347,13 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 	if visible := firstString(units["m-o7"]["visible_text"]); !strings.Contains(visible, "re-sent text of unverified origin") || !strings.HasSuffix(visible, "thanks") {
 		t.Errorf("re-sent sub-agent prompt = %q", visible)
 	}
-	// A short repeat ("?") is not taken for a copy.
-	if units["m-f5-2"]["duplicate_of"] != "m-h1" || units["m-f5-3"]["duplicate_of"] != nil || units["m-f5-1"]["duplicate_of"] != nil {
-		t.Errorf("later fork copies: %v %v %v", units["m-f5-1"]["duplicate_of"], units["m-f5-2"]["duplicate_of"], units["m-f5-3"]["duplicate_of"])
+	// Repeated text is never taken for a copy, long or short.
+	for _, id := range []string{"m-f5-1", "m-f5-2", "m-f5-3", "m-fork-1", "m-f2-2"} {
+		if units[id]["duplicate_of"] != nil || !strings.Contains(firstString(units[id]["context_refs"]), `"occurrence_coverage":"untyped-ancestry/v1"`) {
+			t.Errorf("%s: duplicate_of %v, refs %v", id, units[id]["duplicate_of"], units[id]["context_refs"])
+		}
 	}
-	// The first new turn of a fork sees the copied request and reply.
+	// The first new turn of a fork sees the request and reply before it.
 	if context := firstString(units["m-fork-3"]["context_text"]); !strings.HasPrefix(context, "Previous user request:\nPlease investigate why") ||
 		!strings.HasSuffix(context, "Previous assistant message:\nI will look into the export button.") {
 		t.Errorf("fork context = %q", context)
@@ -392,12 +397,13 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 	for _, row := range labelingRows(t, db, `SELECT message_id,COALESCE(duplicate_of,'') duplicate_of FROM exclusions`) {
 		duplicates[firstString(row["message_id"])] = firstString(row["duplicate_of"])
 	}
-	if duplicates["m-fork-1"] != "m-h1" || duplicates["m-fork-2"] != "m-a1" || duplicates["m-f2-1"] != "m-h1" || duplicates["m-f2-2"] != "m-h2" ||
-		duplicates["m-f3-1"] != "m-h1" || duplicates["m-f4-1"] != "m-h1" {
-		t.Errorf("inherited history = %v", duplicates)
+	for message, original := range duplicates {
+		if original != "" {
+			t.Errorf("%s excluded as a copy of %s without proof", message, original)
+		}
 	}
 	for message, reason := range map[string]string{"m-branch": "unselected_branch", "m-untimed": "authorship_missing", "m-o2": "action_only",
-		"m-fork-1": "inherited_history", "m-fork-2": "inherited_history", "m-o-think": "reasoning_extraction_pending", "m-harness-only": "no_target_text",
+		"m-o-think": "reasoning_extraction_pending", "m-harness-only": "no_target_text",
 		"m-bad": "invalid_utf8", "m-n4": "residual_punctuation"} {
 		if exclusions[message] != reason {
 			t.Errorf("%s excluded as %q, want %s", message, exclusions[message], reason)
@@ -409,7 +415,7 @@ func TestLabelingPrepareBuildsTheDatasetWithoutWritingTheCatalog(t *testing.T) {
 		counted[firstString(row["reason"])] += int(row["records"].(float64))
 	}
 	for reason, count := range map[string]int{"mirrored_work": 1, "reasoning_unavailable": 1, "kind_tool_call": 4, "kind_tool_result": 1,
-		"tool_result_answer": 1, "tool_result_answer_duplicate": 1, "tool_result_answer_unverified": 1, "inherited_history": 6, "unselected_branch": 3} {
+		"tool_result_answer": 1, "tool_result_answer_duplicate": 1, "tool_result_answer_unverified": 1, "inherited_history": 0, "unselected_branch": 3} {
 		if counted[reason] != count {
 			t.Errorf("%s counted %d, want %d (%v)", reason, counted[reason], count, counted)
 		}
@@ -567,9 +573,9 @@ func TestLabelingPlanReadsOnlyTheDataset(t *testing.T) {
 	// The seeded conversations share few families; one item per family
 	// and request takes more requests than packing four at a time.
 	packing := plan["packing"].(map[string]any)
-	if plan["items"] != 29 || plan["requests"] != 24 || packing["requests_without_family_separation"] != 8 || packing["added_requests"] != 16 ||
-		plan["selection"].(map[string]any)["duplicate_items_skipped"] != 3 {
-		t.Fatalf("plan = %v items in %v requests", plan["items"], plan["requests"])
+	if plan["items"] != 36 || plan["requests"] != 31 || packing["requests_without_family_separation"] != 9 || packing["added_requests"] != 22 ||
+		plan["selection"].(map[string]any)["duplicate_items_skipped"] != 2 {
+		t.Fatalf("plan = %v items in %v requests (%v, %v)", plan["items"], plan["requests"], packing, plan["selection"])
 	}
 	price := plan["price"].(map[string]any)
 	if price["status"] != "priced" || price["cost_usd"].(float64) <= 0 {
@@ -577,7 +583,7 @@ func TestLabelingPlanReadsOnlyTheDataset(t *testing.T) {
 	}
 	luna, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: "codex", Model: "gpt-6-luna", Effort: "medium", Cohorts: []string{"human"},
 		ItemsPerRequest: 4, MaxRequestTokens: 24000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
-	if err != nil || luna["items"] != 17 || luna["price"].(map[string]any)["status"] != "priced" {
+	if err != nil || luna["items"] != 23 || luna["price"].(map[string]any)["status"] != "priced" {
 		t.Fatalf("luna plan = %v, %v", luna, err)
 	}
 	unknown, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: "codex", Model: "made-up-model", Effort: "high",
@@ -615,7 +621,7 @@ func TestLabelingPlanReadsOnlyTheDataset(t *testing.T) {
 	}
 	all, err := planLabeling(context.Background(), labelingPlanOptions{Dir: dir, Route: "claude", Model: "claude-haiku-5-5", Effort: "high", IncludeDuplicates: true,
 		ItemsPerRequest: 4, MaxRequestTokens: 24000, Concurrency: 3, CharsPerToken: labelingCharsPerToken, TokensPerMinute: 2_000_000, Today: today})
-	if err != nil || all["items"] != 32 {
+	if err != nil || all["items"] != 38 {
 		t.Fatalf("with duplicates = %v items, %v", all["items"], err)
 	}
 	if _, err := os.Stat(started); !os.IsNotExist(err) {
@@ -930,5 +936,303 @@ func TestLabelingDropsHarnessAfterAnUnrecognizedTag(t *testing.T) {
 	context := firstString(next["context_text"])
 	if !strings.Contains(context, "Previous user request:\n"+typed) || strings.Contains(context, "PRIVATE HARNESS") || strings.Contains(context, "/settings") {
 		t.Fatalf("next unit's context = %q", context)
+	}
+}
+
+// A depth reached through an inferred or unverified link keeps its quality
+// in depth_status; only an observed depth reads as plain "resolved".
+func TestLabelingDepthKeepsAncestryQuality(t *testing.T) {
+	for quality, want := range map[string]string{ancestryObserved: "resolved", ancestryInferred: "resolved:inferred", ancestryUnverified: "resolved:unverified"} {
+		p := &labelingPass{mainSession: map[string]string{"c": "s"}, sessionKind: map[string]string{},
+			lineage: &usageConversationAttribution{delegatedDepth: map[string]int64{"s": 1}, depthQuality: map[string]string{"s": quality}, unresolved: map[string]string{}}}
+		unit := &labelingUnit{}
+		p.resolveDepth(unit, &labelingConversation{id: "c"})
+		if unit.depth != 1 || unit.depthStatus != want || labelingDepthBucket(unit.depth, unit.depthStatus) != "1" {
+			t.Errorf("%s: depth %d status %q", quality, unit.depth, unit.depthStatus)
+		}
+	}
+}
+
+// Labeling and agent-event units take inherited history from the shared
+// occurrence index alone. Ingested through the production adapters' records:
+//   - a Codex fork whose copies carry the parent's provider event IDs
+//     (proven copies), plus synthesized line locators at a coincident and a
+//     shifted line with equal content (unresolved candidates), a reply
+//     repeating a copied reply's text and send time without proof, and its
+//     own reply;
+//   - a Codex fork whose parent is not retained (an unresolved region);
+//   - a Cursor fork whose proven copies' original is gone (inherited, no
+//     original to name).
+//
+// Prepare and the live builder (the labels and agent-events passes' unit
+// source) agree with the index on every record: proven copies are no units
+// and name only an original the index resolves; unresolved observations stay
+// units, marked; copies still frame the next request, with the index's
+// provenance.
+func TestLabelingUnitsFollowSharedOccurrences(t *testing.T) {
+	ctx := t.Context()
+	catalog, _ := testCatalog(t)
+	at := func(minute int) string { return fmt.Sprintf("2026-09-10T12:%02d:00.000Z", minute) }
+	meta := func(id, from string, ordinal int) MessageRecord {
+		text := jsonText(map[string]any{"type": "session_meta", "payload": map[string]any{"id": id, "forked_from_id": from, "forked_from_ordinal_exclusive": ordinal}})
+		return MessageRecord{NativeID: "line-1", Role: "system", Kind: "metadata", Text: text, EvidenceLocator: "/r/" + id + ".jsonl:1", CreatedAt: at(10), Selected: true}
+	}
+	reply := "I read the repository layout before changing anything."
+	parent := ConversationRecord{NativeID: "thread-parent", Provider: "codex", Account: "local", StartedAt: at(0), Messages: []MessageRecord{
+		{NativeID: "resp_1", Role: "user", Kind: "message", Text: "Explore the repository and explain its layout", EvidenceLocator: "/r/parent.jsonl:2", CreatedAt: at(0), Selected: true},
+		{NativeID: "resp_2", Role: "assistant", Kind: "message", Text: reply, EvidenceLocator: "/r/parent.jsonl:3", CreatedAt: at(1), Selected: true},
+		{NativeID: "line-4", Role: "assistant", Kind: "message", Text: "Checked the build scripts as well.", EvidenceLocator: "/r/parent.jsonl:4", CreatedAt: at(2), Selected: true},
+	}}
+	fork := ConversationRecord{NativeID: "thread-fork", ParentNativeID: "thread-parent", Provider: "codex", Account: "local", StartedAt: at(10), Messages: []MessageRecord{
+		meta("thread-fork", "thread-parent", 4),
+		{NativeID: "resp_1", Role: "user", Kind: "message", Text: "Explore the repository and explain its layout", EvidenceLocator: "/r/fork.jsonl:2", CreatedAt: at(0), Selected: true},
+		{NativeID: "resp_2", Role: "assistant", Kind: "message", Text: reply, EvidenceLocator: "/r/fork.jsonl:3", CreatedAt: at(1), Selected: true},
+		// The same content at the parent's line, and the same at a later one.
+		{NativeID: "line-4", Role: "assistant", Kind: "message", Text: "Checked the build scripts as well.", EvidenceLocator: "/r/fork.jsonl:4", CreatedAt: at(2), Selected: true},
+		{NativeID: "line-6", Role: "assistant", Kind: "message", Text: "Checked the build scripts as well.", EvidenceLocator: "/r/fork.jsonl:6", CreatedAt: at(11), Selected: true},
+		// Equal text and send time as a copied reply, with no proof of one occurrence.
+		{NativeID: "resp_rep", Role: "assistant", Kind: "message", Text: reply, EvidenceLocator: "/r/fork.jsonl:7", CreatedAt: at(1), Selected: true},
+		{NativeID: "resp_own", Role: "assistant", Kind: "message", Text: "The fork's own answer about the tests.", EvidenceLocator: "/r/fork.jsonl:8", CreatedAt: at(12), Selected: true},
+	}}
+	orphan := ConversationRecord{NativeID: "thread-orphan", ParentNativeID: "thread-gone", Provider: "codex", Account: "local", StartedAt: at(20), Messages: []MessageRecord{
+		meta("thread-orphan", "thread-gone", 1),
+		{NativeID: "resp_9", Role: "assistant", Kind: "message", Text: "An answer the missing parent gave.", EvidenceLocator: "/r/orphan.jsonl:2", CreatedAt: at(20), Selected: true},
+		{NativeID: "resp_10", Role: "assistant", Kind: "message", Text: "The orphan's own answer.", EvidenceLocator: "/r/orphan.jsonl:3", CreatedAt: at(21), Selected: true},
+	}}
+	for _, conversation := range []ConversationRecord{parent, fork, orphan} {
+		ingestRecordTx(t, catalog, WorkspaceRecord{SourceID: conversation.NativeID, SourceKind: "codex", Account: "local", Conversations: []ConversationRecord{conversation}})
+	}
+	ingestRecordTx(t, catalog, WorkspaceRecord{SourceID: "composer-f", SourceKind: "cursor", Account: "local", Conversations: []ConversationRecord{
+		{NativeID: "composer-f", Provider: "cursor", Account: "local", StartedAt: at(30), Messages: []MessageRecord{
+			{NativeID: "b1", Role: "user", Kind: "message", Text: "Plan the migration of the settings page", CreatedAt: at(30), Selected: true},
+			{NativeID: "b2", Role: "assistant", Kind: "message", Text: "Here is the plan for the settings page.", CreatedAt: at(31), Selected: true},
+			{NativeID: "b3", Role: "user", Kind: "message", Text: "Now do the first step in this fork", CreatedAt: at(32), Selected: true},
+		}, Evidence: []EvidenceRecord{{Kind: evidenceHistoryCopy, Subject: "conversation", Object: executionNativeKey("cursor", "local", "composer-gone"),
+			Origin: "native", Rule: "cursor-fork-length-at-spawn/v1", IDKind: idKindNativeEvent,
+			Detail: map[string]any{"copied": 2, "boundary_ordinal": 2, "mapping": "unverified", "parent_read": false, "parent_deleted": true, "first_id": "b1", "last_id": "b2"}}}}}})
+	if err := catalog.RebuildAuthorship(ctx, "test"); err != nil {
+		t.Fatal(err)
+	}
+	cid := func(provider, native string) string {
+		var id string
+		if err := catalog.DB.QueryRow(`SELECT id FROM conversations WHERE provider=? AND native_id=?`, provider, native).Scan(&id); err != nil {
+			t.Fatalf("%s: %v", native, err)
+		}
+		return id
+	}
+	forkID, orphanID, cursorID := cid("codex", "thread-fork"), cid("codex", "thread-orphan"), cid("cursor", "composer-f")
+	msg := func(conversation, native string) string { return messageCatalogID(conversation, native) }
+
+	// What the shared API decides, by each record's stored membership.
+	res, err := resolveExecutionsFrom(ctx, catalog.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := res.Occurrences(ctx, catalog.DB, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type decision struct {
+		role     occurrenceRole
+		original string
+	}
+	decided, conversationOf := map[string]decision{}, map[string]string{}
+	for _, row := range labelingRows(t, catalog.DB, `SELECT m.id,m.conversation_id,COALESCE((SELECT MIN(agent_session_id) FROM agent_session_messages a WHERE a.message_id=m.id),'') session
+		FROM messages m WHERE m.conversation_id IN (?,?,?) AND m.selected=1`, forkID, orphanID, cursorID) {
+		stream := sourceRef{sourceSession, firstString(row["session"])}
+		if stream.ID == "" {
+			stream = sourceRef{sourceConversation, firstString(row["conversation_id"])}
+		}
+		o := index.Lookup(sourceRef{sourceMessage, firstString(row["id"])}, stream)
+		d := decision{role: o.Role}
+		if o.Canonical.Kind == sourceMessage && o.Canonical.ID != firstString(row["id"]) && o.Role != occurrenceUnresolved {
+			d.original = o.Canonical.ID
+		}
+		decided[firstString(row["id"])] = d
+		conversationOf[firstString(row["id"])] = firstString(row["conversation_id"])
+	}
+	// The cases are the ones intended: the API, not this test, decides them.
+	parentID := cid("codex", "thread-parent")
+	for id, want := range map[string]decision{
+		msg(forkID, "resp_1"): {occurrenceInherited, msg(parentID, "resp_1")}, msg(forkID, "resp_2"): {occurrenceInherited, msg(parentID, "resp_2")},
+		msg(forkID, "line-4"): {occurrenceUnresolved, ""}, msg(forkID, "line-6"): {occurrenceUnresolved, ""},
+		msg(forkID, "resp_rep"): {occurrenceOriginal, ""}, msg(forkID, "resp_own"): {occurrenceOriginal, ""},
+		msg(orphanID, "resp_9"): {occurrenceUnresolved, ""}, msg(orphanID, "resp_10"): {occurrenceOriginal, ""},
+		msg(cursorID, "b1"): {occurrenceInherited, ""}, msg(cursorID, "b2"): {occurrenceInherited, ""}, msg(cursorID, "b3"): {occurrenceOriginal, ""},
+	} {
+		if decided[id] != want {
+			t.Fatalf("shared decision for %s = %+v, want %+v", id, decided[id], want)
+		}
+	}
+
+	// Prepare.
+	dir := filepath.Join(t.TempDir(), "dataset")
+	manifest, err := prepareLabelingDataset(ctx, labelingPrepareOptions{Dir: dir, CatalogPath: catalog.Path, Live: true, FreshDays: 14, Progress: io.Discard,
+		Conversations: []string{forkID, orphanID, cursorID}, Now: func() time.Time { return labelingFixtureNow }}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, labelingDatasetFile)+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	units, exclusions := map[string]map[string]any{}, map[string]map[string]any{}
+	for _, row := range labelingRows(t, db, `SELECT message_id,context_refs FROM units`) {
+		units[firstString(row["message_id"])] = row
+	}
+	for _, row := range labelingRows(t, db, `SELECT message_id,reason,COALESCE(duplicate_of,'') duplicate_of FROM exclusions`) {
+		exclusions[firstString(row["message_id"])] = row
+	}
+	refs := func(id string) map[string]any {
+		var out map[string]any
+		_ = json.Unmarshal([]byte(firstString(units[id]["context_refs"])), &out)
+		return out
+	}
+	for id, d := range decided {
+		switch d.role {
+		case occurrenceInherited, occurrenceDuplicate:
+			if units[id] != nil || exclusions[id] == nil || exclusions[id]["duplicate_of"] != d.original ||
+				exclusions[id]["reason"] != map[occurrenceRole]string{occurrenceInherited: "inherited_history", occurrenceDuplicate: "duplicate_observation"}[d.role] {
+				t.Errorf("%s (%s, original %q): unit %v, exclusion %v", id, d.role, d.original, units[id] != nil, exclusions[id])
+			}
+		case occurrenceUnresolved:
+			if units[id] == nil || refs(id)["occurrence"].(map[string]any)["role"] != "unresolved" {
+				t.Errorf("%s: an unresolved observation is not a marked unit: %v %v", id, units[id], exclusions[id])
+			}
+		default:
+			if r := firstString(exclusions[id]["reason"]); r == "inherited_history" || r == "duplicate_observation" {
+				t.Errorf("%s: an original excluded as a copy", id)
+			}
+		}
+	}
+	for _, id := range []string{msg(forkID, "resp_rep"), msg(forkID, "resp_own"), msg(orphanID, "resp_10"), msg(cursorID, "b3")} {
+		if units[id] == nil {
+			t.Errorf("%s: own message is not a unit (%v)", id, exclusions[id])
+		}
+	}
+	// A copy frames the next request with the index's provenance, and a
+	// missing original is said so rather than guessed.
+	if prior := refs(msg(cursorID, "b3"))["prior_assistant"].(map[string]any); prior["message"] != msg(cursorID, "b2") || prior["occurrence"] != "inherited_copy" || prior["original"] != "unavailable" {
+		t.Errorf("framing from a copy of a missing original: %v", prior)
+	}
+	if prior := refs(msg(cursorID, "b3"))["prior_user"]; prior != nil {
+		if prior.(map[string]any)["occurrence"] != "inherited_copy" {
+			t.Errorf("framing request: %v", prior)
+		}
+	}
+	// The orphan's transcript is partial, and the manifest says what was unresolved.
+	if refs(msg(orphanID, "resp_10"))["occurrence_coverage"] == nil {
+		t.Errorf("orphan coverage not noted: %v", refs(msg(orphanID, "resp_10")))
+	}
+	occurrences := manifest["duplicates"].(map[string]any)["occurrences"].(map[string]any)
+	if occurrences["source"] != "snapshot" || occurrences["unresolved_units"].(int) != 3 || occurrences["original_unavailable"].(int) != 2 || len(occurrences["partial_conversations"].(map[string]int)) == 0 {
+		t.Errorf("manifest occurrences = %v", occurrences)
+	}
+	if coverage := strings.Join(manifest["coverage"].([]string), "\n"); !strings.Contains(coverage, "occurrences: 3 units") {
+		t.Errorf("coverage = %s", coverage)
+	}
+
+	// The live builder (labels and agent events) selects the same units,
+	// through the catalog's cached index or its own resolution alike.
+	direct, err := newLabelsItemBuilder(ctx, catalog.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := catalog.newLabelsItemBuilderFor(ctx, catalog.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, builder := range map[string]*labelsItemBuilder{"direct": direct, "cached": cached, "fork": cached.fork(ctx)} {
+		for _, conversation := range []string{forkID, orphanID, cursorID} {
+			built, err := builder.conversation(ctx, conversation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, want := []string{}, []string{}
+			for _, unit := range built {
+				got = append(got, unit.messageID)
+			}
+			for id := range units {
+				if conversationOf[id] == conversation {
+					want = append(want, id)
+				}
+			}
+			slices.Sort(got)
+			slices.Sort(want)
+			if !slices.Equal(got, want) {
+				t.Errorf("%s builder, %s: units %v, prepare %v", name, conversation, got, want)
+			}
+		}
+	}
+}
+
+// A live builder selects units with exactly the evidence its captured
+// dependency digests describe. Evidence that changes and changes back
+// between capture and publication (A, B, A) must not let units chosen at B
+// publish as current: here an original matching a child's event ID appears
+// in the parent only at B (which would make the child's reply an inherited
+// copy), written by a writer that marks nothing, and is gone again before
+// the publication check. The child's own rows never change.
+func TestLabelsBuilderCapturesOneSnapshot(t *testing.T) {
+	ctx := t.Context()
+	catalog, _ := testCatalog(t)
+	execTx(t, catalog.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','claude','local','w','w','2026-10-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,started_at) VALUES('p','w','claude','local','p','2026-09-01T12:00:00.000Z')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,started_at) VALUES('c','w','claude','local','c','p',1,'2026-09-01T12:05:00.000Z')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected,source_order) VALUES
+		 ('p1','p','evt-p1','assistant','message','The parent looked at the layout first.','h-p1','2026-09-01T12:01:00.000Z',1,1),
+		 ('c1','c','evt-shared','assistant','message','The child read the build scripts carefully.','h-c1','2026-09-01T12:06:00.000Z',1,2)`)
+	original := `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected,source_order) VALUES
+		 ('p2','p','evt-shared','assistant','message','The child read the build scripts carefully.','h-c1','2026-09-01T12:02:00.000Z',1,3)`
+	digestAt := func() string {
+		t.Helper()
+		digests, err := executionDependencyDigestsFor(ctx, catalog.DB, []string{"c"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return digests["c"]
+	}
+	atA := digestAt()
+	execTx(t, catalog.DB, original)
+	if atB := digestAt(); atB == atA {
+		t.Fatal("the dependency digest does not cover the original's arrival")
+	}
+	execTx(t, catalog.DB, `DELETE FROM messages WHERE id='p2'`)
+	if digestAt() != atA {
+		t.Fatal("restoring A does not restore its digest")
+	}
+	direct := func(ctx context.Context) (*labelsItemBuilder, error) { return newLabelsItemBuilder(ctx, catalog.DB) }
+	for name, build := range map[string]func(context.Context) (*labelsItemBuilder, error){"direct": direct, "catalog": func(ctx context.Context) (*labelsItemBuilder, error) {
+		return catalog.newLabelsItemBuilderFor(ctx, catalog.DB)
+	}} {
+		builder, err := build(ctx) // at A
+		if err != nil {
+			t.Fatal(err)
+		}
+		if builder.p.executionDigests["c"] != atA {
+			t.Fatalf("%s: captured digest is not A's", name)
+		}
+		execTx(t, catalog.DB, original) // B, before the first conversation is read
+		units, err := builder.conversation(ctx, "c")
+		if err != nil {
+			t.Fatal(err)
+		}
+		execTx(t, catalog.DB, `DELETE FROM messages WHERE id='p2'`) // A again
+		// At A the child's reply is its own; units chosen at B would drop it
+		// as an inherited copy while the captured digest still passes.
+		if len(units) != 1 || units[0].messageID != "c1" {
+			t.Fatalf("%s: units at a later snapshot than the captured digests: %v", name, units)
+		}
+		tx, err := catalog.DB.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		current, err := executionDependencyCurrent(ctx, tx, map[string]string{"c": builder.p.executionDigests["c"]})
+		_ = tx.Rollback()
+		if err != nil || !current["c"] {
+			t.Fatalf("%s: publication check at A = %v %v", name, current, err)
+		}
 	}
 }

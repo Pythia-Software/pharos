@@ -29,6 +29,10 @@ var queryCacheTables = []string{
 	"tl1_installations", "tl1_flavors", "tl1_tasks", "tl1_attempts", "tl1_candidates",
 	"tl1_events", "tl1_review_findings", "tl1_human_touches", "tl1_configuration_health",
 	"agent_events", "agent_event_messages",
+	// Typed execution evidence decides parents, bindings and occurrence
+	// ownership in delegation, quick stats, activity and parallelism; a
+	// backfill writes nothing else. Publication never writes it.
+	"execution_claims", "execution_evidence_state",
 	// One stamp per rebuilt conversation; its facts are written in the same
 	// transaction.
 	"agent_event_fact_conversations",

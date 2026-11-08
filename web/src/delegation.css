@@ -1031,6 +1031,9 @@
    checks the separations in both themes. */
 .lt-session-tree,.delegation-parallel.is-recursive,.lt-ribbon-inspector{--activity-read:#ff9a3c;--activity-write:#a43ff0;--activity-run:#17b3c4;--activity-git:#4f7f86;--activity-network:#9a6f8c;--activity-delegate:#f27fc0;--activity-wait:#8d818f;--activity-poll:#7b858a;--activity-other:#857b6e;--activity-model:#968ba0;--activity-error:#e0198f}
 .lt-session-row-label .app-icon{width:11px;height:11px;flex:none;color:var(--muted)}
+.lt-session-row-label strong{min-width:0}
+.lt-session-row-label .lt-session-caret{width:14px;height:14px;flex:none;margin-left:auto;color:var(--muted);text-align:center}
+.lt-session-row-label small+.lt-session-caret{margin-left:0}
 .lt-session-row-label>i{height:6px;width:6px;flex:none}
 
 /* The window is a control surface; its frame and handles are not event marks. */
@@ -1141,8 +1144,8 @@ button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--
 .lt-session-gutter{background:var(--panel)}
 .lt-session-fold-anchor{position:sticky;left:0;width:var(--lt-execution,175px);height:0;z-index:3;pointer-events:none}
 .lt-session-branches{position:absolute;left:0;top:0;fill:none;stroke:color-mix(in srgb,var(--muted) 55%,transparent);stroke-width:1;pointer-events:none}
-.lt-session-fold{top:9px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;pointer-events:auto}
-.lt-session-fold button,.lt-session-fold .lt-preview-fold{width:20px;height:20px;min-width:0;padding:2px;background:transparent}
+.lt-session-fold{top:11px;width:16px;height:16px;display:flex;align-items:center;justify-content:center;pointer-events:auto}
+.lt-session-fold .lt-preview-fold{width:16px;height:16px;min-width:0;padding:2px;background:transparent}
 .lt-session-fold .app-icon{width:13px;height:13px}
 .is-preview .lt-session-fold-anchor{z-index:12}
 .is-preview .lt-session-fold{pointer-events:none}
@@ -1170,6 +1173,8 @@ button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--
 .delegation-table tbody .delegation-label-cell{padding-top:0;padding-bottom:0}
 .delegation-node .lt-session-identity{position:relative;width:100%;max-width:330px}
 .session-fold{z-index:3;position:absolute;top:13px;width:20px;height:20px;box-sizing:border-box;padding:2px;background:var(--panel);border:1px solid var(--line);border-radius:3px}
+.delegation-inbox-session .session-fold,.lt-session-fold button{width:16px;height:16px;min-width:0;box-sizing:border-box;padding:2px;background:var(--panel);border:1px solid var(--line);border-radius:3px}
+.delegation-inbox-session .session-fold .app-icon,.lt-session-fold button .app-icon{width:10px;height:10px}
 .lt-session-identity[aria-current="true"]{cursor:default}
 .lt-session-root>summary,.lt-session-preview,.lt-session-empty-root{position:relative}
 .delegation-inbox-row.current::after,.delegation-lane-current .lt-session-root>summary::after,.delegation-lane-current .lt-session-preview::after,.delegation-lane-current .lt-session-empty-root::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 0 1px var(--accent);pointer-events:none;z-index:13}
@@ -1177,5 +1182,9 @@ button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--
 .without-events .lt-session-node>summary,.without-events .lt-session-row,.without-events .delegation-axis.lt-resizable-axis{grid-template-columns:var(--lt-execution) var(--lt-time)}
 .delegation-ancestor .lt-session-identity:not(.is-interactive):not([aria-current="true"]) strong{color:var(--muted)}
 .delegation-parallel.is-preview .delegation-lane-scroll{border:1px solid var(--line);border-radius:4px}
+
+/* A session named inside a note; reads as a link, behaves as a button. */
+.delegation-inline-link{padding:0;border:0;background:none;color:inherit;font:inherit;text-decoration:underline;cursor:pointer}
+.delegation-relatives{position:absolute;right:0;bottom:2px;z-index:3;padding-left:4px;background:var(--panel);color:var(--muted);font-size:var(--fs-xs)}
 
 .delegation-token-evidence { color: var(--muted); font-size: var(--fs-sm); margin: 8px 0; max-width: 85ch; }

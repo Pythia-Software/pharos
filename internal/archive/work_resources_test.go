@@ -333,6 +333,7 @@ func TestTaskHelperCountersAndIdentity(t *testing.T) {
 		{"missing initial CPU", processUsage{Known: counterMemory, Footprint: 500, Started: 9}, end, false, true},
 		{"reset CPU", base, processUsage{Known: counterOwnCPU | counterMemory, CPUSeconds: 1, Footprint: 600, Started: 9}, false, true},
 		{"unknown identity", processUsage{Known: base.Known}, processUsage{Known: end.Known}, false, false},
+		{"acquired identity", processUsage{Known: base.Known}, end, false, false},
 		{"lost identity", base, processUsage{Known: end.Known}, false, false},
 		{"replaced", base, processUsage{Known: end.Known, Started: 10}, false, false},
 	} {
@@ -357,6 +358,28 @@ func TestTaskHelperCountersAndIdentity(t *testing.T) {
 			}
 			if tc.memory && (*helper.Footprint.Value != float64(tc.finish.Footprint) || helper.CounterBasis != resourceBasis) {
 				t.Fatalf("endpoint memory with reader basis: %+v", helper)
+			}
+		})
+	}
+	for _, stage := range []string{"admission", "release"} {
+		t.Run(stage+" observation error", func(t *testing.T) {
+			r := newTaskResources(taskIdentity{Kind: "analysis.labels"}, time.Now)
+			reads := 0
+			scope := r.helperStartWith(77, "labeler", true, func(int) (processUsage, error) {
+				reads++
+				if stage == "admission" && reads == 1 || stage == "release" && reads > 1 {
+					return processUsage{}, os.ErrPermission
+				}
+				if reads == 1 {
+					return base, nil
+				}
+				return end, nil
+			})
+			scope.end()
+			view := r.view(time.Now())
+			helper := view.Helpers[0]
+			if helper.CPU.Value != nil || helper.Footprint.Value != nil || view.CPU["helpers"].Basis != basisUnavailable {
+				t.Fatalf("a failed ownership observation must not establish a measured interval: %+v", helper)
 			}
 		})
 	}

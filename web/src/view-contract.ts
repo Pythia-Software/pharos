@@ -77,6 +77,7 @@ export const viewFields: Record<string, ViewField> = {
   delegation_column_order: field("delegation_column_order", ["work"], "strings", "Metric column ordering, including hidden columns."),
   delegation_tint: field("delegation_tint", ["work"], "enum", "Tint session metric cells.", ["all", "sort", "off"]),
   delegation_expanded: field("delegation_expanded", ["work"], "strings", "Session IDs with detailed parallel lanes expanded."),
+  delegation_relatives: field("delegation_relatives", ["work"], "strings", "Session rows whose relatives omitted at the explorer's family bound are loaded."),
   delegation_event: field("delegation_event", ["work"], "text", "Selected parallel-lane event ID."),
   timeline_idle: field("timeline_idle", ["work"], "boolean", "Skip idle gaps on the session timeline: stretches of 15 minutes or more with nothing running in any session (no message, model request or tool call in flight) that end with the caller speaking. Each skipped gap is a bar marked with the time the session resumed; the overview, zoom, axis and agent event arcs use the same compressed clock. Default on; a checkbox beside the timeline's zoom controls.", undefined, true),
   reader_filter_level: field("reader_filter_level", ["work"], "enum", "Transcript Show preset or custom category selection.", ["all", "all-minus-usage", "thought", "primary", "custom"]),

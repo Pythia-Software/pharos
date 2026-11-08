@@ -1,18 +1,22 @@
 package archive
 
 // The delegation read model sits above the existing transcript/session ledgers.
-// It reconciles source aliases without rewriting them, and never loads transcript
-// bodies (only bounded delegation-result evidence). Cached snapshots are immutable.
+// It projects the shared execution resolution onto one workspace without
+// rewriting sources, and never loads transcript bodies. Cached snapshots are
+// immutable.
 import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,25 +68,63 @@ type delegationReference struct {
 	Provider       string `json:"provider"`
 	MessageID      string `json:"message_id,omitempty"`
 }
+
+// delegationSegment is one transcript of an execution, where it is retained.
+type delegationSegment struct {
+	ConversationID string `json:"conversation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+}
+type delegationAttempt struct {
+	ID        string `json:"id"`
+	Outcome   string `json:"outcome"`
+	MessageID string `json:"message_id,omitempty"`
+}
 type delegationNode struct {
-	ID                string                   `json:"id"`
-	ConversationID    string                   `json:"conversation_id"`
-	WorkspaceID       string                   `json:"workspace_id"`
-	ParentID          string                   `json:"parent_id,omitempty"`
-	ParentEvidence    string                   `json:"parent_evidence,omitempty"`
-	ExternalParent    *delegationReference     `json:"external_parent,omitempty"`
-	ExternalChild     *delegationReference     `json:"external_child,omitempty"`
-	Navigation        *delegationReference     `json:"navigation,omitempty"`
-	ContextOnly       bool                     `json:"context_only,omitempty"`
-	MessageID         string                   `json:"message_id,omitempty"`
-	Label             string                   `json:"label"`
-	Provider          string                   `json:"provider"`
-	Model             string                   `json:"model"`
-	Effort            string                   `json:"effort"`
-	Coverage          string                   `json:"coverage"`
-	Usage             string                   `json:"usage_status"`
-	Depth             int                      `json:"depth"`
-	Outline           string                   `json:"outline"`
+	ID             string `json:"id"`
+	ConversationID string `json:"conversation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	ParentID       string `json:"parent_id,omitempty"`
+	ParentEvidence string `json:"parent_evidence,omitempty"`
+	// ParentCertainty is the winning parent claim's provenance: native,
+	// derived, or legacy (a stored link of unknown provenance, not verified).
+	ParentCertainty string               `json:"parent_certainty,omitempty"`
+	ExternalParent  *delegationReference `json:"external_parent,omitempty"`
+	ExternalChild   *delegationReference `json:"external_child,omitempty"`
+	Navigation      *delegationReference `json:"navigation,omitempty"`
+	ContextOnly     bool                 `json:"context_only,omitempty"`
+	MessageID       string               `json:"message_id,omitempty"`
+	// Label is the execution's one name in every reader and projection
+	// (delegationProjection.label). Subtitle is local context, such as the
+	// workspace title, that never replaces it.
+	Label    string `json:"label"`
+	Subtitle string `json:"subtitle,omitempty"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort"`
+	Coverage string `json:"coverage"`
+	Usage    string `json:"usage_status"`
+	// Depth is layout indentation within this snapshot. Ancestry carries the
+	// semantic parent state; its depth is absent unless the chain reaches a
+	// known root. AncestorIDs are the resolved chain, nearest first.
+	Depth       int                `json:"depth"`
+	Ancestry    delegationAncestry `json:"ancestry"`
+	AncestorIDs []string           `json:"ancestor_ids,omitempty"`
+	// Segments are the execution's transcripts in segment order when it has
+	// more than one (continuations); each stays navigable.
+	Segments []delegationSegment `json:"segments,omitempty"`
+	// Attempts are launches this execution issued that created no confirmed
+	// execution (rejected, or with no outcome). They are not child rows.
+	Attempts []delegationAttempt `json:"attempts,omitempty"`
+	// OccurrencePartial names why copied history may still be counted in
+	// this execution's own activity (occurrenceIndex.Partial); its
+	// observation metrics are then partial.
+	OccurrencePartial string `json:"occurrence_partial,omitempty"`
+	// EventsPending: some of its agent events are withheld (built on
+	// superseded execution evidence) or awaiting a rebuild.
+	EventsPending bool `json:"events_pending,omitempty"`
+	// ChildrenOmitted counts this row's children the snapshot leaves out at
+	// the family bound; its navigation opens a reader that includes them.
+	ChildrenOmitted   int                      `json:"children_omitted,omitempty"`
 	Order             int                      `json:"order"`
 	ChildCount        int                      `json:"child_count"`
 	Start             *float64                 `json:"start"`
@@ -97,17 +139,37 @@ type delegationNode struct {
 	Self              map[string]delegationMetric `json:"self"`
 	All               map[string]delegationMetric `json:"all"`
 	children          []*delegationNode
+	execution         executionID
 	tools             []delegationTool
 	requests          []float64
 	points            []float64
-	episodes          []delegationSpan
-	editedFiles       map[string]bool
-	fileCalls         int
-	fileKnown         int
-	filesPartial      bool
-	readFiles         map[string]bool
-	readCalls         int
-	readKnown         int
+	// The streams' recorded envelope (session or conversation start and
+	// end), which spans copied history too. It is the span only when no
+	// timed observation of the streams exists to say otherwise.
+	envelopeStart, envelopeEnd *float64
+	// timed: some timed observation (own or inherited) of the streams exists.
+	timed        bool
+	episodes     []delegationSpan
+	editedFiles  map[string]bool
+	fileCalls    int
+	fileKnown    int
+	filesPartial bool
+	readFiles    map[string]bool
+	readCalls    int
+	readKnown    int
+}
+type delegationAncestry struct {
+	State string `json:"state"` // root, resolved, ambiguous, missing, cycle or conflict
+	Depth *int   `json:"depth,omitempty"`
+	// The resolver's ancestry quality (executionAncestry), never a local
+	// policy. Certainty is CertaintyName: native, derived, legacy, synthesized
+	// or inferred. DepthQuality and RootQuality are observed, inferred or
+	// unverified ("" when unknown). Conflicted: the execution or an ancestor
+	// is in an unresolved identity conflict.
+	Certainty    string `json:"certainty,omitempty"`
+	DepthQuality string `json:"depth_quality,omitempty"`
+	RootQuality  string `json:"root_quality,omitempty"`
+	Conflicted   bool   `json:"conflicted,omitempty"`
 }
 type delegationSpan struct {
 	Start float64 `json:"start"`
@@ -124,7 +186,15 @@ type delegationTool struct {
 	Duration  *float64 `json:"duration"`
 }
 type delegationSnapshot struct {
-	ID      string
+	ID       string
+	Revision executionRevision
+	// FamilyComplete is false when a family exceeded delegationFamilyLimit.
+	FamilyComplete bool
+	// Coverage is what the resolution could not establish for these rows.
+	Coverage   delegationCoverage
+	projection delegationProjection
+	// members are the source rows each execution row combines.
+	members map[string][]string
 	Nodes   []*delegationNode
 	ByID    map[string]*delegationNode
 	Aliases map[string]string
@@ -136,6 +206,17 @@ type delegationSnapshot struct {
 	Start, End  *float64
 	Density     []int
 	Warnings    []string
+}
+
+// delegationCoverage counts the snapshot's rows whose ancestry or accounting
+// the evidence leaves uncertain, and the evidence capabilities the library
+// lacks, so uncertain answers are never shown as confirmed.
+type delegationCoverage struct {
+	Missing           []string `json:"missing"`
+	UnresolvedParents int      `json:"unresolved_parents"`
+	UnverifiedParents int      `json:"unverified_parents"`
+	Conflicts         int      `json:"conflicts"`
+	Unqueried         int      `json:"unqueried"`
 }
 
 func delegationTime(value any) *float64 {
@@ -166,44 +247,68 @@ func delegationUnion(spans []delegationSpan) float64 {
 	}
 	return total + end - start
 }
+
+// errDelegationSnapshotChanged: the execution evidence a cached snapshot was
+// resolved from has changed since. Its lanes are not combined with newer
+// rows; the client refreshes the explorer instead.
+// delegationAnalysisLimit bounds the rows one explorer snapshot holds; family
+// context never takes it past this (a package variable so tests can lower it).
+var delegationAnalysisLimit = 10000
+
+var errDelegationSnapshotChanged = errors.New("execution evidence changed since the explorer snapshot")
+
 func (c *Catalog) delegationSnapshot(ctx context.Context, workspace string) (*delegationSnapshot, error) {
-	return cachedValue(ctx, c, "delegation:"+workspace, func(ctx context.Context) (*delegationSnapshot, error) {
-		return c.readDelegationSnapshot(ctx, workspace)
+	return c.delegationSnapshotWith(ctx, workspace, nil)
+}
+
+// delegationSnapshotWith also loads the relatives that the family bound left
+// out below the given rows (the explorer's delegation_relatives).
+func (c *Catalog) delegationSnapshotWith(ctx context.Context, workspace string, relatives []string) (*delegationSnapshot, error) {
+	relatives = slices.Compact(slices.Sorted(slices.Values(relatives)))
+	// The key names the execution source generation as well as the derived
+	// cache's version: typed evidence can change without advancing the latter,
+	// and a refresh after a snapshot_changed answer must see the new graph.
+	key := "delegation:" + workspace
+	if generation, tracked, err := executionSourceGeneration(ctx, c.reader()); err != nil {
+		return nil, err
+	} else if tracked {
+		key += "@" + strconv.FormatInt(generation, 10)
+	}
+	if len(relatives) > 0 {
+		key += "+" + strings.Join(relatives, ",")
+	}
+	return cachedValue(ctx, c, key, func(ctx context.Context) (*delegationSnapshot, error) {
+		return c.readDelegationSnapshotWith(ctx, workspace, relatives)
 	})
 }
 
-// Materialize compact result references once per conversation. Joining messages
-// directly by conversation_id and call_id scans the whole transcript for every
-// launch: the conversation index does not cover call_id. Keep bodies outside the
-// temporary table and fetch only the matching results, bounded to 8192 characters.
-const delegationResultEvidenceSQL = `WITH launches AS MATERIALIZED (
- SELECT a.id,d.conversation_id,d.call_id FROM agent_sessions a
- JOIN messages d ON d.id=a.delegation_message_id
- WHERE a.workspace_id=? AND a.child_conversation_id IS NULL AND a.native_id<>'main'
-), results AS MATERIALIZED (
- SELECT m.id,m.conversation_id,m.call_id FROM messages m
- WHERE m.conversation_id IN (SELECT conversation_id FROM launches)
- AND +m.kind IN ('delegation_result','tool_result')
-)
-SELECT l.id,substr(m.text,1,8192) text FROM launches l
- JOIN results r ON r.conversation_id=l.conversation_id AND r.call_id=l.call_id
- JOIN messages m ON m.id=r.id`
+// Use the retained launch's assignment in both outgoing rows and incoming
+// ancestor context, so opening a separate child workspace keeps its label.
+const delegationAssignmentSQL = `substr(CASE WHEN json_valid(m.text) THEN
+ (SELECT value FROM json_each(m.text,'$.input')
+  WHERE type='text' AND key IN ('task_name','description','prompt','Prompt','task','message')
+   AND trim(value,char(9)||char(10)||char(13)||' ')<>'' AND value NOT GLOB 'gAAAA*'
+  ORDER BY CASE key WHEN 'task_name' THEN 0 WHEN 'description' THEN 1 WHEN 'prompt' THEN 2 WHEN 'Prompt' THEN 3 WHEN 'task' THEN 4 ELSE 5 END
+  LIMIT 1)
+ ELSE m.text END,1,180)`
 
 // Copy only the small accounting fields before joining session membership.
 // Looking up every message by its hashed ID makes long transcripts perform
 // thousands of random reads of the wide message table on external libraries.
-const delegationMessageCountsSQL = `WITH message_facts AS MATERIALIZED (
- SELECT m.id,m.role,m.kind,m.created_at FROM conversations c
+// Rows stay per message so copied history can be left out of each count.
+const delegationMessageFactsSQL = `WITH message_facts AS MATERIALIZED (
+ SELECT m.id,m.conversation_id,m.role,m.kind,m.created_at FROM conversations c
  JOIN messages m ON m.conversation_id=c.id WHERE c.workspace_id=?
 )
-SELECT am.agent_session_id,COUNT(*) messages,
- SUM(CASE WHEN m.role='user' AND m.kind='message' THEN 1 ELSE 0 END) turns,
- MIN(m.created_at) start,MAX(m.created_at) end
+SELECT am.agent_session_id,m.id,m.conversation_id,m.role='user' AND m.kind='message' turn,m.created_at
  FROM agent_sessions a JOIN agent_session_messages am ON am.agent_session_id=a.id
- JOIN message_facts m ON m.id=am.message_id WHERE a.workspace_id=?
- GROUP BY am.agent_session_id`
+ JOIN message_facts m ON m.id=am.message_id WHERE a.workspace_id=?`
 
 func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) (*delegationSnapshot, error) {
+	return c.readDelegationSnapshotWith(ctx, workspace, nil)
+}
+
+func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace string, relatives []string) (*delegationSnapshot, error) {
 	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -226,13 +331,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	// fields. Codex can retain a readable task_name beside an encrypted message.
 	// Extract before clipping: the name may follow a very large message. Unknown
 	// structured payloads and opaque messages must not become display labels.
-	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,substr(CASE WHEN json_valid(m.text) THEN
- (SELECT value FROM json_each(m.text,'$.input')
-  WHERE type='text' AND key IN ('task_name','description','prompt','Prompt','task','message')
-   AND trim(value,char(9)||char(10)||char(13)||' ')<>'' AND value NOT GLOB 'gAAAA*'
-  ORDER BY CASE key WHEN 'task_name' THEN 0 WHEN 'description' THEN 1 WHEN 'prompt' THEN 2 WHEN 'Prompt' THEN 3 WHEN 'task' THEN 4 ELSE 5 END
-  LIMIT 1)
- ELSE m.text END,1,180) assignment
+	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,`+delegationAssignmentSQL+` assignment
  FROM agent_sessions a LEFT JOIN messages m ON m.id=a.delegation_message_id
  WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT 10001`, workspace)
 	if err != nil {
@@ -242,17 +341,20 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
 	}
 	s := &delegationSnapshot{ByID: map[string]*delegationNode{}, Aliases: map[string]string{}, Maxima: map[string]map[string]float64{"self": {}, "all": {}}, Density: make([]int, 120), Warnings: []string{}}
+	res, err := c.executionResolutionAt(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	p := delegationProjection{res: res}
+	s.projection, s.Revision, s.members = p, res.Revision, map[string][]string{}
 	conv := map[string]map[string]any{}
 	roots := map[string]string{}
-	raw := map[string]map[string]any{}
 	for _, cv := range conversations {
 		conv[firstString(cv["id"])] = cv
 	}
 	for _, row := range sessions {
-		id, cid := firstString(row["id"]), firstString(row["conversation_id"])
-		raw[id] = row
 		if row["native_id"] == "main" {
-			roots[cid] = id
+			roots[firstString(row["conversation_id"])] = firstString(row["id"])
 		}
 	}
 	// Conversations without a derived session remain navigable with unknown usage.
@@ -261,228 +363,348 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		if roots[cid] == "" {
 			id := "conversation:" + cid
 			roots[cid] = id
-			row := map[string]any{"id": id, "conversation_id": cid, "provider": cv["provider"], "model": cv["model"], "started_at": cv["started_at"], "ended_at": cv["ended_at"], "usage_status": "unavailable", "native_id": "main"}
-			raw[id] = row
-			sessions = append(sessions, row)
+			sessions = append(sessions, map[string]any{"id": id, "conversation_id": cid, "provider": cv["provider"], "model": cv["model"], "started_at": cv["started_at"], "ended_at": cv["ended_at"], "usage_status": "unavailable", "native_id": "main"})
 		}
-	}
-	links, err := loadDelegationLinks(ctx, tx, workspace, conversations, sessions, roots)
-	if err != nil {
-		return nil, err
-	}
-	aliasesChild := links.aliases
-	for _, row := range links.extra {
-		sessions = append(sessions, row)
-		raw[firstString(row["id"])] = row
 	}
 	if len(sessions) > 10000 {
 		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
 	}
-	external := map[string]*delegationReference{}
-	reference := func(id string) (*delegationReference, error) {
-		if id == "" || conv[id] != nil {
-			return nil, nil
-		}
-		if ref := external[id]; ref != nil {
-			return ref, nil
-		}
-		var ref delegationReference
-		err := tx.QueryRowContext(ctx, `SELECT c.id,c.workspace_id,COALESCE(c.agent_nickname,w.title,c.native_id),c.provider FROM conversations c JOIN workspaces w ON w.id=c.workspace_id WHERE c.id=?`, id).Scan(&ref.ConversationID, &ref.WorkspaceID, &ref.Label, &ref.Provider)
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		external[id] = &ref
-		return &ref, nil
-	}
-	for _, row := range sessions {
-		if _, err = reference(firstString(row["child_conversation_id"])); err != nil {
-			return nil, err
-		}
-	}
-	for _, cv := range conversations {
-		if _, err = reference(firstString(cv["parent_id"])); err != nil {
-			return nil, err
-		}
-	}
-	tokenFields := map[string]string{"tokens": "total_tokens", "input": "input_tokens", "uncached": "uncached_input_tokens", "cacheRead": "cache_read_input_tokens", "cacheWrite": "cache_creation_input_tokens", "output": "output_tokens", "reasoning": "reasoning_output_tokens"}
+	// One row per execution with a stream here. Attempts and copied launches are
+	// source evidence, not executions: their IDs remain aliases, and a row the
+	// evidence does not know stays visible with unresolved ancestry.
+	members := map[string][]map[string]any{}
+	order, attempts := []string{}, []map[string]any{}
 	for _, row := range sessions {
 		id := firstString(row["id"])
-		if links.failed[id] {
+		nid := id
+		if x := p.execution(id); x != nil {
+			nid = p.nodeID(x.ID)
+		} else if canonical, known := p.alias(id); known {
+			s.Aliases[id] = canonical
+			if res.Attempts[sourceRef{sourceSession, id}] != nil {
+				attempts = append(attempts, row)
+			}
 			continue
 		}
-		if child := aliasesChild[id]; child != "" && (firstString(row["usage_status"]) == "in-child-conversation" || integer(row["total_tokens"]) == 0) {
-			s.Aliases[id] = child
+		if nid != id {
+			s.Aliases[id] = nid
+		}
+		if members[nid] == nil {
+			order = append(order, nid)
+		}
+		members[nid] = append(members[nid], row)
+		s.members[nid] = append(s.members[nid], id)
+	}
+	// Each local execution brings its ancestors and then its family as context,
+	// so opening any member shows the same executions in the same order.
+	local, context := map[executionID]bool{}, []executionID{}
+	for _, nid := range order {
+		if x := p.execution(firstString(members[nid][0]["id"])); x != nil {
+			local[x.ID] = true
+		}
+	}
+	localIDs := slices.Sorted(maps.Keys(local))
+	// An unknown family root leaves rows' ancestry unresolved; only the bound
+	// makes this snapshot partial. Context fits the analysis limit with the
+	// local rows, nearest relatives first.
+	expand := []executionID{}
+	for _, id := range relatives {
+		if x := p.execution(id); x != nil {
+			expand = append(expand, x.ID)
+		}
+	}
+	capacity := max(0, delegationAnalysisLimit-len(order))
+	context, s.FamilyComplete = p.familyContext(localIDs, expand, min(delegationFamilyLimit, capacity), capacity)
+	if !s.FamilyComplete {
+		s.Warnings = append(s.Warnings, "Only the nearest part of this work's execution family is shown; open a related session to see its own relatives.")
+	}
+	elsewhere := []string{}
+	for _, id := range append(localIDs, context...) {
+		x := res.Executions[id]
+		if x.Conversation == "" && local[id] {
 			continue
 		}
-		cid := firstString(row["conversation_id"])
+		cid := x.Conversation
+		if cid == "" && len(x.Streams) > 0 {
+			cid = res.Stream(x.Streams[0]).ConversationID
+		}
+		if conv[cid] == nil {
+			elsewhere = append(elsewhere, cid)
+		}
+	}
+	metas, err := loadDelegationConversationMeta(ctx, tx, uniqueStrings(elsewhere))
+	if err != nil {
+		return nil, err
+	}
+	// The opening request of an execution's own transcript, wherever it is
+	// retained: subtitle context, never a label.
+	initiation := func(x *execution) string {
+		if cv := conv[x.Conversation]; cv != nil {
+			return firstString(cv["prompt"])
+		}
+		return metas[x.Conversation].Initiation
+	}
+	// Executions with streams in other workspaces: this snapshot reads only
+	// the local ones, so their metrics are partial or unknown, never complete.
+	unqueried := map[*delegationNode]bool{}
+	tokenFields := map[string]string{"tokens": "total_tokens", "input": "input_tokens", "uncached": "uncached_input_tokens", "cacheRead": "cache_read_input_tokens", "cacheWrite": "cache_creation_input_tokens", "output": "output_tokens", "reasoning": "reasoning_output_tokens"}
+	for _, nid := range order {
+		rows := members[nid]
+		// The execution's own row leads, so metadata never depends on load order.
+		sort.SliceStable(rows, func(i, j int) bool {
+			a, b := firstString(rows[i]["id"]), firstString(rows[j]["id"])
+			if (a == nid) != (b == nid) {
+				return a == nid
+			}
+			return a < b
+		})
+		lead := rows[0]
+		x := p.execution(firstString(lead["id"]))
+		cid := firstString(lead["conversation_id"])
 		cv := conv[cid]
-		label := firstString(row["assignment"])
-		if row["native_id"] == "main" {
+		main := lead["native_id"] == "main"
+		label := firstString(lead["assignment"])
+		if main {
 			label = firstString(cv["agent_nickname"], label, cv["prompt"])
 		}
-		if label == "" {
-			label = firstString(row["native_id"], cv["native_id"])
-			if row["native_id"] == "main" {
-				label = firstString(cv["native_id"], label)
-			}
+		label = firstString(label, lead["native_id"], cv["native_id"])
+		if main {
+			label = firstString(cv["native_id"], label)
 		}
-		n := &delegationNode{ID: id, WorkspaceID: workspace, ConversationID: cid, Provider: firstString(row["provider"], cv["provider"]), Model: firstString(row["model"], cv["model"]), Label: label, Coverage: firstString(cv["coverage"]), Usage: firstString(row["usage_status"]), Start: delegationTime(row["started_at"]), End: delegationTime(row["ended_at"]), Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
-		n.Effort = firstString(row["effort"])
+		n := &delegationNode{ID: nid, WorkspaceID: workspace, ConversationID: cid, Provider: firstString(lead["provider"], cv["provider"]), Model: firstString(lead["model"], cv["model"]), Label: label, Coverage: firstString(cv["coverage"]), Usage: "unavailable", envelopeStart: delegationTime(lead["started_at"]), envelopeEnd: delegationTime(lead["ended_at"]), MessageID: firstString(lead["delegation_message_id"]), Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
 		// Embedded executions must not inherit the parent agent's effort.
-		if row["native_id"] == "main" && n.Effort == "" {
+		n.Effort = firstString(lead["effort"])
+		if main && n.Effort == "" {
 			n.Effort = firstString(cv["effort"])
 		}
-		if ref := external[firstString(row["child_conversation_id"])]; ref != nil {
-			copy := *ref
-			n.ExternalChild = &copy
-		}
-		if ref := links.external[id]; ref != nil {
-			n.ExternalChild = ref
-			n.Label = firstString(row["assignment"], ref.Label)
-			if integer(row["total_tokens"]) == 0 {
-				n.ConversationID, n.WorkspaceID = ref.ConversationID, ref.WorkspaceID
-				n.Provider = ref.Provider
-				n.Model, n.Effort = firstString(row["child_model"]), firstString(row["child_effort"])
-				n.Coverage = firstString(row["child_coverage"])
+		if x != nil {
+			n.execution = x.ID
+			n.Label = x.Label.Text
+			if len(x.Segments) > 1 {
+				n.Segments = p.segments(x)
+			}
+			// The execution's transcript is archived elsewhere; its launch is the
+			// stream here. A local segment (a continuation) keeps this row in
+			// its own transcript; the other segments stay navigable.
+			if meta, ok := metas[x.Conversation]; ok && !p.hasTranscriptIn(x, workspace) {
+				n.ConversationID, n.WorkspaceID, n.Provider = meta.ID, meta.WorkspaceID, meta.Provider
+				n.Model, n.Effort, n.Coverage = meta.Model, meta.Effort, meta.Coverage
+				n.ExternalChild = &delegationReference{ConversationID: meta.ID, WorkspaceID: meta.WorkspaceID, Label: n.Label, Provider: meta.Provider}
 			}
 		}
-		if n.Usage == "in-child-conversation" {
-			n.Usage = "unavailable"
+		if x != nil && p.unqueried(x, workspace) {
+			unqueried[n] = true
+		}
+		// Accounting stays per stream. Resolving two streams to one execution
+		// does not decide whether their reported usage overlaps.
+		reporting := 0
+		for _, row := range rows {
+			usage := firstString(row["usage_status"])
+			if usage == "" || usage == "unavailable" || usage == "in-child-conversation" || row["id"] != lead["id"] && integer(row["total_tokens"]) == 0 {
+				continue
+			}
+			reporting++
+			if n.Usage == "unavailable" || usage == "reported-partial" {
+				n.Usage = usage
+			}
+			for key, field := range tokenFields {
+				v := float64(integer(row[field]))
+				if prior := n.Self[key].Value; prior != nil {
+					v += *prior
+				}
+				n.Self[key] = delegationNumber(v, "reported", 1, 1)
+			}
+			if t := delegationTime(row["started_at"]); t != nil && (n.envelopeStart == nil || *t < *n.envelopeStart) {
+				n.envelopeStart = t
+			}
+			if t := delegationTime(row["ended_at"]); t != nil && (n.envelopeEnd == nil || *t > *n.envelopeEnd) {
+				n.envelopeEnd = t
+			}
+		}
+		if reporting > 1 {
+			s.Warnings = append(s.Warnings, "An execution has independently reported usage in more than one source stream; each is counted and their overlap is unresolved.")
 		}
 		for _, m := range delegationMetrics {
-			n.Self[m.ID] = delegationUnknown()
+			if _, ok := n.Self[m.ID]; !ok {
+				n.Self[m.ID] = delegationUnknown()
+			}
 		}
-		for key, field := range tokenFields {
-			if n.Usage != "unavailable" {
-				n.Self[key] = delegationNumber(float64(integer(row[field])), "reported", 1, 1)
-				if n.Usage == "reported-partial" {
-					v := n.Self[key]
-					v.Quality = "partial"
-					n.Self[key] = v
-				}
+		if n.Usage == "reported-partial" {
+			for key := range tokenFields {
+				v := n.Self[key]
+				v.Quality = "partial"
+				n.Self[key] = v
 			}
 		}
 		for _, key := range []string{"calls", "errors", "messages", "events", "requests", "turns", "toolSum"} {
 			n.Self[key] = delegationNumber(0, "observed", 0, 0)
 		}
 		s.Nodes = append(s.Nodes, n)
-		s.ByID[id] = n
+		s.ByID[nid] = n
 	}
-	canonical := func(id string) string {
-		if mapped := s.Aliases[id]; mapped != "" {
-			return mapped
+	for _, id := range context {
+		x := res.Executions[id]
+		cid := x.Conversation
+		if cid == "" && len(x.Streams) > 0 {
+			cid = res.Stream(x.Streams[0]).ConversationID
 		}
-		return id
+		meta := metas[cid]
+		n := &delegationNode{ID: p.nodeID(id), execution: id, ConversationID: cid, WorkspaceID: firstString(meta.WorkspaceID, x.WorkspaceID), Provider: firstString(meta.Provider, x.Provider),
+			Model: meta.Model, Coverage: meta.Coverage, Label: x.Label.Text, Usage: "unavailable", ContextOnly: true, Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
+		if x.Conversation != "" && meta.Title != n.Label {
+			n.Subtitle = meta.Title
+		}
+		if x.Conversation != "" {
+			n.Effort = meta.Effort
+		}
+		n.Navigation = &delegationReference{ConversationID: cid, WorkspaceID: n.WorkspaceID, Provider: n.Provider, Label: n.Label}
+		for _, spec := range delegationMetrics {
+			n.Self[spec.ID] = delegationUnknown()
+		}
+		if s.ByID[n.ID] == nil {
+			s.Nodes = append(s.Nodes, n)
+			s.ByID[n.ID] = n
+		}
 	}
-	// Source session parents, then transcript parents; exact launch aliases win.
-	for _, n := range s.Nodes {
-		row := raw[n.ID]
-		parent := canonical(firstString(row["parent_id"]))
-		proof := "session-parent"
-		if parent == "" && n.ID == roots[n.ConversationID] {
-			parent = canonical(roots[firstString(conv[n.ConversationID]["parent_id"])])
-			if ref := external[firstString(conv[n.ConversationID]["parent_id"])]; ref != nil {
-				n.ExternalParent = ref
-			}
-			proof = "conversation-parent"
-		}
-		if parent == "" && n.ExternalParent == nil {
-			proof = ""
-		}
-		n.ParentID, n.ParentEvidence = parent, firstString(row["parent_evidence"], proof)
-		n.MessageID = firstString(row["delegation_message_id"])
+	if len(s.Nodes) > delegationAnalysisLimit {
+		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
 	}
-	for _, row := range sessions {
+	// Attempts stay visible on the execution that issued them.
+	unowned := 0
+	for _, row := range attempts {
 		id := firstString(row["id"])
-		child := s.ByID[aliasesChild[id]]
-		if child == nil {
-			continue
-		}
-		parent := canonical(firstString(row["parent_id"]))
-		if parent == "" {
-			parent = canonical(roots[firstString(row["conversation_id"])])
-		}
-		if parent == child.ID {
-			continue
-		}
-		child.ParentID = parent
-		if s.ByID[parent] != nil {
-			child.ExternalParent = nil
-		}
-		if assignment := firstString(row["assignment"]); assignment != "" {
-			child.Label = assignment
-		}
-		child.MessageID = firstString(row["delegation_message_id"])
-		child.ParentEvidence = "exact-delegation-handle"
-		if s.Aliases[id] == "" {
-			s.Warnings = append(s.Warnings, "A linked helper has separate usage in its source; both agent sessions are shown.")
+		a := res.Attempts[sourceRef{sourceSession, id}]
+		if n := s.ByID[p.nodeID(a.Owner)]; a.Owner != "" && n != nil {
+			n.Attempts = append(n.Attempts, delegationAttempt{ID: id, Outcome: string(a.Outcome), MessageID: firstString(row["delegation_message_id"])})
+		} else {
+			unowned++
 		}
 	}
-	launches, err := queryMapsContext(ctx, tx, `SELECT l.child_id,l.parent_id,t.call_message_id FROM conversation_launches l JOIN conversations c ON c.id=l.child_id LEFT JOIN tool_calls t ON t.id=l.tool_call_id WHERE c.workspace_id=?`, workspace)
+	s.Coverage.Missing = append([]string{}, res.Coverage.Missing...)
+	if unowned > 0 {
+		s.Warnings = append(s.Warnings, fmt.Sprintf("%d launch attempts have no resolved issuer.", unowned))
+	}
+	// Parents, ancestry and evidence come from the resolution. A conflicting,
+	// missing or cyclic parent leaves the row at the top of the layout with its
+	// ancestry unresolved; it never becomes a known root.
+	launchOf, commands := map[string]string{}, []string{}
+	for _, n := range s.Nodes {
+		x := res.Executions[n.execution]
+		if x == nil {
+			n.Ancestry = delegationAncestry{State: string(parentMissing)}
+			continue
+		}
+		n.Ancestry, n.AncestorIDs = p.ancestry(x.ID)
+		if x.Parent.State != parentResolved {
+			continue
+		}
+		var launch sourceRef
+		n.ParentID = p.nodeID(x.Parent.ParentID)
+		n.ParentEvidence, launch = p.parentEvidence(x)
+		n.ParentCertainty = x.Parent.Certainty.String()
+		switch {
+		case launch.Kind == sourceSession:
+			launchOf[n.ID] = launch.ID
+		case n.ParentEvidence == "inferred-command-launch" && x.Conversation != "":
+			commands = append(commands, x.Conversation)
+		}
+	}
+	messages, err := delegationLaunchMessages(ctx, tx, slices.Sorted(maps.Values(launchOf)))
 	if err != nil {
 		return nil, err
 	}
-	for _, l := range launches {
-		n := s.ByID[canonical(roots[firstString(l["child_id"])])]
-		if n != nil && n.ParentID == "" {
-			n.ParentID = canonical(roots[firstString(l["parent_id"])])
-			n.ParentEvidence = "inferred-command-launch"
-			n.MessageID = firstString(l["call_message_id"])
-			if ref, refErr := reference(firstString(l["parent_id"])); refErr != nil {
-				return nil, refErr
-			} else if ref != nil {
-				copy := *ref
-				copy.MessageID = n.MessageID
-				n.ExternalParent = &copy
-			}
+	commandMessages := map[string]string{}
+	if len(commands) > 0 {
+		encoded, _ := json.Marshal(commands)
+		rows, err := queryMapsContext(ctx, tx, `SELECT l.child_id,t.call_message_id FROM conversation_launches l JOIN tool_calls t ON t.id=l.tool_call_id WHERE l.child_id IN (SELECT value FROM json_each(?)) AND t.call_message_id IS NOT NULL`, string(encoded))
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			commandMessages[firstString(row["child_id"])] = firstString(row["call_message_id"])
 		}
 	}
-	if err := loadDelegationAncestors(ctx, tx, s, roots); err != nil {
-		return nil, err
-	}
+	outside := false
 	for _, n := range s.Nodes {
-		seen := map[string]bool{n.ID: true}
-		for p := s.ByID[n.ParentID]; p != nil; p = s.ByID[p.ParentID] {
-			if seen[p.ID] {
-				n.ParentID = ""
-				s.Warnings = append(s.Warnings, "A cyclic ownership link was excluded.")
+		if n.ParentID == "" {
+			continue
+		}
+		if message := firstString(messages[launchOf[n.ID]], commandMessages[res.Executions[n.execution].Conversation]); message != "" {
+			n.MessageID = message
+		}
+		parent := s.ByID[n.ParentID]
+		if n.ContextOnly || parent == nil || n.ExternalChild != nil || !parent.ContextOnly && parent.WorkspaceID == n.WorkspaceID {
+			continue
+		}
+		outside = true
+		n.ExternalParent = &delegationReference{ConversationID: parent.ConversationID, WorkspaceID: parent.WorkspaceID, Provider: parent.Provider, Label: parent.Label, MessageID: n.MessageID}
+	}
+	if outside {
+		s.Warnings = append(s.Warnings, "A parent outside this workspace is not included in its totals.")
+	}
+	for state, warning := range map[parentState]string{parentCycle: "Cyclic ownership links leave some parents unresolved.", parentConflict: "Conflicting identity evidence leaves some executions unresolved.", parentAmbiguous: "Equally strong evidence names different parents for some executions."} {
+		for _, n := range s.Nodes {
+			if n.Ancestry.State == string(state) {
+				s.Warnings = append(s.Warnings, warning)
 				break
 			}
-			seen[p.ID] = true
-		}
-		if n.ParentID != "" && s.ByID[n.ParentID] == nil {
-			s.Warnings = append(s.Warnings, "A parent outside this workspace is not included in its totals.")
 		}
 	}
+	sort.Strings(s.Warnings)
 	for _, n := range s.Nodes {
-		if p := s.ByID[n.ParentID]; p != nil {
-			p.children = append(p.children, n)
+		if parent := s.ByID[n.ParentID]; parent != nil {
+			parent.children = append(parent.children, n)
 		} else {
 			s.Roots = append(s.Roots, n)
 		}
 	}
-	// Resolve launches before counting top-level conversations: a child stream
-	// may omit its conversation parent but still have exact delegation evidence.
-	var topLevel []*delegationNode
-	for _, n := range s.Roots {
-		if raw[n.ID]["native_id"] == "main" && n.ParentID == "" && n.ExternalParent == nil && firstString(conv[n.ConversationID]["parent_id"]) == "" {
-			topLevel = append(topLevel, n)
+	// Children left out at the family bound stay reachable from their parent.
+	for _, n := range s.Nodes {
+		if n.execution != "" {
+			n.ChildrenOmitted = max(0, len(res.Children(n.execution))-len(n.children))
 		}
 	}
-	for _, n := range topLevel {
-		n.Label = firstString(conv[n.ConversationID]["prompt"], n.Label)
-		if len(topLevel) == 1 {
-			n.Label = firstString(workspaceTitle, n.Label)
+	// The work's title is local context for its user-started transcripts: a
+	// subtitle, never a replacement for the execution's shared label.
+	for _, n := range s.Nodes {
+		if x := res.Executions[n.execution]; !n.ContextOnly && x != nil && x.Parent.State == parentRoot && conv[x.Conversation] != nil && workspaceTitle != n.Label {
+			n.Subtitle = workspaceTitle
+		}
+		// Otherwise the execution's own opening request, when the label is not it.
+		if x := res.Executions[n.execution]; x != nil && n.Subtitle == "" && x.Conversation != "" {
+			if prompt := initiation(x); prompt != n.Label {
+				n.Subtitle = prompt
+			}
 		}
 	}
+	// Activity belongs to the execution its stream binds to. A launch attempt's
+	// call belongs to the execution that issued it; a copied launch is not
+	// activity of the execution that inherited it.
 	owner := func(sid, cid string) *delegationNode {
-		if n := s.ByID[canonical(sid)]; n != nil {
+		if sid == "" {
+			sid = roots[cid]
+		}
+		b := res.ResolveAlias(sid)
+		switch b.State {
+		case bindingResolved:
+		case bindingAttempt:
+			if a := res.Attempts[sourceRef{sourceSession, sid}]; a != nil && a.Owner != "" {
+				b.ExecutionID = a.Owner
+				break
+			}
+			return nil
+		case bindingUnknown:
+			if n := s.ByID[sid]; n != nil {
+				return n
+			}
+			return nil
+		default:
+			return nil
+		}
+		if n := s.ByID[p.nodeID(b.ExecutionID)]; n != nil && !n.ContextOnly {
 			return n
 		}
-		return s.ByID[canonical(roots[cid])]
+		return nil
 	}
 	bump := func(n *delegationNode, key string, value float64) {
 		m := n.Self[key]
@@ -494,6 +716,61 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		m.Known++
 		m.Total++
 		n.Self[key] = m
+	}
+	cids := make([]string, 0, len(conversations))
+	for _, cv := range conversations {
+		cids = append(cids, firstString(cv["id"]))
+	}
+	occurrences, err := res.Occurrences(ctx, tx, cids)
+	if err != nil {
+		return nil, err
+	}
+	// Copied history and repeated observations stay inspectable in the
+	// transcript but are not an execution's own activity: they are neither
+	// counted nor allowed to extend its span. Observations whose equivalence
+	// is unresolved still count, and leave their metric partial.
+	// A transcript whose copied history the evidence cannot account for
+	// (occurrenceIndex.Partial: untyped ancestry, retained rows without a
+	// history declaration, a missing copy source) leaves every metric its
+	// observations feed partial too, as quick stats does.
+	partial := map[*delegationNode]map[string]bool{}
+	reasons := map[*delegationNode]map[string]bool{}
+	mark := func(n *delegationNode, reason string, metrics []string) {
+		if partial[n] == nil {
+			partial[n], reasons[n] = map[string]bool{}, map[string]bool{}
+		}
+		for _, metric := range append(metrics, "clock", "total", "start") {
+			partial[n][metric] = true
+		}
+		reasons[n][reason] = true
+	}
+	own := func(n *delegationNode, obs sourceRef, sid, cid string, metrics ...string) bool {
+		stream := sourceRef{sourceSession, sid}
+		if sid == "" {
+			stream = sourceRef{sourceConversation, cid}
+		}
+		switch occurrences.Lookup(obs, stream).Role {
+		case occurrenceInherited, occurrenceDuplicate:
+			return false
+		case occurrenceUnresolved:
+			mark(n, "unresolved-observations", metrics)
+		}
+		transcript := cid
+		if st := res.Stream(stream); transcript == "" && st != nil {
+			transcript = st.ConversationID
+		}
+		if reason := occurrences.Partial(transcript); reason != "" {
+			mark(n, reason, metrics)
+		}
+		return true
+	}
+	// seen records a timed observation before ownership decides whether it
+	// is the execution's own: a copy still proves the envelope spans more
+	// than the execution's own activity.
+	seen := func(n *delegationNode, times ...*float64) {
+		if n != nil && slices.ContainsFunc(times, func(at *float64) bool { return at != nil }) {
+			n.timed = true
+		}
 	}
 	point := func(n *delegationNode, at *float64) {
 		if at == nil {
@@ -529,7 +806,12 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			return nil, err
 		}
 		n := owner(sid.String, cid)
-		if n == nil {
+		obs := sourceRef{sourceToolCall, id}
+		if msg.String != "" {
+			obs = sourceRef{sourceMessage, msg.String}
+		}
+		seen(n, delegationTime(start.String), delegationTime(end.String))
+		if n == nil || !own(n, obs, sid.String, cid, "calls", "errors", "toolSum", "files", "filesRead") {
 			continue
 		}
 		t := delegationTool{ID: id, MessageID: msg.String, Name: name, Category: delegationCategory(name, cat, command.String), Status: status, Start: delegationTime(start.String), End: delegationTime(end.String)}
@@ -585,7 +867,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	if err != nil {
 		return nil, err
 	}
-	requests, err := tx.QueryContext(ctx, `SELECT r.agent_session_id,r.conversation_id,r.requested_at,r.total_tokens FROM conversations c JOIN model_requests r ON r.conversation_id=c.id WHERE c.workspace_id=?`, workspace)
+	requests, err := tx.QueryContext(ctx, `SELECT r.id,r.agent_session_id,r.conversation_id,r.requested_at,r.total_tokens FROM conversations c JOIN model_requests r ON r.conversation_id=c.id WHERE c.workspace_id=?`, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -597,20 +879,28 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			return nil, fmt.Errorf("workspace exceeds the 500,000-event analysis limit")
 		}
 		var sid, at sql.NullString
-		var cid string
+		var id, cid string
 		var tokens float64
-		if err = requests.Scan(&sid, &cid, &at, &tokens); err != nil {
+		if err = requests.Scan(&id, &sid, &cid, &at, &tokens); err != nil {
 			requests.Close()
 			return nil, err
 		}
-		if n := owner(sid.String, cid); n != nil {
+		n := owner(sid.String, cid)
+		seen(n, delegationTime(at.String))
+		if n == nil {
+			continue
+		}
+		// Token facts stay per stream row, copies included: the session total
+		// they reconcile against counts them. Only the occurrence (the request
+		// count and its activity point) follows ownership.
+		requestTokens[n.ID] += tokens
+		if own(n, sourceRef{sourceRequest, id}, sid.String, cid, "requests") {
 			bump(n, "requests", 1)
 			t := delegationTime(at.String)
 			point(n, t)
 			if t != nil {
 				n.requests = append(n.requests, *t)
 			}
-			requestTokens[n.ID] += tokens
 		}
 	}
 	err = requests.Err()
@@ -618,37 +908,63 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	if err != nil {
 		return nil, err
 	}
-	counts, err := queryMapsContext(ctx, tx, delegationMessageCountsSQL, workspace, workspace)
+	// counted marks the transcripts whose messages an execution already has
+	// by recorded membership.
+	counted := map[*delegationNode]map[string]bool{}
+	message := func(n *delegationNode, id string, turn bool, at any, sid, cid string) {
+		seen(n, delegationTime(at))
+		if !own(n, sourceRef{sourceMessage, id}, sid, cid, "messages", "turns") {
+			return
+		}
+		bump(n, "messages", 1)
+		if turn {
+			bump(n, "turns", 1)
+		}
+		point(n, delegationTime(at))
+	}
+	facts, err := queryMapsContext(ctx, tx, delegationMessageFactsSQL, workspace, workspace)
 	if err != nil {
 		return nil, err
 	}
-	for _, row := range counts {
-		if n := owner(firstString(row["agent_session_id"]), ""); n != nil {
-			bump(n, "messages", float64(integer(row["messages"])))
-			bump(n, "turns", float64(integer(row["turns"])))
-			point(n, delegationTime(row["start"]))
-			point(n, delegationTime(row["end"]))
+	for _, row := range facts {
+		sid := firstString(row["agent_session_id"])
+		if n := owner(sid, ""); n != nil {
+			if counted[n] == nil {
+				counted[n] = map[string]bool{}
+			}
+			counted[n][firstString(row["conversation_id"])] = true
+			message(n, firstString(row["id"]), integer(row["turn"]) != 0, row["created_at"], sid, "")
 		}
 	}
-	// Legacy transcripts may predate session-message membership. Only their root gets the fallback.
+	// Legacy transcripts may predate session-message membership: their
+	// messages belong to the execution whose own stream is the transcript,
+	// unless it already has that transcript's messages by membership. Each
+	// segment of a continuation is its own transcript and counts.
 	for _, cv := range conversations {
-		n := owner(roots[firstString(cv["id"])], firstString(cv["id"]))
-		if n == nil || *n.Self["messages"].Value > 0 {
+		cid := firstString(cv["id"])
+		n := owner(roots[cid], cid)
+		if n == nil || counted[n][cid] {
 			continue
 		}
-		var count, turns int
-		var start, end sql.NullString
-		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(CASE WHEN role='user' AND kind='message' THEN 1 ELSE 0 END),0),MIN(created_at),MAX(created_at) FROM messages m WHERE conversation_id=? AND NOT EXISTS(SELECT 1 FROM agent_session_messages am WHERE am.message_id=m.id)`, cv["id"]).Scan(&count, &turns, &start, &end); err != nil {
+		rows, err := queryMapsContext(ctx, tx, `SELECT id,role='user' AND kind='message' turn,created_at FROM messages m WHERE conversation_id=? AND NOT EXISTS(SELECT 1 FROM agent_session_messages am WHERE am.message_id=m.id)`, cid)
+		if err != nil {
 			return nil, err
 		}
-		bump(n, "messages", float64(count))
-		bump(n, "turns", float64(turns))
-		point(n, delegationTime(start.String))
-		point(n, delegationTime(end.String))
+		for _, row := range rows {
+			message(n, firstString(row["id"]), integer(row["turn"]) != 0, row["created_at"], "", cid)
+		}
+	}
+	// Events resting on superseded execution evidence are withheld, as the
+	// Agent Experience datasets withhold them (agentEventsWithheld), and
+	// events awaiting a rebuild are pending: either leaves the events metric
+	// of every row reading that transcript partial, never a confirmed count.
+	eventsWithheld, eventsPending, err := delegationEventFreshness(ctx, tx)
+	if err != nil {
+		return nil, err
 	}
 	// Count the same retained events shown by the reader and timeline. Stream
 	// only identities; alias memberships must not count an event twice.
-	events, err := tx.QueryContext(ctx, `SELECT e.id,e.conversation_id,am.agent_session_id
+	events, err := tx.QueryContext(ctx, `SELECT e.id,e.conversation_id,e.message_id,am.agent_session_id
  FROM conversations c JOIN agent_events e ON e.conversation_id=c.id
  JOIN messages m ON m.id=e.message_id
  LEFT JOIN agent_session_messages am ON am.message_id=m.id
@@ -664,13 +980,16 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			return nil, fmt.Errorf("workspace exceeds the 500,000-event analysis limit")
 		}
 		var id int64
-		var cid string
+		var cid, message string
 		var sid sql.NullString
-		if err = events.Scan(&id, &cid, &sid); err != nil {
+		if err = events.Scan(&id, &cid, &message, &sid); err != nil {
 			events.Close()
 			return nil, err
 		}
-		if n := owner(sid.String, cid); n != nil {
+		if eventsWithheld[cid] {
+			continue
+		}
+		if n := owner(sid.String, cid); n != nil && own(n, sourceRef{sourceMessage, message}, sid.String, cid, "events") {
 			if seenEvents[n.ID] == nil {
 				seenEvents[n.ID] = map[int64]bool{}
 			}
@@ -698,11 +1017,18 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		return nil, err
 	}
 	for _, row := range evidence {
+		// An observation describes the agent a launch ran. A launch that
+		// created no confirmed execution has none here, and its issuer
+		// (owner's attempt fallback) did not consume it.
+		if res.ResolveAlias(firstString(row["agent_session_id"])).State == bindingAttempt {
+			continue
+		}
 		if n := owner(firstString(row["agent_session_id"]), ""); n != nil {
 			// The launch is a navigation placeholder for usage held in another
-			// workspace. Keep its source observation in storage, but do not
-			// turn it into a second workspace's consumed-token total.
-			if n.ExternalChild != nil && n.Usage == "unavailable" {
+			// workspace, or the part read here of an execution whose transcript
+			// is archived there. Keep its source observation in storage, but do
+			// not turn it into a second workspace's consumed-token total.
+			if n.ExternalChild != nil && (n.Usage == "unavailable" || unqueried[n]) {
 				continue
 			}
 			if n.TokenAttribution == nil {
@@ -824,10 +1150,18 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 				n.Self["remainder"] = delegationNumber(max(0, *t.Value-requestTokens[n.ID]), t.Quality, 1, 1)
 			}
 		}
+		// The span is the execution's own timed activity. Only a stream with no
+		// timed observation at all (a handle or tokenless usage) falls back to
+		// its recorded envelope, reported rather than observed; one whose timed
+		// observations are all copies has no span of its own.
+		quality := "observed"
+		if n.Start == nil && !n.timed && (n.envelopeStart != nil || n.envelopeEnd != nil) {
+			n.Start, n.End, quality = n.envelopeStart, n.envelopeEnd, "reported"
+		}
 		if n.Start != nil && n.End != nil {
 			span := max(0, *n.End-*n.Start)
-			n.Self["start"] = delegationNumber(*n.Start, "observed", 1, 1)
-			n.Self["clock"] = delegationNumber(span, "observed", 1, 1)
+			n.Self["start"] = delegationNumber(*n.Start, quality, 1, 1)
+			n.Self["clock"] = delegationNumber(span, quality, 1, 1)
 			n.Self["total"] = n.Self["clock"]
 			if s.Start == nil || *n.Start < *s.Start {
 				v := *n.Start
@@ -890,9 +1224,19 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			n.Self["filesRead"] = delegationMetric{Quality: "unknown", Total: n.readCalls}
 		}
 		n.Self["episodes"] = delegationNumber(float64(len(n.episodes)), "inferred", len(n.episodes), len(n.episodes))
-		if n.ExternalChild != nil && n.Self["tokens"].Value == nil && len(n.tools) == 0 && *n.Self["messages"].Value == 0 && *n.Self["requests"].Value == 0 {
-			for _, spec := range delegationMetrics {
-				n.Self[spec.ID] = delegationUnknown()
+		if unqueried[n] {
+			if n.Self["tokens"].Value == nil && len(n.tools) == 0 && *n.Self["messages"].Value == 0 && *n.Self["requests"].Value == 0 {
+				// Nothing of it was read here: unknown, not zero.
+				for _, spec := range delegationMetrics {
+					n.Self[spec.ID] = delegationUnknown()
+				}
+			} else {
+				for key, m := range n.Self {
+					if m.Value != nil && m.Quality != "unknown" {
+						m.Quality = "partial"
+						n.Self[key] = m
+					}
+				}
 			}
 		}
 		n.ChildCount = len(n.children)
@@ -903,12 +1247,50 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		}
 		n.Self["leaves"] = delegationNumber(leaf, "observed", 1, 1)
 	}
+	for n, metrics := range partial {
+		for key := range metrics {
+			if m := n.Self[key]; m.Value != nil {
+				m.Quality = "partial"
+				n.Self[key] = m
+			}
+		}
+		n.OccurrencePartial = slices.Sorted(maps.Keys(reasons[n]))[0]
+	}
+	for _, n := range s.Nodes {
+		for _, cid := range delegationNodeTranscripts(n) {
+			if eventsWithheld[cid] || eventsPending[cid] {
+				m := n.Self["events"]
+				if m.Value == nil {
+					m = delegationNumber(0, "partial", 0, 1)
+				}
+				m.Quality = "partial"
+				n.Self["events"] = m
+				n.EventsPending = true
+				break
+			}
+		}
+	}
 	s.finish()
+	for _, n := range s.Nodes {
+		switch {
+		case n.Ancestry.State == string(parentConflict):
+			s.Coverage.Conflicts++
+			s.Coverage.UnresolvedParents++
+		case n.Ancestry.State != string(parentRoot) && n.Ancestry.State != string(parentResolved):
+			s.Coverage.UnresolvedParents++
+		case n.ParentCertainty == evidenceLegacy.String():
+			s.Coverage.UnverifiedParents++
+		}
+		if unqueried[n] {
+			s.Coverage.Unqueried++
+		}
+	}
 	return s, nil
 }
 
-// finish orders the snapshot's trees by start time, numbers their outline,
+// finish orders the snapshot's trees in the resolution's sibling order,
 // and computes subtree totals, scale maxima, density and the content hash.
+// A snapshot without a resolution orders siblings by start time.
 func (s *delegationSnapshot) finish() {
 	less := func(a, b *delegationNode) bool {
 		if a.Start == nil {
@@ -922,17 +1304,25 @@ func (s *delegationSnapshot) finish() {
 		}
 		return a.ID < b.ID
 	}
+	if s.projection.res != nil {
+		less = s.projection.less
+	}
 	ordered := []*delegationNode{}
-	var walk func([]*delegationNode, int, string)
-	walk = func(nodes []*delegationNode, depth int, prefix string) {
+	var walk func([]*delegationNode, int)
+	walk = func(nodes []*delegationNode, depth int) {
 		sort.Slice(nodes, func(i, j int) bool { return less(nodes[i], nodes[j]) })
-		for i, n := range nodes {
+		for _, n := range nodes {
 			n.Depth = depth
-			n.Outline = fmt.Sprintf("%s%d", prefix, i+1)
 			n.Order = len(ordered)
-			n.Self["depth"] = delegationNumber(float64(depth), "observed", 1, 1)
+			if n.Ancestry.Depth != nil {
+				// Indentation is layout; the depth metric carries the
+				// resolver's depth quality.
+				n.Self["depth"] = delegationNumber(float64(*n.Ancestry.Depth), n.Ancestry.DepthQuality, 1, 1)
+			} else {
+				n.Self["depth"] = delegationMetric{Quality: "unknown", Total: 1}
+			}
 			ordered = append(ordered, n)
-			walk(n.children, depth+1, n.Outline+".")
+			walk(n.children, depth+1)
 			n.All = delegationAggregate(append([]*delegationNode{n}, delegationDescendants(n)...))
 			n.SubtreeStart, n.SubtreeEnd = n.Start, n.End
 			for _, child := range n.children {
@@ -945,7 +1335,7 @@ func (s *delegationSnapshot) finish() {
 			}
 		}
 	}
-	walk(s.Roots, 0, "")
+	walk(s.Roots, 0)
 	s.Nodes = ordered
 	s.Totals = delegationWorkspaceTotals(s.Nodes)
 	s.Maxima = map[string]map[string]float64{"self": {}, "all": {}}
@@ -969,7 +1359,7 @@ func (s *delegationSnapshot) finish() {
 		}
 	}
 	// A content hash rejects continuations after sync or a different filter/sort.
-	hashInput := []any{s.Nodes, s.Aliases}
+	hashInput := []any{s.Revision, s.Nodes, s.Aliases}
 	for _, n := range s.Nodes {
 		hashInput = append(hashInput, n.tools, n.requests)
 	}
@@ -1154,7 +1544,13 @@ type delegationCursor struct {
 }
 
 func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace string, timeline bool) {
-	snapshot, err := s.Catalog.workGroupSnapshot(r.Context(), workspace)
+	var relatives []string
+	for _, id := range strings.Split(r.URL.Query().Get("relatives"), ",") {
+		if id != "" && len(relatives) < 100 {
+			relatives = append(relatives, id)
+		}
+	}
+	snapshot, err := s.Catalog.workGroupSnapshot(r.Context(), workspace, relatives)
 	if err != nil {
 		writeError(w, err, 500)
 		return
@@ -1196,6 +1592,9 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 	provider := q.Get("provider")
 	collapsed := map[string]bool{}
 	for _, id := range strings.Split(q.Get("collapsed"), ",") {
+		if canonical, ok := snapshot.resolveAlias(id); ok && canonical != "" {
+			id = canonical
+		}
 		collapsed[id] = true
 	}
 	nodes := []*delegationNode{}
@@ -1209,8 +1608,8 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 	for id := range matched {
 		visible[id] = true
 		if mode == "hierarchy" {
-			for p := snapshot.ByID[snapshot.ByID[id].ParentID]; p != nil; p = snapshot.ByID[p.ParentID] {
-				visible[p.ID] = true
+			for _, ancestor := range snapshot.ByID[id].AncestorIDs {
+				visible[ancestor] = true
 			}
 		}
 	}
@@ -1220,8 +1619,8 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 		}
 		hidden := false
 		if mode == "hierarchy" {
-			for p := snapshot.ByID[n.ParentID]; p != nil; p = snapshot.ByID[p.ParentID] {
-				if collapsed[p.ID] {
+			for _, ancestor := range n.AncestorIDs {
+				if collapsed[ancestor] {
 					hidden = true
 					break
 				}
@@ -1330,8 +1729,9 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 		seen[n.ID] = true
 	}
 	for _, n := range page {
-		for p := snapshot.ByID[n.ParentID]; p != nil; p = snapshot.ByID[p.ParentID] {
-			if !seen[p.ID] {
+		for _, ancestor := range n.AncestorIDs {
+			p := snapshot.ByID[ancestor]
+			if p != nil && !seen[p.ID] {
 				seen[p.ID] = true
 				if len(ancestors) >= 100 {
 					ancestorsTruncated = true
@@ -1358,12 +1758,25 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 			focus = append(focus, n)
 		}
 	}
-	sessionCount := 0
+	// Sessions in an unresolved identity conflict are counted once per
+	// partition the resolver kept, so the count is not exact.
+	sessionCount, uncertain := 0, 0
+	// Every row with withheld or rebuilding events, including rows a collapse
+	// or page leaves out, so the Timeline can say so where no lane is drawn.
+	eventsPendingSessions := 0
 	for _, n := range snapshot.Nodes {
+		if n.EventsPending {
+			eventsPendingSessions++
+		}
 		if !n.ContextOnly {
 			sessionCount++
+			// The same scope as usage's run_identity: a conflict on the session
+			// or on any ancestor makes its run and cohort counts inexact.
+			if n.Ancestry.State == string(parentConflict) || n.Ancestry.Conflicted {
+				uncertain++
+			}
 		}
-		if n.ConversationID == q.Get("conversation") {
+		if n.ConversationID == q.Get("conversation") || slices.ContainsFunc(n.Segments, func(s delegationSegment) bool { return s.ConversationID == q.Get("conversation") }) {
 			addFocus(n)
 			addFocus(snapshot.ByID[n.ParentID])
 			for _, child := range n.children {
@@ -1375,7 +1788,44 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 	for _, n := range append(append([]*delegationNode{}, page...), ancestors...) {
 		pageMatches[n.ID] = matched[n.ID]
 	}
-	writeJSON(w, map[string]any{"focus": focus, "focus_truncated": focusTruncated, "snapshot": snapshot.ID, "rows": page, "ancestors": ancestors, "ancestors_truncated": ancestorsTruncated, "matched": pageMatches, "total": len(nodes), "session_count": sessionCount, "offset": offset, "next_cursor": next, "metrics": delegationMetrics, "maxima": snapshot.Maxima, "totals": totals, "group_totals": snapshot.GroupTotals, "start": snapshot.Start, "end": snapshot.End, "density": snapshot.Density, "warnings": snapshot.Warnings}, 200)
+	response := map[string]any{"focus": focus, "focus_truncated": focusTruncated, "snapshot": snapshot.ID, "rows": page, "ancestors": ancestors, "ancestors_truncated": ancestorsTruncated, "matched": pageMatches, "total": len(nodes), "session_count": sessionCount, "session_count_uncertain": uncertain, "events_pending_sessions": eventsPendingSessions, "offset": offset, "next_cursor": next, "metrics": delegationMetrics, "maxima": snapshot.Maxima, "totals": totals, "group_totals": snapshot.GroupTotals, "start": snapshot.Start, "end": snapshot.End, "density": snapshot.Density, "warnings": snapshot.Warnings, "family_complete": snapshot.FamilyComplete, "coverage": snapshot.Coverage}
+	// Saved links can name sessions by IDs that now alias an execution. Answer
+	// only for IDs the client asks about: canonical (itself for a current
+	// row, so colon-containing disclosure keys split unambiguously), or null
+	// when unresolved.
+	if requested := q["resolve"]; len(requested) > 0 {
+		aliases := map[string]any{}
+		// A saved ID that names no row here (split, an attempt, a copy whose
+		// original is unknown, or unknown) is null: the client keeps it
+		// visibly unresolved instead of choosing a session for it.
+		for _, id := range requested[:min(len(requested), 200)] {
+			canonical, _ := snapshot.resolveAlias(id)
+			switch {
+			case canonical == "" || snapshot.ByID[canonical] == nil:
+				aliases[id] = nil
+			default:
+				aliases[id] = canonical
+			}
+		}
+		response["aliases"] = aliases
+	}
+	writeJSON(w, response, 200)
+}
+
+// resolveAlias returns the row an earlier session ID now names. ok is false
+// for unknown IDs; an empty canonical ID marks a known alias that no longer
+// identifies one row.
+func (s *delegationSnapshot) resolveAlias(id string) (canonical string, ok bool) {
+	if s.ByID[id] != nil {
+		return id, true
+	}
+	if canonical, ok := s.Aliases[id]; ok {
+		return canonical, true
+	}
+	if s.projection.res == nil {
+		return "", false
+	}
+	return s.projection.alias(id)
 }
 
 type delegationMark struct {
@@ -1435,6 +1885,10 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 	if q.Get("labels") == "1" {
 		var err error
 		messageLanes, taxonomy, err = s.Catalog.delegationTimelineMessages(r.Context(), snapshot, ids, start, end)
+		if errors.Is(err, errDelegationSnapshotChanged) {
+			writeJSON(w, map[string]any{"error": "Archive changed; refresh the explorer.", "code": "snapshot_changed"}, 409)
+			return
+		}
 		if err != nil {
 			writeError(w, err, 500)
 			return
@@ -1527,4 +1981,40 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 		body["taxonomy"] = taxonomy
 	}
 	writeJSON(w, body, 200)
+}
+
+// delegationEventFreshness is the transcripts whose stored agent events are
+// withheld (agentEventsWithheld, the set the Agent Experience datasets leave
+// out) and those awaiting a rebuild (agent_events_dirty).
+func delegationEventFreshness(ctx context.Context, q queryer) (withheld, pending map[string]bool, err error) {
+	withheld, pending = map[string]bool{}, map[string]bool{}
+	present, err := agentEventsLedgerPresent(ctx, q)
+	if err != nil || !present {
+		return withheld, pending, err
+	}
+	ids, err := agentEventsWithheld(ctx, q)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, id := range ids {
+		withheld[id] = true
+	}
+	rows, err := queryMapsContext(ctx, q, `SELECT conversation_id FROM agent_events_dirty`)
+	if err != nil && !strings.Contains(err.Error(), "no such table") {
+		return nil, nil, err
+	}
+	for _, row := range rows {
+		pending[firstString(row["conversation_id"])] = true
+	}
+	return withheld, pending, nil
+}
+
+// delegationNodeTranscripts is every transcript a row reads: its own and its
+// segments'.
+func delegationNodeTranscripts(n *delegationNode) []string {
+	out := []string{n.ConversationID}
+	for _, segment := range n.Segments {
+		out = append(out, segment.ConversationID)
+	}
+	return out
 }

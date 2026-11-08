@@ -27,6 +27,9 @@ var transferHistoryTables = []string{
 	"skill_usages", "conversation_instructions", "task_attempts", "handoffs", "change_sets", "change_files",
 	"work_pr_links", "metrics", "metric_ledger", "workspace_sightings", "conversation_sightings", "copy_versions", "copy_evidence", "source_evidence",
 	"declared_native_aliases", "conversation_group_membership", "conversation_parent_refs", "ask_native_sessions", "protections", "activity_events", "receipts", "mcp_calls",
+	// Typed execution evidence: an adapter's claims (Cursor copies and echoes)
+	// were retained before it filtered and cannot be derived from the rows.
+	"execution_claims", "execution_evidence_state",
 }
 
 type transferFile struct {
@@ -518,6 +521,10 @@ var transferReferences = map[string]string{
 	"result_message_id": "messages", "child_conversation_id": "conversations",
 	"left_id": "conversations", "right_id": "conversations",
 	"source_conversation_id": "conversations", "source_message_id": "messages", "work_id": "workspaces", "child_id": "conversations",
+	// A model request's last usage event (its first is source_message_id).
+	"final_message_id": "messages",
+	// A skill usage's evidence and the message holding its body.
+	"evidence_message_id": "messages", "body_message_id": "messages",
 }
 
 func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
@@ -649,6 +656,14 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 		if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE conversation_id IN (SELECT id FROM delivered_conversations) AND id NOT IN (SELECT id FROM incoming_"+table+")"); err != nil {
 			return err
 		}
+	}
+	// An accepted copy's execution claims are its writer's: claims it no
+	// longer holds go, as its other derived entities do. Divergent unions
+	// keep both sides' claims (a non-writer never retracts).
+	if _, err = tx.ExecContext(ctx, `DELETE FROM execution_claims WHERE conversation_id IN (SELECT id FROM delivered_conversations)
+ AND EXISTS(SELECT 1 FROM incoming_execution_evidence_state s WHERE s.conversation_id=execution_claims.conversation_id)
+ AND NOT EXISTS(SELECT 1 FROM incoming_execution_claims s WHERE s.conversation_id=execution_claims.conversation_id AND s.claim_key=execution_claims.claim_key)`); err != nil {
+		return err
 	}
 	// The imported tool ledger rows replace this library's, whose fingerprints
 	// no longer describe them.

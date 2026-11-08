@@ -2,7 +2,8 @@ package archive
 
 import (
 	"context"
-	"strings"
+	"database/sql"
+	"sort"
 )
 
 type usageConversationAttribution struct {
@@ -12,22 +13,66 @@ type usageConversationAttribution struct {
 	delegatedParents map[string]string
 	sessionRoles     map[string]string
 	unresolved       map[string]string
+	// rootQuality (by conversation) and depthQuality (by session) say how a
+	// projected root or depth was established (executionAncestry): a cohort
+	// or depth reached through an inferred or unverified link is qualified,
+	// never presented as observed. uncertain marks conversations and sessions
+	// whose execution, or an ancestor, is in an unresolved identity conflict:
+	// their run and cohort counts are not established.
+	rootQuality, depthQuality map[string]string
+	uncertain                 map[string]bool
 	// canonical names the conversation each mirror alias stands for, and runs
 	// its execution identity: "" for a root's own (or continued) execution.
 	canonical, runs map[string]string
+	// resolution is the shared execution result these fields project.
+	resolution *executionResolution
 }
 
-// usageConversationRoots assigns every run to one recorded top-level
-// conversation. Embedded agents already share a conversation ID; transcript
-// parents, exact delegation handles, and command launches connect other runs,
-// even across workspaces. Filename forks are continuations of the same work.
-// Missing parents and cycles remain unresolved rather than inventing a root.
-func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConversationAttribution, error) {
-	return usageConversationRootsFrom(c.reader(), ledger)
+// usageConversationRoots projects the shared execution resolution onto
+// usage scope: each conversation's recorded top-level root, and each
+// session's execution, parent and depth. Identity, parentage, continuations,
+// launch outcomes and copied launches are decided once by the resolver; the
+// only scope decision here is which retained copy of a mirrored transcript
+// represents it (ledger lists the retained workspaces). Unresolved ancestry
+// stays unresolved rather than inventing a root.
+func (c *Catalog) usageConversationRoots(ctx context.Context, ledger []map[string]any) (*usageConversationAttribution, error) {
+	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	r, err := c.executionResolutionAt(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	return usageConversationRootsOf(ctx, tx, r, ledger)
 }
 
+// usageConversationRootsAndOccurrences is usageConversationRoots with the
+// catalog-wide occurrence index of the same generation, read in one
+// transaction, for consumers that aggregate the whole catalog.
+func (c *Catalog) usageConversationRootsAndOccurrences(ctx context.Context, ledger []map[string]any) (*usageConversationAttribution, *occurrenceIndex, error) {
+	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	s, err := c.executionSnapshotAt(ctx, tx)
+	if err != nil {
+		return nil, nil, err
+	}
+	lineage, err := usageConversationRootsOf(ctx, tx, s.resolution, ledger)
+	if err != nil {
+		return nil, nil, err
+	}
+	occurrences, err := s.catalogOccurrences(ctx, tx)
+	return lineage, occurrences, err
+}
+
+// usageConversationRootsContext is usageConversationRoots, under the name
+// master's cancellable callers use.
 func (c *Catalog) usageConversationRootsContext(ctx context.Context, ledger []map[string]any) (*usageConversationAttribution, error) {
-	return usageConversationRootsWithContext(ctx, c.reader(), ledger, nil)
+	return c.usageConversationRoots(ctx, ledger)
 }
 
 // usageConversationRootsFrom is usageConversationRoots read through q.
@@ -36,13 +81,19 @@ func usageConversationRootsFrom(q queryer, ledger []map[string]any) (*usageConve
 }
 
 // usageConversationRootsWith resolves roots with the given launch links
-// (child_id, parent_id) in place of the stored ledger, when not nil.
+// (child_id, parent_id) in place of the stored ledger, when not nil. It
+// resolves q's own snapshot, as offline labeling requires.
 func usageConversationRootsWith(q queryer, ledger, derived []map[string]any) (*usageConversationAttribution, error) {
-	return usageConversationRootsWithContext(context.Background(), q, ledger, derived)
+	ctx := context.Background()
+	e, err := loadExecutionEvidenceWith(ctx, q, derived)
+	if err != nil {
+		return nil, err
+	}
+	return usageConversationRootsOf(ctx, q, resolveExecutions(e), ledger)
 }
 
-func usageConversationRootsWithContext(ctx context.Context, q queryer, ledger, derived []map[string]any) (*usageConversationAttribution, error) {
-	conversations, err := queryMapsContext(ctx, q, `SELECT c.id,c.workspace_id,c.parent_id,c.agent_depth,c.provider,
+func usageConversationRootsOf(ctx context.Context, q queryer, r *executionResolution, ledger []map[string]any) (*usageConversationAttribution, error) {
+	conversations, err := queryMapsContext(ctx, q, `SELECT c.id,c.workspace_id,c.provider,
 		COALESCE(NULLIF(c.model,''),a.model) model,COALESCE(NULLIF(c.effort,''),a.effort) effort,
 		w.title root_title,r.display_name root_repository_name
 		FROM conversations c LEFT JOIN agent_sessions a ON a.conversation_id=c.id AND a.native_id='main'
@@ -50,309 +101,157 @@ func usageConversationRootsWithContext(ctx context.Context, q queryer, ledger, d
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := queryMapsContext(ctx, q, `SELECT id,native_id,kind,conversation_id,parent_id,child_conversation_id FROM agent_sessions ORDER BY id`)
+	sessions, err := queryMapsContext(ctx, q, `SELECT id,native_id,kind,conversation_id FROM agent_sessions ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
-	links, err := queryMapsContext(ctx, q, `SELECT left_id,right_id FROM conversation_identity_links ORDER BY left_id,right_id`)
-	if err != nil {
-		return nil, err
-	}
-	launches := derived
-	if launches == nil {
-		if launches, err = queryMapsContext(ctx, q, `SELECT child_id,parent_id FROM conversation_launches ORDER BY child_id,parent_id`); err != nil {
-			return nil, err
-		}
-	}
-	return resolveUsageConversationRoots(conversations, sessions, links, launches, ledger), nil
+	return usageAttributionFrom(r, conversations, sessions, ledger), nil
 }
 
-func resolveUsageConversationRoots(conversations, sessions, links, launches, ledger []map[string]any) *usageConversationAttribution {
+func usageAttributionFrom(r *executionResolution, conversations, sessions, ledger []map[string]any) *usageConversationAttribution {
 	kept := map[string]bool{}
 	for _, row := range ledger {
 		kept[firstString(row["workspace_id"])] = true
 	}
-	byID, aliases := map[string]map[string]any{}, map[string]string{}
+	byID := map[string]map[string]any{}
 	for _, row := range conversations {
-		id := firstString(row["id"])
-		byID[id], aliases[id] = row, id
+		byID[firstString(row["id"])] = row
 	}
-	var canonical func(string) string
-	canonical = func(id string) string {
-		if aliases[id] != "" && aliases[id] != id {
-			aliases[id] = canonical(aliases[id])
-			return aliases[id]
+	result := &usageConversationAttribution{roots: map[string]map[string]any{}, canonical: map[string]string{}, runs: map[string]string{},
+		delegatedRuns: map[string]string{}, delegatedDepth: map[string]int64{}, delegatedParents: map[string]string{}, sessionRoles: map[string]string{},
+		unresolved: map[string]string{}, rootQuality: map[string]string{}, depthQuality: map[string]string{}, uncertain: map[string]bool{}, resolution: r}
+	// Mirrors the resolver joined into one execution: the copy in a retained
+	// workspace represents them in usage scope, then the smallest ID.
+	group := map[string]string{}
+	var find func(string) string
+	find = func(id string) string {
+		if p := group[id]; p != "" && p != id {
+			group[id] = find(p)
+			return group[id]
 		}
 		return id
 	}
-	// Use the same retained workspace as the usage ledger for mirror identity.
-	for _, link := range links {
-		left, right := canonical(firstString(link["left_id"])), canonical(firstString(link["right_id"]))
-		if byID[left] == nil || byID[right] == nil || left == right {
-			continue
+	better := func(a, b string) bool {
+		ka, kb := kept[firstString(byID[a]["workspace_id"])], kept[firstString(byID[b]["workspace_id"])]
+		if ka != kb {
+			return ka
 		}
-		l, r := kept[firstString(byID[left]["workspace_id"])], kept[firstString(byID[right]["workspace_id"])]
-		if r && !l || l == r && right < left {
-			left, right = right, left
-		}
-		aliases[right] = left
+		return a < b
 	}
-	parents := map[string]string{}
-	parentPriority := map[string]int{}
-	parentConflict := map[string]bool{}
-	claimParent := func(id, parent string, priority int) {
-		if parent == "" {
-			return
-		}
-		if priority > parentPriority[id] {
-			parents[id] = parent
-			parentPriority[id] = priority
-			delete(parentConflict, id)
-		} else if priority == parentPriority[id] && parents[id] != parent {
-			parentConflict[id] = true
-		}
-	}
-
-	delegations := map[string]bool{}
-	// Equally authoritative incompatible parents remain conflicted; exact
-	// delegation handles outrank recorded ancestry, which outranks inferred launches.
-	for _, row := range conversations {
-		id, parent := canonical(firstString(row["id"])), canonical(firstString(row["parent_id"]))
-		if parent != "" && (parent != id || row["parent_id"] == row["id"]) {
-			claimParent(id, parent, 10)
-		}
-		if recorded, ok := row["recorded_parent_ids"].([]string); ok {
-			for _, parentID := range recorded {
-				p := canonical(parentID)
-				if p != id || parentID == firstString(row["id"]) {
-					claimParent(id, p, 10)
-				}
-			}
-		}
-		if integer(row["agent_depth"]) > 0 || parent != "" && row["provider"] != "codex" {
-			delegations[id] = true
-		}
-	}
-	bySession := map[string]map[string]any{}
-	for _, row := range sessions {
-		bySession[firstString(row["id"])] = row
-	}
-	for _, row := range sessions {
-		id := canonical(firstString(row["conversation_id"]))
-		if parent := bySession[firstString(row["parent_id"])]; parent != nil {
-			pid := canonical(firstString(parent["conversation_id"]))
-			if pid != "" && pid != id {
-				claimParent(id, pid, 15)
-				delegations[id] = true
-			}
-		}
-		if child := canonical(firstString(row["child_conversation_id"])); child != "" && child != id {
-			claimParent(child, id, 20)
-			delegations[child] = true
-		}
-	}
-	for _, link := range launches {
-		id, parent := canonical(firstString(link["child_id"])), canonical(firstString(link["parent_id"]))
-		if id != parent {
-			claimParent(id, parent, 5)
-			delegations[id] = true
-		}
-	}
-	for id := range parentConflict {
-		parents[id] = "conflict:" + id
-	}
-	resolved, done := map[string]map[string]any{}, map[string]bool{}
-	for _, row := range conversations {
-		id := canonical(firstString(row["id"]))
-		path, seen := []string{}, map[string]bool{}
-		var root map[string]any
-		for at := id; at != "" && byID[at] != nil && !seen[at]; at = parents[at] {
-			if done[at] {
-				root = resolved[at]
-				break
-			}
-			seen[at], path = true, append(path, at)
-			if parents[at] == "" {
-				// A recorded child without its parent is not a known root.
-				if integer(byID[at]["agent_depth"]) == 0 {
-					root = byID[at]
-				}
-				break
-			}
-		}
-		for _, at := range path {
-			resolved[at], done[at] = root, true
-		}
-	}
-	result := &usageConversationAttribution{roots: map[string]map[string]any{}, canonical: map[string]string{}, runs: map[string]string{},
-		delegatedRuns: map[string]string{}, delegatedDepth: map[string]int64{}, delegatedParents: map[string]string{}, sessionRoles: map[string]string{}, unresolved: map[string]string{}}
+	ids := make([]string, 0, len(byID))
 	for id := range byID {
-		result.roots[id], result.canonical[id] = resolved[canonical(id)], canonical(id)
-		if result.roots[id] == nil {
-			at, seen := canonical(id), map[string]bool{}
-			for byID[at] != nil && !seen[at] && parents[at] != "" {
-				seen[at] = true
-				at = parents[at]
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		b := r.BindConversation(id)
+		for _, claim := range b.Evidence {
+			if claim.Kind != claimMirror || claim.Subject.ID != id || byID[claim.Object.ID] == nil {
+				continue
 			}
-			result.unresolved[id] = "missing_parent"
-			if strings.HasPrefix(at, "conflict:") {
-				result.unresolved[id] = "conflict"
+			if r.BindConversation(claim.Object.ID).ExecutionID != b.ExecutionID || b.ExecutionID == "" {
+				continue
 			}
-			if seen[at] {
-				result.unresolved[id] = "cycle"
+			x, y := find(id), find(claim.Object.ID)
+			if x == y {
+				continue
 			}
+			if better(y, x) {
+				x, y = y, x
+			}
+			group[y] = x
 		}
 	}
-	// A continuation is the same execution, not another delegation. Exact
-	// handles and their child transcripts name that same execution as well.
-	runIDs, knownRun := map[string]string{}, map[string]bool{}
-	conversationRun := func(id string) string {
-		root := resolved[id]
-		if root == nil {
+	for _, id := range ids {
+		result.canonical[id] = find(id)
+	}
+	// runID names an execution in usage scope: a transcript-backed execution
+	// by its representative conversation, any other by its execution ID.
+	runID := func(id executionID) string {
+		x := r.Executions[id]
+		if x == nil {
 			return ""
 		}
-		var path []string
-		identity := ""
-		for id != firstString(root["id"]) {
-			if knownRun[id] {
-				identity = runIDs[id]
-				break
-			}
-			path = append(path, id)
-			if delegations[id] {
-				identity = "conversation:" + id
-				break
-			}
-			id = parents[id]
+		if x.Conversation != "" {
+			return "conversation:" + result.canonical[x.Conversation]
 		}
-		for _, at := range path {
-			runIDs[at], knownRun[at] = identity, true
-		}
-		return identity
+		return string(id)
 	}
-	for _, session := range sessions {
-		id, cv := firstString(session["id"]), canonical(firstString(session["conversation_id"]))
-		if resolved[cv] == nil {
+	rootRow := func(id executionID) map[string]any {
+		if x := r.Executions[id]; x != nil && x.Conversation != "" {
+			return byID[result.canonical[x.Conversation]]
+		}
+		return nil
+	}
+	unresolvedReason := func(state parentState) string {
+		switch state {
+		case parentCycle:
+			return "cycle"
+		case parentAmbiguous, parentConflict:
+			return "conflict"
+		}
+		return "missing_parent"
+	}
+	for _, id := range ids {
+		b := r.BindConversation(id)
+		if b.State != bindingResolved {
+			result.unresolved[id] = "missing_parent"
 			continue
 		}
-		if session["native_id"] == "main" {
-			result.delegatedRuns[id] = conversationRun(cv)
-		} else if child := canonical(firstString(session["child_conversation_id"])); child != "" && resolved[child] != nil && resolved[child]["id"] == resolved[cv]["id"] {
-			result.delegatedRuns[id] = conversationRun(child)
-		} else {
-			result.delegatedRuns[id] = "agent:" + id
+		a := r.Ancestry(b.ExecutionID)
+		root := rootRow(a.Root)
+		result.roots[id] = root
+		if a.Conflicted {
+			result.uncertain[id] = true
 		}
-	}
-	// Build execution parents after alias resolution. Exact launch handles keep
-	// nested delegation attached to its actual parent execution, not a flattened
-	// transcript parent. Continuations add no level.
-	runParents := map[string]string{}
-	sessionParent := func(session map[string]any) (string, bool) {
-		if parentID := firstString(session["parent_id"]); parentID != "" {
-			parent, known := result.delegatedRuns[parentID]
-			return parent, known
-		}
-		cv := canonical(firstString(session["conversation_id"]))
-		return conversationRun(cv), resolved[cv] != nil
-	}
-	for _, session := range sessions {
-		id, cv := firstString(session["id"]), canonical(firstString(session["conversation_id"]))
-		run := result.delegatedRuns[id]
-		if run == "" {
+		if root == nil {
+			result.unresolved[id] = unresolvedReason(a.State)
 			continue
 		}
-		if session["native_id"] == "main" {
-			parent := conversationRun(parents[cv])
-			if run != parent {
-				runParents[run] = parent
-			}
-		} else {
-			if parent, known := sessionParent(session); known {
-				runParents[run] = parent
-			}
+		result.rootQuality[id] = a.RootQuality()
+		if r.Executions[b.ExecutionID].Parent.State != parentRoot {
+			result.runs[id] = runID(b.ExecutionID)
 		}
 	}
-	// Exact handles are stronger than transcript parents, independent of ID order.
 	for _, session := range sessions {
-		if firstString(session["child_conversation_id"]) == "" {
+		id, cv := firstString(session["id"]), firstString(session["conversation_id"])
+		if result.roots[cv] == nil {
 			continue
 		}
-		run := result.delegatedRuns[firstString(session["id"])]
-		if run != "" {
-			if parent, known := sessionParent(session); known {
-				runParents[run] = parent
-			} else {
-				delete(runParents, run)
+		b := r.BindSession(id)
+		if b.ExecutionID == "" || b.State != bindingResolved && b.State != bindingInherited {
+			continue // an attempt, or identity the evidence cannot decide
+		}
+		x := r.Executions[b.ExecutionID]
+		a := r.Ancestry(x.ID)
+		run := ""
+		if x.Parent.State != parentRoot {
+			run = runID(x.ID)
+		}
+		result.delegatedRuns[id] = run
+		if a.Conflicted {
+			result.uncertain[id] = true
+		}
+		if a.Known {
+			result.delegatedDepth[id] = int64(a.Depth)
+			result.depthQuality[id] = a.DepthQuality()
+			if a.Depth > 0 {
+				result.delegatedParents[id] = runID(x.Parent.ParentID)
 			}
 		}
-	}
-	depths := map[string]int64{"": 0}
-	for _, run := range result.delegatedRuns {
-		if run == "" {
-			continue
-		}
-		path, seen := []string{}, map[string]bool{}
-		at := run
-		for {
-			if _, known := depths[at]; known {
-				break
-			}
-			parent, known := runParents[at]
-			if seen[at] || !known {
-				at = ""
-				path = nil
-				break
-			}
-			seen[at], path = true, append(path, at)
-			at = parent
-		}
-		depth := depths[at]
-		for i := len(path) - 1; i >= 0; i-- {
-			depth++
-			depths[path[i]] = depth
-		}
-	}
-	for session, run := range result.delegatedRuns {
-		if depth, known := depths[run]; known {
-			result.delegatedDepth[session] = depth
-			if depth > 0 {
-				parent := runParents[run]
-				if parent == "" {
-					root := result.roots[firstString(bySession[session]["conversation_id"])]
-					parent = "conversation:" + firstString(root["id"])
-				}
-				result.delegatedParents[session] = parent
-			}
-		}
-	}
-	// Split recorded roots by structural delegation, across the full recorded
-	// graph. Tokenless children still establish a parent; continuations alone do
-	// not. A root and its continuations share their execution's parent status.
-	hasChildren := map[string]bool{}
-	for _, session := range sessions {
-		id := firstString(session["id"])
-		root := result.roots[firstString(session["conversation_id"])]
-		run := result.delegatedRuns[id]
-		parent, known := runParents[run]
-		if _, resolvedDepth := result.delegatedDepth[id]; root != nil && run != "" && known && resolvedDepth && run != parent {
-			hasChildren[firstString(root["id"])+"|"+parent] = true
-		}
-	}
-	for id := range byID {
-		result.runs[id] = conversationRun(canonical(id))
 	}
 	for _, session := range sessions {
 		id := firstString(session["id"])
-		if session["kind"] == "subagent" {
+		switch session["kind"] {
+		case "subagent":
 			// A subagent remains a subagent even when it delegates further.
 			result.sessionRoles[id] = "subagent"
-		} else if session["kind"] == "root" {
-			root := result.roots[firstString(session["conversation_id"])]
-			if _, known := result.delegatedDepth[id]; root == nil || !known {
+		case "root":
+			if _, known := result.delegatedDepth[id]; !known || result.roots[firstString(session["conversation_id"])] == nil {
 				continue
 			}
 			result.sessionRoles[id] = "singleton"
-			if hasChildren[firstString(root["id"])+"|"+result.delegatedRuns[id]] {
+			if len(r.Children(r.BindSession(id).ExecutionID)) > 0 {
 				result.sessionRoles[id] = "parent"
 			}
 		}

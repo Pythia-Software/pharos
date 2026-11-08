@@ -483,7 +483,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		case len(parts) == 1:
 			value, err = nilIfNoMap(s.Catalog.WorkOverview(parts[0]))
 		case len(parts) == 3 && parts[1] == "conversations":
-			value, err = nilIfNoMap(s.Catalog.WorkConversation(parts[0], parts[2]))
+			value, err = nilIfNoMap(s.Catalog.WorkConversationContext(r.Context(), parts[0], parts[2]))
 		case len(parts) == 4 && parts[1] == "conversations" && parts[3] == "signals":
 			// The reader's Session signals strip (session_shape.go).
 			value, err = nilIfNoMap(s.Catalog.SessionSignals(r.Context(), parts[0], parts[2]))

@@ -43,7 +43,7 @@ var labelsContract = strings.Join([]string{labelrt.FramingContract, labelingUnit
 // labels chunks separately too).
 const labelsMergeVersion = "chunk-union-v1"
 
-const labelsSchemaVersion = "3"
+const labelsSchemaVersion = "5"
 
 // labelsSchemaDDL is created by the first labels run, not when a catalog
 // opens: a library that never enables labeling has none of it. Older builds
@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS message_labels_conversations (
   conversation_id TEXT PRIMARY KEY,
   structure TEXT NOT NULL,
   units INTEGER NOT NULL,
-  built_at TEXT NOT NULL
+  built_at TEXT NOT NULL,
+  execution_digest TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS message_labels_dirty (
   conversation_id TEXT PRIMARY KEY,
@@ -148,13 +149,21 @@ func itemDirtyTriggers(dirty, prefix string) []string {
 
 // ensureLabelsSchema creates the ledger's tables and triggers once, and
 // replaces the triggers when labelsSchemaVersion changes (version 2 marks
-// only real changes; version 3 adds each model's label order).
+// only real changes; version 3 adds each model's label order; version 4
+// records the execution dependency digest each conversation was built at;
+// version 5 the members of each component built at).
 func (c *Catalog) ensureLabelsSchema(ctx context.Context) error {
 	if version, err := c.metaValue(ctx, "labels_schema_version"); err == nil && version == labelsSchemaVersion {
 		return nil
 	}
 	err := c.writeTransaction(ctx, "create the labels ledger", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, labelsSchemaDDL); err != nil {
+			return err
+		}
+		if err := addColumnIfMissing(ctx, tx, "message_labels_conversations", "execution_digest", `TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+		if err := ensureExecutionDependencyMembers(ctx, tx); err != nil {
 			return err
 		}
 		for _, statement := range labelsDirtyTriggers() {
@@ -407,6 +416,9 @@ type LabelsRunStats struct {
 	Conversations, ConversationsBuilt, ConversationsRemoved int
 	// ConversationsFailed could not be built and stay pending.
 	ConversationsFailed int
+	// ConversationsStale were built against execution evidence that changed
+	// before they could be stored; they were not stored and stay pending.
+	ConversationsStale int
 	// MessagesEmptyTarget have no text tokens for a pooling model to pool.
 	MessagesEmptyTarget int
 	// Cut is set when the limit left messages for a later run.
@@ -443,11 +455,16 @@ type labelsMessage struct {
 // delete, and whether the run covers the whole conversation.
 type labelsJob struct {
 	conversation, token, structure string
-	units                          int
-	messages                       []*labelsMessage
-	stale                          []string
-	remaining                      int
-	complete                       bool
+	// dependency is the execution dependency digest the job was built
+	// against; publication checks it is still current, and discarded is
+	// set when it was not.
+	dependency string
+	discarded  bool
+	units      int
+	messages   []*labelsMessage
+	stale      []string
+	remaining  int
+	complete   bool
 }
 
 type labelsSeq struct {
@@ -473,10 +490,21 @@ func newestFirst(p *labelingPass, ids []string) {
 
 func labelsStructure(p *labelingPass, sessions map[string][]string, id string) string {
 	info := p.conversations[id]
-	parts := []string{info.workspace, p.representative[info.workspace], info.provider, info.parent, info.started, fmt.Sprint(p.current[id])}
+	// The execution dependency digest covers what resolution reads from
+	// other conversations: a late acknowledgement elsewhere can change this
+	// conversation's execution, depth or inherited history.
+	parts := []string{info.workspace, p.representative[info.workspace], info.provider, info.parent, info.started, fmt.Sprint(p.current[id]), p.executionDigests[id]}
 	parts = append(parts, sessions[id]...)
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:12])
+}
+
+func labelsJobDependencies(jobs []*labelsJob) map[string]string {
+	out := make(map[string]string, len(jobs))
+	for _, job := range jobs {
+		out[job.conversation] = job.dependency
+	}
+	return out
 }
 
 // labelsInputHash hashes a message's framing inputs, chunk by chunk.
@@ -540,6 +568,13 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 	}
 	if !opts.DryRun {
 		if err := c.recordLabelsModel(dctx, model, identity); err != nil {
+			return stats, err
+		}
+	}
+	if !opts.DryRun {
+		// Execution evidence another writer changed reaches this ledger's
+		// dirty marks before planning reads them.
+		if err := c.propagateExecutionChanges(dctx); err != nil {
 			return stats, err
 		}
 	}
@@ -816,7 +851,7 @@ func (c *Catalog) labelsDiscover(ctx context.Context, builder *labelsItemBuilder
 	jobs := []*labelsJob{}
 	for _, id := range ids {
 		if want[id] {
-			jobs = append(jobs, &labelsJob{conversation: id, token: tokens[id], structure: structures[id]})
+			jobs = append(jobs, &labelsJob{conversation: id, token: tokens[id], structure: structures[id], dependency: p.executionDigests[id]})
 		}
 	}
 	// Conversations that left the catalog (or a dirty mark for one).
@@ -1488,8 +1523,32 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 		}
 		started := time.Now()
 		labeledAt := now()
+		stale := 0
+		if beforeDerivedPublication != nil {
+			beforeDerivedPublication()
+		}
 		err := r.c.writeTransaction(ctx, "store message labels", func(tx *sql.Tx) error {
+			// Built against execution evidence that changed since: publishing
+			// would present an obsolete attribution as current. Its dirty mark
+			// stays and its stored structure differs, so the next run builds it.
+			publication, err := publishExecutionDependents(ctx, tx, "message_labels_conversations", labelsJobDependencies(pending))
+			if err != nil {
+				return err
+			}
+			current := publication.current
+			stale = 0
 			for _, job := range pending {
+				job.discarded = !current[job.conversation]
+				if job.discarded {
+					// Requeued persistently, so a restart or a complete-looking
+					// run cannot forget it.
+					if _, err := tx.ExecContext(ctx, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES(?,hex(randomblob(8)))
+						ON CONFLICT(conversation_id) DO NOTHING`, job.conversation); err != nil {
+						return err
+					}
+					stale++
+					continue
+				}
 				for _, id := range job.stale {
 					if _, err := tx.ExecContext(ctx, `DELETE FROM message_labels WHERE message_id=? AND conversation_id=?`, id, job.conversation); err != nil {
 						return err
@@ -1512,9 +1571,9 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 				if !complete {
 					continue
 				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES(?,?,?,?)
-					ON CONFLICT(conversation_id) DO UPDATE SET structure=excluded.structure,units=excluded.units,built_at=excluded.built_at`,
-					job.conversation, job.structure, job.units, labeledAt); err != nil {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at,execution_digest) VALUES(?,?,?,?,?)
+					ON CONFLICT(conversation_id) DO UPDATE SET structure=excluded.structure,units=excluded.units,built_at=excluded.built_at,execution_digest=excluded.execution_digest`,
+					job.conversation, job.structure, job.units, labeledAt, job.dependency); err != nil {
 					return err
 				}
 				// A mark written after this run read it carries another token
@@ -1523,9 +1582,12 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 					return err
 				}
 			}
-			return nil
+			return publication.finish(ctx, tx)
 		})
 		r.stats.Write += time.Since(started)
+		if err == nil {
+			r.stats.ConversationsStale += stale
+		}
 		if err != nil {
 			// Nothing more can be stored: stop labeling now. The writer
 			// keeps draining (and dropping) so the run is never blocked on it.
@@ -1534,6 +1596,9 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 			return
 		}
 		for _, job := range pending {
+			if job.discarded {
+				continue
+			}
 			r.stats.MessagesRemoved += len(job.stale)
 			complete := job.complete
 			failed := false
@@ -1793,6 +1858,16 @@ func (c *Catalog) messageLabelsAttacherContext(ctx context.Context, conversation
 		if err := c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM message_labels_dirty WHERE conversation_id=?)
 			OR NOT EXISTS(SELECT 1 FROM message_labels_conversations WHERE conversation_id=?)`, conversationID, conversationID).Scan(&pending); err != nil {
 			return nil, err
+		}
+		if !pending {
+			// Labels built against execution evidence that has changed since
+			// (a late acknowledgement elsewhere) are pending, not current,
+			// until the background run rebuilds them. Read only.
+			current, err := labelsExecutionCurrent(ctx, c.reader(), firstString(conversationID))
+			if err != nil {
+				return nil, err
+			}
+			pending = !current
 		}
 		if len(byID) == 0 && !pending {
 			return nil, nil

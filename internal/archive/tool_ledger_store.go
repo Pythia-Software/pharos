@@ -155,7 +155,7 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 	if len(requests) > 0 {
 		statement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,effort,speed,service_tier,speed_source,
 			input_tokens,uncached_input_tokens,cache_read_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,
-			context_growth_tokens,compacted_before,tool_call_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+			context_growth_tokens,compacted_before,tool_call_count,source_message_id,final_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
 		if err != nil {
 			return err
 		}
@@ -174,7 +174,7 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 				nilIfEmpty(request.RequestedAt), nilIfEmpty(request.Model), nilIfEmpty(request.Effort), request.Speed, nilIfEmpty(request.ServiceTier), request.SpeedSource, integer(counts["input_tokens"]), integer(uncached),
 				integer(counts["cache_read_input_tokens"]), integer(counts["cache_creation_input_tokens"]), integer(counts["output_tokens"]),
 				integer(counts["reasoning_output_tokens"]), integer(counts["total_tokens"]), nullableInt(request.ContextGrowth),
-				boolInt(request.CompactedBefore), request.ToolCalls); err != nil {
+				boolInt(request.CompactedBefore), request.ToolCalls, messageID(request.SourceNativeID), messageID(request.FinalNativeID)); err != nil {
 				statement.Close()
 				return err
 			}

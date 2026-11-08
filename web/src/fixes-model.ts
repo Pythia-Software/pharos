@@ -2,6 +2,7 @@
 // the settings' bounds take off the menu, and how a card describes an item.
 // The page (fixes.tsx) only renders what these return.
 
+import { agentEventsFreshnessMark, agentEventsStillCountedNote, type AgentEventsCoverage } from "./agent-events-freshness";
 export const fixesRanks = ["priority", "work", "recent", "time", "spread"] as const;
 export type FixesRank = typeof fixesRanks[number];
 export const fixesRankLabels: Record<FixesRank, string> = { priority: "Priority", work: "Work items", recent: "Recent", time: "Time lost", spread: "Repositories" };
@@ -143,4 +144,14 @@ export function fixesLeadQuote(item: { title: string; lead?: string }): string {
   const plain = (text: string) => text.replace(/[\s.!?…]+$/, "").trim().toLowerCase();
   // A title cut from the lead ("Test status: X" → "X") says the same thing.
   return item.lead && !plain(item.lead).endsWith(plain(item.title)) ? item.lead : "";
+}
+
+/**
+ * How the Fixes counts read while the events they group wait for a rebuild
+ * (overview.events_freshness, the server's agentEventsCoverage): a mark for
+ * the list counts and the sentence beside them; nothing when current.
+ */
+export function fixesEventsFreshness(coverage: AgentEventsCoverage | null | undefined): { mark: string; note: string } {
+  const note = agentEventsStillCountedNote(coverage);
+  return note ? { mark: agentEventsFreshnessMark(coverage), note: `${note} A fix's work items and events can change when they are rebuilt.` } : { mark: "", note: "" };
 }

@@ -313,6 +313,11 @@ func (s *labelsSession) Discover(ctx context.Context) error {
 	if err := c.recordLabelsModel(ctx, s.model, s.identity); err != nil {
 		return err
 	}
+	// Execution evidence another writer changed reaches this ledger's dirty
+	// marks before discovery reads them, as in RunLabels.
+	if err := c.propagateExecutionChanges(ctx); err != nil {
+		return err
+	}
 	s.discovered.Store(false)
 	builder, err := newLabelsItemBuilder(ctx, c.reader())
 	if err != nil {
@@ -342,17 +347,21 @@ func (s *labelsSession) Discover(ctx context.Context) error {
 // labelingInputsGeneration is the native generation of the inputs a model
 // session's discovery reads that no dirty mark carries: the record writer's
 // (conversations, their structure and lineage, and the mirror
-// representatives they decide) and the tool ledger's (identity links, Git
-// merges). Each moves in its writer's own transaction. Message, writing,
-// session and reasoning changes mark the dirty tables themselves
-// (itemDirtyTriggers), so a background writing or reasoning pass does not
-// move it. One meta read: a library selection compares it with the
+// representatives they decide), the tool ledger's (identity links, Git
+// merges) and the execution evidence's (execution_source_generation: claims,
+// launches and observations a writer may change without marking dependents
+// until the next propagation). Each moves in its writer's own transaction.
+// Message, writing, session and reasoning changes mark the dirty tables
+// themselves (itemDirtyTriggers), so a background writing or reasoning pass
+// does not move it, and neither do a propagation's marks nor a derivative's
+// publication. One read: a library selection compares it with the
 // generation its session's discovery read before it ran, so a page is never
 // empty for an inventory older than the library's inputs.
 func (c *Catalog) labelingInputsGeneration(ctx context.Context) (string, error) {
 	var generation string
 	err := c.reader().QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM meta WHERE key='authorship_inputs_generation'),'')||':'||
- COALESCE((SELECT value FROM meta WHERE key='tool_ledger_generation'),'')`).Scan(&generation)
+ COALESCE((SELECT value FROM meta WHERE key='tool_ledger_generation'),'')||':'||
+ COALESCE((SELECT value FROM execution_source_generation WHERE id=1),'')`).Scan(&generation)
 	return generation, err
 }
 
@@ -637,13 +646,25 @@ func labelsDirtyTokens(ctx context.Context, q queryer, ids []string) (map[string
 // loadLabelingPass runs for the whole library: no preparation worker shares
 // it between steps. It returns their conversation rows for the caller to
 // compare with the context's before replacing them. stale reports a mirror
-// representative change, after which any structure may differ: the context
-// must be rebuilt.
+// representative change, after which any structure may differ, or a
+// selected conversation whose execution dependency digest is not the one
+// discovery resolved (new, gone, or its evidence changed): its lineage,
+// copied history and occurrences are only resolved for the whole context.
+// Either way the context must be rebuilt.
 func (c *Catalog) refreshLabelingContext(ctx context.Context, builder *labelsItemBuilder, ids []string) (live map[string]*labelingConversation, stale bool, err error) {
 	p := builder.p
 	representative, err := c.authorshipRepresentatives(ctx)
 	if err != nil || !maps.Equal(representative, p.representative) {
 		return nil, err == nil, err
+	}
+	digests, err := executionDependencyDigestsFor(ctx, c.reader(), ids)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, id := range ids {
+		if digests[id] != p.executionDigests[id] {
+			return nil, true, nil
+		}
 	}
 	selected := ` WHERE id IN (SELECT value FROM json_each(?))`
 	encoded := jsonText(ids)
@@ -707,8 +728,9 @@ func (s *labelsSession) follow(source, follower string) {
 // A change seen since discovery (a new token, another structure, a new
 // conversation) has its followers durably marked before its token is
 // adopted. It reports whether the context must be rebuilt instead: a mirror
-// representative changed (every structure may change) or a selected
-// conversation was deleted (discovery removes its labels).
+// representative changed (every structure may change), a selected
+// conversation's execution dependency digest moved (refreshLabelingContext)
+// or a selected conversation was deleted (discovery removes its labels).
 func (s *labelsSession) refresh(ctx context.Context, ids []string) (bool, error) {
 	c, p := s.c, s.builder.p
 	live, stale, err := c.refreshLabelingContext(ctx, s.builder, ids)
@@ -760,7 +782,7 @@ func (s *labelsSession) refresh(ctx context.Context, ids []string) (bool, error)
 		// Every conversation discovery wanted for a model or contract change
 		// stays wanted until stored; a later step needs its own reason.
 		if want || s.all && job != nil {
-			s.setJob(id, &labelsJob{conversation: id, token: token, structure: structure})
+			s.setJob(id, &labelsJob{conversation: id, token: token, structure: structure, dependency: p.executionDigests[id]})
 		} else {
 			s.setJob(id, nil)
 		}
@@ -811,7 +833,7 @@ func (s *labelsSession) markFollowers(ctx context.Context, sources []string) err
 	}
 	for _, id := range followers {
 		if s.jobs[id] == nil {
-			s.setJob(id, &labelsJob{conversation: id, token: tokens[id], structure: labelsStructure(p, s.builder.sessions, id)})
+			s.setJob(id, &labelsJob{conversation: id, token: tokens[id], structure: labelsStructure(p, s.builder.sessions, id), dependency: p.executionDigests[id]})
 		}
 	}
 	return nil

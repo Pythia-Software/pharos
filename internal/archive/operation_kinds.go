@@ -202,6 +202,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops after the unit in progress; starting the upgrade again resumes it.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "catalog.repair", Class: workClassSpecialized, Label: "Repair usage (Terminal)", Verb: "Repairing usage", Holds: "D:w W:w", Affects: "an.tools, an.authorship",
 		OnEject: "Pharos cannot stop it.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},
+	{Kind: "catalog.execution-evidence", Class: workClassSpecialized, Label: "Derive execution evidence (Terminal)", Verb: "Deriving execution evidence", Holds: "D:w W:w", Affects: "an.labels, an.agent_events",
+		OnEject: "Stops between batches; running it again resumes it.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "repositories.merge", Class: workClassSpecialized, Label: "Merge repositories (Terminal)", Verb: "Merging repositories", Holds: "D:w W:w", Affects: "an.identities, an.git",
 		OnEject: "Pharos cannot stop it.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "analysis.agent_events.import", Class: workClassSpecialized, Label: "Import agent events (Terminal)", Verb: "Importing agent events", Holds: "D:w W:w", Affects: "an.agent_events",

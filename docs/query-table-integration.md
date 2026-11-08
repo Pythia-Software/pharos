@@ -1,17 +1,19 @@
-# Query Table 1.0.1 in Pharos
+# Query Table 1.0.3 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **1.0.1** packages,
-and the Go backend to **v1.0.1**. The lockfile and `go.sum` record the released
+Pharos pins core, React, UI and codegen to the published npm **1.0.3** packages,
+and the Go backend to **v1.0.3**. The lockfile and `go.sum` record the released
 sources. There are no vendored copies, module replacements, package patches or
 build-time source rewrites. Optional upstream worktree linking is described in
 [local development](query-table-local-development.md); ordinary builds need no
 Query Table checkout.
 
-The [1.0.1 release](https://github.com/Pythia-Software/query-table/releases/tag/v1.0.1),
-[wire protocol](https://github.com/Pythia-Software/query-table/blob/v1.0.1/docs/wire-protocol.md)
-and [error contract](https://github.com/Pythia-Software/query-table/blob/v1.0.1/docs/errors.md)
-define the integration. 1.0.1 only speeds up SQLite execution; it has no API
-or client changes, so the 1.0.0 declarations and follow-ups below still apply.
+The [1.0.3 release](https://github.com/Pythia-Software/query-table/releases/tag/v1.0.3),
+[wire protocol](https://github.com/Pythia-Software/query-table/blob/v1.0.3/docs/wire-protocol.md)
+and [error contract](https://github.com/Pythia-Software/query-table/blob/v1.0.3/docs/errors.md)
+define the integration. Query Table 1.0.2 added the run-bar host slot used for
+the readiness indicator; 1.0.3 adds an optional host population counter. Pharos
+continues to use the upstream executor for counts. The remaining 1.0.0
+follow-ups below still apply.
 
 ## Analyze dataset pages
 

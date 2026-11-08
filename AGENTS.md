@@ -97,6 +97,30 @@ author edits when switching targets or changing cover controls. Extend the
 discovered-target and control-change cases in `dashboard-card.test.mjs`; do not
 copy a static page heading or generic topic description into a creation path.
 
+## Portability boundaries
+
+Shared code owns policy; reviewed native helpers own OS mechanisms. Reuse the
+existing platform primitives and host-services adapter. Keep unsupported distinct
+from success, unknown liveness from absence, and missing measurements from zero.
+Preserve descriptor/process lifetimes and persisted identity encodings. See
+[the portability guide](docs/portability.md) and the
+[work-execution contract](docs/work-portability.md). Windows/Linux hosts,
+distributions and a Web product require a separate task.
+
+`go test ./internal/architecture` is a fast source-only boundary check, also
+included in the normal Go suite. Native leaves and legacy shared exceptions
+have exact reviewed entries in `internal/architecture/native_test.go`; a platform
+filename alone is not approval. New exceptions need a reason and cheap failure/
+lifetime contract coverage. `npm --prefix web run check-host-boundaries` discovers
+authored JS/TS and executable shell fragments; native transport and clipboard
+implementations belong only in the approved host adapter.
+
+The cross-compilation matrix is **opt-in only**:
+`go test -tags portability_compile -run '^TestCrossPlatformCompilation$' -timeout 15m ./internal/architecture`.
+It requires the built frontend from setup. Do not add it to setup, merge checks,
+npm checks, normal test commands or other common paths. It proves production
+compilation, not target runtime support. Run it only when explicitly requested.
+
 ## Running tests
 
 The JS tooling needs Node 24 LTS, pinned in `.nvmrc` (`nvm use`) and in

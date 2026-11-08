@@ -5131,6 +5131,12 @@
             "op": "formula",
             "expression": "COUNT_DISTINCT(NULLIF([delegated_session_id],\"\"))",
             "label": "Active delegated runs"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "dg_tokens",
@@ -5151,6 +5157,10 @@
           ],
           "groupLimit": 10000,
           "label": "Daily delegated tokens"
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "retired": true,
@@ -6866,6 +6876,12 @@
             "op": "count_distinct",
             "field": "agent_session_id",
             "label": "Recorded runs"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "card_total_tokens",
@@ -6889,6 +6905,10 @@
               "nulls": "last"
             }
           ]
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "days": [
@@ -7075,6 +7095,12 @@
             "op": "sum",
             "field": "total_tokens",
             "label": "Recorded tokens"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "mc_session_cost",
@@ -7091,7 +7117,11 @@
             "field": "mc_sessions",
             "label": "conversations"
           }
-        ]
+        ],
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
+        }
       },
       "action": "Explore Tokens and Cost",
       "where": [
@@ -7300,6 +7330,12 @@
             "op": "row",
             "field": "root_repository_name",
             "label": "Top-level repository"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "dg_tokens",
@@ -7343,6 +7379,10 @@
             "kind": "bar-horizontal",
             "valueLabel": "Active runs"
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "days": [
@@ -10633,6 +10673,12 @@
             "op": "count_distinct",
             "field": "root_conversation_id",
             "label": "Whole conversations"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "mc_cost",
@@ -10677,6 +10723,10 @@
               "decimals": 2
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -10765,6 +10815,12 @@
             "op": "count_distinct",
             "field": "root_conversation_id",
             "label": "Whole conversations"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "mc_tree_depth",
@@ -10790,6 +10846,10 @@
               "decimals": 0
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -10852,6 +10912,12 @@
             "op": "count_distinct",
             "field": "root_conversation_id",
             "label": "Whole conversations"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "mc_delegates",
@@ -10877,6 +10943,10 @@
               "decimals": 0
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -10992,6 +11062,12 @@
             "op": "sum",
             "field": "output_tokens",
             "label": "Recorded output tokens"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Conversations under an inferred or unverified top-level conversation",
+            "expression": "COUNT_DISTINCT(IF([root_quality]=\"unverified\",[conversation_id],IF([root_quality]=\"inferred\",[conversation_id],NULL)))"
           }
         ],
         "valueField": "mc_human_messages",
@@ -11002,7 +11078,11 @@
           "root_provider",
           "root_model_family",
           "root_conversation_id"
-        ]
+        ],
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "conversations placed under a top-level conversation through an inferred or unverified link"
+        }
       },
       "cover": {
         "mode": "source",
@@ -11080,6 +11160,12 @@
             "op": "sum",
             "field": "total_tokens",
             "label": "Recorded tokens"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "having": [
@@ -11134,6 +11220,10 @@
               "decimals": 1
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -11595,6 +11685,12 @@
             "op": "count_distinct",
             "field": "root_conversation_id",
             "label": "Whole conversations"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "mc_tokens",
@@ -11605,7 +11701,11 @@
           "root_provider",
           "root_model_family",
           "root_conversation_id"
-        ]
+        ],
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
+        }
       },
       "cover": {
         "mode": "source",
@@ -11738,6 +11838,12 @@
             "op": "count_distinct",
             "field": "root_conversation_id",
             "label": "Whole conversations"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "mc_input",
@@ -11748,7 +11854,11 @@
           "root_provider",
           "root_model_family",
           "root_conversation_id"
-        ]
+        ],
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
+        }
       },
       "cover": {
         "mode": "source",
@@ -12678,6 +12788,12 @@
             "op": "sum",
             "field": "cache_creation_input_tokens",
             "label": "Cache-write input tokens"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "cc_input",
@@ -12688,7 +12804,11 @@
           "root_provider",
           "root_model_family",
           "root_conversation_id"
-        ]
+        ],
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
+        }
       },
       "cover": {
         "mode": "source",
@@ -14930,6 +15050,12 @@
             "op": "count_distinct",
             "field": "root_conversation_id",
             "label": "Top-level conversations"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "ac_cost",
@@ -14951,6 +15077,10 @@
           "display": {
             "kind": "pie"
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -15053,6 +15183,12 @@
             "op": "row",
             "field": "root_title",
             "label": "Top-level conversation"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "ac_cost",
@@ -15076,6 +15212,10 @@
               "nulls": "last"
             }
           ]
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -15177,6 +15317,12 @@
             "op": "row",
             "field": "root_title",
             "label": "Top-level conversation"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "ac_cost",
@@ -15228,6 +15374,10 @@
               "mode": "log"
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -15330,6 +15480,12 @@
             "op": "sum",
             "field": "total_tokens",
             "label": "Recorded tokens"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "ac_work",
@@ -15370,6 +15526,10 @@
             },
             "legendPosition": "none"
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -15954,6 +16114,12 @@
             "op": "row",
             "field": "root_repository_name",
             "label": "Top-level repository"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "representative": {
@@ -16007,6 +16173,10 @@
               "mode": "log"
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -16208,6 +16378,12 @@
             "op": "row",
             "field": "root_title",
             "label": "Top-level conversation"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "representative": {
@@ -16259,6 +16435,10 @@
               "mode": "log"
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -16358,6 +16538,12 @@
             "op": "row",
             "field": "root_title",
             "label": "Top-level conversation"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "representative": {
@@ -16409,6 +16595,10 @@
               "mode": "log"
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -16616,6 +16806,12 @@
             "op": "row",
             "field": "root_repository_name",
             "label": "Top-level repository"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "tu_tokens",
@@ -16668,6 +16864,10 @@
               "mode": "log"
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -16774,6 +16974,12 @@
             "op": "row",
             "field": "root_repository_name",
             "label": "Top-level repository"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "tu_tokens",
@@ -16828,6 +17034,10 @@
               "mode": "log"
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -16935,6 +17145,12 @@
             "op": "row",
             "field": "root_repository_name",
             "label": "Top-level repository"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "tu_tokens",
@@ -16991,6 +17207,10 @@
               "mode": "log"
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -17091,6 +17311,12 @@
             "op": "row",
             "field": "root_title",
             "label": "Top-level conversation"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "tu_tokens",
@@ -17143,6 +17369,10 @@
             },
             "legendPosition": "none"
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -17244,6 +17474,12 @@
             "op": "row",
             "field": "root_repository_name",
             "label": "Top-level repository"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "tu_tokens",
@@ -17311,6 +17547,10 @@
             },
             "legendPosition": "none"
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -17410,6 +17650,12 @@
             "op": "row",
             "field": "root_repository_name",
             "label": "Top-level repository"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "tu_tokens",
@@ -17479,6 +17725,10 @@
             },
             "legendPosition": "none"
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -17709,6 +17959,12 @@
             "op": "row",
             "field": "root_title",
             "label": "Top-level conversation"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "dg_runs",
@@ -17752,6 +18008,10 @@
               "decimals": 0
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -17975,6 +18235,12 @@
             "op": "row",
             "field": "root_repository_name",
             "label": "Top-level repository"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "dg_runs",
@@ -18018,6 +18284,10 @@
               "decimals": 0
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -18122,6 +18392,12 @@
             "op": "count_distinct",
             "field": "root_conversation_id",
             "label": "Active top-level conversations"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "dg_share",
@@ -18144,6 +18420,10 @@
               "nulls": "last"
             }
           ]
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -18250,6 +18530,12 @@
             "op": "row",
             "field": "root_title",
             "label": "Top-level conversation"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "dg_runs",
@@ -18291,6 +18577,10 @@
               "decimals": 1
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -18391,6 +18681,12 @@
             "op": "row",
             "field": "root_title",
             "label": "Top-level conversation"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "dg_tokens",
@@ -18442,6 +18738,10 @@
               "mode": "log"
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -18552,6 +18852,12 @@
             "op": "row",
             "field": "root_title",
             "label": "Top-level conversation"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "dg_runs",
@@ -18611,6 +18917,10 @@
               "min": 0
             }
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {
@@ -18697,6 +19007,12 @@
             "op": "row",
             "field": "root_title",
             "label": "Top-level conversation"
+          },
+          {
+            "id": "lineage_qualified",
+            "op": "formula",
+            "label": "Sessions with unverified ancestry or identity",
+            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
           }
         ],
         "valueField": "dg_depth",
@@ -18767,6 +19083,10 @@
             },
             "legendPosition": "none"
           }
+        },
+        "qualifier": {
+          "field": "lineage_qualified",
+          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
       },
       "cover": {

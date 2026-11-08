@@ -2,7 +2,9 @@ package archive
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -23,6 +25,14 @@ type MachineRecord struct {
 	Label string `json:"label"`
 	Kind  string `json:"kind"`
 }
+
+// originResolverVersion versions how origin attribution resolves lineage.
+// Version 2 reads it from the shared execution resolution.
+const originResolverVersion = "2"
+
+// originStoredVersion is what meta records: origins are published again when
+// either these rules or the shared resolution's change.
+const originStoredVersion = originResolverVersion + "/" + executionResolverVersion
 
 var originDimensions = []string{"channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind"}
 
@@ -58,11 +68,11 @@ func (c *Catalog) ensureOriginSchema() error {
 	if err := c.DB.QueryRow("SELECT value FROM meta WHERE key='origin_resolver_version'").Scan(&version); err != nil && err != sql.ErrNoRows {
 		return err
 	}
-	if version != "1" {
+	if version != originStoredVersion {
 		if _, err := c.DB.Exec("UPDATE origin_state SET revision=revision+1 WHERE id=1"); err != nil {
 			return err
 		}
-		if _, err := c.DB.Exec("INSERT INTO meta(key,value) VALUES('origin_resolver_version','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value"); err != nil {
+		if _, err := c.DB.Exec("INSERT INTO meta(key,value) VALUES('origin_resolver_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", originStoredVersion); err != nil {
 			return err
 		}
 	}
@@ -313,6 +323,18 @@ func recordOriginObservation(tx *sql.Tx, id, host, source string, cv Conversatio
 // The origins are computed from a read snapshot, so the writer is held only to
 // store the rows that changed. built records the snapshot's revision; commits
 // since then leave the projection dirty for the next pass.
+//
+// Lineage (roots, canonical identities, their quality) comes from the shared
+// execution resolution, whose evidence (launch results, typed claims) the
+// graph triggers do not watch. The pass also records the execution source
+// generation and a fingerprint of the lineage it published: when the
+// generation moves with the graph unchanged, the cached resolution's lineage
+// is compared, and origins are recomputed only if it differs.
+const (
+	originGenerationKey = "origin_execution_generation"
+	originLineageKey    = "origin_lineage_fingerprint"
+)
+
 func (c *Catalog) ensureOrigins(ctx context.Context) error {
 	_, err := c.publishOrigins(ctx)
 	return err
@@ -333,12 +355,60 @@ func (c *Catalog) publishOrigins(ctx context.Context) (published bool, err error
 	}
 	defer snapshot.Rollback()
 	var revision, built int64
-	if err := snapshot.QueryRowContext(ctx, "SELECT revision,built FROM origin_state WHERE id=1").Scan(&revision, &built); err != nil || revision == built {
+	if err := snapshot.QueryRowContext(ctx, "SELECT revision,built FROM origin_state WHERE id=1").Scan(&revision, &built); err != nil {
 		return false, err
 	}
-	rows, err := computeOrigins(ctx, snapshot)
+	generation, tracked, err := executionSourceGeneration(ctx, snapshot)
+	if err != nil {
+		return false, err
+	}
+	builtGeneration, builtLineage, err := originBuiltLineage(ctx, snapshot)
+	if err != nil {
+		return false, err
+	}
+	if revision == built && (!tracked || generation == builtGeneration) {
+		return false, nil
+	}
+	var resolution *executionResolution
+	if tracked {
+		if resolution, err = c.executionResolutionAt(ctx, snapshot); err != nil {
+			return false, err
+		}
+	}
+	unless := ""
+	if revision == built {
+		unless = builtLineage
+	}
+	rows, lineage, err := computeOriginsWith(ctx, snapshot, resolution, unless)
 	if err != nil {
 		return true, err
+	}
+	// guard: whether another process published this snapshot or a later one.
+	guard := func(tx *sql.Tx) (bool, error) {
+		var current int64
+		if err := tx.QueryRowContext(ctx, "SELECT built FROM origin_state WHERE id=1").Scan(&current); err != nil {
+			return false, err
+		}
+		stored, _, err := originBuiltLineage(ctx, tx)
+		return current > revision || current == revision && (!tracked || stored >= generation), err
+	}
+	record := func(tx *sql.Tx) error {
+		if !tracked {
+			return nil
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?1,?2),(?3,?4) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+			originGenerationKey, fmt.Sprint(generation), originLineageKey, lineage)
+		return err
+	}
+	if rows == nil {
+		// The resolution moved without changing the lineage origins read.
+		_ = snapshot.Rollback()
+		return false, c.writeTransaction(ctx, "conversation-origins", func(tx *sql.Tx) error {
+			if done, err := guard(tx); err != nil || done {
+				return err
+			}
+			return record(tx)
+		})
 	}
 	// Linked child executions also supply attribution for tool calls stored
 	// in their parent's workspace, through the session's child handle.
@@ -354,8 +424,7 @@ func (c *Catalog) publishOrigins(ctx context.Context) (published bool, err error
 	}
 	return true, c.writeTransaction(ctx, "conversation-origins", func(tx *sql.Tx) error {
 		// Another process may have published a later snapshot meanwhile.
-		var current int64
-		if err := tx.QueryRowContext(ctx, "SELECT built FROM origin_state WHERE id=1").Scan(&current); err != nil || current >= revision {
+		if done, err := guard(tx); err != nil || done {
 			return err
 		}
 		cols := append([]string{"conversation_id"}, originFields...)
@@ -397,32 +466,53 @@ func (c *Catalog) publishOrigins(ctx context.Context) (published bool, err error
 				return err
 			}
 		}
-		_, err = tx.ExecContext(ctx, "UPDATE origin_state SET built=? WHERE id=1", revision)
-		return err
+		if _, err = tx.ExecContext(ctx, "UPDATE origin_state SET built=? WHERE id=1", revision); err != nil {
+			return err
+		}
+		return record(tx)
 	})
+}
+
+// originBuiltLineage is the execution source generation and lineage
+// fingerprint the published origins were computed at (0 and "" before any).
+func originBuiltLineage(ctx context.Context, q queryer) (int64, string, error) {
+	rows, err := queryMapsContext(ctx, q, `SELECT key,value FROM meta WHERE key IN (?,?)`, originGenerationKey, originLineageKey)
+	if err != nil {
+		return 0, "", err
+	}
+	var generation int64
+	var lineage string
+	for _, row := range rows {
+		if firstString(row["key"]) == originGenerationKey {
+			fmt.Sscan(firstString(row["value"]), &generation)
+		} else {
+			lineage = firstString(row["value"])
+		}
+	}
+	return generation, lineage, nil
 }
 
 // computeOrigins reads one snapshot and never writes, including on the MCP light path.
 func computeOrigins(ctx context.Context, q queryer) ([]map[string]any, error) {
+	rows, _, err := computeOriginsWith(ctx, q, nil, "")
+	return rows, err
+}
+
+// computeOriginsWith is computeOrigins with the snapshot's resolution when
+// known (nil: resolved here), also returning the fingerprint of the lineage
+// it used. Rows are nil when that fingerprint equals unless.
+func computeOriginsWith(ctx context.Context, q queryer, resolution *executionResolution, unless string) ([]map[string]any, string, error) {
 	cvs, err := queryMapsContext(ctx, q, `SELECT c.id,c.workspace_id,c.native_id,c.account,c.provider,c.parent_id,c.agent_depth,c.harness,c.aliases_json,w.source_kind FROM conversations c JOIN workspaces w ON w.id=c.workspace_id ORDER BY c.id`)
 	if err != nil {
-		return nil, err
-	}
-	sessions, err := queryMapsContext(ctx, q, "SELECT id,native_id,kind,conversation_id,parent_id,child_conversation_id FROM agent_sessions ORDER BY id")
-	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	links, err := queryMapsContext(ctx, q, "SELECT left_id,right_id FROM conversation_identity_links ORDER BY left_id,right_id")
 	if err != nil {
-		return nil, err
-	}
-	launches, err := queryMapsContext(ctx, q, "SELECT child_id,parent_id FROM conversation_launches ORDER BY child_id,parent_id")
-	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	observations, err := queryMapsContext(ctx, q, "SELECT * FROM origin_observations ORDER BY conversation_id,evidence_key")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// Historical native sightings are usable only if every seen host has a
 	// device mapping and they all agree. Exports never inherit their download host.
@@ -433,57 +523,22 @@ func computeOrigins(ctx context.Context, q queryer) ([]map[string]any, error) {
           GROUP BY s.conversation_id HAVING COUNT(DISTINCT hm.machine_id)=1
           AND COUNT(DISTINCT s.host_id)=COUNT(DISTINCT CASE WHEN hm.machine_id IS NOT NULL THEN s.host_id END)`)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	for _, h := range historical {
 		observations = append(observations, map[string]any{"conversation_id": h["conversation_id"], "machine_id": h["machine_id"], "execution_machine_id": h["machine_id"], "priority": int64(1), "evidence": "native source host (inferred)"})
 	}
 	machineRows, err := queryMapsContext(ctx, q, "SELECT * FROM machines")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	machines := map[string]map[string]any{}
 	for _, m := range machineRows {
 		machines[firstString(m["id"])] = m
 	}
 	byID := map[string]map[string]any{}
-	native := map[string]string{}
 	for _, cv := range cvs {
-		id := firstString(cv["id"])
-		byID[id] = cv
-		native[firstString(cv["provider"])+"|"+firstString(cv["account"])+"|"+firstString(cv["native_id"])] = id
-	}
-	// A wrapper can declare a parent's native ID before its native transcript
-	// arrives. Do not arbitrarily resolve an alias claimed by unrelated wrappers.
-	aliasClaims := map[string]string{}
-	ambiguous := map[string]bool{}
-	for _, cv := range cvs {
-		var aliases []string
-		_ = json.Unmarshal([]byte(firstString(cv["aliases_json"])), &aliases)
-		for _, alias := range aliases {
-			key := firstString(cv["provider"]) + "|" + firstString(cv["account"]) + "|" + alias
-			if prior := aliasClaims[key]; prior != "" && prior != cv["id"] {
-				ambiguous[key] = true
-			}
-			aliasClaims[key] = firstString(cv["id"])
-		}
-	}
-	for key, id := range aliasClaims {
-		if native[key] == "" && !ambiguous[key] {
-			native[key] = id
-		}
-	}
-	// Retained native parent IDs let children arriving before parents resolve later.
-	for _, o := range observations {
-		cv := byID[firstString(o["conversation_id"])]
-		if cv == nil {
-			continue
-		}
-		if parent := firstString(o["parent_native_id"]); parent != "" {
-			key := firstString(o["parent_provider"], cv["provider"]) + "|" + firstString(o["parent_account"], cv["account"]) + "|" + parent
-			parents, _ := cv["recorded_parent_ids"].([]string)
-			cv["recorded_parent_ids"] = append(parents, defaultString(native[key], "missing:"+key))
-		}
+		byID[firstString(cv["id"])] = cv
 	}
 	works, seenWorks, workspaceLinks := []map[string]any{}, map[string]bool{}, []map[string]any{}
 	for _, cv := range cvs {
@@ -503,7 +558,31 @@ func computeOrigins(ctx context.Context, q queryer) ([]map[string]any, error) {
 	for _, work := range suppressMirrorRows(works, workspaceLinks) {
 		representatives = append(representatives, map[string]any{"workspace_id": work["id"]})
 	}
-	lineage := resolveUsageConversationRoots(cvs, sessions, links, launches, representatives)
+	// The shared execution resolution of this snapshot decides lineage,
+	// including retained native parent IDs (loadExecutionEvidence).
+	var lineage *usageConversationAttribution
+	if resolution != nil {
+		lineage, err = usageConversationRootsOf(ctx, q, resolution, representatives)
+	} else {
+		lineage, err = usageConversationRootsFrom(q, representatives)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	// What the rows read of the lineage, per conversation.
+	h := sha256.New()
+	for _, cv := range cvs {
+		id := firstString(cv["id"])
+		rootID := ""
+		if root := lineage.roots[id]; root != nil {
+			rootID = firstString(root["id"])
+		}
+		fmt.Fprintf(h, "%s\x1f%s\x1f%s\x1f%s\x1f%s\n", id, lineage.canonical[id], rootID, lineage.rootQuality[id], lineage.unresolved[id])
+	}
+	fingerprint := hex.EncodeToString(h.Sum(nil)[:16])
+	if unless != "" && fingerprint == unless {
+		return nil, fingerprint, nil
+	}
 	// Evidence belongs to the mirror identity, including suppressed wrappers.
 	observed := map[string][]map[string]any{}
 	hasOriginObservation := map[string]bool{}
@@ -546,6 +625,11 @@ func computeOrigins(ctx context.Context, q queryer) ([]map[string]any, error) {
 				v, s, e := originClaim(observed[rid], field)
 				if s == "direct" && rid != canonical {
 					s = "inherited"
+					// Inherited through a root an inferred or unverified link
+					// reached: the attribution is only that certain.
+					if quality := lineage.rootQuality[id]; quality != "" && quality != ancestryObserved {
+						s = "inherited_" + quality
+					}
 				}
 				row[field] = nilIfEmpty(v)
 				target := "channel_status"
@@ -568,7 +652,7 @@ func computeOrigins(ctx context.Context, q queryer) ([]map[string]any, error) {
 		row["workspace_id"] = cv["workspace_id"]
 		rows = append(rows, row)
 	}
-	return rows, nil
+	return rows, fingerprint, nil
 }
 
 func originClaim(rows []map[string]any, field string) (string, string, string) {

@@ -35,6 +35,8 @@ var cliCommandCoverage = map[string]string{
 	"volume-id":             "a read of the volume; never opens the catalog",
 	"labels":                "labels run is the leased analysis.labels operation (cliCatalogOperation); status and explain only read; fetch writes only this Mac's support directory, never a library",
 	"labeling":              "reads only a static backup copy of a catalog (immutable) and writes only its own dataset directory; never opens a live catalog",
+
+	"execution-evidence": "execution-evidence run is the leased catalog.execution-evidence operation (cliCatalogOperation); status only reads",
 }
 
 // Every writing Terminal command takes a lease and registers its

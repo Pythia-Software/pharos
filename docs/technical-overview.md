@@ -4,6 +4,11 @@ Pharos is a local-first macOS library for finding past work across TL1, Conducto
 
 The primary implementation is Go 1.26 with SQLite FTS, a local concept index, an authenticated loopback API, a read-only MCP server, and a responsive desktop UI. The Go service and UI are embedded in the macOS `.app`; the destructive TL1 workflow is deliberately held back.
 
+The [portability guide](portability.md) maps the shared/native boundaries,
+compatibility rules and regression checks. This groundwork prepares future
+ports; macOS remains the supported desktop target. Native Windows/Linux hosts,
+distributions and a Web product are deferred.
+
 The command-line executable is `pharos`, and a per-user installation keeps its configuration in `~/Library/Application Support/Pharos`.
 
 The native app uses an application broker to open named libraries independently
@@ -312,7 +317,7 @@ GET  /api/query/{library|activity|usage|…}/field-stats?fields=a,b
 POST /api/query/{library|activity|usage|…}/query-v3
 ```
 
-The query endpoints implement the published Query Table **1.0.1** V3 wire
+The query endpoints implement the published Query Table **1.0.3** V3 wire
 contract. Their allowlisted field definitions live in [`schemas`](../schemas),
 and the same documents drive the React frontend and generated Go SQLite schemas.
 Tables, charts, metrics, filter suggestions, field statistics and identity

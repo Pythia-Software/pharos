@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture,pendingEvidenceApi} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import writingMessagesDocument from '../../../schemas/writing_messages.schema.json' with {type:'json'};
 import usageDocument from '../../../schemas/usage.schema.json' with {type:'json'};
@@ -89,6 +89,55 @@ test('saved Parallel activity links open the native Timeline and retain the sele
  assert.ok(app.calls.some(call=>call.path.endsWith('/parallel')&&call.query.get('labels')==='1'));
  const copy=await open(t,{url:path(page),ready:'.lt-session-root'});
  assert.equal(await copy.page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
+});
+
+test('legacy delegation session IDs restore to canonical sessions once and keep unrelated state',{skip},async t=>{
+ // s-legacy is an old row ID of s-child; s-split no longer names one session.
+ const aliases={'s-legacy':'s-child','s-split':null};
+ const api={'GET /api/work/:id/delegation':({query})=>{
+  const data=defaultApi['GET /api/work/:id/delegation']({query}),asked=query.getAll('resolve').filter(id=>id in aliases);
+  return asked.length?{...data,aliases:Object.fromEntries(asked.map(id=>[id,aliases[id]]))}:data;
+ }};
+ const disclosures={'delegation-labels:s-legacy:session':true,'delegation-labels:s-split:session':true,'unrelated-section':true};
+ const params=new URLSearchParams({delegation_session:'s-legacy',delegation_collapsed:'s-legacy,s-split',disclosures:JSON.stringify(disclosures)});
+ const app=await open(t,{url:`/work/${workID}?${params}`,api,ready:'.delegation-table tbody tr'}),{page}=app;
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('delegation_session')==='s-child');await app.settled();
+ const url=new URL(page.url());
+ assert.equal(url.searchParams.get('delegation_collapsed'),'s-child,s-split');
+ assert.deepEqual(JSON.parse(url.searchParams.get('disclosures')),{'delegation-labels:s-child:session':true,'delegation-labels:s-split:session':true,'unrelated-section':true});
+ const resolving=()=>app.calls.filter(call=>call.query.getAll('resolve').length).length,once=resolving();
+ await page.reload();await page.locator('.delegation-table tbody tr').first().waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-child','a canonical URL stays canonical');
+ assert.ok(resolving()<=once+1,'restoration does not loop');
+});
+
+test('relatives left out at the family bound load from the URL in a fresh browser',{skip},async t=>{
+ const loaded=page=>page.locator('.delegation-table [data-session-id="s-relative-1"]').first();
+ const app=await open(t,{url:`/work/${workID}`,api:pendingEvidenceApi,ready:'.delegation-table .delegation-relatives'}),{page}=app;
+ await page.getByRole('button',{name:/^Show 2 more related sessions of /}).click();
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('delegation_relatives')==='["s-child"]');
+ await loaded(page).waitFor();await app.settled();
+ assert.ok(app.calls.some(call=>call.path.endsWith('/delegation')&&call.query.get('relatives')==='s-child'));
+ const copy=await open(t,{url:path(page),api:pendingEvidenceApi,ready:'.delegation-table tbody tr'});
+ await loaded(copy.page).waitFor();
+ assert.ok(copy.calls.some(call=>call.path.endsWith('/delegation')&&call.query.get('relatives')==='s-child'));
+});
+
+test('Timeline pending events stay announced for a collapsed session, after restoration and without taking focus',{skip},async t=>{
+ const status=page=>page.locator('[role=status].delegation-truncation');
+ const caption=page=>page.locator('.lt-recursive-lane[data-session-id="s-nested"] .delegation-truncation');
+ const app=await open(t,{url:`/work/${workID}?explorer=timeline`,api:pendingEvidenceApi,ready:'.lt-recursive-lane[data-session-id="s-nested"] .delegation-truncation'}),{page}=app;
+ await status(page).first().waitFor();const drawn=await status(page).first().textContent();
+ assert.equal(await page.evaluate(()=>document.activeElement===document.body),true,'the status does not take focus');
+ // Collapsing the parent hides the pending lane and its caption; the Timeline still says so.
+ await page.getByRole('button',{name:/^Collapse child sessions of Review implementation/}).click();
+ await caption(page).waitFor({state:'detached'});
+ await page.waitForFunction(text=>[...document.querySelectorAll('[role=status].delegation-truncation')].some(el=>el.textContent!==text),drawn);
+ await app.settled();
+ const copy=await open(t,{url:path(page),api:pendingEvidenceApi,ready:'.lt-session-root'});
+ await status(copy.page).first().waitFor();
+ await copy.page.getByRole('button',{name:/^Expand child sessions of Review implementation/}).waitFor();
+ assert.notEqual(await status(copy.page).first().textContent(),drawn,'the restored status still counts the unshown session');
 });
 
 test('workspace sidebar visibility and width restore without leaving the selected conversation',{skip},async t=>{
@@ -402,6 +451,39 @@ test('Timeline grows with its rows and scrolls in the page instead of a nested v
  assert.ok(await app.page.locator('.delegation-lane-scroll').evaluate(element=>element.scrollHeight<=element.clientHeight+1),'the chart must not create its own vertical scroll viewport');
  await app.page.locator('[data-session-id="many-34"]').scrollIntoViewIfNeeded();
  assert.equal(await app.page.locator('[data-session-id="many-34"]').isVisible(),true);
+});
+
+test('timeline zoom retains sessions and blanks out-of-window usage',{skip},async t=>{
+ const base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()}), start=base.start;
+ const rows=base.rows.map(row=>row.id==='s-root'?row:{...row,end:start+30000,subtree_end:start+30000});
+ const api={
+  'GET /api/work/:id/delegation':()=>({...base,rows,focus:rows}),
+  'GET /api/work/:id/parallel':({query})=>{
+   const data=defaultApi['GET /api/work/:id/parallel']({query});
+   return {...data,lanes:data.lanes.map(lane=>lane.session==='s-root'?{...lane,marks:[{...lane.marks[0],start:start+160000,end:start+180000}]}:Number(query.get('start'))>start+30000?{...lane,messages:[],marks:[],model_inferred:[],agent_events:[]}:lane)};
+  },
+ };
+ const params=new URLSearchParams({explorer:'timeline',delegation_start:String(start+150000),delegation_end:String(start+200000)});
+ const app=await open(t,{url:`/work/${workID}?${params}`,api,viewport:{width:1440,height:900},ready:'.lt-caller-row'}),{page}=app;
+ await page.locator('.delegation-lane-scroll[aria-busy="false"]').waitFor();await app.settled();
+ for(const id of ['s-root','s-child','s-nested'])assert.equal(await page.locator(`.lt-recursive-lane[data-session-id="${id}"]`).isVisible(),true);
+ assert.equal(await page.locator('.lt-recursive-lane[data-session-id="s-child"] .lt-session-empty-root').count(),1);
+ assert.equal(await page.locator('.lt-recursive-lane[data-session-id="s-root"] [data-tool-id="tool-read"]').count(),1);
+ await app.shot('timeline-empty-sessions');
+ await page.getByRole('tab',{name:'Hierarchy & usage',exact:true}).click();await page.locator('.delegation-table tbody tr').first().waitFor();await app.settled();
+ const table=page.locator('.delegation-table');
+ assert.equal(await table.locator('[data-session-id="s-child"]').count(),1);
+ assert.ok((await table.locator('[data-session-id="s-root"] td').nth(1).textContent()).trim());
+ assert.deepEqual(await table.locator('[data-session-id="s-child"] td[title="Outside the selected timeline window"]').allTextContents(),Array(await table.locator('thead th').count()-2).fill(''));
+ await app.shot('hierarchy-empty-sessions');
+ await table.getByRole('button',{name:'Open session Review implementation',exact:true}).click();await page.locator('.delegation-inbox-row[data-session-id="s-child"]').waitFor();await app.settled();
+ const sidebar=page.locator('.delegation-inbox-row[data-session-id="s-child"]');
+ assert.deepEqual(await sidebar.locator('.delegation-inbox-metric').allTextContents(),['','']);
+ await page.getByRole('button',{name:'Open workspace overview',exact:true}).first().click();
+ await page.getByRole('tab',{name:'Timeline',exact:true}).click();await page.getByRole('button',{name:'Reset',exact:true}).click();
+ await page.locator('.lt-recursive-lane[data-session-id="s-child"] [data-tool-id="tool-read"]').first().waitFor({state:'attached'});
+ await page.getByRole('tab',{name:'Hierarchy & usage',exact:true}).click();await app.settled();
+ assert.ok((await page.locator('.delegation-table [data-session-id="s-child"] td').nth(1).textContent()).trim(),'reset restores usage');
 });
 
 test('Timeline tool hover selects the recorded call on each overlapping track',{skip},async t=>{
@@ -1386,7 +1468,10 @@ test('Risky actions table edits are Back/Forward steps that restore the table',{
  await page.goForward();
  await page.waitForFunction(()=>/\/srv\/c/.test(document.querySelector('.safety-table .qt-row')?.textContent??''));
  assert.deepEqual(read().orderBy,[{field:'subject',dir:'desc'}]);
-
+ const questions=page.locator('details').filter({has:page.getByText('Questions for each notice',{exact:true})});
+ await questions.locator('summary').click();
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('disclosures') || '{}')['safety-check:permissions:questions'] === true);
+ await page.reload(); await page.waitForFunction(()=>document.querySelector('.optimize-table-questions')?.open);
 });
 
 

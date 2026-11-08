@@ -1,3 +1,4 @@
+import { agentEventsFreshnessMark, agentEventsStillCountedNote, type AgentEventsCoverage } from "./agent-events-freshness";
 import { optimizeSelectionPlan, type OptimizeSelectionGroup } from "./optimize-model";
 export const safetyRanks = ["danger", "recent", "calls", "evidence"] as const;
 export type SafetyRank = typeof safetyRanks[number];
@@ -135,4 +136,17 @@ export function safetyCartChecks(group: { items: readonly { id: string; title: s
     checks.set(key, check);
   }
   return [...checks.values()];
+}
+
+/** Safeguard checks read agent events; the other checks read commands. */
+export const safetyEventRule = (rule: string) => rule.startsWith("safeguard-");
+
+/**
+ * How Risky actions qualifies its event-based counts while those events wait
+ * for a rebuild (overview.events_freshness): the mark goes on safeguard check
+ * cards only, since command checks do not read events; the sentence says so.
+ */
+export function safetyEventsFreshness(coverage: AgentEventsCoverage | null | undefined): { mark: string; note: string } {
+  const note = agentEventsStillCountedNote(coverage);
+  return note ? { mark: agentEventsFreshnessMark(coverage), note: `Safeguard notices come from agent events. ${note}` } : { mark: "", note: "" };
 }

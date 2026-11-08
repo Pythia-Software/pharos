@@ -3,10 +3,13 @@ package archive
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"path/filepath"
 	"slices"
@@ -36,8 +39,18 @@ import (
 //     conversation is delegated even at agent_depth 0, and a continuation
 //     counts toward its root's agent.
 //   - Hours are local (time.Local), not a fixed America/Denver.
+//   - History a transcript copied from its ancestry (shared occurrence
+//     ownership, execution_occurrences.go) is the ancestor's activity, not
+//     the copy's (version 2). Version 3 records each conversation's
+//     occurrence facts (parallelism_occurrences) so a change elsewhere that
+//     reclassifies its copies re-derives it. Version 4 times and fingerprints
+//     with the shared classification (copied launch calls excluded) and
+//     treats cyclic ancestry as unresolved, not copied.
 const (
-	parallelismActivityVersion = "1"
+	parallelismActivityVersion = "4"
+	// parallelismStoredVersion is what meta records: the stored activity is
+	// derived again when either these rules or the shared resolution's change.
+	parallelismStoredVersion = parallelismActivityVersion + "/" + executionResolverVersion
 	// parallelismDays bounds the derived period: local days through today.
 	parallelismDays        = 400
 	parallelismSettingsKey = "pharos-concurrency-v1"
@@ -145,7 +158,8 @@ func clipSpans(spans parallelismSpans, from, to int64) parallelismSpans {
 
 // readParallelismActivity times one conversation's transcript in q's snapshot.
 // The index supplies created_at; role and kind precede the message text.
-func readParallelismActivity(ctx context.Context, q queryer, id string) (parallelismActivity, error) {
+// occurrences classifies q's snapshot, the conversation included.
+func readParallelismActivity(ctx context.Context, q queryer, occurrences *occurrenceIndex, id string) (parallelismActivity, error) {
 	owned := map[string]bool{}
 	rows, err := q.QueryContext(ctx, `SELECT am.message_id FROM agent_sessions a JOIN agent_session_messages am ON am.agent_session_id=a.id
  WHERE a.conversation_id=? AND a.native_id<>'main'`, id)
@@ -163,6 +177,11 @@ func readParallelismActivity(ctx context.Context, q queryer, id string) (paralle
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return parallelismActivity{}, err
+	}
+	// History copied from an ancestor happened in the ancestor; its copy
+	// timestamps must not extend this transcript's own activity.
+	for message := range occurrences.copiedMessages(id) {
+		owned[message] = true
 	}
 	rows, err = q.QueryContext(ctx, `SELECT m.id,m.role,m.kind,m.created_at FROM messages m INDEXED BY messages_conversation_idx
  WHERE m.conversation_id=? AND m.created_at IS NOT NULL ORDER BY m.created_at`, id)
@@ -197,9 +216,66 @@ func readParallelismActivity(ctx context.Context, q queryer, id string) (paralle
 // ensureParallelismActivity marks every conversation dirty when the timing
 // rules change, so the stored spans are rebuilt (incrementally) under them.
 func (c *Catalog) ensureParallelismActivity() error {
+	// A message's timing fields, and the event ID and locator that decide
+	// which messages elsewhere are its copies. Released catalogs have a
+	// trigger without the identity fields, so it is replaced, not kept.
+	if _, err := c.DB.Exec(`DROP TRIGGER IF EXISTS parallelism_messages_update;
+CREATE TRIGGER parallelism_messages_update AFTER UPDATE OF conversation_id,role,kind,created_at,native_id,evidence_locator ON messages
+WHEN (old.conversation_id,old.role,old.kind,old.created_at,old.native_id,old.evidence_locator) IS NOT (new.conversation_id,new.role,new.kind,new.created_at,new.native_id,new.evidence_locator) BEGIN
+ INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO parallelism_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;`); err != nil {
+		return err
+	}
+	// What each stored derivation classified as its own (dependencyLines);
+	// typed copy declarations, which no message trigger sees; and the
+	// recorded ancestry copies are matched along: a transcript's parent and
+	// namespace, and its native ID that declarations name. A changed
+	// transcript is marked itself, and publication marks each dependent whose
+	// occurrence facts then differ (publishParallelism), its own spans equal
+	// or not; declarations naming the old identity are marked here.
+	if _, err := c.DB.Exec(`CREATE TABLE IF NOT EXISTS parallelism_occurrences (
+  conversation_id TEXT PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  generation INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+DROP TRIGGER IF EXISTS parallelism_conversations_update;
+CREATE TRIGGER parallelism_conversations_update AFTER UPDATE OF parent_id,provider,account,native_id ON conversations
+WHEN (old.parent_id,old.provider,old.account,old.native_id) IS NOT (new.parent_id,new.provider,new.account,new.native_id) BEGIN
+ INSERT INTO parallelism_dirty VALUES(new.id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO parallelism_dirty SELECT DISTINCT conversation_id,hex(randomblob(8)) FROM execution_claims WHERE kind='` + evidenceHistoryCopy + `'
+  AND object IN ('native:'||old.provider||'|'||old.account||'|'||old.native_id,'native:'||new.provider||'|'||new.account||'|'||new.native_id)
+  ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+DROP TRIGGER IF EXISTS parallelism_claims_insert;
+CREATE TRIGGER parallelism_claims_insert AFTER INSERT ON execution_claims WHEN new.kind='` + evidenceHistoryCopy + `' BEGIN
+ INSERT INTO parallelism_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+DROP TRIGGER IF EXISTS parallelism_claims_delete;
+CREATE TRIGGER parallelism_claims_delete AFTER DELETE ON execution_claims WHEN old.kind='` + evidenceHistoryCopy + `' BEGIN
+ INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+DROP TRIGGER IF EXISTS parallelism_claims_update;
+CREATE TRIGGER parallelism_claims_update AFTER UPDATE ON execution_claims WHEN '` + evidenceHistoryCopy + `' IN (old.kind,new.kind) BEGIN
+ INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO parallelism_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;`); err != nil {
+		return err
+	}
+	// The execution source generation each fingerprint was derived at
+	// (parallelismStale); a table from before it reads as derived at none.
+	if has, err := c.hasColumn("parallelism_occurrences", "generation"); err != nil {
+		return err
+	} else if !has {
+		if _, err := c.DB.Exec("ALTER TABLE parallelism_occurrences ADD COLUMN generation INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	if _, err := c.DB.Exec("CREATE INDEX IF NOT EXISTS parallelism_occurrences_generation_idx ON parallelism_occurrences(generation)"); err != nil {
+		return err
+	}
 	var version string
 	err := c.DB.QueryRow("SELECT value FROM meta WHERE key='parallelism_activity_version'").Scan(&version)
-	if err != nil && err != sql.ErrNoRows || version == parallelismActivityVersion {
+	if err != nil && err != sql.ErrNoRows || version == parallelismStoredVersion {
 		return err
 	}
 	tx, err := c.DB.Begin()
@@ -207,9 +283,9 @@ func (c *Catalog) ensureParallelismActivity() error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, statement := range []string{"DELETE FROM parallelism_activity",
+	for _, statement := range []string{"DELETE FROM parallelism_activity", "DELETE FROM parallelism_occurrences",
 		"INSERT INTO parallelism_dirty SELECT id,'' FROM conversations WHERE true ON CONFLICT(conversation_id) DO NOTHING",
-		"INSERT INTO meta(key,value) VALUES('parallelism_activity_version','" + parallelismActivityVersion + "') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+		"INSERT INTO meta(key,value) VALUES('parallelism_activity_version','" + parallelismStoredVersion + "') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
 	} {
 		if _, err := tx.Exec(statement); err != nil {
 			return err
@@ -218,9 +294,38 @@ func (c *Catalog) ensureParallelismActivity() error {
 	return tx.Commit()
 }
 
+// parallelismIndex returns the occurrence index of a read-only snapshot,
+// built at most once and only when asked: the shared one (catalogOccurrences),
+// which holds the resolution's copied launch calls, as Delegation and Quick
+// stats classify the same snapshot.
+type parallelismIndex func() (*occurrenceIndex, error)
+
+// parallelismIndexAt is the parallelismIndex of tx, which must be a read-only
+// transaction (the snapshot is admitted to the shared execution cache).
+func (c *Catalog) parallelismIndexAt(ctx context.Context, tx *sql.Tx) parallelismIndex {
+	var built *occurrenceIndex
+	return func() (*occurrenceIndex, error) {
+		if built != nil {
+			return built, nil
+		}
+		s, err := c.executionSnapshotAt(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		built, err = s.catalogOccurrences(ctx, tx)
+		return built, err
+	}
+}
+
 type parallelismDerived struct {
 	id, revision string
 	activity     *parallelismActivity // nil: outside the period or deleted
+	// occurrences fingerprints what the derivation classified as this
+	// conversation's own (parallelismOccurrences); dependents, for
+	// publication, the same for each stored derivation that may copy from it.
+	occurrences string
+	dependents  map[string]string
+	generation  int64 // the execution source generation derived at (0: untracked)
 }
 
 // parallelismPeriod is the derived period: parallelismDays local days through
@@ -235,10 +340,12 @@ func parallelismPeriod(now time.Time) (start, end time.Time, cutoff string) {
 const parallelismDirtySQL = `SELECT d.conversation_id,d.revision,c.id IS NOT NULL AND (c.ended_at IS NULL OR c.ended_at>=?) needed
  FROM parallelism_dirty d LEFT JOIN conversations c ON c.id=d.conversation_id`
 
-// deriveParallelismBatch derives up to limit dirty conversations' activity.
-// A nil members list reads the whole queue; a non-nil one only those
-// conversations (an empty list reads nothing).
-func deriveParallelismBatch(ctx context.Context, q queryer, cutoff string, limit int, members []string) ([]parallelismDerived, error) {
+// deriveParallelismBatch times up to limit dirty conversations in q's
+// snapshot, which index classifies. A nil members list reads the whole queue;
+// a non-nil one only those conversations (an empty list reads nothing). For
+// publication it also fingerprints, from the same classification, the
+// occurrence facts of each and of the stored derivations that may copy from it.
+func deriveParallelismBatch(ctx context.Context, q queryer, index parallelismIndex, cutoff string, limit int, members []string, publication bool) ([]parallelismDerived, error) {
 	query, args := parallelismDirtySQL+" LIMIT ?", []any{cutoff, limit}
 	if members != nil {
 		query, args = parallelismDirtySQL+" WHERE d.conversation_id IN (SELECT value FROM json_each(?)) ORDER BY d.conversation_id LIMIT ?", []any{cutoff, jsonText(members), limit}
@@ -251,7 +358,11 @@ func deriveParallelismBatch(ctx context.Context, q queryer, cutoff string, limit
 	for _, row := range dirty {
 		derived := parallelismDerived{id: firstString(row["conversation_id"]), revision: asString(row["revision"])}
 		if integer(row["needed"]) != 0 {
-			activity, err := readParallelismActivity(ctx, q, derived.id)
+			occurrences, err := index()
+			if err != nil {
+				return nil, err
+			}
+			activity, err := readParallelismActivity(ctx, q, occurrences, derived.id)
 			if err != nil {
 				return nil, err
 			}
@@ -259,18 +370,312 @@ func deriveParallelismBatch(ctx context.Context, q queryer, cutoff string, limit
 		}
 		result = append(result, derived)
 	}
+	if !publication {
+		return result, nil
+	}
+	generation, _, err := executionSourceGeneration(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	for i := range result {
+		result[i].generation = generation
+	}
+	ids, dependents := []string{}, map[string][]string{}
+	for _, derived := range result {
+		if derived.activity == nil {
+			continue
+		}
+		ids = append(ids, derived.id)
+		if dependents[derived.id], err = parallelismDependents(ctx, q, derived.id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, dependents[derived.id]...)
+	}
+	if len(ids) == 0 {
+		return result, nil
+	}
+	occurrences, err := index()
+	if err != nil {
+		return nil, err
+	}
+	fingerprints := parallelismOccurrences(occurrences, ids)
+	for i := range result {
+		if result[i].activity == nil {
+			continue
+		}
+		result[i].occurrences = fingerprints[result[i].id]
+		result[i].dependents = map[string]string{}
+		for _, dependent := range dependents[result[i].id] {
+			result[i].dependents[dependent] = fingerprints[dependent]
+		}
+	}
 	return result, nil
+}
+
+// parallelismOccurrences fingerprints each conversation's occurrence facts
+// in the classification its activity is timed with: which of its
+// observations are copies or duplicates (copied launch calls included) and
+// its coverage (dependencyLines), which is what its stored activity excludes
+// as copied history.
+func parallelismOccurrences(occurrences *occurrenceIndex, ids []string) map[string]string {
+	out := map[string]string{}
+	for _, id := range uniqueStrings(ids) {
+		sum := sha256.Sum256([]byte(strings.Join(occurrences.dependencyLines(id), "\n")))
+		out[id] = hex.EncodeToString(sum[:12])
+	}
+	return out
+}
+
+// parallelismDependents lists the stored derivations whose copied history
+// can match id's messages (as dirtyParallelismDependents marks them): its
+// descendants through recorded ancestry and transcripts whose typed evidence
+// declares id as their copied history's source. One without a stored
+// derivation has nothing stale.
+func parallelismDependents(ctx context.Context, q queryer, id string) ([]string, error) {
+	rows, err := queryMapsContext(ctx, q, `WITH RECURSIVE below(id,depth) AS (
+ SELECT id,1 FROM conversations WHERE parent_id=?1 AND id<>?1
+ UNION SELECT c.id,b.depth+1 FROM conversations c JOIN below b ON c.parent_id=b.id WHERE c.id<>?1 AND b.depth<32)
+SELECT DISTINCT b.id FROM below b JOIN parallelism_activity p ON p.conversation_id=b.id`, id)
+	if err != nil {
+		return nil, err
+	}
+	if typed, err := executionEvidenceTablesPresent(ctx, q); err != nil {
+		return nil, err
+	} else if typed {
+		declared, err := queryMapsContext(ctx, q, `SELECT DISTINCT e.conversation_id id
+ FROM conversations s JOIN execution_claims e ON e.kind=?2 AND e.object='native:'||s.provider||'|'||s.account||'|'||s.native_id
+ JOIN parallelism_activity p ON p.conversation_id=e.conversation_id
+ WHERE s.id=?1 AND e.conversation_id<>?1`, id, evidenceHistoryCopy)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, declared...)
+	}
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, firstString(row["id"]))
+	}
+	return uniqueStrings(out), nil
+}
+
+// parallelismExecutionKey records the execution source generation whose
+// classification the stored derivations were last swept against.
+const parallelismExecutionKey = "parallelism_execution_generation"
+
+// parallelismStale lists the stored derivations whose occurrence facts in
+// q's snapshot (index) differ from those they were built with. The
+// classification follows the resolution, whose inputs (sessions and their
+// memberships, launch calls, identity claims, ancestry) the execution source
+// generation tracks: no list of parallelism triggers could name them all. So
+// whenever that generation has moved since the last sweep, stored
+// fingerprints are compared with the shared index of the new one: those the
+// changes since the sweep can reach (parallelismAffected), and every one when
+// that is unprovable. moved reports a sweep was due and generation which it
+// is (unmoved, or untracked: nothing).
+func (c *Catalog) parallelismStale(ctx context.Context, q queryer, index parallelismIndex) (stale []string, generation int64, moved bool, err error) {
+	generation, tracked, err := executionSourceGeneration(ctx, q)
+	if err != nil || !tracked {
+		return nil, 0, false, err
+	}
+	meta, err := queryMapsContext(ctx, q, "SELECT CAST(value AS INTEGER) swept FROM meta WHERE key=?", parallelismExecutionKey)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if len(meta) > 0 && integer(meta[0]["swept"]) >= generation {
+		return nil, generation, false, nil
+	}
+	// Nothing stored, nothing to compare: the index is not built. Otherwise it
+	// is, even when nothing below turns out affected, since the next sweep
+	// narrows from this snapshot's built claims.
+	if some, err := queryMapsContext(ctx, q, "SELECT 1 FROM parallelism_occurrences LIMIT 1"); err != nil || len(some) == 0 {
+		return nil, generation, err == nil, err
+	}
+	occurrences, err := index()
+	if err != nil {
+		return nil, 0, false, err
+	}
+	var affected []string
+	full := len(meta) == 0
+	if !full {
+		var ok bool
+		if affected, ok, err = c.parallelismAffected(ctx, q, integer(meta[0]["swept"])); err != nil {
+			return nil, 0, false, err
+		}
+		full = !ok
+	}
+	query, args := "SELECT conversation_id,fingerprint FROM parallelism_occurrences", []any{}
+	if !full {
+		// Derivations published since the sweep were built at a generation
+		// the comparison above does not start from: compare them too.
+		query += " WHERE generation>? OR conversation_id IN (SELECT value FROM json_each(?))"
+		args = append(args, integer(meta[0]["swept"]), jsonText(affected))
+	}
+	rows, err := queryMapsContext(ctx, q, query, args...)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if parallelismSweepHook != nil {
+		parallelismSweepHook(full, len(rows))
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, firstString(row["conversation_id"]))
+	}
+	current := parallelismOccurrences(occurrences, ids)
+	for _, row := range rows {
+		if id := firstString(row["conversation_id"]); current[id] != firstString(row["fingerprint"]) {
+			stale = append(stale, id)
+		}
+	}
+	slices.Sort(stale)
+	return stale, generation, true, nil
+}
+
+// parallelismSweepHook, when set by a test, reports each sweep's comparison:
+// whether it was over every stored derivation, and how many it compared.
+var parallelismSweepHook func(full bool, compared int)
+
+// parallelismAffected lists the conversations whose occurrence facts can
+// differ between the swept generation and q's: those whose occurrence claims
+// the changes since then can reach, by the scope an incremental catalog
+// occurrence build reloads (occurrenceScope over executionChangedSince), and
+// those whose copied launch calls (resolution, not claims) differ or name an
+// original launch in a changed transcript, whose requests the copies' request
+// claims name. ok is false when that cannot be shown: the swept generation's
+// snapshot, its rows, resolution or built claims are no longer cached.
+func (c *Catalog) parallelismAffected(ctx context.Context, q queryer, swept int64) (affected []string, ok bool, err error) {
+	before := c.cachedExecutionSnapshot(swept)
+	if before == nil || before.rows == nil || before.resolution == nil {
+		return nil, false, nil
+	}
+	before.occurrenceMu.Lock()
+	claims := before.occurrenceClaims
+	before.occurrenceMu.Unlock()
+	if claims == nil {
+		return nil, false, nil
+	}
+	now, err := c.executionSnapshotAt(ctx, q)
+	if err != nil || now.rows == nil || now.resolution == nil {
+		return nil, false, err
+	}
+	changed, err := executionChangedSince(ctx, q, swept)
+	if err != nil {
+		return nil, false, err
+	}
+	scope, err := now.occurrenceScope(ctx, q, &occurrenceBase{claims: claims, changed: changed, rows: before.rows})
+	if err != nil {
+		return nil, false, err
+	}
+	out := map[string]bool{}
+	for _, cid := range scope {
+		out[cid] = true
+	}
+	inChanged := map[string]bool{}
+	for _, cid := range changed {
+		inChanged[cid] = true
+	}
+	calls := func(r *executionResolution) map[string][]string {
+		lines := map[string][]string{}
+		for _, call := range r.copiedLaunchCalls(nil) {
+			cid := occurrenceClaimConversation(call)
+			lines[cid] = append(lines[cid], strings.Join([]string{call.Subject.String(), call.Object.String(), call.Context.String(), call.Rule}, "\x1f"))
+			if inChanged[call.Context.ID] {
+				out[cid] = true
+			}
+		}
+		return lines
+	}
+	was, is := calls(before.resolution), calls(now.resolution)
+	for _, lines := range []map[string][]string{was, is} {
+		for cid := range lines {
+			if !slices.Equal(was[cid], is[cid]) {
+				out[cid] = true
+			}
+		}
+	}
+	return slices.Sorted(maps.Keys(out)), true, nil
+}
+
+// cachedExecutionSnapshot returns the shared cache's snapshot of exactly
+// generation, or nil when it is not kept. It reads the cache only.
+func (c *Catalog) cachedExecutionSnapshot(generation int64) *executionSnapshot {
+	cache := &c.execution
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.current != nil && cache.current.generation == generation {
+		return cache.current
+	}
+	if s := cache.before(generation); s != nil && s.generation == generation {
+		return s
+	}
+	return nil
+}
+
+// sweepParallelism marks the stale stored derivations (parallelismStale)
+// dirty and records the generation swept, never moving it backwards.
+func (c *Catalog) sweepParallelism(ctx context.Context) error {
+	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	stale, generation, moved, err := c.parallelismStale(ctx, tx, c.parallelismIndexAt(ctx, tx))
+	_ = tx.Rollback()
+	if err != nil || !moved {
+		return err
+	}
+	return c.writeTransaction(ctx, "parallelism-activity", func(tx *sql.Tx) error {
+		for _, id := range stale {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO parallelism_dirty VALUES(?,hex(randomblob(8))) ON CONFLICT(conversation_id) DO NOTHING", id); err != nil {
+				return err
+			}
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value
+ WHERE CAST(meta.value AS INTEGER)<CAST(excluded.value AS INTEGER)`, parallelismExecutionKey, fmt.Sprint(generation))
+		return err
+	})
 }
 
 // Publishing an old derivation is harmless: its conversation stays dirty
 // unless the token it read is still current.
 func (c *Catalog) publishParallelism(ctx context.Context, batch []parallelismDerived) error {
 	return c.writeTransaction(ctx, "parallelism-activity", func(tx *sql.Tx) error {
+		// A derivation from before the last sweep was never compared by it
+		// (parallelismStale starts from the sweep): it stays dirty instead.
+		var swept int64
+		if err := tx.QueryRowContext(ctx, "SELECT CAST(value AS INTEGER) FROM meta WHERE key=?", parallelismExecutionKey).Scan(&swept); err != nil && err != sql.ErrNoRows {
+			return err
+		}
 		for _, derived := range batch {
 			var err error
+			if derived.generation < swept {
+				continue
+			}
+			// A transcript's copied history is classified against its ancestors
+			// and declared sources, so a change here can reclassify what a
+			// dependent copied, whether or not this transcript's own spans
+			// moved: a dependent re-derives when its occurrence facts, read in
+			// the derivation's snapshot, differ from those its stored activity
+			// was built with. Gone or out of period: every dependent.
 			if derived.activity == nil {
-				_, err = tx.ExecContext(ctx, "DELETE FROM parallelism_activity WHERE conversation_id=?", derived.id)
-			} else {
+				if err = dirtyParallelismDependents(ctx, tx, derived.id); err != nil {
+					return err
+				}
+			}
+			for _, dependent := range slices.Sorted(maps.Keys(derived.dependents)) {
+				var stored string
+				_ = tx.QueryRowContext(ctx, "SELECT fingerprint FROM parallelism_occurrences WHERE conversation_id=?", dependent).Scan(&stored)
+				if stored == derived.dependents[dependent] {
+					continue
+				}
+				if _, err = tx.ExecContext(ctx, "INSERT INTO parallelism_dirty VALUES(?,hex(randomblob(8))) ON CONFLICT(conversation_id) DO NOTHING", dependent); err != nil {
+					return err
+				}
+			}
+			if derived.activity == nil {
+				if _, err = tx.ExecContext(ctx, "DELETE FROM parallelism_occurrences WHERE conversation_id=?", derived.id); err == nil {
+					_, err = tx.ExecContext(ctx, "DELETE FROM parallelism_activity WHERE conversation_id=?", derived.id)
+				}
+			} else if _, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO parallelism_occurrences(conversation_id,fingerprint,generation) VALUES(?,?,?)", derived.id, derived.occurrences, derived.generation); err == nil {
 				_, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO parallelism_activity(conversation_id,turns,model_spans,unexplained) VALUES(?,?,?,?)",
 					derived.id, encodeSpans(derived.activity.Turns), encodeSpans(derived.activity.ModelSpans), derived.activity.Unexplained)
 			}
@@ -285,6 +690,28 @@ func (c *Catalog) publishParallelism(ctx context.Context, batch []parallelismDer
 	})
 }
 
+// dirtyParallelismDependents marks the transcripts whose copied history can
+// match id's messages: its descendants through recorded ancestry, which
+// legacy matching walks, and transcripts whose typed evidence declares id as
+// the source of copied history.
+func dirtyParallelismDependents(ctx context.Context, tx *sql.Tx, id string) error {
+	if _, err := tx.ExecContext(ctx, `WITH RECURSIVE below(id,depth) AS (
+ SELECT id,1 FROM conversations WHERE parent_id=?1 AND id<>?1
+ UNION SELECT c.id,b.depth+1 FROM conversations c JOIN below b ON c.parent_id=b.id WHERE c.id<>?1 AND b.depth<32)
+INSERT INTO parallelism_dirty SELECT DISTINCT id,hex(randomblob(8)) FROM below WHERE true
+ ON CONFLICT(conversation_id) DO NOTHING`, id); err != nil {
+		return err
+	}
+	if typed, err := executionEvidenceTablesPresent(ctx, tx); err != nil || !typed {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO parallelism_dirty SELECT DISTINCT e.conversation_id,hex(randomblob(8))
+ FROM conversations s JOIN execution_claims e ON e.kind=?2 AND e.object='native:'||s.provider||'|'||s.account||'|'||s.native_id
+ WHERE s.id=?1 AND e.conversation_id<>?1
+ ON CONFLICT(conversation_id) DO NOTHING`, id, evidenceHistoryCopy)
+	return err
+}
+
 // refreshParallelism stores up to limit dirty conversations' activity, in
 // short read snapshots and write transactions, and reports how many. Unless
 // asked to wait, it leaves the work to a caller already doing it.
@@ -295,6 +722,9 @@ func (c *Catalog) refreshParallelism(ctx context.Context, limit int, wait bool) 
 		return 0, nil
 	}
 	defer c.parallelismMu.Unlock()
+	if err := c.sweepParallelism(ctx); err != nil {
+		return 0, err
+	}
 	_, _, cutoff := parallelismPeriod(c.clock())
 	done := 0
 	for done < limit {
@@ -309,7 +739,7 @@ func (c *Catalog) refreshParallelism(ctx context.Context, limit int, wait bool) 
 		}
 		completed := maintenanceBatch(ctx, tx, "Measuring parallel work", "conversation", pending,
 			"SELECT count(*) FROM parallelism_dirty")
-		batch, err := deriveParallelismBatch(ctx, tx, cutoff, min(limit-done, parallelismBatch), nil)
+		batch, err := deriveParallelismBatch(ctx, tx, c.parallelismIndexAt(ctx, tx), cutoff, min(limit-done, parallelismBatch), nil, true)
 		_ = tx.Rollback()
 		if err != nil || len(batch) == 0 {
 			return done, err
@@ -333,7 +763,8 @@ func (c *Catalog) parallelismActivities(ctx context.Context, cutoff string) (map
 		return nil, err
 	}
 	defer tx.Rollback()
-	dirty, err := deriveParallelismBatch(ctx, tx, cutoff, -1, nil)
+	index := c.parallelismIndexAt(ctx, tx)
+	dirty, err := deriveParallelismBatch(ctx, tx, index, cutoff, -1, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -344,6 +775,26 @@ func (c *Catalog) parallelismActivities(ctx context.Context, cutoff string) (map
 		if derived.activity != nil {
 			result[derived.id] = *derived.activity
 		}
+	}
+	// Stored derivations the classification has since changed under are
+	// derived fresh too, until maintenance stores them (a read writes nothing).
+	stale, _, _, err := c.parallelismStale(ctx, tx, index)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range stale {
+		if skip[id] {
+			continue
+		}
+		occurrences, err := index()
+		if err != nil {
+			return nil, err
+		}
+		activity, err := readParallelismActivity(ctx, tx, occurrences, id)
+		if err != nil {
+			return nil, err
+		}
+		skip[id], result[id] = true, activity
 	}
 	rows, err := tx.QueryContext(ctx, "SELECT conversation_id,turns,model_spans,unexplained FROM parallelism_activity")
 	if err != nil {
@@ -376,7 +827,11 @@ func (c *Catalog) parallelismActivities(ctx context.Context, cutoff string) (map
 	}
 	// Stored spans are disposable; derive any damaged ones again.
 	for _, id := range unreadable {
-		if result[id], err = readParallelismActivity(ctx, tx, id); err != nil {
+		occurrences, err := index()
+		if err != nil {
+			return nil, err
+		}
+		if result[id], err = readParallelismActivity(ctx, tx, occurrences, id); err != nil {
 			return nil, err
 		}
 	}
@@ -434,6 +889,12 @@ type concurrencyThread struct {
 	Turns              parallelismSpans `json:"turns"`
 	ModelSpans         parallelismSpans `json:"model_spans"`
 	RootConversationID string           `json:"root_conversation_id,omitempty"`
+	// RootQuality is how RootConversationID was established (observed,
+	// inferred or unverified; executionAncestry.RootQuality).
+	RootQuality string `json:"root_quality,omitempty"`
+	// OccurrenceCoverage is "partial" when the spans may include copied
+	// history (occurrenceIndex.Partial).
+	OccurrenceCoverage string `json:"occurrence_coverage,omitempty"`
 	location           string
 	rootProvider       string
 	rootModel          string
@@ -447,11 +908,15 @@ type concurrencyData struct {
 	Days        []string            `json:"days"`
 	Threads     []concurrencyThread `json:"threads"`
 	Coverage    struct {
-		Conversations   int    `json:"conversations"`
-		MirrorsRemoved  int    `json:"mirrors_removed"`
-		UnexplainedWait int64  `json:"unexplained_waits_excluded"`
-		Timing          string `json:"timing"`
-		Catalog         string `json:"catalog"`
+		Conversations   int   `json:"conversations"`
+		MirrorsRemoved  int   `json:"mirrors_removed"`
+		UnexplainedWait int64 `json:"unexplained_waits_excluded"`
+		// Threads whose spans may include history copied from another
+		// transcript, when the evidence cannot account for it.
+		OccurrencePartial int    `json:"occurrence_partial_threads"`
+		Occurrences       string `json:"occurrences"`
+		Timing            string `json:"timing"`
+		Catalog           string `json:"catalog"`
 	} `json:"coverage"`
 	start, end int64
 	// canonical names the conversation each mirror alias stands for
@@ -517,7 +982,7 @@ func (c *Catalog) parallelismThreads(ctx context.Context, now time.Time, activit
 		mirrors[id], _ = row["mirrored_workspace_ids"].([]string)
 		kept = append(kept, map[string]any{"workspace_id": id})
 	}
-	lineage, err := c.usageConversationRootsContext(ctx, kept)
+	lineage, occurrences, err := c.usageConversationRootsAndOccurrences(ctx, kept)
 	if err != nil {
 		return nil, err
 	}
@@ -548,7 +1013,7 @@ func (c *Catalog) parallelismThreads(ctx context.Context, now time.Time, activit
 		if root := lineage.roots[id]; root != nil {
 			rootWorkspace = firstString(root["workspace_id"])
 			if rootID := firstString(root["id"]); rootID != id {
-				thread.RootConversationID = rootID
+				thread.RootConversationID, thread.RootQuality = rootID, lineage.rootQuality[id]
 				thread.rootProvider, thread.rootModel = firstString(root["provider"]), defaultString(firstString(root["model"]), "Unknown model")
 			}
 			if lineage.runs[id] != "" {
@@ -570,6 +1035,10 @@ func (c *Catalog) parallelismThreads(ctx context.Context, now time.Time, activit
 			thread.WorkspaceID, thread.WorkspaceName = filepath.Clean(thread.location), filepath.Base(thread.location)
 		}
 		data.Coverage.UnexplainedWait += activity.Unexplained
+		if occurrences.Partial(id) != "" {
+			thread.OccurrenceCoverage = "partial"
+			data.Coverage.OccurrencePartial++
+		}
 		data.Threads = append(data.Threads, thread)
 	}
 	origins, err := c.conversationOrigins(ctx)
@@ -584,6 +1053,10 @@ func (c *Catalog) parallelismThreads(ctx context.Context, now time.Time, activit
 		t.ExecutionMachineID = firstString(o["execution_machine_id"])
 	}
 	data.Coverage.Conversations = len(data.Threads)
+	data.Coverage.Occurrences = "complete"
+	if data.Coverage.OccurrencePartial > 0 {
+		data.Coverage.Occurrences = "partial"
+	}
 	return data, nil
 }
 

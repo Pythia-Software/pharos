@@ -2,24 +2,24 @@
   "version": 1,
   "dependencies": {
     "@pythia-software/query-table-core": {
-      "version": "1.0.1",
+      "version": "1.0.3",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.1: the published npm files are identical to 1.0.0 apart from package.json versions; the release only changes the Go SQLite executor. 1.0.0 review: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.3 against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes. Query Table 1.0.3 also adds an optional Go population counter, which Pharos does not use. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-react": {
-      "version": "1.0.1",
+      "version": "1.0.3",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.1: the published npm files are identical to 1.0.0 apart from package.json versions; the release only changes the Go SQLite executor. 1.0.0 review: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.3 against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes. Query Table 1.0.3 also adds an optional Go population counter, which Pharos does not use. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-ui": {
-      "version": "1.0.1",
+      "version": "1.0.3",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.1: the published npm files are identical to 1.0.0 apart from package.json versions; the release only changes the Go SQLite executor. 1.0.0 review: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.3 against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes. Query Table 1.0.3 also adds an optional Go population counter, which Pharos does not use. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-codegen": {
-      "version": "1.0.1",
+      "version": "1.0.3",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.1: the published npm files are identical to 1.0.0 apart from package.json versions; the release only changes the Go SQLite executor. 1.0.0 review: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.3 against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes. Query Table 1.0.3 also adds an optional Go population counter, which Pharos does not use. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     }
   },
   "bindings": [
@@ -62,6 +62,10 @@
     {
       "file": "web/src/delegation.tsx",
       "field": "delegation_page"
+    },
+    {
+      "file": "web/src/delegation.tsx",
+      "field": "delegation_relatives"
     },
     {
       "file": "web/src/delegation.tsx",
@@ -5155,15 +5159,6 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "013ab4580c16d789:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "button",
-      "control": "onClick={() => openExternal(n.external_parent!)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
       "key": "2562bc8689ddb3ca:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5202,6 +5197,15 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
+      "key": "5eba9ec1822f23d8:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "onClick={() => openExternal(n.external_parent!, n.parent_id)}",
+      "contract": "delegation",
+      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+    },
+    {
       "key": "7387f1cf2fb13437:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5218,6 +5222,15 @@
       "control": "onClick={showHierarchy}",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+    },
+    {
+      "key": "902f5581e7baef79:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "onClick={() => openSegment(shownSession, position.next!)}",
+      "contract": "delegation",
+      "reason": "Segment navigation opens the segment's canonical conversation route (in its own workspace) with delegation_session naming the same execution."
     },
     {
       "key": "9525c695db1669f6:0",
@@ -5279,6 +5292,15 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
+      "key": "ef8df6715bf8aa5d:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "onClick={() => openSegment(shownSession, position.previous!)}",
+      "contract": "delegation",
+      "reason": "Segment navigation opens the segment's canonical conversation route (in its own workspace) with delegation_session naming the same execution."
+    },
+    {
       "key": "f3d7994222b73250:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5316,6 +5338,15 @@
       "control": "onClick={event => { if (!(event.target as HTMLElement).closest(\"button\")) openNode(n); }}",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+    },
+    {
+      "key": "22244af318ff404e:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "ParallelActivity",
+      "tag": "button",
+      "control": "onClick={()=>openNode(owner)}",
+      "contract": "delegation",
+      "reason": "Session navigation writes the canonical conversation route and delegation_session through the shared explorer openNode handler; the current session has no navigation control."
     },
     {
       "key": "3531eb64a70fc13d:0",
@@ -5360,6 +5391,7 @@
       "owner": "ParallelActivity",
       "tag": "button",
       "control": "aria-label={`${collapsed.has(n.id)?\"Expand\":\"Collapse\"} child sessions of ${n.label}`} onClick={()=>toggle(n)}",
+      "disclosure": true,
       "contract": "delegation",
       "reason": "Session hierarchy folding uses the existing delegation_collapsed route owner. Recursive event-tree disclosures use the shared ViewDisclosure URL owner independently of session nesting."
     },
@@ -5412,6 +5444,16 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
+    },
+    {
+      "key": "ff63ef509697c36b:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "RelativesButton",
+      "tag": "button",
+      "control": "data-view-field=\"delegation_relatives\" aria-label={`Show ${node.children_omitted} more related session${node.children_omitted === 1 ? \"\" : \"s\"} of ${node.label}`} onClick={() => show(node)}",
+      "binding": "delegation_relatives",
+      "contract": "view.delegation_relatives",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "188d8c8a1103f46e:0",
@@ -7503,6 +7545,17 @@
       "control": "onClick={() => void refresh()}",
       "contract": "editing",
       "reason": "Requests an explicit background refresh; does not change view state."
+    },
+    {
+      "key": "7b453e50dd2c9c68:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyTableContext",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`safety-check:${focus.rule}:questions`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "0f43a5c72d8a7da5:0",

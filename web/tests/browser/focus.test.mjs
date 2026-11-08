@@ -1939,8 +1939,9 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
 // this checks the composer takes focus once the chat opened from History arrives.
 test("the History drawer takes focus, returns it when dismissed, and its chat focuses the composer", { skip }, async t => {
   const selection = { provider: 'Codex', model: 'test-model', effort: 'Low' };
-  const sessions = [{ id: 'focus-chat', createdAt: Date.now(), updatedAt: Date.now(), selection, draft: '', conversation: [{ id: 'focus-chat-turn', prompt: 'A prior question', cli: 'Codex', model: 'test-model', modelLabel: 'Test Model', effort: 'Low', status: 'multiple', message: '', elapsedMs: 1000, reply: 'A saved reply', cards: [] }] }];
-  const { page, settled } = await open(t, { ready: '#pharos-ask .pharos-ai:not([hidden])', api: {
+  const prompts = ['A prior question', 'What kinds of errors in access control or permissions are my agents consistently facing?', 'An older question 2', 'An older question 3'];
+  const sessions = [0, 3, 15, 45].map((days, index) => ({ id: index ? 'older-chat-'+index : 'focus-chat', createdAt: Date.now()-days*86400000, updatedAt: Date.now()-days*86400000, selection, draft: '', conversation: [{ id: 'focus-chat-turn-'+index, prompt: prompts[index], cli: 'Codex', model: 'test-model', modelLabel: 'Test Model', effort: 'Low', status: 'multiple', message: '', elapsedMs: 1000, reply: 'A saved reply', cards: [] }] }));
+  const { page, settled, shot } = await open(t, { ready: '#pharos-ask .pharos-ai:not([hidden])', api: {
     'GET /api/ask/status': { settings: { enabled: true, showInvitation: true, selection }, providers: [{ id: 'Codex' }] },
     'GET /api/ask/models': { id: 'Codex', models: [{ id: 'test-model', label: 'Test Model', efforts: ['Default', 'Low'], default: true }] },
     'GET /api/ask/sessions': { sessions },
@@ -1951,6 +1952,19 @@ test("the History drawer takes focus, returns it when dismissed, and its chat fo
   const question = page.getByRole('textbox', { name: 'Ask a question', exact: true });
   const focused = selector => page.waitForFunction(selector => document.activeElement?.matches(selector), selector);
   await press(trigger);
+  const belowHeader = () => page.waitForFunction(() => {
+    const header = document.querySelector('body>header').getBoundingClientRect();
+    const drawer = document.querySelector('#pharos-chat-history').getBoundingClientRect();
+    return Math.abs(drawer.top - header.bottom) <= 1 && drawer.bottom <= innerHeight + 1;
+  });
+  await belowHeader();
+  const originalSize = page.viewportSize();
+  await page.setViewportSize({width: 750, height: originalSize.height});
+  await belowHeader();
+  await page.setViewportSize(originalSize);
+  await belowHeader();
+  await settled();
+  await shot('chat-history');
   await holdsFocus(page, drawer, trigger);
   // The drawer is modal: a click beside it dismisses it.
   await press(trigger);await focused('.pharos-history-close');
@@ -2929,6 +2943,18 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  const dialog=page.locator('#dataReadinessDialog');
  const check=async (selector)=>{
   const button=page.locator(selector).first();await button.waitFor();
+  if(selector.includes('query:')){
+   // The readiness action precedes request timing in the rendered run bar,
+   // including the narrow layout where the controls may wrap onto a new row.
+   const placement=await button.evaluate(element=>{
+    const activity=element.closest('.data-source-query')?.querySelector('button[aria-label="Request activity"]');
+    if(!activity)return null;
+    const a=element.getBoundingClientRect(),b=activity.getBoundingClientRect();
+    return {before:a.top<b.top || (a.top===b.top && a.left<b.left), sameRow:a.top===b.top};
+   });
+   assert(placement?.before,'readiness appears before request timing');
+   if(width===1440)assert(placement.sameRow,'desktop run actions share a row');
+  }
   await button.focus();assert(await button.evaluate(element=>element===document.activeElement));
   await button.click();await dialog.waitFor();assert(await dialog.evaluate(element=>element.contains(document.activeElement)));
   await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
@@ -2938,7 +2964,7 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  await check('[data-readiness-result="query:library"]');
  for(const [url,identity] of [
   ['/findings?view=table','query:findings'],
-  ['/findings?optimize_area=safety&view=table','query:safety'],
+  ['/findings?optimize_area=safety&view=table&query_layout='+encodeURIComponent(JSON.stringify({safety:true})),'query:safety'],
   ['/findings?optimize_area=fixes&view=table','query:fixes'],
   ['/analyze?analyze_topic=habits','chart:habits-calendar'],
   ['/analyze?analyze_topic=thinking-overview','chart:thinking-waits'],
@@ -2949,6 +2975,15 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  ]){
   await page.evaluate(url=>window.pharosNavigate(url),url);
   await check(`[data-readiness-result="${identity}"]`);
+  if(identity==='query:safety'){
+   const table=page.locator('.safety-table .data-source-query');
+   await table.getByTitle('Configure auto-update').click();
+   await page.locator('.qt-auto-refresh-popover').getByRole('button',{name:'Start',exact:true}).click();
+   await table.getByTitle('View or clear auto-update').waitFor();
+   await check(`[data-readiness-result="${identity}"]`);
+   await table.getByTitle('View or clear auto-update').click();
+   await page.locator('.qt-auto-refresh-popover').getByRole('button',{name:'Clear',exact:true}).click();
+  }
  }
  // Follow a bespoke chart's prerequisite through the real Settings disclosure.
  // The domain/task reduction itself is covered by the readiness unit tests.

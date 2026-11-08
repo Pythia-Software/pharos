@@ -17,8 +17,10 @@ import (
 // backgrounded when a subshell launches it, as in "(server &)". v10 reads the
 // script of `zsh -lc "..."`, and classifies file-writing cat, runners (npx,
 // "pnpm exec", "uv run") by what they run, formatters, and checks. v11
-// retains explicit request speed from accounting envelopes.
-const toolLedgerVersion = "tools-v12-inference-speed-policy"
+// retains explicit request speed from accounting envelopes. v13 records the
+// messages that carried each request's usage (model_requests.source_message_id,
+// final_message_id), which occurrence ownership classifies requests by.
+const toolLedgerVersion = "tools-v13-request-sources"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the
@@ -27,10 +29,14 @@ const toolLedgerVersion = "tools-v12-inference-speed-policy"
 type modelRequest struct {
 	Key, NativeID, Stream, Model, Effort, Speed, RequestedAt string
 	FirstIndex, Sequence                                     int
-	Counts                                                   tokenCounts
-	ContextGrowth                                            *int64
-	CompactedBefore                                          bool
-	ToolCalls                                                int
+	// SourceNativeID and FinalNativeID are the stored messages of the
+	// request's first and last usage events. Joined anonymous events keep
+	// the largest output's counts, which may be neither's.
+	SourceNativeID, FinalNativeID string
+	Counts                        tokenCounts
+	ContextGrowth                 *int64
+	CompactedBefore               bool
+	ToolCalls                     int
 
 	aliases                  []string // keys of events merged into this request
 	ServiceTier, SpeedSource string
@@ -411,7 +417,8 @@ func ledgerRequests(messages []MessageRecord, streams []string, conversationMode
 		if !known {
 			speed, _ = messageInference(messages[finalIndex])
 		}
-		requests = append(requests, modelRequest{Key: key, NativeID: nativeID, Stream: streams[firstIndex], Model: defaultString(nilIfEmpty(model), conversationModel), Effort: messages[finalIndex].Effort, Speed: speed.Speed, ServiceTier: speed.ServiceTier, SpeedSource: speed.Source, inference: speed, RequestedAt: messages[firstIndex].CreatedAt, FirstIndex: firstIndex, Counts: counts})
+		requests = append(requests, modelRequest{Key: key, NativeID: nativeID, Stream: streams[firstIndex], Model: defaultString(nilIfEmpty(model), conversationModel), Effort: messages[finalIndex].Effort, Speed: speed.Speed, ServiceTier: speed.ServiceTier, SpeedSource: speed.Source, inference: speed, RequestedAt: messages[firstIndex].CreatedAt, FirstIndex: firstIndex, Counts: counts,
+			SourceNativeID: messages[firstIndex].NativeID, FinalNativeID: messages[finalIndex].NativeID})
 	}
 	for key, finalIndex := range final {
 		add(key, nativeIDs[key], first[key], finalIndex)
@@ -469,6 +476,8 @@ func mergeAnonymousRequests(messages []MessageRecord, streams []string, requests
 			if request.Counts["output_tokens"] > target.Counts["output_tokens"] {
 				target.Counts = request.Counts
 			}
+			// The merged request's events run to the last one joined.
+			target.FinalNativeID = request.FinalNativeID
 			aliases[request.Key] = target.Key
 			continue
 		}
