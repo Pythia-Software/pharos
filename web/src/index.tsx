@@ -1,3 +1,6 @@
+import "./reader-key-filter";
+import scatterDocument from "../../schemas/scatter.schema.json";
+import { scatterAnalysisCatalog } from "./scatter-analysis-catalog";
 import { ribbonQueryContext } from "./dashboard-query-adapters";
 import { optimizeTableTitle, optimizeTableSchemas, type OptimizeTableSchemas } from "./optimize-table-title";
 import messagesDocument from "../../schemas/messages.schema.json";
@@ -29,6 +32,7 @@ import "./uifeedback/pharos-client";
 import { dataSources } from "./data-taxonomy-model";
 import { DataTaxonomyModal, openDataTaxonomy, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
+import { installReaderNavigator } from "./reader-navigator";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { ConversationCard, ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary, openableProps, type ResultTarget } from "./conversation-results";
 import { TextSearchEditor } from "./text-search-editor";
@@ -153,7 +157,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "messages" | "people_message_labels" | "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages" | "agent_event_rates" | "session_shape";
+type Dataset = "scatter" | "messages" | "people_message_labels" | "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages" | "agent_event_rates" | "session_shape";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -206,6 +210,7 @@ declare global {
 }
 
 const schemas: Record<Dataset, FieldSchema<Row>> = {
+  scatter: loadSchema<Row>(scatterDocument),
   people_message_labels:loadSchema<Row>(peopleMessageLabelsDocument),
   message_labels:loadSchema<Row>(messageLabelsDocument),
   compactions: loadSchema<Row>(compactionsDocument),
@@ -389,6 +394,7 @@ const filterPresentations = Object.fromEntries(Object.entries(schemas).map(([dat
 const failedMessage = "No results: the query failed (see the error above).";
 
 const emptyMessages: Record<Dataset, string> = {
+  scatter: "No points have both selected measurements.",
   people_message_labels:"No messages match these labels and filters.",
   message_labels:"No messages match these labels and filters.",
   compactions: "No compactions match this query.",
@@ -1103,6 +1109,7 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
 }
 
 function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
+  if (topic === "scatter") return <CatalogDashboard catalog={scatterAnalysisCatalog} dataset="scatter" name="scatter" defaults={dashboardDefaults.scatter} />;
   if(topic==="labels")return <CatalogDashboard catalog={messageLabelsCatalog} dataset="message_labels" name="labels" defaults={dashboardDefaults.labels}/>;
   if (topic === "compaction") return <CompactionDashboard />;
   if(topic==="thinking-overview"||topic==="thinking-detail") return <ThinkingDashboard detail={topic==="thinking-detail"}/>;
@@ -1631,7 +1638,7 @@ for (const [id, component] of mounts) {
   const element = document.getElementById(id);
   if (element) createRoot(element).render(<PageErrorBoundary><LazyPage host={element}>{component}</LazyPage></PageErrorBoundary>);
 }
-startFindingsChrome(); installWorkspaceInbox(); installDelegationExplorer();
+startFindingsChrome(); installWorkspaceInbox(); installDelegationExplorer(); installReaderNavigator();
 if (concurrencyPrototypeEnabled) {
   const modalHost = document.createElement("div");
   modalHost.id = "parallelismModal";document.body.append(modalHost);

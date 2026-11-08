@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {messageLabelFingerprintCache,messageLabelRibbonNotes} from '../../../src/message-label-results-model';
 import {test} from 'node:test';
-import {EMPTY_QUERY,loadSchema,readFieldValue,toServerQuery,toQueryRequestV3,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
+import {EMPTY_QUERY,loadSchema,readFieldValue,selectedFields,toServerQuery,toQueryRequestV3,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
 import {withFingerprintColumn} from '../../../src/fingerprint-columns';
 import {schemaDocuments} from '../../../src/schema-documents';
 
@@ -19,7 +19,12 @@ test('fingerprint columns request stable entity identities even as the only sele
   assert.deepEqual(request.diagnostics??[],[],dataset);
   assert.deepEqual(decodeQueryStrict(encodeQuery(query)).select,query.select);
   assert.equal(withFingerprintColumn(schema,dataset),schema);
-  assert.deepEqual(schema.defaultSelect,original.defaultSelect);
+  assert.deepEqual(schema.defaultSelect,dataset==='library'?[...original.defaultSelect,{field:'fingerprint',width:352}]:original.defaultSelect);
+  assert.equal(field.select.default,dataset==='library');
+  if(dataset==='library'){
+   assert.equal(selectedFields(schema,EMPTY_QUERY).at(-1).name,'fingerprint');
+   assert.deepEqual(selectedFields(schema,{...EMPTY_QUERY,select:[{field:'title'}]}).map(field=>field.name),['title']);
+  }
   const workspace=schema.fields.find(field=>field.name==='workspace_fingerprint');
   if(identity==='conversation_id'&&original.fields.some(field=>field.name==='workspace_id')){
    assert.equal(readFieldValue(workspace,{id:'event',workspace_id:'work'}),'work');

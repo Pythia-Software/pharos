@@ -103,9 +103,14 @@ func messageLabelLiveDatasetFor(conversations, unmarked string) sqlDataset {
 // Datasets resting on execution evidence read the current unmarked set
 // (executionUnmarkedSQL) when they are routed: it is computed once per source
 // generation and propagation state, and both move the cached-view generation.
-func (c *Catalog) sqlDatasetFor(dataset string) (sqlDataset, bool) {
+func (c *Catalog) sqlDatasetFor(dataset string) (table sqlDataset, ok bool) {
+	defer func() {
+		if ok {
+			table = withAgentSessionIdentity(dataset, table)
+		}
+	}()
 	ctx := context.Background()
-	table, ok := sqlDatasetFor(dataset)
+	table, ok = sqlDatasetFor(dataset)
 	if (dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "agent_event_rates") && ok {
 		// Leave out events resting on superseded execution evidence once the
 		// events ledger exists (agent_events.go); imports alone have none.

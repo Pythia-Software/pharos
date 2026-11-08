@@ -349,6 +349,19 @@ function fileChanges(message,result){
 }
 function toolFailed(message,results){const category=toolCategory(message);return Boolean(category==='error'||toolPayload(message).raw?.is_error||results.some(item=>item.kind==='error'||toolPayload(item).raw?.is_error||Number(toolPayload(item).raw?.exit_code)>0||(category==='command'&&/^(?:Process exited with code|Exit code:)\s*[1-9]/im.test(readableValue(toolPayload(item).content)))))}
 
+// Retain calls with missing timestamps; the navigator chooses a real clock or
+// message order for the entire session before placing these marks.
+function readerNavigatorMarks(model,describe=message=>({name:toolPayload(message).name||'Tool'})){
+  return model.messages.filter(message=>['tool_call','delegation'].includes(message.kind)).map(message=>{
+    const parsedStart=Date.parse(message.created_at),start=Number.isFinite(parsedStart)?parsedStart:null;
+    const results=(message.kind==='delegation'?model.delegationResultsByCall:model.toolResultsByCall).get(message.call_id)||[],end=Date.parse(results.at(-1)?.created_at);
+    return{start,end:start!==null&&Number.isFinite(end)?Math.max(start,end):null,
+      end_known:start!==null&&Number.isFinite(end)&&end>=start,
+      category:({edit:'write',search:'read',command:'run',agent:'delegate',web:'network',read:'read'})[toolCategory(message)]||'other',
+      count:1,error:toolFailed(message,results),message_id:message.id,tool_id:message.call_id||message.native_id,...describe(message)};
+  });
+}
+
 // File paths
 // The directories a conversation's file paths are shown relative to: the
 // workspace's, the conversation's and those its events recorded, longest first.
@@ -626,14 +639,17 @@ function eventLinks(messages){
     for(const event of view)if(event.id&&event.target&&present.has(event.target.message_id)&&!seen.has(event.id)){seen.add(event.id);
       const weak=event.target.method==='overlap'||!event.target.strong;
       const pair=links.find(link=>link.message===message.id&&link.sentence[0]===event.sentence[0]&&link.sentence[1]===event.sentence[1]&&sameTarget(link.target,event.target));
-      if(pair){pair.ids.push(event.id);if(!pair.labels.includes(event.label))pair.labels.push(event.label);pair.weak=pair.weak&&weak;continue}
-      links.push({id:event.id,ids:[event.id],n:0,message:message.id,target:event.target,group:event.group,label:event.label,labels:[event.label],kind:event.kind,sentence:event.sentence,sentenceText:event.sentenceText,weak})}
+      if(pair){pair.ids.push(event.id);if(!pair.groups.includes(event.group))pair.groups.push(event.group);if(!pair.labels.includes(event.label))pair.labels.push(event.label);pair.weak=pair.weak&&weak;continue}
+      links.push({id:event.id,ids:[event.id],n:0,message:message.id,target:event.target,group:event.group,groups:[event.group],label:event.label,labels:[event.label],kind:event.kind,sentence:event.sentence,sentenceText:event.sentenceText,weak})}
   }
   links.forEach((link,index)=>{link.n=index+1});
   return links;
 }
 // The pair an event id belongs to (any of its merged events' ids).
 function eventLinkFor(links,id){return links.find(link=>link.id===id||link.ids?.includes(id))||null}
+// A merged pair remains available while any of its event groups is visible.
+function eventLinkHighlightKeys(link){return (link.groups||[link.group]).map(group=>'events:'+eventGroupClass(group))}
+function eventLinkVisible(link,shown){return !!link&&eventLinkHighlightKeys(link).some(key=>shown.has(key))}
 // The spans a message's targets cover in the text the reader shows, each
 // with the links pointing at it. Offsets apply when the shown text is the
 // stored text there; otherwise (a prompt shown without its harness wrapper)
@@ -696,10 +712,43 @@ function readerHighlightOptions(conversation,messages,taxonomy=[]){
   }
   return options;
 }
+// Whole-key defaults apply content visibility and all highlight kinds together.
+// Existing visibility and highlight fields remain the canonical linked state.
+const READER_KEY_PRESETS=[
+  {id:'default',label:'Default',note:'All content. Highlight human writing.',level:'all',highlights:['writing']},
+  {id:'reading',label:'Read replies',note:'Prompts and final responses. Highlight human writing.',level:'primary',highlights:['writing']},
+  {id:'reasoning',label:'Follow reasoning',note:'Prompts, replies and thinking. Highlight agent events and message labels.',level:'thought',highlights:['events','labels']},
+  {id:'review',label:'Review',note:'Everything except token usage. Highlight human writing, agent events and message labels.',level:'all-minus-usage',highlights:['writing','events','labels']},
+  {id:'plain',label:'Plain transcript',note:'All content with highlights off.',level:'all',highlights:[]}
+];
+function readerKeyPresetValues(id){
+  const preset=READER_KEY_PRESETS.find(preset=>preset.id===id);if(!preset)return null;
+  return{reader_filter_level:preset.level,reader_filter:[...transcriptShown({level:preset.level})],
+    ...Object.fromEntries(READER_HIGHLIGHTS.map(option=>[option.field,preset.highlights.includes(option.id)])),reader_highlight_hidden:[]};
+}
+function readerKeyPresetID(state,highlights,hidden=[]){
+  if(hidden.length)return null;const shown=transcriptShown(state);
+  return READER_KEY_PRESETS.find(preset=>{
+    const expected=transcriptShown({level:preset.level});
+    return shown.size===expected.size&&[...shown].every(key=>expected.has(key))
+      &&READER_HIGHLIGHTS.every(option=>Boolean(highlights[option.field])===preset.highlights.includes(option.id));
+  })?.id||null;
+}
 // The ids of the highlights shown: a linked value (true or false) wins, then
 // the saved choice, then the option's fallback. One with nothing to show is off.
 function readerHighlightsShown(options,linked=()=>null,saved=(pref,fallback)=>fallback){
   return new Set(options.filter(option=>{if(!option.available)return false;const value=linked(option.field);return typeof value==='boolean'?value:saved(option.pref,option.fallback)===true}).map(option=>option.id));
+}
+// A conversation only edits its available keys; other conversations' exclusions
+// survive ordinary selections. Whole-key defaults explicitly reset everything.
+function readerHighlightExclusions(hidden,all,selected){
+  const available=new Set(all),shown=new Set(selected);
+  return [...hidden.filter(key=>!available.has(key)),...all.filter(key=>!shown.has(key))];
+}
+// A sentence can carry several event groups. Its hue and tooltip follow the
+// likeliest remaining event when a group is hidden, without changing its text.
+function readerEventHighlights(events,shown){
+  return events.filter(event=>shown.has('events:'+eventGroupClass(event.group))).sort((a,b)=>(b.probability??0)-(a.probability??0));
 }
 function markdownText(text,mask=''){
   if(!/[^0]/.test(mask))return [text];

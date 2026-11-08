@@ -64,6 +64,7 @@ export function analysisCardContext(catalog: AnalysisCatalog, input: AnalysisSta
     state.view === "scatter" && state.scaleY === "logarithmic" ? "Logarithmic Y scale" : "",
     groups ? `Show up to ${groups} groups` : "",
     measure.note,
+    state.view === "scatter" ? catalog.measures[state.metricY].note : "",
     catalog.breakdowns[state.split]?.note ?? "",
     catalog.request?.note ?? "",
   ].filter(Boolean);

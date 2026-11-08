@@ -1,3 +1,6 @@
+import { scatterAnalysisCatalog } from "../web/src/scatter-analysis-catalog";
+import { normalizeAnalysis } from "../web/src/dashboard-analysis-model";
+import { dashboardDefaults } from "../web/src/dashboard-defaults";
 // Deterministic, schema-aware cases for tools/audit-usage.mjs. Runtime samples
 // stay in the private run directory; this file contains no catalog data.
 import { EMPTY_QUERY, encodeQuery, loadSchema, type QueryState, type WhereTerm } from "../web/node_modules/@pythia-software/query-table-core/dist/index.js";
@@ -11,10 +14,10 @@ export function fieldsFor(document: any) {
   const names = document.fields.map((field: any) => field.name);
   const choose = (candidates: string[]) => candidates.find(field => names.includes(field));
   return {
-    time: choose(["occurred_at", "requested_at", "first_usage_at", "started_at", "called_at", "first_message_at", "sent_at", "created_at", "event_at"]),
+    time: choose(["occurred_at", "requested_at", "first_usage_at", "started_at", "called_at", "first_message_at", "sent_at", "created_at", "event_at", "first_at", "last_at"]),
     group: choose(["provider", "root_provider", "tool_name", "repository_name", "root_model_family", "skill_name", "model"]),
     text: choose(["command", "text", "title", "arguments_json", "tool_name", "skill_name", "model", "root_model_family"]),
-    number: choose(["label_depth","total_tokens", "typed_words", "user_words", "duration_ms", "call_count", "estimated_output_tokens", "content_bytes", "unit_hours", "output_tokens", "words", "human_messages"]),
+    number: choose(["human_typed", "tokens_cost", "label_depth","total_tokens", "typed_words", "user_words", "duration_ms", "call_count", "estimated_output_tokens", "content_bytes", "unit_hours", "output_tokens", "words", "human_messages"]),
     nullable: choose(["repository_name", "model", "root_model_family", "program", "error_text", "skill_name", "title"]),
   };
 }
@@ -80,6 +83,11 @@ export function dashboardCases(topic: keyof typeof usageTopics, documents: Recor
     return { id: `dashboard-${topic}-${String(i + 1).padStart(2, "0")}`, page: `dashboard:${topic}`, label: `Habits ${view} combination ${i + 1}`, dataset, url: usageWorkspaceURL({ mode: "dashboards", topic, dataset }, params) };
   });
   if(isThinkingTopic(topic))return Array.from({length:25},(_,i)=>({id:`dashboard-${topic}-${String(i+1).padStart(2,"0")}`,page:`dashboard:${topic}`,label:`Thinking combination ${i+1}`,dataset,url:usageWorkspaceURL({mode:"dashboards",topic,dataset},new URLSearchParams({thinking:JSON.stringify({...defaultThinking,view:thinkingViews[i%thinkingViews.length][0],groupBy:thinkingBreakdowns[Math.floor(i/thinkingViews.length)][0],range:i%2?"30d":"all"})}))}));
+  if (topic === "scatter") return Array.from({length:25},(_,i)=>{
+    const unit=["conversation","work","agent_session","message"][i%4],metrics=Object.entries(scatterAnalysisCatalog.measures).filter(([,measure])=>measure.units?.includes(unit)).map(([id])=>id);
+    const chart=normalizeAnalysis(scatterAnalysisCatalog,{...dashboardDefaults.scatter,unit,metric:metrics[Math.floor(i/4)%metrics.length],metricY:metrics[(Math.floor(i/4)+1)%metrics.length],scale:i%2?"linear":"logarithmic"});
+    return {id:`dashboard-${topic}-${String(i+1).padStart(2,"0")}`,page:`dashboard:${topic}`,label:`Scatter combination ${i+1}`,dataset,url:usageWorkspaceURL({mode:"dashboards",topic,dataset},new URLSearchParams({analyze_topic:topic,analyze_chart:JSON.stringify(chart)}))};
+  });
   const f = fieldsFor(documents[dataset]), sample = samples[dataset] ?? [], category = f.group!, value = String(sample.find(row => row[category] != null)?.[category] ?? "codex");
   const date = new Date(); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - 29);
   const time = topic === "tools" ? "day" : f.time!;

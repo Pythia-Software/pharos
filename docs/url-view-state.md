@@ -160,6 +160,14 @@ Analysis source-query links also retain the dashboard chart/population and opene
 
 `<page>/query` also publishes `schema_name`, an inspection template, and a `properties_path` to the paginated property catalogue. Use that schema name (for example `pharos_mcp_calls`) in each inspection scope. `JsonInspectionState`, `JsonMatchIdentity` and related types are generated from the installed core declarations. Returning a native `JsonValueView` directly from a property renderer lets Query Table bind its controlled state and semantic registry; wrapping that element in a host div hides it from the supported integration.
 
+The session reader's `reader_navigator` stores any combination of `timeline`,
+`context` and `turns` (default `["timeline","context","turns"]`); `[]` hides the bars. All bars
+share the session clock and one visible-window indicator. Scroll progress and
+keyboard browsing positions are transient. Clicking a bar materializes, scrolls
+to and highlights its source without moving keyboard focus. Entirely untimed
+sessions explicitly use message order. Expanding/collapsing content refreshes
+cached geometry; scrolling does not remeasure transcript elements.
+
 ## Attention
 
 `highlight` is repeatable; `reveal` names one landing target. Reveal means **scroll and distinctive persistent highlighting**, without moving browser/keyboard focus. Ordinary tabbing and scrolling never change these parameters. Clear highlights removes the instructions.
@@ -225,3 +233,25 @@ Bookmark identity and saved bookmark URLs exclude `overlay`, `history_search`, `
 6. Cover parsing/building/time transitions in node/Go. Use browser tests for real restoration, materialization, scrolling/focus and a fresh context without a local snapshot cache.
 
 `npm --prefix web run check` includes the source-control review gate, manifest freshness, type checks and unit tests. Do not run a frontend bundle build concurrently with Go compilation: Go embeds the generated bundles.
+
+The **Key** label opens whole-key defaults. Each choice sets content visibility
+and all three highlight switches together, clears individual hue exclusions,
+and saves the same choices as the fallback for unlinked readers. Default shows
+all content with human writing highlighted; Read replies shows prompts and final
+responses with human writing; Follow reasoning shows prompts, replies and thinking
+with agent events and message labels; Review shows everything except token usage
+with every highlight enabled; Plain transcript shows all content without marks.
+Individual highlight keys still use Timeline's grouped legend menus. Changing a
+key can produce a Custom setup; applying a default resets the whole key again.
+Ordinary key edits preserve exclusions for highlights absent from the current
+conversation. Opening an explicit `reader_event_link` enables agent events and
+clears only that pair's event-group and target exclusions in the URL, leaving
+saved preferences intact. Later manual hides are respected until another event
+link is opened. Sentence hover and click use only currently visible event pairs.
+
+These choices write existing canonical fields together: `reader_filter_level`,
+`reader_filter`, `reader_writing`, `reader_events`, `reader_labels`, and
+`reader_highlight_hidden`. The displayed default is derived from those fields,
+so old visibility links, custom categories, copied links and history still restore
+without a separate preset-name field. The standalone Show row is removed; Page
+Find can still reveal hidden content through its existing Show action.

@@ -25,10 +25,12 @@ test('root costs include children in other repositories, inactive roots, indepen
  const sparse=rows.filter(r=>r.root_conversation_id!=='zero');assert.equal(filterBoxSamples(metric('work-cost-distribution',sparse),3).buckets.length,0);assert.equal(table('work-cost-distribution',sparse).length,2);
 });
 
-test('root-count scatter shares the delegated cost population, with zero-cost points retained in its destination',()=>{
- const rows=[usage('a'),usage('b',{workspace_id:'child',repository_name:'child repo'}),usage('second',{root_conversation_id:'second',cost_usd:10}),usage('missing',{root_conversation_id:null,cost_usd:999}),usage('zero',{root_repository_name:'zero',root_conversation_id:'zero',cost_usd:0})];
- const result=metric('work-volume-cost',rows),repo=result.buckets.find(b=>b.keys[0]==='repo');assert.equal(repo.value,2);assert.equal(repo.y,20);assert.equal(result.buckets.length,2);
- const {recipe,query}=card('work-volume-cost');const p=compactMetricPresentation({metrics:[{clause:cardCoverQuery(query,recipe).query.aggregations[0],result}],coverMetricId:'ac_work',fields:schemas.usage.fields});assert.equal(p.axisScales.xScale.mode,'log');assert.equal(p.axisScales.yScale.mode,'log');assert.equal(p.omittedLogPoints,1);assert.equal(table('work-volume-cost',rows).length,2);
+test('workspace-count scatter retains measured zero costs in its source table',()=>{
+ const common={point_kind:'work',repository_name:'repo',first_at:now-1000,last_at:now-1000};
+ const rows=[{...common,id:'work:a',entity_id:'a',tokens_conversations:2,tokens_cost:20},{...common,id:'work:b',entity_id:'b',tokens_conversations:1,tokens_cost:0}];
+ const result=metric('work-volume-cost',rows),work=result.buckets.find(b=>b.keys.at(-1)==='a');assert.equal(work.value,2);assert.equal(work.y,20);assert.equal(result.buckets.length,1);
+ const {recipe,query}=card('work-volume-cost');const p=compactMetricPresentation({metrics:[{clause:cardCoverQuery(query,recipe).query.aggregations[0],result}],coverMetricId:recipe.cover.metricId,fields:schemas.scatter.fields});assert.equal(p.axisScales.xScale.mode,'log');assert.equal(p.axisScales.yScale.mode,'log');assert.equal(p.omittedLogPoints,0);
+ const source=table('work-volume-cost',rows);assert.equal(source.length,2);assert.equal(source.find(row=>row.entity_id==='b').tokens_cost,0);
 });
 
 test('cost history uses exact elapsed boundaries, divides by seven even for sparse windows, and separates headline period',()=>{

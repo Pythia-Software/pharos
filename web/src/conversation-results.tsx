@@ -30,7 +30,6 @@ declare global {
   interface Window {
     pharosMessageCard?: (message: TranscriptMessage, workspace?: string) => HTMLElement;
     pharosLoadOriginal?: (message: TranscriptMessage) => Promise<TranscriptMessage>;
-    pharosTranscriptHighlights?: (panel: HTMLElement, conversation: Row) => (HTMLElement & { dispose: () => void }) | null;
     pharosMessageSummary?: (message: TranscriptMessage) => string;
     pharosConversationOutline?: (conversation: Row) => OutlineEntry[];
   }
@@ -128,20 +127,6 @@ export function ResultMessage({ label, message: given, kind, compact = false, wo
   </div>;
 }
 
-// The reader's Highlight row (transcriptHighlightControl in ui.py) for one
-// session. Its boxes toggle show-<kind> classes on the panel holding the
-// session's messages, which must be keyed by session so its pointer listeners
-// go with it; the control's own window listeners go with this effect.
-function TranscriptHighlights({ panel, conversation }: { panel: React.RefObject<HTMLDivElement | null>; conversation: Row }) {
-  const host = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const control = panel.current ? window.pharosTranscriptHighlights?.(panel.current, conversation) : null;
-    host.current?.replaceChildren(...(control ? [control] : []));
-    return () => { control?.dispose(); control?.remove(); };
-  }, [conversation]);
-  return <div className="result-highlights" ref={host} />;
-}
-
 export type ConversationBranch = { conversation: Row; children: ConversationBranch[] };
 export function conversationForest(conversations: Row[]): ConversationBranch[] {
   const nodes = new Map(conversations.map(conversation => [String(conversation.id), { conversation, children: [] } as ConversationBranch]));
@@ -217,7 +202,6 @@ export function ResultConversationBrowser({ workspaceID, readJSON, target }: { w
   const loadedRef = useRef(loaded); loadedRef.current = loaded;
   const base = `/api/work/${encodeURIComponent(workspaceID)}`;
   const regionID = useId();
-  const highlightPanel = useRef<HTMLDivElement>(null);
   async function load(id: string) {
     const cached = loadedRef.current[id];
     if ((cached && !cached.loading && !cached.error) || requests.current.has(id)) return;
@@ -310,8 +294,7 @@ export function ResultConversationBrowser({ workspaceID, readJSON, target }: { w
       {overview.loading ? <p role="status">Loading conversations…</p> : overview.error ? <p role="alert">{overview.error}</p> : forest.length ? branchList(forest) : <p>No retained conversations.</p>}
     </nav>
     <section className="result-turn-content" id={regionID} aria-label="Selected turn preview" aria-busy={overview.loading || selection.pending || state?.loading}>
-      {overview.loading || selection.pending || state?.loading ? <p role="status">Loading turns…</p> : overview.error || selection.error || state?.error ? <p role="alert">{overview.error || selection.error || state?.error} <button type="button" onClick={() => overview.error || selection.error ? setReload(value => value + 1) : void load(currentID)}>Retry</button></p> : entry ? <div key={currentID} ref={highlightPanel} className="result-exchange">
-        {state?.conversation ? <TranscriptHighlights panel={highlightPanel} conversation={state.conversation} /> : null}
+      {overview.loading || selection.pending || state?.loading ? <p role="status">Loading turns…</p> : overview.error || selection.error || state?.error ? <p role="alert">{overview.error || selection.error || state?.error} <button type="button" onClick={() => overview.error || selection.error ? setReload(value => value + 1) : void load(currentID)}>Retry</button></p> : entry ? <div key={currentID} className="result-exchange show-writing">
         {entry.human ? <ResultMessage workspaceID={workspaceID} label={entry.kind === "agent" || current?.parent_id ? "Assignment" : "You"} message={entry.human} kind="human" reveal={revealOf(entry.human)} full={entry.human === selected} /> : null}
         {matched ? <ResultMessage workspaceID={workspaceID} label="Match" message={matched} kind={matched.role === "user" ? "human" : "assistant"} reveal={revealOf(matched)} full /> : null}
         <ResultMessage workspaceID={workspaceID} label={entry.kind === "agent" ? entry.label : current?.provider || "Agent"} message={entry.response ?? { role: "assistant", text: "No retained response for this turn." }} kind="assistant" reveal={revealOf(entry.response)} full={entry.response === selected} />

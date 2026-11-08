@@ -770,6 +770,14 @@ func (site *siteMap) chartOptionSummary(node *siteNode, dashboard *siteDashboard
 		return summary
 	}
 	labels := site.valueLabels(dashboard, key)
+	// Large cross-dashboard pickers must remain browsable within the normal
+	// response budget. Their own path paginates values and per-value constraints.
+	large := len(view.Domains[key]) > 32
+	if large && !detail {
+		summary["kind"], summary["value_count"] = "choice", len(view.Domains[key])
+		summary["description"] = "Browse this setting for its values, notes and valid combinations."
+		return summary
+	}
 	values := []map[string]any{}
 	for _, value := range view.Domains[key] {
 		item := map[string]any{"value": value}
@@ -783,6 +791,21 @@ func (site *siteMap) chartOptionSummary(node *siteNode, dashboard *siteDashboard
 			if unit, ok := dashboard.Units[siteString(value)]; ok && key == "unit" && unit.Note != "" {
 				item["note"] = unit.Note
 			}
+			if large {
+				constraints := []string{}
+				for _, rule := range view.Rules {
+					if rule.Option == key {
+						for _, constraint := range rule.Constraints {
+							if phrase := site.allowedPhrase(constraint.Given, constraint.Allowed, value); phrase != "" {
+								constraints = append(constraints, phrase)
+							}
+						}
+					}
+				}
+				if len(constraints) > 0 {
+					item["constraints"] = constraints
+				}
+			}
 		}
 		values = append(values, item)
 	}
@@ -792,6 +815,9 @@ func (site *siteMap) chartOptionSummary(node *siteNode, dashboard *siteDashboard
 		summary["description"] = "A list of any of these reference levels, e.g. [\"p50\", \"p90\"]; [] draws none. A line chart draws each as a line at that level of the normPeriods periods before the latest; a heatmap traces each period's own percentile (no mean). Levels the chart cannot draw are dropped."
 	}
 	summary["values"] = values
+	if large {
+		return summary
+	}
 	for _, rule := range view.Rules {
 		if rule.Option != key {
 			continue

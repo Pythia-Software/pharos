@@ -13,12 +13,32 @@ import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
 test('workspace fingerprints restore across views and respect the global event display setting',{skip},async t=>{
- const query={...EMPTY_QUERY,select:[{field:'title',width:280},{field:'fingerprint',width:180}],limit:5},requests=[];
- const api={'POST /api/fingerprints':request=>{requests.push(request.body);return defaultApi['POST /api/fingerprints'](request);}};
- const app=await open(t,{api,url:'/library?view=table&q_library='+encodeQuery(query),ready:'.message-label-fingerprint img'}),{page}=app;
+ const requests=[];
+ const api={'POST /api/fingerprints':request=>{
+  requests.push(request.body);
+  const result=defaultApi['POST /api/fingerprints'](request);
+  for(const item of result.items){
+   const height=item.profile==='wide'?128:256;
+   // Synthetic image with marks near both edges makes clipping visible in screenshots.
+   const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="${height}"><rect width="1024" height="${height}" fill="#ddd4bf"/><path d="M0 ${height*.35}h170v${height*.3}h-170z M240 ${height*.2}h180v${height*.6}h-180z M490 ${height*.3}h190v${height*.4}h-190z M750 ${height*.1}h274v${height*.8}H750z" fill="#557974"/><path d="M80 ${height*.9}Q400 ${height*.02} 850 ${height*.9}" fill="none" stroke="#a05437" stroke-width="8"/><circle cx="850" cy="${height*.9}" r="9" fill="#a05437"/></svg>`;
+   const src='data:image/svg+xml,'+encodeURIComponent(svg);item.images={light:src,dark:src};
+  }
+  return result;
+ }};
+ const app=await open(t,{api,url:'/library?view=table',ready:'.message-label-fingerprint img'}),{page}=app;
  assert.ok(await page.getByRole('img',{name:'Workspace fingerprint',exact:true}).count());
  await page.getByRole('group',{name:'Display results as'}).getByRole('button',{name:'Conversations',exact:true}).click();
  await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
+ assert.ok(requests.some(body=>body.items.some(item=>item.entity==='workspace'&&item.profile==='wide')));
+ const fingerprint=page.locator('.conversation-result-facts .fingerprint-image').first();
+ const geometry=await fingerprint.evaluate(node=>{const image=node.querySelector('img').getBoundingClientRect(),box=node.getBoundingClientRect();return {image:{width:image.width,height:image.height,top:image.top,bottom:image.bottom},box:{width:box.width,height:box.height,top:box.top,bottom:box.bottom}};});
+ assert.ok(Math.abs(geometry.image.width/geometry.image.height-8)<.05);
+ assert.ok(geometry.image.top>=geometry.box.top-.5&&geometry.image.bottom<=geometry.box.bottom+.5,'the full fingerprint fits in its container');
+ await app.shot('search-fingerprint');
+ await page.setViewportSize({width:320,height:900});
+ const narrow=await fingerprint.evaluate(node=>{const image=node.querySelector('img').getBoundingClientRect(),box=node.getBoundingClientRect();return {imageWidth:image.width,imageHeight:image.height,boxWidth:box.width};});
+ assert.ok(Math.abs(narrow.imageWidth/narrow.imageHeight-8)<.05&&narrow.imageWidth<=narrow.boxWidth+.5,'the fingerprint fits on a narrow screen');
+ await page.setViewportSize({width:1440,height:900});
  await app.settled();await page.reload();
  await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
  assert.equal(await page.getByRole('button',{name:'Conversations',exact:true}).getAttribute('aria-pressed'),'true');
@@ -791,10 +811,14 @@ test('nested navigation branches restore independently in a fresh browser',{skip
  await toggle('Dashboards');await tokens.waitFor({state:'hidden'});
  await toggle('Dashboards');await tokens.waitFor();
  assert.equal(await human.isVisible(),false);
+ const messages=navigation.getByRole('link',{name:'Messages',exact:true});
+ assert.equal(await messages.isVisible(),false);
+ await toggle('Conversations & agent sessions');await messages.waitFor();
  const fresh=await open(t,{url:path(page),viewport,ready:'.usage-dashboard .usage-chart'});
  const restored=fresh.page.getByRole('complementary',{name:'Analyze navigation',exact:true});
  assert.equal(await restored.getByRole('link',{name:'Human Words',exact:true}).isVisible(),false);
  assert.equal(await restored.getByRole('link',{name:'Tokens and Cost',exact:true}).isVisible(),true);
+ assert.equal(await restored.getByRole('link',{name:'Messages',exact:true}).isVisible(),true);
  await restored.getByText('People',{exact:true}).click();
  await restored.getByRole('link',{name:'Human Words',exact:true}).waitFor();
  await fresh.shot('nested-dashboards');
@@ -904,7 +928,7 @@ test('automatic oversized query references resolve in a fresh browser with no lo
 });
 
 test('conversation result links restore their session, matched message and inline agent without taking focus',{skip},async t=>{
- const message=(id,role,text)=>({id,native_id:id,role,kind:'message',text});
+ const message=(id,role,text)=>({id,native_id:id,role,kind:'message',text,...(role==='user'?{authorship:{spans:[{category:'typed',start:0,end:text.length}]}}:{})});
  const api={
   'POST /api/query/library/:operation':request=>{
    const result=defaultApi['* /api/query/:dataset/:operation']({...request,params:{dataset:'library',operation:request.params.operation}});
@@ -933,6 +957,8 @@ test('conversation result links restore their session, matched message and inlin
  await preview.getByText('Final reply',{exact:true}).waitFor();
  await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).waitFor();
  assert.equal(await preview.evaluate(element=>element.contains(document.activeElement)),false);
+ await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).click();
+ await preview.getByText('First session prompt',{exact:true}).waitFor();
  await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/Sub-agent · Timing auditor/}).click();
  await preview.getByText('Timing checked.',{exact:true}).waitFor();
  const fresh=await open(t,{url:path(app.page),api,ready:'.conversation-result-card'});
@@ -960,7 +986,8 @@ test('copied Cards view overrides preferences in a fresh context and follows Bac
 
 test('reader category and disclosure state survive a fresh browser', {skip},async t=>{
  const first=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,ready:'.transcript-filter'});
- await first.page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).click();
+ await first.page.getByRole('button',{name:'Key',exact:true}).click();
+ await first.page.getByRole('menuitemradio',{name:/^Read replies/}).click();
  await first.page.waitForFunction(()=>new URLSearchParams(location.search).get('reader_filter_level')==='primary');
  const turn=first.page.locator('.turn').first();
  await turn.locator(':scope > summary').click();
@@ -970,7 +997,8 @@ test('reader category and disclosure state survive a fresh browser', {skip},asyn
  await summary.click();
  await first.page.waitForFunction(()=>Object.keys(JSON.parse(new URLSearchParams(location.search).get('reader_content')||'{}')).some(key=>key.endsWith(':turn-summary-prompt')));
  const fresh=await open(t,{url:path(first.page),ready:'.transcript-filter'});
- assert.equal(await fresh.page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
+ await fresh.page.getByRole('button',{name:'Key',exact:true}).click();
+ assert.equal(await fresh.page.getByRole('menuitemradio',{name:/^Read replies/}).getAttribute('aria-checked'),'true');await fresh.page.keyboard.press('Escape');
  assert.equal(await fresh.page.locator('.turn').first().evaluate(element=>element.open),wasOpen);
  assert.equal(await fresh.page.locator('.turn').first().getByRole('button',{name:'Collapse turn ask',exact:true}).getAttribute('aria-expanded'),'true');
  await fresh.page.getByRole('button',{name:'Close All Turns',exact:true}).click();
@@ -1033,18 +1061,42 @@ test('agent event links restore both ends from the URL, opening folded prose wit
  const messages=[
   {id:'link-prompt',native_id:'link-prompt',role:'user',kind:'message',text:prompt,created_at:new Date(1760000000000).toISOString()},
   {id:'link-reply',native_id:'link-reply',role:'assistant',kind:'message',text:reply,created_at:new Date(1760000001000).toISOString(),
-   agent_events:[{id:'e-link',kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:0.9,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
-    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start,end:start+quote.length,text:quote,strong:true}}]},
+   agent_events:[{id:'e-hidden',kind:'obstacle',label:'Obstacle',group:'Friction',probability:0.95,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
+    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start:prompt.indexOf('phones'),end:prompt.indexOf('phones')+6,text:'phones',strong:true}},
+    ...['e-link','e-alias'].map((id,index)=>({id,kind:'assumption',label:'Assumption',group:index?'Reactions and learning':'Choices you may not see',probability:0.9,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
+    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start,end:start+quote.length,text:quote,strong:true}}))]},
  ];
  const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages,agent_events:{messages_read:2}})};
- const opened=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_events=1&reader_event_link=e-link`,ready:'.conversation-panel.show-events mark.event-target.link-selected'}),{page}=opened;
+ const hidden=['events:event-friction','events:event-choices','events:event-learning','events:event-target-legend','labels:C.report'];
+ const opened=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_events=1&reader_event_link=e-alias`,preferences:{'pharos-reader-highlight-hidden':hidden},ready:'.conversation-panel.show-events mark.event-target.link-selected'}),{page}=opened;
  await opened.settled();
  // The target sits past the fold of a long prompt; restoring the link opens it.
  assert.equal(await page.locator('mark.event-target.link-selected').first().evaluate(mark=>mark.closest('.message-prose').classList.contains('prose-truncated')),false);
  assert.ok(await page.locator('mark.agent-event.link-selected').count());
- for(const selector of ['mark.agent-event','mark.event-target'])assert.deepEqual(await page.locator(selector).evaluateAll(marks=>marks.map(mark=>mark.querySelectorAll('code').length)),[1],`${selector} is one element around the inline code`);
+ for(const selector of ['mark.agent-event.link-selected','mark.event-target.link-selected'])assert.deepEqual(await page.locator(selector).evaluateAll(marks=>marks.map(mark=>mark.querySelectorAll('code').length)),[1],`${selector} is one element around the inline code`);
  assert.equal(await page.evaluate(()=>document.activeElement===document.body||!document.activeElement),true);
  assert.ok(await page.locator('.event-link-gutter path.is-selected').count(),'the gutter connects the two ends');
+ assert.equal(await page.locator('mark.link-selected.reader-event-hidden').count(),0,'explicit links override the relevant saved hue and target exclusions');
+ assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')),['events:event-friction','labels:C.report'],'unrelated exclusions survive link restoration');
+ assert.deepEqual(await page.evaluate(()=>pharosPrefs.get('pharos-reader-highlight-hidden',[])),hidden,'opening a link leaves saved preferences intact');
+ await opened.shot('linked-highlights-restored');
+ // The first event on this sentence is hidden and points somewhere else.
+ await page.evaluate(()=>window.pharosView.write('reader_highlight_hidden',[
+  ...window.pharosView.read('reader_highlight_hidden',[]),'events:event-choices',
+ ]));await opened.settled();
+ await page.evaluate(()=>window.pharosView.write('reader_event_link',null));
+ const observation=page.locator('mark.agent-event');await observation.hover();
+ await page.locator('.event-link-n.is-observation.link-focus:not(.reader-event-hidden)').waitFor();
+ assert.deepEqual(await page.locator('.event-link-n.is-observation.link-focus').evaluateAll(nodes=>nodes.map(node=>node.dataset.eventLink)),['e-link']);
+ await observation.click();await opened.settled();
+ assert.equal(new URL(page.url()).searchParams.get('reader_event_link'),'e-link','click selects the remaining visible pair, including its merged alias');
+ assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')).includes('events:event-choices'),'clicking a visible pair preserves its hidden sibling group');
+ // Follow the canonical visibility binding while the linked reveal may still be scrolling.
+ await page.evaluate(()=>window.pharosView.write('reader_events',false));await opened.settled();
+ assert.equal(await page.locator('.event-link-gutter path.is-selected').count(),0,'a later visibility change is respected');
+ assert.equal(new URL(page.url()).searchParams.get('reader_events'),'0');
+ const copied=await open(t,{api,url:path(page),ready:'.event-link-gutter path.is-selected'});
+ assert.equal(await copied.page.locator('mark.link-selected.reader-event-hidden').count(),0,'an explicit copied URL also restores excluded highlights');
 });
 
 test('literal text reveal opens page Find on the reader and reveals a match without focusing its input', {skip},async t=>{
@@ -1161,9 +1213,10 @@ test('reader disclosure history restores empty overrides to native defaults, and
  const turn=page.locator('.turn').first(),id=await turn.getAttribute('data-pharos-disclosure');
  assert.ok(id);
  await page.evaluate(id=>{const url=new URL(location.href);url.searchParams.delete('reader_filter');url.searchParams.delete('reader_expanded');url.searchParams.set('reader_filter_level','primary');url.searchParams.set('reader_collapsed',JSON.stringify([id]));window.pharosNavigate(url.pathname+url.search);},id);
- await page.waitForFunction(()=>document.querySelector('.transcript-levels button[aria-pressed="true"]')?.textContent==='Primary only'&&!document.querySelector('.turn').open);
+ await page.waitForFunction(()=>document.querySelector('.reader-key-current')?.textContent==='Read replies'&&!document.querySelector('.turn').open);
  await app.settled();
- assert.equal(await page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
+ await page.getByRole('button',{name:'Key',exact:true}).click();
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Read replies/}).getAttribute('aria-checked'),'true');await page.keyboard.press('Escape');
  assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')),[id]);
  assert.equal(await page.evaluate(()=>window.__sameDocument),true,'the reader did not reload the document');
 });
@@ -1715,7 +1768,8 @@ test('message card labels and sentence events restore independently in the reade
   const named=row=>row.conversation_id===rootConversation?{...row,label:'Review the CSV importer'}:row;
   return {...data,rows:data.rows.map(named),focus:data.focus.map(named)};
  };
- const url=`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all&reader_labels=1&reader_events=1&reader_writing=0`;
+ const elsewhere=['events:event-learning','labels:P.frame'];
+ const url=`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all&reader_labels=1&reader_events=1&reader_writing=0&reader_highlight_hidden=${encodeURIComponent(JSON.stringify(elsewhere))}`;
  const app=await open(t,{api,url,ready:'.conversation-panel.show-labels.show-events'}),{page}=app;
  const reasoning=page.locator('.action-row details').filter({has:page.locator('summary .activity-title',{hasText:'Reasoning'})}).first();
  await reasoning.locator('summary').click();
@@ -1737,17 +1791,70 @@ test('message card labels and sentence events restore independently in the reade
  await human.locator('.message-prose').hover();assert.equal(await tip.isVisible(),false);
  await page.mouse.move(0,0);
  await app.shot('message-card-tints-dark');
- await page.getByRole('checkbox',{name:'Message labels',exact:true}).uncheck();await app.settled();
+ const choose=async(name,action)=>{await page.locator('.transcript-highlights').getByRole('button',{name,exact:true}).click();await page.getByRole('menuitem',{name:action}).click();await app.settled();};
+ await choose('Message labels category',/^Hide$/);
  assert.equal(new URL(page.url()).searchParams.get('reader_labels'),'0');
- await page.getByRole('checkbox',{name:'Message labels',exact:true}).check();
- await page.getByRole('checkbox',{name:'Agent events',exact:true}).uncheck();await app.settled();
+ await choose('Message labels category',/^Show$/);
+ assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')),elsewhere,'editing this conversation preserves exclusions available elsewhere');
+ await choose('Agent events category',/^Hide$/);
  const copied=await open(t,{api,url:path(page),ready:'.conversation-panel.show-labels'});
- assert.equal(await copied.page.getByRole('checkbox',{name:'Agent events',exact:true}).isChecked(),false);
+ assert.equal(await copied.page.locator('.transcript-highlights').getByRole('button',{name:'Agent events category',exact:true}).getAttribute('aria-pressed'),'false');
  assert.match(await copied.page.locator('.thinking-card').textContent(),/quoted cell/);
- await page.getByRole('checkbox',{name:'Agent events',exact:true}).check();
+ await choose('Agent events category',/^Show$/);
+ // The shared menu owns keyboard navigation and restores focus after a choice.
+ const report=page.locator('.transcript-highlights').getByRole('button',{name:'Report',exact:true});
+ await report.focus();await page.keyboard.press('ArrowDown');
+ assert.equal(await page.getByRole('menuitem',{name:/^Hide$/}).evaluate(el=>el===document.activeElement),true);
+ await page.keyboard.press('Escape');assert.equal(await report.evaluate(el=>el===document.activeElement),true);
+ await choose('Receiver category',/^Hide others$/);
+ const familyURL=path(page);
+ await choose('Deliberation',/^Hide$/);
+ const familyCopy=await open(t,{api,url:path(page),ready:'.conversation-panel.show-labels'});
+ assert.equal(await familyCopy.page.locator('.transcript-highlights').getByRole('button',{name:'Deliberation',exact:true}).getAttribute('aria-pressed'),'false');
+ await page.locator('.thinking-card').hover();assert.equal(await page.getByRole('tooltip').isVisible(),false);
+ await app.shot('reader-key-filters-hidden');
+ // In-document history restoration updates the mounted keys as well.
+ await page.evaluate(url=>window.pharosNavigate(url),familyURL);await app.settled();
+ assert.equal(await page.locator('.transcript-highlights').getByRole('button',{name:'Deliberation',exact:true}).getAttribute('aria-pressed'),'true');
+ await choose('Agent events category',/^Show$/);
+ await choose('Friction',/^(?:Hide others|Show and Hide Others)$/);
+ await choose('Friction',/^Hide$/);
+ assert.equal(new URL(page.url()).searchParams.get('reader_events'),'0');
+ await choose('Friction',/^Show All$/);
+ const key=page.getByRole('region',{name:'Conversation key',exact:true}).getByRole('button',{name:'Key',exact:true});
+ const defaults=async name=>{await key.click();await page.getByRole('menuitemradio',{name}).click();await app.settled();};
+ await key.focus();await page.keyboard.press('ArrowDown');
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Default/}).evaluate(el=>el===document.activeElement),true);
+ await page.keyboard.press('End');
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Plain transcript/}).evaluate(el=>el===document.activeElement),true);
+ await page.keyboard.press('Enter');await app.settled();
+ assert.equal(await key.evaluate(el=>el===document.activeElement),true);
+ assert.equal(await page.locator('.conversation-panel').evaluate(el=>el.classList.contains('show-labels')||el.classList.contains('show-events')),false);
+ await defaults(/^Follow reasoning/);
+ const presetCopy=await open(t,{api,url:path(page),preferences:{'pharos-reader-writing':true,'pharos-reader-events':false,'pharos-reader-labels':false,'pharos-reader-highlight-hidden':['events:event-friction','labels:C.deliberation']},ready:'.conversation-panel.show-labels.show-events'});
+ await presetCopy.page.getByRole('button',{name:'Key',exact:true}).click();
+ assert.equal(await presetCopy.page.getByRole('menuitemradio',{name:/^Follow reasoning/}).getAttribute('aria-checked'),'true');
+ await choose('Report',/^(?:Hide others|Show and Hide Others)$/);
+ assert.match(await key.textContent(),/Custom/);
+ await defaults(/^Review/);
+ await app.shot('reader-key-filters-desktop');
+ await key.click();await page.getByRole('menu',{name:'Key defaults',exact:true}).waitFor();
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Review/}).getAttribute('aria-checked'),'true');
+ await app.shot('reader-key-defaults-menu');await page.keyboard.press('Escape');
  await page.evaluate(()=>document.documentElement.dataset.theme='light');
  await app.shot('message-card-tints-light');
  await page.setViewportSize({width:390,height:844});
+ await key.scrollIntoViewIfNeeded();
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await report.click();
+ const menu=page.getByRole('menu',{name:'Filter Report',exact:true});
+ await menu.waitFor();
+ assert.equal(await menu.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight}),true);
+ await app.shot('reader-key-filters-phone');
+ await page.keyboard.press('Escape');await key.click();
+ await page.getByRole('menu',{name:'Key defaults',exact:true}).waitFor();
+ await app.shot('reader-key-defaults-phone');
+ await page.keyboard.press('Escape');
  await page.locator('.thinking-card').scrollIntoViewIfNeeded();
  await app.shot('message-card-tints-phone');
 });
@@ -1843,4 +1950,30 @@ test('dataset query ideas restore their query and disclosure, and All records cl
  await page.reload();
  await page.waitForSelector('.usage-workspace-table .qt-row');
  assert.equal(await record.getAttribute('aria-pressed'),'true','a record idea stays selected after native evidence and Detail columns are restored');
+});
+
+test('scatter axes search by dashboard, retain keyboard focus and restore their committed choices',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_topic=scatter&analyze_data=scatter',ready:'.usage-scatter-dashboard'}),{page}=app;
+ const x=page.getByRole('combobox',{name:'X axis',exact:true});
+ await x.fill('cache write');
+ await page.getByRole('listbox',{name:'X axis metrics'}).getByRole('option').first().waitFor();
+ await x.press('Enter');
+ assert.equal(await x.evaluate(node=>node===document.activeElement),true);
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).metric==='usage_cache_creation_input_tokens');
+ const saved=path(page);
+ await page.reload();
+ await page.getByRole('combobox',{name:'X axis',exact:true}).waitFor();
+ assert.equal(await page.getByRole('combobox',{name:'X axis',exact:true}).inputValue(),'Cache write tokens');
+ const y=page.getByRole('combobox',{name:'Y axis',exact:true});
+ await y.fill('session shape');
+ await page.getByRole('listbox',{name:'Y axis metrics'}).getByRole('group',{name:'Session Shape',exact:true}).waitFor();
+ await y.press('Escape');
+ assert.equal(path(page),saved,'typing and cancelling a search leaves the chart URL alone');
+ await page.getByLabel('Count each',{exact:true}).selectOption('agent_session');
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).unit==='agent_session');
+ const fresh=await open(t,{url:path(page),ready:'.usage-scatter-dashboard'});
+ assert.equal(await fresh.page.getByLabel('Count each',{exact:true}).inputValue(),'agent_session');
+ await fresh.page.getByLabel('Count each',{exact:true}).selectOption('message');
+ await fresh.page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).unit==='message');
+ await app.settled();await fresh.settled();
 });

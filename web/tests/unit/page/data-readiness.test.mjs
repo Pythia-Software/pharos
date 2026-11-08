@@ -370,3 +370,11 @@ test('a row read by several tasks uses whichever is scheduled first',()=>{
  data.background.items.find(item=>item.id==='other-sources').next_at=null;
  assert.equal(stage().item.id,'preserve');assert.equal(stage().nextAt,null);
 });
+
+test('scatter readiness follows the selected axis sources',()=>{
+ const typedAndCost=readinessDomains({dataset:'scatter',query:{fields:['human_typed','tokens_cost']}});
+ assert.ok(typedAndCost.includes('an.authorship'));
+ assert.ok(!typedAndCost.includes('@labels')&&!typedAndCost.includes('@agent_events'));
+ const events=readinessDomains({dataset:'scatter',query:{expression:'MAX([agent_experience_events])'}});
+ assert.ok(events.includes('@agent_events'));
+});

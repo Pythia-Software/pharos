@@ -64,6 +64,12 @@ const longTitle = "Investigate why the incremental indexer re-reads every captur
 export const queryFixtureDatasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
 const datasets = queryFixtureDatasets;
+// Invented entity measurements for the standalone cross-dashboard scatter.
+datasets.scatter = ["conversation","work","agent_session","message"].flatMap(point_kind => Array.from({length:8},(_,index)=>({
+  ...datasets.scatter[index], id:`${point_kind}:point-${index}`,entity_id:`point-${index}`,point_kind,
+  title:`Example ${point_kind} ${index + 1}`,provider:index%2?"codex":"claude",repository_name:"pharos",
+  first_at:new Date(now-day).toISOString(),last_at:new Date(now-1000).toISOString(),human_typed:index*120,tokens_cost:index*.4,
+})));
 for (const [index, row] of datasets.messages.entries()) {
   const role = ["user", "assistant", "assistant", "tool"][index % 4];
   Object.assign(row, { role, kind: ["message", "message", "thinking", "tool_result"][index % 4], has_authorship: role === "user", selected: true,

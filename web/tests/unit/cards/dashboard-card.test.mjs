@@ -713,3 +713,16 @@ test('existing Habits cards open Work Hours or the specific Habits view and keep
   assert.equal(params.get('habits_view'), 'punchcard'); assert.equal(params.get('habits_punchcard'), 'unattended');
   assert.equal(params.get('habits_punchcard_days'), '30');
 });
+
+test('scatter card defaults follow both axes, point type and filters', t => {
+  fixture(t);
+  const address = state => '/analyze?'+new URLSearchParams({analyze_topic:'scatter',analyze_data:'scatter',analyze_chart:JSON.stringify({...dashboardDefaults.scatter,...state}),analyze_filters:encodeQuery({...EMPTY_QUERY,where:[{field:'repository_name',op:'=',value:'pharos'}]})});
+  const initial=dashboardCardMetadata(address({}),'chart',schemas.scatter);
+  assert.match(initial.title,/typed words.*API cost.*conversation.*pharos/i);
+  const changed=dashboardCardMetadata(address({metric:'tokens_input',metricY:'tokens_output',unit:'work'}),'chart',schemas.scatter);
+  assert.match(changed.title,/input tokens.*output tokens.*workspace/i);
+  assert.notEqual(initial.title,changed.title);
+  assert.match(changed.description,/output includes/i);
+  const session=dashboardCardMetadata(address({metric:'session_shape_wall_seconds',metricY:'tokens_cost',unit:'agent_session'}),'chart',schemas.scatter);
+  assert.match(session.title,/wall time.*API cost.*agent session/i);
+});

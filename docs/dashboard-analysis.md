@@ -11,6 +11,15 @@ measures, and minimum-sample thresholds.
 This document describes the engine that supplies those capabilities, how a
 card maps onto it, and the phases that adopt it.
 
+## Standalone scatter plots (November 2026)
+
+Two measures now lives in [Scatter Plots](scatter-plots.md), which pairs metrics
+across dashboard sources with searchable, grouped X/Y pickers. Conversations
+are the default point type; workspaces, agent sessions and messages have their own supported
+metrics. Individual dashboard menus omit the scatter view. Recommended scatter
+cards use the standalone source and URL contract for both previews and links.
+The historical phases below describe the shared engine's implementation.
+
 ## Direct card navigation (October 2026)
 
 The card-routing adoption is implemented. All 115 active analysis cards open a
@@ -27,7 +36,7 @@ attribution. Cards keep exact timestamp and evidence predicates instead of
 projecting them onto whole-day summaries. Conversations is a full dashboard
 over conversation_activity: distinct top-level conversations, human messages
 and recorded output tokens, with a summary of the population above the chart. It offers comparisons, distributions,
-scatter, timestamp-based calendar trends and cycles. Whole-conversation
+timestamp-based calendar trends and cycles. Whole-conversation
 observations combine delegated activity across repositories; repository
 breakdowns apply only to activity records. Older card URLs restore their exact
 retained source and calendar intent before opening the current dashboard mapping.
@@ -1050,7 +1059,7 @@ Table's in-process evaluation, and the numbers must match:
 | `model-cost-share` | compare, share, cost by provider + model, priced filters |
 | `cache-efficiency` | compare, `cache_read_share` by provider + model |
 | `model-session-costs` | distribution, conversation unit, cost by provider + model, `minSamples: 5` |
-| `session-token-cost` | scatter, conversation unit, tokens × cost, colored by provider + model |
+| `session-token-cost` | standalone Scatter Plots, conversation unit, `tokens_tokens` × `tokens_cost`, colored by provider |
 | `token-volume-trend` | trend, tokens by provider, 7-day rolling mean |
 | `token-volume-log` | trend, tokens by repository, log scale |
 | `cumulative-api-cost` | trend, cost by provider, cumulative, priced filters (and fully priced cost without them) |

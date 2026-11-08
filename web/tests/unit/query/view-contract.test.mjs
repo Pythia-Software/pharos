@@ -43,7 +43,7 @@ test('semantic detail targets preserve typed identities, reject ambiguous paths,
 });
 
 test('host view codecs preserve explicit false, empty values, ordered IDs and relative intent',()=>{
- const values={card_window:'today',card_filters:false,search_cards:{},delegation_columns:['cost','tokens'],reader_expanded:['message:m'],disclosures:{'row:r:input':true,'timeline-key':false},findings_rank:'tokens',timeline_visibility:{modes:{values:['C.report.finding','?'],excluded:false},events:{values:['friction'],excluded:true},tools:{values:['error'],excluded:true},origins:{values:['typed'],excluded:false}}};
+ const values={card_window:'today',card_filters:false,search_cards:{},delegation_columns:['cost','tokens'],reader_expanded:['message:m'],reader_highlight_hidden:['events:event-friction','labels:C.report'],reader_navigator:['timeline','context','turns'],disclosures:{'row:r:input':true,'timeline-key':false},findings_rank:'tokens',timeline_visibility:{modes:{values:['C.report.finding','?'],excluded:false},events:{values:['friction'],excluded:true},tools:{values:['error'],excluded:true},origins:{values:['typed'],excluded:false}}};
  for(const [key,value]of Object.entries(values))assert.deepEqual(parseViewValue(viewFields[key],encodeViewValue(viewFields[key],value)),value,key);
  assert.equal(fieldsForPage('findings/settings').findings_rank,undefined);
  assert.equal(fieldsForPage('analyze/query/tool_calls','tool_calls').record_keyword.param,'record_tool_calls');
@@ -58,6 +58,8 @@ test('host view codecs preserve explicit false, empty values, ordered IDs and re
   else assert.throws(()=>encodeViewValue(viewFields.timeline_visibility,state));
  }
  assert.deepEqual(parseViewValue(viewFields.timeline_visibility,'{}'),{});
+ assert.deepEqual(parseViewValue(viewFields.reader_navigator,'[]'),[]);
+ for(const raw of ['[\"unknown\"]','[\"turns\",\"turns\"]','{}'])assert.throws(()=>parseViewValue(viewFields.reader_navigator,raw));
 });
 
 test('Safety links restore their own section, lifecycle, case and evidence disclosures',()=>{

@@ -1,3 +1,4 @@
+import { scatterMetrics } from "./scatter-metrics";
 // The processing ledger owns freshness. These are conservative display scopes,
 // not result-revision receipts: until the query API supplies those, the modal
 // identifies this distinction and never infers lag from a publication time.
@@ -41,6 +42,7 @@ const flatOperations = (items: ProcessingOperation[]): ProcessingOperation[] => 
 // requiring capture history in libraries that only read live sources.
 const sources=['conv:*','capt:*'];
 const domainScopes: Record<string,string[]> = {
+  scatter: sources,
   messages:sources, library:[...sources,'view'], usage:sources, model_requests:[...sources,'an.ledger'], compactions:sources,
   conversation_activity:[...sources,'an.authorship'],writing:[...sources,'an.authorship'],writing_messages:[...sources,'an.authorship'],
   tools:[...sources,'an.ledger','an.tools'],tool_calls:[...sources,'an.ledger'],skill_usages:[...sources,'an.ledger'],
@@ -63,6 +65,10 @@ function usesAuthorship(value: unknown): boolean {
   return Boolean(value && typeof value === 'object' && Object.values(value).some(usesAuthorship));
 }
 export function readinessDomains(scope: Pick<ReadinessScope,'dataset'|'query'>): string[] {
+  if (scope.dataset === 'scatter') {
+    const query=JSON.stringify(scope.query ?? {}), datasets=new Set(scatterMetrics.filter(metric=>query.includes(JSON.stringify(metric.id))||query.includes(`[${metric.id}]`)).map(metric=>metric.dataset));
+    if (datasets.size) return [...new Set([...datasets].flatMap(dataset=>domainScopes[dataset] ?? ['@unknown:'+dataset]))];
+  }
   const base=domainScopes[scope.dataset];
   if(!base)return ['@unknown:'+scope.dataset];
   return [...new Set([...base, ...(scope.dataset === 'messages' && usesAuthorship(scope.query) ? ['an.authorship'] : []), ...(usesLabels(scope.query) ? ['an.authorship', '@labels'] : [])])];

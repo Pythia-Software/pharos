@@ -5,6 +5,7 @@ import type { ChartPeriod } from "./chart-period";
 import { heatmapCellText, heatmapColumnText, heatmapPeriodLabel, heatmapShade, type Heatmap } from "./dashboard-heatmap-model";
 import { percentileLabel } from "./dashboard-analysis-model";
 import "./dashboard-heatmap.css";
+import { DashboardLoading } from "./card-loading";
 
 // The trend's heatmap (dashboard-heatmap-model.ts): time across, the value
 // up its own continuous axis, each cell shaded by how much falls in that bin
@@ -41,7 +42,8 @@ export function TrendHeatmap({ title, controls, action, titleSlot, heatmap, peri
   return <div className="usage-chart dashboard-heatmap" data-pharos-target={`section:chart:${title}`}>
     <div className="usage-chart-head">{titleSlot ? createPortal(head, titleSlot) : <div className="usage-chart-title"><h3>{title}</h3>{action}</div>}<div className="usage-chart-controls">{controls}</div></div>
     {error ? <p className="query-table-error" role="alert">{error}</p>
-      : !columns.length || !rows.length ? <p className="usage-chart-empty" role="status">{loading ? "Loading…" : `No ${noun} in this range`}</p>
+      : loading ? <DashboardLoading spec={{ kind: "heatmap", count: 16 }} />
+      : !columns.length || !rows.length ? <p className="usage-chart-empty" role="status">{`No ${noun} in this range`}</p>
       : <ChartTooltip>
         <div className="dashboard-heatmap-plot" role="img" aria-label={`${title}: ${label.toLowerCase()} up the side, time across; darker cells hold more ${noun}.`}>
           <span className="dashboard-heatmap-name">{label}</span>
@@ -69,7 +71,8 @@ export function TrendHeatmap({ title, controls, action, titleSlot, heatmap, peri
           <div className="usage-chart-axis dashboard-heatmap-axis"><span>{heatmapPeriodLabel(columns[0].date, period)}</span><span>{middle && columns.length > 4 ? heatmapPeriodLabel(middle.date, period) : ""}</span><span>{heatmapPeriodLabel(columns[columns.length - 1].date, period)}</span></div>
         </div>
       </ChartTooltip>}
-    <p className="usage-dashboard-note dashboard-heatmap-key"><span className="dashboard-heatmap-ramp" aria-hidden="true" />
+    {!loading && !error ? <p className="usage-dashboard-note dashboard-heatmap-key"><span className="dashboard-heatmap-ramp" aria-hidden="true" />
       <span>Each column is one period; each cell, the {noun} whose {label.toLowerCase()} falls in that bin, darkest at {peak}, shaded on a log scale so sparse bins still show.{heatmap.levels.length ? <> Lines trace each period's {heatmap.levels.map(level => percentileLabel(level).toLowerCase()).join(", ")}, read from the bins; hover a column for their values.</> : null}{placed.length ? " Dotted lines mark where each band starts." : ""} A hatched column had none.{smoothed}</span></p>
+    : null}
   </div>;
 }
