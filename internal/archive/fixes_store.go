@@ -1125,7 +1125,18 @@ func (c *Catalog) fixesQueryRows(ctx context.Context) ([]map[string]any, error) 
 			"status": entry.Status.State, "target": entry.Target, "target_label": entry.TargetLabel, "destination": nilIfEmpty(entry.DestWhere),
 			"terms": nilIfEmpty(strings.Join(entry.Terms, ", ")), "check_name": nilIfEmpty(entry.Check), "work_items": entry.WorkItems, "events": entry.Events,
 			"conversations": entry.Conversations, "hours": entry.Cost.Hours, "priority": entry.Priority, "safeguards": entry.Safeguards, "in_prompt": entry.Cart != nil,
-			"first_seen": nilIfEmpty(entry.Status.First), "last_seen": nilIfEmpty(entry.Status.Last), "handed_at": nilIfEmpty(entry.HandedAt), "fix_count": 1})
+			"first_seen": nilIfEmpty(entry.Status.First), "last_seen": nilIfEmpty(entry.Status.Last), "first_seen_at": fixesDayStart(entry.Status.First),
+			"last_seen_at": fixesDayStart(entry.Status.Last), "handed_at": nilIfEmpty(entry.HandedAt), "fix_count": 1})
 	}
 	return rows, nil
+}
+
+// fixesDayStart is a local day's start as a timestamp, so a date range such
+// as the last 7 days can select fixes by when they were first or last seen.
+func fixesDayStart(day string) any {
+	start, err := time.ParseInLocation("2006-01-02", day, time.Local)
+	if err != nil {
+		return nil
+	}
+	return start.Format(time.RFC3339)
 }

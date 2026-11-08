@@ -109,7 +109,55 @@ test("suggestions and the card library only offer active recipes", t => {
   const offered = suggestionPool(clock);
   assert.equal(offered.length, queryRecipes.length - retired.size);
   assert.ok(offered.every(suggestion => !retired.has(suggestion.id)));
-  const templates = cardTemplates();
+  const templates = cardTemplates(true);
   assert.equal(templates.length, queryRecipes.length - retired.size);
   assert.ok(templates.every(recipe => !retired.has(recipe.id)));
+  // Agent Events cards are offered whether or not the preview is on, as its
+  // dashboard is listed; with no events read they say how to turn the pass on.
+  const events = templates.filter(recipe => recipe.dataset === "agent_event_rates");
+  assert.ok(events.length > 0);
+  assert.deepEqual(cardTemplates(false).map(recipe => recipe.id), templates.map(recipe => recipe.id));
+  assert.ok(events.every(recipe => /Settings/.test(recipe.emptyLabel ?? "")), "an Agent Events card without events says how to turn the pass on");
+});
+
+// The weekly digest: each card opens the table or dashboard it draws, over
+// the same rows and the same window.
+test("the weekly digest cards open Fixes, Risky actions and Agent Events at what they draw", () => {
+  const digest = Object.fromEntries(queryRecipes.filter(recipe => recipe.category === "digest").map(recipe => [recipe.id, recipe]));
+  assert.deepEqual(Object.keys(digest).sort(), ["digest-friction-weeks", "digest-new-fixes", "digest-returning-fixes", "digest-safeguards"]);
+  const open = (id, days) => {
+    const suggestion = instantiateRecipe(digest[id], days, clock), url = new URL(suggestion.url, "http://home.test");
+    const query = core.decodeQueryStrict(url.searchParams.get(`q_${digest[id].dataset}`));
+    return { url, where: (query.grouping?.source ?? query).where.map(term => `${term.field ?? "any"} ${term.op ?? ""} ${term.value ?? ""}`.trim()) };
+  };
+  const table = (url, area) => [url.pathname, url.searchParams.get("optimize_area"), url.searchParams.get("view")].join(" ") === `/findings ${area} table`;
+
+  // New problems: open fixes Open lists, first seen in the window.
+  const fresh = open("digest-new-fixes", 7);
+  assert.ok(table(fresh.url, "fixes"));
+  assert.equal(fresh.url.searchParams.get("window_field"), "first_seen_at");
+  assert.deepEqual(fresh.where, ["state = open", "shown = shown", "first_seen_at >= -7d", "first_seen_at < +0s"]);
+  // Coming back: seen in the window, first seen before it.
+  const returning = open("digest-returning-fixes", 7);
+  assert.ok(table(returning.url, "fixes"));
+  assert.deepEqual(returning.where, ["state = open", "shown = shown", "first_seen_at < -7d", "last_seen_at >= -7d", "last_seen_at < +0s"]);
+  assert.deepEqual(digest["digest-returning-fixes"].days, [7], "the where names the window start, so the card keeps one window");
+  for (const field of ["first_seen_at", "last_seen_at"]) assert.equal(schemas.fixes.fields.find(item => item.name === field)?.type, "datetime", `${field} takes a date range`);
+
+  // Safeguards: every safeguard check Risky actions has, and only those.
+  const safeguards = open("digest-safeguards", 30);
+  assert.ok(table(safeguards.url, "safety"));
+  const rules = schemas.safety.fields.find(field => field.name === "rule").filter.values.options.map(option => option.value);
+  const any = digest["digest-safeguards"].where[0].any.map(term => term.value);
+  assert.deepEqual(any.sort(), rules.filter(rule => rule.startsWith("safeguard-")).sort());
+  assert.match(digest["digest-safeguards"].emptyLabel, /^No agent got around a safeguard/);
+
+  // Friction by week: the Agent Events compare by week, over the cards' friction.
+  const weeks = open("digest-friction-weeks", 30);
+  assert.equal(readUsageWorkspace(weeks.url.searchParams).topic, "agent_event_rates");
+  const chart = JSON.parse(weeks.url.searchParams.get("analyze_chart"));
+  assert.deepEqual([chart.view, chart.metric, chart.split, chart.minSamples], ["compare", "per_thousand", "week", 200]);
+  const filters = readDashboardQuery(weeks.url.searchParams, core.EMPTY_QUERY).query.where.map(term => `${term.field} ${term.op} ${term.value}`);
+  for (const term of ["family_group = Friction", "family != obstacle", "prompted_by != automated", "prompted_by != none"]) assert.ok(filters.includes(term), term);
+  assert.match(digest["digest-friction-weeks"].note, /partial/);
 });

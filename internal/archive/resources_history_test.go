@@ -26,7 +26,7 @@ type historyHarness struct {
 func newHistoryHarness(t *testing.T) *historyHarness {
 	t.Helper()
 	h := &historyHarness{clock: time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC),
-		source: &fakeUsage{procs: map[int]processUsage{10: {CPUSeconds: 1, Footprint: 300e6, Started: 1, DiskBytes: 1e6, DiskKnown: true}}},
+		source: &fakeUsage{procs: map[int]processUsage{10: {CPUSeconds: 1, Footprint: 300e6, Started: 1, DiskBytes: 1e6, Known: counterOwnCPU | counterChildCPU | counterMemory | counterDisk}}},
 		roots:  []resourceProcess{{PID: 10, Role: "service"}}}
 	h.sampler = &resourceSampler{read: h.source.read, basis: resourceBasisKernel, now: func() time.Time { return h.clock }, byPID: map[int]*resourceTrack{}}
 	h.history = newResourceHistory(h.sampler, nil, func(time.Time) resourceHistoryFrame {
@@ -60,7 +60,7 @@ func (h *historyHarness) doc(t *testing.T, since time.Time) resourceHistoryDocum
 		t.Fatalf("no history: %+v", doc)
 	}
 	samples := doc.Samples
-	for _, column := range []int{len(samples.CPU), len(samples.Memory), len(samples.Disk), len(samples.CPUPartial), len(samples.DiskPartial), len(samples.Processes)} {
+	for _, column := range []int{len(samples.CPU), len(samples.Memory), len(samples.Disk), len(samples.CPUPartial), len(samples.DiskPartial), len(samples.MemoryPartial), len(samples.Processes)} {
 		if column != len(samples.T) {
 			t.Fatalf("columns must align with sample times: %+v", samples)
 		}
@@ -126,7 +126,7 @@ func TestResourceHistoryRecordsSegmentsAndGaps(t *testing.T) {
 	}
 
 	// PID reuse: a new process under the same PID is a restart.
-	h.source.set(10, processUsage{CPUSeconds: 0.5, Footprint: 100e6, Started: 2})
+	h.source.set(10, processUsage{Known: counterOwnCPU | counterChildCPU | counterMemory, CPUSeconds: 0.5, Footprint: 100e6, Started: 2})
 	h.advance(resourceHistoryIdle, 0)
 	doc = h.doc(t, time.Time{})
 	if doc.Segments[len(doc.Segments)-1].Reason != "restart" || doc.Samples.CPU[len(doc.Samples.T)-1] != nil {
@@ -164,7 +164,7 @@ func TestResourceHistoryRecordsSegmentsAndGaps(t *testing.T) {
 	// The window is bounded by time, keeping the coverage in effect at its
 	// start; a stopped collector serves nothing.
 	override(t, &resourceHistoryWindow, 30*time.Second)
-	h.source.set(10, processUsage{CPUSeconds: 1, Footprint: 100e6, Started: 3})
+	h.source.set(10, processUsage{Known: counterOwnCPU | counterChildCPU | counterMemory, CPUSeconds: 1, Footprint: 100e6, Started: 3})
 	for range 10 {
 		h.advance(resourceHistoryIdle, 0.1)
 	}
@@ -193,7 +193,7 @@ func TestResourceHistoryGPUMarkersAndIntegration(t *testing.T) {
 	h.now = func() time.Time { return clock }
 	h.running, h.fresh = true, true
 	summary := func(at time.Time, cpu *float64, gpuAt time.Time, gpu *float64) *resourceSummary {
-		return &resourceSummary{Processes: []resourceReading{{PID: 10, Role: "service", cpu: cpu, memory: 1e9, at: at}},
+		return &resourceSummary{Processes: []resourceReading{{PID: 10, Role: "service", cpu: cpu, memory: new(uint64(1e9)), at: at}},
 			GPU: &gpuReading{at: gpuAt, percent: gpu, Partial: gpu == nil}}
 	}
 	tick := func(at time.Time, cpu *float64, gpuAt time.Time, gpu *float64, tasks ...resourceHistoryTask) {
@@ -298,7 +298,7 @@ func TestResourceHistoryUsesWallTime(t *testing.T) {
 	h := newResourceHistory(nil, nil, func(time.Time) resourceHistoryFrame {
 		return resourceHistoryFrame{
 			Tasks: []resourceHistoryTask{{ID: "op1", State: opRunning, RunStarted: time.Now().Add(-time.Second)}},
-			Scopes: []resourceHistoryScope{{Summary: &resourceSummary{Processes: []resourceReading{{PID: 10, Role: "service", memory: 1, at: reading}},
+			Scopes: []resourceHistoryScope{{Summary: &resourceSummary{Processes: []resourceReading{{PID: 10, Role: "service", memory: new(uint64(1)), at: reading}},
 				GPU: &gpuReading{at: reading, percent: new(1.0)}}}}}
 	})
 	h.running, h.fresh = true, true
@@ -326,7 +326,7 @@ func TestResourceHistoryTaskStatesAndUnknownLibraries(t *testing.T) {
 	h := newResourceHistory(nil, nil, func(time.Time) resourceHistoryFrame { return frame })
 	h.now = func() time.Time { return clock }
 	h.running, h.fresh = true, true
-	scopes := []resourceHistoryScope{{Summary: &resourceSummary{Processes: []resourceReading{{PID: 10, Role: "broker", memory: 1, at: clock}},
+	scopes := []resourceHistoryScope{{Summary: &resourceSummary{Processes: []resourceReading{{PID: 10, Role: "broker", memory: new(uint64(1)), at: clock}},
 		GPU: &gpuReading{at: clock, Partial: true}}}}
 	tick := func(unknown []string, tasks ...resourceHistoryTask) {
 		clock = clock.Add(2 * time.Second)
@@ -475,5 +475,40 @@ func TestBrokerResourceTasksShareTheDeadline(t *testing.T) {
 	slices.Sort(ids)
 	if strings.Join(ids, ",") != "b1@"+b1.URL+",b2@"+b2.URL || !frame.Active {
 		t.Fatalf("each answering library's tasks, attributed to it: %v", ids)
+	}
+}
+
+// The same collector works with native, self-only and unavailable readers.
+// Each metric preserves its own missing values, real zeroes and lower bounds.
+func TestResourceHistoryCounterCoverage(t *testing.T) {
+	h := newHistoryHarness(t)
+	h.sampler.basis = "go-runtime"
+	h.source.set(10, processUsage{Known: counterMemory, Footprint: 123})
+	h.history.tick()
+	doc := h.doc(t, time.Time{})
+	if doc.Series["cpu"].Available || doc.Series["disk"].Available || !doc.Series["memory"].Available || !strings.Contains(doc.Series["memory"].Note, "Go runtime") {
+		t.Fatalf("runtime-only capabilities: %+v", doc.Series)
+	}
+	if doc.Samples.CPU[0] != nil || doc.Samples.Disk[0] != nil || doc.Samples.Memory[0] == nil || *doc.Samples.Memory[0] != 123 {
+		t.Fatalf("unavailable is not zero: %+v", doc.Samples)
+	}
+	// Real zero memory remains a reading; a second process without memory
+	// keeps the total a lower bound. No native host calls are needed.
+	h.clock = h.clock.Add(resourceHistoryIdle)
+	h.source.set(10, processUsage{Known: counterMemory})
+	h.source.set(11, processUsage{})
+	h.roots = append(h.roots, resourceProcess{PID: 11, Role: "cli"})
+	h.history.tick()
+	doc = h.doc(t, time.Time{})
+	last := len(doc.Samples.T) - 1
+	if doc.Samples.Memory[last] == nil || *doc.Samples.Memory[last] != 0 || !doc.Samples.MemoryPartial[last] {
+		t.Fatalf("known zero and partial memory: %+v", doc.Samples)
+	}
+	h.clock = h.clock.Add(resourceHistoryIdle)
+	h.source.set(10, processUsage{})
+	h.history.tick()
+	doc = h.doc(t, time.Time{})
+	if doc.Samples.Memory[len(doc.Samples.T)-1] != nil {
+		t.Fatalf("a missing counter must break the memory line: %+v", doc.Samples)
 	}
 }

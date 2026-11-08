@@ -144,11 +144,17 @@ func prepareHistory(ctx context.Context, config Config, p historyPlan, backup st
 	if e != nil {
 		return j, e
 	}
+	// Before any job state: an identity that cannot be read, or a plan
+	// without one, is no proof the volume is the one planned.
 	rootInfo, err := os.Stat(p.CaptureRoot)
 	if err != nil {
 		return j, err
 	}
-	if key, ok := keyOf(rootInfo); ok && fmt.Sprintf("%d:%d", key.device, key.inode) != p.RootIdentity {
+	root, err := rootIdentity(rootInfo)
+	if err != nil {
+		return j, err
+	}
+	if p.RootIdentity == "" || root != p.RootIdentity {
 		return j, errors.New("capture volume changed after planning")
 	}
 	if e = os.MkdirAll(dir, 0700); e != nil {

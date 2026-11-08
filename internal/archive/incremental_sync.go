@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -895,13 +894,16 @@ func conductorPreflight(adapter Adapter) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	info, err := os.Stat(adapter.Config().Path)
+	path := adapter.Config().Path
+	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
 	}
-	identity := ""
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		identity = fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
+	// Without the directory's identity, a replaced source could hash as
+	// unchanged, so the check fails rather than hashing an empty identity.
+	identity, err := localIdentityText(info)
+	if err != nil {
+		return "", fmt.Errorf("identify %s: %w", path, err)
 	}
 	return hashBytes([]byte(fingerprint + ":" + identity + ":" + sourceIndexVersion(adapter))), nil
 }

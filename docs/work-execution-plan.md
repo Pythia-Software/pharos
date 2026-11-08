@@ -826,3 +826,10 @@ prerequisites between each stage. Session Shape likewise stores unknown
 writing-derived fields until estimates land; its native triggers then dirty
 the affected conversations again rather than holding the projection behind
 a paused analysis.
+
+## Platform boundary
+
+[Work execution across platforms](work-portability.md) defines the native
+observation/action boundary, reuse of platform utilities, counter availability
+and the checks required before a future port is supported. Scheduling and
+cooperative CPU grants remain independent of native resource telemetry.

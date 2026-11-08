@@ -56,7 +56,7 @@ func BenchmarkIncrementalScheduled(b *testing.B) {
 			}
 			b.ReportAllocs()
 			b.ResetTimer()
-			cpu := processResourceUsage().cpu
+			before := processResourceUsage()
 			for iteration := range b.N {
 				if workload == "audit-only" {
 					if result := catalog.auditUnit(b.Context(), unit, "benchmark", automaticAuditBytes); result.Outcome != "passed" {
@@ -107,7 +107,10 @@ func BenchmarkIncrementalScheduled(b *testing.B) {
 					b.Fatalf("scheduled run: %s: %v", run.State, run.Error)
 				}
 			}
-			b.ReportMetric((processResourceUsage().cpu-cpu)/float64(b.N), "cpu-s/op")
+			// CPU is reported only where this platform reads it.
+			if cpu := cpuDelta(before, processResourceUsage()); cpu != nil {
+				b.ReportMetric(*cpu/float64(b.N), "cpu-s/op")
+			}
 		})
 	}
 }

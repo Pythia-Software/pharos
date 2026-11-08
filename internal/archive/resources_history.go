@@ -128,11 +128,11 @@ type resourceHistoryMarker struct {
 }
 
 type resourceHistoryPoint struct {
-	at                      time.Time
-	cpu, disk               *float64
-	memory                  *uint64
-	cpuPartial, diskPartial bool
-	processes               int
+	at                                     time.Time
+	cpu, disk                              *float64
+	memory                                 *uint64
+	cpuPartial, diskPartial, memoryPartial bool
+	processes                              int
 }
 
 type resourceHistoryGPUPoint struct {
@@ -161,18 +161,20 @@ type resourceCovered struct {
 }
 
 type resourceSeries struct {
-	label     string
-	summary   *resourceSummary
-	summaryAt time.Time
-	seenAt    time.Time
-	basis     string
-	points    []resourceHistoryPoint
-	gpu       []resourceHistoryGPUPoint
-	gpuSeen   bool
-	diskSeen  bool
-	segments  []resourceHistorySegment
-	coverage  []resourceHistoryCoverage
-	identity  string
+	label      string
+	summary    *resourceSummary
+	summaryAt  time.Time
+	seenAt     time.Time
+	basis      string
+	points     []resourceHistoryPoint
+	gpu        []resourceHistoryGPUPoint
+	gpuSeen    bool
+	cpuSeen    bool
+	memorySeen bool
+	diskSeen   bool
+	segments   []resourceHistorySegment
+	coverage   []resourceHistoryCoverage
+	identity   string
 }
 
 type resourceHistory struct {
@@ -326,8 +328,10 @@ func (h *resourceHistory) record(now time.Time, frame resourceHistoryFrame) {
 			series.basis = summary.Basis
 			point = historyPoint(summary)
 			for _, reading := range summary.Processes {
+				series.cpuSeen = series.cpuSeen || !reading.cpuUnavailable
+				series.memorySeen = series.memorySeen || reading.memory != nil
 				covered = append(covered, resourceCovered{PID: reading.PID, Role: reading.Role, Library: reading.Library})
-				if identity == "" && (reading.Role == "service" || reading.Role == "broker") {
+				if identity == "" && reading.started != 0 && (reading.Role == "service" || reading.Role == "broker") {
 					identity = fmt.Sprintf("%s:%d:%d", reading.Role, reading.PID, reading.started)
 				}
 			}
@@ -389,9 +393,9 @@ func (h *resourceHistory) record(now time.Time, frame resourceHistoryFrame) {
 // historyPoint is a summary's exact totals: the rounded ones are for the
 // status document. Its time is its newest reading's.
 func historyPoint(summary *resourceSummary) resourceHistoryPoint {
-	point := resourceHistoryPoint{cpuPartial: summary.CPUPartial, diskPartial: summary.DiskPartial, processes: len(summary.Processes)}
+	point := resourceHistoryPoint{cpuPartial: summary.CPUPartial, diskPartial: summary.DiskPartial, memoryPartial: summary.MemoryPartial, processes: len(summary.Processes)}
 	cpu, disk, memory := 0.0, 0.0, uint64(0)
-	cpuKnown, diskKnown := false, false
+	cpuKnown, diskKnown, memoryKnown := false, false, false
 	for _, reading := range summary.Processes {
 		if reading.cpu != nil {
 			cpu += *reading.cpu
@@ -401,7 +405,10 @@ func historyPoint(summary *resourceSummary) resourceHistoryPoint {
 			disk += *reading.disk
 			diskKnown = true
 		}
-		memory += reading.memory
+		if reading.memory != nil {
+			memory += *reading.memory
+			memoryKnown = true
+		}
 		if at := wallTime(reading.at); at.After(point.at) {
 			point.at = at
 		}
@@ -412,7 +419,7 @@ func historyPoint(summary *resourceSummary) resourceHistoryPoint {
 	if diskKnown {
 		point.disk = &disk
 	}
-	if len(summary.Processes) > 0 {
+	if memoryKnown {
 		point.memory = &memory
 	}
 	return point
@@ -661,13 +668,14 @@ type resourceSeriesInfo struct {
 }
 
 type resourceHistorySamples struct {
-	T           []int64    `json:"t"`
-	CPU         []*float64 `json:"cpu"`
-	Memory      []*uint64  `json:"memory"`
-	Disk        []*float64 `json:"disk"`
-	CPUPartial  []bool     `json:"cpu_partial"`
-	DiskPartial []bool     `json:"disk_partial"`
-	Processes   []int      `json:"processes"`
+	T             []int64    `json:"t"`
+	CPU           []*float64 `json:"cpu"`
+	Memory        []*uint64  `json:"memory"`
+	Disk          []*float64 `json:"disk"`
+	CPUPartial    []bool     `json:"cpu_partial"`
+	DiskPartial   []bool     `json:"disk_partial"`
+	MemoryPartial []bool     `json:"memory_partial"`
+	Processes     []int      `json:"processes"`
 }
 
 type resourceHistoryGPUSamples struct {
@@ -738,14 +746,18 @@ func (h *resourceHistory) document(key string, since time.Time) (resourceHistory
 	doc.Cadence = map[string]float64{"active_seconds": resourceHistoryActive.Seconds(), "idle_seconds": resourceHistoryIdle.Seconds(), "gpu_seconds": gpuSampleInterval.Seconds()}
 	cores := 100 * float64(resourceCores())
 	basis := defaultString(series.basis, resourceBasis)
+	memoryNote := "Physical footprint of the covered processes at each sample."
+	if basis != resourceBasisKernel {
+		memoryNote = "Approximate Go runtime-managed memory of this process; excludes unmanaged memory and is not RSS or physical footprint."
+	}
 	doc.Series = map[string]resourceSeriesInfo{
-		"cpu":    {Label: "CPU", Unit: "percent_one_core", Basis: basis, Available: true, Max: &cores, Note: "100% is one core; the total can exceed it."},
-		"memory": {Label: "RAM", Unit: "bytes", Basis: basis, Available: true, Note: "Physical footprint of the covered processes at each sample."},
+		"cpu":    {Label: "CPU", Unit: "percent_one_core", Basis: basis, Available: series.cpuSeen, Max: &cores, Note: "100% is one core; the total can exceed it."},
+		"memory": {Label: "RAM", Unit: "bytes", Basis: basis, Available: series.memorySeen, Note: memoryNote},
 		"disk":   {Label: "I/O", Unit: "bytes_per_second", Basis: basis, Available: series.diskSeen, Note: "Bytes the covered processes read and wrote; exited children are not counted."},
 		"gpu": {Label: "GPU", Unit: "percent_driver_time", Basis: gpuResourceBasis, Available: series.gpuSeen,
 			Note: "Driver GPU-time share of the covered processes, sampled on its own cadence; not device saturation."},
 	}
-	samples := &resourceHistorySamples{T: []int64{}, CPU: []*float64{}, Memory: []*uint64{}, Disk: []*float64{}, CPUPartial: []bool{}, DiskPartial: []bool{}, Processes: []int{}}
+	samples := &resourceHistorySamples{T: []int64{}, CPU: []*float64{}, Memory: []*uint64{}, Disk: []*float64{}, CPUPartial: []bool{}, DiskPartial: []bool{}, MemoryPartial: []bool{}, Processes: []int{}}
 	for _, point := range series.points {
 		if !afterMilli(point.at, since) {
 			continue
@@ -756,6 +768,7 @@ func (h *resourceHistory) document(key string, since time.Time) (resourceHistory
 		samples.Disk = append(samples.Disk, roundTo(point.disk, 1))
 		samples.CPUPartial = append(samples.CPUPartial, point.cpuPartial)
 		samples.DiskPartial = append(samples.DiskPartial, point.diskPartial)
+		samples.MemoryPartial = append(samples.MemoryPartial, point.memoryPartial)
 		samples.Processes = append(samples.Processes, point.processes)
 	}
 	doc.Samples = samples
@@ -927,6 +940,7 @@ func (s *Server) collectResourceHistory(at time.Time) resourceHistoryFrame {
 	tasks := resourceHistoryTasks(s.ops.running())
 	active := slices.ContainsFunc(tasks, func(task resourceHistoryTask) bool { return task.State == opRunning })
 	s.historyLeases.active = active
+	processes := s.serviceHistoryProcesses(at)
 	return resourceHistoryFrame{Tasks: tasks, Active: active,
-		Scopes: collectResourceGroups(s.resources, processGPU, resourceScopeService, nil, s.serviceHistoryProcesses(at), nil)}
+		Scopes: collectResourceGroups(s.resources, processGPU, resourceScopeService, nil, processes, s.historyLeases.omitted)}
 }

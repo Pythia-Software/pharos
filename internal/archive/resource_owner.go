@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -53,12 +54,16 @@ type resourceLeaseCache struct {
 	active  bool              // the previous frame had running work
 	started map[string]uint64 // OS process identity observed with each lease
 	read    func(int) (processUsage, error)
+	// omitted describes unverified local leases from the most recent probe.
+	// It is diagnostic coverage, never a lifecycle verdict.
+	omitted []string
 	// stale makes the next probe read the drive again: status's own fresh
 	// probe found a live lease the cached one lacks. Any goroutine sets it.
 	stale atomic.Bool
 }
 
 func (c *resourceLeaseCache) probe(dirs []string, at time.Time) []leaseProbe {
+	c.omitted = nil
 	key := strings.Join(dirs, "\x00")
 	every := resourceLeaseIdle
 	if c.active {
@@ -85,7 +90,7 @@ func (c *resourceLeaseCache) probe(dirs []string, at time.Time) []leaseProbe {
 	if read == nil {
 		read = processUsageOf
 	}
-	probes := c.probes[key]
+	probes := slices.Clone(c.probes[key])
 	for i := range probes {
 		probe := &probes[i]
 		if !probe.Live || probe.Info == nil || probe.Info.HostID != currentHost().ID {
@@ -98,7 +103,12 @@ func (c *resourceLeaseCache) probe(dirs []string, at time.Time) []leaseProbe {
 		// A cached flock says nothing about a replacement process with the
 		// same PID. Once its observed OS identity ends, forget this lease
 		// until the next real probe instead of attributing unrelated load.
-		if err != nil || usage.Started == 0 || c.started[probe.Path] != usage.Started {
+		if err != nil || usage.Started == 0 || c.started[probe.Path] == 0 {
+			probe.Live = false
+			if presence, _ := observeProcess(probe.Info.PID); presence != processAbsent {
+				c.omitted = append(c.omitted, fmt.Sprintf("Lease process (PID %d): usage or process identity could not be verified", probe.Info.PID))
+			}
+		} else if c.started[probe.Path] != usage.Started {
 			probe.Live = false
 		}
 	}
@@ -113,19 +123,20 @@ func (b *brokerOperations) collectResourceHistory(at time.Time) resourceHistoryF
 	tasks := resourceHistoryTasks(b.reg.running())
 	unknown := []string{}
 	appLeases := b.leases.probe([]string{appLeaseDir()}, at)
-	omitted := []string{"Native UI helper ownership is not independently verified"}
+	omitted := append(slices.Clone(b.leases.omitted), "Native UI helper ownership is not independently verified")
 	for _, library := range libraries {
 		processes := []resourceProcess{}
 		if library.Child != nil {
 			processes = append(processes, resourceProcess{PID: library.Child.PID, Role: "service", Library: library.ID, LibraryName: library.Name})
 		}
 		processes = append(processes, leaseProcesses(b.leases.probe(library.LeaseDirs, at), library.ID, library.Name)...)
+		leaseOmissions := slices.Clone(b.leases.omitted)
 		for _, lease := range appLeases {
 			if lease.Info != nil && slices.ContainsFunc(lease.Info.Libraries, func(path string) bool { return sameConfig(path, library) }) {
 				processes = append(processes, leaseProcesses([]leaseProbe{lease}, library.ID, library.Name)...)
 			}
 		}
-		groups = append(groups, resourceGroup{Key: library.ID, Label: library.Name, Processes: processes})
+		groups = append(groups, resourceGroup{Key: library.ID, Label: library.Name, Processes: processes, Omitted: leaseOmissions})
 	}
 	// Memory-only task metadata from each service: never /status/freshness
 	// or a catalog query on the sampler path. The services are asked at once,
