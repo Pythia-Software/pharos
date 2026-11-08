@@ -121,24 +121,17 @@ APP_HTML = r'''<!doctype html>
     .subagent-run{margin:0;border:0;border-radius:0;background:none}
     .subagent-run>summary{font-weight:400}.subagent-run>summary .activity-title{flex:0 0 auto;min-width:35px}.subagent-summary-stats{display:flex;align-items:center;flex-shrink:0}
     .subagent-body{margin:0 0 4px 20px;padding:2px 8px 4px;border-left:1px solid var(--line)}.subagent-body .timeline-entry{grid-template-columns:38px minmax(0,1fr)}.subagent-assignment{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-xs);line-height:1.45}.subagent-details>summary{color:var(--muted)}
-    .conversation-map{position:fixed;z-index:5;right:10px;top:var(--conversation-rail-top,72px);bottom:34px;display:none;width:30px;padding:3px;background:var(--panel);border:1px solid var(--line)}
-    .conversation-map.visible{display:block}
     .token-column{display:flex;flex-direction:column;align-items:stretch;flex:0 0 var(--token-column-width,60px);width:var(--token-column-width,60px);min-width:0;gap:3px}.conversation-panel:not(.has-token-usage) .token-column{display:none}
     .token-column>.context-evidence{display:flex;flex-direction:column;align-items:stretch;gap:3px;min-width:0}.token-column .token-badge,.token-column .spend-badge,.token-column .compaction-badge{display:block;box-sizing:border-box;width:100%;margin-left:0;padding:1px 2px;text-align:center;white-space:normal;overflow-wrap:anywhere}
     .token-badge{display:inline-block;flex-shrink:0;font:var(--fs-2xs)/1.5 ui-monospace,SFMono-Regular,monospace;white-space:nowrap;padding:1px 5px;border:1px solid currentColor;border-radius:3px;margin-left:6px;background:var(--panel)}
     .context-badge{color:var(--heat-color,var(--muted))}
     .compaction-badge{font-size:var(--fs-2xs);color:var(--muted);white-space:nowrap;margin-left:5px}.compaction-badge::before{content:'';display:inline-block;width:9px;height:2px;margin:0 4px 2px 0;vertical-align:middle;background:var(--ink)}.token-legend{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:8px 0 0;font-size:var(--fs-2xs);color:var(--muted)}.token-legend button{font-size:var(--fs-xs);padding:1px 6px}
-    .token-map{display:none;position:fixed;z-index:5;right:46px;top:var(--conversation-rail-top,72px);bottom:34px;width:48px;padding:4px;background:var(--panel);border:1px solid var(--line)}.token-map.visible{display:flex;flex-direction:column}.conversation-map-label,.token-map-label{position:absolute;top:100%;left:0;width:100%;font:8px/16px ui-monospace,monospace;color:var(--muted);text-align:center}.token-map-track{position:relative;flex:1;min-height:0}.token-marker{position:absolute;right:0;min-height:2px;padding:0;border:0;border-bottom:1px solid var(--panel);border-radius:0;background:var(--token-color,var(--line));opacity:.6}.token-marker.turn-marker{left:0;right:auto;border-left:2px solid var(--ink);margin:0}.token-marker.in-view,.token-marker:hover,.token-marker:focus-visible{opacity:1;outline:1px solid var(--ink);z-index:1}.token-marker.compaction-marker{background:var(--ink)}.token-highlight{animation:token-flash 2s ease-out}@keyframes token-flash{from{background:color-mix(in srgb,var(--gold) 25%,transparent)}to{background:transparent}}
-    .token-marker,.token-marker.compaction-marker{left:0;right:auto;min-height:0;border:0;background:transparent}.token-marker::before{content:'';position:absolute;inset:0;background:var(--token-color);clip-path:var(--context-profile);pointer-events:none}.token-marker.compaction-marker::before{background:var(--ink)}.token-marker.manual-compaction::before,.compaction-badge.manual-compaction::before{background:var(--heat-1)}.token-marker.auto-compaction::before,.compaction-badge.auto-compaction::before{background:var(--heat-3)}.spend-badge{display:inline-block;margin-left:6px;padding:1px 5px;border:1px dashed var(--muted);border-radius:3px;color:var(--muted);font:var(--fs-2xs)/1.5 ui-monospace,monospace;white-space:nowrap}.context-key{color:#43877e}.agent-context-key{color:#b07a18}
+    .token-highlight{animation:token-flash 2s ease-out}@keyframes token-flash{from{background:color-mix(in srgb,var(--gold) 25%,transparent)}to{background:transparent}}
+    .compaction-badge.manual-compaction::before{background:var(--heat-1)}.compaction-badge.auto-compaction::before{background:var(--heat-3)}
+    .spend-badge{display:inline-block;margin-left:6px;padding:1px 5px;border:1px dashed var(--muted);border-radius:3px;color:var(--muted);font:var(--fs-2xs)/1.5 ui-monospace,monospace;white-space:nowrap}.context-key{color:#43877e}.agent-context-key{color:#b07a18}
     @media(min-width:901px){.conversation-panel{margin-right:65px}}
-    @media(max-width:900px){.token-map{display:none!important}}
-    .conversation-map-track{position:relative;height:100%;overflow:hidden;background:var(--bg);cursor:pointer}
-    .conversation-map-turn{position:absolute;left:6px;right:6px;min-height:3px;padding:0;border:0;border-radius:0;background:color-mix(in srgb,var(--muted) 25%,transparent)}
-    .conversation-map-turn.human{border-top:2px solid var(--gold)}.conversation-map-turn.current{background:color-mix(in srgb,var(--accent) 45%,transparent)}
-    .conversation-map-viewport{position:absolute;z-index:2;left:1px;right:1px;min-height:8px;border:1px solid var(--accent);pointer-events:none}
     summary:focus-visible,button:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:2px}
     @media(min-width:901px){.conversation-panel{margin-right:30px}}
-    @media(max-width:900px){.conversation-map{display:none!important}}
     @media(max-width:760px){.conversation-head{padding:14px}.conversation-toolbar{flex-wrap:wrap}.conversation-toolbar input{flex-basis:100%}.turn-list{padding:0 10px}.turn-summary-stats{display:none}.timeline-entry{grid-template-columns:32px minmax(0,1fr);gap:7px}.activity-title{flex-basis:48px;font-size:var(--fs-xs);overflow-wrap:anywhere}.change-path{max-width:150px}.tool-inputs{grid-template-columns:1fr}.event-body{padding-left:8px}.subagent-body{padding-left:8px}}
   </style>
   <style>
@@ -228,7 +221,7 @@ APP_HTML = r'''<!doctype html>
     .show-labels .speaker-row.human[data-label-family]:not(.reader-label-hidden){padding:8px 9px 8px 24px}
     .thinking-card{position:relative;padding:8px 12px;margin:4px 0 8px;border-left:2px solid var(--line);background:color-mix(in srgb,var(--bg) 30%,var(--panel))}
     .label-legend-group{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:5px 7px;border:1px solid color-mix(in srgb,var(--ink) 14%,transparent);border-radius:5px;max-width:100%}.label-legend-group>strong{font-size:inherit;font-weight:600;color:var(--ink)}
-    .label-legend{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px}.label-legend[hidden]{display:none}.label-legend-item{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}.label-legend-item i,.label-tip-row i{display:inline-block;flex:none;width:11px;height:11px;border-radius:2px;background:color-mix(in srgb,var(--label-hue) 24%,transparent);border:1px solid color-mix(in srgb,var(--label-hue) 60%,transparent)}.label-legend-note{color:var(--muted)}
+    .label-legend{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;max-width:100%}.label-legend[hidden]{display:none}.label-legend-item{display:inline-flex;align-items:center;gap:5px;white-space:normal;min-width:0}.label-legend-item i,.label-tip-row i{display:inline-block;flex:none;width:11px;height:11px;border-radius:2px;background:color-mix(in srgb,var(--label-hue) 24%,transparent);border:1px solid color-mix(in srgb,var(--label-hue) 60%,transparent)}.label-legend-note{color:var(--muted)}
     .label-tip{position:fixed;z-index:60;max-width:340px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);box-shadow:0 8px 24px #0003;font-size:var(--fs-sm);line-height:1.35;pointer-events:none}.label-tip[hidden]{display:none}.label-tip-segment{margin-bottom:6px;color:var(--muted);font-size:var(--fs-xs)}.label-tip-row{display:grid;grid-template-columns:11px 1fr auto;column-gap:7px;align-items:center;margin-top:4px}.label-tip-row strong{font-weight:600}.label-tip-row span{color:var(--muted);font-variant-numeric:tabular-nums}.label-tip-row p{grid-column:2/4;margin:1px 0 0;color:var(--muted);font-size:var(--fs-xs)}
     /* Agent events (agentEventsAttacher): an event's sentence in its kind group's hue, what it was about and what the agent did underlined, shown with the Agent events highlight. */
     /* Agent events take the primaries, so they read apart from the secondary and tertiary tool-action hues (web/src/delegation.css) and the message modes: friction red, learning gold (a deep ochre, kept apart from the attention and Find yellows --attention-*), second look green, choices blue. Deep in light mode, pale in dark; each group also has its own shape (web/src/event-link-layout.ts). web/tests/unit/delegation/timeline-palette.test.mjs checks the separations. Links between an event and its target are ink (--event-link); --event-on is text on an event colour. */
@@ -267,10 +260,6 @@ APP_HTML = r'''<!doctype html>
     .markdown-content pre code{background:none;padding:0}.markdown-table{overflow:auto}.markdown-content table{border-collapse:collapse;font-size:var(--fs-xs);margin:4px 0}.markdown-content th,.markdown-content td{padding:3px 7px;border-bottom:1px solid var(--line);text-align:left}.markdown-content hr{border:0;border-top:1px solid var(--line);margin:6px 0}
     @media(max-width:760px){.conversation-head{padding:8px 10px}.turn-list{padding:0 8px}.timeline-entry{grid-template-columns:29px minmax(0,1fr);gap:5px}.message-prose{font-size:var(--fs-sm)}.file-chip{font-size:var(--fs-2xs)}.chip-preview{margin-left:0}}
     @media(min-width:901px){.conversation-panel{margin-right:110px}}
-    .token-map{padding:3px}.token-map-track{height:100%;flex:1}.token-marker.in-view{outline:none}.token-marker:hover,.token-marker:focus-visible{outline:1px solid var(--ink)}
-    .conversation-map-window{position:fixed;z-index:7;top:var(--conversation-rail-top,72px);right:10px;bottom:34px;width:30px;display:none;padding:3px;pointer-events:none}
-    .conversation-map-window.visible{display:block}.conversation-map-window-track{position:relative;width:100%;height:100%}.conversation-map-window .conversation-map-viewport{left:0;right:0;border:1px solid color-mix(in srgb,var(--ink) 34%,transparent);border-radius:2px;background:color-mix(in srgb,var(--ink) 7%,transparent)}
-    @media(max-width:900px){.conversation-map-window{display:none!important}}
   </style>
   <style>
     /* Pharos identity: the header, beam, highlights, and empty states borrow the app icon's harbor green, stone, brass, and lamp. */
@@ -1050,7 +1039,7 @@ function exemptFromTranscriptFilter(panel,element){for(let entry=element?.closes
 // would render, in the kinds the Show filter shows, and renders the parts
 // holding the match it steps to.
 function transcriptFindable(panel){const shown=panel?.transcriptShown?.();return message=>!shown||panel.transcript.pathOf(message).every(key=>shown.has(key))}
-function findLazily(element,messages,materialize){element.dataset.pharosFindPending='';element.pharosFindPending=()=>{if(!element.hasAttribute('data-pharos-find-pending'))return null;const findable=transcriptFindable(element.closest('.conversation-panel'));return messages().filter(findable).map(findableText)};element.pharosFindMaterialize=test=>{const findable=transcriptFindable(element.closest('.conversation-panel')),wanted=message=>findable(message)&&test(findableText(message));const loaded=messages().filter(message=>message.id&&wanted(message));if(loaded.length){const state=window.pharosView?.read('reader_content',{})||{};window.pharosView?.write('reader_content',{...state,...Object.fromEntries(loaded.map(message=>['loaded:'+message.id,true]))})}materialize(wanted)}}
+function findLazily(element,messages,materialize){element.pharosSourceMessages=messages;element.dataset.pharosFindPending='';element.pharosFindPending=()=>{if(!element.hasAttribute('data-pharos-find-pending'))return null;const findable=transcriptFindable(element.closest('.conversation-panel'));return messages().filter(findable).map(findableText)};element.pharosFindMaterialize=test=>{const findable=transcriptFindable(element.closest('.conversation-panel')),wanted=message=>findable(message)&&test(findableText(message));const loaded=messages().filter(message=>message.id&&wanted(message));if(loaded.length){const state=window.pharosView?.read('reader_content',{})||{};window.pharosView?.write('reader_content',{...state,...Object.fromEntries(loaded.map(message=>['loaded:'+message.id,true]))})}materialize(wanted)}}
 function transcriptKindList(keys){const labels=keys.map(key=>TRANSCRIPT_CATEGORIES.find(([name])=>name===key)?.[1].toLowerCase()).filter(Boolean);return labels.length>1?labels.slice(0,-1).join(', ')+' and '+labels.at(-1):labels[0]||''}
 // Each path is an event's category followed by those of the sub-agents holding it.
 function transcriptFilterControl(panel,paths){
@@ -1162,66 +1151,13 @@ function renderSequence(messages,context){
   return fragment;
 }
 const conversationMapCleanups=[];
-// Both rails read geometry before either writes styles. Even scrollTop can
-// flush layout when the other rail has just changed thousands of markers.
-const conversationFrameReads=new Set();
-let conversationFrame=0;
-function scheduleConversationFrame(read){
-  conversationFrameReads.add(read);
-  if(!conversationFrame)conversationFrame=requestAnimationFrame(()=>{
-    conversationFrame=0;const reads=[...conversationFrameReads];conversationFrameReads.clear();
-    const writes=reads.map(read=>read());for(const write of writes)write?.();
-  });
-}
-function conversationRailMetrics(list){
-  const rect=list.getBoundingClientRect(),scroller=conversationScroller(list);return{rect,scroller,top:rect.top+scroller.scrollTop,total:Math.max(1,list.scrollHeight)};
-}
 function conversationScroller(panel){return panel.closest('.workspace-reader-content')||document.querySelector('#detail .workspace-reader-content')||pageScroller}
-function observeConversationLayout(observer,panel){
-  const scroller=conversationScroller(panel);
-  for(let element=panel;element&&element!==scroller;element=element.parentElement)observer.observe(element);
-  observer.observe(scroller);
-  // A preceding overview can move the transcript without changing its size
-  // or the scrollport's. Observe that content too, including Archive details.
-  for(const child of scroller.children)observer.observe(child);
-}
-function conversationRailFraction(metrics,target){
-  return Math.max(0,Math.min(1,(target.getBoundingClientRect().top+metrics.scroller.scrollTop-metrics.top)/metrics.total));
-}
 function setupConversationMap(panel,list){
-  const scroller=conversationScroller(panel);
-  const map=node('aside','conversation-map'),track=node('div','conversation-map-track'),windowOverlay=node('div','conversation-map-window'),windowTrack=node('div','conversation-map-window-track'),viewport=node('span','conversation-map-viewport'),turns=[...list.querySelectorAll(':scope > .turn')];
-  map.setAttribute('aria-label','Conversation position');windowOverlay.setAttribute('aria-hidden','true');windowTrack.append(viewport);windowOverlay.append(windowTrack);
-  turns.forEach((turn,index)=>{const marker=node('button',`conversation-map-turn ${turn.dataset.human==='true'?'human':''}`);marker.type='button';marker.title=turn.dataset.prompt||`Turn ${index+1}`;marker.onclick=event=>{event.stopPropagation();turn.scrollIntoView({behavior:'smooth',block:'start'})};track.append(marker)});
-  map.append(track,node('span','conversation-map-label','Turns'));document.body.append(map,windowOverlay);let disposed=false;
-  // Turn spans are offsets within the list and change only when it resizes
-  // (stale); scrolling moves just the viewport and the current turn.
-  let stale=true,spans=[],geometry;
-  const update=()=>{
-    if(disposed||!panel.isConnected)return;
-    const relaid=stale;
-    if(stale){
-      stale=false;const metrics=conversationRailMetrics(list);
-      geometry={metrics,panel:panel.getBoundingClientRect(),scroll:scroller.scrollTop,scrollerTop:scroller.getBoundingClientRect().top,scrollerHeight:scroller.clientHeight};
-      spans=turns.map(turn=>{const rect=turn.getBoundingClientRect();return{top:rect.top-metrics.rect.top,bottom:rect.bottom-metrics.rect.top}});
-    }
-    const delta=scroller.scrollTop-geometry.scroll,listTop=geometry.metrics.rect.top-delta,{total}=geometry.metrics,{scrollerTop,scrollerHeight}=geometry,active=document.querySelector('#detail.active')&&geometry.panel.top-delta<innerHeight/2&&geometry.panel.bottom-delta>innerHeight/2;
-    const windowWidth=panel.querySelector('.token-map.visible')?'84px':'30px';
-    return()=>{
-      map.classList.toggle('visible',Boolean(active&&total>innerHeight*.75));windowOverlay.classList.toggle('visible',map.classList.contains('visible'));
-      windowOverlay.style.width=windowWidth;
-      const windowHeight=Math.max(.06,Math.min(1,scrollerHeight/total));
-      viewport.style.top=`${Math.max(0,Math.min(1-windowHeight,(scrollerTop-listTop)/total))*100}%`;
-      viewport.style.height=`${windowHeight*100}%`;
-      const middle=innerHeight/2-listTop;
-      spans.forEach(({top,bottom},index)=>{const marker=track.children[index];if(relaid){marker.style.top=`${Math.max(0,Math.min(1,top/total))*100}%`;marker.style.height=`${Math.max(.018,(bottom-top)/total)*100}%`}marker.classList.toggle('current',top<=middle&&bottom>=middle)});
-    };
-  };
-  let scheduled=false;const schedule=()=>{if(!scheduled){scheduled=true;scheduleConversationFrame(()=>{scheduled=false;return update()})}},relayout=()=>{stale=true;schedule()};
-  track.onclick=event=>{if(event.target!==track)return;const ratio=Math.max(0,Math.min(1,(event.clientY-track.getBoundingClientRect().top)/track.clientHeight));scroller.scrollBy({top:list.getBoundingClientRect().top+ratio*list.scrollHeight-scroller.getBoundingClientRect().top-scroller.clientHeight/2,behavior:'smooth'})};
-  scroller.addEventListener('scroll',schedule,{passive:true});addEventListener('resize',relayout);const observer=new ResizeObserver(relayout),railObserver=new MutationObserver(schedule);observer.observe(list);observeConversationLayout(observer,panel);
-  const tokenRail=panel.querySelector('.token-map');if(tokenRail)railObserver.observe(tokenRail,{attributes:true,attributeFilter:['class']});
-  schedule();conversationMapCleanups.push(()=>{disposed=true;scroller.removeEventListener('scroll',schedule);removeEventListener('resize',relayout);observer.disconnect();railObserver.disconnect();map.remove();windowOverlay.remove()});
+  if(!panel.isConnected)return;
+  let dispose;
+  const mount=()=>{if(!panel.isConnected||dispose||!window.pharosReaderNavigator)return;dispose=window.pharosReaderNavigator.mount(panel,panel.navigatorData)};
+  mount();addEventListener('pharos:reader-navigator-ready',mount);
+  conversationMapCleanups.push(()=>{removeEventListener('pharos:reader-navigator-ready',mount);dispose?.()});
 }
 function githubPullURL(remote,number){const match=String(remote||'').match(/github\.com(?::|\/)([^/\s]+\/[^/\s]+?)(?:\.git)?$/i);return match?`https:${'//'}github.com/${match[1].replace(/\.git$/i,'')}/pull/${number}`:''}
 function workPullRequests(work){
@@ -1493,7 +1429,6 @@ function setupConversationSearch(panel){
 }
 
 function setupTokenOverview(panel,conversation={}){
-  const scroller=conversationScroller(panel);
   const turns=[...panel.querySelectorAll('.turn')],entries=[],turnEntries=[];
   // Use the same normalized objects and ownership graph as the transcript.
   // Closed, unmaterialized turns still have complete accounting and profiles.
@@ -1528,69 +1463,14 @@ function setupTokenOverview(panel,conversation={}){
   const materialized=event=>{refreshTargets(event.detail?.roots||[event.target]);panel.dispatchEvent(new Event('input'))};
   panel.addEventListener('transcript-materialized',materialized);
   conversationMapCleanups.push(()=>panel.removeEventListener('transcript-materialized',materialized));
-  if(!entries.length)return;
-  const rail=node('aside','token-map'),track=node('div','token-map-track');rail.setAttribute('aria-label','Conversation context growth');rail.append(track,node('span','token-map-label','Context'));panel.append(rail);
-  // Widths are shares of each stream's context window; without a known window,
-  // fall back to the largest context observed in the conversation.
-  const {streams,windows,scale}=contextScale(entries.map(e=>e.sample)),colors=['#43877e','#b07a18','#557ed0','#c06c91','#8a79be'];
-  const short=tokenCount;
-  const mainWindow=windows.get('main')||windows.get(streams[0]);
-  rail.title=mainWindow?`Width is the share of the ${short(mainWindow)}-token context window in use.`:'Width is relative to the largest context observed; the context window is unknown.';
-  for(const entry of entries){
-    const {sample}=entry,marker=node('button','token-marker '+(sample.compact?'compaction-marker'+(sample.trigger?' '+sample.trigger+'-compaction':''):'event-marker'));
-    marker.type='button';marker.style.setProperty('--token-color',sample.stream==='main'?colors[0]:colors[1+Math.max(0,streams.filter(s=>s!=='main').indexOf(sample.stream))%(colors.length-1)]);
-    marker.dataset.context=sample.size??'';marker.dataset.stream=sample.stream;marker.dataset.delta=sample.delta??'';
-    marker.title=`${entry.label} · ${sample.stream==='main'?'Main context':'Subagent '+sample.stream} · ${sample.compact?compactionLabel(sample.trigger):sample.size.toLocaleString()+' input tokens'+(sample.estimated?' (estimated)':'')+(windows.get(sample.stream)?` · ${Math.round(sample.size/windows.get(sample.stream)*100)}% of ${short(windows.get(sample.stream))} window`:'')}`;
-    marker.setAttribute('aria-label',marker.title);marker.onclick=()=>jump(entry);track.append(marker);entry.marker=marker;
-  }
-  // Marker positions are offsets within the transcript, so scrolling changes
-  // only which groups are in view. Placing markers measures every target, so
-  // it waits for a change in content, size, or filters (stale).
-  let scheduled=false,stale=true,disposed=false,ordered=[],geometry;
-  const update=()=>{
-    scheduled=false;if(disposed||!panel.isConnected)return;
-    // Measure everything before writing: a measurement after a style write
-    // forces a layout, and one per marker froze long conversations.
-    const relaid=stale;
-    if(stale){
-      stale=false;const metrics=conversationRailMetrics(panel.querySelector('.turn-list')),trackHeight=track.clientHeight,groups=new Map();
-      geometry={panel:panel.getBoundingClientRect(),listTop:metrics.rect.top,scroll:scroller.scrollTop};
-      for(const entry of entries){
-        if(entry.turn.hidden)continue;
-        let target=entry.target,collapsed=false;
-        for(let ancestor=target;ancestor&&ancestor!==panel;ancestor=ancestor.parentElement)if(ancestor.tagName==='DETAILS'&&!ancestor.open){target=ancestor;collapsed=true}else if(ancestor.dataset.show&&transcriptHidden(panel,ancestor)){target=ancestor.parentElement;collapsed=true}
-        if(!groups.has(target)){const bounds=target.getBoundingClientRect();groups.set(target,{target,collapsed,entries:[],pixel:Math.max(0,Math.min(1,(bounds.top+scroller.scrollTop-metrics.top)/metrics.total))*trackHeight,top:bounds.top-metrics.rect.top,bottom:bounds.bottom-metrics.rect.top,inView:null})}
-        groups.get(target).entries.push(entry);
-      }
-      ordered=[...groups.values()].sort((a,b)=>a.pixel-b.pixel);
-      geometry.trackHeight=trackHeight;
-    }
-    const delta=scroller.scrollTop-geometry.scroll,listTop=geometry.listTop-delta;
-    return()=>{
-      if(relaid){
-        const trackHeight=geometry.trackHeight;
-        for(const entry of entries)entry.marker.hidden=true;
-        ordered.forEach((group,index)=>{
-          const end=ordered[index+1]?.pixel??trackHeight,height=Math.max(2,end-group.pixel);
-          // Preserve all samples, even in a collapsed group, as a compressed profile.
-          group.entries.forEach((entry,i)=>{
-            const {sample,marker}=entry,h=Math.max(.5,height/group.entries.length),{from,width}=contextProfile(sample,scale);
-            marker.hidden=false;marker.style.top=`${group.pixel+i*height/group.entries.length}px`;marker.style.height=`${sample.compact?2:h}px`;marker.style.width='100%';marker.style.setProperty('--context-profile',sample.compact?'none':`polygon(0 0,${from}% 0,${width}% 100%,0 100%)`);
-            marker.classList.toggle('collapsed-context',group.collapsed);marker.classList.toggle('agent-context',sample.stream!=='main');
-          });
-        });
-      }
-      rail.classList.toggle('visible',geometry.panel.top-delta<innerHeight&&geometry.panel.bottom-delta>0);
-      for(const group of ordered){
-        const inView=listTop+group.bottom>0&&listTop+group.top<innerHeight;
-        if(inView!==group.inView){group.inView=inView;for(const entry of group.entries)entry.marker.classList.toggle('in-view',inView)}
-      }
-    };
-  };
-  const schedule=()=>{if(!scheduled){scheduled=true;scheduleConversationFrame(update)}},relayout=()=>{stale=true;schedule()};
-  const observer=new ResizeObserver(relayout);observeConversationLayout(observer,panel);observer.observe(track);
-  scroller.addEventListener('scroll',schedule,{passive:true});addEventListener('resize',relayout);panel.addEventListener('toggle',relayout,true);panel.addEventListener('input',relayout);panel.addEventListener('transcript-filter',relayout);scheduleConversationFrame(update);
-  conversationMapCleanups.push(()=>{disposed=true;observer.disconnect();scroller.removeEventListener('scroll',schedule);removeEventListener('resize',relayout);panel.removeEventListener('toggle',relayout,true);panel.removeEventListener('input',relayout);panel.removeEventListener('transcript-filter',relayout);rail.remove()});
+  const labels=model.messages.map(message=>({id:message.id,role:message.role,kind:message.kind,at:message.created_at||null,text:message.text||'',text_source:'Retained message',truncated:false,segment:message.labels?.segment||'',chunks:message.labels?1:0,labels:(message.labels?.ids||[]).map(id=>[id,message.labels.probs?.[id]||0]),authorship:message.authorship}));
+  const marks=readerNavigatorMarks(model,message=>({name:toolPayload(message).name||toolLabel(message),preview:toolPreview(message)}));
+  const events=model.messages.flatMap(message=>(messageEventView(message)||[]).map(event=>({id:event.id,message_id:message.id,kind:event.kind,label:event.label,group:event.group,probability:event.probability||0,source:message.kind==='reasoning'?'thinking':'message',sentence:event.sentenceText,target:event.target,span:event.ownSentence||event.sentence,position:event.sentence[0]/Math.max(1,String(message.text||'').length)})));
+  const {streams,windows,scale:profileScale}=contextScale(entries.map(entry=>entry.sample)),contextColors=['#43877e','#b07a18','#557ed0','#c06c91','#8a79be'];
+  const contextMetadata=entry=>{const sample=entry.sample,window=windows.get(sample.stream);return{color:sample.compact?sample.trigger==='manual'?'var(--heat-1)':sample.trigger==='auto'?'var(--heat-3)':'var(--ink)':sample.stream==='main'?contextColors[0]:contextColors[1+Math.max(0,streams.filter(stream=>stream!=='main').indexOf(sample.stream))%(contextColors.length-1)],title:`${entry.label} · ${sample.stream==='main'?'Main context':'Subagent '+sample.stream} · ${sample.compact?compactionLabel(sample.trigger):sample.size.toLocaleString()+' input tokens'+(sample.estimated?' (estimated)':'')+(window?` · ${Math.round(sample.size/window*100)}% of ${tokenCount(window)} window`:' · context window unknown')}`}};
+
+  panel.navigatorData={messages:labels,marks,events,taxonomy:conversation.labels?.taxonomy||[],turns:turns.map((target,index)=>({target,messages:model.turns[index].owned.map(message=>message.id),label:target.dataset.prompt||`Turn ${index+1}`})),contexts:entries.map(entry=>({...entry,...contextProfile(entry.sample,profileScale),...contextMetadata(entry)})),jumpContext:entry=>jump(entries.find(candidate=>candidate.message===entry.message&&candidate.sample===entry.sample)||entry),jumpMessage:id=>revealMessage(panel.parentElement,id,true)};
+
 }
 
 function detail(id,fromLocation=false){if(fromLocation&&workspaceInbox?.workspace===id&&document.querySelector('#detail.active'))return workspaceLocation?.();return pageLoad(()=>renderDetail(id,fromLocation))}
@@ -1912,13 +1792,17 @@ function bindReaderView(panel){
  // absent/empty override must agree with reopening that URL in a fresh reader.
  const known=new WeakMap();const restore=(force=false,roots=[panel])=>{const opened=new Set(api.read('reader_expanded',[])),closed=new Set(api.read('reader_collapsed',[])),queue=roots.flatMap(root=>[...root.matches('details')?[root]:[],...root.querySelectorAll('details')]),visited=new Set();for(let i=0;i<queue.length;i++){const detail=queue[i];if(visited.has(detail))continue;visited.add(detail);const id=key(detail);if(!id||!force&&known.has(detail))continue;const state=known.get(detail)||{initial:detail.open,current:detail.open};known.set(detail,state);detail.dataset.pharosDisclosure=id;const open=readerDisclosureOpen(id,opened,closed,state.initial);if(open){detail.materialize?.();queue.push(...detail.querySelectorAll('details'))}detail.open=open;state.current=open}};
  restore();
- const toggled=event=>{const detail=event.target;if(!(detail instanceof HTMLDetailsElement))return;const id=key(detail),state=known.get(detail);if(!id||state?.current===detail.open)return;if(state)state.current=detail.open;const next=readerDisclosureToggle(id,detail.open,api.read('reader_expanded',[]),api.read('reader_collapsed',[]));api.writeAll({reader_expanded:next.expanded,reader_collapsed:next.collapsed})};
+ // Bulk turn changes deliver a toggle event per disclosure. Save one batch
+ // per frame: WebKit rejects more than 100 history writes in ten seconds.
+ const pending=new Map();let saveFrame=0;
+ const flush=()=>{cancelAnimationFrame(saveFrame);saveFrame=0;if(!pending.size)return;let next={expanded:api.read('reader_expanded',[]),collapsed:api.read('reader_collapsed',[])};for(const[id,open]of pending)next=readerDisclosureToggle(id,open,next.expanded,next.collapsed);pending.clear();api.writeAll({reader_expanded:next.expanded,reader_collapsed:next.collapsed})};
+ const toggled=event=>{const detail=event.target;if(!(detail instanceof HTMLDetailsElement))return;const id=key(detail),state=known.get(detail);if(!id||state?.current===detail.open)return;if(state)state.current=detail.open;pending.set(id,detail.open);if(!saveFrame)saveFrame=requestAnimationFrame(flush)};
  panel.addEventListener('toggle',toggled,true);
  // New content brings its own details; earlier ones are already known.
  const observer=new MutationObserver(records=>{const roots=records.flatMap(record=>[...record.addedNodes].filter(node=>node instanceof Element));if(roots.length)restore(false,roots)});observer.observe(panel,{childList:true,subtree:true});
- const navigate=()=>{if(!panel.isConnected||!panel.closest('#detail.active'))return;panel.restoreTranscriptView?.();panel.restoreHighlights?.();restoreContent();restore(true)};
+ const navigate=()=>{cancelAnimationFrame(saveFrame);saveFrame=0;pending.clear();if(!panel.isConnected||!panel.closest('#detail.active'))return;panel.restoreTranscriptView?.();panel.restoreHighlights?.();restoreContent();restore(true)};
  const events=['popstate','pharos:view','pharos:workspace-history','pharos:route'];for(const name of events)window.addEventListener(name,navigate);
- conversationMapCleanups.push(()=>{panel.removeEventListener('toggle',toggled,true);observer.disconnect();for(const name of events)window.removeEventListener(name,navigate)})
+ conversationMapCleanups.push(()=>{flush();panel.removeEventListener('toggle',toggled,true);observer.disconnect();for(const name of events)window.removeEventListener(name,navigate)})
 }
 function restoreViewOverlay(){const overlay=window.pharosView?.read('overlay','none');restoringViewOverlay=true;try{$('#historyFilter').value=window.pharosView?.read('history_search','')||'';setDrawer(overlay==='history'?'historyDrawer':overlay==='bookmarks'?'bookmarksDrawer':'');setUsageSummaryOpen(overlay==='usage');window.pharosLibrary?.setPanelOpen(overlay==='drive')}finally{restoringViewOverlay=false}}
 window.addEventListener('pharos:drive-view-ready',restoreViewOverlay);window.addEventListener('popstate',restoreViewOverlay);window.addEventListener('pharos:view',restoreViewOverlay);

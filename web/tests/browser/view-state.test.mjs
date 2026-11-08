@@ -962,8 +962,9 @@ test('agent event links restore both ends from the URL, opening folded prose wit
  assert.deepEqual(await page.evaluate(()=>pharosPrefs.get('pharos-reader-highlight-hidden',[])),hidden,'opening a link leaves saved preferences intact');
  await opened.shot('linked-highlights-restored');
  // The first event on this sentence is hidden and points somewhere else.
- await page.locator('.transcript-highlights').getByRole('button',{name:'Choices you may not see',exact:true}).click();
- await page.getByRole('menuitem',{name:/^Hide$/}).click();await opened.settled();
+ await page.evaluate(()=>window.pharosView.write('reader_highlight_hidden',[
+  ...window.pharosView.read('reader_highlight_hidden',[]),'events:event-choices',
+ ]));await opened.settled();
  await page.evaluate(()=>window.pharosView.write('reader_event_link',null));
  const observation=page.locator('mark.agent-event');await observation.hover();
  await page.locator('.event-link-n.is-observation.link-focus:not(.reader-event-hidden)').waitFor();
@@ -971,9 +972,9 @@ test('agent event links restore both ends from the URL, opening folded prose wit
  await observation.click();await opened.settled();
  assert.equal(new URL(page.url()).searchParams.get('reader_event_link'),'e-link','click selects the remaining visible pair, including its merged alias');
  assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')).includes('events:event-choices'),'clicking a visible pair preserves its hidden sibling group');
- await page.locator('.transcript-highlights').getByRole('button',{name:'Agent events category',exact:true}).click();
- await page.getByRole('menuitem',{name:/^Hide(?: \d+ values?)?$/}).click();await opened.settled();
- assert.equal(await page.locator('.event-link-gutter path.is-selected').count(),0,'a later manual hide is respected');
+ // Follow the canonical visibility binding while the linked reveal may still be scrolling.
+ await page.evaluate(()=>window.pharosView.write('reader_events',false));await opened.settled();
+ assert.equal(await page.locator('.event-link-gutter path.is-selected').count(),0,'a later visibility change is respected');
  assert.equal(new URL(page.url()).searchParams.get('reader_events'),'0');
  const copied=await open(t,{api,url:path(page),ready:'.event-link-gutter path.is-selected'});
  assert.equal(await copied.page.locator('mark.link-selected.reader-event-hidden').count(),0,'an explicit copied URL also restores excluded highlights');

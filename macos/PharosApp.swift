@@ -415,7 +415,11 @@ final class ArchiveService: ObservableObject {
     /// library (localRequest), so the broker passes it on to that library's
     /// service rather than answering for itself.
     func checkReady(_ completion: @escaping (Bool) -> Void) {
-        guard var request = localRequest("/api/ready") else { completion(false); return }
+        // The broker can be alive while the first navigation opens a library
+        // under its routing lock. /api/app/state cannot answer then either,
+        // so a selected-library header alone misses this first-launch wait.
+        let path = managedApplication ? "/api/ready?routing=1" : "/api/ready"
+        guard var request = localRequest(path) else { completion(false); return }
         // With no library connected the window shows the broker's own pages
         // (the chooser, its status): then the broker is what must answer.
         if !hasConnectedLibrary { request.setValue(nil, forHTTPHeaderField: "X-Pharos-Library") }

@@ -144,6 +144,14 @@ Analysis source-query links also retain the dashboard chart/population and opene
 
 `<page>/query` also publishes `schema_name`, an inspection template, and a `properties_path` to the paginated property catalogue. Use that schema name (for example `pharos_mcp_calls`) in each inspection scope. `JsonInspectionState`, `JsonMatchIdentity` and related types are generated from the installed core declarations. Returning a native `JsonValueView` directly from a property renderer lets Query Table bind its controlled state and semantic registry; wrapping that element in a host div hides it from the supported integration.
 
+The session reader's `reader_navigator` stores any combination of `timeline`,
+`context` and `turns` (default `["timeline","context","turns"]`); `[]` hides the bars. All bars
+share the session clock and one visible-window indicator. Scroll progress and
+keyboard browsing positions are transient. Clicking a bar materializes, scrolls
+to and highlights its source without moving keyboard focus. Entirely untimed
+sessions explicitly use message order. Expanding/collapsing content refreshes
+cached geometry; scrolling does not remeasure transcript elements.
+
 ## Attention
 
 `highlight` is repeatable; `reveal` names one landing target. Reveal means **scroll and distinctive persistent highlighting**, without moving browser/keyboard focus. Ordinary tabbing and scrolling never change these parameters. Clear highlights removes the instructions.

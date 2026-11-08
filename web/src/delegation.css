@@ -996,7 +996,7 @@
    leaving the primaries to agent events (ui.py --event-*). Error is magenta, not
    red, so it never reads as friction. web/tests/unit/delegation/timeline-palette.test.mjs
    checks the separations in both themes. */
-.lt-session-tree,.delegation-parallel.is-recursive,.lt-ribbon-inspector{--activity-read:#ff9a3c;--activity-write:#a43ff0;--activity-run:#17b3c4;--activity-git:#4f7f86;--activity-network:#9a6f8c;--activity-delegate:#f27fc0;--activity-wait:#8d818f;--activity-poll:#7b858a;--activity-other:#857b6e;--activity-model:#968ba0;--activity-error:#e0198f}
+.lt-session-tree,.delegation-parallel.is-recursive,.lt-ribbon-inspector,.reader-navigator{--activity-read:#ff9a3c;--activity-write:#a43ff0;--activity-run:#17b3c4;--activity-git:#4f7f86;--activity-network:#9a6f8c;--activity-delegate:#f27fc0;--activity-wait:#8d818f;--activity-poll:#7b858a;--activity-other:#857b6e;--activity-model:#968ba0;--activity-error:#e0198f}
 .lt-session-row-label .app-icon{width:11px;height:11px;flex:none;color:var(--muted)}
 .lt-session-row-label strong{min-width:0}
 .lt-session-row-label .lt-session-caret{width:14px;height:14px;flex:none;margin-left:auto;color:var(--muted);text-align:center}

@@ -819,7 +819,7 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		`{"page":"work","options":{"work_id":"w"},"view":{"disclosures":{"timeline-key":true}},"reveal":"section:timeline-key"}`,
 		`{"page":"analyze/thinking-detail","view":{"thinking":{"view":"calendar","groupBy":"model_effort","timezone":"America/Denver","range":"30d","hiddenPercentiles":["p95"],"hours":6}}}`,
 		`{"page":"cards","view":{"card_window":"today","card_filters":false},"highlight":["card:tool-failures"],"reveal":"text:failed command"}`,
-		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"find":"failed command","find_case":true,"reader_expanded":["message:m"],"reader_filter":["prompts","response"],"reader_highlight_hidden":["events:event-friction","labels:C.report"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
+		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"find":"failed command","find_case":true,"reader_expanded":["message:m"],"reader_filter":["prompts","response"],"reader_highlight_hidden":["events:event-friction","labels:C.report"],"reader_navigator":["timeline","context","turns"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
 		`{"page":"work","options":{"work_id":"w"},"view":{"timeline_visibility":{"modes":{"values":["C.report.finding","?"],"excluded":false},"events":{"values":["friction"],"excluded":true},"tools":{"values":["error"],"excluded":true},"origins":{"values":["typed"],"excluded":false}}}}`,
 	} {
 		result, err := site.linkTool(linkArgs(t, input))
@@ -1105,6 +1105,13 @@ func TestSiteLinkJSONInspectionsAndDetailTargets(t *testing.T) {
 
 func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 	site := testSiteMap(t)
+	for _, raw := range []string{`[]`, `["timeline","context","turns"]`, `["turns"]`, `["unknown"]`, `["turns","turns"]`, `{}`} {
+		valid := raw == `[]` || raw == `["timeline","context","turns"]` || raw == `["turns"]`
+		_, err := site.linkTool(map[string]any{"url": "/work/w?reader_navigator=" + url.QueryEscape(raw)})
+		if (err == nil) != valid {
+			t.Fatalf("navigator %s: valid=%v: %v", raw, valid, err)
+		}
+	}
 	visibilityData, err := os.ReadFile(filepath.Join("..", "..", "testdata", "timeline-visibility-cases.json"))
 	if err != nil {
 		t.Fatal(err)

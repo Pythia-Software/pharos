@@ -349,6 +349,19 @@ function fileChanges(message,result){
 }
 function toolFailed(message,results){const category=toolCategory(message);return Boolean(category==='error'||toolPayload(message).raw?.is_error||results.some(item=>item.kind==='error'||toolPayload(item).raw?.is_error||Number(toolPayload(item).raw?.exit_code)>0||(category==='command'&&/^(?:Process exited with code|Exit code:)\s*[1-9]/im.test(readableValue(toolPayload(item).content)))))}
 
+// Retain calls with missing timestamps; the navigator chooses a real clock or
+// message order for the entire session before placing these marks.
+function readerNavigatorMarks(model,describe=message=>({name:toolPayload(message).name||'Tool'})){
+  return model.messages.filter(message=>['tool_call','delegation'].includes(message.kind)).map(message=>{
+    const parsedStart=Date.parse(message.created_at),start=Number.isFinite(parsedStart)?parsedStart:null;
+    const results=(message.kind==='delegation'?model.delegationResultsByCall:model.toolResultsByCall).get(message.call_id)||[],end=Date.parse(results.at(-1)?.created_at);
+    return{start,end:start!==null&&Number.isFinite(end)?Math.max(start,end):null,
+      end_known:start!==null&&Number.isFinite(end)&&end>=start,
+      category:({edit:'write',search:'read',command:'run',agent:'delegate',web:'network',read:'read'})[toolCategory(message)]||'other',
+      count:1,error:toolFailed(message,results),message_id:message.id,tool_id:message.call_id||message.native_id,...describe(message)};
+  });
+}
+
 // File paths
 // The directories a conversation's file paths are shown relative to: the
 // workspace's, the conversation's and those its events recorded, longest first.

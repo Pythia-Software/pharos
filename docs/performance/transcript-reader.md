@@ -195,3 +195,57 @@ page's compositing layers, so a small indicator cost more on a longer page.
 In WKWebView, with every turn of the same conversation open, the web process
 used about 13% CPU during the sweep. It now uses 1–2%, the same as with nothing
 animating. The skeleton uses 2–3%.
+
+## Sticky session navigators, 2026-11-08
+
+The session reader replaces its two independent vertical rails with optional
+horizontal Timeline, Context and Turns bars. They share an elapsed-time axis
+and one read-only viewport indicator. The timeline uses `SessionRibbon`, the
+same summary renderer and tool/event palette as the workspace timeline, with
+a compact `TimelineKey` below it. Navigator choices are `reader_navigator` URL
+state; scrolling never writes a URL.
+
+`reader-navigator-layout.ts` measures each distinct rendered target only after
+layout changes. Closed disclosures and lazy earlier/later pages retain their
+source ranges without rendering hidden records. Individual turn and ancestor
+ResizeObservers, plus disclosure, filter and materialization events, invalidate
+that cache. All geometry reads precede writes. A prefix-maximum index narrows
+scroll updates to visible cached spans, including overlapping/out-of-order
+subagent records. Scrolling changes only the shared indicator's transforms;
+its fill and two edges have separate compositor layers. The percentage readout
+updates its existing text node after scrolling settles, avoiding repeated text
+replacement and layout invalidation in long WebKit documents.
+
+Bulk disclosure saves also batch once per animation frame. The expanded
+fixture exposed WebKit's limit of 100 history writes per ten seconds when
+Open turns saved every native toggle separately.
+
+The performance case in `web/tests/browser/focus.test.mjs` uses **synthetic
+input**: 160 turns, 1,920 normalized messages and 960 context samples. The
+actual input construction is in that test: twelve records per turn, one-minute
+turn spacing, one-second record spacing, and alternating prose/token-count
+records. It checks all three bars, repeated expanded history, Timeline + Turns,
+Timeline alone, and no bars, with twenty scroll steps per configuration. It
+instruments transcript `getBoundingClientRect` calls, which must stay **zero**
+while scrolling in both collapsed and expanded states. A DOM-free unit case
+also checks that lookup work stays independent of 20,000 cached spans.
+
+Final local observations after compositing/readout changes:
+
+| Engine | Expanded, all bars | Repeated traversal, all bars | All bars hidden |
+| --- | ---: | ---: | ---: |
+| Chrome | 35 ms / 0 | 34 ms / 0 | 34 ms / 0 |
+| Headless WebKit | 65 ms / 1 | 35 ms / 0 | 34 ms / 0 |
+
+Each cell is **maximum time through two animation frames / number of those
+intervals over 50 ms**, not a single-frame duration or latency guarantee.
+Collapsed-history maxima were about 34 ms, with no intervals over 50 ms.
+These are short runs on a shared machine; earlier expanded WebKit runs were
+noisier. Zero transcript remeasurements is the stable assertion. Long-history
+painting can still stall, and headless WebKit does not prove WKWebView's real
+window/compositor performance.
+
+Browser checks additionally cover sticky placement below the header, narrow
+readers, fresh-load restoration of any/no navigator, no-focus message jumps,
+multiple normalized blocks sharing a source message, lazy context jumps,
+opening/closing turns and a preceding workspace overview changing height.

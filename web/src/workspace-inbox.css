@@ -8,18 +8,12 @@
 .workspace-reader[hidden], .workspace-divider[hidden] { display: none; }
 .workspace-reader > .workspace-sidebar-toggle { position: absolute; top: var(--workspace-page-top); left: var(--workspace-page-gutter); z-index: 9; }
 .workspace-inbox.sidebar-collapsed .workspace-reader-content { padding-left: 52px; }
-.workspace-reader-content { flex: 1; min-height: 0; overflow: auto; padding: 0 var(--workspace-rail-gutter,0px) 60px 0; scroll-padding-top: var(--workspace-page-top); scrollbar-gutter: stable; }
+.workspace-reader-content { flex: 1; min-height: 0; overflow: auto; padding: 0 var(--workspace-rail-gutter,0px) 60px 0; scroll-padding-top: calc(var(--reader-navigator-height,0px) + var(--workspace-page-top)); scrollbar-gutter: stable; }
 .workspace-reader-content:empty { display: block; }
-.workspace-reader-content > .conversation-panel { margin: 0; min-width: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.workspace-reader-content > .conversation-panel { margin: 0; min-width: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: visible; }
 .workspace-reader-content > .conversation-panel:focus { outline: none; }
 .workspace-reader-content .conversation-head { padding: var(--workspace-page-top) var(--workspace-page-gutter); background: transparent; }
 .workspace-reader-content .turn-list { padding: 24px var(--workspace-page-gutter); background: transparent; }
-/* The page gutter already separates content from the edge; add room only for
-   the maps that are actually shown in a reader wide enough to display them. */
-@media (min-width:901px) {
-  body.workspace-inbox-viewing:not(.workspace-reader-narrow):has(> .conversation-map.visible) .workspace-reader-content:not(.conversation-timeline-active) { --workspace-rail-gutter: 16px; }
-  body.workspace-inbox-viewing:not(.workspace-reader-narrow) .workspace-reader-content:not(.conversation-timeline-active):has(.token-map.visible) { --workspace-rail-gutter: 64px; }
-}
 .workspace-inbox.viewing .workspace-overview { --workspace-page-gutter: 8px; width: var(--workspace-nav-width,400px); border-right: 1px solid var(--line); scrollbar-gutter: auto; }
 .workspace-inbox.viewing .workspace-nav-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; position: sticky; top: 0; z-index: 10; padding: var(--workspace-page-top) var(--workspace-page-gutter) 0; background: var(--bg); }
 .workspace-nav-bar > button:first-child { min-height: 36px; padding: 4px 0; font-size: var(--fs-xs); color: var(--accent); text-align: left; }
