@@ -2555,9 +2555,23 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
       }}),{headers:{'Content-Type':'application/x-ndjson'}}));
     };
   });
+  await page.emulateMedia({reducedMotion:'no-preference'});
   await page.getByRole('button',{name:'Send question',exact:true}).click();
+  const puzzle=page.locator('.pharos-waiting:not([hidden]) .pharos-puzzle');
+  await puzzle.waitFor();
+  await page.waitForFunction(()=>document.querySelectorAll('.pharos-puzzle span').length===8&&[...document.querySelectorAll('.pharos-puzzle span')].every(tile=>tile.getAnimations().length===1));
+  const centered=()=>puzzle.evaluate(element=>{
+    const icon=element.getBoundingClientRect(),text=element.nextElementSibling.getBoundingClientRect();
+    return Math.abs((icon.top+icon.bottom-text.top-text.bottom)/2)<1;
+  });
+  assert.ok(await centered(),'the puzzle is centered beside the initial message');
+  await page.waitForFunction(()=>typeof window.pharosAskProgress==='function');
+  await page.evaluate(()=>window.pharosAskProgress({message:'Browsing available views…',elapsedMs:1000}));
+  await page.locator('.pharos-elapsed').filter({hasText:'elapsed'}).waitFor();
+  assert.ok(await centered(),'the puzzle is centered beside the message and elapsed time');
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
   await panel.waitFor();
+  assert.equal(await puzzle.evaluate(element=>[...element.children].reduce((count,tile)=>count+tile.getAnimations().length,0)),0,'hidden puzzles stop animating');
   await page.waitForFunction(()=>typeof window.pharosAskProgress==='function');
   await page.evaluate(()=>window.pharosAskProgress({message:'Browsing available views…',elapsedMs:1000}));
   await panel.getByRole('button',{name:/Browsing available views/}).waitFor();

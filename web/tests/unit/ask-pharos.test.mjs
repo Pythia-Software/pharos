@@ -12,6 +12,56 @@ import { loadClassicScript, plain } from './helpers/classic-script.mjs';
 const model = loadClassicScript('ask-model.js',{TextEncoder,TextDecoder});
 const prompt = loadClassicScript('ask-prompt.js');
 
+test('Ask progress puzzles produce distinct solvable shuffles using adjacent moves',()=>{
+  let seed=19;const random=()=>((seed=(seed*16807)%2147483647)/2147483647);
+  let previous=null;
+  for(let round=0;round<20;round++){
+    const path=plain(model.askPuzzlePath(random,previous));
+    assert.notDeepEqual(path[0],previous);
+    assert.notDeepEqual(path[0],[1,2,3,4,5,6,7,8,0]);
+    assert.deepEqual(path.at(-1),[1,2,3,4,5,6,7,8,0]);
+    for(let i=1;i<path.length;i++){
+      const before=path[i-1],after=path[i],empty=before.indexOf(0),next=after.indexOf(0);
+      assert.equal(Math.abs(empty%3-next%3)+Math.abs(Math.floor(empty/3)-Math.floor(next/3)),1);
+      assert.equal(before[next],after[empty]);
+      assert.equal(before.filter((tile,index)=>tile!==after[index]).length,2);
+    }
+    previous=path[0];
+  }
+  const repeated=plain(model.askPuzzlePath(()=>0));
+  assert.notDeepEqual(plain(model.askPuzzlePath(()=>0,repeated[0]))[0],repeated[0],'even a repeated random sequence gets a fresh board');
+});
+
+test('Ask progress motion pauses around the solve, resets together, and stops cleanly',()=>{
+  let change;const media={matches:false,addEventListener:(_,fn)=>{change=fn;},removeEventListener:(_,fn)=>assert.equal(fn,change)};
+  const created=[],tiles=Array.from({length:8},()=>({style:{removeProperty(){}},animate(frames,options){
+    const animation={frames,options,canceled:false,cancel(){this.canceled=true;}};created.push(animation);return animation;
+  }}));
+  const motion=model.askPuzzleMotion({children:tiles},{random:()=>0,media});
+  motion.setWorking(true);
+  const first=created.slice(0,8),duration=first[0].options.duration;
+  assert.equal(duration,18840);
+  for(const animation of first){
+    assert.equal(animation.frames[1].offset,1000/duration,'initial board stays still for one second');
+    assert.equal(animation.frames[2].offset,1640/duration,'each move lasts 640 milliseconds');
+    assert.equal(animation.frames[3].offset,1800/duration,'the next move starts after a 160 millisecond pause');
+    assert.equal(animation.frames[2].transform,animation.frames[3].transform,'tiles hold position between moves');
+    assert.equal(animation.frames.at(-2).offset,16840/duration,'solved board stays still for two seconds');
+    assert.equal(animation.frames.at(-1).transform,'translate(0px,0px)');
+  }
+  motion.setWorking(true);assert.equal(created.length,8,'progress updates do not restart the solve');
+  first[0].onfinish();
+  const reset=created.slice(8,16);assert.equal(reset.length,8);
+  assert.ok(reset.every(animation=>animation.options.duration===400&&animation.frames.length===2),'all tiles reset together');
+  reset[0].onfinish();
+  const second=created.slice(16,24);assert.equal(second.length,8);
+  assert.ok(second[0].options.duration>=17840&&second[0].options.duration<=18640);
+  media.matches=true;change();assert.ok(second.every(animation=>animation.canceled),'reduced motion cancels animations');
+  media.matches=false;change();assert.equal(created.length,32,'motion resumes when allowed');
+  motion.setWorking(false);assert.ok(created.slice(24).every(animation=>animation.canceled));
+  motion.destroy();
+});
+
 test('prompt invitations rotate after idle time and restart the wait after editing or hiding',()=>{
   const items=['A','B','C','D','E'].map(text=>({id:text,text}));
   const hints=prompt.askPromptHints(()=>0),first=hints.update(items,items.slice(0,2)),seen=new Set([first]);

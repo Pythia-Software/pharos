@@ -165,6 +165,8 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const turn=turns.at(-1),state=askFloatingState(turn,{navigated:!!turn&&turn.id===navigatedTurn});
     glows.forEach(glow=>glow.setWorking(!!pending));pageTrace.setWorking(!!pending);
     floating.hidden=presentation!=='floating';
+    const showPuzzle=!ai.hidden&&!document.hidden&&!['floating','dismissed'].includes(presentation);
+    turnViews.forEach(view=>view.puzzle?.setWorking(showPuzzle));
     floating.dataset.ready=String(state.ready);
     floating.querySelector('.pharos-floating-open span').textContent=state.message;
     browseButton.parentElement.hidden=ai.hidden;
@@ -185,6 +187,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
       if(headerButton.title!==title)headerButton.title=title;
     }
   }
+  listen(document,'visibilitychange',updateSurface);
   function restoreHome() {
     if(holdFloating||presentation==='modal'||homeHost===mountHost||!['/','/home'].includes(location.pathname))return;
     const returning=presentation!=='home'||root.parentElement!==homeHost;
@@ -660,6 +663,8 @@ window.initPharosAsk = function(root, {previews} = {}) {
     element.dataset.status=turn.status;
     get('.pharos-agent-message').setAttribute('aria-busy',String(loading));
     get('.pharos-waiting').hidden=!loading;
+    if(loading&&!view.puzzle)view.puzzle=askPuzzleMotion(get('.pharos-puzzle'));
+    else if(!loading&&view.puzzle){view.puzzle.destroy();view.puzzle=null;}
     const wait=askWaitStatus(turn);
     get('.pharos-wait-message').textContent=wait.message;
     get('.pharos-elapsed').textContent=wait.elapsed;
@@ -749,7 +754,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const actions=askClarificationActions({latest:turn===turns.at(-1),status:turn.status,pending:!!pending,enabled:accessEnabled,opening:openingSession!==null,draft:text});
     if(actions.sendOther){submitQuestion(text,true);question.focus({preventScroll:true});}
   }
-  function disposePreviews(){turnViews.forEach(view=>{view.disposeFeedback?.();view.previews.forEach(preview=>preview.dispose());});}
+  function disposePreviews(){turnViews.forEach(view=>{view.puzzle?.destroy();view.disposeFeedback?.();view.previews.forEach(preview=>preview.dispose());});}
   function renderThread(){disposePreviews();thread.replaceChildren();turnViews.clear();turns.forEach(appendTurn);syncComposer();}
   function answerFor(turn){return {intro:'',cards:turn.cards||[]};}
   function drawEdge(){composerGlow.draw();}
