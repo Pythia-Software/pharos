@@ -24891,7 +24891,7 @@
       "habits": {
         "target": "habits-streaks",
         "view": {
-          "habits_view": "calendar"
+          "habits_view": "days"
         },
         "window": "Today",
         "kind": "Summary",
@@ -24918,7 +24918,7 @@
         "target": "habits-streaks",
         "view": {
           "habits_streak": "weekdays",
-          "habits_view": "calendar"
+          "habits_view": "days"
         },
         "window": "Today",
         "kind": "Summary",
@@ -25076,7 +25076,7 @@
       "habits": {
         "target": "habits-pace",
         "view": {
-          "habits_view": "calendar"
+          "habits_view": "days"
         },
         "window": "Past 28 days",
         "kind": "Summary",
@@ -25084,33 +25084,6 @@
           "kind": "list",
           "count": 4,
           "height": 121
-        }
-      }
-    },
-    {
-      "id": "habits-automations",
-      "title": "Automatic agent runs",
-      "description": "Past 30 days. What started agents without a message from you: schedules, scripts, orchestrators and other agents, by runs.",
-      "category": "machines",
-      "idea": "rhythm-03",
-      "dataset": "rhythm",
-      "field": "started_at",
-      "unit": "hours",
-      "measures": [],
-      "period": "current",
-      "action": "Explore Habits",
-      "habits": {
-        "target": "habits-automations",
-        "view": {
-          "habits_punchcard_days": "30",
-          "habits_view": "punchcard"
-        },
-        "window": "Past 30 days",
-        "kind": "Ranking",
-        "loading": {
-          "kind": "list",
-          "count": 6,
-          "height": 161
         }
       }
     }
