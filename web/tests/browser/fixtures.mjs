@@ -965,6 +965,12 @@ export const pendingEvidenceApi = {
   },
   "GET /api/work/:id/parallel": ({ query }) => { const data = parallel(query); return { ...data, lanes: data.lanes.map(lane => lane.session === "s-nested" ? { ...lane, events_pending: true } : lane) }; },
   "GET /api/labels/conversations/:id": async call => ({ ...await defaultApi["GET /api/labels/conversations/:id"](call), events_pending: 1, events_pending_conversations: [call.params.id] }),
+  // Result cards draw the stored image: one whose events are withheld is a
+  // stale image (not current) that says how many conversations wait.
+  "POST /api/fingerprints": async call => {
+    const answer = await defaultApi["POST /api/fingerprints"](call);
+    return { ...answer, items: answer.items.map(item => call.body.events === false ? item : { ...item, state: "pending", stale: true, events_pending: 1 }) };
+  },
   // Every event conversation is withheld: nothing reads as scanned, yet the
   // pages say a rebuild is pending rather than that nothing was ever read.
   "* /api/query/:dataset/:operation": async ({ params, body, query }) => {
