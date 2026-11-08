@@ -696,10 +696,14 @@ test('nested navigation branches restore independently in a fresh browser',{skip
  await toggle('Dashboards');await tokens.waitFor({state:'hidden'});
  await toggle('Dashboards');await tokens.waitFor();
  assert.equal(await human.isVisible(),false);
+ const messages=navigation.getByRole('link',{name:'Messages',exact:true});
+ assert.equal(await messages.isVisible(),false);
+ await toggle('Conversations & agent sessions');await messages.waitFor();
  const fresh=await open(t,{url:path(page),viewport,ready:'.usage-dashboard .usage-chart'});
  const restored=fresh.page.getByRole('complementary',{name:'Analyze navigation',exact:true});
  assert.equal(await restored.getByRole('link',{name:'Human Words',exact:true}).isVisible(),false);
  assert.equal(await restored.getByRole('link',{name:'Tokens and Cost',exact:true}).isVisible(),true);
+ assert.equal(await restored.getByRole('link',{name:'Messages',exact:true}).isVisible(),true);
  await restored.getByText('People',{exact:true}).click();
  await restored.getByRole('link',{name:'Human Words',exact:true}).waitFor();
  await fresh.shot('nested-dashboards');
