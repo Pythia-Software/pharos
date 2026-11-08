@@ -16,7 +16,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/gbdubs/pharos/internal/platform/filelock"
@@ -394,20 +393,7 @@ func (r *labelingRunner) recover() error {
 	for _, row := range rows {
 		attempt := labelingAttemptInfo{id: firstString(row["id"]), request: firstString(row["request_id"]), number: int(integer(row["number"])),
 			dir: firstString(row["dir"]), day: firstString(row["day"])}
-		cleanup := []map[string]any{}
-		// The CLI of a runner that died may still run; its output has no
-		// reader any more. The group is signalled only while its leader is
-		// still the process the attempt started (same pid and start time).
-		if pid := int(integer(row["pid"])); pid > 0 && syscall.Kill(-pid, 0) == nil {
-			if recorded := firstString(row["process_start"]); recorded != "" && labelingProcessStart(pid) == recorded {
-				if syscall.Kill(-pid, syscall.SIGKILL) == nil {
-					cleanup = append(cleanup, map[string]any{"signal": "SIGKILL", "reason": "orphaned by an earlier runner"})
-				}
-			} else {
-				cleanup = append(cleanup, map[string]any{"reason": "possibly_orphaned", "pid": pid,
-					"note": "a process group with the recorded id runs, but its leader is not the recorded CLI process; not signalled"})
-			}
-		}
+		cleanup := labelingRecoverGroup(int(integer(row["pid"])), firstString(row["process_start"]))
 		stream, err := replayLabelingStream(r.job.Route, filepath.Join(attempt.dir, "events.jsonl"))
 		if err != nil {
 			return err
@@ -420,6 +406,51 @@ func (r *labelingRunner) recover() error {
 	// transaction writes both), but would otherwise wait forever.
 	_, err = r.db.Exec(`UPDATE requests SET state='unknown',note='submitted without an attempt record' WHERE job=? AND state='submitted'`, r.job.Name)
 	return err
+}
+
+// labelingRecoverGroup settles the process group an earlier runner's
+// attempt left: the CLI of a runner that died may still run, and its output
+// has no reader any more. The group is signalled only while its leader is
+// still the process the attempt started: the recorded pid with the recorded,
+// nonempty start identity. An unreadable identity, a different one or an
+// unknown group status never authorizes a signal; they are noted instead.
+// The observations are separate steps, so a pid reused between them is not
+// excluded; the start identity only makes a stale match unlikely.
+func labelingRecoverGroup(pid int, recorded string) []map[string]any {
+	cleanup := []map[string]any{}
+	if pid <= 0 {
+		return cleanup
+	}
+	notSignalled := func(reason, note string, err error) []map[string]any {
+		entry := map[string]any{"reason": reason, "pid": pid, "note": note}
+		if err != nil {
+			entry["error"] = err.Error()
+		}
+		return append(cleanup, entry)
+	}
+	switch state, err := labelingObserveGroup(pid); state {
+	case labelingGroupAbsent:
+		return cleanup
+	case labelingGroupUnknown:
+		return notSignalled("group_status_unknown", "whether a process group with the recorded id runs could not be determined; not signalled", err)
+	}
+	if recorded == "" {
+		return notSignalled("possibly_orphaned", "a process group with the recorded id runs, but no start time was recorded for the CLI process; not signalled", nil)
+	}
+	observed, err := labelingReadProcessStart(pid)
+	if err != nil {
+		return notSignalled("possibly_orphaned", "a process group with the recorded id runs, but its leader's start time could not be read; not signalled", err)
+	}
+	if observed != recorded {
+		return notSignalled("possibly_orphaned", "a process group with the recorded id runs, but its leader is not the recorded CLI process; not signalled", nil)
+	}
+	entry := map[string]any{"signal": labelingActionName(labelingForceKill), "reason": "orphaned by an earlier runner"}
+	if err := labelingSignalGroup(pid, labelingForceKill); errors.Is(err, errLabelingGroupAbsent) {
+		return cleanup
+	} else if err != nil {
+		entry["error"] = err.Error()
+	}
+	return append(cleanup, entry)
 }
 
 // refusalCheck reads the registry fresh (it is small). A registry that
@@ -588,16 +619,6 @@ func (r *labelingRunner) acceptServedModel(model string) error {
 		r.printf("%s: released %d held requests: served model accepted\n", r.job.Name, released)
 	}
 	return nil
-}
-
-// labelingProcessStart identifies a running process by its start time, so a
-// reused pid is not mistaken for it. Empty when it does not run.
-func labelingProcessStart(pid int) string {
-	output, err := exec.Command("ps", "-o", "lstart=", "-p", fmt.Sprint(pid)).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(output))
 }
 
 func (r *labelingRunner) stopRequested(ctx context.Context) bool {
