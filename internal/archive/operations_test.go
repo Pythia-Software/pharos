@@ -225,6 +225,44 @@ func TestDaemonPassIsForgottenWhenItDidNothing(t *testing.T) {
 	} else if step := operationStep(views[0]); step == nil || step["unit"] == nil || step["done"] != float64(25) {
 		t.Fatalf("a working pass lost its high-level counts: %+v", step)
 	}
+	t.Run("shared waits preserve progress and probe visibility", func(t *testing.T) {
+		timing := catalog.beginPass(t.Context(), "maintenance.parallelism", triggerChained)
+		shape := catalog.beginPass(t.Context(), "maintenance.session-shape", triggerChained)
+		probe := catalog.beginPass(t.Context(), "maintenance.previews", triggerChained)
+		defer timing.end(nil)
+		defer shape.end(nil)
+		defer probe.end(nil)
+		timing.worked(1, "conversation")
+		shape.worked(2, "conversation")
+		before := len(catalog.ops.views())
+		resume := waitForDaemonPasses("ingest-busy", "source indexing and its follow-up analysis to finish", timing, shape, probe, nil)
+		for _, pass := range []*daemonPass{timing, shape} {
+			view := pass.op.view()
+			if view.State != opBlocked || view.Reason != "ingest-busy" || stateDetail(view) == "" {
+				t.Fatalf("a paused pass still claims to run: %+v", view)
+			}
+		}
+		if len(catalog.ops.views()) != before || probe.op.State() != opRunning {
+			t.Fatal("waiting published a probe that found no work")
+		}
+		resume()
+		for _, pass := range []*daemonPass{timing, shape} {
+			if view := pass.op.view(); view.State != opRunning || view.Reason != "" || view.Detail != "" {
+				t.Fatalf("a pass did not resume after indexing: %+v", view)
+			}
+		}
+		if timing.op.view().Step.Done != 1 || shape.op.view().Step.Done != 2 {
+			t.Fatal("waiting discarded committed progress")
+		}
+		// A wait must not clear a different owner's blocker or Stop.
+		shape.op.Block("interactive-query", "interactive queries to finish")
+		resume = waitForDaemonPasses("ingest-busy", "source indexing to finish", timing, shape)
+		timing.op.markStopping()
+		resume()
+		if timing.op.State() != opStopping || shape.op.State() != opBlocked || shape.op.view().Reason != "interactive-query" {
+			t.Fatal("resuming overwrote another owner's state")
+		}
+	})
 }
 
 func TestWorkerProgressReachesOperationAndObserver(t *testing.T) {

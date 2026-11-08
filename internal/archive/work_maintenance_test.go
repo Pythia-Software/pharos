@@ -101,6 +101,17 @@ func TestMaintenanceRequestedPassSurvivesBlockAndFailure(t *testing.T) {
 	if q := h.request(id); q.State != opSucceeded || ran != 3 || finished != 1 {
 		t.Fatalf("request %+v after %d steps, %d finished", q, ran, finished)
 	}
+	t.Run("fingerprint waiter yields coordinator", func(t *testing.T) {
+		override(t, &workAwaitPoll, 5*time.Millisecond)
+		task := &maintenanceTask{kind: kindFingerprints, phase: "render", step: func(context.Context, workAllocation) (bool, int64, error) {
+			return false, 0, workBlocked(workBlocker{Reason: workBlockedDependency, Detail: "analysis is pending"})
+		}}
+		s := scheduledTestServer(t, workDefinition{Kind: kindFingerprints, Coarse: true, Task: task})
+		err := s.work.runLibraryMode(t.Context(), []string{kindFingerprints}, true, triggerUser, workModePass)
+		if !errors.Is(err, errFingerprintWaiting) || !backgroundWithdrawn(err) {
+			t.Fatalf("waiting pass did not retain its retry cause: %v", err)
+		}
+	})
 }
 
 // The findings algorithm is the one the request asked for; demand its

@@ -236,6 +236,9 @@ func TestRibbonEventsFollowAgentEventsFreshness(t *testing.T) {
 		if stats, err := c.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{}); err != nil || !stats.Complete {
 			t.Fatalf("agent events: %+v %v", stats, err)
 		}
+		// The analysis chain acknowledges its captured generations after
+		// these direct domain calls complete.
+		execTx(t, c.DB, `UPDATE sync_deferred SET completed_generation=generation WHERE name IN ('labels','agent_events')`)
 	}
 	read := func(path string) (events int, eventsPending float64, labelsPending any) {
 		t.Helper()
@@ -377,24 +380,22 @@ func TestRibbonEventsFollowAgentEventsFreshness(t *testing.T) {
 	// is drawn.
 	ready("before the mark", false, false)
 	execTx(t, c.DB, `UPDATE fingerprint_entities SET revision='requeued' WHERE entity='conversation' AND id='c-events'`)
-	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	renderFingerprintTestEntity(t, c, "conversation", "c-events", false)
 	if len(drawn) != 0 || queued() != 1 {
 		t.Fatalf("drawn on superseded evidence before the mark: %v queued %d", drawn, queued())
 	}
-	// Once marked, the labels are ordinary labeling backlog: the event-hidden
-	// appearance is drawn without them and is current. The events appearance
-	// is queued but not drawn without its events.
+	// Marked analysis backlog holds both appearances, including event-hidden
+	// images, until the labels and events have been rebuilt.
 	if err := c.propagateExecutionChanges(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if countRows(t, c, `SELECT COUNT(*) FROM agent_events_execution_stale WHERE conversation_id='c-events'`) != 1 {
 		t.Fatal("propagation did not mark c-events")
 	}
-	renderFingerprintTestEntity(t, c, "conversation", "c-events")
-	renderFingerprintTestEntity(t, c, "conversation", "c-events")
-	ready("after the mark", true, false)
-	if want := []drawing{{2, 0, 0}}; !slices.Equal(drawn, want) || queued() != 1 {
-		t.Fatalf("after the mark: %v, want %v; queued %d", drawn, want, queued())
+	renderFingerprintTestEntity(t, c, "conversation", "c-events", false)
+	ready("after the mark", false, false)
+	if len(drawn) != 0 || queued() != 1 {
+		t.Fatalf("analysis backlog was drawn: %v; queued %d", drawn, queued())
 	}
 	run()
 	for _, path := range []string{"/api/labels/conversations/c-events", "/api/labels/workspaces/ws-main"} {
@@ -409,17 +410,23 @@ func TestRibbonEventsFollowAgentEventsFreshness(t *testing.T) {
 	renderFingerprintTestEntity(t, c, "conversation", "c-events")
 	renderFingerprintTestEntity(t, c, "conversation", "c-events")
 	ready("republished", true, true)
-	if want := []drawing{{2, 0, 0}, {2, built, labeled}, {1, built, labeled}}; !slices.Equal(drawn, want) || queued() != 0 {
+	if want := []drawing{{2, built, labeled}, {1, built, labeled}}; !slices.Equal(drawn, want) || queued() != 0 {
 		t.Fatalf("republished: %v, want %v; queued %d", drawn, want, queued())
 	}
-	// Ordinary labeling backlog never holds an image back: drawn without the
-	// pending labels, current, and requeued again as labeling moves.
+	// Ordinary labeling backlog also waits rather than drawing an interim
+	// unlabelled image and rendering it again when labeling finishes.
 	execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('c-events','backlog')`)
+	renderFingerprintTestEntity(t, c, "conversation", "c-events", false)
+	ready("labeling backlog", false, false)
+	if len(drawn) != 2 || queued() != 1 {
+		t.Fatalf("labeling backlog was drawn: %v; queued %d", drawn, queued())
+	}
+	run()
 	renderFingerprintTestEntity(t, c, "conversation", "c-events")
 	renderFingerprintTestEntity(t, c, "conversation", "c-events")
-	ready("labeling backlog", true, true)
-	if want := []drawing{{2, built, 0}, {1, built, 0}}; !slices.Equal(drawn[3:], want) || queued() != 0 {
-		t.Fatalf("labeling backlog: %v, want %v; queued %d", drawn[3:], want, queued())
+	ready("labeling complete", true, true)
+	if want := []drawing{{2, built, labeled}, {1, built, labeled}}; !slices.Equal(drawn[2:], want) || queued() != 0 {
+		t.Fatalf("labeling complete: %v, want %v; queued %d", drawn[2:], want, queued())
 	}
 	// The ledger created during this session already requeues images: a
 	// write to its build stamp alone (an executable that records no digest)

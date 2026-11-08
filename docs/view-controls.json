@@ -2452,13 +2452,13 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
-      "key": "html:305cae4f2d4663e4:0",
+      "key": "html:6c593b43c068b90b:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
       "tag": "button",
-      "control": "<button id=\"fingerprintEvents\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"fingerprintEventsTitle\" aria-describedby=\"fingerprintEventsDescription\" aria-checked=\"true\">",
+      "control": "<button id=\"escapeClearsHighlights\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"escapeClearsHighlightsTitle\" aria-describedby=\"escapeClearsHighlightsDescription\" aria-checked=\"true\">",
       "contract": "settings",
-      "reason": "Library-wide fingerprint event display preference, persisted independently of a page URL and applied immediately to every fingerprint."
+      "reason": "Library preference for the Escape shortcut; it does not change the linked view."
     },
     {
       "key": "html:6ee22a83547c6076:0",
@@ -2532,6 +2532,15 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "html:a3e65b59f377fd62:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"uncertainRelatedWork\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"uncertainRelatedWorkTitle\" aria-describedby=\"uncertainRelatedWorkDescription\" aria-checked=\"false\">",
+      "contract": "settings",
+      "reason": "Library-wide preference for including uncertain related work in workspace sessions, timelines and conversations; defaults off and applies independently of URL view state."
     },
     {
       "key": "html:c93fda6c25a2c2d9:0",
@@ -8066,11 +8075,11 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "0afdd250a64435f0:0",
+      "key": "0ff74d6539d804dc:0",
       "file": "web/src/text-search-editor.tsx",
       "owner": "TextSearchEditor",
-      "tag": "button",
-      "control": "aria-label=\"Search all time\" onClick={() => { scope({ from: \"\" }); setAddedFields(fields => fields.filter(key => key !== \"from\")); }}",
+      "tag": "SearchSelect",
+      "control": "aria-label={field.key === \"from\" ? \"Date comparison\" : \"End date comparison\"} value={relative?.duration === \"today\" ? \"today\" : relative ? \"last\" : field.key} onChange={event => { const comparison = event.target.value as SearchDateComparison; if (comparison === \"all\") { searchAllTime(field.key); return; } const target = comparison === \"last\" || comparison === \"today\" ? \"from\" : comparison; patch(withSearchDateComparison(draft, field.key, comparison)); setAddedFields(fields => [...fields.filter(key => key !== field.key), target]); requestAnimationFrame(() => document.getElementById(`${filterID}-${target}`)?.focus()); }}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -8103,15 +8112,6 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "498022b5366d25f6:0",
-      "file": "web/src/text-search-editor.tsx",
-      "owner": "TextSearchEditor",
-      "tag": "SearchSelect",
-      "control": "aria-label={field.key === \"from\" ? \"Date comparison\" : \"End date comparison\"} value={relative?.duration === \"today\" ? \"today\" : relative ? \"last\" : field.key} onChange={event => { const comparison = event.target.value as SearchDateComparison; const target = comparison === \"last\" || comparison === \"today\" ? \"from\" : comparison; patch(withSearchDateComparison(draft, field.key, comparison)); setAddedFields(fields => [...fields.filter(key => key !== field.key), target]); requestAnimationFrame(() => document.getElementById(`${filterID}-${target}`)?.focus()); }}",
-      "contract": "host-search",
-      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
-    },
-    {
       "key": "4fff1abe85313d7f:0",
       "file": "web/src/text-search-editor.tsx",
       "owner": "TextSearchEditor",
@@ -8135,6 +8135,15 @@
       "owner": "TextSearchEditor",
       "tag": "SearchSelect",
       "control": "aria-label=\"Search target\" value={textKind ? selectedScope?.id ?? \"custom\" : kind} onChange={event => { const target = event.target.value; if (target === \"file\" || target === \"url\") onKind(target); else { patch({ scope: chooseScope(draft.scope, target) }); onKind(\"text\"); } }}",
+      "contract": "host-search",
+      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
+    },
+    {
+      "key": "674b35492dc83a04:0",
+      "file": "web/src/text-search-editor.tsx",
+      "owner": "TextSearchEditor",
+      "tag": "button",
+      "control": "aria-label=\"Search all time\" onClick={() => searchAllTime(field.key)}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -9052,6 +9061,15 @@
       "control": "onClick={() => setAttempt(value => value + 1)}",
       "contract": "action",
       "reason": "Retry resolves the retained card source again and replaces the URL with its canonical dashboard state; the attempt count is transient."
+    },
+    {
+      "key": "514fb9b45bb95972:0",
+      "file": "web/src/view-attention.ts",
+      "owner": "installViewAttention",
+      "tag": "button",
+      "control": "\"button\"",
+      "contract": "action",
+      "reason": "Transient context menu action clears linked attention from the URL."
     },
     {
       "key": "a77d7bde4338f61f:0",

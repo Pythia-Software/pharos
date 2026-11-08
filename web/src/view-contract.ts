@@ -9,6 +9,7 @@ import { sessionSignals } from "./session-shape-model";
 import {validTimelineVisibility} from "./timeline-visibility";
 import { dataGuideSelectionKeys, dataSources } from "./data-taxonomy-model";
 import { syncSchemas } from "./sync-table-model";
+import { readerParams } from "./site-routes";
 // One contract for host-owned view state. Query Table owns q_* and its
 // composite controls; the site map exports this contract verbatim to agents.
 export type ViewField = { param: string; pages: string[]; kind: "text" | "boolean" | "enum" | "json" | "strings"; description: string; values?: readonly string[]; default?: unknown; details?: Record<string,unknown>; captureEntries?: boolean };
@@ -97,7 +98,7 @@ export const viewFields: Record<string, ViewField> = {
   query_settings: field("analyze_query_settings", ["analyze/query/*"], "json", "Calculation settings captured by a dashboard query: carbon_settings, habits_settings or parallelism_settings, each a JSON string. The query source uses only its own settings."),
   carbon: field("analyze_carbon", ["analyze/carbon","analyze/query/*"], "json", "View-scoped Carbon assumptions; same shape as the Carbon controls."),
   parallelism: field("analyze_parallelism", ["analyze/parallelism","analyze/query/parallelism"], "json", "Ribbon mode, counting, gap, repository, range/custom bounds, selected workspace/agent, zoom and smoothingMinutes."),
-  habits_view: field("habits_view", ["analyze/habits", "analyze/query/rhythm"], "enum", "The Habits chart to show. Its controls change with the view: activity calendar (calendar), weekday × hour punchcard (punchcard), or daily work schedule (days).", ["calendar", "punchcard", "days"], "calendar"),
+  habits_view: field("habits_view", ["analyze/habits", "analyze/query/rhythm"], "enum", "The Habits chart to show. Its controls change with the view: activity calendar (calendar), weekday × hour punchcard (punchcard), or daily work schedule (days).", ["calendar", "punchcard", "days"], "days"),
   habits_streak: field("habits_streak", ["analyze/habits", "analyze/query/rhythm"], "enum", "Which days a Habits streak runs over: every day (all), or weekdays only (weekdays), where Saturdays and Sundays neither break nor extend it. Vacation days never do.", ["all", "weekdays"], "all"),
   habits_calendar: field("habits_calendar", ["analyze/habits", "analyze/query/rhythm"], "enum", "Whose days the Habits activity calendar shows: you (typed messages), agents you started (answering a message you sent), or automatic agent runs (started by a schedule, script, orchestrator or another agent).", ["you", "agents", "automated"], "you"),
   habits_weekends: field("habits_weekends", ["analyze/habits", "analyze/query/rhythm"], "enum", "Whether the Habits activity calendar shows Saturdays and Sundays (show) or weekdays only (hide).", ["show", "hide"], "show"),
@@ -242,6 +243,19 @@ export function retainPageView(params: URLSearchParams, page: string, nativePara
   if(sourcePage!==page)for(const name of pageAttentionParameters)params.delete(name);
   const allowed=new Set([...Object.values(fieldsForPage(page)).map(field=>field.param),...nativeParameters]);
   for(const field of Object.values(viewFields))if(!field.param.includes("{dataset}")&&!allowed.has(field.param))params.delete(field.param);
+}
+
+// Native reader references are selections, not presentation preferences. A
+// workspace opened from Search must not inherit another workspace's transcript,
+// local event IDs, timeline window or page. Stable-identity maps can travel.
+const workspaceSelections = [...readerParams.map(field => field.name), "delegation_session", "delegation_collapsed", "delegation_start", "delegation_end", "delegation_page", "delegation_expanded", "delegation_relatives", "delegation_event", "reader_event_link", "reader_expanded", "reader_collapsed"];
+const workspacePresentation = ["explorer", "delegation_mode", "delegation_sort", "delegation_scope", "delegation_direction", "delegation_search", "delegation_matching"];
+export function retainNavigationView(params: URLSearchParams, target: URL, source: URL, nativeParameters: readonly string[] = []) {
+  const workspace = (url: URL) => { try { const id = url.pathname.match(/^\/work\/([^/]+)(?:\/|$)/)?.[1]; return id ? decodeURIComponent(id) : null; } catch { return null; } };
+  const next = workspace(target);
+  retainPageView(params, viewPageForURL(target), nativeParameters, viewPageForURL(source));
+  if (!next || next !== workspace(source)) for (const name of [...workspaceSelections, ...pageAttentionParameters]) params.delete(name);
+  if (!next) for (const name of workspacePresentation) params.delete(name);
 }
 
 /** Canonical page identity for route-scoped bindings retained in the shell. */

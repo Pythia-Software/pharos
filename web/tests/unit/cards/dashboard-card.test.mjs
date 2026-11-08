@@ -479,7 +479,7 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
   const legacy = address.replace("habits_view=calendar", "reveal=section%3Ahabits-calendar");
   assert.equal(new URL(pageCardURL(legacy), location.origin).searchParams.get("habits_view"), "calendar");
   assert.equal(new URL(url, location.origin).searchParams.has('habits_day'), false, 'a selected day is not part of a card');
-  assert.deepEqual(dashboardCardTargets(url).map(target => target.id), ['habits-streaks', 'habits-calendar', 'habits-pace', 'habits-automations']);
+  assert.deepEqual(dashboardCardTargets(url).map(target => target.id), ['habits-streaks', 'habits-calendar', 'habits-pace']);
   assert.equal(dashboardCardTargets(url).find(target => target.id === 'habits-calendar').title, 'Days with automatic agent runs · weekdays only');
   assert.equal(dashboardCardWindow(url, 'habits-calendar'), 'Past 13 weeks');
   // A year's calendar draws the weeks a card can show, and says so.
@@ -495,7 +495,7 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
   assert.equal(dashboardCardPresentation(url, 'habits-streaks').category, 'human');
   assert.match(dashboardCardDescription(url, 'habits-calendar'), /automatic agent runs/);
   assert.throws(() => collectDashboardCard(makeURL(dashboardDefaults.tokens), 'Streak', '', 'habits-streaks'), /cannot/);
-  for (const target of ['habits-streaks', 'habits-calendar', 'habits-punchcard', 'habits-days', 'habits-pace', 'habits-automations']) {
+  for (const target of ['habits-streaks', 'habits-calendar', 'habits-punchcard', 'habits-days', 'habits-pace']) {
     const card = collectDashboardCard(url, target, '', target);
     assert.equal(card.dashboardTarget, target);
     const destination = new URL(card.url, location.origin).searchParams;
@@ -520,7 +520,7 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
   const { collectCardTemplate } = await import('../../../src/dashboard-card-model');
   const { loadQueryPreviews } = await import('../../../src/query-previews');
   const templates = queryRecipes.filter(recipe => recipe.habits);
-  assert.deepEqual(new Set(templates.map(recipe => recipe.habits.target)), new Set(['habits-streaks', 'habits-calendar', 'habits-punchcard', 'habits-days', 'habits-pace', 'habits-automations']));
+  assert.deepEqual(new Set(templates.map(recipe => recipe.habits.target)), new Set(['habits-streaks', 'habits-calendar', 'habits-punchcard', 'habits-days', 'habits-pace']));
   t.mock.method(global, 'fetch', async request => { assert.match(String(request), /^\/api\/habits\?/); return new Response(JSON.stringify(summary)); });
   for (const recipe of templates) {
     const item = instantiateRecipe(recipe, null), address = new URL(item.url, location.origin);

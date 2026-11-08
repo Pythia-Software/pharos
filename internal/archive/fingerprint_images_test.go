@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -32,15 +33,233 @@ INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,cr
 UPDATE fingerprint_entities SET dirty=0,priority=0,next_attempt=0;`)
 	return c, config
 }
-func renderFingerprintTestEntity(t *testing.T, c *Catalog, entity, id string) {
+func renderFingerprintTestEntity(t *testing.T, c *Catalog, entity, id string, wantWork ...bool) {
 	t.Helper()
 	execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=0`)
 	if _, err := c.DB.Exec(`UPDATE fingerprint_entities SET dirty=1,next_attempt=0,priority=100 WHERE entity=? AND id=?`, entity, id); err != nil {
 		t.Fatal(err)
 	}
 	more, err := c.refreshFingerprintImages(t.Context())
-	if err != nil || !more {
+	want := true
+	if len(wantWork) > 0 {
+		want = wantWork[0]
+	}
+	if err != nil || more != want {
 		t.Fatalf("render %s/%s: more=%v %v", entity, id, more, err)
+	}
+}
+
+func TestFingerprintWaitsForAnalysis(t *testing.T) {
+	c, config := seedFingerprintLibrary(t)
+	srv := testServer(t, config, c)
+	if err := c.ensureLabelsSchema(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ensureAgentEventsSchema(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ensureAgentEventsLedger(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	renderFingerprintTestEntity(t, c, "conversation", "fp-a")
+	var calls int
+	renderer := c.fingerprints.renderer
+	c.fingerprints.renderer = fingerprintRenderFunc(func(ctx context.Context, input any, mask int) (fingerprintRendered, error) {
+		calls++
+		return renderer.Render(ctx, input, mask)
+	})
+	queue := func(t *testing.T) {
+		t.Helper()
+		execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=1,priority=0,next_attempt=0,attempts=0;
+UPDATE fingerprint_entities SET priority=100 WHERE entity='conversation' AND id='fp-a'`)
+	}
+	waiting := func(t *testing.T) {
+		t.Helper()
+		before := calls
+		queueState := func() string {
+			t.Helper()
+			rows, err := queryMapsContext(t.Context(), c.reader(), `SELECT entity,id,revision,dirty,attempts,next_attempt FROM fingerprint_entities ORDER BY entity,id`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return jsonText(rows)
+		}
+		unchanged := queueState()
+		if pending, err := c.fingerprintImagesPending(t.Context()); err != nil || pending {
+			t.Fatalf("waiting work submitted: %v %v", pending, err)
+		}
+		if did, more, err := c.renderFingerprintBatch(t.Context(), workAllocation{CPUs: 1}, false, time.Minute); err != nil || more || did != 0 || calls != before {
+			t.Fatalf("waiting work rendered: count=%d more=%v calls=%d %v", did, more, calls-before, err)
+		}
+		if queueState() != unchanged {
+			t.Fatal("waiting analysis changed its queue state")
+		}
+	}
+	for _, stage := range []string{"tools", "authorship", "peers", "labels", "agent_events"} {
+		t.Run("deferred "+stage, func(t *testing.T) {
+			queue(t)
+			execTx(t, c.DB, fmt.Sprintf(`INSERT INTO sync_deferred(name,generation,completed_generation,changed_at) VALUES('%s',1,0,'2026-01-01') ON CONFLICT(name) DO UPDATE SET generation=generation+1`, stage))
+			waiting(t)
+			if stage == "labels" || stage == "agent_events" {
+				if pending, err := c.fingerprintImagesPending(srv.fingerprintContext(t.Context())); err != nil || !pending {
+					t.Fatalf("disabled analysis held images: %v %v", pending, err)
+				}
+			}
+			execTx(t, c.DB, fmt.Sprintf(`UPDATE sync_deferred SET completed_generation=generation WHERE name='%s'`, stage))
+			if pending, err := c.fingerprintImagesPending(t.Context()); err != nil || !pending {
+				t.Fatalf("completed analysis did not resume images: %v %v", pending, err)
+			}
+		})
+	}
+	queue(t)
+	_, op := srv.begin(t.Context(), OperationSpec{Kind: "analysis.labels", Trigger: triggerChained})
+	waiting(t)
+	op.Finish(nil)
+	// A pending conversation and its workspace stay queued; unrelated ready
+	// entities still progress, despite the waiting conversation's priority.
+	for _, table := range []string{"message_labels_dirty", "agent_events_dirty"} {
+		t.Run(table, func(t *testing.T) {
+			queue(t)
+			execTx(t, c.DB, `INSERT INTO `+table+`(conversation_id,token) VALUES('fp-a','waiting'); UPDATE fingerprint_entities SET next_attempt=0`)
+			if did, more, err := c.renderFingerprintBatch(t.Context(), workAllocation{CPUs: 1}, false, time.Minute); err != nil || more || did != 2 {
+				t.Fatalf("ready entities: count=%d more=%v %v", did, more, err)
+			}
+			waiting(t)
+			if pending, err := c.fingerprintImagesPending(srv.fingerprintContext(t.Context())); err != nil || !pending {
+				t.Fatalf("disabled analysis marks held images: %v %v", pending, err)
+			}
+			if dirty := countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`); dirty != 2 {
+				t.Fatalf("waiting conversation and workspace lost: %d", dirty)
+			}
+			execTx(t, c.DB, `DELETE FROM `+table+` WHERE conversation_id='fp-a'; UPDATE fingerprint_entities SET next_attempt=0`)
+			if did, more, err := c.renderFingerprintBatch(t.Context(), workAllocation{CPUs: 1}, false, time.Minute); err != nil || more || did != 2 {
+				t.Fatalf("completed analysis: count=%d more=%v %v", did, more, err)
+			}
+		})
+	}
+	t.Run("requested passes", testFingerprintRequestedPasses)
+	t.Run("blocked maintenance demand", func(t *testing.T) {
+		c, config := seedFingerprintLibrary(t)
+		s := testServer(t, config, c)
+		execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=1,next_attempt=0;
+INSERT INTO sync_deferred(name,generation,changed_at) VALUES('tools',1,'2026-01-01')`)
+		task := s.fingerprintMaintenanceTask()
+		h := newWorkHarness(t, 2, workDefinition{Kind: kindFingerprints, Coarse: true, Task: task})
+		request := h.submit(workRequestSpec{Kinds: []string{kindFingerprints}, Mode: workModePass, Priority: workPriorityLive})
+		h.runner.Pump()
+		h.complete(kindFingerprints)
+		if facts := h.request(request); opTerminal(facts.State) || countRows(t, c, `SELECT COUNT(*) FROM fingerprint_images`) != 0 {
+			t.Fatalf("blocked pass consumed its demand: %+v", facts)
+		}
+		execTx(t, c.DB, `UPDATE sync_deferred SET completed_generation=generation`)
+		h.clock.Advance(workReconcileInterval)
+		h.runner.Pump()
+		h.complete(kindFingerprints)
+		if facts := h.request(request); facts.State != opSucceeded || countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`) != 0 {
+			t.Fatalf("ready pass did not finish its demand: %+v", facts)
+		}
+	})
+}
+
+func testFingerprintRequestedPasses(t *testing.T) {
+	for _, engine := range []string{"classic", "scheduled"} {
+		for _, cadence := range []string{cadenceHourly, cadenceDaily, cadenceManual} {
+			t.Run(engine+"/"+cadence, func(t *testing.T) {
+				c, config := seedFingerprintLibrary(t)
+				config.WorkEngine, config.BackgroundCPUs = engine, 2
+				s := testServer(t, config, c)
+				renderer, err := newFingerprintRenderer()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var calls atomic.Int64
+				// Use one CPU so both slots never share native scratch.
+				engine := fingerprintRenderFunc(func(ctx context.Context, input any, mask int) (fingerprintRendered, error) {
+					if pending := countRows(t, c, `SELECT COUNT(*) FROM sync_deferred WHERE name='tools' AND generation>completed_generation`); pending != 0 {
+						t.Error("fingerprint rendered before tools finished")
+					}
+					calls.Add(1)
+					return renderer.Render(ctx, input, mask)
+				})
+				c.fingerprints.renderer = engine
+				if s.work != nil {
+					defs, err := s.maintenanceWorkDefinitions(nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, def := range defs {
+						if def.Kind == kindFingerprints {
+							def.Task.(*maintenanceTask).maxCPUs = func(context.Context) int { return 1 }
+						}
+					}
+					useWorkDefinitions(t, s, defs...)
+				}
+				passCadence := cadence
+				if cadence == cadenceManual {
+					passCadence = "requested"
+				}
+				set := apiCall(t, s, config.APIToken, http.MethodPost, "/api/background/settings", map[string]any{
+					"mode": "on", "hold_when_busy": false, "temporary_cadences": map[string]any{"fingerprints": cadence, "tools": cadence}})
+				if set.Code != http.StatusOK {
+					t.Fatal(set.Body.String())
+				}
+				execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=1,next_attempt=0;
+INSERT INTO sync_deferred(name,generation,changed_at) VALUES('tools',1,'2026-01-01')`)
+				plans := []itemPlan{{ID: "tools", Cadence: cadence}, {ID: "fingerprints", Cadence: cadence}}
+				run := func(ids ...string) {
+					t.Helper()
+					ctx, op := s.begin(t.Context(), OperationSpec{Kind: "background.update", Trigger: triggerSchedule})
+					_, err := s.runBackgroundItems(ctx, op, "", passCadence, ids, plans)
+					op.Finish(err)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				// Deliberately list fingerprints first: the pass must run tools
+				// before it records a successful fingerprint pass.
+				run("fingerprints", "tools")
+				if calls.Load() == 0 || countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`) != 0 {
+					deferred, _ := c.freshnessDeferred(t.Context())
+					t.Fatalf("pass succeeded without rendering after analysis: calls=%d dirty=%d deferred=%v runs=%v", calls.Load(), countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`), deferred, c.backgroundRuns(t.Context()))
+				}
+				last := c.backgroundRuns(t.Context())["fingerprints"].succeeded
+				execTx(t, c.DB, `UPDATE sync_deferred SET generation=generation+1 WHERE name='tools';
+UPDATE fingerprint_entities SET dirty=1,next_attempt=0`)
+				run("fingerprints")
+				if row := c.backgroundRuns(t.Context())["fingerprints"]; row.succeeded != last || row.err != "" || s.background.fingerprintRetry != passCadence {
+					t.Fatalf("waiting pass was consumed: %+v retry=%q", row, s.background.fingerprintRetry)
+				}
+				// Keep unrelated work off this retry's schedule.
+				tx := seedTx(t, c.DB)
+				for _, item := range backgroundItems {
+					if item.ID != "fingerprints" {
+						if _, err := tx.Exec(`INSERT INTO background_runs(host_id,item,succeeded_at) VALUES(?,?,?) ON CONFLICT(host_id,item) DO UPDATE SET succeeded_at=excluded.succeeded_at`, currentHost().ID, item.ID, now()); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				if _, err := tx.Exec(`UPDATE sync_deferred SET completed_generation=generation WHERE name='tools'`); err != nil {
+					t.Fatal(err)
+				}
+				commitSeed(t, tx)
+				if !s.backgroundPass(t.Context(), time.Now()) || countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`) != 0 || s.background.fingerprintRetry != "" {
+					t.Fatal("accepted pass did not resume after analysis")
+				}
+				// The public Run now queue must also retain its request while
+				// letting other background stages proceed.
+				execTx(t, c.DB, `UPDATE sync_deferred SET generation=generation+1 WHERE name='tools'; UPDATE fingerprint_entities SET dirty=1,next_attempt=0`)
+				s.requestBackground("fingerprints")
+				before := calls.Load()
+				s.backgroundPass(t.Context(), time.Now())
+				if !s.peekRequested()["fingerprints"] || calls.Load() != before {
+					t.Fatal("Run now consumed a request waiting for analysis")
+				}
+				execTx(t, c.DB, `UPDATE sync_deferred SET completed_generation=generation WHERE name='tools'`)
+				if !s.backgroundPass(t.Context(), time.Now()) || s.peekRequested()["fingerprints"] || countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`) != 0 {
+					t.Fatal("Run now did not resume its retained request")
+				}
+			})
+		}
 	}
 }
 func fingerprintTestRevision(t *testing.T, c *Catalog, entity, id string) string {
@@ -139,8 +358,8 @@ func TestFingerprintImagesAPI(t *testing.T) {
 		t.Fatal("events pending without withheld events", m)
 	}
 	execTx(t, c.DB, `INSERT INTO agent_events_execution_stale(conversation_id) VALUES('fp-a')`)
-	renderFingerprintTestEntity(t, c, "conversation", "fp-a") // event-hidden; the events appearance waits
-	if hidden := request(false); hidden.State != "ready" || hidden.Stale || hidden.EventsPending != 0 {
+	renderFingerprintTestEntity(t, c, "conversation", "fp-a", false) // both appearances wait for analysis
+	if hidden := request(false); hidden.State == "ready" || !hidden.Stale || hidden.EventsPending != 0 {
 		t.Fatal("the event-hidden image reported withheld events", hidden)
 	}
 	if shown := request(true); shown.State == "ready" || !shown.Stale || len(shown.Images) != 2 || shown.EventsPending != 1 {
@@ -468,6 +687,7 @@ func TestFingerprintInvalidationAndRecovery(t *testing.T) {
 	if fingerprintTestRevision(t, c, "conversation", "fp-a") == before {
 		t.Fatal("tool call did not invalidate image")
 	}
+	execTx(t, c.DB, `DELETE FROM message_labels_dirty`)
 	renderer, err := newFingerprintRenderer()
 	if err != nil {
 		t.Fatal(err)
@@ -489,6 +709,7 @@ func TestFingerprintInvalidationAndRecovery(t *testing.T) {
 	c.fingerprints.renderer = fingerprintRenderFunc(func(context.Context, any, int) (fingerprintRendered, error) {
 		return fingerprintRendered{}, errors.New("temporary raster failure")
 	})
+	execTx(t, c.DB, `DELETE FROM message_labels_dirty`)
 	renderFingerprintTestEntity(t, c, "conversation", "fp-a")
 	var attempts, dirty, next int
 	if err := c.DB.QueryRow(`SELECT attempts,dirty,next_attempt FROM fingerprint_entities WHERE entity='conversation' AND id='fp-a'`).Scan(&attempts, &dirty, &next); err != nil {

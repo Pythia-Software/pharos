@@ -68,6 +68,46 @@ func TestAuditDefersChangesWaitingForIndex(t *testing.T) {
 			}
 		})
 	}
+	for _, repair := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ledger-upgrade/repair=%t", repair), func(t *testing.T) {
+			useHost(t, "host-a")
+			path := filepath.Join(t.TempDir(), "session.jsonl")
+			writeSourceFile(t, path, claudeLine("session", "question", "question", "", 1)+
+				`{"type":"assistant","uuid":"answer","sessionId":"session","timestamp":"2026-09-01T00:02:00Z","message":{"id":"request","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"answer"}],"usage":{"input_tokens":10,"output_tokens":2}}}`+"\n")
+			source := SourceConfig{Name: "claude", Kind: "claude", Path: path, Account: "local", Enabled: true}
+			server := automaticTestServer(t, source)
+			ingestSource(t, server.Catalog, source)
+			unit := firstSyncUnit(t, server.Catalog, source)
+			if countRows(t, server.Catalog, "SELECT COUNT(*) FROM model_requests WHERE source_message_id IS NOT NULL") != 1 {
+				t.Fatal("fixture has no request message evidence")
+			}
+			execTx(t, server.Catalog.DB, "UPDATE model_requests SET source_message_id=NULL,final_message_id=NULL",
+				"UPDATE tool_ledger_state SET version='tools-v12-inference-speed-policy'")
+			openIssueFoundBy(t, server, unit, "old-verifier")
+			if result := server.Catalog.auditUnit(t.Context(), unit, "upgrade-pending", 0); result.Outcome != "deferred" || result.Reason != "derivation_pending" {
+				t.Fatalf("pending upgrade reported corruption: %+v", result)
+			}
+			if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_integrity_issues WHERE state='open'") != 1 {
+				t.Fatal("deferral dismissed an unverified issue")
+			}
+			if !repair {
+				if _, err := server.Catalog.BackfillToolLedger(t.Context(), nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result := server.Catalog.auditUnitMode(t.Context(), unit, "upgrade-complete", 0, repair)
+			if result.Outcome != "passed" || result.Reindexed != boolInt(repair) {
+				t.Fatalf("upgraded ledger failed verification: %+v", result)
+			}
+			if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_integrity_issues WHERE state='open'") != 0 {
+				t.Fatal("verified upgrade did not resolve its issue")
+			}
+			execTx(t, server.Catalog.DB, "UPDATE model_requests SET source_message_id=NULL")
+			if result := server.Catalog.auditUnit(t.Context(), unit, "current-ledger-corruption", 0); result.Outcome != "mismatch" || !slices.Contains(result.Differences, "model_requests") {
+				t.Fatalf("current ledger corruption was hidden: %+v", result)
+			}
+		})
+	}
 }
 
 func TestAutomaticAuditFallsBackAndPersistsLargerChecks(t *testing.T) {

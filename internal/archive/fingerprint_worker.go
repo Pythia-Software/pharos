@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,9 +73,160 @@ var fingerprintRenderTimeout = 2 * time.Minute
 // fingerprintInputReadHook, when set (tests), runs after a unit reads its input.
 var fingerprintInputReadHook func()
 
+type fingerprintAnalysisPolicy struct{ labels, events bool }
+type fingerprintAnalysisPolicyKey struct{}
+
+func (s *Server) fingerprintContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, fingerprintAnalysisPolicyKey{}, fingerprintAnalysisPolicy{s.Config().Labels.Enabled, s.agentEventsEnabled(ctx)})
+}
+
+func fingerprintPolicy(ctx context.Context) fingerprintAnalysisPolicy {
+	if policy, ok := ctx.Value(fingerprintAnalysisPolicyKey{}).(fingerprintAnalysisPolicy); ok {
+		return policy
+	}
+	// Catalog-only callers have no service configuration: existing analysis
+	// ledgers remain dependencies until their pending work is complete.
+	return fingerprintAnalysisPolicy{true, true}
+}
+
+// Fingerprints consume the analysis chain's results. Wait between passes,
+// including after an interrupted run, rather than drawing intermediate labels
+// and events and invalidating the same images again as analysis progresses.
+func (c *Catalog) fingerprintAnalysisReady(ctx context.Context) (bool, error) {
+	for _, op := range c.ops.views() {
+		if !liveState(op.State) {
+			continue
+		}
+		switch op.Spec.Kind {
+		case "analysis.chain":
+			// Population requests also wrap maintenance, including these
+			// fingerprints. Their actual analysis stages are checked below.
+			if op.Spec.Variant != "population-request" {
+				return false, nil
+			}
+		case "analysis.labels", "analysis.agent_events", "analysis.authorship", "analysis.authorship.refine", "analysis.peers", "analysis.tools":
+			return false, nil
+		}
+	}
+	stages := []string{"tools", "authorship", "peers"}
+	policy := fingerprintPolicy(ctx)
+	if policy.labels {
+		stages = append(stages, "labels")
+	}
+	if policy.events {
+		stages = append(stages, "agent_events")
+	}
+	pending, err := catalogExists(ctx, c, `SELECT 1 FROM sync_deferred WHERE name IN (SELECT value FROM json_each(?)) AND generation>completed_generation`, jsonText(stages))
+	return !pending, err
+}
+
+// Select only entities whose analysis is ready. Dirty marks also cover work
+// outside the chain, and unmarked execution changes cover older writers. A
+// workspace waits for every conversation it draws. Keeping waiting entities
+// out of selection avoids retry writes, inflated progress and starvation of
+// ready entities behind a high-priority waiting one.
+func (c *Catalog) fingerprintSelectionSQL(ctx context.Context, columns string) (string, error) {
+	tables, err := queryMapsContext(ctx, c.reader(), `SELECT name FROM sqlite_master WHERE type='table' AND name IN ('message_labels_dirty','agent_events_dirty','message_labels_conversations','agent_events_conversations')`)
+	if err != nil {
+		return "", err
+	}
+	pending := []string{}
+	policy := fingerprintPolicy(ctx)
+	for _, table := range tables {
+		switch name := firstString(table["name"]); name {
+		case "message_labels_dirty":
+			if policy.labels {
+				pending = append(pending, `SELECT conversation_id id FROM `+name)
+			}
+		case "agent_events_dirty":
+			if policy.events {
+				pending = append(pending, `SELECT conversation_id id FROM `+name)
+			}
+		case "message_labels_conversations":
+			pending = append(pending, executionUnmarkedSQL(ctx, c.reader(), name))
+		case "agent_events_conversations":
+			pending = append(pending, `SELECT conversation_id id FROM (`+agentEventsWithheldSQLFor(ctx, c.reader())+`)`)
+		}
+	}
+	query := `SELECT ` + columns + ` FROM fingerprint_entities WHERE dirty=1 AND next_attempt<=unixepoch()`
+	if len(pending) > 0 {
+		query = `WITH pending_analysis(id) AS MATERIALIZED (` + strings.Join(pending, ` UNION `) + `),
+pending_workspaces(id) AS MATERIALIZED (SELECT DISTINCT workspace_id FROM conversations WHERE id IN (SELECT id FROM pending_analysis) AND workspace_id IS NOT NULL)
+` + query + ` AND (entity='conversation' AND id NOT IN (SELECT id FROM pending_analysis) OR entity='workspace' AND id NOT IN (SELECT id FROM pending_workspaces))`
+	}
+	return query, nil
+}
+
+func (c *Catalog) fingerprintImagesPending(ctx context.Context) (bool, error) {
+	ready, err := c.fingerprintAnalysisReady(ctx)
+	if err != nil || !ready {
+		return false, err
+	}
+	query, err := c.fingerprintSelectionSQL(ctx, "1")
+	if err != nil {
+		return false, err
+	}
+	return catalogExists(ctx, c, query+` LIMIT 1`)
+}
+
+// Waiting is a held pass, not a success or a rendering failure. The background
+// loop retains its accepted demand until analysis (or a render retry) is ready.
+var errFingerprintWaiting = fmt.Errorf("%w: fingerprints are waiting for analysis or retry", errWorkHeld)
+
+func (s *Server) fingerprintPassReady(ctx context.Context) (bool, error) {
+	pending, err := catalogExists(ctx, s.Catalog, `SELECT 1 FROM fingerprint_entities WHERE dirty=1`)
+	if err != nil || !pending {
+		return !pending, err
+	}
+	return s.Catalog.fingerprintImagesPending(ctx)
+}
+
+func (s *Server) runFingerprintPass(ctx context.Context) error {
+	ctx = s.fingerprintContext(ctx)
+	c := s.Catalog
+	ready, err := s.fingerprintPassReady(ctx)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		// Collection remains independent of analysis readiness.
+		if err := c.runSearchBatches(ctx, []searchBatch{{"maintenance.fingerprints", c.pruneFingerprintBlobs}}); err != nil {
+			return err
+		}
+		return errFingerprintWaiting
+	}
+	if s.work.declares(kindFingerprints) {
+		err = s.work.runLibraryMode(ctx, []string{kindFingerprints}, backgroundExplicit(ctx), triggerChained, workModePass)
+	} else {
+		err = c.runSearchBatches(ctx, []searchBatch{
+			{"maintenance.fingerprints", c.pruneFingerprintBlobs},
+			{"maintenance.fingerprints", c.refreshFingerprintImages},
+		})
+	}
+	if err != nil {
+		return err
+	}
+	// Selection can become blocked during a pass. Do not consume the request
+	// just because no image is eligible in this snapshot.
+	if pending, checkErr := catalogExists(ctx, c, `SELECT 1 FROM fingerprint_entities WHERE dirty=1`); checkErr != nil {
+		return checkErr
+	} else if pending {
+		return errFingerprintWaiting
+	}
+	return nil
+}
+
 func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 	if c.readOnly || c.queryOnly {
 		return false, nil
+	}
+	ready, err := c.fingerprintAnalysisReady(ctx)
+	if err != nil || !ready {
+		return false, err
+	}
+	query, err := c.fingerprintSelectionSQL(ctx, "entity,id,revision,events_mask,attempts")
+	if err != nil {
+		return false, err
 	}
 	worker := &c.fingerprints
 	worker.mu.Lock()
@@ -91,7 +243,6 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 	}
 	var entity, id, revision string
 	var mask, attempts int
-	query := `SELECT entity,id,revision,events_mask,attempts FROM fingerprint_entities WHERE dirty=1 AND next_attempt<=unixepoch()`
 	args := []any{}
 	for _, active := range worker.active {
 		if active != nil {
@@ -100,7 +251,7 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 		}
 	}
 	query += ` ORDER BY priority DESC,next_attempt,entity,id LIMIT 1`
-	err := c.reader().QueryRowContext(ctx, query, args...).Scan(&entity, &id, &revision, &mask, &attempts)
+	err = c.reader().QueryRowContext(ctx, query, args...).Scan(&entity, &id, &revision, &mask, &attempts)
 	var renderer fingerprintImageRenderer
 	if err == nil {
 		worker.active[slot] = &fingerprintEntity{entity, id}
@@ -149,12 +300,10 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 	} else if needed&1 != 0 {
 		needed = 1
 	}
-	// While the appearance rests on superseded execution evidence
-	// (fingerprintExecutionPending) it waits, backing off: drawn so, it would
-	// read current if the change were undone before any mark. A mark, and the
-	// run that clears it, requeue it (fingerprintSourceTriggers). The input is
-	// classified at one execution source generation: the pending sets move
-	// only with it or with writes that move the revision, so a read that
+	// Recheck execution evidence after selection. Leave superseded work queued
+	// without counting a render or writing a retry. The input is classified at
+	// one execution source generation: the pending sets move only with it or
+	// with writes that move the revision, so a read that
 	// straddles a change is not drawn. It is conservative: any execution
 	// source write counts, related or not, so the retry takes the same
 	// backoff, bounding repeated reads while an ingest writes.
@@ -167,11 +316,7 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if superseded {
-		delay := min(300, 5*(1<<min(attempts, 6)))
-		return true, c.writeTransaction(ctx, "defer superseded fingerprint", func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, `UPDATE fingerprint_entities SET attempts=attempts+1,next_attempt=unixepoch()+? WHERE entity=? AND id=? AND revision=?`, delay, entity, id, revision)
-			return err
-		})
+		return false, nil
 	}
 	renderCtx, cancel := context.WithTimeout(ctx, fingerprintRenderTimeout)
 	defer cancel()
@@ -301,17 +446,23 @@ func (s *Server) maintainFingerprintImagesLoop(ctx context.Context, secondary bo
 		if err := c.queries.wait(ctx); err != nil {
 			return
 		}
-		if pass == nil {
-			pass = shared.join(ctx, c)
-		}
 		if !secondary && time.Since(pruneAt) > time.Minute {
 			prune := c.beginPass(ctx, "maintenance.fingerprints", triggerSchedule)
 			prune.runIO(ctx, func(ctx context.Context) { _, err = c.pruneFingerprintBlobs(ctx) })
 			prune.end(err)
 			pruneAt = time.Now()
 		}
+		if pass == nil {
+			if pending, err := c.fingerprintImagesPending(s.fingerprintContext(ctx)); err != nil || !pending {
+				if !waitFingerprintWorker(ctx, time.Second) {
+					return
+				}
+				continue
+			}
+			pass = shared.join(ctx, c)
+		}
 		var more bool
-		pass.runIO(ctx, func(ctx context.Context) { more, err = c.refreshFingerprintImages(ctx) })
+		pass.runIO(ctx, func(ctx context.Context) { more, err = c.refreshFingerprintImages(s.fingerprintContext(ctx)) })
 		if more {
 			shared.worked(1)
 		}
@@ -396,7 +547,7 @@ func (s *Server) fingerprintMaintenanceTask() *maintenanceTask {
 			if allowed, _ := s.fingerprintPower(ctx); !allowed {
 				return false, nil
 			}
-			pending, err := catalogExists(ctx, c, "SELECT 1 FROM fingerprint_entities WHERE dirty=1 AND next_attempt<=unixepoch()")
+			pending, err := c.fingerprintImagesPending(s.fingerprintContext(ctx))
 			if err != nil || pending || !pruneDue() {
 				return pending, err
 			}
@@ -422,7 +573,16 @@ func (s *Server) fingerprintMaintenanceTask() *maintenanceTask {
 				}
 			}
 			_, slower := s.fingerprintPower(ctx)
-			rendered, more, err := c.renderFingerprintBatch(ctx, allocation, slower, maintenanceSlice)
+			rendered, more, err := c.renderFingerprintBatch(s.fingerprintContext(ctx), allocation, slower, maintenanceSlice)
+			if err == nil && requested && !more {
+				pending, checkErr := catalogExists(ctx, c, `SELECT 1 FROM fingerprint_entities WHERE dirty=1`)
+				if checkErr != nil {
+					return false, work + rendered, checkErr
+				}
+				if pending {
+					return false, work + rendered, workBlocked(workBlocker{Reason: workBlockedDependency, Detail: "fingerprints are waiting for analysis or retry"})
+				}
+			}
 			return more || requested && pruned, work + rendered, err
 		}}
 }

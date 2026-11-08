@@ -1130,6 +1130,7 @@ final class ArchiveWKWebView: WKWebView {
         var title: String { highlighted ? "Remove Highlight" : "Highlight \(noun)" }
     }
     var contextTarget: ContextTarget?
+    var contextHasAttention = false
 
     /// The local file a right-clicked Markdown link names, once the service
     /// has found it (`data-file-path` on the link). `launchable` is the
@@ -1180,6 +1181,11 @@ final class ArchiveWKWebView: WKWebView {
             return item
         }
         var items = [copy, highlight]
+        if contextHasAttention {
+            let clear = NSMenuItem(title: "Clear Highlights", action: #selector(clearHighlights(_:)), keyEquivalent: "")
+            clear.target = self
+            items.append(clear)
+        }
         if let enabled = contextLighthouseLoading {
             let lighthouse = NSMenuItem(title: "Lighthouse Loading Indicator", action: #selector(runPageAction(_:)), keyEquivalent: "")
             lighthouse.target = self
@@ -1286,6 +1292,7 @@ final class ArchiveWKWebView: WKWebView {
     override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
         super.didCloseMenu(menu, with: event)
         contextTarget = nil
+        contextHasAttention = false
         contextFile = nil
         contextLighthouseLoading = nil
         pageActions = false
@@ -1307,6 +1314,10 @@ final class ArchiveWKWebView: WKWebView {
               let data = try? JSONSerialization.data(withJSONObject: [reference]),
               let json = String(data: data, encoding: .utf8) else { return }
         evaluateJavaScript("window.pharosView?.toggleAttention(\(json)[0])")
+    }
+
+    @objc private func clearHighlights(_ sender: Any?) {
+        evaluateJavaScript("window.pharosView?.clearAttention()")
     }
 }
 
@@ -1457,7 +1468,7 @@ struct ArchiveWebView: NSViewRepresentable {
         const file = link ? {path: link.dataset.filePath, launchable: link.dataset.fileLaunchable !== 'false'} : false;
         const lighthouse = element?.closest('body > header .brand, body > header .tabs button[data-view="home"]');
         const lighthouseLoading = lighthouse && typeof window.pharosLighthouseLoadingIndicator === 'function' ? window.pharosLighthouseLoadingIndicator() : null;
-        window.webkit.messageHandlers.\(windowMessageName).postMessage({contextTarget: target ?? false, contextFile: file, lighthouseLoading, pageActions: typeof window.pharosPageAction === 'function'});
+        window.webkit.messageHandlers.\(windowMessageName).postMessage({contextTarget: target ?? false, contextHasAttention: window.pharosView?.hasAttention?.() === true, contextFile: file, lighthouseLoading, pageActions: typeof window.pharosPageAction === 'function'});
       }, true);
     })();
     """
@@ -1719,6 +1730,7 @@ struct ArchiveWebView: NSViewRepresentable {
                 }
                 if let body = message.body as? [String: Any], body.keys.contains("contextTarget") {
                     webView.contextTarget = ArchiveWKWebView.ContextTarget(body["contextTarget"])
+                    webView.contextHasAttention = body["contextHasAttention"] as? Bool == true
                     webView.contextFile = ArchiveWKWebView.ContextFile(body["contextFile"])
                     webView.contextLighthouseLoading = body["lighthouseLoading"] as? Bool
                     webView.pageActions = body["pageActions"] as? Bool == true

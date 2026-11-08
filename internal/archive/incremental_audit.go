@@ -493,6 +493,18 @@ func (c *Catalog) auditUnitMode(ctx context.Context, unit syncUnit, runID string
 	defer os.RemoveAll(dir)
 	read := unit.Parts
 	compare := func(record WorkspaceRecord) error {
+		// A reference ingest uses today's ledger derivation. An older stored
+		// ledger is queued for upgrade, so its missing derived fields cannot
+		// establish corruption. Explicit repair may rebuild it and reverify.
+		if !repair {
+			pending, err := c.auditLedgerUpgradePending(ctx, record)
+			if err != nil {
+				return err
+			}
+			if pending {
+				return &auditDeferral{Reason: "derivation_pending", Detail: "selected input has a tool ledger upgrade waiting to be built"}
+			}
+		}
 		scope, err := os.MkdirTemp(dir, "scope-")
 		if err != nil {
 			return err
@@ -586,6 +598,22 @@ func (c *Catalog) auditUnitMode(ctx context.Context, unit syncUnit, runID string
 		}
 	}
 	return
+}
+
+func (c *Catalog) auditLedgerUpgradePending(ctx context.Context, record WorkspaceRecord) (bool, error) {
+	tx, err := c.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	id, err := storedWorkspaceID(tx, record)
+	if err != nil || id == "" {
+		return false, err
+	}
+	var pending bool
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM conversations c
+		JOIN tool_ledger_state s ON s.conversation_id=c.id WHERE c.workspace_id=? AND s.version<>?)`, id, toolLedgerVersion).Scan(&pending)
+	return pending, err
 }
 
 func (c *Catalog) openAuditIssue(ctx context.Context, unit syncUnit, runID string, differences []string, signature string) error {

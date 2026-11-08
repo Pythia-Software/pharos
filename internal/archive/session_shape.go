@@ -725,14 +725,6 @@ func deriveSessionShapeOf(ctx context.Context, q queryer, id string) (*sessionSh
 	return &facts, evidence, nil
 }
 
-func deriveSessionShapeBatch(ctx context.Context, q queryer, limit int) ([]sessionShapeDerived, error) {
-	dirty, err := queryMapsContext(ctx, q, "SELECT conversation_id,revision FROM session_shape_dirty LIMIT ?", limit)
-	if err != nil {
-		return nil, err
-	}
-	return deriveSessionShapeRows(ctx, q, dirty)
-}
-
 func deriveSessionShapeRows(ctx context.Context, q queryer, dirty []map[string]any) ([]sessionShapeDerived, error) {
 	result := make([]sessionShapeDerived, 0, len(dirty))
 	for _, row := range dirty {
@@ -798,12 +790,20 @@ func (c *Catalog) refreshSessionShape(ctx context.Context, limit int, wait bool)
 		if err != nil {
 			return done, err
 		}
-		batch, err := deriveSessionShapeBatch(ctx, tx, min(limit-done, sessionShapeBatch))
+		dirty, err := queryMapsContext(ctx, tx, "SELECT conversation_id,revision FROM session_shape_dirty LIMIT ?", min(limit-done, sessionShapeBatch))
+		completed := maintenanceBatch(ctx, tx, "Measuring session shape", "conversation", len(dirty),
+			"SELECT count(*) FROM session_shape_dirty")
+		var batch []sessionShapeDerived
+		if err == nil {
+			batch, err = deriveSessionShapeRows(ctx, tx, dirty)
+		}
 		_ = tx.Rollback()
 		if err != nil || len(batch) == 0 {
 			return done, err
 		}
-		if err := c.publishSessionShape(ctx, batch); err != nil {
+		err = c.publishSessionShape(ctx, batch)
+		completed(err)
+		if err != nil {
 			return done, err
 		}
 		done += len(batch)

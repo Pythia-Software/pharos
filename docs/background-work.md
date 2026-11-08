@@ -393,9 +393,13 @@ unit publishes it. Zero-work probes stay tentative. A stretch of passes that kee
 catching up, previews, parallelism, an index build) is one operation, from
 the first pass that works to the first that finds nothing. These kinds do
 not call `Wrote()`, so they are journaled only past their threshold.
+When source indexing pauses the Library maintenance loop, all its published
+passes become blocked until indexing and its follow-up analysis finish. Their
+committed counts remain visible; waiting does not publish zero-work probes.
+Stopping the Search view refresh likewise blocks its open passes until Resume.
 
 Maintenance batches report named phases and actual units: conversations for
-message-label query facts and parallelism, workspaces for Search projections,
+message-label query facts, parallelism and session shape, workspaces for Search projections,
 metrics and previews, messages/tool calls for search backfills, and files for
 capture compression. Counts advance after successful commits. Inventories are
 collected by the worker, never by a status request, and refreshed at most once
@@ -1452,7 +1456,8 @@ Scheduled (muted: "updates tomorrow"; never "stale"), `behind` Behind,
 ### 8.3 Reason codes
 
 Blocked: `capture-running`, `ingest-busy` (another run holds the
-coordinator), `catalog-busy` (the writer, with retries), `interactive-query`
+coordinator, including its follow-up analysis), `search-stopped` (the Search
+view refresh waits for Resume), `catalog-busy` (the writer, with retries), `interactive-query`
 (yielding to interactive reads when enabled), `destination-busy`,
 `waiting-for-drive`, `waiting-for-network`. Skipped: `already-running`,
 `nothing-to-do`, `disabled`, `capture-busy`, `deferred-to-<kind>`,

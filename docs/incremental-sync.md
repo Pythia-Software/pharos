@@ -297,6 +297,16 @@ When a known unit's selected parts differ from its indexed input states, its
 check defers until indexing catches up instead of reporting index lag as
 corruption. Entirely untracked inputs are still checked for omissions; older
 captures remain eligible to verify their contribution to retained history.
+Checks also defer while a stored tool ledger awaits a derivation upgrade;
+newly added request fields are not evidence of corruption in an older ledger.
+Explicit verification with repair can rebuild that ledger and verify it again.
+Deferred checks keep existing warnings until verification passes.
+
+Manual verification and repair can interrupt scheduled indexing or background
+analysis. Capture and foreground indexing, verification or repair still block
+another maintenance run. Viewing and copying issue diagnostics stays available
+throughout. Sync status exposes this distinction as `maintenance_busy`, alongside
+the shared `busy` flag.
 
 ## API
 

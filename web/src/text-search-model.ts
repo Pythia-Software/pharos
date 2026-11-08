@@ -48,8 +48,9 @@ export function searchDateValue(value: string): string {
 export function withSearchDateRange(draft: TextSearchDraft): TextSearchDraft {
   return { ...draft, dateWindow: undefined, scope: { ...draft.scope, from: searchDateValue(draft.scope.from), to: searchDateValue(draft.scope.to) } };
 }
-export type SearchDateComparison = "today" | "last" | "from" | "to";
+export type SearchDateComparison = "all" | "today" | "last" | "from" | "to";
 export function withSearchDateComparison(draft: TextSearchDraft, field: "from" | "to", comparison: SearchDateComparison, clock = new Date()): TextSearchDraft {
+  if (comparison === "all") return { ...draft, dateWindow: undefined, scope: { ...draft.scope, from: "", to: "" } };
   if (comparison === "today") return withSearchDateWindow(draft, "today", clock);
   if (searchDateWindow(draft)?.duration === "today") draft = { ...draft, dateWindow: undefined, scope: { ...draft.scope, to: "" } };
   const other = field === "from" ? "to" : "from";

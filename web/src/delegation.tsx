@@ -58,8 +58,8 @@ export type Session = {
   external_child?: Reference;
   navigation?: Reference;
   context_only?: boolean;
-  // Certain related work shown beside the workspace's own sessions.
-  peer?: { workspace_id: string; title: string; role: string };
+  // Related work shown beside the workspace's own sessions.
+  peer?: { workspace_id: string; title: string; role: string; confidence?: string };
   /** The one label every reader shows for this execution. */
   label: string;
   /** Local context (prompt, work title) that is not part of the label. */
@@ -172,6 +172,7 @@ type Lane = {
 export type Activity = Span & { snapshot: string; lanes: Lane[]; inference: string; taxonomy?: Taxonomy };
 type Props = {
   workspace: string;
+  includeUncertain?: boolean;
   conversation: string;
   contextHost: HTMLElement | null;
   statsHost?: HTMLElement | null;
@@ -508,6 +509,7 @@ function ColumnPicker({
 
 export function DelegationExplorer({
   workspace,
+  includeUncertain = false,
   conversation,
   contextHost,
   statsHost,
@@ -611,6 +613,7 @@ export function DelegationExplorer({
       conversation,
       collapsed: collapsedKey,
       ...(relativesKey ? {relatives: relativesKey} : {}),
+      ...(includeUncertain ? {include_uncertain: "1"} : {}),
       cursor,
       limit: "40",
     });
@@ -672,6 +675,7 @@ export function DelegationExplorer({
     direction,
     collapsedKey,
     relativesKey,
+    includeUncertain,
     pageIndex,
     revision,
   ]);
@@ -1219,6 +1223,7 @@ export function DelegationExplorer({
                   previewOnly={splitReader}
                   openOverview={openOverview}
                   endpoint={endpoint}
+                  includeUncertain={includeUncertain}
                   relatives={relativesKey}
                   data={data}
                   rows={rows}
@@ -1309,7 +1314,7 @@ function RelativesButton({ node, show }: { node: Session; show: (node: Session) 
 }
 
 // Related work's sessions name their role first.
-const peerPrefix = (n: Session) => n.peer ? `${peerRoleLabel(n.peer.role)} · ` : "";
+const peerPrefix = (n: Session) => n.peer ? `${peerRoleLabel(n.peer.role)}${n.peer.confidence === "low" ? " · uncertain" : ""} · ` : "";
 
 function InboxSessions({ rows, data, shown, range, collapsed, toggle, openNode, showRelatives }: {
   rows: Session[];
@@ -1564,6 +1569,7 @@ function TimelineOverview({
 
 export function ParallelActivity({
   endpoint,
+  includeUncertain = false,
   relatives = "",
   data,
   rows,
@@ -1579,6 +1585,7 @@ export function ParallelActivity({
   previewOnly?:boolean;openOverview?:()=>void;
   timeline?:boolean;single?:boolean;compact?:boolean;
   endpoint: string;
+  includeUncertain?: boolean;
   /** The explorer's loaded relatives; lanes must name the same snapshot. */
   relatives?: string;
   data: Analysis;
@@ -1674,6 +1681,7 @@ export function ParallelActivity({
       width: String(trackWidth),
       ...(timeline ? {labels:"1"} : {}),
       ...(relatives ? {relatives} : {}),
+      ...(includeUncertain ? {include_uncertain: "1"} : {}),
     });
     readJSON<Activity>(`${endpoint}/parallel?${params}`, controller.signal)
       .then(setActivity, (e) => {
@@ -1683,7 +1691,7 @@ export function ParallelActivity({
         if (!controller.signal.aborted) setPending(false);
       });
     return () => controller.abort();
-  }, [endpoint, relatives, ids, data.snapshot, range, trackWidth,timeline]);
+  }, [endpoint, relatives, includeUncertain, ids, data.snapshot, range, trackWidth,timeline]);
   const visibleActivity =
     activity?.start === range[0] && activity?.end === range[1]
       ? activity
@@ -1693,10 +1701,10 @@ export function ParallelActivity({
     if (!timeline || !skipIdle || wholeWindow) return;
     if (wholeActivity?.snapshot === data.snapshot && wholeActivity.start === full[0] && wholeActivity.end === full[1] && (wholeActivity as Activity & { sessions?: string }).sessions === ids) return;
     const controller = new AbortController();
-    const params = new URLSearchParams({ snapshot: data.snapshot, start: String(full[0]), end: String(full[1]), sessions: ids, width: "1000", labels: "1", ...(relatives ? {relatives} : {}) });
+    const params = new URLSearchParams({ snapshot: data.snapshot, start: String(full[0]), end: String(full[1]), sessions: ids, width: "1000", labels: "1", ...(relatives ? {relatives} : {}), ...(includeUncertain ? {include_uncertain: "1"} : {}) });
     readJSON<Activity>(`${endpoint}/parallel?${params}`, controller.signal).then(value => setWholeActivity({ ...value, sessions: ids } as Activity), () => {});
     return () => controller.abort();
-  }, [timeline, skipIdle, wholeWindow, endpoint, relatives, ids, data.snapshot, full[0], full[1]]);
+  }, [timeline, skipIdle, wholeWindow, endpoint, relatives, includeUncertain, ids, data.snapshot, full[0], full[1]]);
   const idleSource = wholeWindow ? visibleActivity : wholeActivity?.snapshot === data.snapshot && wholeActivity.start === full[0] && wholeActivity.end === full[1] ? wholeActivity : null;
   const gaps = useMemo<IdleGap[]>(() => {
     if (!timeline || !idleSource) return [];
