@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -831,6 +832,165 @@ func TestBackupTakenMidCompressionRestoresAValidCapture(t *testing.T) {
 			target := captureTarget{Host: currentHost(), Source: "conductor", Dir: capturedPath(restored, "conductor", "")}
 			if result := catalog.IndexCapture(t.Context(), target, nil); result.Error != nil || conversationMessages(t, catalog, "conductor:old") != 2 {
 				t.Fatalf("restored capture: %+v", result)
+			}
+		})
+	}
+}
+
+// A backup's copy is flushed after it has its timestamps and before its name.
+// A failed copy is never flushed; a failed flush is a destination error that
+// keeps the previous backup's file and leaves no partial copy or link.
+func TestBackupCopyFileFlushesBeforePublishing(t *testing.T) {
+	dir := t.TempDir()
+	source, target := filepath.Join(dir, "source"), filepath.Join(dir, "dest", "file")
+	writeSourceFile(t, source, "new bytes")
+	info, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newJob := func(ctx context.Context) *backupJob {
+		return &backupJob{ctx: ctx, buffer: make([]byte, 4)}
+	}
+	unchanged := func(t *testing.T, j *backupJob) {
+		t.Helper()
+		if text := readText(t, target); text != "old bytes" {
+			t.Fatalf("previous backup changed: %q", text)
+		}
+		if backupFileExists(t, target+backupTempSuffix) || len(j.links) != 0 {
+			t.Fatalf("failed copy left a partial copy or link: %v", j.links)
+		}
+	}
+	for _, failure := range fileSyncFailures() {
+		t.Run(failure.name, func(t *testing.T) {
+			writeSourceFile(t, target, "old bytes")
+			j := newJob(t.Context())
+			calls := failFileSync(t, failure.err, func(file *os.File) bool {
+				if stat, err := file.Stat(); err != nil || !stat.ModTime().Equal(info.ModTime()) {
+					t.Errorf("flushed before the copy had its timestamps: %v, %v", stat, err)
+				}
+				return file.Name() == target+backupTempSuffix
+			})
+			err := j.copyFile(source, target, info)
+			if !errors.As(err, new(backupDestinationError)) || !errors.Is(err, failure.is) || *calls != 1 {
+				t.Fatalf("copy = %v after %d flushes; want a destination error for %v once", err, *calls, failure.is)
+			}
+			unchanged(t, j)
+		})
+	}
+	t.Run("copy failure", func(t *testing.T) {
+		calls := failFileSync(t, errors.New("flushed a failed copy"), func(*os.File) bool { return true })
+		cancelled, cancel := context.WithCancel(t.Context())
+		cancel()
+		for _, test := range []struct {
+			name  string
+			ctx   context.Context
+			size  int64
+			error error
+		}{
+			{"cancelled", cancelled, info.Size(), context.Canceled},
+			{"source shrank", t.Context(), info.Size() + 1, errBackupSourceShrank},
+		} {
+			writeSourceFile(t, target, "old bytes")
+			j := newJob(test.ctx)
+			err := j.copyFile(source, target, sizedInfo{info, test.size})
+			if !errors.Is(err, test.error) || errors.As(err, new(backupDestinationError)) || *calls != 0 {
+				t.Fatalf("%s: copy = %v after %d flushes", test.name, err, *calls)
+			}
+			unchanged(t, j)
+		}
+	})
+	t.Run("success", func(t *testing.T) {
+		writeSourceFile(t, target, "old bytes")
+		j := newJob(t.Context())
+		calls := failFileSync(t, nil, func(file *os.File) bool {
+			if text := readText(t, target); text != "old bytes" {
+				t.Errorf("flushed after publishing: %q", text)
+			}
+			return false
+		})
+		if err := j.copyFile(source, target, info); err != nil || *calls != 0 {
+			t.Fatal(err)
+		}
+		copied, err := os.Stat(target)
+		if err != nil || readText(t, target) != "new bytes" || !copied.ModTime().Equal(info.ModTime()) || len(j.links) != 1 {
+			t.Fatalf("copy: %v, %v, links %v", copied, err, j.links)
+		}
+	})
+}
+
+// sizedInfo is a file's info with another size, as if it shrank afterwards.
+type sizedInfo struct {
+	os.FileInfo
+	size int64
+}
+
+func (s sizedInfo) Size() int64 { return s.size }
+
+// A failed flush of the catalog snapshot or a copied file fails the backup
+// before anything is published: the previous backup's files, manifest and
+// history stay as they were.
+func TestBackupFlushFailureKeepsThePreviousBackup(t *testing.T) {
+	readManifest := func(t *testing.T, dest string) backupManifest {
+		t.Helper()
+		var manifest backupManifest
+		if err := json.Unmarshal([]byte(readText(t, filepath.Join(dest, backupManifestName))), &manifest); err != nil {
+			t.Fatal(err)
+		}
+		return manifest
+	}
+	for _, test := range []struct {
+		name string
+		file func(manifest backupManifest) string
+	}{
+		{"catalog snapshot", func(manifest backupManifest) string { return manifest.Catalog.Path }},
+		{"copied file", func(backupManifest) string { return "captures/host-a/claude/files/p/b.jsonl" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config, dest := backupFixture(t)
+			runBackup(t, config, dest, false)
+			previous := readManifest(t, dest)
+			target := filepath.Join(dest, filepath.FromSlash(test.file(previous)))
+			before, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Change both, so that either is copied again.
+			writeSourceFile(t, filepath.Join(config.CaptureRoot, "host-a", "claude", "files", "p", "b.jsonl"), "rewritten\n")
+			catalog := reopenCatalog(t, config.CatalogPath)
+			if _, err := catalog.DB.Exec("INSERT INTO hosts(id,label,first_seen_at,last_seen_at) VALUES('host-y','Y','2026-01-01','2026-01-01')"); err != nil {
+				t.Fatal(err)
+			}
+			if err := catalog.Close(); err != nil {
+				t.Fatal(err)
+			}
+			failure := syscall.EIO
+			calls := failFileSync(t, failure, func(file *os.File) bool { return file.Name() == target+backupTempSuffix })
+			job, err := prepareBackup(config, dest, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := job.Run(t.Context(), nil)
+			if run.State != "failed" || *calls != 1 || len(run.Errors) == 0 || !strings.Contains(run.Errors[0].Error, failure.Error()) {
+				t.Fatalf("backup after %d failed flushes: %+v", *calls, run)
+			}
+			if after, err := os.ReadFile(target); err != nil || string(after) != string(before) {
+				t.Fatalf("previous backup's %s changed: %v", filepath.Base(target), err)
+			}
+			manifest := readManifest(t, dest)
+			if manifest.Complete || manifest.FinishedAt != "" || len(loadBackupHistory(config).Backups) != 1 {
+				t.Fatalf("a failed backup was recorded as finished: %+v", manifest)
+			}
+			if test.name == "catalog snapshot" && *manifest.Catalog != *previous.Catalog {
+				t.Fatalf("the unflushed snapshot was recorded: %+v", manifest.Catalog)
+			}
+			err = filepath.WalkDir(dest, func(path string, entry os.DirEntry, err error) error {
+				if err == nil && strings.HasSuffix(path, backupTempSuffix) {
+					t.Errorf("partial copy left behind: %s", path)
+				}
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

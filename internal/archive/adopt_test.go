@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/gbdubs/pharos/internal/platform/filesync"
 )
 
 const adoptVolume = "uuid:ADOPT-TEST"
@@ -929,6 +931,73 @@ func TestCopyPreservedRestoresHardLinksOnRetry(t *testing.T) {
 	if plan.Files != 4 || plan.Copied != 3 {
 		t.Fatalf("plan after retry: %+v", plan)
 	}
+}
+
+// copyFileSynced flushes the copy before giving it its timestamps and name.
+// A failed copy is never flushed; a failed flush leaves the previous file and
+// no partial copy.
+func TestCopyFileSyncedFlushesBeforePublishing(t *testing.T) {
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "source"), filepath.Join(dir, "copy")
+	if err := os.WriteFile(src, []byte("new bytes"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchanged := func(t *testing.T) {
+		t.Helper()
+		if data, err := os.ReadFile(dst); err != nil || string(data) != "old bytes" {
+			t.Fatalf("previous copy changed: %q, %v", data, err)
+		}
+		if _, err := os.Lstat(dst + adoptPartialSuffix); !os.IsNotExist(err) {
+			t.Fatalf("partial copy left behind: %v", err)
+		}
+	}
+	for _, failure := range fileSyncFailures() {
+		t.Run(failure.name, func(t *testing.T) {
+			if err := os.WriteFile(dst, []byte("old bytes"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			calls := failFileSync(t, failure.err, func(file *os.File) bool { return file.Name() == dst+adoptPartialSuffix })
+			if err := copyFileSynced(src, dst, info); !errors.Is(err, failure.is) || *calls != 1 {
+				t.Fatalf("copy = %v after %d flushes; want %v once", err, *calls, failure.is)
+			}
+			unchanged(t)
+		})
+	}
+	t.Run("copy failure", func(t *testing.T) {
+		if err := os.WriteFile(dst, []byte("old bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		calls := failFileSync(t, errors.New("flushed a failed copy"), func(*os.File) bool { return true })
+		// Reading a directory fails once the copy starts.
+		if err := copyFileSynced(dir, dst, info); err == nil || *calls != 0 {
+			t.Fatalf("copy of a directory = %v after %d flushes", err, *calls)
+		}
+		unchanged(t)
+	})
+	t.Run("success", func(t *testing.T) {
+		if err := os.WriteFile(dst, []byte("old bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		calls := 0
+		override(t, &syncFileData, func(file *os.File) error {
+			calls++
+			if data, err := os.ReadFile(dst); file.Name() != dst+adoptPartialSuffix || err != nil || string(data) != "old bytes" {
+				t.Errorf("flushed %s after publishing: %q, %v", file.Name(), data, err)
+			}
+			return filesync.Flush(file)
+		})
+		if err := copyFileSynced(src, dst, info); err != nil || calls != 1 {
+			t.Fatalf("copy = %v after %d flushes", err, calls)
+		}
+		copied, err := os.Stat(dst)
+		if data, readErr := os.ReadFile(dst); err != nil || readErr != nil || string(data) != "new bytes" || !copied.ModTime().Equal(info.ModTime()) {
+			t.Fatalf("copy: %q, %v, %v, %v", data, copied, err, readErr)
+		}
+	})
 }
 
 func TestAdoptRefusesAFallbackHostID(t *testing.T) {

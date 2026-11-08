@@ -1211,7 +1211,7 @@ func (j *backupJob) copyFile(source, target string, info fs.FileInfo) error {
 	if err := os.Chtimes(temporary, info.ModTime(), info.ModTime()); err != nil {
 		return abandon(toBackupDestination(err))
 	}
-	if err := syscall.Fsync(int(out.Fd())); err != nil {
+	if err := syncFileData(out); err != nil {
 		return abandon(toBackupDestination(err))
 	}
 	if err := out.Close(); err != nil {
