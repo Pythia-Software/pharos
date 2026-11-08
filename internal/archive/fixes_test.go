@@ -556,9 +556,50 @@ func TestFixesLeadsTitlesAndKnownFailures(t *testing.T) {
 		"I'm noticing that the history_search input triggers a double render.":           "The history_search input triggers a double render",
 		"**Test status:** `npm --prefix web test -- dashboards` could not run.":          "`npm --prefix web test -- dashboards` could not run",
 		"Odd, git status shows staged changes I didn't cause — so I'll check the index.": "Git status shows staged changes I didn't cause",
+		// Openers, and what the agent did or does next, are not the problem.
+		"Actually, the until-loop is still waiting because pgrep -f matches itself.":                        "The until-loop is still waiting because pgrep -f matches itself",
+		"Confirmed: batching AVG alongside SUM re-evaluates the source per aggregate.":                      "Batching AVG alongside SUM re-evaluates the source per aggregate",
+		"BSD sed failed; fix imports with Python.":                                                          "BSD sed failed",
+		"The rebase hit a conflict only in the built `query-tables.js`; I rebuilt it from `web/src`.":       "The rebase hit a conflict only in the built `query-tables.js`",
+		"Truncating to hour boundaries breaks for offsets like India's +5:30 -- I need a different helper.": "Truncating to hour boundaries breaks for offsets like India's +5:30",
+		"The zsh word-splitting issue in the quiet run again; running through bash:":                        "The zsh word-splitting issue in the quiet run again",
+		"I realize there's an import cycle between labeler and its test helpers.":                           "There's an import cycle between labeler and its test helpers",
 	} {
 		if got := fixesLeadTitle(text); got != want {
 			t.Errorf("%q: got %q, want %q", text, got, want)
+		}
+	}
+
+	// The lead states the problem, not its remedy, a fix already made or a
+	// success, even when the problem is said in the first person or less
+	// like the group.
+	for name, outcome := range map[string]string{
+		"remedy":  "Actually, the right approach is a blocking wait loop using the Monitor tool rather than foreground sleep.",
+		"fix is":  "The fix is to make worker_test.go an external test package.",
+		"done":    "Fixed the topology auditor's parsing regression and handed the candidate back for review.",
+		"success": "Codex thinking events now display correctly in the reader after fixing the raw_text check.",
+		"passes":  "Carbon now passes, likely due to a timing race between carbon.js and the bundle.",
+		"plan":    "Since I can't peek inside the process, my best move is to send it a SIGQUIT for a goroutine dump.",
+	} {
+		events := []fixesEvent{
+			{ID: 1, Source: "reply", Sentence: outcome},
+			{ID: 2, Source: "thinking", Sentence: "For the subagent, I can't sleep in the foreground since foreground sleep is blocked."},
+		}
+		if lead := fixesRepresentative(events, map[int64]float64{1: 0.9, 2: 0.6}, nil); lead.ID != 2 {
+			t.Errorf("%s: the lead is an outcome: %q", name, lead.Sentence)
+		}
+	}
+	for sentence, want := range map[string]bool{
+		"The fix is to search only the list items.":                                      true,
+		"I fixed the Go test that failed verify and handed the candidate back.":          true,
+		"| 1 | Version gate bypassed after a crash | **Fixed.** The manifest is now v6.": true,
+		"The XMATCH replays pass after the revision.":                                    true,
+		"Fixed the parser, but the import still fails on empty rows.":                    false,
+		"After keyboard navigation, main now shows the default focus ring.":              false,
+		"The real issue is that conn.Raw returns ErrBadConn.":                            false,
+	} {
+		if got := fixesOutcomeOnly(sentence); got != want {
+			t.Errorf("outcome %q: got %v, want %v", sentence, got, want)
 		}
 	}
 
@@ -603,10 +644,35 @@ func TestFixesLeadsTitlesAndKnownFailures(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		f.add("missing_capability", "app", fmt.Sprintf("node-%d", i), "2026-10-26", fmt.Sprintf("The guidance says the runner requires Node 24, but the shell defaults to Node 20 version, so `npm test` did not run (%d).", i))
 	}
-	input := fixesInput{Events: f.events, End: "2026-10-28"}
-	items, _, err := fixesBuild(input)
+	before, _, err := fixesBuild(fixesInput{Events: f.events, End: "2026-10-28"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// A group that only reports work already done is not a fix; leaving it
+	// out changes no other item or ID.
+	for i, sentence := range []string{
+		"I fixed the auditor's parsing regression and handed the candidate back as ready.",
+		"Fixed the auditor's slice regression and handed the candidate back for review.",
+		"I fixed the auditor's review finding and handed the candidate back as ready.",
+		"I fixed the auditor's latest finding and handed the candidate back as ready.",
+	} {
+		f.add("unblocking_insight", "app", fmt.Sprintf("done-%d", i), "2026-10-26", sentence)
+	}
+	input := fixesInput{Events: f.events, End: "2026-10-28"}
+	items, excluded, err := fixesBuild(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := fixesFind(items, "handed the candidate back"); done != nil || excluded["done"] != 4 {
+		t.Fatalf("work already done is an item (%d left out): %+v", excluded["done"], done)
+	}
+	if len(items) != len(before) {
+		t.Fatalf("items changed: %v vs %v", fixesTitles(items), fixesTitles(before))
+	}
+	for i := range items {
+		if items[i].ID != before[i].ID || items[i].Title != before[i].Title {
+			t.Fatalf("item %d changed: %s %q vs %s %q", i, items[i].ID, items[i].Title, before[i].ID, before[i].Title)
+		}
 	}
 	rounding := []*fixItem{}
 	for i := range items {
