@@ -2,7 +2,6 @@
 .habits-panel { display: grid; gap: 16px; margin-bottom: 22px; min-width: 0; }
 .habits-controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; }
 .habits-streaks { margin: 0; }
-.habits-streak.habits-today-done strong { color: var(--sea); }
 .habits-streak small, .habits-panel .mcp-metric small { display: block; margin-top: 3px; color: var(--muted); font-size: var(--fs-xs); }
 .habits-card { min-width: 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .habits-card h3 { margin: 0 0 4px; font: 650 var(--fs-lg)/1.25 var(--serif); }
@@ -51,10 +50,6 @@
 .habits-grid { stroke: var(--line); }
 .habits-span { fill: color-mix(in srgb, var(--muted) 30%, transparent); }
 .habits-excused { opacity: .45; }
-.habits-automations { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
-.habits-automations :is(th, td) { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
-.habits-automations thead th { color: var(--muted); font-size: var(--fs-xs); font-weight: 650; }
-.habits-strip { fill: var(--gold); }
 .habits-settings summary { cursor: pointer; font-weight: 650; }
 .habits-settings h4 { margin: 14px 0 6px; font-size: var(--fs-sm); }
 .habits-settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 12px; }

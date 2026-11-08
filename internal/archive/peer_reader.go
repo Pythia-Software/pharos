@@ -296,12 +296,12 @@ func (c *Catalog) messagePeerAttacher(conversationID string) (func(map[string]an
 	}, nil
 }
 
-// peerConversations lists the conversations of certain related work, so the
+// peerConversations lists the selected related work’s conversations, so the
 // work page's reader can open them in place from its hierarchy and timeline.
-func (c *Catalog) peerConversations(ctx context.Context, peers []workPeer) ([]map[string]any, error) {
+func (c *Catalog) peerConversations(ctx context.Context, peers []workPeer, includeUncertain bool) ([]map[string]any, error) {
 	out := []map[string]any{}
 	for _, p := range peers {
-		if p.Confidence != peerHigh {
+		if p.Confidence != peerHigh && !includeUncertain {
 			continue
 		}
 		rows, err := queryMapsContext(ctx, c.reader(), `SELECT c.id,c.workspace_id,c.provider,c.model,c.native_id,c.parent_id,c.started_at,c.ended_at,
@@ -311,7 +311,7 @@ func (c *Catalog) peerConversations(ctx context.Context, peers []workPeer) ([]ma
 			return nil, err
 		}
 		for _, row := range rows {
-			row["title"], row["peer_role"], row["peer"] = p.Title, p.Role, true
+			row["title"], row["peer_role"], row["peer"], row["peer_confidence"] = p.Title, p.Role, true, p.Confidence
 		}
 		out = append(out, rows...)
 	}

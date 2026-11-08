@@ -283,10 +283,11 @@ test('Ask keeps asking for suggestions while they are being chosen, backing off'
 
 test('Ask composer keeps search available while draft and conversation controls follow content', () => {
   const actions = state => plain(model.askComposerActions({enabled:true, model:'available-model', ...state}));
-  assert.deepEqual(actions({}), {send:false, stop:false, history:true, clear:false, modelLocked:false});
-  assert.deepEqual(actions({draft:'  '}), {send:false, stop:false, history:false, clear:true, modelLocked:false});
-  assert.deepEqual(actions({draft:'Find my work'}), {send:true, stop:false, history:false, clear:true, modelLocked:false});
-  assert.deepEqual(actions({turns:[{prompt:'Find my work'}]}), {send:false, stop:false, history:false, clear:true, modelLocked:true});
+  assert.deepEqual(actions({}), {send:false, stop:false, history:true, clear:false, clearLabel:'Clear', modelLocked:false});
+  assert.deepEqual(actions({draft:'  '}), {send:false, stop:false, history:true, clear:true, clearLabel:'Clear', modelLocked:false});
+  assert.deepEqual(actions({draft:'Find my work'}), {send:true, stop:false, history:true, clear:true, clearLabel:'Clear', modelLocked:false});
+  assert.deepEqual(actions({turns:[{prompt:'Find my work'}]}), {send:false, stop:false, history:true, clear:true, clearLabel:'New Chat', modelLocked:true});
+  assert.equal(actions({draft:'Follow up',turns:[{prompt:'First question'}],pending:true}).clearLabel,'New Chat');
   assert.equal(actions({draft:'Follow up', pending:true}).send, false);
   assert.equal(actions({draft:'Find', enabled:false}).send, false);
   assert.equal(actions({draft:'Find', model:''}).send, false);
@@ -786,3 +787,65 @@ test('retained Ask charts revalidate on reopening and their own data or calendar
   const draft=model.askRetryDraft({turns:[{prompt:'Request export',status:'feedback',feedback:{kind:'feature',comment:'Export selected conversations to Markdown.'}}]});
   assert.match(draft,/Feedback draft \(feature\):\nExport selected conversations/);
  });
+
+
+test('Ask request ownership follows each chat through switching, completion and retry',()=>{
+  const requests=model.askRequestRegistry(),first={id:'first',turnId:'a'},second={id:'second',turnId:'b'};
+  requests.start(first);requests.start(second);
+  assert.equal(requests.size,2);
+  assert.equal(requests.get('first'),first);
+  assert.equal(requests.get('second'),second);
+  assert.throws(()=>requests.start({id:'first',turnId:'duplicate'}));
+  requests.release(second);
+  assert.equal(requests.get('first'),first,'stopping one chat leaves the other running');
+  const retry={id:'second',turnId:'b'};requests.start(retry);requests.release(second);
+  assert.equal(requests.get('second'),retry,'a stale callback cannot release its retry');
+  requests.release(first);requests.release(retry);assert.equal(requests.size,0);
+
+  const saved={id:'previous',status:'multiple',reply:'Earlier answer'},turn={id:'queued',status:'loading',prompt:'Still sending'};
+  const snapshot=[saved];
+  const restored=model.askRestoreTurns(snapshot,turn);
+  assert.equal(restored.length,2,'a saved snapshot can omit the queued question');
+  assert.equal(restored[1],turn,'the restored question shares the running request object');
+  assert.notEqual(restored[0],saved,'stored turns are copied before editing');
+  assert.equal(snapshot.length,1,'restoration leaves the saved snapshot alone');
+  Object.assign(turn,{status:'multiple',reply:'The completed answer'});
+  assert.equal(restored[1].reply,'The completed answer','stream completion updates the restored turn');
+  const present=model.askRestoreTurns([saved,{id:turn.id,status:'loading'}],turn);
+  assert.equal(present.length,2,'a saved copy of the pending question is not duplicated');
+  assert.equal(present[1],turn);
+  assert.equal(model.askRestoreTurns(snapshot,turn)[1],turn,'a request that finished while loading still supersedes its older snapshot');
+  assert.equal(model.askRestoreTurns(snapshot).length,1);
+});
+
+test('Ask inbox distinguishes answering, unseen answers, seen answers and drafts',()=>{
+  const state=conversation=>plain(model.askInboxState({conversation}));
+  assert.deepEqual(state([]),{running:false,unread:0,label:'Draft'});
+  const answer={id:'a',status:'multiple',startedAt:1};
+  assert.equal(state([answer]).unread,1);
+  assert.equal(state([{...answer,seenAt:5}]).label,'Seen');
+  assert.equal(state([{...answer,status:'loading'}]).running,true);
+  assert.equal(state([{...answer,status:'loading'}]).unread,0);
+  assert.equal(state([{...answer,status:'canceled'}]).unread,0);
+  assert.equal(state([answer,{id:'b',status:'clarification'}]).label,'2 unseen answers');
+  assert.deepEqual(plain(model.askInboxState({lastStatus:'loading',unreadCount:2,conversation:[{prompt:'Title only'}]})),{running:true,unread:2,label:'Answering…'});
+  assert.equal(model.askAnswerUnread({...answer,seenAt:5}),false);
+  assert.equal(model.askAnswerUnread({...answer,status:'error'}),true);
+
+  const oldError={id:'retry',startedAt:10,status:'error',reply:'Original error'};
+  const reopened={id:'chat',conversation:model.askRestoreTurns([oldError])};
+  const receipt={id:'chat',turnID:oldError.id,startedAt:oldError.startedAt};
+  const retry=reopened.conversation[0];
+  Object.assign(retry,{startedAt:20,status:'loading',reply:''});
+  assert.equal(model.askApplyReceipt(reopened,receipt,100),null,'an old receipt cannot read the running retry');
+  Object.assign(retry,{status:'multiple',reply:'Recovered answer'});
+  assert.equal(model.askApplyReceipt(reopened,receipt,100),null,'reopening broke the captured object identity, but the attempt still guards the final answer');
+  assert.equal(retry.reply,'Recovered answer');assert.equal(retry.seenAt,undefined);
+  assert.equal(oldError.startedAt,10,'the captured old object remains unchanged');
+  assert.equal(model.askApplyReceipt({...reopened,id:'other'}, {...receipt,startedAt:20},100),null,'another active chat cannot accept this receipt');
+  assert.equal(model.askApplyReceipt(reopened, {...receipt,turnID:'other',startedAt:20},100),null);
+  assert.equal(model.askApplyReceipt(reopened, {...receipt,startedAt:20},100),retry,'a valid receipt resolves the current instance');
+  assert.equal(retry.seenAt,100);
+  assert.equal(model.askApplyReceipt(reopened, {...receipt,startedAt:20},200),null,'repeated receipts keep the original seen time');
+  assert.equal(retry.seenAt,100);
+});

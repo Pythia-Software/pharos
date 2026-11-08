@@ -31,6 +31,7 @@ type askCard struct {
 type askTurn struct {
 	Feedback   *askFeedback  `json:"feedback,omitempty"`
 	ID         string        `json:"id"`
+	SeenAt     int64         `json:"seenAt,omitempty"`
 	Prompt     string        `json:"prompt"`
 	CurrentURI string        `json:"currentURI,omitempty"`
 	CLI        string        `json:"cli"`
@@ -57,6 +58,8 @@ type askTurn struct {
 type askSession struct {
 	HostID             string       `json:"hostID"`
 	QuestionCount      int          `json:"questionCount,omitempty"`
+	UnreadCount        int          `json:"unreadCount,omitempty"`
+	LastStatus         string       `json:"lastStatus,omitempty"`
 	ID                 string       `json:"id"`
 	CreatedAt          int64        `json:"createdAt"`
 	UpdatedAt          int64        `json:"updatedAt"`
@@ -238,6 +241,10 @@ func (s *Server) askSessions(ctx context.Context, query string, offset int) ([]a
  COALESCE(json_extract(value,'$.draft'),''),
  COALESCE(json_extract(value,'$.conversation[0].prompt'),''),
  json_array_length(json_extract(value,'$.conversation')),
+ COALESCE(json_extract(value,'$.conversation[#-1].status'),''),
+ (SELECT count(*) FROM json_each(ask_sessions.value,'$.conversation') turn
+  WHERE json_extract(turn.value,'$.status') NOT IN ('loading','canceled')
+  AND COALESCE(json_extract(turn.value,'$.seenAt'),0)=0),
  (SELECT json_group_array(json_object('cli',cli,'model',model,'label',label) ORDER BY latest DESC) FROM (
   SELECT COALESCE(json_extract(turn.value,'$.cli'),'') cli,COALESCE(json_extract(turn.value,'$.model'),'') model,
    COALESCE(json_extract(turn.value,'$.modelLabel'),'') label,MAX(turn.key) latest
@@ -252,7 +259,7 @@ func (s *Server) askSessions(ctx context.Context, query string, offset int) ([]a
 	for rows.Next() {
 		var session askSession
 		var selection, title, models string
-		if err = rows.Scan(&session.ID, &session.UpdatedAt, &session.CreatedAt, &selection, &session.Draft, &title, &session.QuestionCount, &models); err != nil {
+		if err = rows.Scan(&session.ID, &session.UpdatedAt, &session.CreatedAt, &selection, &session.Draft, &title, &session.QuestionCount, &session.LastStatus, &session.UnreadCount, &models); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal([]byte(selection), &session.Selection); err != nil {
@@ -536,6 +543,25 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(err)
 			return
 		}
+		// History remains available while a draft or receipt waits for the writer.
+		if s.ask.mu.TryLock() {
+			for i := range sessions {
+				if saved := s.ask.saving[sessions[i].ID]; saved != nil {
+					sessions[i].LastStatus = saved.session.Conversation[len(saved.session.Conversation)-1].Status
+					sessions[i].UnreadCount = 0
+					for _, turn := range saved.session.Conversation {
+						if turn.Status != "loading" && turn.Status != "canceled" && turn.SeenAt == 0 {
+							sessions[i].UnreadCount++
+						}
+					}
+				} else if sessions[i].LastStatus == "loading" {
+					if _, running := s.ask.active[sessions[i].ID]; !running {
+						sessions[i].LastStatus = "canceled"
+					}
+				}
+			}
+			s.ask.mu.Unlock()
+		}
 		writeJSON(w, map[string]any{"sessions": sessions}, 200)
 	case "/api/ask/session":
 		id := r.URL.Query().Get("id")
@@ -617,6 +643,52 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, session, 200)
+	case "/api/ask/read":
+		if r.Method != http.MethodPost {
+			fail(fmt.Errorf("POST required"))
+			return
+		}
+		var input struct {
+			ID, TurnID string
+			StartedAt  int64
+		}
+		if err := askDecode(body, &input); err != nil {
+			fail(err)
+			return
+		}
+		if !askID.MatchString(input.ID) || !askID.MatchString(input.TurnID) {
+			fail(fmt.Errorf("invalid chat or message ID"))
+			return
+		}
+		saving := s.ask.saving[input.ID]
+		var session askSession
+		var err error
+		if saving != nil {
+			session = saving.session
+			session.Conversation = slices.Clone(session.Conversation)
+		} else {
+			session, err = s.askSession(ctx, input.ID)
+		}
+		if err != nil {
+			fail(err)
+			return
+		}
+		for i := range session.Conversation {
+			turn := &session.Conversation[i]
+			// A receipt for an earlier attempt must never read its retry.
+			if turn.ID != input.TurnID || turn.StartedAt != input.StartedAt || turn.Status == "loading" || turn.Status == "canceled" || turn.SeenAt != 0 {
+				continue
+			}
+			turn.SeenAt = time.Now().UnixMilli()
+			if saving != nil {
+				saving.session = session
+				saving.version++
+			} else if err = s.saveAskSession(ctx, session, false); err != nil {
+				fail(err)
+				return
+			}
+		}
+		writeJSON(w, map[string]bool{"ok": true}, 200)
 	case "/api/ask/cancel":
 		if r.Method != http.MethodPost {
 			fail(fmt.Errorf("POST required"))
@@ -789,6 +861,13 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		if readErr == nil {
 			session.Draft = fresh.Draft
 			session.ClarificationDraft = fresh.ClarificationDraft
+			for i := range session.Conversation {
+				for _, saved := range fresh.Conversation {
+					if session.Conversation[i].ID == saved.ID && session.Conversation[i].StartedAt == saved.StartedAt {
+						session.Conversation[i].SeenAt = saved.SeenAt
+					}
+				}
+			}
 		}
 		turn := &session.Conversation[len(session.Conversation)-1]
 		turn.Activity = slices.Clone(s.ask.active[session.ID].activity)

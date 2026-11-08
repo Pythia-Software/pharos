@@ -38,7 +38,8 @@ export function readHabitsView(params: URLSearchParams): HabitsView {
   if (target.includes("habits-calendar")) return "calendar";
   if (params.has("habits_shape_days")) return "days";
   if (params.has("habits_punchcard") || params.has("habits_punchcard_days")) return "punchcard";
-  return "calendar";
+  if (["habits_calendar", "habits_weekends", "habits_weeks", "habits_day"].some(key => params.has(key))) return "calendar";
+  return "days";
 }
 
 export function habitsTargetParams(target: HabitsCardTarget, params: URLSearchParams): URLSearchParams {

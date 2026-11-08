@@ -136,7 +136,7 @@ function askPuzzleMotion(host, {random=Math.random, media=matchMedia('(prefers-r
 }
 function askComposerActions({draft = '', turns = [], pending = false, opening = false, enabled = false, model = ''}) {
   const populated = turns.length > 0 || draft.length > 0;
-  return {send: enabled && !!model && !pending && !opening && !!draft.trim(), stop: pending, history: !populated, clear: populated, modelLocked: turns.length > 0};
+  return {send: enabled && !!model && !pending && !opening && !!draft.trim(), stop: pending, history: true, clear: populated, clearLabel: turns.length ? 'New Chat' : 'Clear', modelLocked: turns.length > 0};
 }
 // Carry the visible conversation into a fresh, editable prompt for another model.
 function askRetryDraft({turns = [], draft = ''}) {
@@ -215,6 +215,44 @@ function askFullscreenExit(href, from, id) {
 function askHistoryEntries({sessions = [], current = null, query = ''}) {
   const entries = query || !current ? sessions : [current, ...sessions.filter(session => session.id !== current.id)];
   return [...entries].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+// Request ownership stays with its chat when the visible composer switches.
+// Releasing an old attempt cannot release a later retry of the same chat.
+function askRequestRegistry(){
+  const requests=new Map();
+  return {
+    get size(){return requests.size;},
+    get:id=>requests.get(id),values:()=>requests.values(),
+    forEach:callback=>requests.forEach(callback),
+    start(run){if(requests.has(run.id))throw new Error('This chat is already answering.');requests.set(run.id,run);},
+    release(run){if(requests.get(run.id)===run)requests.delete(run.id);},
+  };
+}
+// A queued request may not be present in a saved snapshot yet. Preserve its
+// live object so the stream and the restored transcript share the same turn.
+function askRestoreTurns(conversation = [], localTurn = null){
+  const turns=conversation.map(turn=>turn.id===localTurn?.id?localTurn:{...turn});
+  if(localTurn&&!turns.some(turn=>turn.id===localTurn.id))turns.push(localTurn);
+  return turns;
+}
+// Resolve a receipt against the current session, never the object captured by
+// the original read. Reopening clones turns and retrying creates a new attempt.
+function askApplyReceipt(session, {id,turnID,startedAt}, seenAt){
+  if(session?.id!==id)return null;
+  const turn=session.conversation?.find(turn=>turn.id===turnID&&turn.startedAt===startedAt);
+  if(!askAnswerUnread(turn))return null;
+  turn.seenAt=seenAt;
+  return turn;
+}
+// Receipts belong to an answer attempt, and only a visible answer is seen.
+function askAnswerUnread(turn) {
+  return !!turn && !['loading','canceled'].includes(turn.status) && !!turn.status && !turn.seenAt;
+}
+function askInboxState(session) {
+  const turns=session.conversation||[],latest=turns.at(-1);
+  const status=session.lastStatus||latest?.status,running=status==='loading';
+  const unread=session.unreadCount??turns.filter(askAnswerUnread).length;
+  return {running,unread,label:running?'Answering…':status==='canceled'?'Canceled':unread?unread+(unread===1?' unseen answer':' unseen answers'):turns.length||session.questionCount?'Seen':'Draft'};
 }
 // Each CLI and model a chat's turns used, most recent first. Server summaries
 // carry the list; the open chat derives it from its turns, and a chat without

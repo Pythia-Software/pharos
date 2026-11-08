@@ -18,22 +18,12 @@ import (
 // queryV3MaxRows is the V3 row budget. Tests lower it, so that a few rows
 // make a source larger than the budget.
 var queryV3MaxRows = querytable.MaxLimit
-var queryV3MaxGroups = 10_000
+var queryV3MaxGroups = 100_000
 var queryV3MaxPopulation = 10_000_000
-var queryV3UsageMaxGroups = 100_000
 
 func queryV3Dataset(schema qt.Schema) qt.QueryDatasetV3 {
-	groups := queryV3MaxGroups
-	// Usage has one compact fact per execution/day/model. The built-in Work
-	// preset and message-label conversation results must cover libraries with
-	// more than 10,000 workspaces or conversations. Session shape has one
-	// compact row per session, and its dashboard counts each session or root
-	// conversation, a group per conversation.
-	if schema.Name == "pharos_usage" || schema.Name == "pharos_message_labels" || schema.Name == "pharos_session_shape" {
-		groups = queryV3UsageMaxGroups
-	}
 	return qt.QueryDatasetV3{Schema: schema, Scope: queryTableScope, Dataset: schema.Name, Dialect: "sqlite",
-		MaxRows: queryV3MaxRows, MaxGroups: groups, MaxPopulation: queryV3MaxPopulation, MaxStagingBytes: 512 << 20}
+		MaxRows: queryV3MaxRows, MaxGroups: queryV3MaxGroups, MaxPopulation: queryV3MaxPopulation, MaxStagingBytes: 512 << 20}
 }
 
 func authorizeQueryV3Computed(ctx context.Context, tx *sql.Tx, d *qt.QueryDatasetV3) error {

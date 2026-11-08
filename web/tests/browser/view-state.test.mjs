@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture,pendingEvidenceApi} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture,pendingEvidenceApi,relatedWork} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import writingMessagesDocument from '../../../schemas/writing_messages.schema.json' with {type:'json'};
 import usageDocument from '../../../schemas/usage.schema.json' with {type:'json'};
@@ -47,6 +47,37 @@ test('workspace fingerprints restore across views and show agent events despite 
  await page.goto(new URL('/analyze?analyze_mode=query&analyze_data=message_labels&label_results=cards',page.url()).href);
  await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
  assert.ok(requests.some(body=>body.events===true&&body.items.some(item=>item.entity==='conversation')));
+});
+
+test('uncertain related work setting includes sessions and opens their conversations',{skip},async t=>{
+ const other=relatedWork.peers[1],conversation={id:'conv-maybe',workspace_id:other.workspace_id,provider:other.provider,title:other.title,peer:true,peer_role:other.role,peer_confidence:'low'};
+ const api={
+  'GET /api/work/:id':request=>({...defaultApi['GET /api/work/:id'](request),...relatedWork,peer_conversations:request.query.get('include_uncertain')==='1'?[...relatedWork.peer_conversations,conversation]:relatedWork.peer_conversations}),
+  'GET /api/work/:id/delegation':request=>{
+   const data=defaultApi['GET /api/work/:id/delegation'](request);
+   if(request.query.get('include_uncertain')!=='1')return data;
+   const peer={...data.rows[0],id:'s-maybe',workspace_id:other.workspace_id,conversation_id:conversation.id,label:other.title,order:data.rows.length,child_count:0,peer:{workspace_id:other.workspace_id,title:other.title,role:other.role,confidence:'low'}};
+   return {...data,rows:[...data.rows,peer],focus:[...data.focus,peer],matched:{...data.matched,[peer.id]:true},total:data.total+1,session_count:data.session_count+1};
+  },
+  'GET /api/work/:id/conversations/:conversation':request=>request.params.id===other.workspace_id?{...conversation,messages:[{id:'maybe-ask',role:'user',kind:'message',text:'Inspect the changes'}]}:undefined,
+  'GET /api/work/:id/conversations/:conversation/signals':request=>request.params.id===other.workspace_id?{conversation_id:conversation.id,signals:[],coverage:{}}:undefined,
+ };
+ const app=await open(t,{api,url:'/settings/preferences',ready:'#uncertainRelatedWork'}),{page}=app;
+ const toggle=page.getByRole('switch',{name:'Show uncertain related work',exact:true});
+ assert.equal(await toggle.getAttribute('aria-checked'),'false');
+ await toggle.click();await page.evaluate(()=>window.pharosPrefs.flush());
+ await page.goto(new URL(`/work/${workID}?explorer=timeline`,page.url()).href);
+ const lane=page.locator('[data-session-id="s-maybe"]').first();await lane.waitFor();
+ await page.waitForFunction(()=>document.querySelector('[data-session-id="s-maybe"]')?.textContent.includes('uncertain'));
+ await page.waitForFunction(()=>document.querySelector('.lt-recursive-lane[data-session-id="s-maybe"]'));
+ assert.ok(app.calls.some(call=>call.path.endsWith('/parallel')&&call.query.get('include_uncertain')==='1'&&(call.query.get('sessions')||'').includes('s-maybe')));
+ await lane.getByRole('button',{name:`Open session ${other.title}`,exact:true}).click();
+ await page.locator('.peer-reader-note').waitFor();
+ assert.match(await page.locator('.peer-reader-note').textContent(),/uncertain/);
+ await page.goto(new URL('/settings/preferences',page.url()).href);await toggle.waitFor();
+ assert.equal(await toggle.getAttribute('aria-checked'),'true');await toggle.click();await page.evaluate(()=>window.pharosPrefs.flush());
+ await page.goto(new URL(`/work/${workID}?explorer=timeline`,page.url()).href);await page.locator('.lt-recursive-lane').first().waitFor();
+ assert.equal(await page.locator('[data-session-id="s-maybe"]').count(),0);
 });
 
 test('Background Processing table queries and editor layout restore independently in a fresh browser',{skip},async t=>{
@@ -1411,8 +1442,29 @@ test('Message Labels category menus apply to descendants and restore mixed selec
 });
 
 test('Habits switches views and restores the selected chart and its controls', {skip}, async t => {
- const app=await open(t,{url:'/analyze?analyze_topic=habits',ready:'.habits-calendar'}),{page}=app;
+ const api={'GET /api/habits':()=>{const data=defaultApi['GET /api/habits']();data.streaks.you.today='done';return data;}};
+ const app=await open(t,{url:'/analyze?analyze_topic=habits',viewport:{width:1920,height:1050},api,ready:'.habits-days-chart'}),{page}=app;
  const view=page.getByRole('combobox',{name:'View',exact:true});
+ assert.equal(await view.inputValue(),'days');
+ await app.shot('default');
+ const automation=page.getByRole('navigation',{name:'Explore this dashboard'}).getByRole('link',{name:/Automatic agent runs/});
+ await automation.scrollIntoViewIfNeeded();
+ await app.shot('automatic-link');
+ const automationURL=await automation.getAttribute('href');
+ const automationQuery=decodeQueryStrict(new URL(automationURL,page.url()).searchParams.get('q_rhythm'));
+ assert.deepEqual(automationQuery.grouping.keys,['initiator','automation']);
+ assert.ok(automationQuery.grouping.source.where.some(term=>term.field==='actor'&&term.value==='automated'));
+ await automation.click();
+ await page.locator('.usage-workspace-table').waitFor();await app.settled();
+ await page.getByRole('link',{name:/^Back to dashboard/}).waitFor();
+ const run=page.waitForResponse(response=>response.url().includes('/api/query/rhythm')&&response.request().method()==='POST');
+ await page.getByRole('button',{name:'Run Now',exact:true}).click();
+ assert.equal((await run).ok(),true);await app.settled();
+ await app.shot('automatic-table');
+ await page.goBack();
+ await page.locator('.habits-days-chart').waitFor();
+ await view.selectOption('calendar');
+ await page.locator('.habits-calendar').waitFor();
  await page.getByRole('combobox',{name:'Whose days',exact:true}).selectOption('agents');
  await page.getByRole('combobox',{name:'Calendar range',exact:true}).selectOption('13');
  await page.getByRole('combobox',{name:'Streaks count',exact:true}).selectOption('weekdays');
@@ -1447,7 +1499,6 @@ test('Habits standalone charts preview, pin, restore and open their records',{sk
   '.habits-days-chart',
   '.habits-calendar',
   '[data-pharos-target="section:habits-punchcard"] .habits-chart-inspection',
-  '.habits-automations',
  ];
  for(const selector of charts){
   await page.getByRole('combobox',{name:'View',exact:true}).selectOption(selector.includes('days-chart')?'days':selector.includes('calendar')?'calendar':'punchcard');
