@@ -473,9 +473,12 @@ type backupJob struct {
 	// keep holds the DEST files (by device and inode, so names that the
 	// destination stores differently, as HFS+ does accented ones, still
 	// match) that the item being backed up accounts for; prune keeps them.
-	keep     map[fileKey]bool
-	symlinks int
-	links    map[backupLinkKey]string
+	keep map[fileKey]bool
+	// keepFailed is why a destination file the item accounts for could not
+	// be identified; prune then keeps the item's whole earlier backup.
+	keepFailed error
+	symlinks   int
+	links      map[backupLinkKey]string
 }
 
 type backupLinkKey struct {
@@ -483,26 +486,34 @@ type backupLinkKey struct {
 	size, mtime int64
 }
 
+// linkKey is the hard-link group of the object info describes, with its own
+// size and mtime. False means it is copied on its own: such a key never goes
+// into links, so files without an identity are never grouped.
 func linkKey(info fs.FileInfo) (backupLinkKey, bool) {
 	key, ok := keyOf(info)
-	return backupLinkKey{key, info.Size(), info.ModTime().UnixNano()}, ok
-}
-
-type fileKey struct{ device, inode uint64 }
-
-func keyOf(info fs.FileInfo) (fileKey, bool) {
-	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		return fileKey{}, false
+		return backupLinkKey{}, false
 	}
-	return fileKey{uint64(stat.Dev), uint64(stat.Ino)}, true
+	return backupLinkKey{key, info.Size(), info.ModTime().UnixNano()}, true
 }
 
-func (j *backupJob) keepPath(path string) {
-	if info, err := os.Lstat(path); err == nil {
-		if key, ok := keyOf(info); ok {
-			j.keep[key] = true
+// keepPath records the destination object at path as accounted for. Where
+// it cannot be identified, prune could not tell it from a stale file listed
+// under another name, so the item is not pruned at all; absent is only
+// expected where the library has a symlink nothing was copied for.
+func (j *backupJob) keepPath(path string, mayBeAbsent bool) {
+	info, err := os.Lstat(path)
+	if err == nil {
+		var observed fileObservation
+		if observed, err = observeFile(info); err == nil {
+			j.keep[observed.key] = true
+			return
 		}
+	} else if mayBeAbsent && errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if j.keepFailed == nil {
+		j.keepFailed = err
 	}
 }
 
@@ -886,7 +897,7 @@ func (j *backupJob) item(item backupItem) error {
 		return nil
 	}
 	destination := filepath.Join(j.dest, filepath.FromSlash(item.Path))
-	j.keep = map[fileKey]bool{}
+	j.keep, j.keepFailed = map[fileKey]bool{}, nil
 	errorsBefore := len(j.run.Errors)
 	listed := 0
 	switch {
@@ -905,6 +916,8 @@ func (j *backupJob) item(item backupItem) error {
 	switch {
 	case len(j.run.Errors) > errorsBefore:
 		// An incomplete listing must not prune what it failed to list.
+	case j.keepFailed != nil:
+		j.run.Warnings = append(j.run.Warnings, fmt.Sprintf("the files backed up from %s could not all be identified in %s (%v), so its earlier backup was not pruned", item.Source, destination, j.keepFailed))
 	case listed == 0:
 		if entries, err := os.ReadDir(destination); err == nil && len(entries) > 0 {
 			j.run.Warnings = append(j.run.Warnings, fmt.Sprintf("%s has no files, so its earlier backup in %s was not pruned", item.Source, destination))
@@ -1035,7 +1048,7 @@ func (j *backupJob) tree(source, destination string) (int, error) {
 		switch {
 		case entry.Type()&fs.ModeSymlink != 0:
 			j.symlinks++
-			j.keepPath(filepath.Join(destination, rel))
+			j.keepPath(filepath.Join(destination, rel), true)
 		case entry.Type().IsRegular() && !skipBackupName(entry.Name()):
 			files = append(files, path)
 		}
@@ -1083,7 +1096,7 @@ func (j *backupJob) copyAll(files []string, root, destination string) (int, erro
 				j.links[key] = target
 			}
 			j.run.FilesUnchanged++
-			j.keepPath(target)
+			j.keepPath(target, false)
 			continue
 		}
 		jobs = append(jobs, copyJob{file, target, info})
@@ -1111,7 +1124,7 @@ func (j *backupJob) copyAll(files []string, root, destination string) (int, erro
 			j.fail(job.source, err)
 			continue
 		}
-		j.keepPath(job.target)
+		j.keepPath(job.target, false)
 		j.run.FilesCopied++
 		j.run.BytesCopied += job.info.Size()
 		j.report()
@@ -1270,9 +1283,13 @@ func (j *backupJob) pruneTree(destination, source string) {
 		if err != nil || path == destination {
 			return nil
 		}
-		info, infoErr := entry.Info()
-		key, ok := keyOf(info)
-		kept := infoErr != nil || !ok || j.keep[key] || protected[path] || appleDouble(path)
+		// What cannot be identified is kept, and a directory with its subtree.
+		kept := protected[path] || appleDouble(path)
+		if info, infoErr := entry.Info(); infoErr != nil {
+			kept = true
+		} else if key, ok := keyOf(info); !ok || j.keep[key] {
+			kept = true
+		}
 		if !kept && !entry.IsDir() {
 			rel, _ := filepath.Rel(destination, path)
 			original := filepath.Join(source, rel)

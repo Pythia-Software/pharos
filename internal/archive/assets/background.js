@@ -95,6 +95,18 @@
 .bg-labeler-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;font-size:var(--fs-sm);color:var(--muted)}
 .bg-threads{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-sm);color:var(--muted)}
 .bg-threads select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:1px 4px;background:var(--panel);color:var(--ink)}
+.bg-work-cpu{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin-top:12px;font-size:var(--fs-sm)}
+.bg-work-cpu select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:3px 6px;background:var(--bg);color:var(--ink)}
+.bg-work-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+#backgroundSchedule .bg-work-actions .bg-button{max-width:100%;white-space:normal;text-align:left}
+.bg-work-list{margin-top:14px}
+.bg-work-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;border-top:1px solid var(--line);padding:8px 0;font-size:var(--fs-sm);min-width:0}
+.bg-work-row>div{flex:1 1 240px;min-width:0;overflow-wrap:anywhere}
+.bg-work-row .bg-name,.bg-work-row .bg-state,.bg-work-row .bg-error{display:block}
+#backgroundSchedule .bg-work-row .bg-button{padding:4px 10px;font-size:var(--fs-xs)}
+.bg-work-more{margin-top:12px;font-size:var(--fs-sm);min-width:0}
+.bg-work-more summary{cursor:pointer;font-weight:600}
+.bg-work-more p{overflow-wrap:anywhere}
 @media(max-width:900px){.bg-cols,.bg-battery{grid-template-columns:minmax(0,1fr)}}
 @container (max-width:560px){.bg-cols{grid-template-columns:minmax(0,1fr)}}`;
 
@@ -271,10 +283,138 @@
       threadsCanChange: execution.device === 'cpu' && settings.threads_can_change === true};
   }
 
+  // ---- shared work (docs/work-execution-plan.md §10): the CPU allowance of
+  // this process, explicit requests and why each task waits, from the `work`
+  // descriptor of GET /api/background and the state of GET /api/work. The
+  // runner reports structured reasons; these words name them. An older or
+  // classic service has no work descriptor, and the page shows no Work card.
+  const WORK_KINDS = {'analysis.authorship': 'Update writing estimates', 'analysis.labels': 'Label messages',
+    'maintenance.parallelism': 'Measure parallel work', 'maintenance.labels.query': 'Index message labels'};
+  const WORK_STATES = {queued: 'Waiting to start', running: 'Running', blocked: 'Waiting', stopping: 'Stopping', succeeded: 'Done',
+    failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted', skipped: 'Skipped'};
+  const WORK_REASONS = {
+    dependency: 'Waiting for work it depends on', capacity: 'Waiting for a free CPU slot', power: 'Waiting for power',
+    policy: 'Waiting for background settings to allow it', writer: 'Waiting for another write to the library', external: 'Waiting for an outside service',
+    held: 'Stopped until you resume it or Pharos restarts', failed: 'Stopped after a failure', 'failures-full': 'Stopped after too many failures',
+    'retry-backoff': 'Trying again shortly after a failure', 'allocation-exceeds-cap': 'Needs more CPU slots than the allowance',
+    'request-memory': 'Waiting for memory', 'request-limit': 'Waiting for other requests to finish', 'recent-first': 'Waiting for recent work to finish first',
+    paused: 'Background processing is paused', 'inputs-keep-changing': 'Its conversations kept changing; they stay queued for the next update',
+    'units-failed': 'Some conversations failed', 'dependency-failed': 'Work it depends on failed', 'membership-unavailable': 'Could not list its conversations',
+  };
+  const WORK_LIVE = new Set(['queued', 'running', 'blocked', 'stopping']);
+  const WORK_LIMIT = 5;
+  const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+  const kindLabel = (kind, labels = {}) => labels[kind] || WORK_KINDS[kind] || kind || '';
+
+  // Why something waits or ended: the reason's words, the work it depends on
+  // when named, and the server's detail except for a hold, which says it all.
+  function workReason(blocker, labels = {}) {
+    if (!blocker?.reason) return '';
+    if (blocker.depends_on && blocker.reason === 'dependency') return `Waiting for ${kindLabel(blocker.depends_on, labels)}`;
+    const words = WORK_REASONS[blocker.reason] || blocker.reason;
+    return blocker.detail && blocker.reason !== 'held' ? `${words}: ${blocker.detail}` : words;
+  }
+
+  // The allowance select: whole slots from 1 to the CPUs this Mac has, the
+  // saved value clamped into them, and what holds it when it cannot change.
+  function cpuAllowance(work, authority = null) {
+    if (!work?.available) return null;
+    const max = Math.max(1, Math.floor(Number(work.max_cpu_slots)) || 1);
+    const value = Math.min(max, Math.max(1, Math.floor(Number(work.cpu_slots)) || 1));
+    const canChange = work.can_change === true;
+    const locked = canChange ? '' : work.locked_reason || 'Set by PHAROS_BACKGROUND_CPUS when Pharos started. Restart without it to change it here.';
+    let inUse = '';
+    if (authority) {
+      const cap = Math.max(1, Number(authority.cpu_cap) || value), used = Math.max(0, Number(authority.cpu_allocated) || 0);
+      const parts = [`${used} of ${cap} in use`];
+      if (authority.cpu_waiters > 0) parts.push(`${authority.cpu_waiters} waiting`);
+      if (authority.cpu_over_budget > 0) parts.push(`${plural(authority.cpu_over_budget, 'slot')} over until current work reaches a safe point`);
+      inUse = parts.join(' · ');
+    }
+    return {value, max, choices: Array.from({length: max}, (_, index) => index + 1), canChange, locked, scope: work.scope || 'this process', inUse};
+  }
+
+  // Request keys are private coalescing identities. Display only the
+  // server's explicit scope, with a neutral fallback for older services.
+  function requestScope(request) {
+    const scope = request?.scope || (request?.explicit ? 'explicit' : 'automatic');
+    const titles = {recent: 'Recent conversations', backfill: 'Historical conversations, at low priority',
+      selection: 'Selected conversations', explicit: 'Requested work', automatic: 'Automatic catch-up'};
+    return {scope, title: titles[scope] || scope};
+  }
+
+  function requestModel(request, now = Date.now(), labels = {}) {
+    const {scope, title} = requestScope(request);
+    const live = WORK_LIVE.has(request.state);
+    const members = Math.max(0, Number(request.members) || 0), sealed = Math.max(0, Number(request.sealed) || 0);
+    const failed = Math.max(0, Number(request.failed) || 0) + Math.max(0, Number(request.exhausted) || 0);
+    const listed = members > 0 || Boolean(request.membership_frozen_at);
+    let progress = '';
+    if (request.library) progress = live ? 'Updating queued work…' : '';
+    else if (!listed) progress = live ? 'Listing conversations…' : '';
+    else if (!members) progress = 'No conversations needed updating';
+    else progress = `${sealed} of ${plural(members, 'conversation')} done${failed ? `, ${failed} failed` : ''}`;
+    const reason = request.blocker ? workReason(request.blocker, labels) : WORK_REASONS[request.reason] || request.reason || '';
+    const waiting = (request.tasks || []).filter(task => task.blocker?.reason).map(task => `${kindLabel(task.kind, labels)}: ${workReason(task.blocker, labels)}`);
+    return {id: request.id, scope, title,
+      state: request.state, live, stateText: WORK_STATES[request.state] || request.state || '', progress, fraction: members ? Math.min(1, sealed / members) : null,
+      reason, detail: request.blocker ? '' : request.detail || '', waiting: waiting.slice(0, 3), requested: ago(request.requested_at, now),
+      kinds: (request.kinds || []).map(kind => kindLabel(kind, labels)), cancellable: live && Boolean(request.explicit)};
+  }
+
+  // A task kind's line and the actions that apply: Stop while it has work,
+  // Resume while held, Retry once something failed.
+  function taskModel(task, labels = {}) {
+    const held = task.blocker?.reason === 'held';
+    const failures = Math.max(0, Number(task.failures) || 0);
+    let text = WORK_STATES[task.state] || 'Idle';
+    if (task.state === 'running' && task.running) {
+      const units = Math.max(0, Number(task.running.units) || 0), cpus = Math.max(0, Number(task.running.cpus) || 0);
+      text = [task.running.coarse || task.coarse ? 'Running one step that cannot be split' : units ? `Running ${plural(units, 'conversation')}` : 'Running',
+        cpus ? `${cpus} CPU ${cpus === 1 ? 'slot' : 'slots'}` : ''].filter(Boolean).join(' · ');
+    } else if (task.blocker) text = workReason(task.blocker, labels);
+    const actions = [];
+    if (held) actions.push('resume');
+    else if (WORK_LIVE.has(task.state)) actions.push('stop');
+    if (failures || ['failed', 'failures-full', 'retry-backoff', 'dependency-failed'].includes(task.blocker?.reason)) actions.push('retry');
+    return {kind: task.kind, label: kindLabel(task.kind, task.label ? {[task.kind]: task.label} : labels), state: held ? 'held' : task.state || 'idle', text,
+      failures: failures ? plural(failures, 'failure') : '', examples: (task.failure_examples || []).slice(0, 3).map(example => example.error).filter(Boolean),
+      actions, active: held || failures > 0 || WORK_LIVE.has(task.state)};
+  }
+
+  // The Work card's model, or null when this service has no shared work
+  // (an older service, or the classic engine).
+  function workModel(document, inspection, now = Date.now()) {
+    const allowance = cpuAllowance(document?.work, inspection?.authority);
+    if (!allowance) return null;
+    const labels = inspection?.labels || {};
+    const order = (a, b) => Number(Boolean(b.explicit)) - Number(Boolean(a.explicit)) || (parse(a.requested_at) ?? 0) - (parse(b.requested_at) ?? 0) || a.id - b.id;
+    const live = [...(inspection?.requests || [])].sort(order);
+    const ended = [...(inspection?.ended || [])].sort((a, b) => b.id - a.id);
+    const tasks = (inspection?.tasks || []).map(task => taskModel(task, labels));
+    return {allowance, paused: Boolean(inspection?.paused), inspected: Boolean(inspection),
+      requests: live.slice(0, WORK_LIMIT).map(request => requestModel(request, now, labels)), moreRequests: Math.max(0, live.length - WORK_LIMIT),
+      ended: ended.slice(0, WORK_LIMIT).map(request => requestModel(request, now, labels)),
+      tasks: tasks.filter(task => task.active), idleTasks: tasks.filter(task => !task.active).map(task => task.label),
+      recentLive: live.some(request => request.explicit && requestScope(request).scope === 'recent'),
+      backfillLive: live.some(request => request.explicit && requestScope(request).scope === 'backfill')};
+  }
+
+  // The POST /api/work body for an action, or null when its target is not
+  // one the server accepts.
+  function workRequestBody(action, target = {}) {
+    if (action === 'recent' || action === 'backfill') return {action};
+    if (action === 'cancel') return Number.isSafeInteger(target.id) && target.id > 0 ? {action, request_id: target.id} : null;
+    if (['stop', 'resume', 'retry'].includes(action)) return typeof target.kind === 'string' && target.kind ? {action, kind: target.kind} : null;
+    return null;
+  }
+
   // ---- rendering
   // The Agent Experience switch (web/src/agent-events-flag.ts).
   const AGENT_EVENTS_KEY = 'pharos-agent-events-v1';
-  let document_ = null, dragging = null, inFlight = false, fetchedAt = 0, sheet = null, labelsSaving = false, labelsRevision = 0;
+  // savesRevision counts direct saves (models, the CPU allowance), so a
+  // refresh that started before one does not overwrite its answer.
+  let document_ = null, work_ = null, pendingFocus = '', again = false, dragging = null, inFlight = null, fetchedAt = 0, sheet = null, labelsSaving = false, savesRevision = 0;
   const node = (tag, className = '', text) => {
     const element = document.createElement(tag);
     if (className) element.className = className;
@@ -289,12 +429,26 @@
     if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`);
     return value;
   }
+  const pendingWorkActions = new Set();
   const button = (text, action, className = 'bg-button') => {
     const element = node('button', className, text);
     element.type = 'button';
-    element.onclick = async () => {
-      element.disabled = true;
-      try { await action(); } catch (error) { toast(error.message); } finally { element.disabled = false; }
+    element.onclick = async event => {
+      const current = event?.currentTarget || element;
+      const key = current.dataset.focusKey?.startsWith('work:') ? current.dataset.focusKey : '';
+      const focused = document.activeElement === current;
+      if (key) pendingWorkActions.add(key);
+      current.disabled = true;
+      try { await action(); } catch (error) { toast(error.message); } finally {
+        if (key) {
+          pendingWorkActions.delete(key);
+          // Recompute disabled state from the latest model. Restore lost
+          // keyboard focus now; no pending action may steal it on a poll.
+          if (focused && (!document.activeElement || document.activeElement === document.body)) pendingFocus = key;
+          render();
+          pendingFocus = '';
+        } else current.disabled = false;
+      }
     };
     return element;
   };
@@ -548,14 +702,19 @@
     return fieldset;
   }
 
-  function render() {
+  function render({allowFocusedSelect = false} = {}) {
     const target = host();
     // A drag keeps the items it is over.
     if (!target || !document_ || labelsSaving || dragging) return;
-    // A select being used keeps its value until it is changed.
-    if (target.contains(document.activeElement) && document.activeElement.matches('select')) return;
+    // Keep an open CPU select in place while its live status and the rest
+    // of the page update. Other settings selects retain their old edit rule.
+    const activeSelect = target.contains(document.activeElement) && document.activeElement.matches('select') ? document.activeElement : null;
+    const keepCPU = !allowFocusedSelect && activeSelect?.dataset.focusKey === 'work:cpu';
+    if (!allowFocusedSelect && activeSelect && !keepCPU) return;
     // The focused run button or item keeps focus across the redraw.
-    const focusKey = document.activeElement?.dataset?.focusKey;
+    const lost = !document.activeElement || document.activeElement === document.body;
+    const focusKey = document.activeElement?.dataset?.focusKey || (lost ? pendingFocus : '');
+    pendingFocus = '';
     const focused = document.activeElement?.closest?.('[data-item]')?.dataset.item;
     const labelsFocused = ['labelsEnabled', 'agentEventsEnabled'].includes(document.activeElement?.id) && document.activeElement.id;
     const model = scheduleModel(document_, Date.now(), settingsQueue.cadences);
@@ -593,6 +752,8 @@
       card.append(rule);
     }
     content.append(card);
+    const work = workModel(document_, work_);
+    if (work) content.append(renderWork(work));
     if (model.battery) {
       const battery = node('section', 'bg-card');
       battery.dataset.card = 'battery';
@@ -611,6 +772,23 @@
       low.append(lowBox, model.battery.lowText);
       battery.append(rows, low);
       content.append(battery);
+    }
+    if (keepCPU && window.pharosLibrary?.updateLiveChildren) {
+      const previous = activeSelect.closest('[data-card="work"]');
+      const next = content.querySelector('[data-card="work"]');
+      if (previous && next) {
+        // The shared live renderer keeps unchanged nodes attached. Give it
+        // the select's current edit, rather than replacing its native menu.
+        next.querySelector('[data-focus-key="work:cpu"]').replaceWith(activeSelect.cloneNode(true));
+        window.pharosLibrary.updateLiveChildren(previous, next);
+        for (const child of [...target.childNodes]) if (child !== previous) child.remove();
+        let after = false;
+        for (const child of [...content.childNodes]) {
+          if (child === next) { after = true; continue; }
+          if (after) target.append(child); else target.insertBefore(child, previous);
+        }
+        return;
+      }
     }
     target.replaceChildren(...content.childNodes);
     const keyed = focusKey && target.querySelector(`[data-focus-key="${window.CSS.escape(focusKey)}"]`);
@@ -667,7 +845,7 @@
       const enabled = toggle.getAttribute('aria-checked') !== 'true';
       show(enabled);
       labelsSaving = true;
-      labelsRevision++;
+      savesRevision++;
       toggle.disabled = true;
       let saved = false;
       try {
@@ -706,21 +884,190 @@
     return row;
   }
 
+  // The Work card: this process's CPU allowance, the recent-first and
+  // history requests, what each task is doing or waiting for, and its Stop,
+  // Resume and Retry. Finished requests and the machine export sit in one
+  // keyed disclosure.
+  async function workAction(action, target, message, focusKey = '') {
+    const body = workRequestBody(action, target);
+    if (!body) return;
+    // A button disables itself while it acts, which can drop its focus to
+    // the page; the redraw then returns it to the same action.
+    pendingFocus = focusKey;
+    try {
+      await call('/api/work', body);
+      toast(message);
+      await refresh(true);
+    } catch (error) {
+      pendingFocus = '';
+      throw error;
+    }
+  }
+
+  function renderWork(model) {
+    const card = node('section', 'bg-card');
+    card.dataset.card = 'work';
+    card.dataset.key = 'work';
+    const allowance = model.allowance;
+    card.append(node('h3', '', 'Background CPU'),
+      node('p', 'muted', `How many CPU-heavy background workers ${allowance.scope} may run at once. Other Pharos processes have their own allowance; interactive pages are not limited by it.`));
+    const cpu = node('div', 'bg-work-cpu');
+    const label = node('label', '', 'Allowance ');
+    const choice = select(allowance.choices.map(value => [value, String(value)]), allowance.value, async value => {
+      savesRevision++;
+      try {
+        document_ = await call('/api/work/settings', {cpu_slots: Number(value)});
+        fetchedAt = Date.now();
+        work_ = await loadWork(document_);
+      } catch (error) {
+        choice.value = String(allowance.value);
+        throw error;
+      } finally {
+        // A completed save can redraw this select and restore its keyed
+        // focus; ordinary polls still leave an open select alone.
+        render({allowFocusedSelect: true});
+      }
+    }, 'Background CPU allowance');
+    choice.dataset.focusKey = 'work:cpu';
+    choice.disabled = !allowance.canChange;
+    label.append(choice, ` of ${plural(allowance.max, 'CPU')}`);
+    cpu.append(label);
+    if (allowance.inUse) cpu.append(node('span', 'bg-state', allowance.inUse));
+    card.append(cpu, node('p', 'muted', allowance.locked || 'This shares out work; it is not measured CPU use, which Load in the activity panel shows. A lower allowance applies once current work reaches a safe point.'));
+    if (model.paused) card.append(node('p', 'muted', 'Background processing is paused; requests wait until it resumes.'));
+
+    const actions = node('div', 'bg-work-actions');
+    const recent = button('Bring last 2 days up to date', () => workAction('recent', {}, 'Bringing the last 2 days up to date first; older history continues afterward.', 'work:recent'));
+    recent.prepend(play());
+    recent.dataset.focusKey = 'work:recent';
+    recent.disabled = model.recentLive;
+    const history = button('Catch up all history', () => workAction('backfill', {}, 'Catching up all history at low priority, after recent work.', 'work:backfill'));
+    history.dataset.focusKey = 'work:backfill';
+    history.disabled = model.backfillLive;
+    history.title = 'Runs after recent work, at low priority. Cancel it at any time.';
+    actions.append(recent, history);
+    card.append(actions);
+
+    if (model.requests.length) {
+      const list = node('div', 'bg-work-list');
+      list.setAttribute('aria-label', 'Requests');
+      for (const request of model.requests) list.append(requestRow(request));
+      if (model.moreRequests) list.append(node('p', 'muted', `and ${plural(model.moreRequests, 'more request')}`));
+      card.append(list);
+    }
+    if (model.tasks.length) {
+      const list = node('div', 'bg-work-list');
+      list.setAttribute('aria-label', 'Tasks');
+      for (const task of model.tasks) list.append(taskRow(task));
+      card.append(list);
+    }
+    if (model.inspected && !model.requests.length && !model.tasks.length) card.append(node('p', 'muted', 'Nothing is waiting.'));
+
+    const details = node('details', 'bg-work-more');
+    details.dataset.viewKey = 'background:work:details';
+    details.dataset.viewDefault = 'false';
+    details.open = window.pharosView?.read('disclosures', {})[details.dataset.viewKey] === true;
+    details.append(node('summary', '', 'Finished requests and details'));
+    for (const request of model.ended) details.append(requestRow(request));
+    if (!model.ended.length) details.append(node('p', 'muted', 'No finished requests since Pharos started.'));
+    if (model.idleTasks.length) details.append(node('p', 'muted', `Idle: ${model.idleTasks.join(', ')}.`));
+    const download = node('a', '', 'Download work details (JSON)');
+    download.href = '/api/work';
+    download.download = 'pharos-work.json';
+    const exportLine = node('p', 'muted');
+    exportLine.append(download, ' — requests, tasks, blockers and recent decisions, for support or an agent.');
+    details.append(exportLine);
+    card.append(details);
+    for (const action of card.querySelectorAll('button[data-focus-key]')) {
+      if (pendingWorkActions.has(action.dataset.focusKey)) action.disabled = true;
+    }
+    return card;
+  }
+
+  function requestRow(request) {
+    const row = node('div', 'bg-work-row');
+    row.dataset.request = String(request.id);
+    row.dataset.key = `request:${request.id}`;
+    const copy = node('div');
+    copy.append(node('span', 'bg-name', request.title),
+      node('span', 'bg-state', [request.stateText, request.progress, request.requested && `requested ${request.requested}`].filter(Boolean).join(' · ')));
+    if (request.reason) copy.append(node('span', request.state === 'failed' ? 'bg-error' : 'bg-state', request.reason));
+    for (const text of request.waiting) copy.append(node('span', 'bg-state', text));
+    row.append(copy);
+    if (request.cancellable) {
+      const key = `work:cancel:${request.id}`;
+      const cancel = button('Cancel request', () => workAction('cancel', {id: request.id}, 'Request cancelled. Work that another request or the schedule needs may continue.', key));
+      cancel.dataset.focusKey = key;
+      cancel.dataset.key = key;
+      cancel.title = 'Removes this request only; shared work another request or the schedule needs may continue.';
+      row.append(cancel);
+    }
+    return row;
+  }
+
+  function taskRow(task) {
+    const row = node('div', 'bg-work-row');
+    row.dataset.task = task.kind;
+    row.dataset.key = `task:${task.kind}`;
+    const copy = node('div');
+    copy.append(node('span', 'bg-name', task.label), node('span', 'bg-state', [task.text, task.failures].filter(Boolean).join(' · ')));
+    for (const text of task.examples) copy.append(node('span', 'bg-error', text));
+    row.append(copy);
+    // Stop and Resume share a focus key: one replaces the other.
+    const words = {
+      stop: ['Stop', `Stopping ${task.label} at its next safe point. It stays stopped until you resume it or Pharos restarts.`,
+        'Stops at the next safe point and holds it until you resume it or Pharos restarts. Requests that need it wait.'],
+      resume: ['Resume', `${task.label} resumed.`, 'Lets it run again.'],
+      retry: ['Retry', `Trying ${task.label}'s failures again.`, 'Tries what failed again.'],
+    };
+    for (const action of task.actions) {
+      const [text, message, title] = words[action];
+      const key = `work:${action === 'retry' ? 'retry' : 'hold'}:${task.kind}`;
+      const control = button(text, () => workAction(action, {kind: task.kind}, message, key));
+      control.dataset.focusKey = key;
+      control.dataset.key = key;
+      control.dataset.action = action;
+      control.title = title;
+      row.append(control);
+    }
+    return row;
+  }
+
+  // GET /api/work only where the background document says this service has
+  // shared work; an older service has no such endpoint. Inspection is an
+  // addition: without it the card still shows the allowance and actions.
+  const loadWork = next => next?.work?.available ? call('/api/work').then(value => value?.state || null, () => null) : Promise.resolve(null);
+
   async function refresh(force = false) {
     const target = host();
-    if (!target || inFlight || labelsSaving || settingsQueue.busy || (!force && (!target.offsetParent || Date.now() - fetchedAt < 4000))) return;
-    inFlight = true;
-    const revision = labelsRevision;
-    const settingsRevision = settingsQueue.revision;
-    try {
-      const next = await call('/api/background');
-      if (revision !== labelsRevision || labelsSaving || settingsRevision !== settingsQueue.revision || settingsQueue.busy) return;
-      document_ = next;
-      fetchedAt = Date.now();
-      render();
-    } catch (error) {
-      if (!document_) target.replaceChildren(node('p', 'badtext', error.message));
-    } finally { inFlight = false; }
+    // Every caller waits for the same refresh, including a forced follow-up
+    // requested during a poll. Work actions stay pending until that follow-up
+    // has reconciled the model the POST changed.
+    if (target && inFlight) {
+      if (force) again = true;
+      return inFlight;
+    }
+    if (!target || labelsSaving || settingsQueue.busy || (!force && (!target.offsetParent || Date.now() - fetchedAt < 4000))) return;
+    inFlight = (async () => {
+      do {
+        again = false;
+        const revision = savesRevision;
+        const settingsRevision = settingsQueue.revision;
+        try {
+          const next = await call('/api/background');
+          const inspection = await loadWork(next);
+          if (revision === savesRevision && !labelsSaving && settingsRevision === settingsQueue.revision && !settingsQueue.busy) {
+            document_ = next;
+            work_ = inspection;
+            fetchedAt = Date.now();
+            render();
+          }
+        } catch (error) {
+          if (!document_) target.replaceChildren(node('p', 'badtext', error.message));
+        }
+      } while (again && host() && !labelsSaving && !settingsQueue.busy);
+    })();
+    try { await inFlight; } finally { inFlight = null; }
   }
 
   function start() {
@@ -737,6 +1084,7 @@
 
   window.pharosBackground = {refresh, render,
     // Pure helpers, for web/tests/unit/page/background.test.mjs.
-    scheduleModel, itemModel, batteryModel, labelingControls, createSettingsQueue, stateText, dropCadence, pauseLength, ago, until, duration};
+    scheduleModel, itemModel, batteryModel, labelingControls, createSettingsQueue, stateText, dropCadence, pauseLength, ago, until, duration,
+    workModel, cpuAllowance, requestModel, taskModel, workReason, workRequestBody};
   if (host()) start(); else document.addEventListener('DOMContentLoaded', start, {once: true});
 })();

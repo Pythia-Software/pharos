@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { defaultApi, cloudScheduledStatus, rootConversation, workID, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument } from "./fixtures.mjs";
+import { defaultApi, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const missingPrices = { ...defaultApi['GET /api/pricing'], unpriced_tokens: 5000,
@@ -55,6 +55,20 @@ const tokenEvidenceAPI = {
         evidence:[{scope:"last-request",total_tokens:116837,message_id:"conv-child-reply",conversation_id:"conv-child",workspace_id:workID}]}};
     return {...data, rows:data.rows.map(patch), focus:data.focus.map(patch)};
   },
+};
+// Related work: chips (one uncertain) and a certain review's session among
+// the workspace's own.
+const relatedWorkAPI = {
+  "GET /api/work/:id": request => ({ ...defaultApi["GET /api/work/:id"](request), ...relatedWork }),
+  "GET /api/work/:id/delegation": request => {
+    const data = defaultApi["GET /api/work/:id/delegation"](request), [review] = relatedWork.peers;
+    const peer = { ...data.rows[0], id: "s-peer", workspace_id: peerWorkID, conversation_id: "conv-review", label: review.title, outline: "2", order: data.rows.length, child_count: 0,
+      peer: { workspace_id: peerWorkID, title: review.title, role: review.role } };
+    return { ...data, rows: [...data.rows, peer], focus: [...data.focus, peer], matched: { ...data.matched, [peer.id]: true }, total: data.total + 1, session_count: data.session_count + 1, group_totals: data.totals };
+  },
+  "GET /api/work/:id/conversations/:conversation": request => request.params.id === peerWorkID ? { ...relatedWork.peer_conversations[0],
+    messages: [{ id: "conv-review-ask", role: "user", kind: "message", text: "Review the changes" }, { id: "conv-review-reply", role: "assistant", kind: "message", text: "P1: the sort ignores ties." }] }
+    : defaultApi["GET /api/work/:id/conversations/:conversation"](request),
 };
 // The root session's last reply, which the card previews as its latest response.
 const latestResponseID = defaultApi["GET /api/work/:id/conversations/:conversation"]({ params: { id: workID, conversation: rootConversation } }).messages
@@ -367,7 +381,8 @@ const ROUTES = [
       assert.equal(await unmeasured.getAttribute('aria-valuenow'), null, 'unknown work is accessible without a fabricated percentage');
     },
   },
-  { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
+  { name: "Home", url: "/", ready: ".home-recent-grid .conversation-result-card" },
+  { name: "Home without recent conversations", url: "/", ready: ".home-recent-empty", api: { "GET /api/library/recent-conversations": { items: [] } } },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",
     check: page => page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input")) },
   { name: "Home search before date", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).click(); await page.getByRole("combobox", { name: "Date comparison", exact: true }).selectOption("to"); }, shown: ".home-search-disclosure.is-expanded" },
@@ -480,6 +495,9 @@ const ROUTES = [
   // cycle) not drawn above.
   { name: "MCP dashboard weekday cycle", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "cycle", cycle: "weekday", metric: "time", split: "none", reduce: "mean" }))}`, ready: `.usage-mcp-dashboard ${analysisReady}`,
     check: async page => assert.deepEqual(await page.locator(".usage-mcp-dashboard [role=alert], .usage-mcp-dashboard .query-table-error").allTextContents(), [], "the dashboard reports an error") },
+  { name: "Analyze Work Hours dashboard", url: "/analyze?analyze_topic=work_hours", ready: ".usage-work-hours-dashboard .usage-chart" },
+  { name: "Analyze habits punchcard", url: "/analyze?analyze_topic=habits&habits_view=punchcard", ready: '[data-pharos-target="section:habits-punchcard"]' },
+  { name: "Analyze habits daily schedule", url: "/analyze?analyze_topic=habits&habits_view=days", ready: ".habits-days-chart" },
   { name: "Analyze habits dashboard", url: "/analyze?analyze_topic=habits&habits_day=" + new Date(Date.now() - 86400000).toISOString().slice(0, 10), ready: ".habits-panel .habits-day" },
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
@@ -609,6 +627,8 @@ const ROUTES = [
     await page.locator('[data-view-key="background:agent_events"]').click();
   }, shown: '#background-detail-labels:not([hidden])' },
   { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
+  { name: "Background Processing work", url: "/settings/sync", ready: "#backgroundSchedule [data-card=work] .bg-work-row", api: { "GET /api/background": workBackgroundDocument, "GET /api/work": workInspection },
+    open: page => page.locator('#backgroundSchedule [data-view-key="background:work:details"] summary').click(), shown: '#backgroundSchedule [data-view-key="background:work:details"][open] .bg-work-row' },
   { name: "Background Processing sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
   { name: "Background Processing queued verification", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Verify indexed data" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
@@ -628,6 +648,17 @@ const ROUTES = [
   { name: "Mac menu with all items", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, api: tokenEvidenceAPI, ready: ".delegation-table tbody tr" },
   { name: "Workspace Timeline", url: `${work}?explorer=timeline`, ready: ".lt-session-root" },
+  { name: "Workspace with related work", url: work, api: relatedWorkAPI, ready: ".peer-strip .peer-chip.uncertain", open: page => page.locator(".peer-reasons summary").click(), shown: ".peer-reasons[open] li",
+    check: async page => {
+      await page.locator('[data-session-id="s-peer"]').first().waitFor();
+      // Following a hand-off opens the related conversation and reveals the
+      // message without taking keyboard focus.
+      await page.goto(`${page.url().split("/work/")[0]}${work}/conversation/${rootConversation}`);
+      await page.locator(".handoff-marker").first().click();
+      await page.locator(".peer-reader-note").waitFor();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+      assert.ok(await page.evaluate(() => !document.activeElement?.closest(".conversation-panel")), "following a hand-off moved focus into the reader");
+    } },
   { name: "Workspace Timeline skipping idle time, agent events expanded", url: `${work}?explorer=timeline&disclosures=${idleTimelineDisclosures}`, api: idleTimelineAPI, ready: ".lt-session-node .lt-session-row-label svg.event-link-glyph", open: page => page.locator(".lt-session-ribbon .lt-idle-cut-line").first().waitFor({ state: "attached" }), shown: ".lt-clock-heading .lt-idle-cut time" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, api: tokenEvidenceAPI, ready: ".conversation-panel .turn" },
@@ -1154,6 +1185,19 @@ test("dashboard catalog stays readable while a preview is pending", { skip }, as
     await settled();
     await page.unroute('**/api/query/tl1_attempts/*', hold);
   }
+});
+
+test('Recent conversation links open the selected conversation and search', { skip }, async t => {
+  const { page, settled, calls } = await open(t, { url: '/', ready: '.home-recent-grid .conversation-result-card' });
+  assert.equal(calls.some(call => /\/api\/work\/.+\/conversations\//.test(call.path)), false, 'previews do not load transcripts');
+  await page.locator('.home-recent-grid .conversation-result-title').first().click();
+  await page.waitForURL(url => url.pathname === `/work/${workID}/conversation/${rootConversation}`);
+  await page.locator('#detail .conversation-panel:not(.conversation-loading)').first().waitFor();
+  await settled();
+  await page.goBack();
+  await page.locator('.home-recent-search').click();
+  await page.waitForURL(url => url.pathname === '/library' && url.searchParams.get('view') === 'conversation');
+  await page.locator('#queryTableLibrary .conversation-result-card').first().waitFor();
 });
 
 test('pages without section menus use the full window', { skip }, async t => {

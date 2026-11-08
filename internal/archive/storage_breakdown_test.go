@@ -54,9 +54,9 @@ func TestMeasureLibrarySplitsCapturesAndCatalogParts(t *testing.T) {
 	}
 	writeSized(t, filepath.Join(reader, ".reader.lock"), 3)
 
-	device, ok := deviceOf(root)
-	if !ok {
-		t.Fatal("no device")
+	device, err := deviceOf(root)
+	if err != nil {
+		t.Fatal(err)
 	}
 	sizes := measureLibrary(t.Context(), config, device)
 	want := []captureSize{
@@ -78,6 +78,16 @@ func TestMeasureLibrarySplitsCapturesAndCatalogParts(t *testing.T) {
 	}
 	if sizes.LibraryBytes != 526+4632+5 {
 		t.Fatalf("library bytes %d", sizes.LibraryBytes)
+	}
+	// Deduplication is informational: files whose device and inode cannot be
+	// observed are each counted, never grouped under a shared made-up key.
+	override(t, &captureHardlinkKey, func(os.FileInfo) ([2]uint64, error) { return [2]uint64{}, errFileObservationUnavailable })
+	undeduplicated := measureCaptures(t.Context(), config.CaptureRoot)
+	want[1].Other += 100
+	for index := range want {
+		if undeduplicated[index] != want[index] {
+			t.Fatalf("undeduplicated capture %d: %+v, want %+v", index, undeduplicated[index], want[index])
+		}
 	}
 }
 
@@ -226,8 +236,12 @@ func TestStorageBreakdownEndpoint(t *testing.T) {
 		}
 		return body
 	}
+	key, _, err := driveKey(config)
+	if err != nil {
+		t.Fatal(err)
+	}
 	drives.mu.Lock()
-	drives.key = driveKey(config)
+	drives.key = key
 	drives.state = &driveState{checked: time.Now(), shares: shares, sizes: librarySizes{CatalogBytes: 400,
 		Captures: []captureSize{{Host: "host-b", Source: "claude", Latest: 60}, {Host: "host-b", Source: "codex", Latest: 20}}}}
 	drives.mu.Unlock()

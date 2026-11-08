@@ -114,13 +114,13 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
   return <article ref={card} className={`query-card${discovery ? " discovery" : ""}${before ? " insert-before" : ""}`} data-card-id={id} data-pharos-target={`card:${id.split(":")[0]}`} data-category={category} data-xray={xray ? "" : undefined} data-revealable={xray && onReveal ? "" : undefined} aria-hidden={xray && !onReveal || undefined}
     style={{ "--query-tone": style.tone, "--query-lean": `${lean}deg` } as React.CSSProperties}
     draggable={!xray && Boolean(onDragStart)} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={onDrop ? event => event.preventDefault() : undefined} onDrop={onDrop}>
-    {!editing && !xray ? <DataReadinessIndicator id={`card:${id}`} title={title} dataset={readiness.dataset} query={readiness.query} empty={preview?.state==="empty"} updatedAt={preview?.updatedAt} refreshing={preview?.refreshing} refreshError={preview?.refreshError} className="query-card-readiness" /> : null}
     {editing ? <div className="query-card-open query-card-editing">{cover}{caption}</div> : null}
     {editing ? null : discovery && !xray ? <span className="query-drag-tip"><Icon name="arrow-up" /> Drag up to collect</span> : null}
     {editing ? null : error ? <div className="query-card-unavailable">{cover}<a className="query-card-open" {...linkProps}>{caption}</a></div>
       : <a className="query-card-open" {...linkProps}>{cover}{caption}</a>}
-    {editing ? null : xray ? onReveal ? <button type="button" className="query-xray-open" aria-label={`Bring ${title} into view`} title="Bring into view" onClick={onReveal} /> : null
-      : discovery ? onKeep ? <button className="query-keep" type="button" aria-label={`Collect ${title}`} title="Add to your collection" onClick={onKeep}><Icon name="plus" /></button> : null
-      : <span className="query-card-tools">{onReload ? <button type="button" aria-label={`Refresh ${title}`} title="Refresh this card" onClick={onReload}><Icon name="refresh" /></button> : null}<button type="button" aria-label={`Edit ${title}`} title="Edit saved view" onClick={onEdit}><Icon name="edit" /></button><button type="button" aria-label={`Remove ${title}`} title="Remove from collection" onClick={onRemove}><Icon name="close" /></button></span>}
+    {editing ? null : xray ? onReveal ? <button type="button" className="query-xray-open" aria-label={`Bring ${title} into view`} title="Bring into view" onClick={onReveal} /> : null : <>
+      <span className="query-card-tools">{!discovery && onReload ? <button type="button" aria-label={`Refresh ${title}`} title="Refresh this card" onClick={onReload}><Icon name="refresh" /></button> : null}<DataReadinessIndicator id={`card:${id}`} title={title} dataset={readiness.dataset} query={readiness.query} empty={preview?.state==="empty"} updatedAt={preview?.updatedAt} refreshing={preview?.refreshing} refreshError={preview?.refreshError} className="query-card-readiness" />{!discovery ? <><button type="button" aria-label={`Edit ${title}`} title="Edit saved view" onClick={onEdit}><Icon name="edit" /></button><button type="button" aria-label={`Remove ${title}`} title="Remove from collection" onClick={onRemove}><Icon name="close" /></button></> : null}</span>
+      {discovery && onKeep ? <button className="query-keep" type="button" aria-label={`Collect ${title}`} title="Add to your collection" onClick={onKeep}><Icon name="plus" /></button> : null}
+    </>}
   </article>;
 }

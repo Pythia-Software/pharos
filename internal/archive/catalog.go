@@ -62,6 +62,8 @@ type Catalog struct {
 	labelers       *labelrt.Manager
 	labelersOnce   sync.Once
 	labelerWorkers sync.Map // model path -> labelerWorkerObservation
+	labelerUsesMu  sync.Mutex
+	labelerUses    map[*labelrt.Runner][]*labelerUse
 	mcpHistory     mcpHistory
 	wal            walBound
 	writers        catalogWriteTracker
@@ -77,7 +79,12 @@ type Catalog struct {
 	initialized *initializeRecord
 	// ops is the registry Catalog-level work registers with (the service's,
 	// or a CLI command's); nil registers nothing.
-	ops               *opRegistry
+	ops  *opRegistry
+	work *workService
+	// commandCPUs is a Terminal command's CPU authority under the scheduled
+	// engine (cliWorkAuthority), for the background work it starts; a
+	// service's catalog answers to work instead.
+	commandCPUs       atomic.Pointer[workAuthority]
 	unowned           sync.WaitGroup
 	projectionBatches atomic.Int32
 	// ingestRuns counts this process's running ingests (see cacheVersion).
@@ -248,6 +255,9 @@ func (c *Catalog) Initialize() error {
 		return fmt.Errorf("initialize catalog: %w", err)
 	}
 	if err := c.ensureOriginSchema(); err != nil {
+		return err
+	}
+	if err := c.dropRetiredWorkRevisionTriggers(); err != nil {
 		return err
 	}
 	if err := c.ensureAnalysisPartitions(); err != nil {

@@ -86,11 +86,11 @@
 .query-timeline-legend>span { display:flex; align-items:center; gap:3px; min-width:0; }
 .query-timeline-legend i { flex:none; width:5px; height:5px; border-radius:1px; }
 .query-timeline-legend>span>span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.query-card-tools { position:absolute; display:flex; top:5px; left:25px; gap:2px; opacity:0; pointer-events:none; }
+.query-card-tools { position:absolute; z-index:2; display:flex; top:5px; left:25px; gap:2px; border-radius:4px; background:var(--panel); opacity:0; pointer-events:none; }
 .query-card:hover .query-card-tools,.query-card:focus-within .query-card-tools { opacity:1; pointer-events:auto; }
 .query-card-tools button,.query-keep { display:grid; place-items:center; width:24px; height:24px; padding:4px; border:0; border-radius:4px; background:var(--panel); color:var(--ink); min-height:0; }
 .query-card-tools button:hover { background:var(--bg); color:var(--gold); }
-.query-card-tools svg,.query-keep svg { width:13px; height:13px; }
+.query-card-tools svg,.query-keep svg,.query-card-tools .data-readiness-indicator .app-icon { width:13px; height:13px; }
 .query-keep{position:absolute;z-index:3;right:8px;bottom:8px;width:34px;height:34px;padding:8px;border:1px solid var(--line);border-radius:7px;background:color-mix(in srgb,var(--panel) 25%,transparent);color:var(--ink);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);box-shadow:0 4px 10px #0005;transition:background .16s,box-shadow .16s}
 .query-keep svg { width:16px; height:16px; }
 .query-keep:hover { border-color:var(--sea); background:color-mix(in srgb,var(--sea) 18%,var(--panel)); box-shadow:0 3px 9px #0004; }

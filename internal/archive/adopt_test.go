@@ -936,6 +936,49 @@ func TestCopyPreservedRestoresHardLinksOnRetry(t *testing.T) {
 	if plan.Files != 4 || plan.Copied != 3 {
 		t.Fatalf("plan after retry: %+v", plan)
 	}
+
+	// Without a link identity, a single link, or files that only share an
+	// inode number on different devices, each file is its own copy.
+	devices := uint64(0)
+	for name, observe := range map[string]func(fs.FileInfo) (fileObservation, error){
+		"unsupported": func(fs.FileInfo) (fileObservation, error) { return fileObservation{}, errFileIdentityUnsupported },
+		"one link":    func(fs.FileInfo) (fileObservation, error) { return fileObservation{key: fileKey{1, 7}, links: 1}, nil },
+		"devices": func(fs.FileInfo) (fileObservation, error) {
+			devices++
+			return fileObservation{key: fileKey{devices, 7}, links: 2}, nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			override(t, &observeFile, observe)
+			to := filepath.Join(root, name, "Pharos", "preserved")
+			if err := os.MkdirAll(to, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := planPreserved(from, filepath.Dir(to))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := copyPreserved(context.Background(), &plan, to, new([]string)); err != nil {
+				t.Fatal(err)
+			}
+			infos := []os.FileInfo{}
+			for _, name := range names {
+				info, err := os.Stat(filepath.Join(to, name))
+				if err != nil || readText(t, filepath.Join(to, name)) != "evidence" {
+					t.Fatalf("%s: %v", name, err)
+				}
+				for _, other := range infos {
+					if os.SameFile(info, other) {
+						t.Fatalf("%s was linked to an unrelated copy", name)
+					}
+				}
+				infos = append(infos, info)
+			}
+			if plan.Files != 4 || plan.Copied != 4 {
+				t.Fatalf("plan: %+v", plan)
+			}
+		})
+	}
 }
 
 // copyFileSynced flushes the copy before giving it its timestamps and name.

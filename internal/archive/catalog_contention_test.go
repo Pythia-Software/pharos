@@ -51,6 +51,7 @@ func TestInteractiveReadDemand(t *testing.T) {
 		{http.MethodPost, "/api/query/library/query-v3", true},
 		{http.MethodGet, "/api/search", true},
 		{http.MethodGet, "/api/library/find", true},
+		{http.MethodGet, "/api/library/recent-conversations", true},
 		{http.MethodPost, "/api/search/text", true},
 		{http.MethodGet, "/api/work/id/conversations/id", true},
 		{http.MethodGet, "/api/usage/parallelism", true},
@@ -601,7 +602,7 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 	stale.checked = time.Now().Add(-2 * driveFactsTTL)
 	drives.state = &stale
 	drives.mu.Unlock()
-	if _, refresh := drives.cached(config); refresh {
+	if _, refresh, err := drives.cached(config); err != nil || refresh {
 		t.Error("a second drive refresh started while the first still waited for the writer")
 	}
 

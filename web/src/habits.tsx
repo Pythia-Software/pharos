@@ -1,3 +1,5 @@
+import { createPortal } from "react-dom";
+import { useDashboardHeadline } from "./usage-workspace";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { DashboardSelect } from "./dashboard-select";
 import { ChartSelect } from "./usage-chart";
@@ -8,7 +10,7 @@ import { initiatorLabels } from "./habits-analysis-catalog";
 import { DashboardResultActions } from "./create-dashboard-card";
 import { CalendarChart, DaysChart, PunchcardChart } from "./habits-charts";
 import { HabitsChartInspection, type HabitChartPoint } from "./habits-chart-inspection";
-import { habitsCardTitle, readHabitsCardView, type HabitsCardTarget, type HabitsCardView } from "./habits-card";
+import { habitsCardTitle, habitsViews, habitsViewTarget, readHabitsView, readHabitsCardView, type HabitsView, type HabitsCardTarget, type HabitsCardView } from "./habits-card";
 import {
   defaultHabitsSettings, engagedGaps, formatClock, formatDay, formatGap, formatHours, habitsSettingsKey, healthStats,
   normalizeHabitsSettings, recentWork, punchcardViews, streakActors, streakDays, todayLabel, toggleVacation, validDay,
@@ -18,8 +20,8 @@ import "./habits.css";
 
 // Habits: streaks, calendars, a punchcard, the shape of your days and the
 // automations that run without you, from the service's summary
-// (/api/habits, internal/archive/habits.go). The catalog views below the
-// panel read the same records (rhythm) by actor and hour.
+// (/api/habits, internal/archive/habits.go). Work Hours explores the same
+// records (rhythm) by actor and hour in the standard catalog dashboard.
 
 const savedSettings = () => normalizeHabitsSettings(preferences().get<unknown>(habitsSettingsKey, defaultHabitsSettings));
 const saveSettings = (settings: HabitsSettings) => preferences().set(habitsSettingsKey, settings);
@@ -51,10 +53,11 @@ function useHabits(mode: HabitsMode, days: number) {
   return { ...state, settings, update };
 }
 
-// Keep one summary request and view state for the panels on either side of
-// CatalogDashboard. The chart stays in the standard dashboard flow, outside
-// the panels' styling and loading/error boundary.
-export function HabitsPanels({ children }: { children: (before: React.ReactNode, after: React.ReactNode) => React.ReactNode }) {
+// One set of URL-backed controls chooses the chart. Summary cards keep their
+// place above and below it, and share its summary request.
+export function HabitsDashboard() {
+  const headline = useDashboardHeadline();
+  const [chart, setChart] = useViewState<HabitsView>("habits_view", readHabitsView(new URLSearchParams(location.search)));
   const [mode, setMode] = useViewState<HabitsMode>("habits_streak", "all");
   const [weeks, setWeeks] = useViewState<string>("habits_weeks", "53");
   const [calendar, setCalendar] = useViewState<StreakActor>("habits_calendar", "you");
@@ -66,45 +69,45 @@ export function HabitsPanels({ children }: { children: (before: React.ReactNode,
   const { data, error, loading, settings, update } = useHabits(mode, punchcardDays === "all" ? 0 : Number(punchcardDays));
   const day = validDay(selected) ? data?.days.find(item => item.day === selected) : undefined;
   const cardView: HabitsCardView = { mode, weeks: Number(weeks), calendar, weekends: weekends !== "hide", punchcard: view, range: punchcardDays, shapeDays: Number(shapeDays) };
-  const before = !data ? error ? <p className="query-table-error" role="alert">{error}</p> : <p className="muted" role="status">Loading your habits…</p>
-    : <section className="habits-panel" aria-label="Habits" aria-busy={loading}>
-    <div className="habits-streaks-head">
+  const target = habitsViewTarget(chart);
+  return <HabitsViewContext.Provider value={cardView}>
+    {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{habitsCardTitle(target, cardView)}</h2><DashboardResultActions target={target} /></div>, headline) : null}
+    <section className="usage-habits-dashboard habits-panel" aria-label="Habits" aria-busy={loading}>
       <div className="usage-chart-controls habits-controls">
+        <ChartSelect label="View" value={chart} onChange={setChart} options={habitsViews} />
         <ChartSelect label="Streaks count" value={mode} onChange={setMode} options={[["all", "Every day"], ["weekdays", "Weekdays only"]]} />
+        {chart === "calendar" ? <>
+          <ChartSelect label="Whose days" value={calendar} onChange={setCalendar} options={streakActors.map(actor => [actor.id, actor.label])} />
+          <ChartSelect label="Range" ariaLabel="Calendar range" value={weeks} onChange={setWeeks} options={[["13", "Last 13 weeks"], ["26", "Last 26 weeks"], ["53", "Last year"]]} />
+          <ChartSelect label="Weekends" value={weekends} onChange={setWeekends} options={[["show", "Show Saturday and Sunday"], ["hide", "Weekdays only"]]} />
+        </> : chart === "punchcard" ? <>
+          <ChartSelect label="Whose time" ariaLabel="Punchcard time" value={view} onChange={setView} options={punchcardViews} />
+          <ChartSelect label="Range" ariaLabel="Punchcard range" value={punchcardDays} onChange={setPunchcardDays} options={punchcardRanges} />
+        </> : <ChartSelect label="Range" ariaLabel="Your days range" value={shapeDays} onChange={setShapeDays} options={shapeRanges} />}
       </div>
-      <Heading target="habits-streaks" />
-    </div>
-    <Streaks data={data} settings={settings} />
-    <div className="habits-card" data-pharos-target="section:habits-calendar">
-      <Heading target="habits-calendar" />
-      <div className="usage-chart-controls habits-controls">
-        <ChartSelect label="Whose days" value={calendar} onChange={setCalendar} options={streakActors.map(actor => [actor.id, actor.label])} />
-        <ChartSelect label="Range" ariaLabel="Calendar range" value={weeks} onChange={setWeeks} options={[["13", "Last 13 weeks"], ["26", "Last 26 weeks"], ["53", "Last year"]]} />
-        <ChartSelect label="Weekends" value={weekends} onChange={setWeekends} options={[["show", "Show Saturday and Sunday"], ["hide", "Weekdays only"]]} />
-      </div>
-      <p className="muted">{streakActors.find(actor => actor.id === calendar)?.rule(settings)} Each square is a day; darker is more time. Click a day for its details, or to mark it as a vacation day.</p>
-      <div className="habits-calendar-row">
-        <CalendarChart data={data} actor={calendar} weeks={Number(weeks)} weekends={weekends !== "hide"} selected={day?.day ?? ""} onSelect={setSelected} />
-        <DayDetail data={data} day={day} settings={settings} onSelect={setSelected} onVacation={() => day && update(toggleVacation(settings, day.day))} />
-      </div>
-    </div>
-    <Health data={data} />
-    <div className="habits-pair habits-charts-pair">
-      <Punchcard data={data} view={view} onView={setView} days={punchcardDays} onDays={setPunchcardDays} />
-      <WorkdayShape data={data} days={Number(shapeDays)} onDays={setShapeDays} />
-    </div>
-  </section>;
-  const after = data ? <section className="habits-panel" aria-label="Habit automations and settings" aria-busy={loading}>
-    <p className="usage-dashboard-note">Your time is estimated from the messages you typed: each one adds its typing time, and messages within {settings.engagedGap} minutes join one engaged block. Agent turns are split by whether you were engaged and by who started them. {data.coverage.unmatched_turns ? `${data.coverage.unmatched_turns.toLocaleString()} of ${data.coverage.turns.toLocaleString()} turns have no prompt to read who started them; they count as unattended.` : ""}</p>
-    <Automations data={data} />
-    <HabitsSettingsPanel settings={settings} onChange={update} />
-  </section> : null;
-  return <HabitsViewContext.Provider value={cardView}>{children(before, after)}</HabitsViewContext.Provider>;
+      {!data ? error ? <p className="query-table-error" role="alert">{error}</p> : <p className="muted" role="status">Loading your habits…</p> : <>
+        <div><Heading target="habits-streaks" /><Streaks data={data} settings={settings} /></div>
+        {chart === "calendar" ? <div className="habits-card" data-pharos-target="section:habits-calendar">
+          <Heading target="habits-calendar" primary />
+          <p className="muted">{streakActors.find(actor => actor.id === calendar)?.rule(settings)} Each square is a day; darker is more time. Click a day for its details, or to mark it as a vacation day.</p>
+          <div className="habits-calendar-row">
+            <CalendarChart data={data} actor={calendar} weeks={Number(weeks)} weekends={weekends !== "hide"} selected={day?.day ?? ""} onSelect={setSelected} />
+            <DayDetail data={data} day={day} settings={settings} onSelect={setSelected} onVacation={() => day && update(toggleVacation(settings, day.day))} />
+          </div>
+        </div> : chart === "punchcard" ? <Punchcard data={data} view={view} /> : <WorkdayShape data={data} days={Number(shapeDays)} />}
+        <Health data={data} />
+        <p className="usage-dashboard-note">Your time is estimated from the messages you typed: each one adds its typing time, and messages within {settings.engagedGap} minutes join one engaged block. Agent turns are split by whether you were engaged and by who started them. {data.coverage.unmatched_turns ? `${data.coverage.unmatched_turns.toLocaleString()} of ${data.coverage.turns.toLocaleString()} turns have no prompt to read who started them; they count as unattended.` : ""}</p>
+        <Automations data={data} />
+        <HabitsSettingsPanel settings={settings} onChange={update} />
+      </>}
+    </section>
+  </HabitsViewContext.Provider>;
 }
 
 // A section's heading, with the standard control that makes it a Home card.
-function Heading({ target }: { target: HabitsCardTarget }) {
-  const view = useContext(HabitsViewContext);
+function Heading({ target, primary = false }: { target: HabitsCardTarget; primary?: boolean }) {
+  const view = useContext(HabitsViewContext), headline = useDashboardHeadline();
+  if (primary && headline) return null;
   return <div className="habits-card-title"><h3>{habitsCardTitle(target, view)}</h3><DashboardResultActions target={target} /></div>;
 }
 
@@ -138,23 +141,18 @@ function DayDetail({ data, day, settings, onSelect, onVacation }: { data: Habits
 const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
 const punchcardRanges: Array<[string, string]> = [["7", "Last 7 days"], ["30", "Last 30 days"], ["90", "Last 90 days"], ["365", "Last year"], ["all", "All time"]];
-function Punchcard({ data, view, onView, days, onDays }: { data: HabitsSummary; view: PunchcardView; onView: (view: PunchcardView) => void; days: string; onDays: (days: string) => void }) {
+function Punchcard({ data, view }: { data: HabitsSummary; view: PunchcardView }) {
   return <div className="habits-card" data-pharos-target="section:habits-punchcard">
-    <Heading target="habits-punchcard" />
-    <div className="usage-chart-controls habits-controls">
-      <ChartSelect label="Whose time" ariaLabel="Punchcard time" value={view} onChange={onView} options={punchcardViews} />
-      <ChartSelect label="Range" ariaLabel="Punchcard range" value={days} onChange={onDays} options={punchcardRanges} />
-    </div>
+    <Heading target="habits-punchcard" primary />
     <p className="muted">Minutes per week in each hour, {formatDay(data.punchcard.from)} to {formatDay(data.punchcard.to)}.{view === "difference" ? " Filled is more agent time than yours; hollow, more of yours." : ""} Colours are the time of day.</p>
     <div className="habits-scroll"><PunchcardChart data={data} view={view} /></div>
   </div>;
 }
 
 const shapeRanges: Array<[string, string]> = [["7", "Last 7 days"], ["14", "Last 14 days"], ["28", "Last 28 days"], ["56", "Last 56 days"], ["90", "Last 90 days"]];
-function WorkdayShape({ data, days, onDays }: { data: HabitsSummary; days: number; onDays: (days: string) => void }) {
+function WorkdayShape({ data, days }: { data: HabitsSummary; days: number }) {
   return <div className="habits-card" data-pharos-target="section:habits-days">
-    <Heading target="habits-days" />
-    <div className="usage-chart-controls habits-controls"><ChartSelect label="Range" ariaLabel="Your days range" value={String(days)} onChange={onDays} options={shapeRanges} /></div>
+    <Heading target="habits-days" primary />
     <p className="muted">The faint bar runs from your first engaged minute to your last; the solid pieces are when you were engaged, coloured by time of day.</p>
     <DaysChart data={data} count={days} />
   </div>;

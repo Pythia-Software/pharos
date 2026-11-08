@@ -15,7 +15,6 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -93,11 +92,18 @@ func (m *mcpServer) afterAnswer(pending []byte) {
 
 // restartMCP replaces this process with a fresh run of executable, this
 // process's own. The PID and stdio stay, so the agent client stays connected.
-// It returns only on failure.
+// It returns only on failure, including on platforms that cannot replace a
+// process (errProcessReplaceUnsupported).
 func restartMCP(executable string, pending []byte) error {
 	fmt.Fprintln(os.Stderr, "Pharos MCP: restarting after a memory fault while reading the catalog")
-	return syscall.Exec(executable, os.Args, append(os.Environ(), mcpPendingEnv+"="+base64.StdEncoding.EncodeToString(pending)))
+	return replaceProcess(executable, os.Args, append(os.Environ(), mcpPendingEnv+"="+base64.StdEncoding.EncodeToString(pending)))
 }
+
+var errProcessReplaceUnsupported = fmt.Errorf("replacing the process is not supported on this platform: %w", errors.ErrUnsupported)
+
+// replaceProcess is replaceProcessNative; tests replace it to observe the
+// replacement without one.
+var replaceProcess = replaceProcessNative
 
 func (m *mcpServer) handle(request map[string]any) map[string]any {
 	method := firstString(request["method"])

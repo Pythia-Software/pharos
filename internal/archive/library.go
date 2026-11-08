@@ -423,6 +423,9 @@ func (c *Catalog) resumeLibraryRefresh() bool {
 	defer c.catchUp.mu.Unlock()
 	stopped := c.catchUp.stopped
 	c.catchUp.stopped = false
+	if c.work != nil {
+		c.work.runner.Wake()
+	}
 	return stopped
 }
 

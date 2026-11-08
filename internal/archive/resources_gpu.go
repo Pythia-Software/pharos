@@ -15,6 +15,9 @@ type gpuReading struct {
 	Partial            bool     `json:"partial"`
 	SampledAt          string   `json:"sampled_at"`
 	Basis              string   `json:"basis"`
+	// exact value and sample time, for the history (resources_history.go).
+	percent *float64
+	at      time.Time
 }
 
 type gpuClient struct {
@@ -50,6 +53,33 @@ type gpuSampler struct {
 	attempted bool
 	supported bool
 	clients   map[uint64]gpuClientRate
+	// staleGap widens the continuity check while a history collector reads
+	// at its idle cadence (0: resourceStaleGap).
+	staleGap   time.Duration
+	collectors int
+}
+
+// widen lets readings up to gap apart give a rate (a history collector's
+// idle cadence is longer than resourceStaleGap).
+func (s *gpuSampler) widen(gap time.Duration) func() {
+	if s == nil {
+		return func() {}
+	}
+	s.mu.Lock()
+	s.collectors++
+	s.staleGap = max(s.staleGap, gap)
+	s.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			s.collectors--
+			if s.collectors == 0 {
+				s.staleGap = 0
+			}
+		})
+	}
 }
 
 func (s *gpuSampler) sample(processes []resourceReading) *gpuReading {
@@ -62,7 +92,7 @@ func (s *gpuSampler) sample(processes []resourceReading) *gpuReading {
 	if !s.attempted || now.Sub(s.at) >= gpuSampleInterval {
 		snapshot, err := s.read()
 		elapsed := now.Sub(s.at)
-		continuous := s.supported && elapsed > 0 && elapsed <= resourceStaleGap
+		continuous := s.supported && elapsed > 0 && elapsed <= max(resourceStaleGap, s.staleGap)
 		current := make(map[uint64]gpuClientRate, len(snapshot.clients))
 		if err == nil && snapshot.supported {
 			for _, client := range snapshot.clients {
@@ -75,7 +105,7 @@ func (s *gpuSampler) sample(processes []resourceReading) *gpuReading {
 		}
 		s.at, s.attempted, s.supported, s.clients = now, true, err == nil && snapshot.supported, current
 	}
-	reading := &gpuReading{SampledAt: formatTime(s.at), Basis: gpuResourceBasis}
+	reading := &gpuReading{SampledAt: formatTime(s.at), Basis: gpuResourceBasis, at: s.at}
 	if !s.supported {
 		return reading
 	}
@@ -99,14 +129,19 @@ func (s *gpuSampler) sample(processes []resourceReading) *gpuReading {
 	// No GPU clients in the selected tree means idle. Existing clients need
 	// two readings; keep any measured portion visible while new clients warm up.
 	if matched == 0 || measured > 0 {
-		reading.UtilizationPercent = roundedPercent(new(min(percent, 100)))
+		reading.percent = new(min(percent, 100))
+		reading.UtilizationPercent = roundedPercent(reading.percent)
 	}
 	return reading
 }
 
 func withProcessGPU(summary *resourceSummary) *resourceSummary {
+	return withGPU(processGPU, summary)
+}
+
+func withGPU(gpu *gpuSampler, summary *resourceSummary) *resourceSummary {
 	if summary != nil {
-		summary.GPU = processGPU.sample(summary.Processes)
+		summary.GPU = gpu.sample(summary.Processes)
 	}
 	return summary
 }

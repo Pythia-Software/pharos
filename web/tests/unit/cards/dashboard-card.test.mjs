@@ -9,7 +9,7 @@ import { fittedCoverHeight } from '../../../src/card-loading-model';
 import { loadDashboardCardPreview } from '../../../src/dashboard-card-preview';
 import { analysisCatalogs } from '../../../src/analysis-catalogs';
 import { dashboardDefaults } from '../../../src/dashboard-defaults';
-import { readBookmarks, updateBookmark, moveBookmark, removeBookmark } from '../../../src/bookmarks';
+import { writeBookmarks, readBookmarks, updateBookmark, moveBookmark, removeBookmark } from '../../../src/bookmarks';
 import { normalizeAnalysis, analysisQuery, analysisResult, analysisLabels, selectGroups, cycleResult, switchView } from '../../../src/dashboard-analysis-model';
 import { trendQuery, trendSeries } from '../../../src/dashboard-trend-model';
 import { optionLabels } from '../../../src/option-labels';
@@ -131,6 +131,10 @@ test('every dashboard creation target supplies bounded default copy from its own
     assert.match(dashboardCardMetadata(url, 'chart', schema).title, /codex/i);
     assert.match(dashboardCardMetadata(url, 'chart', schema).description, /codex/i);
   }
+  for (const habits_view of ["calendar", "punchcard", "days"]) for (const actor of ["you", "agents", "automated"]) {
+    check(pageCardURL('/analyze?' + new URLSearchParams({ analyze_topic: "habits", habits_view, habits_calendar: actor,
+      habits_punchcard: actor, habits_weeks: "13", habits_shape_days: "7", habits_punchcard_days: "30" })), schemas.rhythm);
+  }
   for (const topic of thinkingTopics) for (const [view] of thinkingViews) for (const [groupBy] of thinkingBreakdowns) {
     const url = pageCardURL('/analyze?' + new URLSearchParams({ analyze_topic: topic, thinking: JSON.stringify({ view, groupBy }),
       analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: 'harness', op: '=', value: 'codex' }] }) }));
@@ -194,8 +198,7 @@ test('catalog default copy follows chart semantics, selections, time windows and
 test('Habits defaults describe each actor and range, independently of unrelated catalog filters', t => {
   fixture(t);
   const base = readHabitsCardView(new URLSearchParams());
-  const url = view => dashboardCardURL('/analyze?' + new URLSearchParams({ analyze_topic: 'habits', ...view }), analysisCatalogs.habits, dashboardDefaults.habits,
-    [{ field: 'repository_name', op: '=', value: 'catalog-only' }]);
+  const url = view => pageCardURL('/analyze?' + new URLSearchParams({ analyze_topic: 'habits', ...view, analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: 'repository_name', op: '=', value: 'catalog-only' }] }) }));
   for (const target of habitsCardTargets) {
     const copy = dashboardCardMetadata(url({}), target);
     assert.equal(copy.title, habitsCardTitle(target, base));
@@ -451,14 +454,16 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
     windows: [], punchcard: { from: '2026-10-01', to: '2026-10-07', weeks: empty().map(hours => hours.map(() => 1)), cells: { you: empty(), with_you: empty(), unattended: empty(), automated: empty() } },
     automations: [{ initiator: 'scripted', label: 'claude -p', runs: 3, active_days: 3, agent_hours: 3, first_run: 0, last_run: 0, median_gap_ms: 2 * 86400000, missed: 0, daily: {} }],
     coverage: { turns: 10, unmatched_turns: 0, typed_messages: 6, messages: 6 } };
-  const address = '/analyze?' + new URLSearchParams({ analyze_topic: 'habits', habits_calendar: 'automated', habits_weekends: 'hide', habits_weeks: '13', habits_punchcard: 'agents', habits_punchcard_days: 'all', habits_shape_days: '7', habits_day: '2026-10-03' });
-  const url = dashboardCardURL(address, analysisCatalogs.habits, dashboardDefaults.habits, []);
+  const address = '/analyze?' + new URLSearchParams({ analyze_topic: 'habits', habits_view: 'calendar', habits_calendar: 'automated', habits_weekends: 'hide', habits_weeks: '13', habits_punchcard: 'agents', habits_punchcard_days: 'all', habits_shape_days: '7', habits_day: '2026-10-03' });
+  const url = pageCardURL(address);
+  const legacy = address.replace("habits_view=calendar", "reveal=section%3Ahabits-calendar");
+  assert.equal(new URL(pageCardURL(legacy), location.origin).searchParams.get("habits_view"), "calendar");
   assert.equal(new URL(url, location.origin).searchParams.has('habits_day'), false, 'a selected day is not part of a card');
-  assert.deepEqual(dashboardCardTargets(url).map(target => target.id), ['habits-streaks', 'habits-calendar', 'habits-punchcard', 'habits-days', 'habits-pace', 'habits-automations', 'chart']);
+  assert.deepEqual(dashboardCardTargets(url).map(target => target.id), ['habits-streaks', 'habits-calendar', 'habits-pace', 'habits-automations']);
   assert.equal(dashboardCardTargets(url).find(target => target.id === 'habits-calendar').title, 'Days with automatic agent runs · weekdays only');
   assert.equal(dashboardCardWindow(url, 'habits-calendar'), 'Past 13 weeks');
   // A year's calendar draws the weeks a card can show, and says so.
-  const year = dashboardCardURL(address.replace('habits_weeks=13', 'habits_weeks=53'), analysisCatalogs.habits, dashboardDefaults.habits, []);
+  const year = pageCardURL(address.replace('habits_weeks=13', 'habits_weeks=53'));
   assert.equal(dashboardCardWindow(year, 'habits-calendar'), 'Past 17 weeks');
   const yearPreview = await loadDashboardCardPreview(year, schemas.rhythm, undefined, undefined, Date.parse('2026-10-07T12:00:00Z'), 'habits-calendar', undefined, summary);
   assert.equal(yearPreview.habits.weeks, 17);
@@ -469,11 +474,12 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
   assert.equal(dashboardCardPresentation(url, 'habits-calendar').category, 'machines');
   assert.equal(dashboardCardPresentation(url, 'habits-streaks').category, 'human');
   assert.match(dashboardCardDescription(url, 'habits-calendar'), /automatic agent runs/);
-  assert.equal(dashboardCardDescription(url), dashboardCardDescription(url, 'chart'));
   assert.throws(() => collectDashboardCard(makeURL(dashboardDefaults.tokens), 'Streak', '', 'habits-streaks'), /cannot/);
   for (const target of ['habits-streaks', 'habits-calendar', 'habits-punchcard', 'habits-days', 'habits-pace', 'habits-automations']) {
     const card = collectDashboardCard(url, target, '', target);
     assert.equal(card.dashboardTarget, target);
+    const destination = new URL(card.url, location.origin).searchParams;
+    assert.equal(destination.get("habits_view"), target === "habits-days" ? "days" : ["habits-punchcard", "habits-automations"].includes(target) ? "punchcard" : "calendar");
     assert.equal(dashboardCardCollected(url, target), true);
   }
   const preview = target => loadDashboardCardPreview(url, schemas.rhythm, undefined, undefined, Date.parse('2026-10-07T12:00:00Z'), target, undefined, summary);
@@ -654,7 +660,7 @@ test('compaction card defaults follow trigger/service controls and filters', t =
 
 test('People message-label cards retain their source, filters and counting after collection',async t=>{
  fixture(t);
- for(const topic of ['human','activity','habits']){
+ for(const topic of ['human','activity','work_hours']){
   const source=analysisCatalogs[topic],state={...dashboardDefaults[topic],metric:'messages',split:'message_family',share:true,period:'day'},at=new Date(now-86400000).toISOString();
   const filters=[{field:'repository_name',op:'=',value:'importer'},...topic==='human'?[{field:'text',op:'contains',value:'parser'}]:[]];
   const url=dashboardCardURL('/analyze?analyze_topic='+topic,source,state,filters);
@@ -664,7 +670,7 @@ test('People message-label cards retain their source, filters and counting after
   assert.match(copy.title,/message label/i);assert.match(copy.description,/importer/);
   const card=collectDashboardCard(url,copy.title,copy.description);
   assert.equal(dashboardCardSource(card.url).dataset,'people_message_labels');
-  const data=[{id:'one',message_id:'m',people_scope:topic,label:'P.request.work',family:'P.request',text:'Please fix the parser',repository_name:'importer',sent_at:at,event_at:at,started_at:at,day:at.slice(0,10)}];
+  const data=[{id:'one',message_id:'m',people_scope:topic === "work_hours" ? "habits" : topic,label:'P.request.work',family:'P.request',text:'Please fix the parser',repository_name:'importer',sent_at:at,event_at:at,started_at:at,day:at.slice(0,10)}];
   if(topic==='human')data.push({...data[0],id:'two',message_id:'other',label:'P.control.redirect',family:'P.control',text:'Please review the renderer'});
   const preview=await loadDashboardCardPreview(url,schemas.people_message_labels,undefined,{rows:data},now);
   assert.equal(preview.state,'ready');assert.ok(preview.series.some(series=>series.value==='P.request'));
@@ -689,4 +695,20 @@ test('saved component shares keep their metric, denominator and context through 
     assert.deepEqual(preview.metrics[0].result.buckets.map(bucket=>bucket.keys[0]),expected.buckets.map(bucket=>analysisLabels(catalog,state)[split](bucket.keys[0])));
     assert.match(dashboardCardMetadata(url,'chart',schemas.usage).title,/Share of .* by .*type/);
   }
+});
+
+test('existing Habits cards open Work Hours or the specific Habits view and keep their saved parameters', t => {
+  fixture(t);
+  const chart = dashboardCardURL('/analyze?analyze_topic=work_hours', analysisCatalogs.work_hours,
+    { ...dashboardDefaults.work_hours, split: 'repository_name' }, where);
+  const old = chart.replace('analyze_topic=work_hours', 'analyze_topic=habits');
+  writeBookmarks([{ id: 'old-hours', title: 'My hours', dashboard: true, url: old },
+    { id: 'old-punchcard', title: 'My schedule', dashboard: true, dashboardTarget: 'habits-punchcard',
+      url: '/analyze?analyze_topic=habits&habits_punchcard=unattended&habits_punchcard_days=30' }]);
+  const [hours, punchcard] = readBookmarks();
+  assert.equal(hours.id, 'old-hours'); assert.equal(hours.title, 'My hours'); assert.equal(hours.url, chart);
+  assert.deepEqual(readDashboardCard(hours.url).where, where);
+  const params = new URL(punchcard.url, location.origin).searchParams;
+  assert.equal(params.get('habits_view'), 'punchcard'); assert.equal(params.get('habits_punchcard'), 'unattended');
+  assert.equal(params.get('habits_punchcard_days'), '30');
 });

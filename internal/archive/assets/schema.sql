@@ -174,6 +174,10 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE INDEX IF NOT EXISTS conversations_workspace_idx ON conversations(workspace_id);
 CREATE INDEX IF NOT EXISTS conversations_parent_idx ON conversations(parent_id);
 CREATE INDEX IF NOT EXISTS conversations_native_alias_idx ON conversations(account,native_id);
+-- Home discovery bounds its pool through this index before consulting stored
+-- previews or optional enrichment ledgers.
+CREATE INDEX IF NOT EXISTS conversations_recent_idx ON conversations(COALESCE(ended_at,started_at) DESC,id)
+  WHERE parent_id IS NULL AND agent_depth=0;
 
 CREATE TABLE IF NOT EXISTS mcp_calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -343,6 +347,25 @@ CREATE TABLE IF NOT EXISTS conversation_launches (
   program TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS conversation_launches_parent_idx ON conversation_launches(parent_id);
+-- Derived after authorship (peer_links.go): independently started work that
+-- worked on the same change, such as a review and the conversation it
+-- reviewed. Both sides are mirror representatives of top-level workspaces;
+-- left is the source (writer, quoted conversation), right the consumer.
+-- Messages anchor hand-offs; '' when a link has none.
+CREATE TABLE IF NOT EXISTS work_peer_links (
+  left_workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  right_workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  confidence TEXT NOT NULL,
+  left_message_id TEXT NOT NULL DEFAULT '',
+  right_message_id TEXT NOT NULL DEFAULT '',
+  at TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY(left_workspace_id, right_workspace_id, kind, left_message_id, right_message_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS work_peer_links_right_idx ON work_peer_links(right_workspace_id);
+CREATE INDEX IF NOT EXISTS work_peer_links_left_message_idx ON work_peer_links(left_message_id) WHERE left_message_id<>'';
+CREATE INDEX IF NOT EXISTS work_peer_links_right_message_idx ON work_peer_links(right_message_id) WHERE right_message_id<>'';
 -- Prose messages by role and time, for the human-authorship rebuild.
 CREATE INDEX IF NOT EXISTS messages_prose_idx ON messages(role, created_at) WHERE kind='message';
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(message_id UNINDEXED, text, tokenize='unicode61');
@@ -1494,6 +1517,17 @@ CREATE TRIGGER IF NOT EXISTS session_shape_tool_calls_update AFTER UPDATE OF con
 BEGIN
  INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
  INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+-- The earliest start among tool calls whose result arrived after the call was
+-- stored. The ledger updates such calls in place, so their rowid is old and
+-- the related-work refresh would not see a diff's output otherwise.
+CREATE TABLE IF NOT EXISTS work_peer_links_dirty (
+  id INTEGER PRIMARY KEY CHECK(id=1),
+  since TEXT NOT NULL,
+  revision TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS work_peer_links_result_update AFTER UPDATE OF result_message_id ON tool_calls
+WHEN new.result_message_id IS NOT NULL AND old.result_message_id IS NOT new.result_message_id AND new.started_at IS NOT NULL BEGIN
+ INSERT INTO work_peer_links_dirty VALUES(1,new.started_at,hex(randomblob(8))) ON CONFLICT(id) DO UPDATE SET since=min(since,excluded.since),revision=excluded.revision;
 END;
 CREATE TRIGGER IF NOT EXISTS session_shape_requests_insert AFTER INSERT ON model_requests
 BEGIN

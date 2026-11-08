@@ -1,3 +1,4 @@
+import { habitsTargetParams, isHabitsCardTarget } from "./habits-card";
 import type { DashboardCardTarget } from "./dashboard-card-model";
 import { queryRecipes } from "./curiosity-data";
 import { cardDestination } from "./card-destinations";
@@ -21,7 +22,16 @@ export type Bookmark = {
 
 export function readBookmarks(): Bookmark[] {
   const value = preferences().get<unknown>(BOOKMARKS_KEY, []);
-  return Array.isArray(value) ? value.filter(item => item && typeof item.id === "string" && typeof item.title === "string" && typeof item.url === "string") : [];
+  return Array.isArray(value) ? value.filter(item => item && typeof item.id === "string" && typeof item.title === "string" && typeof item.url === "string").map(item => {
+    if (!item.dashboard) return item;
+    try {
+      const url = new URL(item.url, location.origin);
+      if (url.origin !== location.origin || url.pathname !== "/analyze" || url.searchParams.get("analyze_topic") !== "habits") return item;
+      if (isHabitsCardTarget(item.dashboardTarget ?? "chart")) url.search = habitsTargetParams(item.dashboardTarget, url.searchParams).toString();
+      else url.searchParams.set("analyze_topic", "work_hours");
+      return { ...item, url: url.pathname + url.search + url.hash };
+    } catch { return item; }
+  }) : [];
 }
 
 export function writeBookmarks(items: Bookmark[]) {

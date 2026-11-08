@@ -25,6 +25,9 @@ export const queryCategories = {
   library: { label: "Search", tone: "color-mix(in srgb,var(--muted) 70%,var(--sea))" },
   tl1: { label: "TL1", tone: "color-mix(in srgb,var(--heat-2) 70%,var(--warn))" },
   agent_events: { label: "Agent Events", tone: "color-mix(in srgb,var(--sea) 55%,var(--warn))" },
+  // This week against the ones before: new and returning Fixes, safeguards
+  // got around, friction by week (digest-card-recipes.ts).
+  digest: { label: "Weekly digest", tone: "color-mix(in srgb,var(--sea) 45%,var(--gold))" },
 } as const;
 export type QueryCategory = keyof typeof queryCategories;
 

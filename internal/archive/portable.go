@@ -75,7 +75,7 @@ func libraryConfigBeside(executable string) string {
 // not mounted, so neither may be papered over with a fresh empty catalog.
 // identity is volumeIdentity outside tests; it shells out, so call this once.
 func (c Config) checkLibrary(identity func(string) string) error {
-	if _, err := readLibraryDescriptor(c); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if _, err := readLibraryDescriptor(c); err != nil && !libraryDescriptorMissing(err) {
 		return err
 	}
 	if !c.Library {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -610,5 +611,40 @@ func TestValueBinsMatchTheFrontend(t *testing.T) {
 				t.Errorf("%s bin of %v = %v, want %v", scheme.scale, pair[0], got, pair[1])
 			}
 		}
+	}
+}
+
+// Under population execution a selection stores only its own dirty
+// conversations, as one revision-guarded step; the Search view's Stop holds
+// the task and Resume releases it.
+func TestSessionShapeSelectionStep(t *testing.T) {
+	c, config := parallelismTestCatalog(t)
+	all := countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty")
+	step, err := c.refreshSessionShapeFor(t.Context(), []string{"cv-a1", "cv-b1", "cv-missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(step.Done, []string{"cv-a1", "cv-b1", "cv-missing"}) || countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty") != all-2 ||
+		countRows(t, c, "SELECT COUNT(*) FROM session_shape_facts WHERE conversation_id IN ('cv-a1','cv-b1')") != 2 {
+		t.Fatalf("selection step %+v", step)
+	}
+	c.sessionShapeMu.Lock()
+	_, err = c.refreshSessionShapeFor(t.Context(), []string{"cv-a2"})
+	c.sessionShapeMu.Unlock()
+	if !errors.Is(err, errWorkDomainBusy) {
+		t.Fatalf("a busy domain reported %v", err)
+	}
+
+	config.WorkEngine = "scheduled"
+	s := testServer(t, config, c)
+	task := s.sessionShapeWorkDefinition().Task
+	c.stopLibraryRefresh()
+	if selection, err := task.Next(t.Context(), &workPopulation{}); err != nil || selection.Blocker.Reason != workBlockedHeld {
+		t.Fatalf("a stopped refresh selected %+v %v", selection, err)
+	}
+	c.resumeLibraryRefresh()
+	selection, err := task.Next(t.Context(), &workPopulation{})
+	if err != nil || len(selection.Units) == 0 || slices.ContainsFunc(selection.Units, func(m workMember) bool { return m.ID == "cv-a1" }) {
+		t.Fatalf("resumed selection %+v %v", selection, err)
 	}
 }

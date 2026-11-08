@@ -331,12 +331,60 @@ func TestHistoryPlanPaginationAndStaleInputs(t *testing.T) {
 	if e != nil || len(next.Units) != 1 || next.Units[0].ID == page.Units[0].ID {
 		t.Fatal(next, e)
 	}
+	// The plan binds the capture root as persisted plans always have.
+	root := identityOf(t, config.CaptureRoot)
+	if want := fmt.Sprintf("%d:%d", root.device, root.inode); p.RootIdentity != want {
+		t.Fatalf("root identity %q, want %q", p.RootIdentity, want)
+	}
+	if again, e := planHistory(t.Context(), config, historyScope{}); e != nil || again.ID != p.ID || again.RootIdentity != p.RootIdentity {
+		t.Fatal("an unchanged root replanned differently", again.ID, p.ID, e)
+	}
+	noJobs := func(what string) {
+		t.Helper()
+		if _, e := os.Stat(filepath.Join(config.CaptureRoot, historyDir)); !errors.Is(e, os.ErrNotExist) {
+			t.Fatal(what+" wrote history state", e)
+		}
+	}
+	// A root that cannot be identified is neither planned nor protected:
+	// at planning (its second observation fails), between the fresh plan and
+	// protection (again the second), or in a plan that has no identity.
+	rootObservations := 0
+	hideIdentities(t, func(observed fileObservation) bool {
+		if observed.key != root || rootObservations < 0 {
+			return false
+		}
+		rootObservations++
+		return rootObservations > 1
+	})
+	if _, e := planHistory(t.Context(), config, historyScope{}); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := planHistory(t.Context(), config, historyScope{}); !errors.Is(e, errFileIdentityUnavailable) {
+		t.Fatal("planned an unidentified root:", e)
+	}
+	noJobs("an unidentified plan")
+	rootObservations = 0
+	if _, e = prepareHistory(t.Context(), config, p, dest, 128<<20, 128<<20); !errors.Is(e, errFileIdentityUnavailable) {
+		t.Fatal("protected an unidentified root:", e)
+	}
+	noJobs("an unidentified root")
+	rootObservations = -1
+	unbound := p
+	unbound.RootIdentity = ""
+	if _, e = prepareHistory(t.Context(), config, unbound, dest, 128<<20, 128<<20); e == nil {
+		t.Fatal("a plan without a root identity was accepted")
+	}
+	noJobs("a plan without a root identity")
 	execTx(t, c.DB, `UPDATE messages SET text='changed' WHERE native_id='one'`)
 	if _, e = prepareHistory(t.Context(), config, p, dest, 128<<20, 128<<20); e == nil {
 		t.Fatal("stale catalog accepted")
 	}
 	if _, e = os.Stat(filepath.Join(config.CaptureRoot, historyDir, "jobs", p.ID)); !errors.Is(e, os.ErrNotExist) {
 		t.Fatal("stale dry run wrote job state", e)
+	}
+	// A current plan with its identity still protects.
+	if j := prepareHistoryFixture(t, config, dest); j.Plan.RootIdentity != p.RootIdentity {
+		t.Fatal("root identity changed", j.Plan.RootIdentity)
 	}
 }
 func TestHistoryPublicationResumesAndKeepsPins(t *testing.T) {

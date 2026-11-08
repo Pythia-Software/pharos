@@ -12,7 +12,7 @@ import { normalizeConcurrencySettings, readConcurrencySettings } from "./concurr
 import { loadConcurrencyData } from "./concurrency-store";
 import type { ConcurrencyData } from "./concurrency-data";
 import { ribbonCardTitle, ribbonCover } from "./parallelism-ribbon-card";
-import { habitsCardPreview, isHabitsCardTarget, loadHabitsSummary, readHabitsCardView } from "./habits-card";
+import { habitsCardPreview, isHabitsCardTarget, loadHabitsSummary, readHabitsCard } from "./habits-card";
 import type { HabitsSummary } from "./habits-model";
 import { orderThinkingGroups, thinkingRequest, type ThinkingResponse } from "./thinking-model";
 import { gridCoverHeight } from "./grid-cover";
@@ -35,7 +35,7 @@ import { hoursOfDay, weekdays } from "./weekday-cover";
 // replaces the dashboard's for its chart only.
 export async function loadDashboardCardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), target: DashboardCardTarget = "chart", timing?: ConcurrencyData, habits?: HabitsSummary, thinking?: ThinkingResponse, groups?: number): Promise<QueryPreview> {
   if (isHabitsCardTarget(target)) {
-    const view = readHabitsCardView(readDashboardCard(address, new Date(now)).params);
+    const view = readHabitsCard(address);
     return habitsCardPreview(target, view, habits ?? await loadHabitsSummary(view, signal));
   }
   if (isThinkingCardTarget(target)) return thinkingPreview(address, schema, target, signal, now, thinking);

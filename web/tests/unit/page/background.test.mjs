@@ -272,3 +272,131 @@ test("on battery: each cadence's choice and the low-battery rule, only on a Mac 
   assert.equal(background.batteryModel({ settings, power: { battery: false, on_battery: false, percent: -1 } }), null);
   assert.equal(background.batteryModel({ settings }), null);
 });
+
+// Shared work (docs/work-execution-plan.md §10): the work descriptor of GET
+// /api/background and the state of GET /api/work.
+const work = { available: true, engine: "scheduled", cpu_slots: 4, max_cpu_slots: 10, scope: "this process", can_change: true };
+const recentKey = "opaque-recent-request";
+const inspection = {
+  authority: { cpu_cap: 4, cpu_allocated: 3, cpu_waiters: 1 },
+  requests: [
+    { id: 3, key: "automatic", kinds: ["analysis.labels"], priority: "live", state: "queued", requested_at: minutesAgo(1), members: 0, sealed: 0, unfinished: 0 },
+    { id: 7, scope: "recent", key: recentKey, kinds: ["analysis.authorship", "analysis.labels"], priority: "foreground", explicit: true, state: "running", requested_at: minutesAgo(5),
+      membership_frozen_at: minutesAgo(4), members: 40, sealed: 10, failed: 1, exhausted: 1, unfinished: 28,
+      tasks: [{ kind: "analysis.labels", state: "blocked", covered: 0, blocker: { reason: "dependency", depends_on: "analysis.authorship" } }] },
+  ],
+  ended: [
+    { id: 2, scope: "backfill", key: "explicit-backfill:[analysis.labels]", explicit: true, state: "interrupted", reason: "inputs-keep-changing", requested_at: minutesAgo(90), members: 5, sealed: 3, unfinished: 2 },
+    { id: 5, scope: "recent", key: recentKey, explicit: true, state: "cancelled", requested_at: minutesAgo(30), members: 0, sealed: 0, unfinished: 0, membership_frozen_at: minutesAgo(29) },
+  ],
+  tasks: [
+    { kind: "analysis.authorship", state: "running", running: { kind: "analysis.authorship", batch: 9, units: 12, cpus: 2 }, batches: 3 },
+    { kind: "analysis.labels", state: "blocked", blocker: { reason: "held", detail: "stopped until Resume or a service restart" }, failures: 2,
+      failure_examples: [{ kind: "analysis.labels", unit: { id: "c1" }, attempts: 3, error: "Error A", exhausted: true }] },
+    { kind: "maintenance.parallelism", batches: 0 },
+    { kind: "maintenance.labels.query", state: "blocked", blocker: { reason: "power" } },
+  ],
+};
+
+test("no Work card without shared work: an older service or the classic engine", () => {
+  assert.equal(background.workModel(document, null, at), null, "an older service has no work descriptor");
+  assert.equal(background.workModel({ ...document, work: { ...work, available: false } }, null, at), null);
+  const bare = plain(background.workModel({ ...document, work }, null, at));
+  assert.equal(bare.inspected, false, "without GET /api/work the card keeps its allowance and actions");
+  assert.deepEqual([bare.requests, bare.tasks, bare.allowance.inUse], [[], [], ""]);
+});
+
+test("the CPU allowance offers whole slots up to this Mac's CPUs and clamps the saved value", () => {
+  const allowance = plain(background.cpuAllowance(work, inspection.authority));
+  assert.deepEqual([allowance.value, allowance.max, allowance.choices.length, allowance.choices[0], allowance.choices.at(-1)], [4, 10, 10, 1, 10]);
+  assert.equal(allowance.canChange, true);
+  assert.equal(allowance.locked, "");
+  assert.match(allowance.inUse, /3\D+4/);
+  assert.match(allowance.inUse, /1/, "waiting grants are counted");
+  assert.equal(background.cpuAllowance({ ...work, cpu_slots: 64 }).value, 10);
+  assert.equal(background.cpuAllowance({ ...work, cpu_slots: 0 }).value, 1);
+  assert.equal(background.cpuAllowance({ ...work, cpu_slots: 2.7 }).value, 2);
+  assert.equal(background.cpuAllowance({ ...work, max_cpu_slots: null }).choices.length, 1);
+  assert.match(background.cpuAllowance({ ...work, cpu_slots: 2 }, { cpu_cap: 2, cpu_allocated: 3, cpu_over_budget: 1 }).inUse, /1 slot\b/, "a shrunken allowance reports its drain");
+});
+
+test("an allowance the process start owns cannot change here, and says why", () => {
+  const locked = background.cpuAllowance({ ...work, can_change: false });
+  assert.equal(locked.canChange, false);
+  assert.match(locked.locked, /PHAROS_BACKGROUND_CPUS/);
+  assert.equal(background.cpuAllowance({ ...work, can_change: false, locked_reason: "Reason A" }).locked, "Reason A", "the server's reason wins");
+});
+
+test("requests: explicit scope, progress in conversations, reasons, and Cancel only for live explicit ones", () => {
+  const model = plain(background.workModel({ ...document, work }, inspection, at));
+  assert.deepEqual(model.requests.map(request => request.id), [7, 3], "explicit requests first");
+  const [recent, automatic] = model.requests;
+  assert.equal(recent.scope, "recent");
+  assert.equal(recent.title, "Recent conversations");
+  assert.equal(recent.fraction, 0.25);
+  assert.match(recent.progress, /^10 of 40 conversations done, 2 failed$/);
+  assert.equal(recent.cancellable, true);
+  assert.equal(recent.waiting.length, 1);
+  assert.match(recent.waiting[0], /Update writing estimates/, "a dependency names the work it waits for");
+  assert.equal(automatic.scope, "automatic");
+  assert.equal(automatic.cancellable, false, "automatic demand is not cancelled from here");
+  assert.equal(automatic.fraction, null);
+  assert.ok(automatic.progress, "a request still listing its conversations says so");
+  assert.equal(model.recentLive, true);
+  assert.equal(model.backfillLive, false);
+  assert.deepEqual(model.ended.map(request => [request.id, request.scope, request.live, request.cancellable]), [[5, "recent", false, false], [2, "backfill", false, false]]);
+  assert.ok(model.ended[1].reason && model.ended[1].reason !== "inputs-keep-changing", "an ended request's reason is in words");
+  assert.ok(model.ended[0].progress, "a frozen empty request says nothing needed updating");
+  const legacy = background.requestModel({key: "recent:private:format", state: "queued", explicit: true}, at);
+  assert.equal(legacy.title, "Requested work", "private key formats cannot become display contracts");
+  assert.equal(background.requestModel({ key: "x", scope: "backfill", state: "queued" }, at).scope, "backfill", "the server's scope wins");
+  assert.equal(background.requestModel({scope: "automatic", library: true, state: "running"}, at).progress,
+    "Updating queued work…", "live queues do not pretend to enumerate a frozen population");
+});
+
+test("requests and finished requests are bounded", () => {
+  const many = Array.from({ length: 8 }, (_, index) => ({ id: index + 1, key: "automatic", state: "queued", requested_at: minutesAgo(index), members: 0, sealed: 0 }));
+  const model = plain(background.workModel({ ...document, work }, { requests: many, ended: many.map(request => ({ ...request, state: "succeeded" })), tasks: [] }, at));
+  assert.equal(model.requests.length, 5);
+  assert.equal(model.moreRequests, 3);
+  assert.equal(model.ended.length, 5);
+  assert.deepEqual(model.ended.map(request => request.id), [8, 7, 6, 5, 4], "newest finished first");
+});
+
+test("tasks: Stop while they have work, Resume while held, Retry after failures; idle tasks are listed apart", () => {
+  const model = plain(background.workModel({ ...document, work }, inspection, at));
+  const byKind = Object.fromEntries(model.tasks.map(task => [task.kind, task]));
+  assert.deepEqual(Object.keys(byKind).sort(), ["analysis.authorship", "analysis.labels", "maintenance.labels.query"]);
+  assert.deepEqual(byKind["analysis.authorship"].actions, ["stop"]);
+  assert.match(byKind["analysis.authorship"].text, /12 conversations\D+2 CPU/);
+  assert.deepEqual(byKind["analysis.labels"].actions, ["resume", "retry"]);
+  assert.equal(byKind["analysis.labels"].state, "held");
+  assert.ok(!byKind["analysis.labels"].text.includes("service restart"), "a hold's implementation detail is not repeated");
+  assert.deepEqual(byKind["analysis.labels"].examples, ["Error A"]);
+  assert.deepEqual(byKind["maintenance.labels.query"].actions, ["stop"]);
+  assert.deepEqual(model.idleTasks, ["Measure parallel work"]);
+  assert.equal(background.taskModel({ kind: "analysis.new", state: "running", running: { units: 1, cpus: 1, coarse: true } }).label, "analysis.new", "an unknown kind keeps its identity");
+  assert.equal(background.taskModel({ kind: "analysis.new", label: "Label A" }).label, "Label A", "the server's label wins");
+  assert.deepEqual(plain(background.taskModel({ kind: "k", state: "blocked", blocker: { reason: "failures-full" } }).actions), ["stop", "retry"]);
+});
+
+test("reasons: every runner reason has words; an unknown one keeps its identity", () => {
+  for (const reason of ["dependency", "capacity", "power", "policy", "writer", "external", "held", "failed", "failures-full", "retry-backoff",
+    "allocation-exceeds-cap", "request-memory", "request-limit", "recent-first", "paused", "inputs-keep-changing", "units-failed", "dependency-failed", "membership-unavailable"]) {
+    const words = background.workReason({ reason });
+    assert.ok(words && words !== reason, reason);
+  }
+  assert.equal(background.workReason({ reason: "new-reason" }), "new-reason");
+  assert.equal(background.workReason(null), "");
+  assert.ok(background.workReason({ reason: "external", detail: "Detail A" }).endsWith("Detail A"));
+});
+
+test("action bodies match POST /api/work and refuse a target it would reject", () => {
+  assert.deepEqual(plain(background.workRequestBody("recent")), { action: "recent" });
+  assert.deepEqual(plain(background.workRequestBody("backfill")), { action: "backfill" });
+  assert.deepEqual(plain(background.workRequestBody("cancel", { id: 7 })), { action: "cancel", request_id: 7 });
+  for (const id of [0, -1, 1.5, "7", undefined, 2 ** 53]) assert.equal(background.workRequestBody("cancel", { id }), null, String(id));
+  for (const action of ["stop", "resume", "retry"]) assert.deepEqual(plain(background.workRequestBody(action, { kind: "analysis.labels" })), { action, kind: "analysis.labels" });
+  assert.equal(background.workRequestBody("stop", {}), null);
+  assert.equal(background.workRequestBody("delete", { kind: "analysis.labels" }), null);
+});

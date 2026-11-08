@@ -76,10 +76,19 @@ func counterDelta[T int64 | float64](start, end T, startKnown, endKnown bool) *T
 	return new(end - start)
 }
 
+// cpuDelta is the change in own plus completed children's CPU, with each
+// counter held to counterDelta's rules on its own: a reset in one is
+// unavailable even when growth in the other would hide it in the total.
 func cpuDelta(start, end processResources) *float64 {
-	from, fromKnown := start.totalCPU()
-	to, toKnown := end.totalCPU()
-	return counterDelta(from, to, fromKnown, toKnown)
+	advanced := func(counter resourceCounters, from, to float64) bool {
+		return start.known.has(counter) && end.known.has(counter) && to >= from
+	}
+	if !advanced(counterOwnCPU, start.cpu, end.cpu) || !advanced(counterChildCPU, start.childCPU, end.childCPU) {
+		return nil
+	}
+	from, _ := start.totalCPU()
+	to, _ := end.totalCPU()
+	return new(to - from)
 }
 
 // syncMeterSources are where a meter reads: processResourceUsage,
@@ -161,8 +170,8 @@ func (meter *syncMeter) beginPhase(name string) phaseStart {
 }
 
 // endPhase records a phase's elapsed time and its CPU, which follows the
-// same rules as the run's: unavailable unless both ends were read and the
-// counter did not go backwards.
+// same rules as the run's: unavailable unless both ends were read and
+// neither CPU counter went backwards.
 func (meter *syncMeter) endPhase(phase phaseStart) {
 	meter.measurement.Phases = append(meter.measurement.Phases, syncPhase{Name: phase.name, Seconds: meter.sources.now().Sub(phase.started).Seconds(), CPUSeconds: cpuDelta(phase.start, meter.sources.observe())})
 }

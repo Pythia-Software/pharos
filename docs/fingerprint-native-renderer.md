@@ -146,6 +146,7 @@ regexp2 dependency. `x/text` collation remains to preserve the reference's order
 The retired JS bundle is removed by the frontend build before the assets are
 embedded, so an older checkout's generated output cannot remain in the service.
 
-Native source hashes version the image cache automatically. The first run of the
-new version requeues existing images; it retains the last good PNGs while the
-background worker recomputes them.
+0.9.0 versioned the image cache by hashing these native sources, so its first
+run requeued every stored image although it draws them byte for byte. The
+version is now the digest of the parity corpus's expected PNGs, and opening a
+library stamped by 0.8.9 or 0.9.0 adopts their images instead of rendering again.

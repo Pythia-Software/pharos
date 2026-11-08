@@ -347,9 +347,10 @@ A figure that could not be read is **unavailable, not zero**: `cpu_seconds`,
 `cpu_percent_one_core`, `rss_baseline_bytes`, `rss_observed_peak_bytes`,
 `read_blocks`, `written_blocks` and a phase's `cpu_seconds` are `null` in the
 stored sample and the API. A run or phase has CPU only when both of its ends
-were read (its own CPU and its completed children's) and the counter did not
-go backwards; a failed baseline is never a delta from zero, and a reset is not
-a negative cost. Each phase takes its own baseline. The RSS peak is the
+were read (its own CPU and its completed children's) and neither counter went
+backwards. Each is checked on its own, so growth in one cannot hide a reset in
+the other; a failed baseline is never a delta from zero, and a reset is not a
+negative cost. Each phase takes its own baseline. The RSS peak is the
 highest reading that succeeded (a failed reading leaves a known peak alone;
 a run with no reading has none), with the same sampled-peak limitation. Run
 history recorded before this kept its numbers and is not rewritten; a field it

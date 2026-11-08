@@ -121,18 +121,31 @@ const codeBlock = ["```js", ...Array.from({ length: 30 }, (_, i) => `${"  ".repe
 const wideTable = [`| ${Array.from({ length: 14 }, (_, i) => `Column header ${i}`).join(" | ")} |`, `|${" --- |".repeat(14)}`,
   ...Array.from({ length: 6 }, (_, row) => `| ${Array.from({ length: 14 }, (_, i) => `value-${row}-${i}-${"x".repeat(i)}`).join(" | ")} |`)].join("\n");
 const usage = (input, output = 400) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: input * 4, cache_creation_input_tokens: 200 });
+// Related work (peer_reader.go): a certain review and an uncertain reader.
+export const peerWorkID = "work-review";
+const peerHandoff = (kind, confidence) => ({ kind, confidence, role: "reviewer", workspace_id: peerWorkID, conversation_id: "conv-review", message_id: "conv-review-reply", title: `Review: ${longTitle}` });
+export const relatedWork = {
+  peers: [
+    { workspace_id: peerWorkID, title: `Review: ${longTitle}`, provider: "codex", started_at: at(30), role: "reviewer", confidence: "high",
+      evidence: [{ kind: "read_written_by", confidence: "high", from_workspace_id: workID, to_workspace_id: peerWorkID, details: { basis: "diff", lines: 42, timing: "return" } }, { kind: "copied_into", confidence: "high", from_workspace_id: peerWorkID, to_workspace_id: workID, details: { words: 180 } }] },
+    { workspace_id: "work-maybe", title: "Parallel work in the same checkout that may have read this diff", provider: "claude", started_at: at(60), role: "reviewer", confidence: "low",
+      evidence: [{ kind: "read_written_by", confidence: "low", from_workspace_id: workID, to_workspace_id: "work-maybe", details: { basis: "read", lines: 4 } }] },
+  ],
+  peer_conversations: [{ id: "conv-review", workspace_id: peerWorkID, provider: "codex", native_id: "conv-review", started_at: at(30), title: `Review: ${longTitle}`, peer_role: "reviewer", peer: true }],
+};
 function transcript() {
   sequence = 0;
   const messages = [];
   for (let turn = 0; turn < 12; turn++) {
-    messages.push(event("message", `Turn ${turn}: ${turn % 3 ? "please look at the failing test and fix it" : `${longTitle}. ${"Here is more context that wraps across several lines. ".repeat(8)}`}`, { role: "user" }));
+    // The first prompt quotes a related review; the first edit was read by one.
+    messages.push(event("message", `Turn ${turn}: ${turn % 3 ? "please look at the failing test and fix it" : `${longTitle}. ${"Here is more context that wraps across several lines. ".repeat(8)}`}`, { role: "user", ...(turn === 0 ? { handoffs_in: [peerHandoff("copied_into", "high")] } : {}) }));
     messages.push(event("message", { message: { id: `r-${turn}`, usage: usage(12000 + turn * 9000), content: [{ type: "text", text: turn % 2 ? `Here is the change:\n\n${codeBlock}` : `Findings so far:\n\n${wideTable}\n\nA path to note: /Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive/incremental_sync_recovery_test.go` }] } }));
     const call = `call-${turn}`;
     if (turn % 3 === 0) {
       messages.push(event("tool_call", { name: "Bash", input: { command: `go test -run 'TestIncrementalSyncRecovery|TestCaptureAfterSleep' -count=1 -v ./internal/archive/... 2>&1 | tee /tmp/${"very-long-log-name-".repeat(4)}${turn}.log` } }, { call_id: call }));
       messages.push(event("tool_result", { content: Array.from({ length: 40 }, (_, i) => `=== RUN   TestIncrementalSyncRecovery/case_${i}_${"with_a_long_subtest_name_".repeat(3)}`).join("\n"), is_error: turn === 3 }, { call_id: call }));
     } else if (turn % 3 === 1) {
-      messages.push(event("tool_call", { name: "Edit", input: { file_path: "/repo/internal/archive/incremental_sync.go", old_string: `func recover() {\n${longLine}\n}`, new_string: `func recover(ctx context.Context) error {\n${longLine}\n${longLine}\n\treturn nil\n}` } }, { call_id: call }));
+      messages.push(event("tool_call", { name: "Edit", ...(turn === 1 ? { handoffs_out: [peerHandoff("read_written_by", "low")] } : {}), input: { file_path: "/repo/internal/archive/incremental_sync.go", old_string: `func recover() {\n${longLine}\n}`, new_string: `func recover(ctx context.Context) error {\n${longLine}\n${longLine}\n\treturn nil\n}` } }, { call_id: call }));
       messages.push(event("tool_result", { content: "The file /repo/internal/archive/incremental_sync.go has been updated." }, { call_id: call }));
     } else {
       // A delegation with a nested delegation inside it.
@@ -581,6 +594,32 @@ export const temporaryBackgroundDocument = {
     note: "Temporary schedule; your usual schedule resumes after one week.",
   } : item), idleBackground.headline),
 };
+// Shared work (docs/work-execution-plan.md §10): a scheduled service's CPU
+// allowance, and GET /api/work with a recent request waiting on a
+// dependency, a running task, a held task with a long failure and a
+// finished request, so the Work card draws every row kind.
+export const workBackgroundDocument = {
+  ...backgroundDocument,
+  work: { available: true, engine: "scheduled", cpu_slots: 4, max_cpu_slots: 10, scope: "this process", can_change: true },
+};
+export const workInspection = () => ({ engine: "scheduled", scope: "this process", state: {
+  at: iso(0), authority: { cpu_cap: 4, cpu_allocated: 2, cpu_waiters: 1, memory_reserved: 0, memory_limit: 134217728, request_memory_limit: 33554432, explicit_request_limit: 8 },
+  requests: [
+    { id: 7, scope: "recent", key: `recent:${(now - 2 * day) * 1e6}:${now * 1e6}:[analysis.authorship analysis.labels]`, trigger: "user", kinds: ["analysis.authorship", "analysis.labels"], priority: "foreground", explicit: true,
+      state: "running", requested_at: iso(300000), membership_frozen_at: iso(290000), members: 40, sealed: 12, failed: 1, unfinished: 27, bytes: 4096,
+      tasks: [{ kind: "analysis.authorship", state: "running", covered: 12 }, { kind: "analysis.labels", state: "blocked", covered: 0, blocker: { reason: "dependency", depends_on: "analysis.authorship" } }] },
+    { id: 8, key: "library", kinds: ["maintenance.parallelism"], priority: "live", state: "queued", library: true, requested_at: iso(60000), members: 0, sealed: 0, unfinished: 0, bytes: 0 },
+  ],
+  ended: [{ id: 5, scope: "backfill", key: "explicit-backfill:[analysis.labels]", kinds: ["analysis.labels"], priority: "backfill", explicit: true, state: "interrupted", reason: "inputs-keep-changing",
+    requested_at: iso(3 * 3600000), members: 900, sealed: 880, unfinished: 20, bytes: 0 }],
+  tasks: [
+    { kind: "analysis.authorship", state: "running", running: { kind: "analysis.authorship", batch: 3, units: 12, cpus: 2, demanders: [7] }, batches: 3, committed_units: 30, work: 30, active_ns: 4e9, select_ns: 1e6 },
+    { kind: "analysis.labels", state: "blocked", blocker: { reason: "held", detail: "stopped until Resume or a service restart" }, batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0, failures: 1,
+      failure_examples: [{ kind: "analysis.labels", unit: { id: "c1", revision: "r1" }, attempts: 3, error: "labeler worker exited: /Users/someone/Library/Application Support/Pharos/models/a-model-with-a-very-long-name-that-has-to-wrap.onnx", exhausted: true }] },
+    { kind: "maintenance.parallelism", batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0 },
+  ],
+  decisions: [], decisions_total: 0,
+} });
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
   eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
@@ -601,7 +640,15 @@ export const busyStatus = {
     statusOperation("op-index", { step: { index: 3, count: 6, name: "Indexing a source with a very long name that has to wrap somewhere", source: "Claude Code", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },
       time: { state: "estimating", low_seconds: 180, high_seconds: 360, label: "about 3–6 min" },
       children: [statusOperation("op-chain", { kind: "analysis.chain", label: "Update analyses", state_label: "Updating analyses", stoppable: false, stop: undefined })], children_count: 2 }),
-    statusOperation("op-view", { kind: "maintenance.library-view", label: "Index the Search view", state_label: "Indexing the Search view", priority: "background", stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-view" } }, step: { index: 1, count: null, name: "Search view", unit: "workspace", done: 2, total: 40, fraction: 0.05 } }),
+    statusOperation("op-view", { kind: "maintenance.library-view", label: "Index the Search view", state_label: "Indexing the Search view", priority: "background", stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-view" } }, step: { index: 1, count: null, name: "Search view", unit: "workspace", done: 2, total: 40, fraction: 0.05 },
+      // A task resource record (docs/work-resource-accounting.md), so the
+      // panel draws the resource line, its export and the profile link.
+      resources: { version: 1, allocation: { current: { cpu_slots: 2, gpu: 0 } }, time: { active: { value: 95, unit: "seconds", basis: "measured" } },
+        waits: { capacity: { value: 12, unit: "seconds", basis: "measured" }, writer: { value: 3, unit: "seconds", basis: "measured" } },
+        cpu: { go_process: { value: null, unit: "cpu_seconds", basis: "shared", coverage: "Go work shares the service process with other tasks." } },
+        memory: { process: { value: null, unit: "bytes", basis: "shared" }, owned_buffers_peak_bytes: { value: 48e6, unit: "bytes", basis: "counted" } },
+        gpu: { time: { value: null, unit: "gpu_seconds", basis: "unavailable" } },
+        io: { logical_read_bytes: { value: 310e6, unit: "bytes", basis: "counted", coverage: "Instrumented logical bytes only; coverage is partial." }, logical_written_bytes: { value: 22e6, unit: "bytes", basis: "counted" } } } }),
     statusOperation("op-backup", { kind: "backup.local", label: "Back up", state: "blocked", state_label: "Waiting", priority: "background", stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-backup" } }, detail: "Waiting for a capture to finish" }),
     statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
   ],
@@ -632,6 +679,27 @@ export const managedStatus = snapshot => ({
     ...snapshot.resources.processes.map(process => ({ ...process, library: "local" })),
     { pid: 4300, role: "service", library: "archive", cpu_percent: 5, memory_bytes: 210e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service (Archive) · ~5% of one core · 210 MB" }]),
 });
+
+// Resource history (docs/work-resource-accounting.md): a few minutes of
+// samples with a gap, irregular GPU samples, a task marker and an omission,
+// so the panel's strip draws every case. A since= request gets the same
+// document; the store merges it without repeating a time.
+export const resourceHistory = (scope = "this library service") => {
+  const t = Array.from({ length: 60 }, (_, index) => now - (240 - index * 4) * 1000).filter((_, index) => index < 30 || index > 34);
+  const wave = index => Math.round((60 + 50 * Math.sin(index / 4)) * 10) / 10;
+  return {
+    version: 1, available: true, scope, instance: "fixture", generated_at: iso(0), now, window_seconds: 900, active: true,
+    cadence: { active_seconds: 2, idle_seconds: 10, gpu_seconds: 5 },
+    series: { cpu: { label: "CPU", unit: "percent_one_core", basis: "proc_pid_rusage", available: true, max: 1000 }, memory: { label: "RAM", unit: "bytes", basis: "proc_pid_rusage", available: true },
+      disk: { label: "I/O", unit: "bytes_per_second", basis: "proc_pid_rusage", available: true }, gpu: { label: "GPU", unit: "percent_driver_time", basis: "IOAccelerator.AppUsage.accumulatedGPUTime", available: true } },
+    samples: { t, cpu: t.map((_, index) => index === 0 ? null : wave(index)), memory: t.map((_, index) => 1.2e9 + index * 4e6), disk: t.map((_, index) => index === 0 ? null : 2e6 + index * 1e5),
+      cpu_partial: t.map((_, index) => index === 1), disk_partial: t.map(() => false), processes: t.map(() => 2) },
+    gpu: { t: Array.from({ length: 40 }, (_, index) => now - (238 - index * 6) * 1000), value: Array.from({ length: 40 }, (_, index) => index === 20 ? null : 20 + index), partial: Array.from({ length: 40 }, () => false) },
+    segments: [{ t: t[0], reason: "started", detail: "fixture" }, { t: t[30], reason: "gap", detail: "No samples for 24 s" }],
+    coverage: [{ t: t[0], covered: [{ pid: 4100, role: "service" }, { pid: 4200, role: "worker:pharos-labeler-ort" }], omitted: ["Pharos Mac app: ownership is not verified, so it is not measured"] }],
+    markers: [{ t: t[10], event: "start", id: "op-index", kind: "index.changes.manual" }, { t: t[40], event: "end", id: "op-index", kind: "index.changes.manual", observed: true }],
+  };
+};
 
 // Synthetic numeric timing fixture: UI/layout tests never read a user library.
 export function thinkingFixture(query) {
@@ -721,6 +789,21 @@ export const defaultApi = {
   "POST /api/query/:dataset": ({ params, body }) => schemas[params.dataset] && answerQuery("rows", body, datasets[params.dataset], schemas[params.dataset], { now }),
 
   // The header, menus and status polling on every page.
+  "GET /api/library/recent-conversations": { items: [
+    ["Trace the incremental indexer", "pharos", "codex", "gpt-5", 2, "Review the recovery path after sleep and preserve the existing index.", "The index resumes after sleep without replaying retained captures."],
+    ["Make search feel faster", "atlas", "claude", "claude-opus-4-1", 1, "Find what slows down the first search in a large library.", "The search now reuses the stored catalog summaries."],
+    ["A simpler release checklist", "pharos", "codex", "gpt-5", 0, "Walk through the release process and flag any duplicate steps.", "The checklist follows signing, verification, and publication in order."],
+    ["Review the conversation reader", "atlas", "claude", "claude-sonnet-4", 3, "Keep each review inside the turn that requested it.", "The outline shows every helper beneath its parent turn."],
+    ["Explore the activity timeline", "observatory", "codex", "gpt-5", 0, "Compare activity across the last week of conversations.", "The timeline makes the quiet gaps and long sessions easier to inspect."],
+    ["Follow nested agent work", "pharos", "claude", "claude-opus-4-1", 2, "Show which sub-agent handled each part of the migration.", "The delegated work is grouped by assignment and depth."],
+    ["Clean up a small parser", "atlas", "codex", "gpt-5", 0, "Handle quoted phrases without changing ordinary word searches.", "Quoted phrases and individual words now keep their intended meanings."],
+    ["Check background recovery", "observatory", "claude", "claude-sonnet-4", 1, "Test what happens when indexing stops halfway through a batch.", "The next pass picks up the remaining records safely."],
+    ["Understand token patterns", "pharos", "codex", "gpt-5", 0, "Compare shorter conversations with the deeper delegated work.", "The comparison separates main-agent and helper activity."],
+    ["Plan the next iteration", "observatory", "claude", "claude-opus-4-1", 1, "Review the open questions and choose the next small improvement.", "The next iteration starts with clearer navigation and a smaller scope."],
+  ].map(([title, repository, provider, model, subagent_depth, first_input, last_response], index) => ({
+    id: index ? `recent-${index}` : rootConversation, workspace_id: workID, title, repository, provider, model, subagent_depth, first_input, last_response,
+    activity_at: new Date(now - index * day).toISOString(), labels_ready: index < 7, events_ready: index < 4,
+  })) },
   "GET /api/activity": { active: 0, runs: [] },
   "GET /api/library/status": { idle: true, portable: true, library_dir: "/Volumes/Pharos SSD/Pharos", drive: { name: "Pharos SSD", mounted: true, ejectable: true }, activities: [] },
   "GET /api/probe/status": { library: true, needs_onboarding: false, host_file_exists: true, host: { id: "test-mac", label: "This Mac" } },
@@ -756,6 +839,8 @@ export const defaultApi = {
   "GET /api/status/stream": eventStream(idleStatus),
   "GET /api/app/status": managedStatus(idleStatus),
   "GET /api/app/status/stream": eventStream(managedStatus(idleStatus)),
+  "GET /api/resources/history": () => resourceHistory(),
+  "GET /api/app/resources/history": () => resourceHistory("Pharos app (covered processes)"),
   "POST /api/operations/stop": { stopping: true },
   "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
@@ -801,6 +886,10 @@ export const defaultApi = {
     labels: { ...backgroundDocument.labels, ...('enabled' in body ? {enabled:body.enabled, status:body.enabled ? 'On, waiting for the labeling model.' : 'Off.'} : {}), ...('threads' in body ? {threads:body.threads} : {}) },
     agent_events: { ...backgroundDocument.agent_events, ...('agent_events_threads' in body ? {threads:body.agent_events_threads} : {}) } }),
   "POST /api/background/run": ({ body }) => ({ accepted: true, items: [body?.item].filter(Boolean) }),
+  "GET /api/work": { engine: "classic", available: false },
+  "POST /api/work": ({ body }) => ["recent", "backfill"].includes(body?.action) ? { request_id: 9, operation_id: "op-work-9", scope: body.action, state: "queued" }
+    : body?.action === "cancel" ? { cancelled: true } : { changed: true, kind: body?.kind, action: body?.action },
+  "POST /api/work/settings": ({ body }) => ({ ...workBackgroundDocument, work: { ...workBackgroundDocument.work, cpu_slots: body.cpu_slots } }),
   "GET /api/backup": { active: false, run: null, runs: [], last_success: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day) }, record: "/Volumes/Pharos SSD/Pharos/backups.json", suggested_destination: "/Users/someone/Pharos Backup" },
 
   // Findings and MCP.
@@ -836,7 +925,7 @@ export const defaultApi = {
   // The Session signals strip: the failed call's result, and two late prompts
   // as corrections, so stepping lands in a collapsed turn.
   "GET /api/work/:id/conversations/:conversation/signals": ({ params }) => {
-    if (params.id !== workID) return undefined;
+    if (params.id !== workID && params.id !== peerWorkID) return undefined;
     const coverage = { has_tool_data: true, has_timestamps: true, has_authorship: true, has_context_window: false };
     if (params.conversation !== rootConversation) return { conversation_id: params.conversation, signals: [], coverage };
     const messages = transcript(), failed = messages.filter(message => message.kind === "tool_result" && JSON.parse(message.text).is_error), late = messages.filter(message => message.role === "user").slice(-2);

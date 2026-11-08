@@ -183,6 +183,16 @@ conversation's effort; embedded children never inherit their parent's value.
 Provider, model, and effort share one dot-separated metadata line, with missing
 effort shown as unknown.
 
+**Related work.** Certain related work (`work_peer_links`, see
+[peer conversations](peer-conversations-design.md#what-was-built)), such as a
+review that read this workspace's diff, joins the hierarchy and timeline as
+further top-level trees: `workGroupSnapshot` copies each related workspace's
+cached snapshot into one and renumbers the outline. Its nodes carry `peer`
+(workspace, title and role), and their sub-agents stay nested under them.
+Workspace `totals` stay this workspace's own; `group_totals` counts every
+session shown. The merged snapshot is cached under its own `delegation:` key
+and obeys the same limits. Uncertain related work stays out of the hierarchy.
+
 Episodes currently cluster tool/request timestamps and message-envelope
 endpoints separated by more than 30 minutes. Intermediate message timestamps
 are not sampled, so these gaps do not establish inactivity. These are neither
@@ -194,7 +204,8 @@ model-processing, or background-process time.
 `GET /api/work/{workspace}/delegation` accepts `mode` (`hierarchy` or `rank`), `sort`, `scope` (`self`/`all`), `direction`, `search`, `provider`,
 `collapsed`, `only_matching`, `conversation`, `limit`, and an opaque `cursor`.
 It returns a bounded page, separate ancestor context, conversation navigation
-context, metric definitions, workspace totals/maxima, and full-range density.
+context, metric definitions, workspace totals/maxima (and `group_totals` with
+related work), and full-range density.
 Incoming ancestor rows carry `context_only` and a `navigation` reference.
 `session_count` excludes them; `total` counts the displayed hierarchy rows.
 Cursor continuations are bound to both the content snapshot and query; changes

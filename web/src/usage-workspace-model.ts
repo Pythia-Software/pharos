@@ -41,7 +41,7 @@ export const engineUsageTopics = {
   tools: { label: "Tool Summary", description: "Understand tool mix, reliability, and context overhead. Compare groups or follow changes over time." },
   time: { label: "Tool Time", description: "Where is recorded tool time going? Compare activities over time." },
   parallelism: { label: "Parallelism", description: "Explore overlapping conversations and estimated model activity. Select a ribbon or drag to zoom." },
-  habits: { label: "Habits", description: "When do you and your agents work, and how consistently? Streaks, an activity calendar, a weekday × hour punchcard, workday shape and automation reliability." },
+  work_hours: { label: "Work Hours", description: "Explore wall hours for you and your agents over time, by who is active, conversation, model or repository." },
   mcp: { label: "Pharos MCP", description: "How are agents using Pharos? Explore calls, reliability, response sizes, and time spent serving requests." },
   carbon: { label: "Carbon Impact", description: "Estimated electricity and emissions, with explicit assumptions." },
   agent_event_rates: { label: "Agent Events", description: "How often do agents run into each kind of event? Rates per message, turn or conversation the event pass read, by kind, model and effort, who prompted, prompt length, repository and more." },
@@ -49,6 +49,7 @@ export const engineUsageTopics = {
   session_shape: { label: "Session Shape", description: "What does a typical session look like, and which went badly? Session length, active time, tool calls, autonomy and turn cycles, and forensic signals against your own history." },
 } as const;
 export const usageTopics = { ...engineUsageTopics,
+  habits: { label: "Habits", description: "Explore your activity calendar, weekday and hour patterns, or daily work schedule, with streaks, work and rest patterns, and automatic agent runs." },
   "thinking-overview": {label:"Waiting",description:"Understand observed model waits, context associations and timing evidence."},
   "thinking-detail": {label:"Thinking",description:"Compare recorded model-request distributions across models, effort, workloads and dates."},
 } as const;
@@ -56,12 +57,12 @@ export type UsageTopic = keyof typeof usageTopics;
 export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
   people_message_labels:"labels", message_labels:"labels",
   compactions: "compaction", model_requests: "thinking-detail", usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
-  tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", rhythm: "habits", tl1_attempts: "tokens", agent_events: "agent_experience", agent_event_messages: "agent_experience", agent_event_rates: "agent_event_rates", session_shape: "session_shape",
+  tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", rhythm: "work_hours", tl1_attempts: "tokens", agent_events: "agent_experience", agent_event_messages: "agent_experience", agent_event_rates: "agent_event_rates", session_shape: "session_shape",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
   compaction:"compactions", labels:"message_labels",
   "thinking-overview":"model_requests", "thinking-detail":"model_requests",
-  calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", habits: "rhythm", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage", agent_experience: "agent_events", agent_event_rates: "agent_event_rates", session_shape: "session_shape",
+  calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", habits: "rhythm", work_hours: "rhythm", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage", agent_experience: "agent_events", agent_event_rates: "agent_event_rates", session_shape: "session_shape",
 };
 
 // Fields that hold a dashboard's dates, by dataset: its range, and the day

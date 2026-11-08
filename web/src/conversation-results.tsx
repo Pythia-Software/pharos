@@ -9,6 +9,19 @@ import { findMatches, findTest } from "./page-find-model";
 import { scrollRange } from "./page-find";
 
 type Row = Record<string, any>;
+
+/** Shared Library card presentation. Callers supply navigation and facts for
+ * the entity they actually show: a workspace result or a single conversation. */
+export function ConversationCard({ title, facts, actions, children, ...props }: Omit<React.ComponentPropsWithoutRef<"article">, "title"> & { title: React.ReactNode; facts?: React.ReactNode; actions?: React.ReactNode }) {
+  return <article {...props} className={`conversation-result-card ${props.className ?? ""}`}>
+    <div className="conversation-result-head">
+      <div className="conversation-result-summary">{title}{facts}</div>
+      {actions ? <div className="conversation-result-actions">{actions}</div> : null}
+    </div>
+    {children}
+  </article>;
+}
+
 export type TranscriptMessage = { id?: string; native_id?: string; role: string; text: unknown; raw_text?: unknown; authorship?: unknown; text_clipped?: boolean };
 export type OutlineEntry = { id: string; kind: "turn" | "agent"; label: string; prompt: string; human: TranscriptMessage | null; response: TranscriptMessage | null; messages: TranscriptMessage[]; tools: number; children: OutlineEntry[] };
 /** A message to open in Browse, with Search's terms to mark in it. */

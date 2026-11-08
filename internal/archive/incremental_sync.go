@@ -455,24 +455,30 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 			}
 		}, written: func(id string) { changedWorkspaces[id] = true }}
 		baseW, baseC, baseM := totals(results)
-		var result IngestResult
-		handle.RunIO(func() {
-			result = s.Catalog.IngestContext(withIngestMode(ctx, mode), adapter, func(phase string, w, c, m, skipped, processed int) {
-				s.updateRun(run.ID, func(run *SyncRun) {
-					run.Phase = phase
-					run.Workspaces = baseW + w
-					run.Conversations = baseC + c
-					run.Messages = baseM + m
-					run.InputsChecked = checked
+		// Each source is one admitted CPU leaf, taken before its ingest opens
+		// anything; the run itself (holding only the TryLock coordinator) is
+		// not admitted.
+		result := s.Catalog.admittedIngest(ctx, source.Name, currentHost().ID, func(ctx context.Context) IngestResult {
+			var result IngestResult
+			handle.RunIO(func() {
+				result = s.Catalog.IngestContext(withIngestMode(ctx, mode), adapter, func(phase string, w, c, m, skipped, processed int) {
+					s.updateRun(run.ID, func(run *SyncRun) {
+						run.Phase = phase
+						run.Workspaces = baseW + w
+						run.Conversations = baseC + c
+						run.Messages = baseM + m
+						run.InputsChecked = checked
+					})
+					work := activityWork{Phase: phase, Source: source.Name}
+					if plan != nil && phase == "indexing" {
+						work = plan.work(phase, source.Name, model, processed)
+						work.Kind = "incremental"
+					}
+					work.Next = "Refresh the Library view and verify changed inputs"
+					workMeter.report(work)
 				})
-				work := activityWork{Phase: phase, Source: source.Name}
-				if plan != nil && phase == "indexing" {
-					work = plan.work(phase, source.Name, model, processed)
-					work.Kind = "incremental"
-				}
-				work.Next = "Refresh the Library view and verify changed inputs"
-				workMeter.report(work)
 			})
+			return result
 		})
 		op.end("source:"+source.Name, result.Error == nil && ctx.Err() == nil)
 		results = append(results, result)

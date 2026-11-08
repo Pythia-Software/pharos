@@ -95,6 +95,9 @@ func (s *Server) postFindings(w http.ResponseWriter, r *http.Request, body map[s
 		writeResult(w, map[string]any{"ok": err == nil}, err)
 	case path == "refresh":
 		started := s.start(OperationSpec{Kind: "analysis.findings", Trigger: triggerUser, Priority: priorityForeground}, func(ctx context.Context, op *Op) error {
+			if s.work != nil {
+				return s.work.runLibraryMode(ctx, []string{kindFindings}, true, triggerUser, "force")
+			}
 			err := s.Catalog.RefreshFindings(withWorkProgress(ctx, op.mirrorWork), true)
 			if err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Findings: %v\n", err)
