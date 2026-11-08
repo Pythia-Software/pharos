@@ -112,6 +112,15 @@ anything the person controls. Intervals for small groups wait on Query Table
 ([handoff](handoffs/query-table-tuple-colors.md)): Query Table colours a two-field bar by the whole pair, so the same
 kind takes a different colour on each repository's row.
 
+The Weekly digest cards (`web/src/digest-card-recipes.ts`) are the lab digest's "this week against the ones before",
+drawn from what already exists: new problems to fix (open Fixes first seen in the window), problems that keep coming
+back (open Fixes seen again in the last 7 days but first seen before them), safeguards agents got around (Risky
+actions notices of the `safeguard-*` checks), and friction week by week (this dashboard's compare by Week). The Fixes
+cards filter on `first_seen_at` and `last_seen_at`, the start of the local day in `first_seen` and `last_seen`, so a
+relative date range can select them. The returning card keeps one 7-day window: its "first seen before" bound is a
+fixed relative date in the where, which the card's window control does not move. Choices made without asking stay the
+Agent Events card above.
+
 ### In the reader
 
 A conversation the pass has read offers **Agent events** in the reader's Highlight row, beside Human writing and

@@ -13,7 +13,7 @@ const defaultTimeFields: Partial<Record<QueryDataset, string[]>> = {
   people_message_labels:["sent_at"], message_labels:["occurred_at"],
   compactions: ["occurred_at"], model_requests: ["requested_at"],
   writing: ["first_message_at", "last_message_at"], conversation_activity: ["event_at"], mcp_calls: ["called_at"], library: ["activity_at"], usage: ["first_usage_at", "last_usage_at"], tool_calls: ["started_at"],
-  skill_usages: ["created_at"], writing_messages: ["sent_at"], tl1_attempts: ["started_at"], parallelism: ["started_at"], findings: ["first_seen_at"], safety: ["last_seen_at"], agent_events: ["occurred_at"], agent_event_messages: ["occurred_at"], agent_event_rates: ["occurred_at"], session_shape: ["started_at"],
+  skill_usages: ["created_at"], writing_messages: ["sent_at"], tl1_attempts: ["started_at"], parallelism: ["started_at"], findings: ["first_seen_at"], safety: ["last_seen_at"], fixes: ["last_seen_at", "first_seen_at"], agent_events: ["occurred_at"], agent_event_messages: ["occurred_at"], agent_event_rates: ["occurred_at"], session_shape: ["started_at"],
 };
 const timeFields = Object.fromEntries(Object.entries(schemaDocuments).map(([dataset, schema]) =>
   [dataset, schema.fields.filter(field => field.type === "datetime").map(field => field.name)])) as Record<QueryDataset, string[]>;

@@ -23731,6 +23731,399 @@
       }
     },
     {
+      "category": "digest",
+      "dataset": "fixes",
+      "unit": "work items",
+      "measures": [],
+      "id": "digest-new-fixes",
+      "idea": "learning-07",
+      "field": "first_seen_at",
+      "days": [
+        7,
+        30
+      ],
+      "title": "New problems to fix",
+      "description": "Open Fixes first seen in the last {days} days, by the work items they came up in.",
+      "where": [
+        {
+          "field": "state",
+          "op": "=",
+          "value": "open"
+        },
+        {
+          "field": "shown",
+          "op": "=",
+          "value": "shown"
+        }
+      ],
+      "exploration": {
+        "keys": [
+          "id"
+        ],
+        "valueField": "dg_work_items",
+        "unit": "work items",
+        "subjects": "new problems",
+        "action": "Review new problems",
+        "labelFields": [
+          "dg_title"
+        ],
+        "summaries": [
+          {
+            "id": "dg_work_items",
+            "op": "sum",
+            "field": "work_items",
+            "label": "Work items"
+          },
+          {
+            "id": "dg_title",
+            "op": "row",
+            "field": "title",
+            "label": "Problem"
+          },
+          {
+            "id": "dg_events",
+            "op": "sum",
+            "field": "events",
+            "label": "Events"
+          },
+          {
+            "id": "dg_conversations",
+            "op": "sum",
+            "field": "conversations",
+            "label": "Conversations"
+          },
+          {
+            "id": "dg_first_seen",
+            "op": "row",
+            "field": "first_seen",
+            "label": "First seen"
+          },
+          {
+            "id": "dg_last_seen",
+            "op": "row",
+            "field": "last_seen",
+            "label": "Last seen"
+          }
+        ],
+        "context": [
+          {
+            "field": "dg_events",
+            "label": "events"
+          },
+          {
+            "field": "dg_conversations",
+            "label": "conversations"
+          }
+        ],
+        "representative": {
+          "orderBy": [
+            {
+              "field": "last_seen_at",
+              "dir": "desc",
+              "nulls": "last"
+            }
+          ]
+        }
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "dg_work_items",
+        "kind": "bar-horizontal",
+        "maxGroups": 5,
+        "showOther": false
+      },
+      "action": "Review new problems",
+      "emptyLabel": "No new problems to fix: agents reported nothing new that Fixes lists.",
+      "note": "Each is a problem agents reported for the first time in this window, such as an environment step that failed or a doc that was out of date; open one for what agents said and the change that would prevent it. Fixes record days, not times, so a problem counts from the start of the local day it was seen. Open fixes only, as Open lists them: fixes your Fixes settings hide (seen in too few work items, quiet too long, or covered by guidance) are left out. A work item is a task the source recorded, so one long task counts once however many conversations it took."
+    },
+    {
+      "category": "digest",
+      "dataset": "fixes",
+      "unit": "work items",
+      "measures": [],
+      "id": "digest-returning-fixes",
+      "idea": "conversation-05",
+      "field": "last_seen_at",
+      "days": [
+        7
+      ],
+      "title": "Problems that keep coming back",
+      "description": "Open Fixes agents reported again in the last {days} days that were first seen before them, by the work items they came up in.",
+      "where": [
+        {
+          "field": "state",
+          "op": "=",
+          "value": "open"
+        },
+        {
+          "field": "shown",
+          "op": "=",
+          "value": "shown"
+        },
+        {
+          "field": "first_seen_at",
+          "op": "<",
+          "value": "-7d"
+        }
+      ],
+      "exploration": {
+        "keys": [
+          "id"
+        ],
+        "valueField": "dg_work_items",
+        "unit": "work items",
+        "subjects": "returning problems",
+        "action": "Review returning problems",
+        "labelFields": [
+          "dg_title"
+        ],
+        "summaries": [
+          {
+            "id": "dg_work_items",
+            "op": "sum",
+            "field": "work_items",
+            "label": "Work items"
+          },
+          {
+            "id": "dg_title",
+            "op": "row",
+            "field": "title",
+            "label": "Problem"
+          },
+          {
+            "id": "dg_events",
+            "op": "sum",
+            "field": "events",
+            "label": "Events"
+          },
+          {
+            "id": "dg_conversations",
+            "op": "sum",
+            "field": "conversations",
+            "label": "Conversations"
+          },
+          {
+            "id": "dg_first_seen",
+            "op": "row",
+            "field": "first_seen",
+            "label": "First seen"
+          },
+          {
+            "id": "dg_last_seen",
+            "op": "row",
+            "field": "last_seen",
+            "label": "Last seen"
+          }
+        ],
+        "context": [
+          {
+            "field": "dg_events",
+            "label": "events"
+          },
+          {
+            "field": "dg_conversations",
+            "label": "conversations"
+          }
+        ],
+        "representative": {
+          "orderBy": [
+            {
+              "field": "last_seen_at",
+              "dir": "desc",
+              "nulls": "last"
+            }
+          ]
+        }
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "dg_work_items",
+        "kind": "bar-horizontal",
+        "maxGroups": 5,
+        "showOther": false
+      },
+      "action": "Review returning problems",
+      "emptyLabel": "No older problems came back: agents reported none of them again.",
+      "note": "A problem that comes back has outlasted the work that met it: a change to docs, checks, environment or tools would stop it for every agent. Work items counts every work item it came up in, not only this week's. Fixes record days, not times, so a problem counts from the start of the local day it was seen. Open fixes only, as Open lists them: fixes your Fixes settings hide (seen in too few work items, quiet too long, or covered by guidance) are left out. A work item is a task the source recorded, so one long task counts once however many conversations it took."
+    },
+    {
+      "id": "digest-safeguards",
+      "category": "digest",
+      "idea": "verification-06",
+      "dataset": "safety",
+      "field": "last_seen_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "notices",
+      "title": "Safeguards agents got around",
+      "description": "Risky actions notices from the last {days} days where an agent weakened a test or check, or got around a restriction, gate or instruction, by kind.",
+      "where": [
+        {
+          "any": [
+            {
+              "field": "rule",
+              "op": "=",
+              "value": "safeguard-test"
+            },
+            {
+              "field": "rule",
+              "op": "=",
+              "value": "safeguard-restriction"
+            },
+            {
+              "field": "rule",
+              "op": "=",
+              "value": "safeguard-gate"
+            },
+            {
+              "field": "rule",
+              "op": "=",
+              "value": "safeguard-other"
+            }
+          ]
+        }
+      ],
+      "measures": [],
+      "exploration": {
+        "keys": [
+          "rule_label"
+        ],
+        "summaries": [
+          {
+            "id": "dg_notices",
+            "op": "sum",
+            "field": "review_count",
+            "label": "Notices"
+          },
+          {
+            "id": "dg_locations",
+            "op": "count_distinct",
+            "field": "target_label",
+            "label": "Locations"
+          }
+        ],
+        "valueField": "dg_notices",
+        "unit": "notices",
+        "subjects": "kinds of safeguard",
+        "action": "Review the notices",
+        "labelFields": [
+          "rule_label"
+        ],
+        "context": [
+          {
+            "field": "dg_locations",
+            "label": "locations"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "dg_notices",
+        "kind": "bar-horizontal",
+        "maxGroups": 4,
+        "showOther": false
+      },
+      "action": "Review the notices",
+      "emptyLabel": "No agent got around a safeguard in this window.",
+      "note": "Each notice is a time an agent said it weakened a test or check, or got around a restriction, gate or instruction, in any Risky actions state. Most weeks have none. Read each one and decide whether the safeguard needs changing or the agent needs telling. Notices come from what agents wrote, as the events pass read it, so a workaround an agent did not mention is not here."
+    },
+    {
+      "id": "digest-friction-weeks",
+      "category": "digest",
+      "idea": "conversation-01",
+      "dataset": "agent_event_rates",
+      "field": "occurred_at",
+      "days": [
+        30
+      ],
+      "unit": "events per 1,000 messages",
+      "title": "Friction week by week",
+      "description": "Environment problems, missing tools, out-of-date docs, failures already there and unclear instructions per 1,000 agent messages read, week by week over the last {days} days.",
+      "where": [
+        {
+          "field": "family_group",
+          "op": "=",
+          "value": "Friction"
+        },
+        {
+          "field": "family",
+          "op": "!=",
+          "value": "obstacle"
+        },
+        {
+          "field": "prompted_by",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "prompted_by",
+          "op": "!=",
+          "value": "none"
+        }
+      ],
+      "measures": [
+        {
+          "id": "friction_by_week",
+          "op": "sum",
+          "expression": "SUM([events])/NULLIF(COUNT_DISTINCT([message_id])/1000,0)",
+          "groupBy": [
+            "week"
+          ],
+          "groupLimit": 200,
+          "sort": [
+            {
+              "key": "group0",
+              "dir": "asc"
+            }
+          ],
+          "minCount": {
+            "min": 200,
+            "distinct": "message_id"
+          },
+          "label": "Friction events per 1,000 messages read",
+          "display": {
+            "kind": "bar-vertical",
+            "xLabel": "Week starting",
+            "yLabel": "Events per 1,000 messages",
+            "format": {
+              "kind": "number",
+              "decimals": 1
+            }
+          }
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "friction_by_week",
+        "kind": "bar-vertical",
+        "maxGroups": 14,
+        "showOther": false,
+        "showLegend": false,
+        "showHeadline": false,
+        "height": 240
+      },
+      "action": "Explore Agent Events",
+      "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
+      "note": "Weeks start on Monday, in local time. The first and latest weeks are partial: the window starts mid-week, and this week is still under way, so its rate can move. Plain obstacles are left out, as on Where agents hit friction. A week under 200 messages read is hidden. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages, in turns a person or a delegating agent started: scripted runs are left out. Opening the dashboard does not run the pass.",
+      "destination": {
+        "topic": "agent_event_rates",
+        "chart": {
+          "v": 2,
+          "view": "compare",
+          "metric": "per_thousand",
+          "split": "week",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "minSamples": 200
+        },
+        "dataset": "agent_event_rates",
+        "detailAction": "Compare weeks"
+      }
+    },
+    {
       "dataset": "model_requests",
       "field": "requested_at",
       "days": [

@@ -163,6 +163,7 @@ const dashboards: Record<string, CardDashboard> = {
   "agent-events-stale-docs": events("per_thousand", "repository_name"),
   "agent-events-known-failures": events("per_thousand", "repository_name"),
   "agent-events-unseen-choices": events("per_thousand", "choices_repository"),
+  "digest-friction-weeks": events("per_thousand", "week"),
   // Session Shape: one record per agent session. Rates carry their coverage
   // population as the card's filters.
   "session-sources": sessions("sessions", "harness", {}),
