@@ -1,5 +1,6 @@
 import React from "react";
 import type { CardLoadingSpec } from "./card-loading-model";
+import "./query-card.css";
 
 const heights = [40, 75, 55, 85, 30, 65, 50];
 const delays = [0, -.7, -.3, -.9, -.5];
@@ -14,6 +15,7 @@ export function CardLoading({ spec = { kind: "text", count: 3 } }: { spec?: Card
         : spec.kind === "scatter" ? <span className="query-loading-scatter">{marks.map(i => <i key={i} style={{ left: `${12 + (i * 29) % 76}%`, top: `${12 + (i * 43) % 70}%`, width: `${6 + i % 3 * 2}px`, height: `${6 + i % 3 * 2}px`, "--drift-x": `${i % 2 ? 7 : -5}px`, "--drift-y": `${i % 3 ? -6 : 5}px`, ...timing(i) } as React.CSSProperties} />)}</span>
         : spec.kind === "line" ? <svg className="query-loading-line" viewBox="0 0 100 60" preserveAspectRatio="none"><polyline points={marks.map(i => `${marks.length === 1 ? 50 : i / (marks.length - 1) * 100},${60 - heights[i % heights.length] * .5}`).join(" ")} /></svg>
         : spec.kind === "pie" || spec.kind === "donut" ? <span className="query-loading-circle" style={{ "--loading-segment": `${360 / spec.count}deg` } as React.CSSProperties} />
+        : spec.kind === "heatmap" ? <span className="query-loading-grid">{Array.from({ length: 96 }, (_, i) => <i key={i} style={timing(i)} />)}</span>
         : <span className="query-loading-rows">{marks.map(i => <span className="query-loading-row" key={i} style={timing(i)}>
           {spec.kind === "box" ? <><i className="query-loading-row-label" /><span className="query-loading-whisker"><i /></span></>
             : spec.kind === "table" ? <><i /><i /><i /></>
@@ -23,4 +25,9 @@ export function CardLoading({ spec = { kind: "text", count: 3 } }: { spec?: Card
     </span>
     <span className="query-preview-spinner" aria-hidden="true" /><span className="query-loading-label">{spec.kind === "text" || spec.kind === "table" ? "Loading preview" : spec.kind === "value" ? "Loading value" : "Loading chart"}</span>
   </span>;
+}
+
+// Full-page charts use the same loading animation as their card previews.
+export function DashboardLoading({ spec }: { spec: CardLoadingSpec }) {
+  return <div className="dashboard-loading"><CardLoading spec={spec} /></div>;
 }

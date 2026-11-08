@@ -124,7 +124,7 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   const state = normalizeAnalysis(catalog, { ...input, view: isTrendView(input.view) ? input.view : "trend" }), measure = catalog.measures[state.metric], kind = trendKind(measure);
   const breakdown = catalog.breakdowns[state.split], components = catalog.components?.[state.split], drawing = trendDrawing(catalog, state);
   const count = trendPeriodCount(state), cumulative = state.display === "cumulative", grid = { period: state.period, count };
-  const additive = kind === "additive", empty: TrendSeries = { series: [], buckets: [], selected: [], excluded: false, lines: false, additive };
+  const additive = kind === "additive", empty: TrendSeries = { series: [], buckets: [], selected: [], excluded: false, lines: drawing === "trend_line", additive };
   // No results yet: the query is loading, which is not an error.
   if (!results.length) return empty;
   // A missing, partial or truncated clause would read as idle periods.

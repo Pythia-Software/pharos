@@ -8,10 +8,28 @@ import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-cat
 import { runAnalysisQuery } from "../../../src/analysis-request";
 import { answerQuery } from "../../support/query-server.mjs";
 import { cycleSamples, hoursOfDay, weekdayMetric, weekdays } from "../../../src/weekday-cover";
+import { analysisLoadingPresentation } from "../../../src/dashboard-loading-model";
 
 const { rows, hourly } = usageLedger(), schema = schemas.usage;
 const trend = { metric: "percent_cost", split: "type", period: "day", hours: 6, days: 3, rollingPeriods: 7, scale: "half", display: "interval" };
 const evaluate = query => core.evaluateMetrics(rows, query, schema, { now }).metrics[0];
+
+test("analysis loading follows the selected chart, including folded cycles", () => {
+  for (const [input, kind] of [
+    [{ view: "compare", metric: "tokens", split: "provider" }, "list"],
+    [{ view: "compare", metric: "tokens", split: "provider", compareAs: "share" }, "pie"],
+    [{ view: "distribution", metric: "tokens", split: "provider" }, "box"],
+    [{ view: "distribution", metric: "output", split: "none" }, "columns"],
+    [{ view: "scatter", unit: "conversation", metric: "cost", metricY: "tokens" }, "scatter"],
+    [{ view: "cycle", cycle: "hour", metric: "tokens", reduce: "median" }, "box"],
+    [{ view: "cycle", cycle: "weekday", metric: "tokens", reduce: "mean" }, "columns"],
+  ]) {
+    const view = normalizeAnalysis(catalog, input), { clause } = analysisQuery(catalog, view, []);
+    assert.equal(analysisLoadingPresentation(clause, view, false).kind, kind, JSON.stringify(input));
+  }
+  const view = normalizeAnalysis(catalog, { view: "distribution", metric: "tokens" });
+  assert.equal(analysisLoadingPresentation(analysisQuery(catalog, view, []).clause, view, true).kind, "columns");
+});
 
 test("a trend link without a view stays the trend; an old share metric reads as its measure shown as shares", () => {
   assert.ok(validAnalysisState(catalog, trend));

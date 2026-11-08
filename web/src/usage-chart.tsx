@@ -14,6 +14,7 @@ import { chartGesture, chartInspectionRange, type ChartInspectionRange } from ".
 import { ChartPopover, ChartPopoverRow } from "./chart-popover";
 import { DashboardSelect } from "./dashboard-select";
 import { SearchHelp } from "./search-help";
+import { DashboardLoading } from "./card-loading";
 
 export { chartSpan, smoothingWhere, timeBounds, usageTime, withTimeRange, writingTime, type ChartRange, type FilterChange, type TimeBounds, type TimeFields } from "./chart-range";
 
@@ -407,8 +408,9 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
     </div> : null}
     {error ? <p className="query-table-error">{error}</p> : null}
     <div className={`usage-chart-plot${split ? " broken" : ""}`}>
-      {split ? <div className="usage-chart-log" aria-hidden="true"><span>log scale</span></div> : null}
-      {ticks.map(tick => <div key={tick} className="usage-chart-grid" style={{ bottom: `${y(tick)}%` }} aria-hidden="true"><span>{tickFormat(tick)}</span></div>)}
+      {loading && !error ? <DashboardLoading spec={{ kind: lineChart ? "line" : "columns", count: 16 }} /> : null}
+      {!loading && split ? <div className="usage-chart-log" aria-hidden="true"><span>log scale</span></div> : null}
+      {!loading ? ticks.map(tick => <div key={tick} className="usage-chart-grid" style={{ bottom: `${y(tick)}%` }} aria-hidden="true"><span>{tickFormat(tick)}</span></div>) : null}
       <div ref={bars} className={`usage-chart-bars ${density} ${loading ? "loading" : ""} ${onRange ? "pickable" : ""} ${drag ? "picking" : ""}`} role="group" aria-busy={loading} aria-label={split ? `${chartLabel}; linear up to ${tickFormat(split)}, logarithmic above` : chartLabel} {...picking}>
         {lineChart && buckets.length ? <svg className="usage-chart-lines" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
           {drawn.map(item => <path key={item.key} fill="none" stroke={item.color} strokeWidth="2" vectorEffect="non-scaling-stroke" d={path(item.key)} />)}
@@ -424,7 +426,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
           </button>;
         })}
       </div>
-      {split ? <div className="usage-chart-break" aria-hidden="true"><span>{tickFormat(split)}</span></div> : null}
+      {!loading && split ? <div className="usage-chart-break" aria-hidden="true"><span>{tickFormat(split)}</span></div> : null}
     </div>
     {buckets.length === 5000 ? <p className="muted">Showing the latest 5,000 periods.{cumulative ? " Cumulative balances include earlier activity in the selected range." : " Narrow the date range to see earlier activity."}</p> : null}
     <div className="usage-chart-axis"><span>{buckets.length ? label(buckets[0].date) : ""}</span><span>{middle && buckets.length > 4 ? label(middle.date) : ""}</span><span>{!last ? "" : last.key !== periodKey(new Date(), period, periodCount) ? label(last.date) : period === "day" ? "today" : `this ${unit}`}</span></div>

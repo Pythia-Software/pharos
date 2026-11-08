@@ -1212,6 +1212,72 @@ test("dashboard catalog stays readable while a preview is pending", { skip }, as
   }
 });
 
+test("dashboard loading follows the chart and keeps controls usable", { skip }, async t => {
+  const { page, settled } = await open(t, { url: '/analyze?analyze_topic=tokens', viewport: { width: 390, height: 850 }, ready: overTimeReady });
+  let release;
+  let response = new Promise(resolve => { release = resolve; });
+  const hold = async route => {
+    if (route.request().method() === 'POST') await response;
+    await route.continue();
+  };
+  await page.route('**/api/query/usage/*', hold);
+  t.after(() => release());
+  try {
+    const trend = page.locator('section[aria-label="Over time"]');
+    const column = await trend.locator('.usage-chart-bars > button').first().elementHandle();
+    const view = trend.getByLabel('View', { exact: true });
+    for (const event of ['dataset', 'focus', 'visibilitychange']) {
+      await column.focus();
+      await page.evaluate(event => {
+        if (event === 'dataset') window.dispatchEvent(new CustomEvent('pharos:data-refresh', { detail: 'usage' }));
+        else if (event === 'focus') window.dispatchEvent(new Event('focus'));
+        else document.dispatchEvent(new Event('visibilitychange'));
+      }, event);
+      await trend.locator('[data-loading-kind="columns"]').waitFor();
+      assert.ok(await column.evaluate(el => el.isConnected && document.activeElement === el), `${event} keeps the focused period during loading`);
+      if (event === 'visibilitychange') await view.focus();
+      release();
+      await page.locator(overTimeReady).waitFor();
+      await settled();
+      if (event === 'visibilitychange') assert.ok(await view.evaluate(el => document.activeElement === el), 'loading does not take focus back from another control');
+      else assert.ok(await column.evaluate(el => el.isConnected && document.activeElement === el), `${event} keeps the focused period after loading`);
+      response = new Promise(resolve => { release = resolve; });
+    }
+
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await trend.locator('[data-loading-kind="columns"]').waitFor();
+    assert.deepEqual(await layoutProblems(page), []);
+    assert.equal(await trend.locator('.query-preview-spinner').evaluate(el => getComputedStyle(el).animationName), 'none', 'reduced motion stops the spinner');
+    release();
+    await page.locator(overTimeReady).waitFor();
+
+    response = new Promise(resolve => { release = resolve; });
+    await trend.getByLabel('View', { exact: true }).selectOption('compare');
+    const analysis = page.locator('.usage-analysis-dashboard');
+    await analysis.locator('[data-loading-kind="list"]').waitFor();
+    assert.deepEqual(await layoutProblems(page), []);
+    release();
+    await page.locator(analysisReady).waitFor();
+    await settled();
+
+    const fail = route => route.fulfill({ status: 200, json: { metrics: [] } });
+    await page.route('**/api/query/usage/query-v3', fail);
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await analysis.locator('[role="alert"]').waitFor();
+    await page.unroute('**/api/query/usage/query-v3', fail);
+    response = new Promise(resolve => { release = resolve; });
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await analysis.locator('[data-loading-kind="list"]').waitFor();
+    assert.equal(await analysis.locator('[role="alert"]').count(), 0, 'a retry replaces the old error with loading');
+    release();
+    await page.locator(analysisReady).waitFor();
+    await settled();
+  } finally {
+    release();
+    await page.unroute('**/api/query/usage/*', hold);
+  }
+});
+
 test('Recent conversation links open the selected conversation and search', { skip }, async t => {
   const { page, settled, calls } = await open(t, { url: '/', ready: '.home-recent-grid .conversation-result-card' });
   assert.equal(calls.some(call => /\/api\/work\/.+\/conversations\//.test(call.path)), false, 'previews do not load transcripts');
