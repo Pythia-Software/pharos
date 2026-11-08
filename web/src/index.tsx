@@ -114,7 +114,7 @@ import { Icon } from "./icons";
 import {  CategoryPill, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { startConcurrencySummary } from "./concurrency-store";
-import { HabitsPanels } from "./habits";
+import { HabitsDashboard } from "./habits";
 import { sessionShapeAnalysisCatalog } from "./session-shape-analysis-catalog";
 import { SessionShapeDefinitions, SessionsToRead, SignalTable, revealDefinitions } from "./session-shape-panels";
 import { formatSeconds } from "./session-shape-model";
@@ -1101,7 +1101,8 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "tokens") return <TokenUsageDashboard />;
   if (topic === "human") return <HumanUsageDashboard />;
   if (topic === "parallelism") return <ParallelismUsageDashboard />;
-  if (topic === "habits") return <HabitsDashboard />;
+  if (topic === "habits") return <DashboardCardSourceContext.Provider value={{ page: true, schema: schemas.rhythm }}><HabitsDashboard /></DashboardCardSourceContext.Provider>;
+  if (topic === "work_hours") return <CatalogDashboard catalog={habitsAnalysisCatalog} dataset="rhythm" name="work-hours" defaults={dashboardDefaults.work_hours} />;
   if (topic === "tools") return <ToolsUsageDashboard />;
   if (topic === "mcp") return <MCPUsageDashboard />;
   if (topic === "carbon") return <CarbonDashboard />;
@@ -1122,17 +1123,6 @@ function CarbonDashboard() {
   const carbon = useCarbonCatalog();
   return <CatalogDashboard catalog={carbon.catalog ?? carbonCatalogShape} dataset="usage" name="carbon" defaults={dashboardDefaults.carbon}
     frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonImpact>} />;
-}
-
-// Habits: summary panels surround the standard catalog dashboard, as the
-// Parallelism ribbon does. The chart keeps its own title below the panels.
-function HabitsDashboard() {
-  const headline = useDashboardHeadline();
-  return <HabitsPanels>{(before, after) => <CatalogDashboard catalog={habitsAnalysisCatalog} dataset="rhythm" name="habits" defaults={dashboardDefaults.habits} chartHeadline={false}
-    before={<>
-      {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>Habits</h2></div>, headline) : null}
-      {before}
-    </>} after={after} />}</HabitsPanels>;
 }
 
 // Parallelism's views follow the saved counting and gap, with which the

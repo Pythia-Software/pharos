@@ -682,11 +682,11 @@ const thinkingDaysOption: Option = { name: "days", param: "thinking", key: "rang
 // catalog's chart and window, or options keyed into the parameter that holds
 // its state, with days for its range. Every topic must say, so that a new
 // dashboard cannot become a page that takes only filters.
-type DashboardLinks = { catalog: true } | { options: Option[]; days: Option };
+type DashboardLinks = { standalone: true } | { catalog: true } | { options: Option[]; days: Option };
 const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
   compaction: { catalog: true }, labels:{catalog:true},
   activity: { catalog: true }, human: { catalog: true }, tokens: { catalog: true }, skills: { catalog: true }, calls: { catalog: true },
-  tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, habits: { catalog: true }, mcp: { catalog: true }, carbon: { catalog: true },
+  tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, work_hours: { catalog: true }, habits: { standalone: true }, mcp: { catalog: true }, carbon: { catalog: true },
   agent_experience: { catalog: true },
   agent_event_rates: { catalog: true },
   session_shape: { catalog: true },
@@ -695,7 +695,7 @@ const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
 };
 function checkDashboardLinks(topic: UsageTopic, links: DashboardLinks) {
   if ("catalog" in links !== Boolean(analysisCatalogs[topic])) fail(`${topic}: dashboardLinks says catalog ${"catalog" in links}, but analysisCatalogs ${analysisCatalogs[topic] ? "has" : "lacks"} it`);
-  if ("catalog" in links) return;
+  if ("catalog" in links || "standalone" in links) return;
   if (!links.options.length) fail(`${topic}: a dashboard without a catalog needs options for its controls`);
   for (const option of [...links.options, links.days]) if (!option.key || option.param !== links.days.param) fail(`${topic}: option ${option.name} is not a key of ${links.days.param}`);
   if (links.days.name !== "days" || links.days.kind !== "days") fail(`${topic}: its range is the days option`);
@@ -783,7 +783,7 @@ export function buildSiteMap(inputs: SiteInputs) {
         if ("catalog" in links) continue;
         child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
           fixed: { analyze_mode: "dashboards", analyze_topic: topic, analyze_data: usageTopicDatasets[topic] }, dataset: usageTopicDatasets[topic],
-          options: [...links.options, whereOption("analyze_filters", usageTopicDatasets[topic]), links.days] });
+          options: "standalone" in links ? [] : [...links.options, whereOption("analyze_filters", usageTopicDatasets[topic]), links.days] });
       }
       for (const topic of topics.filter(topic => "catalog" in dashboardLinks[topic])) child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
         fixed: { analyze_mode: "dashboards", analyze_topic: topic, analyze_data: usageTopicDatasets[topic] }, dataset: usageTopicDatasets[topic], dashboard: topic,

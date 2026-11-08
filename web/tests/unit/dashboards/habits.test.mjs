@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { calendarValue, calendarWeeks, healthStats, level, monthLabels, normalizeHabitsSettings, punchcardGrid, recentWork, quartileLevels, toggleVacation, workdayShape, formatClock, formatGap } from "../../../src/habits-model";
+import { habitsTargetParams, habitsViewTarget, readHabitsView } from "../../../src/habits-card";
 import { habitsAnalysisCatalog } from "../../../src/habits-analysis-catalog";
 import { catalogProblems } from "../../../src/dashboard-analysis-model";
+import { usageDashboardReturn } from "../../../src/usage-workspace-model";
 import { habitsChartQuery, habitsChartURL } from "../../../src/habits-chart-query";
 import { applyQuery, decodeQueryStrict, loadSchema } from "@pythia-software/query-table-core";
 import rhythmDocument from "../../../../schemas/rhythm.schema.json" with { type: "json" };
@@ -153,11 +155,14 @@ test("punchcard inspections select one clock weekday and hour within their own r
 });
 
 test("Habits detail links open an ungrouped Rhythm Query Table independently of the catalog's filters", () => {
-  const current = new URLSearchParams({ analyze_topic: "habits", analyze_filters: "catalog-only", habits_shape_days: "14" });
+  const current = new URLSearchParams({ analyze_topic: "habits", analyze_filters: "catalog-only", habits_view: "days", habits_shape_days: "14" });
   const selection = { day: "2026-10-05", automation: { initiator: "scheduled", label: "nightly" } };
   const url = new URL(habitsChartURL(summary(), selection, ["automated"], current), "https://pharos.local");
   assert.equal(url.searchParams.get("analyze_mode"), "query");
   assert.equal(url.searchParams.get("analyze_data"), "rhythm");
+  const returned = new URL(usageDashboardReturn(url.searchParams).href, "https://pharos.local");
+  assert.equal(returned.searchParams.get("habits_view"), "days");
+  assert.equal(returned.searchParams.get("habits_shape_days"), "14");
   const query = decodeQueryStrict(url.searchParams.get("q_rhythm"));
   assert.ok(!query.grouping);
   assert.ok(query.where.some(term => term.field === "automation" && term.value === "nightly"));
@@ -167,4 +172,20 @@ test("Habits detail links open an ungrouped Rhythm Query Table independently of 
     { actor: "automated", initiator: "scripted", automation: "nightly", started_at: "2026-10-05T12:00:00Z" },
     { actor: "automated", initiator: "scheduled", automation: "other", started_at: "2026-10-05T12:00:00Z" },
   ]), ["0"]);
+});
+
+test("Habits view links select the chart, with legacy section and pin restoration", () => {
+  for (const view of ["calendar", "punchcard", "days"]) {
+    const target = habitsViewTarget(view);
+    assert.equal(readHabitsView(new URLSearchParams({ habits_view: view, habits_shape_days: "7" })), view);
+    assert.equal(readHabitsView(new URLSearchParams({ reveal: `section:${target}` })), view);
+    assert.equal(readHabitsView(new URLSearchParams({ chart_pins: JSON.stringify({ [target]: "point" }) })), view);
+    const params = habitsTargetParams(target, new URLSearchParams({ habits_view: "calendar", habits_shape_days: "14", habits_calendar: "agents" }));
+    assert.equal(params.get("habits_view"), view);
+    assert.equal(params.get("habits_shape_days"), "14");
+    assert.equal(params.get("habits_calendar"), "agents");
+  }
+  assert.equal(readHabitsView(new URLSearchParams()), "calendar");
+  assert.equal(readHabitsView(new URLSearchParams({ habits_shape_days: "14" })), "days");
+  assert.equal(readHabitsView(new URLSearchParams({ habits_punchcard: "unattended" })), "punchcard");
 });

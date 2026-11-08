@@ -395,9 +395,8 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   assert.ok(libraryScopes.length>0&&libraryScopes.every(scope=>scope==='source-review-library'),'source setup requests lost their library binding');
 });
 
-// Habits surrounds the shared chart with its own panels; exercise that page
-// at both widths so panel styles cannot break chart hit targets or gestures.
-for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 'cumulative', 1440], ['habits', 'interval', 1440], ['habits', 'interval', 390]]) test(`Dashboard ${topic} ${display} inspection at ${width}px focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
+// Work Hours uses the shared chart; exercise inspection at both widths.
+for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 'cumulative', 1440], ['work_hours', 'interval', 1440], ['work_hours', 'interval', 390]]) test(`Dashboard ${topic} ${display} inspection at ${width}px focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
   const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }) })}`, viewport: { width, height: 900 }, ready: '.usage-chart-bars:not(.loading) > button' });
   const chart = page.locator('.usage-dashboard .usage-chart').first();
   const bar = display === 'cumulative' ? chart.locator('.usage-chart-bars > button').last() : chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first();

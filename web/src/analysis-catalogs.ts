@@ -21,7 +21,7 @@ import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCo
 export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
   compaction: compactionAnalysisCatalog, labels:messageLabelsCatalog,
   calls: toolTimeAnalysisCatalog, activity: conversationAnalysisCatalog, tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: toolTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
-  human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape, habits: habitsAnalysisCatalog, agent_experience: agentEventsAnalysisCatalog, session_shape: sessionShapeAnalysisCatalog,
+  human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape, work_hours: habitsAnalysisCatalog, agent_experience: agentEventsAnalysisCatalog, session_shape: sessionShapeAnalysisCatalog,
   agent_event_rates: agentEventRatesCatalog,
 };
 
