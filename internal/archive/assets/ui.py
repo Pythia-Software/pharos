@@ -1246,8 +1246,8 @@ function transcriptHighlightControl(panel,conversation,messages){
     return{id:option.id,label:option.label,title:option.title,values:values(option),available:option.available,note:option.note,...(children.length?{children}:{})};
   });
   for(const option of options)if(option.available&&option.note)notes.append(node('span','transcript-highlight-note',option.label+': '+option.note));if(notes.childNodes.length)box.append(notes);
-  const all=options.filter(option=>option.available).flatMap(values),keys=window.pharosReaderKeys(host,panel.classList.contains('conversation-panel')),links=eventLinks(messages),eventsById=new Map(messages.flatMap(message=>messageEventView(message)||[]).map(event=>[event.id,event]));let visible=new Set(),lastVisibility=null;
-  const eventVisible=event=>visible.has('events:'+eventGroupClass(event.group));
+  const all=options.filter(option=>option.available).flatMap(values),keys=window.pharosReaderKeys(host,panel.classList.contains('conversation-panel')),links=eventLinks(messages);let visible=new Set(),lastVisibility=null;
+  panel.eventLinkVisible=id=>eventLinkVisible(eventLinkFor(links,id),visible);
   const applyMarks=root=>{
     const elements=selector=>[...(root.matches?.(selector)?[root]:[]),...root.querySelectorAll(selector)];
     for(const card of elements('[data-label-family]'))if(card.labelMessage)card.classList.toggle('reader-label-hidden',!visible.has('labels:'+card.dataset.labelFamily));
@@ -1265,7 +1265,7 @@ function transcriptHighlightControl(panel,conversation,messages){
     }
     for(const mark of elements('mark.event-target,.event-link-n')){
       const ids=(mark.dataset.eventTargets||mark.dataset.eventLink||'').split(' '),isTarget=mark.matches('mark.event-target,.is-target');
-      mark.classList.toggle('reader-event-hidden',isTarget&&!visible.has('events:event-target-legend')||!ids.some(id=>{const link=eventLinkFor(links,id);return link&&(link.ids||[link.id]).some(id=>eventVisible(eventsById.get(id)||link))}));
+      mark.classList.toggle('reader-event-hidden',isTarget&&!visible.has('events:event-target-legend')||!ids.some(panel.eventLinkVisible));
     }
   };
   const apply=()=>{
@@ -1274,7 +1274,7 @@ function transcriptHighlightControl(panel,conversation,messages){
     visible=new Set(options.filter(option=>shown.has(option.id)).flatMap(values).filter(key=>!hidden.includes(key)));
     for(const option of READER_HIGHLIGHTS)panel.classList.toggle('show-'+option.id,shown.has(option.id));
     keys.render({items,all,shown:[...visible],onChange:next=>{
-      const selected=new Set(next),updates={reader_highlight_hidden:all.filter(key=>!selected.has(key))};
+      const selected=new Set(next),updates={reader_highlight_hidden:readerHighlightExclusions(hidden,all,next)};
       for(const option of options)if(option.available){const on=values(option).some(key=>selected.has(key));updates[option.field]=on;pharosPrefs.set(option.pref,on)}
       pharosPrefs.set('pharos-reader-highlight-hidden',updates.reader_highlight_hidden);window.pharosView?.writeAll(updates);apply();
     }});
@@ -1282,6 +1282,11 @@ function transcriptHighlightControl(panel,conversation,messages){
     window.pharosView?.writeAll({...Object.fromEntries(options.filter(option=>option.available).map(option=>[option.field,shown.has(option.id)])),reader_highlight_hidden:hidden});
   };
   panel.restoreHighlights=apply;
+  panel.revealEventLinkHighlights=link=>{
+    const hidden=window.pharosView?.read('reader_highlight_hidden',pharosPrefs.get('pharos-reader-highlight-hidden',[]))||[];
+    const required=new Set([...eventLinkHighlightKeys(link),'events:event-target-legend']);
+    window.pharosView?.writeAll({reader_events:true,reader_highlight_hidden:hidden.filter(key=>!required.has(key))});apply();
+  };
   const changes=['pharos:uri-changed','pharos:view','popstate'],follow=()=>{if(box.isConnected)apply()};
   for(const name of changes)addEventListener(name,follow);
   // Covers deferred turns, tool bodies, and Browse switching its selected turn.
@@ -1357,7 +1362,7 @@ function bindEventLinks(panel,links){
   const ends=id=>panel.querySelectorAll(`[data-event-links~="${CSS.escape(id)}"],[data-event-targets~="${CSS.escape(id)}"],[data-event-link="${CSS.escape(id)}"]`);
   const gutter=document.createElementNS('http://www.w3.org/2000/svg','svg');gutter.classList.add('event-link-gutter');gutter.setAttribute('aria-hidden','true');panel.append(gutter);
   let hovered=null,selected=null;
-  const arc=id=>{const o=panel.querySelector(`mark[data-event-links~="${CSS.escape(id)}"]`),t=panel.querySelector(`mark[data-event-targets~="${CSS.escape(id)}"]`);if(!o||!t||o.classList.contains('reader-event-hidden')||t.classList.contains('reader-event-hidden')||!o.getClientRects().length||!t.getClientRects().length)return '';
+  const arc=id=>{const o=panel.querySelector(`mark[data-event-links~="${CSS.escape(id)}"]`),t=panel.querySelector(`mark[data-event-targets~="${CSS.escape(id)}"]`);if(panel.eventLinkVisible?.(id)===false||!o||!t||o.classList.contains('reader-event-hidden')||t.classList.contains('reader-event-hidden')||!o.getClientRects().length||!t.getClientRects().length)return '';
     const box=panel.getBoundingClientRect(),a=t.getClientRects()[0],b=o.getClientRects()[0],yt=a.top-box.top+a.height/2,yo=b.top-box.top+b.height/2,x=6,lead=(el,r)=>Math.max(x+8,Math.min(r.left,(el.closest('p,li,blockquote,pre,td,.message-prose,.markdown-content')||el).getBoundingClientRect().left)-box.left-4),xt=lead(t,a),xo=lead(o,b),r=Math.min(6,Math.abs(yo-yt)/2),dir=Math.sign(yo-yt)||1;
     return `M${xo} ${yo}H${x+r}Q${x} ${yo} ${x} ${yo-dir*r}V${yt+dir*r}Q${x} ${yt} ${x+r} ${yt}H${xt}`};
   const arrow=`event-link-arrow-${++eventLinkArrows}`;
@@ -1376,13 +1381,16 @@ function bindEventLinks(panel,links){
     mark(id);for(const end of new Set([found,...ends(id)]))for(let el=end;el&&el!==panel;el=el.parentElement){if(el.tagName==='DETAILS')el.open=true;if(el.classList?.contains('prose-truncated'))el.pharosFindExpand?.()}
     exemptFromTranscriptFilter(panel,found);found.classList.add('link-reveal');setTimeout(()=>found.classList.remove('link-reveal'),2400);
     requestAnimationFrame(()=>{if(found.isConnected){found.scrollIntoView({block:'center',behavior:smooth?'smooth':'auto'});setTimeout(draw,400)}})};
-  const idAt=target=>{const el=target.closest?.('[data-event-link],mark[data-event-links],mark[data-event-targets]');if(!el||el.classList.contains('reader-event-hidden'))return null;const id=el.dataset.eventLink||(el.dataset.eventLinks||el.dataset.eventTargets).split(' ')[0];return {id,side:el.dataset.side||(el.dataset.eventTargets!==undefined&&!el.dataset.eventLinks?'target':'observation')}};
+  const idAt=target=>{const el=target.closest?.('[data-event-link],mark[data-event-links],mark[data-event-targets]');if(!el||el.classList.contains('reader-event-hidden'))return null;const id=(el.dataset.eventLink||el.dataset.eventLinks||el.dataset.eventTargets).split(' ').find(id=>panel.eventLinkVisible?.(id)!==false);return id?{id,side:el.dataset.side||(el.dataset.eventTargets!==undefined&&!el.dataset.eventLinks?'target':'observation')}:null};
   panel.addEventListener('pointerover',event=>{if(!panel.classList.contains('show-events'))return;focus(idAt(event.target)?.id||null)});
   panel.addEventListener('pointerleave',()=>focus(null));
-  panel.addEventListener('click',event=>{if(!panel.classList.contains('show-events'))return;const hit=idAt(event.target);if(!hit)return;event.preventDefault();window.pharosView?.write('reader_event_link',hit.id);reveal(hit.id,hit.side)});
+  panel.addEventListener('click',event=>{if(!panel.classList.contains('show-events'))return;const hit=idAt(event.target);if(!hit)return;event.preventDefault();mark(hit.id);window.pharosView?.write('reader_event_link',hit.id);reveal(hit.id,hit.side)});
   // The URL owns the selection: restore it on load, Back/Forward and links.
   // Any merged event's id selects its pair.
-  const restore=()=>{const id=window.pharosView?.read('reader_event_link',null)||null,link=id?eventLinkFor(links,id):null;if((link?.id??id)===selected)return;if(!link){mark(null);return}reveal(link.id,'target',0,false)};
+  const restore=()=>{const id=window.pharosView?.read('reader_event_link',null)||null,link=id?eventLinkFor(links,id):null;if((link?.id??id)===selected)return;if(!link){mark(null);return}
+    // Record the selection before writing its required highlights: URL observers
+    // re-enter restore, and later manual exclusions must remain deliberate.
+    selected=link.id;panel.revealEventLinkHighlights?.(link);reveal(link.id,'target',0,false)};
   const changes=['pharos:uri-changed','pharos:view','popstate'],follow=()=>{if(panel.isConnected){restore();redraw()}};
   for(const name of changes)addEventListener(name,follow);
   // Turns render and expand after the selection is drawn; redraw when the transcript moves.

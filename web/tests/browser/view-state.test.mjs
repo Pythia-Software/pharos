@@ -756,18 +756,41 @@ test('agent event links restore both ends from the URL, opening folded prose wit
  const messages=[
   {id:'link-prompt',native_id:'link-prompt',role:'user',kind:'message',text:prompt,created_at:new Date(1760000000000).toISOString()},
   {id:'link-reply',native_id:'link-reply',role:'assistant',kind:'message',text:reply,created_at:new Date(1760000001000).toISOString(),
-   agent_events:[{id:'e-link',kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:0.9,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
-    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start,end:start+quote.length,text:quote,strong:true}}]},
+   agent_events:[{id:'e-hidden',kind:'obstacle',label:'Obstacle',group:'Friction',probability:0.95,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
+    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start:prompt.indexOf('phones'),end:prompt.indexOf('phones')+6,text:'phones',strong:true}},
+    ...['e-link','e-alias'].map((id,index)=>({id,kind:'assumption',label:'Assumption',group:index?'Reactions and learning':'Choices you may not see',probability:0.9,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
+    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start,end:start+quote.length,text:quote,strong:true}}))]},
  ];
  const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages,agent_events:{messages_read:2}})};
- const opened=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_events=1&reader_event_link=e-link`,ready:'.conversation-panel.show-events mark.event-target.link-selected'}),{page}=opened;
+ const hidden=['events:event-friction','events:event-choices','events:event-learning','events:event-target-legend','labels:C.report'];
+ const opened=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_events=1&reader_event_link=e-alias`,preferences:{'pharos-reader-highlight-hidden':hidden},ready:'.conversation-panel.show-events mark.event-target.link-selected'}),{page}=opened;
  await opened.settled();
  // The target sits past the fold of a long prompt; restoring the link opens it.
  assert.equal(await page.locator('mark.event-target.link-selected').first().evaluate(mark=>mark.closest('.message-prose').classList.contains('prose-truncated')),false);
  assert.ok(await page.locator('mark.agent-event.link-selected').count());
- for(const selector of ['mark.agent-event','mark.event-target'])assert.deepEqual(await page.locator(selector).evaluateAll(marks=>marks.map(mark=>mark.querySelectorAll('code').length)),[1],`${selector} is one element around the inline code`);
+ for(const selector of ['mark.agent-event.link-selected','mark.event-target.link-selected'])assert.deepEqual(await page.locator(selector).evaluateAll(marks=>marks.map(mark=>mark.querySelectorAll('code').length)),[1],`${selector} is one element around the inline code`);
  assert.equal(await page.evaluate(()=>document.activeElement===document.body||!document.activeElement),true);
  assert.ok(await page.locator('.event-link-gutter path.is-selected').count(),'the gutter connects the two ends');
+ assert.equal(await page.locator('mark.link-selected.reader-event-hidden').count(),0,'explicit links override the relevant saved hue and target exclusions');
+ assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')),['events:event-friction','labels:C.report'],'unrelated exclusions survive link restoration');
+ assert.deepEqual(await page.evaluate(()=>pharosPrefs.get('pharos-reader-highlight-hidden',[])),hidden,'opening a link leaves saved preferences intact');
+ await opened.shot('linked-highlights-restored');
+ // The first event on this sentence is hidden and points somewhere else.
+ await page.locator('.transcript-highlights').getByRole('button',{name:'Choices you may not see',exact:true}).click();
+ await page.getByRole('menuitem',{name:/Remove from selection/}).click();await opened.settled();
+ await page.evaluate(()=>window.pharosView.write('reader_event_link',null));
+ const observation=page.locator('mark.agent-event');await observation.hover();
+ await page.locator('.event-link-n.is-observation.link-focus:not(.reader-event-hidden)').waitFor();
+ assert.deepEqual(await page.locator('.event-link-n.is-observation.link-focus').evaluateAll(nodes=>nodes.map(node=>node.dataset.eventLink)),['e-link']);
+ await observation.click();await opened.settled();
+ assert.equal(new URL(page.url()).searchParams.get('reader_event_link'),'e-link','click selects the remaining visible pair, including its merged alias');
+ assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')).includes('events:event-choices'),'clicking a visible pair preserves its hidden sibling group');
+ await page.locator('.transcript-highlights').getByRole('button',{name:'Agent events category',exact:true}).click();
+ await page.getByRole('menuitem',{name:/Show all except this category/}).click();await opened.settled();
+ assert.equal(await page.locator('.event-link-gutter path.is-selected').count(),0,'a later manual hide is respected');
+ assert.equal(new URL(page.url()).searchParams.get('reader_events'),'0');
+ const copied=await open(t,{api,url:path(page),ready:'.event-link-gutter path.is-selected'});
+ assert.equal(await copied.page.locator('mark.link-selected.reader-event-hidden').count(),0,'an explicit copied URL also restores excluded highlights');
 });
 
 test('literal text reveal opens page Find on the reader and reveals a match without focusing its input', {skip},async t=>{
@@ -1447,7 +1470,8 @@ test('message card labels and sentence events restore independently in the reade
   const named=row=>row.conversation_id===rootConversation?{...row,label:'Review the CSV importer'}:row;
   return {...data,rows:data.rows.map(named),focus:data.focus.map(named)};
  };
- const url=`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all&reader_labels=1&reader_events=1&reader_writing=0`;
+ const elsewhere=['events:event-learning','labels:P.frame'];
+ const url=`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all&reader_labels=1&reader_events=1&reader_writing=0&reader_highlight_hidden=${encodeURIComponent(JSON.stringify(elsewhere))}`;
  const app=await open(t,{api,url,ready:'.conversation-panel.show-labels.show-events'}),{page}=app;
  const reasoning=page.locator('.action-row details').filter({has:page.locator('summary .activity-title',{hasText:'Reasoning'})}).first();
  await reasoning.locator('summary').click();
@@ -1461,6 +1485,7 @@ test('message card labels and sentence events restore independently in the reade
  await choose('Message labels category',/^Show all except this category/);
  assert.equal(new URL(page.url()).searchParams.get('reader_labels'),'0');
  await choose('Message labels category',/^Add all to selection/);
+ assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')),elsewhere,'editing this conversation preserves exclusions available elsewhere');
  await choose('Agent events category',/^Show all except this category/);
  const copied=await open(t,{api,url:path(page),ready:'.conversation-panel.show-labels'});
  assert.equal(await copied.page.locator('.transcript-highlights').getByRole('button',{name:'Agent events category',exact:true}).getAttribute('aria-pressed'),'false');

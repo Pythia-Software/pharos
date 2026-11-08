@@ -195,6 +195,11 @@ with agent events and message labels; Review shows everything except token usage
 with every highlight enabled; Plain transcript shows all content without marks.
 Individual highlight keys still use Timeline's grouped legend menus. Changing a
 key can produce a Custom setup; applying a default resets the whole key again.
+Ordinary key edits preserve exclusions for highlights absent from the current
+conversation. Opening an explicit `reader_event_link` enables agent events and
+clears only that pair's event-group and target exclusions in the URL, leaving
+saved preferences intact. Later manual hides are respected until another event
+link is opened. Sentence hover and click use only currently visible event pairs.
 
 These choices write existing canonical fields together: `reader_filter_level`,
 `reader_filter`, `reader_writing`, `reader_events`, `reader_labels`, and

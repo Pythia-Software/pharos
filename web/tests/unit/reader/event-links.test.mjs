@@ -86,4 +86,13 @@ test("events on one sentence pointing at the same text are one pair, found by ei
   // A different target on the same sentence stays its own pair.
   const other = structuredClone(twice); other[1].agent_events[1].target = { method: "quote", message_id: "p", start: 30, end: 35, text: "works", strong: true };
   assert.deepEqual(plain(reader.eventLinks(other).map(link => link.ids)), [["a1"], ["a2"]]);
+  other[1].agent_events[0].group = 'Friction';
+  other[1].agent_events[1].group = 'Reactions and learning';
+  const separate = reader.eventLinks(other), shown = new Set(['events:event-learning']);
+  assert.deepEqual(plain(separate.filter(link => reader.eventLinkVisible(link, shown)).map(link => link.id)), ['a2'], 'a sentence only offers links belonging to visible groups');
+  other[1].agent_events[1].target = target;
+  const merged = reader.eventLinkFor(reader.eventLinks(other), 'a2');
+  assert.deepEqual(plain(reader.eventLinkHighlightKeys(merged)), ['events:event-friction', 'events:event-learning']);
+  assert.equal(reader.eventLinkVisible(merged, shown), true, 'a visible alias keeps its merged pair available');
+  assert.equal(reader.eventLinkVisible(merged, new Set()), false);
 });

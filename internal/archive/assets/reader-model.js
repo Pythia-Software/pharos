@@ -626,14 +626,17 @@ function eventLinks(messages){
     for(const event of view)if(event.id&&event.target&&present.has(event.target.message_id)&&!seen.has(event.id)){seen.add(event.id);
       const weak=event.target.method==='overlap'||!event.target.strong;
       const pair=links.find(link=>link.message===message.id&&link.sentence[0]===event.sentence[0]&&link.sentence[1]===event.sentence[1]&&sameTarget(link.target,event.target));
-      if(pair){pair.ids.push(event.id);if(!pair.labels.includes(event.label))pair.labels.push(event.label);pair.weak=pair.weak&&weak;continue}
-      links.push({id:event.id,ids:[event.id],n:0,message:message.id,target:event.target,group:event.group,label:event.label,labels:[event.label],kind:event.kind,sentence:event.sentence,sentenceText:event.sentenceText,weak})}
+      if(pair){pair.ids.push(event.id);if(!pair.groups.includes(event.group))pair.groups.push(event.group);if(!pair.labels.includes(event.label))pair.labels.push(event.label);pair.weak=pair.weak&&weak;continue}
+      links.push({id:event.id,ids:[event.id],n:0,message:message.id,target:event.target,group:event.group,groups:[event.group],label:event.label,labels:[event.label],kind:event.kind,sentence:event.sentence,sentenceText:event.sentenceText,weak})}
   }
   links.forEach((link,index)=>{link.n=index+1});
   return links;
 }
 // The pair an event id belongs to (any of its merged events' ids).
 function eventLinkFor(links,id){return links.find(link=>link.id===id||link.ids?.includes(id))||null}
+// A merged pair remains available while any of its event groups is visible.
+function eventLinkHighlightKeys(link){return (link.groups||[link.group]).map(group=>'events:'+eventGroupClass(group))}
+function eventLinkVisible(link,shown){return !!link&&eventLinkHighlightKeys(link).some(key=>shown.has(key))}
 // The spans a message's targets cover in the text the reader shows, each
 // with the links pointing at it. Offsets apply when the shown text is the
 // stored text there; otherwise (a prompt shown without its harness wrapper)
@@ -722,6 +725,12 @@ function readerKeyPresetID(state,highlights,hidden=[]){
 // the saved choice, then the option's fallback. One with nothing to show is off.
 function readerHighlightsShown(options,linked=()=>null,saved=(pref,fallback)=>fallback){
   return new Set(options.filter(option=>{if(!option.available)return false;const value=linked(option.field);return typeof value==='boolean'?value:saved(option.pref,option.fallback)===true}).map(option=>option.id));
+}
+// A conversation only edits its available keys; other conversations' exclusions
+// survive ordinary selections. Whole-key defaults explicitly reset everything.
+function readerHighlightExclusions(hidden,all,selected){
+  const available=new Set(all),shown=new Set(selected);
+  return [...hidden.filter(key=>!available.has(key)),...all.filter(key=>!shown.has(key))];
 }
 // A sentence can carry several event groups. Its hue and tooltip follow the
 // likeliest remaining event when a group is hidden, without changing its text.

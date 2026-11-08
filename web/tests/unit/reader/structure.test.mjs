@@ -201,6 +201,11 @@ test("reader legend keys isolate values and categories, combine choices, and all
   assert.deepEqual(readerKeyState(all, ['read'], tools), {active:false,mixed:true,dimmed:false,selectionActive:true,soleSelection:false});
   assert.equal(readerKeyState(all, [], tools).dimmed, true);
   assert.equal(readerKeyState(all, all, tools).selectionActive, false);
+  const hidden = ['events:event-friction', 'labels:P.frame', 'writing'], available = ['writing', 'events:event-learning'];
+  const exclusions = shown => plain(reader.readerHighlightExclusions(hidden, available, shown));
+  assert.deepEqual(exclusions(available), ['events:event-friction', 'labels:P.frame'], 'adding writing preserves keys absent from this conversation');
+  assert.deepEqual(exclusions([]), [...hidden, 'events:event-learning'], 'hiding available keys retains unrelated exclusions');
+  assert.deepEqual(hidden, ['events:event-friction', 'labels:P.frame', 'writing']);
 });
 
 
