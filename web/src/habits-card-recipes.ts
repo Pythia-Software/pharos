@@ -29,5 +29,4 @@ export const habitsCardRecipes: QueryRecipe[] = [
   habits("habits-punchcard-away", "habits-punchcard", { habits_punchcard: "unattended" }),
   habits("habits-days", "habits-days"),
   habits("habits-pace", "habits-pace"),
-  habits("habits-automations", "habits-automations", { habits_punchcard_days: "30" }),
 ];

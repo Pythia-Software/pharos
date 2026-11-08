@@ -501,7 +501,7 @@ const ROUTES = [
   { name: "Analyze Work Hours dashboard", url: "/analyze?analyze_topic=work_hours", ready: ".usage-work-hours-dashboard .usage-chart" },
   { name: "Analyze habits punchcard", url: "/analyze?analyze_topic=habits&habits_view=punchcard", ready: '[data-pharos-target="section:habits-punchcard"]' },
   { name: "Analyze habits daily schedule", url: "/analyze?analyze_topic=habits&habits_view=days", ready: ".habits-days-chart" },
-  { name: "Analyze habits dashboard", url: "/analyze?analyze_topic=habits&habits_day=" + new Date(Date.now() - 86400000).toISOString().slice(0, 10), ready: ".habits-panel .habits-day" },
+  { name: "Analyze habits dashboard", url: "/analyze?analyze_topic=habits&habits_view=calendar&habits_day=" + new Date(Date.now() - 86400000).toISOString().slice(0, 10), ready: ".habits-panel .habits-day" },
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   { name: "Analyze workspace agent experience dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", ready: `.usage-agent-experience-dashboard ${overTimeReady}` },
@@ -1223,6 +1223,25 @@ test('Recent conversation links open the selected conversation and search', { sk
   await page.locator('.home-recent-search').click();
   await page.waitForURL(url => url.pathname === '/library' && url.searchParams.get('view') === 'conversation');
   await page.locator('#queryTableLibrary .conversation-result-card').first().waitFor();
+});
+
+test('Habits daily bars use the available width when the window and range change', { skip }, async t => {
+  const app = await open(t, { url: '/analyze?analyze_topic=habits&habits_view=days', viewport: { width: 1920, height: 1050 }, ready: '.habits-days-chart .habits-span' });
+  const { page } = app, chart = page.locator('.habits-days-chart'), bar = chart.locator('.habits-span').first();
+  await page.waitForFunction(() => {
+    const chart = document.querySelector('.habits-days-chart'), svg = chart?.querySelector('svg');
+    return chart && svg && Number(svg.getAttribute('width')) === chart.clientWidth;
+  });
+  const wide = (await bar.boundingBox()).width;
+  await chart.scrollIntoViewIfNeeded();
+  await app.shot('wide');
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.waitForFunction(previous => document.querySelector('.habits-days-chart .habits-span')?.getBoundingClientRect().width < previous, wide);
+  const narrow = (await bar.boundingBox()).width;
+  assert.ok(narrow < wide, 'bars shrink with the available width');
+  await page.getByRole('combobox', { name: 'Your days range', exact: true }).selectOption('7');
+  await page.waitForFunction(previous => document.querySelector('.habits-days-chart .habits-span')?.getBoundingClientRect().width > previous, narrow);
+  assert.ok((await bar.boundingBox()).width > narrow, 'fewer days get wider bars');
 });
 
 test('pages without section menus use the full window', { skip }, async t => {

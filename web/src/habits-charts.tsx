@@ -117,7 +117,7 @@ export function DaysChart({ data, count = 28, fit }: { data: HabitsSummary; coun
   const span = Math.max(24, ...days.map(day => Math.ceil(day.end ?? 0))), top = fit ? 7 : 6, left = fit ? 38 : 42;
   const height = fit ? Math.max(top + 1, fit.height - 8) : 210;
   const width = fit ? fit.width : Math.max(left + 1, availableWidth || left + days.length * 14);
-  const pitchX = (width - left) / Math.max(1, days.length), bar = Math.min(18, pitchX * 0.72);
+  const pitchX = (width - left) / Math.max(1, days.length), bar = pitchX - Math.min(gapPx, pitchX * 0.28);
   const x = (index: number) => left + index * pitchX + (pitchX - bar) / 2;
   const y = (hours: number) => top + (hours / span) * (height - top);
   const clock = (hours: number) => formatClock(hours + data.settings.dayStart);

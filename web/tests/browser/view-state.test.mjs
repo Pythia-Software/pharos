@@ -1376,8 +1376,29 @@ test('Message Labels category menus apply to descendants and restore mixed selec
 });
 
 test('Habits switches views and restores the selected chart and its controls', {skip}, async t => {
- const app=await open(t,{url:'/analyze?analyze_topic=habits',ready:'.habits-calendar'}),{page}=app;
+ const api={'GET /api/habits':()=>{const data=defaultApi['GET /api/habits']();data.streaks.you.today='done';return data;}};
+ const app=await open(t,{url:'/analyze?analyze_topic=habits',viewport:{width:1920,height:1050},api,ready:'.habits-days-chart'}),{page}=app;
  const view=page.getByRole('combobox',{name:'View',exact:true});
+ assert.equal(await view.inputValue(),'days');
+ await app.shot('default');
+ const automation=page.getByRole('navigation',{name:'Explore this dashboard'}).getByRole('link',{name:/Automatic agent runs/});
+ await automation.scrollIntoViewIfNeeded();
+ await app.shot('automatic-link');
+ const automationURL=await automation.getAttribute('href');
+ const automationQuery=decodeQueryStrict(new URL(automationURL,page.url()).searchParams.get('q_rhythm'));
+ assert.deepEqual(automationQuery.grouping.keys,['initiator','automation']);
+ assert.ok(automationQuery.grouping.source.where.some(term=>term.field==='actor'&&term.value==='automated'));
+ await automation.click();
+ await page.locator('.usage-workspace-table').waitFor();await app.settled();
+ await page.getByRole('link',{name:/^Back to dashboard/}).waitFor();
+ const run=page.waitForResponse(response=>response.url().includes('/api/query/rhythm')&&response.request().method()==='POST');
+ await page.getByRole('button',{name:'Run Now',exact:true}).click();
+ assert.equal((await run).ok(),true);await app.settled();
+ await app.shot('automatic-table');
+ await page.goBack();
+ await page.locator('.habits-days-chart').waitFor();
+ await view.selectOption('calendar');
+ await page.locator('.habits-calendar').waitFor();
  await page.getByRole('combobox',{name:'Whose days',exact:true}).selectOption('agents');
  await page.getByRole('combobox',{name:'Calendar range',exact:true}).selectOption('13');
  await page.getByRole('combobox',{name:'Streaks count',exact:true}).selectOption('weekdays');
@@ -1412,7 +1433,6 @@ test('Habits standalone charts preview, pin, restore and open their records',{sk
   '.habits-days-chart',
   '.habits-calendar',
   '[data-pharos-target="section:habits-punchcard"] .habits-chart-inspection',
-  '.habits-automations',
  ];
  for(const selector of charts){
   await page.getByRole('combobox',{name:'View',exact:true}).selectOption(selector.includes('days-chart')?'days':selector.includes('calendar')?'calendar':'punchcard');

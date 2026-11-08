@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, encodeQuery, type WhereTerm } from "@pythia-software/query-table-core";
 import { parseRangeInput } from "./chart-range";
 import { shiftDay, type HabitsSummary, type PunchcardActor } from "./habits-model";
 import { orderedUsageQuery } from "./usage-query-order";
@@ -35,5 +35,9 @@ export function habitsChartQuery(data: HabitsSummary, selection: HabitsChartSele
 }
 
 export function habitsChartURL(data: HabitsSummary, selection: HabitsChartSelection, actors: PunchcardActor[], current: URLSearchParams) {
-  return usageWorkspaceURL({ mode: "query", dataset: "rhythm", topic: "habits", query: habitsChartQuery(data, selection, actors) }, current);
+  const query = habitsChartQuery(data, selection, actors);
+  const address = usageWorkspaceURL({ mode: "query", dataset: "rhythm", topic: "habits", query }, current);
+  const params = new URLSearchParams(address.slice(address.indexOf("?") + 1));
+  if (!params.has("analyze_opened")) params.set("analyze_opened", encodeQuery({ ...EMPTY_QUERY, where: query.where }));
+  return `/analyze?${params}`;
 }
