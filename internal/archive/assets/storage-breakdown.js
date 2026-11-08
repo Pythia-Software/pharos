@@ -16,9 +16,10 @@
 .storage-legend li{display:flex;align-items:center;gap:7px;max-width:100%;white-space:nowrap}
 .storage-legend li>span:not([class]){min-width:0;white-space:normal}
 .storage-legend b,.storage-table td.num{font-weight:600;font-variant-numeric:tabular-nums}
-.storage-views{display:inline-flex;margin:18px 0 8px;border:1px solid var(--line,#ccc);border-radius:5px;overflow:hidden}
+.storage-views{display:inline-flex;margin:18px 0 8px;border:1px solid var(--line,#ccc);border-radius:5px}
 .storage-views button{border:0;border-radius:0;background:none;color:var(--muted,#666);padding:4px 10px}
 .storage-views button+button{border-left:1px solid var(--line,#ccc)}
+.storage-views button:first-child{border-radius:4px 0 0 4px}.storage-views button:last-child{border-radius:0 4px 4px 0}.storage-views button:only-child{border-radius:4px}
 .storage-views button[aria-pressed="true"]{background:var(--accent,#315845);color:var(--panel,#fff)}
 .storage-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--fs-md,13px)}
 .storage-table th{color:var(--muted,#666);font-weight:500;text-align:left}

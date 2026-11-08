@@ -1,5 +1,7 @@
 import type { FieldDef, FieldSchema } from "@pythia-software/query-table-core";
 
+const libraryFingerprintWidth = 8 * 44;
+
 // These are display columns. Project only the entity identity; ribbon evidence
 // is fetched when the cell is mounted, independently of the query's measures.
 export function withFingerprintColumn(schema: FieldSchema, dataset: string): FieldSchema {
@@ -12,12 +14,14 @@ export function withFingerprintColumn(schema: FieldSchema, dataset: string): Fie
     source: { kind: "derived", dependencies: [identity], accessor: row => row[identity] },
     filter: { enabled: false }, sort: { enabled: false }, aggregate: { measure: false, groupable: false },
     render: identity === "conversation_id" ? "label_fingerprint" : "workspace_fingerprint",
-    select: { default: false, width: 180 }, property: { default: false },
+    select: { default: dataset === "library" && name === "fingerprint", width: dataset === "library" ? libraryFingerprintWidth : 180 }, property: { default: false },
   });
   const fields = [fingerprint("fingerprint", "Fingerprint", identity)];
   if (identity === "conversation_id" && schema.fields.some(field => field.name === "workspace_id")) {
     fields.push(fingerprint("workspace_fingerprint", "Workspace fingerprint", "workspace_id"));
   }
   const additions = fields.filter(field => !schema.fields.some(existing => existing.name === field.name));
-  return additions.length ? { ...schema, fields: [...schema.fields, ...additions] } : schema;
+  return additions.length ? { ...schema, fields: [...schema.fields, ...additions],
+    ...(dataset === "library" ? { defaultSelect: [...(schema.defaultSelect ?? []), { field: "fingerprint", width: libraryFingerprintWidth }] } : {}),
+  } : schema;
 }

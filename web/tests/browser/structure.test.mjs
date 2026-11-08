@@ -401,7 +401,11 @@ const ROUTES = [
   { name: "Search table", url: "/library?view=table", ready: "#queryTableLibrary .qt-row" },
   { name: "Markdown links in transcript", url: `${work}/conversation/${rootConversation}`, api: markdownLinkAPI, ready: ".conversation-panel .markdown-link" },
   { name: "Markdown links in Search", url: "/library", api: {...conversationResultAPI,...markdownLinkAPI}, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("link",{name:"Running dev server",exact:true}).waitFor();}, shown: ".result-turn-content .markdown-link" },
-  { name: "Search nested reviews and human writing", url: "/library", api: authoredTurnAPI, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("button",{name:/Sub-agent · Reviewer 5/}).waitFor();}, shown: ".result-turn-content .human-written" },
+  { name: "Search nested reviews and human writing", url: "/library?reader_writing=0&reader_events=1&reader_labels=1", api: authoredTurnAPI, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("button",{name:/Sub-agent · Reviewer 5/}).waitFor();}, shown: ".result-turn-content .human-written",
+    check: async page => {
+      const painted = await page.locator(".result-turn-content .human-written").first().evaluate(element => getComputedStyle(element).backgroundColor);
+      assert.notEqual(painted, "rgba(0, 0, 0, 0)", "human writing remains highlighted when the reader preference is off");
+    } },
   { name: "Transcript human writing", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".conversation-panel .human-written" },
   { name: "Transcript expanded sub-agent", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".subagent-run", open: async page => { await page.locator(".subagent-run > summary").first().click(); }, shown: ".subagent-body" },
   { name: "Transcript agent event link", url: `${work}/conversation/${rootConversation}?reader_events=1&reader_event_link=e-review`, api: authoredTurnAPI, ready: ".conversation-panel.show-events mark.event-target.link-selected" },
@@ -415,7 +419,18 @@ const ROUTES = [
         const current = page.getByRole("navigation", { name: "Conversation outline", exact: true }).locator('[aria-current="true"]');
         await current.waitFor();
         assert.match(await current.innerText(), /^Turn 12/);
-        await page.locator(".result-turn-content .result-message.assistant.pharos-highlight").waitFor();
+        const highlighted = page.locator(".result-turn-content .result-message.assistant.pharos-highlight");
+        await highlighted.waitFor();
+        const clipped = await highlighted.evaluate(element => {
+          const target = element.getBoundingClientRect();
+          for (let ancestor = element.parentElement; ancestor && !ancestor.matches("main"); ancestor = ancestor.parentElement) {
+            const style = getComputedStyle(ancestor), rect = ancestor.getBoundingClientRect();
+            if (style.overflowX !== "visible" && (target.left - 8 < rect.left || target.right + 8 > rect.right)) return true;
+            if (style.overflowY !== "visible" && (target.top - 8 < rect.top || target.bottom + 8 > rect.bottom)) return true;
+          }
+          return false;
+        });
+        assert.equal(clipped, false, "the selected message's highlight has room outside its edges");
         return;
       }
       await page.getByRole("button", selection === "summary" ? { name: /^Browse turns: / } : { name: "Browse", exact: true }).click();

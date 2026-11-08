@@ -42,6 +42,21 @@ const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   tokens: "Outcomes", carbon: "Outcomes",
 };
 
+// Query tables are grouped by the records they contain, not dashboard topic.
+const queryGroups = [
+  { id: "conversations", label: "Conversations & agent sessions" },
+  { id: "tools", label: "Tools & context" },
+  { id: "usage", label: "Usage & activity" },
+  { id: "events", label: "Agent events" },
+] as const;
+const queryDatasetGroups: Record<(typeof analyzeQueryDatasets)[number], (typeof queryGroups)[number]["id"]> = {
+  messages: "conversations", message_labels: "conversations", session_shape: "conversations",
+  tl1_attempts: "conversations", conversation_activity: "conversations",
+  tool_calls: "tools", compactions: "tools", skill_usages: "tools", mcp_calls: "tools",
+  model_requests: "usage", usage: "usage", rhythm: "usage", parallelism: "usage",
+  agent_events: "events", agent_event_messages: "events", agent_event_rates: "events",
+};
+
 // Schema defaults are immutable; loading all schemas on every URL edit makes
 // navigation needlessly repeat the same work.
 const datasetQueries = new Map<UsageDataset, QueryState>(analyzeQueryDatasets.map(dataset => [dataset, fittedDefaultQuery(loadSchema(schemaDocuments[dataset]))]));
@@ -57,8 +72,11 @@ export function analyzePages(params: URLSearchParams, previews = agentEventsEnab
       children: Object.entries(usageTopics).filter(([topic]) => dashboardGroups[topic as UsageTopic] === label && (previews || !agentEventTopics.has(topic)))
         .map(([topic, item]) => ({ id: `dashboards:${topic}`, label: item.label, href: usageWorkspaceURL({ mode: "dashboards", topic: topic as UsageTopic, report: "" }, params) })),
     })) },
-    { id: "query", label: "Query tables", children: analyzeQueryDatasets.filter(dataset => previews || !agentEventDatasets.has(dataset))
-      .map(dataset => ({ id: `query:${dataset}`, label: usageDatasets[dataset].label, href: usageWorkspaceURL({ mode: "query", dataset, topic: usageDatasetTopics[dataset], report: "", query: datasetQueries.get(dataset)! }, datasetContext) })),
+    { id: "query", label: "Query tables", children: queryGroups.map(group => ({
+      id: `query-group:${group.id}`, label: group.label,
+      children: analyzeQueryDatasets.filter(dataset => queryDatasetGroups[dataset] === group.id && (previews || !agentEventDatasets.has(dataset)))
+        .map(dataset => ({ id: `query:${dataset}`, label: usageDatasets[dataset].label, href: usageWorkspaceURL({ mode: "query", dataset, topic: usageDatasetTopics[dataset], report: "", query: datasetQueries.get(dataset)! }, datasetContext) })),
+    })).filter(group => group.children.length),
     },
   ];
 

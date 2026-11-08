@@ -23,9 +23,10 @@
 .carbon-comparison select{width:50px;min-width:0;padding:0 15px 0 3px;border:1px solid var(--line,#ccc);border-radius:5px;background-color:var(--panel,#fff);background-position:calc(100% - 9px) center,calc(100% - 5px) center;background-size:4px 4px;color:var(--ink,#222);font:inherit}
 .carbon-comparison select[data-carbon-control="vehicle"]{width:110px}
 .carbon-comparison .carbon-info-button{margin-left:2px}
-.carbon-segmented{display:inline-flex;flex:none;border:1px solid var(--line,#ccc);border-radius:5px;overflow:hidden}
+.carbon-segmented{display:inline-flex;flex:none;border:1px solid var(--line,#ccc);border-radius:5px}
 .carbon-segmented button{border:0;border-radius:0;background:none;color:var(--muted,#666);padding:4px 10px}
 .carbon-segmented button+button{border-left:1px solid var(--line,#ccc)}
+.carbon-segmented button:first-child{border-radius:4px 0 0 4px}.carbon-segmented button:last-child{border-radius:0 4px 4px 0}.carbon-segmented button:only-child{border-radius:4px}
 .carbon-segmented button[aria-pressed="true"]{background:var(--accent,#315845);color:var(--panel,#fff)}
 .carbon-assumptions h3{margin:0;font-size:var(--fs-base,14px)}
 .carbon-controls{display:flex;flex-wrap:wrap;align-items:end;gap:12px 18px;margin:12px 0 4px}

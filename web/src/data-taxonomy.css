@@ -31,8 +31,8 @@
 .guide-example-scene .guide-example-term:hover { background-color: #eaf3ff; }
 .guide-example-term small { display: block; color: var(--example-muted); font-size: 10px; font-weight: 400; }
 .guide-desktop-stage { padding: 28px; border: 1px solid #cfd9ea; border-radius: 10px; background: linear-gradient(140deg, #e4edf7, #d7dfee 60%, #e9e4f2); }
-.guide-native-window { min-width: 0; overflow: hidden; border: 1px solid #adb7c5; border-radius: 9px; background: #fff; box-shadow: 0 12px 28px #293d5b26, 0 2px 5px #293d5b15; }
-.guide-window-bar { display: flex; align-items: center; gap: 14px; min-height: 44px; padding: 10px 14px; border-bottom: 1px solid #d0d4db; background: #f2f2f4; }
+.guide-native-window { min-width: 0; border: 1px solid #adb7c5; border-radius: 9px; background: #fff; box-shadow: 0 12px 28px #293d5b26, 0 2px 5px #293d5b15; }
+.guide-window-bar { display: flex; align-items: center; gap: 14px; min-height: 44px; padding: 10px 14px; border-bottom: 1px solid #d0d4db; border-radius: 8px 8px 0 0; background: #f2f2f4; }
 .guide-window-bar > strong { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
 .guide-window-lights { display: flex; flex: none; gap: 6px; }
 .guide-window-lights i { width: 10px; height: 10px; border: 1px solid #0001; border-radius: 50%; background: #ff6059; }
@@ -59,7 +59,7 @@
 .guide-finder-row:nth-child(2n) { border-radius: 4px; background: #f3f5f8; }
 .guide-finder-row > span:first-child { display: flex; min-width: 0; align-items: center; gap: 8px; overflow-wrap: anywhere; }
 .guide-finder-row > span + span { color: var(--example-muted); font-size: 10px; }
-.guide-finder-path { display: flex; align-items: center; gap: 7px; padding: 9px 12px; border-top: 1px solid var(--example-line); background: #f7f7f9; color: #5b6069; font-size: 10px; overflow-wrap: anywhere; }
+.guide-finder-path { display: flex; align-items: center; gap: 7px; padding: 9px 12px; border-top: 1px solid var(--example-line); border-radius: 0 0 8px 8px; background: #f7f7f9; color: #5b6069; font-size: 10px; overflow-wrap: anywhere; }
 .guide-finder-path > span:last-child:not(:first-of-type) { margin-left: auto; white-space: nowrap; }
 .guide-finder-path .guide-folder-icon { width: 15px; height: 13px; }
 .guide-example-connections { padding: 14px 18px; border: 1px solid #d5dce5; border-radius: 0 0 8px 8px; background: #f5f8fc; }
@@ -75,7 +75,7 @@
 .data-guide .guide-chat-choices > button { display: flex; align-items: center; gap: 7px; padding: 7px 8px; font-size: 11px; }
 .data-guide .guide-chat-choices > button[aria-pressed=true] { background: #e3e7ec; }
 .data-guide .guide-chat-choices > button:hover { background: #d8e5f5; }
-.guide-chat-window { display: grid; grid-template-columns: 140px minmax(0, 1fr); overflow: hidden; border: 1px solid #cbd0d8; border-radius: 10px; background: #fff; box-shadow: 0 4px 14px #15233112; }
+.guide-chat-window { display: grid; grid-template-columns: 140px minmax(0, 1fr); border: 1px solid #cbd0d8; border-radius: 10px; background: #fff; box-shadow: 0 4px 14px #15233112; }
 .guide-chat-titlebar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-bottom: 1px solid #dedede; border-radius: 8px 8px 0 0; background: #efefef; }
 .data-guide .guide-chat-titlebar > .guide-example-term { padding: 3px; font-size: 11px; font-weight: 500; }
 .guide-chat-titlebar > .app-icon { margin-left: auto; color: #777; }
@@ -83,7 +83,7 @@
 .data-guide .guide-chat-app-title > .guide-example-term { padding: 1px 2px; font-size: 11px; font-weight: 500; }
 .guide-chat-app-title .guide-chat-platform { color: #727272; }
 .guide-sunburst { flex: none; width: 28px; height: 28px; color: #151515; }
-.guide-chat-sidebar { display: flex; flex-direction: column; gap: 12px; padding: 15px 9px 13px; background: #f5f5f5; }
+.guide-chat-sidebar { display: flex; flex-direction: column; gap: 12px; padding: 15px 9px 13px; border-radius: 0 0 0 9px; background: #f5f5f5; }
 .data-guide .guide-chat-brand { display: flex; align-items: center; gap: 5px; padding: 4px; font-size: 13px; }
 .guide-chat-brand strong { font-weight: 600; }
 .guide-chat-new { display: flex; align-items: center; gap: 7px; padding: 5px 7px; font-size: 11px; }
