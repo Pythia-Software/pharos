@@ -565,6 +565,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeJSON(w, map[string]any{"ok": true}, 200)
 		}
+	case path == "/api/diagnostics/query-counts":
+		// In-memory tallies only; reading them touches no catalog.
+		writeJSON(w, s.Catalog.queryCounts.snapshot(), 200)
 	case path == "/api/diagnostics/profile":
 		w.Header().Set("X-Pharos-Profile-Labels", strings.Join(taskProfileLabelKeys, ","))
 		seconds, _ := strconv.Atoi(r.URL.Query().Get("seconds"))
