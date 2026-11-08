@@ -129,8 +129,8 @@ var backgroundItems = []backgroundItem{
 		Stages: []string{"identities", "git"}, Kinds: []string{"analysis.github", "analysis.identities", "analysis.git"}, Why: "Links conversations to their repositories, and asks Git which branches merged."},
 	{ID: "tools", Label: "Tools & usage", Verb: "Updating tools and usage", Feeds: "Analyze → Tools, and the usage cards", Cadence: cadenceFrequent, Adaptive: true,
 		Stages: []string{"tools"}, Kinds: []string{"analysis.tools"}, Why: "Adds the commands and tokens of the workspaces that changed."},
-	{ID: "writing", Label: "Update writing estimates", Verb: "Updating writing estimates", Feeds: "Human Words cards, and Analyze → Writing", Cadence: cadenceFrequent,
-		Stages: []string{"authorship"}, Kinds: []string{"analysis.authorship"}, Why: "Updates a bounded batch of new or changed messages. Estimates are refined overnight."},
+	{ID: "writing", Label: "Update writing estimates", Verb: "Updating writing estimates", Feeds: "Human Words cards, Analyze → Writing, and related conversations on Work pages", Cadence: cadenceFrequent,
+		Stages: []string{"authorship", "peers"}, Kinds: []string{"analysis.authorship"}, Why: "Updates a bounded batch of new or changed messages, then links reviews to the work they read or were pasted into. Estimates are refined overnight."},
 	{ID: "findings", Label: "Findings", Verb: "Updating findings", Feeds: "Optimize", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"findings"}, Kinds: []string{"analysis.findings"}, Why: "Measures the findings you watch against new work."},
 	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
@@ -146,7 +146,7 @@ var backgroundItems = []backgroundItem{
 }
 
 // stageOrder is the analysis chain's order (finishDeferredStages).
-var stageOrder = []string{"identities", "git", "tools", "authorship", "findings", "labels", "agent_events"}
+var stageOrder = []string{"identities", "git", "tools", "authorship", "peers", "findings", "labels", "agent_events"}
 
 func backgroundItemByID(id string) (backgroundItem, bool) {
 	for _, item := range backgroundItems {
@@ -1296,4 +1296,4 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 }
 
 // stageItems is the background item each chain stage belongs to.
-var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "findings": "findings", "labels": "labels", "agent_events": "agent_events"}
+var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "peers": "writing", "findings": "findings", "labels": "labels", "agent_events": "agent_events"}

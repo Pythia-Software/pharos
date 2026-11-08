@@ -17,7 +17,7 @@ import (
 var queryCacheTables = []string{
 	"hosts", "machines", "host_machines", "origin_observations", "conversation_sightings", "conversation_origins",
 	"repositories", "workspaces", "workspace_names", "work_items", "conversations",
-	"messages", "message_authorship", "message_authorship_spans", "conversation_launches",
+	"messages", "message_authorship", "message_authorship_spans", "conversation_launches", "work_peer_links",
 	"conversation_documents", "conversation_identity_links", "conversation_group_membership",
 	"declared_native_aliases", "agent_sessions", "agent_session_usage", "agent_session_messages",
 	"agent_session_token_evidence", "usage_attribution_state",

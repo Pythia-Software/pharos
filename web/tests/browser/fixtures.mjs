@@ -121,18 +121,31 @@ const codeBlock = ["```js", ...Array.from({ length: 30 }, (_, i) => `${"  ".repe
 const wideTable = [`| ${Array.from({ length: 14 }, (_, i) => `Column header ${i}`).join(" | ")} |`, `|${" --- |".repeat(14)}`,
   ...Array.from({ length: 6 }, (_, row) => `| ${Array.from({ length: 14 }, (_, i) => `value-${row}-${i}-${"x".repeat(i)}`).join(" | ")} |`)].join("\n");
 const usage = (input, output = 400) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: input * 4, cache_creation_input_tokens: 200 });
+// Related work (peer_reader.go): a certain review and an uncertain reader.
+export const peerWorkID = "work-review";
+const peerHandoff = (kind, confidence) => ({ kind, confidence, role: "reviewer", workspace_id: peerWorkID, conversation_id: "conv-review", message_id: "conv-review-reply", title: `Review: ${longTitle}` });
+export const relatedWork = {
+  peers: [
+    { workspace_id: peerWorkID, title: `Review: ${longTitle}`, provider: "codex", started_at: at(30), role: "reviewer", confidence: "high",
+      evidence: [{ kind: "read_written_by", confidence: "high", from_workspace_id: workID, to_workspace_id: peerWorkID, details: { basis: "diff", lines: 42, timing: "return" } }, { kind: "copied_into", confidence: "high", from_workspace_id: peerWorkID, to_workspace_id: workID, details: { words: 180 } }] },
+    { workspace_id: "work-maybe", title: "Parallel work in the same checkout that may have read this diff", provider: "claude", started_at: at(60), role: "reviewer", confidence: "low",
+      evidence: [{ kind: "read_written_by", confidence: "low", from_workspace_id: workID, to_workspace_id: "work-maybe", details: { basis: "read", lines: 4 } }] },
+  ],
+  peer_conversations: [{ id: "conv-review", workspace_id: peerWorkID, provider: "codex", native_id: "conv-review", started_at: at(30), title: `Review: ${longTitle}`, peer_role: "reviewer", peer: true }],
+};
 function transcript() {
   sequence = 0;
   const messages = [];
   for (let turn = 0; turn < 12; turn++) {
-    messages.push(event("message", `Turn ${turn}: ${turn % 3 ? "please look at the failing test and fix it" : `${longTitle}. ${"Here is more context that wraps across several lines. ".repeat(8)}`}`, { role: "user" }));
+    // The first prompt quotes a related review; the first edit was read by one.
+    messages.push(event("message", `Turn ${turn}: ${turn % 3 ? "please look at the failing test and fix it" : `${longTitle}. ${"Here is more context that wraps across several lines. ".repeat(8)}`}`, { role: "user", ...(turn === 0 ? { handoffs_in: [peerHandoff("copied_into", "high")] } : {}) }));
     messages.push(event("message", { message: { id: `r-${turn}`, usage: usage(12000 + turn * 9000), content: [{ type: "text", text: turn % 2 ? `Here is the change:\n\n${codeBlock}` : `Findings so far:\n\n${wideTable}\n\nA path to note: /Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive/incremental_sync_recovery_test.go` }] } }));
     const call = `call-${turn}`;
     if (turn % 3 === 0) {
       messages.push(event("tool_call", { name: "Bash", input: { command: `go test -run 'TestIncrementalSyncRecovery|TestCaptureAfterSleep' -count=1 -v ./internal/archive/... 2>&1 | tee /tmp/${"very-long-log-name-".repeat(4)}${turn}.log` } }, { call_id: call }));
       messages.push(event("tool_result", { content: Array.from({ length: 40 }, (_, i) => `=== RUN   TestIncrementalSyncRecovery/case_${i}_${"with_a_long_subtest_name_".repeat(3)}`).join("\n"), is_error: turn === 3 }, { call_id: call }));
     } else if (turn % 3 === 1) {
-      messages.push(event("tool_call", { name: "Edit", input: { file_path: "/repo/internal/archive/incremental_sync.go", old_string: `func recover() {\n${longLine}\n}`, new_string: `func recover(ctx context.Context) error {\n${longLine}\n${longLine}\n\treturn nil\n}` } }, { call_id: call }));
+      messages.push(event("tool_call", { name: "Edit", ...(turn === 1 ? { handoffs_out: [peerHandoff("read_written_by", "low")] } : {}), input: { file_path: "/repo/internal/archive/incremental_sync.go", old_string: `func recover() {\n${longLine}\n}`, new_string: `func recover(ctx context.Context) error {\n${longLine}\n${longLine}\n\treturn nil\n}` } }, { call_id: call }));
       messages.push(event("tool_result", { content: "The file /repo/internal/archive/incremental_sync.go has been updated." }, { call_id: call }));
     } else {
       // A delegation with a nested delegation inside it.
@@ -897,7 +910,7 @@ export const defaultApi = {
   // The Session signals strip: the failed call's result, and two late prompts
   // as corrections, so stepping lands in a collapsed turn.
   "GET /api/work/:id/conversations/:conversation/signals": ({ params }) => {
-    if (params.id !== workID) return undefined;
+    if (params.id !== workID && params.id !== peerWorkID) return undefined;
     const coverage = { has_tool_data: true, has_timestamps: true, has_authorship: true, has_context_window: false };
     if (params.conversation !== rootConversation) return { conversation_id: params.conversation, signals: [], coverage };
     const messages = transcript(), failed = messages.filter(message => message.kind === "tool_result" && JSON.parse(message.text).is_error), late = messages.filter(message => message.role === "user").slice(-2);

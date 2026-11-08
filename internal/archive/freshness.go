@@ -777,7 +777,8 @@ func libraryInputs(meta map[string]string) string {
 // stops at the first that fails.
 var chainStages = []struct{ kind, domain, label string }{
 	{"analysis.github", "", "GitHub check"}, {"analysis.identities", "an.identities", "Identity links"}, {"analysis.git", "an.git", "Merges from Git"},
-	{"analysis.tools", "an.tools", "Tool summaries"}, {"analysis.authorship", "an.authorship", "Writing classification"}, {"analysis.findings", "findings", "Findings"}}
+	{"analysis.tools", "an.tools", "Tool summaries"}, {"analysis.authorship", "an.authorship", "Writing classification"},
+	{"analysis.peers", "", "Related conversations"}, {"analysis.findings", "findings", "Findings"}}
 
 // chainFailure applies failure precedence (§5) to a domain that is not
 // current: its own stage failed after its last completion (and after the

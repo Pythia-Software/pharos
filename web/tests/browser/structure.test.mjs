@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { defaultApi, cloudScheduledStatus, rootConversation, workID, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection } from "./fixtures.mjs";
+import { defaultApi, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const missingPrices = { ...defaultApi['GET /api/pricing'], unpriced_tokens: 5000,
@@ -55,6 +55,20 @@ const tokenEvidenceAPI = {
         evidence:[{scope:"last-request",total_tokens:116837,message_id:"conv-child-reply",conversation_id:"conv-child",workspace_id:workID}]}};
     return {...data, rows:data.rows.map(patch), focus:data.focus.map(patch)};
   },
+};
+// Related work: chips (one uncertain) and a certain review's session among
+// the workspace's own.
+const relatedWorkAPI = {
+  "GET /api/work/:id": request => ({ ...defaultApi["GET /api/work/:id"](request), ...relatedWork }),
+  "GET /api/work/:id/delegation": request => {
+    const data = defaultApi["GET /api/work/:id/delegation"](request), [review] = relatedWork.peers;
+    const peer = { ...data.rows[0], id: "s-peer", workspace_id: peerWorkID, conversation_id: "conv-review", label: review.title, outline: "2", order: data.rows.length, child_count: 0,
+      peer: { workspace_id: peerWorkID, title: review.title, role: review.role } };
+    return { ...data, rows: [...data.rows, peer], focus: [...data.focus, peer], matched: { ...data.matched, [peer.id]: true }, total: data.total + 1, session_count: data.session_count + 1, group_totals: data.totals };
+  },
+  "GET /api/work/:id/conversations/:conversation": request => request.params.id === peerWorkID ? { ...relatedWork.peer_conversations[0],
+    messages: [{ id: "conv-review-ask", role: "user", kind: "message", text: "Review the changes" }, { id: "conv-review-reply", role: "assistant", kind: "message", text: "P1: the sort ignores ties." }] }
+    : defaultApi["GET /api/work/:id/conversations/:conversation"](request),
 };
 // The root session's last reply, which the card previews as its latest response.
 const latestResponseID = defaultApi["GET /api/work/:id/conversations/:conversation"]({ params: { id: workID, conversation: rootConversation } }).messages
@@ -630,6 +644,17 @@ const ROUTES = [
   { name: "Mac menu with all items", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, api: tokenEvidenceAPI, ready: ".delegation-table tbody tr" },
   { name: "Workspace Timeline", url: `${work}?explorer=timeline`, ready: ".lt-session-root" },
+  { name: "Workspace with related work", url: work, api: relatedWorkAPI, ready: ".peer-strip .peer-chip.uncertain", open: page => page.locator(".peer-reasons summary").click(), shown: ".peer-reasons[open] li",
+    check: async page => {
+      await page.locator('[data-session-id="s-peer"]').first().waitFor();
+      // Following a hand-off opens the related conversation and reveals the
+      // message without taking keyboard focus.
+      await page.goto(`${page.url().split("/work/")[0]}${work}/conversation/${rootConversation}`);
+      await page.locator(".handoff-marker").first().click();
+      await page.locator(".peer-reader-note").waitFor();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+      assert.ok(await page.evaluate(() => !document.activeElement?.closest(".conversation-panel")), "following a hand-off moved focus into the reader");
+    } },
   { name: "Workspace Timeline skipping idle time, agent events expanded", url: `${work}?explorer=timeline&disclosures=${idleTimelineDisclosures}`, api: idleTimelineAPI, ready: ".lt-session-node .lt-session-row-label svg.event-link-glyph", open: page => page.locator(".lt-session-ribbon .lt-idle-cut-line").first().waitFor({ state: "attached" }), shown: ".lt-clock-heading .lt-idle-cut time" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, api: tokenEvidenceAPI, ready: ".conversation-panel .turn" },
