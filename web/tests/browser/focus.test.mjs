@@ -8,6 +8,22 @@ import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { defaultApi, workID, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
+test('the Lighthouse menu action shares its saved setting with App preferences', {skip}, async t => {
+  const {page, settled} = await open(t, {url:'/settings/preferences', ready:'#lighthouseLoadingIndicator'});
+  const indicator = page.getByRole('switch', {name:'Lighthouse loading indicator'});
+  assert.equal(await indicator.getAttribute('aria-checked'), 'true');
+  await page.evaluate(() => window.pharosPageAction('lighthouse-loading'));
+  assert.equal(await indicator.getAttribute('aria-checked'), 'false');
+  assert.equal(await page.evaluate(() => window.pharosLighthouseLoadingIndicator()), false);
+  await page.evaluate(() => window.pharosPrefs.flush());
+  await page.reload();
+  await indicator.waitFor();
+  await settled();
+  assert.equal(await indicator.getAttribute('aria-checked'), 'false');
+  await indicator.click();
+  assert.equal(await page.evaluate(() => window.pharosLighthouseLoadingIndicator()), true);
+});
+
 test('Settings switches keep keyboard focus and their saved state across Settings and Analyze', {skip}, async t => {
   let background = structuredClone(defaultApi['GET /api/background']);
   const {page, settled, shot} = await open(t, {url:'/settings/sync',viewport:{width:1920,height:1050},ready:'#backgroundSchedule .bg-col', api: {
