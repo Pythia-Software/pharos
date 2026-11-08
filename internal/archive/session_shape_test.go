@@ -511,9 +511,32 @@ func TestSessionShapeIncremental(t *testing.T) {
 	if len(shapeRows(t, c)) == 0 || countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty") != all {
 		t.Fatal("a page stored session shape")
 	}
-	if _, err := c.refreshSessionShape(t.Context(), 100, false); err != nil {
-		t.Fatal(err)
-	}
+	t.Run("maintenance reports committed conversations", func(t *testing.T) {
+		c.ops = newOpRegistry("service")
+		defer func() { c.ops = nil }()
+		pass := c.beginPass(t.Context(), "maintenance.session-shape", triggerChained)
+		defer pass.end(nil)
+		var reports []activityWork
+		ctx := withWorkProgress(t.Context(), func(work activityWork) { reports = append(reports, work) })
+		refresh := func(limit int) {
+			t.Helper()
+			var n int
+			var err error
+			pass.runIO(ctx, func(ctx context.Context) { n, err = c.refreshSessionShape(ctx, limit, false) })
+			pass.worked(n)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		refresh(1)
+		if len(reports) != 2 || reports[0].Done != 0 || reports[1].Done != 1 || reports[1].Total != float64(all) || reports[1].Unit != "conversation" {
+			t.Fatalf("first batch did not report its conversation inventory: %+v", reports)
+		}
+		refresh(100)
+		if step := operationStep(pass.op.view()); step["done"] != float64(all) || step["total"] != float64(all) || step["unit"] != "conversation" {
+			t.Fatalf("maintenance lost or double-counted progress: %+v", step)
+		}
+	})
 	if countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty") != 0 || countRows(t, c, "SELECT COUNT(*) FROM session_shape_facts") != all {
 		t.Fatal("refresh left conversations unstored")
 	}

@@ -217,6 +217,23 @@ func (p *daemonPass) context(ctx context.Context) context.Context {
 // active reports a pass with an operation open.
 func (p *daemonPass) active() bool { return p != nil && p.op != nil }
 
+// waitForDaemonPasses records a shared gate for every pass it pauses. The
+// scoped waits preserve their counts, leave tentative probes invisible and
+// restore only the blocked states they own.
+func waitForDaemonPasses(reason, detail string, passes ...*daemonPass) func() {
+	resumes := make([]func(), 0, len(passes))
+	for _, pass := range passes {
+		if pass.active() {
+			resumes = append(resumes, pass.op.waitFor(reason, detail))
+		}
+	}
+	return func() {
+		for _, resume := range resumes {
+			resume()
+		}
+	}
+}
+
 // defaultError is err, or fallback when err is nil.
 func defaultError(err, fallback error) error {
 	if err != nil {
