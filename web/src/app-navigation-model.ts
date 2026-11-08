@@ -34,12 +34,13 @@ export function optimizePages(): NestedPage[] {
 const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   activity: "People", human: "People", habits: "People",
   compaction: "Agents", skills: "Agents", calls: "Agents", tools: "Agents", time: "Agents",
-  parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents", session_shape: "Agents",
+  parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents", session_shape: "Agents", agent_event_rates: "Agents",
   "thinking-overview": "Agents", "thinking-detail": "Agents",
   tokens: "Outcomes", carbon: "Outcomes",
 };
 
-// Preview pages (agent-events-flag.ts) are listed only when turned on.
+// Preview pages (agent-events-flag.ts) are listed only when turned on; Agent
+// Events is not one of them.
 export function analyzePages(params: URLSearchParams, previews = agentEventsEnabled()): NestedPage[] {
   return [
     { id: "dashboards", label: "Dashboards", children: (["People", "Agents", "Outcomes"] as const).map(label => ({

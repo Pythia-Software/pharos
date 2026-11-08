@@ -8,6 +8,7 @@ import { reader } from "../helpers/transcript.mjs";
 import { plain } from "../helpers/classic-script.mjs";
 import { eventReaderURL, interleaveByKind } from "../../../src/agent-event-examples";
 import { AGENT_EVENTS_KEY, agentEventsEnabled } from "../../../src/agent-events-flag";
+import { agentEventFixLinks } from "../../../src/agent-event-rates-catalog";
 
 test("Agent Experience is listed by its Settings switch or by the library's configuration", t => {
   const saved = globalThis.window;
@@ -86,4 +87,13 @@ test("the dashboard's kinds and the reader's groups are Go's", () => {
   assert.deepEqual(agentEventKinds, kindsFixture.kinds);
   assert.deepEqual([...agentEventGroups], kindsFixture.groups);
   assert.deepEqual(plain(reader.EVENT_GROUPS.map(([group]) => group)), kindsFixture.groups);
+});
+
+test("Fixes links name the friction kinds the population keeps", () => {
+  const kinds = where => agentEventFixLinks(where).map(link => new URLSearchParams(link.href.split("?")[1]).get("fixes_kind"));
+  assert.deepEqual(kinds([]), ["stale", "flaky", "env", "tool", "obstacle"]);
+  assert.deepEqual(kinds([{ field: "family", op: "=", value: "stale_guidance" }]), ["stale"]);
+  // The first view: friction without plain obstacles.
+  assert.deepEqual(kinds([{ field: "family_group", op: "=", value: "Friction" }, { field: "family", op: "!=", value: "obstacle" }]), ["stale", "flaky", "env", "tool"]);
+  assert.deepEqual(kinds([{ field: "family_group", op: "=", value: "Choices you may not see" }]), []);
 });

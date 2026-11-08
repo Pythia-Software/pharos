@@ -20,6 +20,7 @@ import fixesDocument from "../../schemas/fixes.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
 import agentEventsDocument from "../../schemas/agent_events.schema.json";
 import agentEventMessagesDocument from "../../schemas/agent_event_messages.schema.json";
+import agentEventRatesDocument from "../../schemas/agent_event_rates.schema.json";
 import sessionShapeDocument from "../../schemas/session_shape.schema.json";
 
 export const schemaDocuments = {
@@ -27,5 +28,5 @@ export const schemaDocuments = {
   compactions: compactionsDocument, model_requests: modelRequestsDocument, library: libraryDocument, usage: usageDocument, writing: writingDocument, conversation_activity: conversationActivityDocument,
   writing_messages: writingMessagesDocument, mcp_calls: mcpCallsDocument, tools: toolsDocument, tool_calls: toolCallsDocument,
   skill_usages: skillUsagesDocument, tl1_attempts: tl1AttemptsDocument, parallelism: parallelismDocument, rhythm: rhythmDocument, findings: findingsDocument, safety: safetyDocument, fixes: fixesDocument,
-  agent_events: agentEventsDocument, agent_event_messages: agentEventMessagesDocument, session_shape: sessionShapeDocument,
+  agent_events: agentEventsDocument, agent_event_messages: agentEventMessagesDocument, agent_event_rates: agentEventRatesDocument, session_shape: sessionShapeDocument,
 };

@@ -484,6 +484,10 @@ const ROUTES = [
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   { name: "Analyze workspace agent experience dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", ready: `.usage-agent-experience-dashboard ${overTimeReady}` },
+  // Agent Events opens on Compare; its trend is the stacked kind chart.
+  { name: "Agent Events dashboard", url: "/analyze?analyze_topic=agent_event_rates", ready: `.usage-agent-events-dashboard ${analysisReady}`,
+    check: async page => assert.deepEqual(await page.locator(".usage-agent-events-dashboard [role=alert], .usage-agent-events-dashboard .query-table-error").allTextContents(), [], "the dashboard reports an error") },
+  { name: "Agent Events trend by kind", url: `/analyze?analyze_topic=agent_event_rates&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "trend", metric: "per_thousand", split: "family", period: "day" }))}`, ready: `.usage-agent-events-dashboard ${overTimeReady}` },
   // With a partial population, so its chips share the control row at 320 px.
   { name: "Analyze workspace session shape dashboard", url: `/analyze?${new URLSearchParams({ analyze_workspace: "1", analyze_topic: "session_shape",
     analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "started_at", op: ">=", value: "-30d" }, { field: "started_at", op: "<", value: "+0s" }, { any: [{ field: "harness", op: "!=", value: "antigravity-cli" }, { field: "harness", op: "is_null", value: "" }] }] }) })}`,

@@ -21,6 +21,7 @@ import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catalog";
 import { mcpAnalysisCatalog as mcp } from "../../../src/mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog as agentEvents } from "../../../src/agent-events-analysis-catalog";
+import { agentEventRatesCatalog as eventRates } from "../../../src/agent-event-rates-catalog";
 import { sessionShapeAnalysisCatalog as sessionShape } from "../../../src/session-shape-analysis-catalog";
 import { toolTimeAnalysisCatalog as time, skillsAnalysisCatalog as skills } from "../../../src/record-analysis-catalogs";
 import { dashboardChartURL } from "../../../src/dashboard-chart-links";
@@ -30,8 +31,8 @@ import { runAnalysisQuery } from "../../../src/analysis-request";
 import { answerQuery } from "../../support/query-server.mjs";
 import { peopleMessageLabelCatalog } from "../../../src/people-message-labels";
 
-const rows = { people_message_labels: population(schemas.people_message_labels, { now }), compactions: population(schemas.compactions, { now }), conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages(), agent_events: population(schemas.agent_events, { now }), session_shape: population(schemas.session_shape, { now }) };
-const catalogs = [compaction,tools, mcp, time, skills, activity, agentEvents, sessionShape];
+const rows = { people_message_labels: population(schemas.people_message_labels, { now }), compactions: population(schemas.compactions, { now }), conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages(), agent_events: population(schemas.agent_events, { now }), session_shape: population(schemas.session_shape, { now }), agent_event_rates: population(schemas.agent_event_rates, { now }) };
+const catalogs = [compaction,tools, mcp, time, skills, activity, agentEvents, sessionShape, eventRates];
 const month = catalog => withTimeRange([], catalog.time, new Date(now - 30 * 86400000), new Date(now));
 const run = (catalog, query) => core.evaluateMetrics(rows[catalog.dataset], query, schemas[catalog.dataset], { now }).metrics;
 // A cycle's per-occurrence clause is planned into plain calendar metrics
@@ -443,7 +444,7 @@ test("a ratio part may state a condition: the empty-search rate pools zero-resul
   const built = trendSeries(mcp, { ...state, split: "none" }, query, run(mcp, query.query), { now });
   const last = built.buckets.at(-1), end = last.date.getTime() + 86400000, start = new Date(last.date); start.setDate(start.getDate() - 6);
   assert.equal(last.values.total, rate(population.filter(row => Date.parse(row.called_at) >= start.getTime() && Date.parse(row.called_at) < end)));
-  assert.deepEqual(catalogProblems({ ...mcp, measures: { ...mcp.measures, bad: { ...mcp.measures.empty_rate, ratio: [{ op: "sum", expression: "1" }, "call_count"] } } }), ["bad has an expression part without a label."]);
+  assert.deepEqual(catalogProblems({ ...mcp, measures: { ...mcp.measures, bad: { ...mcp.measures.empty_rate, ratio: [{ op: "sum", expression: "1" }, "call_count"] } } }), ["bad has an expression or distinct part without a label."]);
 });
 
 test("a catalog's request: its parameters reach every request, and its note every view", async t => {
@@ -503,6 +504,44 @@ test("compaction charts count boundaries and retain unknown triggers through ser
   assert.equal(core.evaluateMetrics(records, distinct.query, schemas.compactions, { now }).metrics[0].buckets[0].value, 1);
   assert.equal(compaction.labels.trigger("human"), "Human triggered");
   assert.equal(compaction.labels.trigger("machine"), "Machine triggered");
+});
+
+test("agent event rates divide by every message read, whichever kinds are chosen or broken down", () => {
+  // Three messages read in two turns, each once per kind: m1 has two
+  // obstacles, m3 a discovery; m2 has none. m1 and m2 are a person's turn of
+  // 20 words, m3 a delegated one.
+  const read = [{ message_id: "m1", turn_id: "t1", prompted_by: "person", prompt_length: "11-30", source: "reply" },
+    { message_id: "m2", turn_id: "t1", prompted_by: "person", prompt_length: "11-30", source: "thinking" },
+    { message_id: "m3", turn_id: "t2", prompted_by: "agent", prompt_length: null, source: "reply" }];
+  const events = { "m1:obstacle": 2, "m3:discovery": 1 };
+  const records = read.flatMap(message => ["obstacle", "discovery"].map(family => {
+    const count = events[`${message.message_id}:${family}`] ?? 0;
+    return { ...message, id: `${message.message_id}:${family}`, family, family_group: family === "obstacle" ? "Friction" : "Reactions and learning", conversation_id: "c", events: count, has_event: count > 0, occurred_at: "2026-10-10T12:00:00Z", day: "2026-10-10" };
+  }));
+  const values = (metric, split, where = []) => {
+    const planned = analysisQuery(eventRates, { view: "compare", metric, split, minSamples: 1 }, where, { now });
+    const result = core.evaluateMetrics(records, planned.query, schemas.agent_event_rates, { now }).metrics[0];
+    return { planned, result, by: Object.fromEntries(result.buckets.map(bucket => [bucket.keys.join(" · "), bucket.value])) };
+  };
+  // Each kind's rate is over all three messages read.
+  assert.deepEqual(values("per_thousand", "family").by, { obstacle: 2000 / 3, discovery: 1000 / 3 });
+  // A kind filter narrows the numerator only.
+  const obstacle = [{ field: "family", op: "=", value: "obstacle" }];
+  assert.deepEqual(values("message_share", "none", obstacle).by, { "": 1 / 3 });
+  assert.deepEqual(values("turn_share", "none", obstacle).by, { "": 1 / 2 });
+  assert.deepEqual(values("turn_share", "prompted_by").by, { person: 1, agent: 1 });
+  assert.deepEqual(values("messages", "family").by, { obstacle: 3, discovery: 3 });
+  // Prompt length is a person's prompt, so that breakdown keeps person turns only.
+  const lengths = values("per_thousand", "prompt_length");
+  assert.ok(lengths.planned.query.where.some(term => term.field === "prompted_by" && term.value === "person"));
+  assert.deepEqual(lengths.by, { "11-30": 1000 });
+  // The minimum counts messages read, not message × kind records.
+  const floored = analysisQuery(eventRates, { view: "compare", metric: "per_thousand", split: "family", minSamples: 200 }, [], { now });
+  assert.deepEqual(floored.query.aggregations[0].minCount, { min: 200, distinct: "message_id" });
+  // A bar opens the messages behind it that have an event of its kind.
+  const { planned, result } = values("per_thousand", "family");
+  const drilled = analysisInspectQuery(planned, result.buckets.find(bucket => bucket.keys[0] === "obstacle"), planned.clause, schemas.agent_event_rates, "compare");
+  assert.deepEqual(core.applyQuery(records, drilled, schemas.agent_event_rates, { now }).rows.map(row => row.id), ["m1:obstacle"]);
 });
 
 test("every trend draws each %ile level it offers: reference lines over earlier points, and a heatmap's traces", () => {
