@@ -526,6 +526,13 @@ func TestAwaitedRequestsWithdrawWhenHeld(t *testing.T) {
 			}
 		}
 	}
+	// A model request also includes writing prerequisites. Their writer
+	// waits are ordinary contention, not another model invocation owner.
+	writer := &workBlocker{Reason: workBlockedWriter}
+	if blocker := workRequestHold(workRequestFacts{State: opBlocked, Kinds: []string{kindLabels}, Blocker: writer,
+		Tasks: []workRequestTaskFacts{{Kind: kindAuthorship, State: opBlocked, Blocker: writer}}}); blocker != nil {
+		t.Fatal("a model request must wait for its writing prerequisite")
+	}
 	if blocker := workRequestHold(workRequestFacts{State: opBlocked, Kinds: []string{kindGit}, Blocker: &workBlocker{Reason: workBlockedWriter}}); blocker != nil {
 		t.Fatal("an ordinary writer wait must not withdraw unrelated work")
 	}

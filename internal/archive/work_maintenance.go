@@ -535,8 +535,8 @@ func maintenanceUnpausable(kind, trigger string) bool {
 var workAwaitPoll = 250 * time.Millisecond
 
 // errWorkHeld is a request its awaiter withdrew because Stop (the Search
-// view's, or a kind's), Pause, or another model pass holds it: the
-// the background loop, Run now and the chain wait on their awaited items.
+// view's, or a kind's), Pause, or another model pass holds it. The
+// background loop, Run now and the chain can then continue with other items.
 // The work stays pending in its domain, as when the classic pass skipped it.
 var errWorkHeld = errors.New("held")
 
@@ -549,8 +549,7 @@ func workRequestHold(facts workRequestFacts) *workBlocker {
 		return nil
 	}
 	holds := func(b *workBlocker) bool {
-		model := slices.Contains(facts.Kinds, kindLabels) || slices.Contains(facts.Kinds, kindAgentEvents)
-		return b != nil && (b.Reason == workBlockedHeld || b.Reason == workBlockedPaused || model && b.Reason == workBlockedWriter)
+		return b != nil && (b.Reason == workBlockedHeld || b.Reason == workBlockedPaused)
 	}
 	if holds(facts.Blocker) {
 		return facts.Blocker
@@ -558,7 +557,8 @@ func workRequestHold(facts workRequestFacts) *workBlocker {
 	if facts.State == opBlocked {
 		// Nothing of it runs and one of its kinds is held: it cannot end.
 		for _, task := range facts.Tasks {
-			if holds(task.Blocker) {
+			model := task.Kind == kindLabels || task.Kind == kindAgentEvents
+			if holds(task.Blocker) || model && task.Blocker != nil && task.Blocker.Reason == workBlockedWriter {
 				return task.Blocker
 			}
 		}
