@@ -52,11 +52,15 @@ type trialDescriptor struct {
 	Kinds         []string            `json:"kinds"`
 	PendingCounts map[string]string   `json:"pending_counts"`
 	RecentChecks  map[string][]string `json:"recent_checks"`
-	MaxSeconds    int                 `json:"max_seconds"`
-	WaitSeconds   int                 `json:"wait_seconds"`
-	HoldSeconds   int                 `json:"hold_seconds"`
-	SampleSeconds int                 `json:"sample_seconds"`
-	Cycles        int                 `json:"cycles"`
+	// HistoryCounts is optional, per kind: a read-only count of that kind's
+	// pending work outside the recent window. Only these kinds can show that
+	// recent demand leaves whole-history work pending.
+	HistoryCounts map[string]string `json:"history_counts"`
+	MaxSeconds    int               `json:"max_seconds"`
+	WaitSeconds   int               `json:"wait_seconds"`
+	HoldSeconds   int               `json:"hold_seconds"`
+	SampleSeconds int               `json:"sample_seconds"`
+	Cycles        int               `json:"cycles"`
 }
 
 func (d trialDescriptor) validate() error {
@@ -84,6 +88,11 @@ func (d trialDescriptor) validate() error {
 			if !readOnlyCheck(query) {
 				return fmt.Errorf("%s: a recent check is one SELECT or WITH statement", kind)
 			}
+		}
+	}
+	for kind, query := range d.HistoryCounts {
+		if !slices.Contains(d.Kinds, kind) || !readOnlyCheck(query) {
+			return fmt.Errorf("history_counts %s: a demanded kind and one read-only query", kind)
 		}
 	}
 	for _, bound := range []struct {
@@ -283,7 +292,26 @@ type trial struct {
 	bounded  map[string]bool
 }
 
-func TestWorkTrial(t *testing.T) {
+func TestWorkTrial(t *testing.T) { runWorkTrial(t, (*trial).run) }
+
+// TestWorkTrialSharing is the sharing control alone, on a fresh arm: shared
+// demand and one requester's cancel, then the remaining request's cancel.
+func TestWorkTrialSharing(t *testing.T) {
+	runWorkTrial(t, func(tr *trial) {
+		pending := tr.counts("baseline")
+		tr.sample("startup")
+		stopSampling := tr.sampler()
+		a := tr.sharing(pending)
+		tr.cancelLast(a)
+		stopSampling()
+		tr.untested("stop/resume, CPU allowance, release and recovery", "a sharing-only trial (TestWorkTrialSharing)")
+		tr.finish()
+	})
+}
+
+// runWorkTrial admits the arm, its environment and descriptor, opens the
+// arm's catalog and runs body.
+func runWorkTrial(t *testing.T, body func(*trial)) {
 	root := os.Getenv("PHAROS_WORK_TRIAL_ARM")
 	if root == "" {
 		t.Skip("set PHAROS_WORK_TRIAL_ARM to a freshly prepared version-3 experiment arm")
@@ -328,7 +356,7 @@ func TestWorkTrial(t *testing.T) {
 			tr.checks.Close()
 		}
 	}()
-	tr.run()
+	body(tr)
 }
 
 // open loads the arm's configuration and opens its catalog and a server
@@ -510,7 +538,7 @@ func (tr *trial) counts(label string) map[string]int64 {
 	counts := map[string]int64{}
 	for _, kind := range tr.d.Kinds {
 		var n int64
-		if err := tr.checks.QueryRowContext(tr.ctx, tr.d.PendingCounts[kind]).Scan(&n); err != nil {
+		if err := tr.checks.QueryRowContext(context.WithoutCancel(tr.ctx), tr.d.PendingCounts[kind]).Scan(&n); err != nil {
 			tr.fail("pending count %s: %v", kind, err)
 		}
 		counts[kind] = n
@@ -670,14 +698,63 @@ func trialRequest(in workInspection, id uint64) (q workRequestFacts, ended, foun
 	return workRequestFacts{}, false, false
 }
 
-// trialShared is a running batch that serves every one of ids, or nil.
-func trialShared(in workInspection, ids ...uint64) *workJob {
+// trialShared is a running batch that serves every one of ids, or nil. It
+// prefers a batch of domain units of a kind with pending work, then any unit
+// batch, then a phase batch (Units 0: prepare, discover, power, cleanup).
+func trialShared(in workInspection, pending map[string]int64, ids ...uint64) *workJob {
+	var best *workJob
+	rank := func(job *workJob) int {
+		switch {
+		case job.Units > 0 && pending[job.Kind] > 0:
+			return 2
+		case job.Units > 0:
+			return 1
+		}
+		return 0
+	}
 	for _, task := range in.Tasks {
-		if task.Running != nil && !slices.ContainsFunc(ids, func(id uint64) bool { return !slices.Contains(task.Running.Demanders, id) }) {
-			return task.Running
+		if job := task.Running; job != nil && !slices.ContainsFunc(ids, func(id uint64) bool { return !slices.Contains(job.Demanders, id) }) && (best == nil || rank(job) > rank(best)) {
+			best = job
 		}
 	}
-	return nil
+	return best
+}
+
+// trialBatchEnd is the index of batch's end decision in the inspection's
+// bounded decision ring, or -1 when it has not ended or left the ring.
+func trialBatchEnd(in workInspection, batch uint64) int {
+	return slices.IndexFunc(in.Decisions, func(d workDecision) bool {
+		return d.Batch == batch && slices.Contains([]string{"finished", "blocked", "cancelled", "interrupted", "refused"}, d.Event)
+	})
+}
+
+// trialEndedBeforeCancel is whether the shared batch was no longer running
+// for the cancel of request b: it ended before b's "ended" decision, or it is
+// gone and its end is not in the ring. Either way the cancel exercised
+// nothing.
+func trialEndedBeforeCancel(in workInspection, shared workJob, b uint64) bool {
+	if run := trialTask(in, shared.Kind).Running; run != nil && run.Batch == shared.Batch {
+		return false
+	}
+	end := trialBatchEnd(in, shared.Batch)
+	cancelled := slices.IndexFunc(in.Decisions, func(d workDecision) bool { return d.Event == "ended" && d.Request == b })
+	return end < 0 || cancelled < 0 || end < cancelled
+}
+
+// trialSharedVerdict judges the shared batch after another requester left.
+// It finished, or blocked for a reason no control caused: the work went on.
+// It is still running with a among its demanders: it goes on. Cancelled,
+// interrupted or refused, or running without a: it did not. Its end
+// missing from the ring is unknown, never a pass.
+func trialSharedVerdict(in workInspection, shared workJob, a uint64) (continued bool, unknown string) {
+	if i := trialBatchEnd(in, shared.Batch); i >= 0 {
+		d := in.Decisions[i]
+		return d.Event == "finished" || d.Event == "blocked" && d.Reason != workBlockedHeld && d.Reason != workBlockedPaused, ""
+	}
+	if run := trialTask(in, shared.Kind).Running; run != nil && run.Batch == shared.Batch {
+		return slices.Contains(run.Demanders, a), ""
+	}
+	return false, fmt.Sprintf("batch %d's end decision is not in the inspection's last %d decisions", shared.Batch, workDecisionLimit)
 }
 
 // trialSharingUntested says why a recent request cannot show sharing: it
@@ -690,15 +767,6 @@ func trialSharingUntested(q workRequestFacts, ended bool) string {
 		return "the recent request's members were already sealed; it succeeded before any batch could be shared"
 	}
 	return ""
-}
-
-// trialContinued is whether the shared work went on for requester a after
-// another requester left: the same batch still runs with a among its
-// demanders, or the same kind committed more units. Other kinds' commits are
-// not evidence.
-func trialContinued(in workInspection, shared workJob, a uint64, committed int64) bool {
-	task := trialTask(in, shared.Kind)
-	return task.Running != nil && task.Running.Batch == shared.Batch && slices.Contains(task.Running.Demanders, a) || task.Committed > committed
 }
 
 // trialFailureGrowth lists the kinds whose remembered failure count grew.
@@ -751,6 +819,37 @@ func (tr *trial) missed(reason string) string {
 	return reason
 }
 
+// skip records step as untested once the deadline has passed. A user may
+// budget a trial for partial coverage; steps it never reached are not
+// failures.
+func (tr *trial) skip(step string) bool {
+	if tr.missed("") == "" {
+		return false
+	}
+	tr.untested(step, "trial deadline reached before this step")
+	return true
+}
+
+// waited is check for a verdict that depends on a wait: a failure whose
+// wait the deadline cut short is untested, not failed.
+func (tr *trial) waited(name, contract string, waitOK, pass bool, evidence any) {
+	if trialCutShort(waitOK, pass, tr.missed("") != "") {
+		tr.untested(name, "trial deadline reached before the wait ended")
+		return
+	}
+	tr.check(name, contract, pass, evidence)
+}
+
+// trialResumed is whether a resumed kind is admitted again: no longer held,
+// and not running in the stopped execution. Queued behind a prerequisite,
+// CPUs or policy is a valid admitted state.
+func trialResumed(task workTaskFacts, stopped uint64) bool {
+	held := task.Blocker != nil && task.Blocker.Reason == workBlockedHeld
+	return !held && (task.Running == nil || task.Execution != stopped)
+}
+
+func trialCutShort(waitOK, pass, expired bool) bool { return !pass && !waitOK && expired }
+
 func (tr *trial) running(in workInspection) []string {
 	var kinds []string
 	for _, task := range in.Tasks {
@@ -785,19 +884,31 @@ func trialAllowance(readings []workAuthorityFacts, target int) (drained int, vio
 }
 
 func (tr *trial) run() {
-	tr.counts("baseline")
+	pending := tr.counts("baseline")
 	tr.sample("startup")
 	stopSampling := tr.sampler()
 	defer func() { stopSampling() }()
-	a := tr.sharing()
-	tr.stopResume()
-	tr.allowance()
+	a := tr.sharing(pending)
+	if !tr.skip("stop/resume") {
+		tr.stopResume()
+	}
+	if !tr.skip("CPU allowance") {
+		tr.allowance()
+	}
 	// The sampler reads the server, which the restart replaces.
 	stopSampling()
-	tr.restart(a)
-	stopSampling = tr.sampler()
-	tr.recover()
-	stopSampling()
+	if !tr.skip("release, reopen and recovery") {
+		tr.restart(a)
+		stopSampling = tr.sampler()
+		tr.recover()
+		stopSampling()
+	}
+	tr.finish()
+}
+
+// finish takes the last sample, releases the service and saves the report.
+// None of it uses the trial's context, which the deadline ends.
+func (tr *trial) finish() {
 	tr.sample("end")
 	tr.boundsHeld()
 	if err := tr.server.stop(stopTimeout); err != nil {
@@ -812,46 +923,84 @@ func (tr *trial) run() {
 	fmt.Printf("work trial %s: passed=%v checks=%d; private report saved\n", tr.d.Name, passed, len(tr.report.Checks))
 }
 
-// sharing submits whole-history and recent demand for the same kinds, shows
-// one batch serving both, then cancels the recent request.
-func (tr *trial) sharing() uint64 {
+// sharing submits whole-history demand, waits for it to run a batch of
+// domain units, then submits recent demand for the same kinds, shows one
+// batch serving both and cancels the recent request. pending prefers a
+// kind with pending work.
+func (tr *trial) sharing(pending map[string]int64) uint64 {
 	a := tr.submit("backfill")
-	b := tr.submit("recent")
-	in, ok := tr.wait("shared batch", tr.waitLimit(), func(in workInspection) bool {
-		_, ended, _ := trialRequest(in, b)
-		return ended || trialShared(in, a, b) != nil
+	in, ok := tr.wait("whole history runs units", tr.waitLimit(), func(in workInspection) bool {
+		job := trialShared(in, pending, a)
+		return job != nil && job.Units > 0
 	})
-	if q, ended, _ := trialRequest(in, b); trialSharingUntested(q, ended) != "" {
-		tr.untested("shared demand", trialSharingUntested(q, ended))
+	if !ok {
+		tr.untested("shared demand", tr.missed("whole-history demand ran no unit batch; recent demand was not submitted"))
 		return a
 	}
-	shared := trialShared(in, a, b)
-	if !tr.check("shared demand", "TestWorkSharedBatchOutlivesItsRequester: one running batch lists every requester as a demander", shared != nil,
-		map[string]any{"shared": shared, "requests": []uint64{a, b}, "timed_out": !ok, "reason": tr.missed("")}) {
+	b := tr.submit("recent")
+	in, ok = tr.wait("shared batch", tr.waitLimit(), func(in workInspection) bool {
+		_, ended, _ := trialRequest(in, b)
+		job := trialShared(in, pending, a, b)
+		return ended || job != nil && job.Units > 0
+	})
+	q, ended, _ := trialRequest(in, b)
+	shared := trialShared(in, pending, a, b)
+	if shared == nil {
+		reason := trialSharingUntested(q, ended)
+		if reason == "" && ended && q.State == opSucceeded {
+			reason = "the recent request succeeded before an inspection saw a batch serving both requests"
+		}
+		if reason = tr.missed(reason); reason != "" {
+			tr.untested("shared demand", reason)
+			return a
+		}
+	}
+	evidence := map[string]any{"shared": shared, "requests": []uint64{a, b}, "timed_out": !ok, "b_state": q.State, "b_members": q.Members}
+	if shared != nil {
+		evidence["units"], evidence["phase"], evidence["pending"] = shared.Units, shared.Phase, pending[shared.Kind]
+	}
+	if !tr.check("shared demand", "TestWorkSharedBatchOutlivesItsRequester: one running batch lists every requester as a demander", shared != nil, evidence) {
 		return a
 	}
 	tr.sample("shared")
 	before := in
-	committed := trialTask(in, shared.Kind).Committed
 	status, value := tr.call(http.MethodPost, "/api/work", map[string]any{"action": "cancel", "request_id": b})
+	// Cancel is synchronous; this reading orders the batch's end against
+	// B's "ended" decision.
+	in, _ = tr.inspect()
+	tr.state("after cancel", in)
+	if trialEndedBeforeCancel(in, *shared, b) {
+		tr.untested("shared work outlives a requester", fmt.Sprintf("shared batch %d (%s, %d units, phase %q) ended before the cancel, or its end left the decision ring", shared.Batch, shared.Kind, shared.Units, shared.Phase))
+		return a
+	}
+	committed := trialTask(in, shared.Kind).Committed
 	in, ok = tr.wait("cancelled shared requester", tr.waitLimit(), func(in workInspection) bool {
 		q, ended, _ := trialRequest(in, b)
 		return ended && q.State == opCancelled
 	})
-	tr.check("cancel one requester", "postWork cancel / workRunner.Cancel: the request ends cancelled", status == http.StatusOK && value["cancelled"] == true && ok,
+	tr.waited("cancel one requester", "postWork cancel / workRunner.Cancel: the request ends cancelled", ok, status == http.StatusOK && value["cancelled"] == true && ok,
 		map[string]any{"status": status, "cancelled": value["cancelled"], "reason": tr.missed("")})
-	// Wait for the shared kind to commit more; a batch still running for A
-	// at the end of the wait also shows the work outlived B.
-	in, _ = tr.wait("shared work continues", tr.waitLimit(), func(in workInspection) bool {
+	// Wait for the same batch's decision, a commit by its kind or A's end.
+	// At the limit a batch still running for A also shows the work went on.
+	in, ok = tr.wait("shared work continues", tr.waitLimit(), func(in workInspection) bool {
 		_, ended, _ := trialRequest(in, a)
-		return trialTask(in, shared.Kind).Committed > committed || ended
+		return trialBatchEnd(in, shared.Batch) >= 0 || trialTask(in, shared.Kind).Committed > committed || ended
 	})
-	q, ended, _ := trialRequest(in, a)
+	qa, aEnded, _ := trialRequest(in, a)
 	task, grew := trialTask(in, shared.Kind), trialFailureGrowth(before, in)
-	tr.check("shared work outlives a requester", "TestWorkServiceSharedExecutionOutlivesItsFirstRequester: the shared batch keeps running for the remaining request, or its kind commits more; no kind's failure count grows",
-		trialContinued(in, *shared, a, committed) && (!ended || q.State == opSucceeded) && len(grew) == 0,
-		map[string]any{"kind": shared.Kind, "batch": shared.Batch, "running": task.Running, "committed_before": committed, "committed_after": task.Committed,
-			"a_state": q.State, "failure_growth": grew, "reason": tr.missed("")})
+	continued, unknown := trialSharedVerdict(in, *shared, a)
+	evidence = map[string]any{"kind": shared.Kind, "batch": shared.Batch, "units": shared.Units, "phase": shared.Phase, "running": task.Running,
+		"committed_after_cancel": committed, "committed_after": task.Committed, "a_state": qa.State, "failure_growth": grew, "reason": tr.missed("")}
+	if i := trialBatchEnd(in, shared.Batch); i >= 0 {
+		evidence["decision"] = in.Decisions[i]
+	}
+	aFine := !aEnded || qa.State == opSucceeded
+	if unknown != "" && aFine && len(grew) == 0 {
+		tr.untested("shared work outlives a requester", unknown)
+		return a
+	}
+	tr.waited("shared work outlives a requester", "TestWorkServiceSharedExecutionOutlivesItsFirstRequester: after the cancel the shared batch finishes (or blocks on its own) or keeps running for the remaining request, never cancelled; no kind's failure count grows",
+		ok, continued && aFine && len(grew) == 0, evidence)
 	return a
 }
 
@@ -884,7 +1033,7 @@ func (tr *trial) stopResume() {
 			task := trialTask(in, kind)
 			return task.Running == nil && task.Blocker != nil && task.Blocker.Reason == workBlockedHeld
 		})
-		tr.check(label+": stop drains at a boundary", "workRunner.Stop: the running batch drains and the kind is held", status == http.StatusOK && value["changed"] == true && ok,
+		tr.waited(label+": stop drains at a boundary", "workRunner.Stop: the running batch drains and the kind is held", ok, status == http.StatusOK && value["changed"] == true && ok,
 			map[string]any{"kind": kind, "execution": before.Execution, "drain_seconds": time.Since(stoppedAt).Seconds(), "reason": tr.missed("")})
 		if !ok {
 			tr.call(http.MethodPost, "/api/work", map[string]any{"action": "resume", "kind": kind})
@@ -906,22 +1055,26 @@ func (tr *trial) stopResume() {
 			}
 		}
 		pendingAfter := tr.counts(label + ": hold end")[kind]
-		if pendingHeld == 0 {
+		switch {
+		case pendingHeld == 0:
 			// Nothing dirty could restart a batch or be lost.
 			tr.untested(label+": held kind stays dirty", "the held kind had no pending work")
-		} else {
+		case len(restarted) == 0 && time.Now().Before(holdEnd):
+			tr.untested(label+": held kind stays dirty", "trial deadline reached during the hold")
+		default:
 			tr.check(label+": held kind stays dirty", "TestWorkStopHoldsTheTaskUntilResume: no batch restarts from rediscovered dirty work and its domain stays dirty",
 				len(restarted) == 0 && pendingAfter >= pendingHeld, map[string]any{"kind": kind, "restarted": restarted, "pending_held": pendingHeld, "pending_after": pendingAfter, "hold_seconds": tr.d.HoldSeconds})
 		}
 		status, value = tr.call(http.MethodPost, "/api/work", map[string]any{"action": "resume", "kind": kind})
-		in, ok = tr.wait(label+": resumed", tr.waitLimit(), func(in workInspection) bool {
-			task := trialTask(in, kind)
-			return task.Running != nil && task.Execution != before.Execution || task.Blocker == nil && task.State == ""
-		})
+		in, ok = tr.wait(label+": resumed", tr.waitLimit(), func(in workInspection) bool { return trialResumed(trialTask(in, kind), before.Execution) })
 		task, grew := trialTask(in, kind), trialFailureGrowth(start, in)
-		tr.check(label+": resume runs in a new execution", "workRunner.Resume: work resumes in a new execution, never the stopped one, or no demand remains; no kind's failure count grows",
-			status == http.StatusOK && value["changed"] == true && ok && len(grew) == 0,
-			map[string]any{"kind": kind, "stopped_execution": before.Execution, "execution": task.Execution, "state": task.State, "failure_growth": grew, "reason": tr.missed("")})
+		evidence := map[string]any{"kind": kind, "stopped_execution": before.Execution, "execution": task.Execution, "state": task.State, "blocker": task.Blocker,
+			"running": task.Running != nil, "failure_growth": grew, "reason": tr.missed("")}
+		if task.Running != nil {
+			evidence["new_execution"] = task.Execution
+		}
+		tr.waited(label+": resume releases the hold", "workRunner.Resume: the hold ends; the kind may wait (queued, a dependency, CPUs), and a batch that runs is in a new execution, never the stopped one; no kind's failure count grows",
+			ok, status == http.StatusOK && value["changed"] == true && ok && len(grew) == 0, evidence)
 	}
 }
 
@@ -968,13 +1121,14 @@ func (tr *trial) allowance() {
 	if len(readings) > 0 {
 		evidence["first_allocated"] = readings[0].CPUAllocated
 	}
+	inTime := tr.missed("") == ""
 	if trialOverCap(readings, target) {
-		tr.check("CPU allowance drains at boundaries", "workAuthority.SetCPUs / TestWorkCPUGrantsAreExplicitAndHonest: grants over the new cap drain at their boundary, nothing new is admitted over budget, allocation then stays within the cap",
-			status == http.StatusOK && drained >= 0 && len(violations) == 0, evidence)
+		tr.waited("CPU allowance drains at boundaries", "workAuthority.SetCPUs / TestWorkCPUGrantsAreExplicitAndHonest: grants over the new cap drain at their boundary, nothing new is admitted over budget, allocation then stays within the cap",
+			inTime, status == http.StatusOK && drained >= 0 && len(violations) == 0, evidence)
 	} else {
 		tr.untested("CPU allowance drains at boundaries", tr.missed("allocation was not over one slot when the cap changed"))
-		tr.check("CPU allowance cap follows the setting", "workAuthority.SetCPUs: the cap is the requested allowance and allocation stays within it",
-			status == http.StatusOK && len(readings) > 0 && len(violations) == 0, evidence)
+		tr.waited("CPU allowance cap follows the setting", "workAuthority.SetCPUs: the cap is the requested allowance and allocation stays within it",
+			inTime, status == http.StatusOK && len(readings) > 0 && len(violations) == 0, evidence)
 	}
 	status, _ = tr.call(http.MethodPost, "/api/work/settings", map[string]any{"cpu_slots": original})
 	in, _ = tr.inspect()
@@ -1068,52 +1222,88 @@ func (tr *trial) restart(a uint64) {
 // recover settles recent demand after the restart, then runs whole-history
 // demand until the deadline nears and cancels it.
 func (tr *trial) recover() {
-	reopened := tr.counts("before recent")
+	history := tr.history("before recent")
 	r := tr.submit("recent")
 	in, ok := tr.wait("recent after restart", tr.waitLimit(), func(in workInspection) bool { _, ended, _ := trialRequest(in, r); return ended })
 	q, _, _ := trialRequest(in, r)
 	pending := map[string]int{}
 	for kind, queries := range tr.d.RecentChecks {
 		for i, query := range queries {
-			if dirty, err := checkPending(tr.ctx, tr.checks, query); err != nil || dirty {
+			if dirty, err := checkPending(context.WithoutCancel(tr.ctx), tr.checks, query); err != nil || dirty {
 				pending[fmt.Sprintf("%s#%d", kind, i)]++
 			}
 		}
 	}
-	settled := tr.counts("recent settled")
+	tr.counts("recent settled")
 	if q.Members == 0 {
 		tr.untested("recent demand settles after restart", tr.missed("the recent request froze no members"))
 	} else {
-		tr.check("recent demand settles after restart", "the recent request succeeds and its recent_checks are empty", ok && q.State == opSucceeded && len(pending) == 0,
+		tr.waited("recent demand settles after restart", "the recent request succeeds and its recent_checks are empty", ok, ok && q.State == opSucceeded && len(pending) == 0,
 			map[string]any{"state": q.State, "reason": q.Reason, "members": q.Members, "sealed": q.Sealed, "failed": q.Failed, "pending_checks": pending, "timeout": tr.missed("")})
-		// Recent demand selects only recent members; whole-history work it
-		// did not select stays pending.
-		var emptied []string
-		for kind, n := range reopened {
-			if n > 0 && settled[kind] == 0 {
-				emptied = append(emptied, kind)
+		// Recent demand selects only recent members; whole-history work
+		// outside the window stays pending. Only history_counts can say
+		// what lies outside it.
+		after := tr.history("recent settled")
+		for _, kind := range tr.d.Kinds {
+			name := "history stays pending after recent demand: " + kind
+			_, counted := tr.d.HistoryCounts[kind]
+			if pass, untested := trialHistoryKept(counted, history[kind], after[kind]); untested != "" {
+				tr.untested(name, untested)
+			} else {
+				tr.check(name, "recent demand settles its frozen members only: work pending outside the recent window before it is still pending", pass,
+					map[string]any{"history_before": history[kind], "history_after": after[kind]})
 			}
-		}
-		slices.Sort(emptied)
-		if trialDirty(reopened) {
-			tr.check("history stays pending after recent demand", "recent demand settles its frozen members only: no kind pending before it is left with nothing pending",
-				len(emptied) == 0, map[string]any{"before": reopened, "after": settled, "emptied": emptied})
-		} else {
-			tr.untested("history stays pending after recent demand", "no pending work before the recent request")
 		}
 	}
 	a := tr.submit("backfill")
 	// Keep room for the cancellation, its drain and the hold.
 	room := time.Until(tr.deadline) - 2*tr.waitLimit() - time.Duration(tr.d.HoldSeconds)*time.Second
-	in, _ = tr.wait("whole history", max(room, 0), func(in workInspection) bool { _, ended, _ := trialRequest(in, a); return ended })
-	if q, ended, _ := trialRequest(in, a); ended {
+	tr.wait("whole history", max(room, 0), func(in workInspection) bool { _, ended, _ := trialRequest(in, a); return ended })
+	tr.cancelLast(a)
+}
+
+// history reads the descriptor's history_counts, outside the deadline.
+func (tr *trial) history(label string) map[string]int64 {
+	counts := map[string]int64{}
+	for kind, query := range tr.d.HistoryCounts {
+		var n int64
+		if err := tr.checks.QueryRowContext(context.WithoutCancel(tr.ctx), query).Scan(&n); err != nil {
+			tr.fail("history count %s: %v", kind, err)
+		}
+		counts[kind] = n
+	}
+	if len(counts) > 0 {
+		tr.mu.Lock()
+		tr.report.Pending = append(tr.report.Pending, map[string]any{"label": label + " (history)", "seconds": tr.seconds(), "counts": counts})
+		tr.mu.Unlock()
+	}
+	return counts
+}
+
+// trialHistoryKept judges one kind's history after recent demand: without
+// a history count, or with no history pending before, it is untested.
+func trialHistoryKept(counted bool, before, after int64) (pass bool, untested string) {
+	switch {
+	case !counted:
+		return false, "the descriptor has no history_counts query for this kind"
+	case before == 0:
+		return false, "no work was pending outside the recent window before the recent request"
+	}
+	return after > 0, ""
+}
+
+// cancelLast cancels whole-history request a, the last demander, unless it
+// already settled, and checks that its batches drain, no failure count grows
+// and the domain stays dirty with nothing demanding it.
+func (tr *trial) cancelLast(a uint64) {
+	before, _ := tr.inspect()
+	if q, ended, _ := trialRequest(before, a); ended {
 		tr.check("whole history settles", "the backfill request succeeds", q.State == opSucceeded, map[string]any{"state": q.State, "reason": q.Reason, "failed": q.Failed})
-		tr.untested("cancel the last demander", "whole-history demand settled before the deadline")
+		tr.untested("cancel the last demander", "whole-history demand ended before its cancel")
 		return
 	}
-	before := in
 	status, value := tr.call(http.MethodPost, "/api/work", map[string]any{"action": "cancel", "request_id": a})
-	in, ok = tr.wait("last demander cancelled", tr.waitLimit(), func(in workInspection) bool {
+	in, ok := tr.wait("last demander cancelled", tr.waitLimit(), func(in workInspection) bool {
 		q, ended, _ := trialRequest(in, a)
 		return ended && q.State == opCancelled && len(tr.running(in)) == 0
 	})
@@ -1122,12 +1312,15 @@ func (tr *trial) recover() {
 	later := tr.counts("cancel hold end")
 	decreased, grew := trialLost(drained, later), trialFailureGrowth(before, in)
 	evidence := map[string]any{"drained": drained, "later": later, "decreased": decreased, "running": tr.running(in), "failure_growth": grew, "reason": tr.missed("")}
-	tr.check("the last demander's cancel drains", "postWork cancel: the request ends cancelled, running batches stop at their boundary and no kind's failure count grows",
-		status == http.StatusOK && value["cancelled"] == true && ok && len(grew) == 0, evidence)
-	if trialDirty(drained) {
+	tr.waited("the last demander's cancel drains", "postWork cancel: the request ends cancelled, running batches stop at their boundary and no kind's failure count grows",
+		ok, status == http.StatusOK && value["cancelled"] == true && ok && len(grew) == 0, evidence)
+	switch {
+	case !ok:
+		tr.untested("the last demander leaving keeps the domain dirty", tr.missed("batches were still running after the cancel"))
+	case trialDirty(drained):
 		tr.check("the last demander leaving keeps the domain dirty", "TestWorkSharedBatchOutlivesItsRequester: with no demand left nothing runs, so no pending count falls over the hold",
 			len(decreased) == 0, evidence)
-	} else {
+	default:
 		tr.untested("the last demander leaving keeps the domain dirty", "no pending work after the cancel drained")
 	}
 }
@@ -1190,6 +1383,10 @@ func TestWorkTrialGuards(t *testing.T) {
 		"unbounded duration": func(d *trialDescriptor) { d.MaxSeconds = 86400 },
 		"too many cycles":    func(d *trialDescriptor) { d.Cycles = 50 },
 		"undemanded check":   func(d *trialDescriptor) { d.RecentChecks = map[string][]string{kindLabels: {"SELECT 1"}} },
+		"undemanded history": func(d *trialDescriptor) { d.HistoryCounts = map[string]string{kindLabels: "SELECT 1"} },
+		"a history write": func(d *trialDescriptor) {
+			d.HistoryCounts = map[string]string{kindParallelism: "DELETE FROM parallelism_dirty"}
+		},
 	} {
 		changed := d
 		change(&changed)
@@ -1235,41 +1432,131 @@ func TestWorkTrialGuards(t *testing.T) {
 // the inspection bounds.
 func TestWorkTrialVerdicts(t *testing.T) {
 	in := workInspection{Tasks: []workTaskFacts{
-		{Kind: kindLabels, Committed: 10, Running: &workJob{Kind: kindLabels, Batch: 7, Demanders: []uint64{1, 2}}},
-		{Kind: kindParallelism, Committed: 50, Failures: 5, Running: &workJob{Kind: kindParallelism, Batch: 8, Demanders: []uint64{1}}},
+		{Kind: kindAuthorship, Running: &workJob{Kind: kindAuthorship, Batch: 6, Phase: "prepare", Demanders: []uint64{1, 2}}},
+		{Kind: kindLabels, Committed: 10, Running: &workJob{Kind: kindLabels, Batch: 7, Units: 4, Demanders: []uint64{1, 2}}},
+		{Kind: kindParallelism, Committed: 50, Failures: 5, Running: &workJob{Kind: kindParallelism, Batch: 8, Units: 2, Demanders: []uint64{1, 2}}},
 	}}
-	shared := trialShared(in, 1, 2)
-	if shared == nil || shared.Kind != kindLabels || shared.Batch != 7 || trialShared(in, 1, 3) != nil {
-		t.Fatalf("a shared batch lists every requester: %+v", shared)
+	pending := map[string]int64{kindLabels: 3}
+	if shared := trialShared(in, pending, 1, 2); shared == nil || shared.Batch != 7 || trialShared(in, pending, 1, 3) != nil {
+		t.Fatalf("a shared batch lists every requester and prefers units of a pending kind: %+v", shared)
+	}
+	if shared := trialShared(in, nil, 1, 2); shared == nil || shared.Units == 0 {
+		t.Fatalf("a unit batch is preferred over a phase batch: %+v", shared)
+	}
+	phaseOnly := workInspection{Tasks: in.Tasks[:1]}
+	if shared := trialShared(phaseOnly, pending, 1, 2); shared == nil || shared.Batch != 6 {
+		t.Fatalf("a phase batch is the fallback: %+v", shared)
 	}
 
-	// After B leaves: the same batch still serving A, or the same kind
-	// committing, is continuation. Another kind committing is not.
+	// After B (2) leaves, the shared batch's own end decision judges it.
 	after := func(change func(*workInspection)) workInspection {
 		next := workInspection{Tasks: slices.Clone(in.Tasks)}
 		change(&next)
 		return next
 	}
-	if !trialContinued(after(func(w *workInspection) {
-		w.Tasks[0].Running = &workJob{Kind: kindLabels, Batch: 7, Demanders: []uint64{1}}
-	}), *shared, 1, 10) {
-		t.Fatal("the shared batch still running for A continues")
+	ended := func(decisions ...workDecision) func(*workInspection) {
+		return func(w *workInspection) { w.Tasks[1].Running, w.Decisions = nil, decisions }
 	}
-	if !trialContinued(after(func(w *workInspection) { w.Tasks[0].Running, w.Tasks[0].Committed = nil, 11 }), *shared, 1, 10) {
-		t.Fatal("the shared kind committing more continues")
-	}
-	for name, change := range map[string]func(*workInspection){
-		"another kind committed": func(w *workInspection) { w.Tasks[0].Running, w.Tasks[1].Committed = nil, 500 },
-		"a new batch without A": func(w *workInspection) {
-			w.Tasks[0].Running = &workJob{Kind: kindLabels, Batch: 9, Demanders: []uint64{3}}
-		},
-		"the batch lost A": func(w *workInspection) {
-			w.Tasks[0].Running = &workJob{Kind: kindLabels, Batch: 7, Demanders: []uint64{3}}
-		},
+	cancelB := workDecision{Event: "ended", Request: 2, Reason: opCancelled}
+	labels := workJob{Kind: kindLabels, Batch: 7, Units: 4}
+	coarse := workJob{Kind: kindIdentities, Batch: 9, Coarse: true}
+	for name, c := range map[string]struct {
+		w         workInspection
+		shared    workJob
+		continued bool
+		unknown   bool
+	}{
+		"still running for A": {after(func(w *workInspection) {
+			w.Tasks[1].Running = &workJob{Kind: kindLabels, Batch: 7, Demanders: []uint64{1}}
+		}), labels, true, false},
+		"finished": {after(ended(cancelB, workDecision{Event: "finished", Batch: 7, Detail: "4 committed"})), labels, true, false},
+		"phase finished without commits": {after(ended(cancelB, workDecision{Event: "finished", Batch: 6, Detail: "0 committed"})),
+			workJob{Kind: kindAuthorship, Batch: 6, Phase: "prepare"}, true, false},
+		"blocked on its own": {after(ended(workDecision{Event: "blocked", Batch: 7, Reason: workBlockedPower})), labels, true, false},
+		"blocked by a hold":  {after(ended(workDecision{Event: "blocked", Batch: 7, Reason: workBlockedHeld})), labels, false, false},
+		"cancelled":          {after(ended(cancelB, workDecision{Event: "no-demand", Batch: 7}, workDecision{Event: "cancelled", Batch: 7, Reason: "no-demand"})), labels, false, false},
+		"interrupted":        {after(ended(workDecision{Event: "interrupted", Batch: 7})), labels, false, false},
+		"running without A": {after(func(w *workInspection) {
+			w.Tasks[1].Running = &workJob{Kind: kindLabels, Batch: 7, Demanders: []uint64{3}}
+		}), labels, false, false},
+		"end left the ring":      {after(ended(workDecision{Event: "started", Batch: 12})), labels, false, true},
+		"another kind commits":   {after(func(w *workInspection) { w.Tasks[1].Running, w.Tasks[2].Committed = nil, 500 }), labels, false, true},
+		"same kind commits only": {after(func(w *workInspection) { w.Tasks[1].Running, w.Tasks[1].Committed = nil, 11 }), labels, false, true},
+		"coarse pass finished":   {after(ended(cancelB, workDecision{Event: "finished", Batch: 9})), coarse, true, false},
 	} {
-		if trialContinued(after(change), *shared, 1, 10) {
-			t.Fatalf("%s is not continuation", name)
+		continued, unknown := trialSharedVerdict(c.w, c.shared, 1)
+		if continued != c.continued || (unknown != "") != c.unknown {
+			t.Fatalf("%s: continued %v unknown %q, want %v %v", name, continued, unknown, c.continued, c.unknown)
 		}
+		if continued && unknown != "" {
+			t.Fatalf("%s: an unknown end never passes", name)
+		}
+	}
+
+	// A batch that ended before B's cancel exercised nothing.
+	running := after(func(w *workInspection) { w.Decisions = []workDecision{cancelB} })
+	for name, c := range map[string]struct {
+		w      workInspection
+		shared workJob
+		before bool
+	}{
+		"still running":         {running, labels, false},
+		"ended after cancel":    {after(ended(cancelB, workDecision{Event: "cancelled", Batch: 7})), labels, false},
+		"ended before cancel":   {after(ended(workDecision{Event: "finished", Batch: 7}, cancelB)), labels, true},
+		"coarse ended before":   {after(ended(workDecision{Event: "finished", Batch: 9}, cancelB)), coarse, true},
+		"gone, end not in ring": {after(ended(cancelB)), labels, true},
+	} {
+		if got := trialEndedBeforeCancel(c.w, c.shared, 2); got != c.before {
+			t.Fatalf("%s: ended before cancel %v, want %v", name, got, c.before)
+		}
+	}
+
+	// Resume releases the hold; a queued or dependency-blocked kind is
+	// admitted, and only a running batch must be in a new execution.
+	for name, c := range map[string]struct {
+		task    workTaskFacts
+		resumed bool
+	}{
+		"still held":                {workTaskFacts{State: opQueued, Blocker: &workBlocker{Reason: workBlockedHeld}}, false},
+		"queued":                    {workTaskFacts{State: opQueued}, true},
+		"waiting on a prerequisite": {workTaskFacts{State: opQueued, Blocker: &workBlocker{Reason: workBlockedDependency}}, true},
+		"settled":                   {workTaskFacts{}, true},
+		"new execution":             {workTaskFacts{Execution: 31, Running: &workJob{Batch: 32}}, true},
+		"the stopped execution":     {workTaskFacts{Execution: 20, Running: &workJob{Batch: 32}}, false},
+	} {
+		if got := trialResumed(c.task, 20); got != c.resumed {
+			t.Fatalf("%s: resumed %v, want %v", name, got, c.resumed)
+		}
+	}
+
+	// History outside the recent window: only a provided count with work
+	// before it is judged.
+	for name, c := range map[string]struct {
+		counted        bool
+		before, after  int64
+		pass, untested bool
+	}{
+		"no history count":           {false, 9, 0, false, true},
+		"nothing outside the window": {true, 0, 0, false, true},
+		"history kept":               {true, 9, 9, true, false},
+		"history emptied":            {true, 9, 0, false, false},
+	} {
+		if pass, untested := trialHistoryKept(c.counted, c.before, c.after); pass != c.pass || (untested != "") != c.untested {
+			t.Fatalf("%s: pass %v untested %q", name, pass, untested)
+		}
+	}
+
+	// Only a failure whose wait the deadline cut short becomes untested.
+	if !trialCutShort(false, false, true) || trialCutShort(true, false, true) || trialCutShort(false, false, false) || trialCutShort(false, true, true) {
+		t.Fatal("cut short is a failed, unfinished wait past the deadline")
+	}
+	expired := &trial{deadline: time.Now().Add(-time.Second)}
+	if !expired.skip("stop/resume") || len(expired.report.Untested) != 1 || (&trial{deadline: time.Now().Add(time.Hour)}).skip("stop/resume") {
+		t.Fatalf("steps after the deadline are untested: %+v", expired.report.Untested)
+	}
+	expired.waited("resume", "none", false, false, nil)
+	if len(expired.report.Checks) != 0 || len(expired.report.Untested) != 2 {
+		t.Fatalf("a wait the deadline ended is untested, not failed: %+v", expired.report)
 	}
 
 	// Failure counts are complete; a sixth failure behind five examples
@@ -1277,7 +1564,7 @@ func TestWorkTrialVerdicts(t *testing.T) {
 	if grew := trialFailureGrowth(in, in); len(grew) != 0 {
 		t.Fatalf("unchanged failures: %v", grew)
 	}
-	if grew := trialFailureGrowth(in, after(func(w *workInspection) { w.Tasks[1].Failures = 6 })); len(grew) != 1 {
+	if grew := trialFailureGrowth(in, after(func(w *workInspection) { w.Tasks[2].Failures = 6 })); len(grew) != 1 {
 		t.Fatalf("one more failure than examples show: %v", grew)
 	}
 	if grew := trialFailureGrowth(workInspection{}, in); len(grew) != 1 {
