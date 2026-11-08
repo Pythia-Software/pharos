@@ -105,7 +105,7 @@ function classifiedPrompt(id, parts) {
 const authoredPrompt = classifiedPrompt("human-mixed",humanPromptParts);
 const authoredTurnMessages = [authoredPrompt,
   ...Array.from({length:5},(_,index)=>[
-    {id:`review-${index}`,native_id:`review-${index}`,role:"assistant",kind:"delegation",call_id:`reviewer-${index}`,text:JSON.stringify({name:"Task",input:{subagent_type:`Reviewer ${index+1}`,prompt:["Review the parent turn structure","Check nested review groups","Verify human-written text highlighting","Check keyboard navigation","Check the narrow screen layout"][index]}})},
+    {id:index===0?"m-15":`review-${index}`,native_id:index===0?"m-15":`review-${index}`,role:"assistant",kind:"delegation",call_id:`reviewer-${index}`,text:JSON.stringify({name:"Task",input:{subagent_type:`Reviewer ${index+1}`,prompt:["Review the parent turn structure","Check nested review groups","Verify human-written text highlighting","Check keyboard navigation","Check the narrow screen layout"][index]}})},
     {id:`review-reply-${index}`,native_id:`review-reply-${index}`,role:"assistant",kind:"message",parent_native_id:`reviewer-${index}`,text:`Review ${index+1} complete. The assigned check passed.`},
   ]).flat(),
   {id:"nested-review",native_id:"nested-review",role:"assistant",kind:"delegation",call_id:"nested-reviewer",parent_native_id:"reviewer-0",text:JSON.stringify({name:"Task",input:{subagent_type:"Nested reviewer",prompt:"Check the child branch under Reviewer 1"}})},
@@ -403,6 +403,7 @@ const ROUTES = [
   { name: "Markdown links in Search", url: "/library", api: {...conversationResultAPI,...markdownLinkAPI}, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("link",{name:"Running dev server",exact:true}).waitFor();}, shown: ".result-turn-content .markdown-link" },
   { name: "Search nested reviews and human writing", url: "/library", api: authoredTurnAPI, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("button",{name:/Sub-agent · Reviewer 5/}).waitFor();}, shown: ".result-turn-content .human-written" },
   { name: "Transcript human writing", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".conversation-panel .human-written" },
+  { name: "Transcript expanded sub-agent", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".subagent-run", open: async page => { await page.locator(".subagent-run > summary").first().click(); }, shown: ".subagent-body" },
   { name: "Transcript agent event link", url: `${work}/conversation/${rootConversation}?reader_events=1&reader_event_link=e-review`, api: authoredTurnAPI, ready: ".conversation-panel.show-events mark.event-target.link-selected" },
   { name: "Search conversations", url: "/library", ready: ".conversation-result-card" },
   ...["turn", "sub-agent", "accordion", "summary", "preview"].map(selection => ({
@@ -659,6 +660,15 @@ const ROUTES = [
   { name: "Mac menu with all items", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, api: tokenEvidenceAPI, ready: ".delegation-table tbody tr" },
   { name: "Workspace Timeline", url: `${work}?explorer=timeline`, ready: ".lt-session-root" },
+  { name: "Workspace Timeline compact key", url: `${work}?explorer=timeline&disclosures=${encodeURIComponent(JSON.stringify({'timeline-key':false}))}`, ready: ".lt-session-root", api: {
+    "GET /api/work/:id/parallel": request => {
+      const data=defaultApi["GET /api/work/:id/parallel"](request);
+      if(request.query.get('labels')!=='1')return data;
+      // A dense mode family must wrap individual icons at narrow widths.
+      const ids=Array.from({length:40},(_,index)=>`C.report.fixture${index}`);
+      return {...data,taxonomy:[...data.taxonomy,...ids.map((id,index)=>({id,name:`Fixture mode ${index}`,definition:'Synthetic layout fixture.'}))],lanes:data.lanes.map(lane=>({...lane,messages:lane.messages.map(message=>message.role==='assistant'?{...message,labels:{...message.labels,ids:[...message.labels.ids,...ids]}}:message)}))};
+    },
+  } },
   { name: "Workspace with related work", url: work, api: relatedWorkAPI, ready: ".peer-strip .peer-chip.uncertain", open: page => page.locator(".peer-reasons summary").click(), shown: ".peer-reasons[open] li",
     check: async page => {
       await page.locator('[data-session-id="s-peer"]').first().waitFor();

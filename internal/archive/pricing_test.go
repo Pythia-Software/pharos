@@ -186,10 +186,13 @@ func TestAssumedPricesAndRefreshPrompt(t *testing.T) {
 		}
 	}
 	prompt := status["prompt"].(string)
-	for _, want := range []string{"| `gpt-7-preview` | codex |", "\"status\": \"proposed\"", "\"assumption\": true", "pricing/cost_changes.json", "Never fill in a value from memory"} {
+	for _, want := range []string{"| `gpt-7-preview` | codex |", "\"status\": \"proposed\"", "\"assumption\": true", "pricing/cost_changes.json", "pricing/model_colors.json", "For each newly priced model", "npm --prefix web test -- chart-colors", "Never fill in a value from memory"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("refresh prompt is missing %q:\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "Edit only `pricing/cost_changes.json`.") {
+		t.Error("refresh prompt must permit the model color catalog")
 	}
 	doc.Changes[len(doc.Changes)-1].Notes = ""
 	if problems := strings.Join(validatePricing(doc), "\n"); !strings.Contains(problems, "assumption rows must explain") {

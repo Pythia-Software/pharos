@@ -82,16 +82,18 @@ Coverage is attached to owned rendering boundaries, rather than DOM discovery:
 
 | Surface | Shared boundary |
 | --- | --- |
-| All query tables and their native metric charts, including Findings/Risky actions/Fixes | SourceQueryBuilder: always-visible sibling of the query editor, even collapsed |
+| All query tables and their native metric charts, including Findings/Risky actions/Fixes | SourceQueryBuilder: run-bar action before request timing, even when the editor is collapsed |
 | Library conversation results and message-label cards | Same query boundary, plus shared first-analysis empty state around all presentations |
 | Catalog trend, comparison, distribution, scatter and cycle dashboards | AnalysisTrend / DashboardAnalysis |
 | Bespoke Habits and Waiting/Thinking charts | DashboardResultActions, reusing each target's metadata and source |
 | Parallelism ribbon and supporting conversation table | ConcurrencyPanel |
 | Carbon estimate | Host boundary around the classic summary renderer |
 | Token, Human Words, Conversation, Tool Time and Agent Experience summary tiles | Each independent metric's label row |
-| Agent Experience rates and examples | Existing panel headings |
 | Efficiency, Risky actions and Fixes dashboards | Existing page heading; the tables use the query boundary |
 | Saved Home and Card Library cards | QueryCard; dashboard sources resolve through dashboardCardSource even without a query token |
+
+Query Table provides the run-bar slot and button styling; the original request
+is recorded in the [upstream handoff](handoffs/query-table-run-bar-slots.md).
 
 Nested tables that explain one chart share that chart's scope; static methodology
 and live diagnostics (sync history, request logs, activity/load and feedback

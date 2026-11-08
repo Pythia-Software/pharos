@@ -70,15 +70,39 @@ Draft controls are explicitly classified as editing: source/library onboarding; 
 
 ## Timeline Key
 
-The timeline Key uses the dashboard legend menu: show only a value or category,
-add/remove values, show everything except a value or category, or reset that
-section. Hidden values stay in the Key with muted, desaturated swatches so they
-can be restored. Sender, Receiver and message-mode families apply to all of
-their displayed labels, with mixed selection indicated on the parent.
+The **Key** button switches between the labeled, nested Key and a compact
+icon-only strip. Compact keeps every swatch and event symbol, including the
+arc and hollow no-target marker. Hovering an icon immediately names it;
+clicking opens the same visibility menu. Arc/no-target explanation icons open
+the Agent events section menu. `disclosures["timeline-key"]` stores the
+presentation (`true` for labeled, the default; `false` for compact), so copied
+links, reloads and browser history restore it alongside visibility selections.
+
+Beside a conversation, the sidebar timeline uses a read-only icon-only Key,
+regardless of the full Timeline's `timeline-key` disclosure. The preview does
+not write that disclosure. Hover names remain available above the preview's
+activation surface; clicking Key or an icon opens the full Timeline without
+changing visibility. `timeline_visibility` remains shared when entering a
+conversation, returning to the workspace, reloading or following history.
+
+The shared legend menu shows **Hide** and **Hide others** for a visible value,
+and **Show** and **Show and Hide Others** for a hidden value. A mixed category
+shows **Show N values** and **Hide M values**, using its hidden and visible
+child counts. **Show All** follows a separator whenever values are hidden.
+Hide/Show retain unrelated choices; Hide others isolates that value or group.
+On the timeline, Show All restores the whole Key. Hidden values keep their
+muted swatches in both presentations so they can be shown again.
 
 `timeline_visibility` stores independent `modes`, `events`, `tools` and `origins`
-selections. Each optional section has `{values: string[], excluded: boolean}`;
-an absent section or empty values shows everything in that section. Values use
+selections. The optional `sections` selection controls whole layers by those
+same IDs. Section headings can show only that layer, add or remove it, exclude
+it, or reset the whole Key. Showing or adding a whole section includes all its
+values; individual menus still control values within a section. Each selection
+has `{values: string[], excluded: boolean}`;
+an absent section or empty values shows everything in that section, unless
+`allHidden:true` explicitly hides everything (with empty values and
+`excluded:false`). This keeps hiding the last visible value from resetting
+the selection. Values use
 stable message-label IDs (`?` for uncategorized), event-group keys, tool-category
 IDs (`error` for failed calls), or caller-source IDs. The selection filters
 ribbon spans, event arcs and markers, counts and inspection targets together.
@@ -112,7 +136,7 @@ A native `query` includes its filters/time predicates; give it without `filters`
 
 Home card links open full dashboards directly with `analyze_chart` and `analyze_filters`. Collected-card source queries and cover metadata remain in storage for previews and editing, and are removed from navigation links. There is no expanded-card page. Dashboard Today links may pin an IANA zone with `analyze_timezone`. **Create card** saves that canonical dashboard URL to the Home collection, including chart, filters, Today/timezone, Carbon assumptions and Parallelism counting/gap settings. Card names, descriptions, categories and calls to action, and the creation dialog, are authoring data/drafts; they do not add view parameters. One dashboard URL can hold several charts (Parallelism draws its ribbon above its catalog chart): each chart has its own **Create card** button, the dialog chooses among them, and the card stores its choice as `dashboardTarget` beside the URL rather than in it. Custom card previews resolve the saved URL and run the dashboard’s analysis/trend models again.
 
-A catalog dashboard's `analyze_filters` terms other than its range are its **population**: every view, breakdown and panel counts only those records. A catalog with `population` (Session Shape) shows them as removable chips in a Population control beside Range, edits them as a draft with the query filter editor, and lets a legend value's menu add one: "Count only this value" writes `{field, op: "=", value}` on the breakdown's field, "Leave this value out" `{any: [{field, op: "!=", value}, {field, op: "is_null"}]}`. A legend selection stays in `analyze_chart` and only chooses what is drawn; "Make this the population" moves it into the filters. The chart title names a partial population ("· excluding antigravity-cli"). There is no separate parameter: site_link's `filters` are these terms, as in `{"page": "analyze/session_shape", "filters": [{"field": "agent_kind", "op": "=", "value": "root"}]}`.
+A catalog dashboard's `analyze_filters` terms other than its range are its **population**: every view, breakdown and panel counts only those records. A catalog with `population` (Session Shape) shows them as removable chips in a Population control beside Range, edits them as a draft with the query filter editor, and applies population changes through that control. Legend menus only change visibility. A legend selection stays in `analyze_chart` and only chooses what is drawn; "Make this the population" moves it into the filters. The chart title names a partial population ("· excluding antigravity-cli"). There is no separate parameter: site_link's `filters` are these terms, as in `{"page": "analyze/session_shape", "filters": [{"field": "agent_kind", "op": "=", "value": "root"}]}`.
 
 Analyze query pages accept `options.return_topic` (`analyze_topic`) independently of their dataset so a supporting query returns to the dashboard that opened it.
 

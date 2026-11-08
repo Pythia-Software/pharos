@@ -17,7 +17,6 @@ import { isOriginDimension, originLabel, useOriginMetadata } from "./origin-dime
 import { optionLabels } from "./option-labels";
 import { CreateDashboardCard } from "./create-dashboard-card";
 import { PopulationControl, usePopulation } from "./dashboard-population-control";
-import { withPopulationGroup, type PopulationAction } from "./dashboard-population";
 import { TrendHeatmap } from "./dashboard-heatmap";
 import { trendHeatmap } from "./dashboard-heatmap-model";
 
@@ -104,15 +103,6 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const title = analysisCardCopy(catalog, view, where, schema).title;
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)}
     population={catalog.population ? <PopulationControl catalog={catalog} schema={schema} where={where} terms={population.terms} subjects={catalog.records.plural.toLowerCase()} onFilter={onFilter} /> : undefined} />;
-  // The legend's population actions filter on the series' group; a series
-  // with no single group (Other, a component) has none.
-  const populate = catalog.population && !catalog.components?.[view.split] && view.split !== noSplit ? (key: string, action: PopulationAction) => {
-    const value = built.series.find(item => item.key === key)?.value;
-    if (value === undefined) return;
-    onFilter(current => withPopulationGroup(catalog, current, view.split, value, action));
-    // A selection on the same breakdown would hide what the population keeps.
-    if (view.selection?.values.length) set({ selection: { values: [], excluded: false } });
-  } : undefined;
   const action = <><DataReadinessIndicator id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty} updatedAt={result.updatedAt} />{onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : null}</>;
   // A heatmap draws the value its bins hold on that value's own axis, with
   // the band's edges as guides (heatmapAxis).
@@ -137,7 +127,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
       references={built.references?.map(item => ({ value: item.value, level: item.level, label: `${percentileLabel(item.level)}, prior ${view.normPeriods}` }))}
       format={amount} tickFormat={tickAmount} noun={share || ratio || measure.unit === "USD" ? "" : view.display !== "cumulative" && view.rollingOp === "sum" && view.rollingPeriods > 1 ? rollingSumUnit(measure, view.period) : measure.unit}
       loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} legend={built.series.length > 0} percent={share}
-      selected={built.selected} excluded={built.excluded} onSelect={select} onSelectGroup={selectGroup} onPopulation={populate} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })}
+      selected={built.selected} excluded={built.excluded} allHidden={built.allHidden} onSelect={select} onSelectGroup={selectGroup} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })}
       onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))} seriesHref={href} titleSlot={links && titled ? headline : undefined} />
     {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
     {measure.populationShare && measure.note ? <p className="usage-dashboard-note">{measure.note}</p> : null}

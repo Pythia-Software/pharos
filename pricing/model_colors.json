@@ -22,6 +22,7 @@
     "sonnet-5": { "provider": "anthropic", "class": "Sonnet", "color": "#b57925" },
     "sonnet-5-5": { "provider": "anthropic", "class": "Sonnet", "color": "#9b651e" },
     "haiku": { "provider": "anthropic", "class": "Haiku", "color": "#e09270" },
+    "3-5-haiku": { "provider": "anthropic", "class": "Haiku", "color": "#f0b292" },
     "haiku-4-5": { "provider": "anthropic", "class": "Haiku", "color": "#bf633e" },
     "haiku-5-5": { "provider": "anthropic", "class": "Haiku", "color": "#ad6129" },
     "fable-5": { "provider": "anthropic", "class": "Fable", "color": "#e2a07a" },

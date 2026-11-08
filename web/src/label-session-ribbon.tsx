@@ -5,7 +5,7 @@ import {ViewDisclosure} from './view-disclosure';
 import {useViewEntry} from './view-state';
 import {useRibbonInspector,useRibbonPointer,type RibbonHit} from './label-ribbon-inspector';
 import {PageLink} from './nested-pages';
-import {timelinePreviewText} from './timeline-preview';
+import {timelinePreviewText,trimTimelineSnippet} from './timeline-preview';
 import {agentEventClock,ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointerHits,ribbonToolPlacement,ribbonOriginParts,sessionRibbonTree,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
 import {shortLabel,specificLabels,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
 import type {TimeRange,TimelineSessionBranch} from './timeline-label-model';
@@ -14,7 +14,7 @@ import {eventKindCounts,markIds,mergeAgentEvents,type KindCounts} from './event-
 import {EventGlyph,EventLinkCard,EventLinkOverlay,eventHitTargets,eventLayout,eventTargetFocus,placeEvents,setEventLinkFocus,useEventLinkFocus} from './event-link-overlay';
 import {linkedTarget,type AgentEventLink} from './event-link-layout';
 import {timeScale,type TimeScale} from './timeline-idle-model';
-import {timelineEventVisible,visibleTimelineTree,type TimelineVisibility} from './timeline-visibility';
+import {timelineEventVisible,timelineSectionVisible,visibleTimelineTree,type TimelineVisibility} from './timeline-visibility';
 
 // Agent events draw in each session's summary row, the way they draw in the
 // fingerprint (event-link-layout.ts): an event sits in the row of the session
@@ -31,7 +31,7 @@ function SourceContent({item,sourceHref,close,children}:{item:RibbonObservation;
  return href?<PageLink href={href} className="lt-observation-source" onClick={event=>{event.stopPropagation();close?.();}}>{children}<span>Show in conversation →</span></PageLink>:<>{children}</>;
 }
 function MessagePreview({message}:{message:LabelMessage}){
- const body=timelinePreviewText(message.preview??message.text,{input:message.kind==='delegation',unwrap:message.role!=='user'||message.kind!=='message'}),characters=Array.from(body);
+ const body=trimTimelineSnippet(timelinePreviewText(message.preview??message.text,{input:message.kind==='delegation',unwrap:message.role!=='user'||message.kind!=='message'})),characters=Array.from(body);
  const clipped=characters.length>640||message.preview_truncated===true||message.preview===undefined&&message.truncated&&Array.from(message.text).length>=320;
  const label=message.chunks?specificLabels(message)[0]?.[0]:undefined;
  return <blockquote className="lt-message-quote" style={label?{'--message-label-color':stateColor(label)} as React.CSSProperties:undefined}>{characters.slice(0,640).join('')}{clipped&&!body.endsWith('…')?'…':''}</blockquote>;
@@ -58,7 +58,7 @@ function ObservationCard({items,sourceHref,eventHref,close}:{items:RibbonObserva
    {[...labels].slice(0,8).map(([id,ids])=><React.Fragment key={id}><dt><i style={{background:stateColor(id)}}/>{id==='?'?'Uncategorized':shortLabel(id)}</dt><dd>{ids.size}</dd></React.Fragment>)}
    {[...origins].map(([category,ids])=><React.Fragment key={category}><dt>{callerSource(category).name}</dt><dd>{ids.size}</dd></React.Fragment>)}
   </dl>}
-  {composition.length?composition.slice(0,4).map(part=><SourceContent key={part.id} item={part} sourceHref={sourceHref} close={close}>{part.excerpt?<blockquote className="lt-message-quote" style={part.label&&part.label!=='?'?{'--message-label-color':stateColor(part.label)} as React.CSSProperties:undefined}>{composition.length>1?<strong>{callerSource(part.authorship!).name}</strong>:null}{part.excerpt.text}{part.excerpt.truncated?'…':''}</blockquote>:<small>This part is outside the retained preview.</small>}</SourceContent>):(sourceHref?messages.slice(0,4):messages.length===1?messages:[]).map(message=><SourceContent key={message.id} item={items.find(item=>item.message?.id===message.id)!} sourceHref={sourceHref} close={close}><MessagePreview message={message}/></SourceContent>)}
+  {composition.length?composition.slice(0,4).map(part=><SourceContent key={part.id} item={part} sourceHref={sourceHref} close={close}>{part.excerpt?<blockquote className="lt-message-quote" style={part.label&&part.label!=='?'?{'--message-label-color':stateColor(part.label)} as React.CSSProperties:undefined}>{composition.length>1?<strong>{callerSource(part.authorship!).name}</strong>:null}{trimTimelineSnippet(part.excerpt.text)}{part.excerpt.truncated?'…':''}</blockquote>:<small>This part is outside the retained preview.</small>}</SourceContent>):(sourceHref?messages.slice(0,4):messages.length===1?messages:[]).map(message=><SourceContent key={message.id} item={items.find(item=>item.message?.id===message.id)!} sourceHref={sourceHref} close={close}><MessagePreview message={message}/></SourceContent>)}
   {tools.slice(0,4).map(item=>{
    const mark=item.mark!,elapsed=mark.end_known?mark.end-mark.start:null;
    return <SourceContent key={item.id} item={item} sourceHref={sourceHref} close={close}><div className="lt-tool-preview">
@@ -173,9 +173,9 @@ function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;le
  const icon=(node.id==='events'||node.id==='labels:thinking')?'thought':node.id==='activity'?'settings':node.id.startsWith('activity:')?icons[node.items[0]?.mark?.category??'other']:node.id==='labels'?'read':node.id==='authorship'?'human':undefined;
  const count=ribbonEventCount(node.items,ownEvents?'events':'session');
  const label=<span className={`lt-session-row-label${root?' is-root':''}`} style={{paddingLeft:root?8:8+Math.min(level-1,8)*9}} aria-label={root?`${count} events`:undefined}>{root?<strong className="lt-event-count">{count}</strong>:<>{eventGlyph?<EventGlyph group={eventGlyph.group}/>:icon?<Icon name={icon}/>:node.items[0]?.label?<i style={{background:node.items[0].color}}/>:null}<strong>{node.title}</strong><small>{ownEvents?counts.events:counts.messages||counts.activity||counts.inferred}</small></>}{node.children.length?<Icon name="chevron-right" className="lt-session-caret"/>:<span className="lt-session-caret" aria-hidden="true">·</span>}</span>;
- const content=<>{identity}{!props.hideEvents && label}<SessionRibbon visibility={props.visibility} node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></>;
+ const content=<>{identity}{!props.hideEvents && label}<SessionRibbon visibility={props.visibility} node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller&&timelineSectionVisible(props.visibility??{},'origins')} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></>;
  if(props.collapsed)return <div className="lt-session-row lt-session-preview">{content}</div>;
- if(!node.items.length)return <div className={`lt-session-row lt-session-empty ${root?'lt-session-empty-root':''}`}>{identity}{!props.hideEvents && label}<SessionRibbon visibility={props.visibility} node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></div>;
+ if(!node.items.length)return <div className={`lt-session-row lt-session-empty ${root?'lt-session-empty-root':''}`}>{identity}{!props.hideEvents && label}<SessionRibbon visibility={props.visibility} node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller&&timelineSectionVisible(props.visibility??{},'origins')} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></div>;
  if(!node.children.length)return <div className="lt-session-leaf"><button type="button" data-ribbon-event={node.items[0]?.id} data-view-field="delegation_event" className="lt-session-row" ref={anchor=>{if(anchor)props.restore(node.items[0],anchor);}} style={{'--row-depth':level} as React.CSSProperties} onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} eventHref={props.eventHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}>{content}</button></div>;
  return <ViewDisclosure viewKey={viewKey} className={`lt-session-node ${root?'lt-session-root':''}`} summary={content}>{open?node.children.map(child=><RecursiveRibbonRow key={child.id} node={child} props={props} level={level+1}/>):null}</ViewDisclosure>;
 }

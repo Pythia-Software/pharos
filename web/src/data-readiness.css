@@ -1,20 +1,20 @@
 /* Reuse the header tool, Data Guide dialog, card status slot, shared icons and
    operation progress track. These rules describe only freshness-specific ink. */
-.data-readiness-indicator{display:inline-flex;align-items:center;justify-content:center;flex:none;width:26px;height:26px;min-height:26px;padding:5px;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--muted);cursor:pointer;vertical-align:middle}
+.data-readiness-indicator:where(:not(.query-table-readiness)){display:inline-flex;align-items:center;justify-content:center;flex:none;width:26px;height:26px;min-height:26px;padding:5px;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--muted);cursor:pointer;vertical-align:middle}
 .data-readiness-indicator .app-icon{width:15px;height:15px}
-.data-readiness-indicator:hover{background:var(--bg);border-color:var(--line)}
-.data-readiness-indicator:focus-visible{outline:2px solid var(--focus-ring,var(--accent));outline-offset:2px}
+.data-readiness-indicator:where(:not(.query-table-readiness)):hover{background:var(--bg);border-color:var(--line)}
+.data-readiness-indicator:where(:not(.query-table-readiness)):focus-visible{outline:2px solid var(--focus-ring,var(--accent));outline-offset:2px}
 :is(.data-readiness-indicator:not(.query-card-readiness),#dataReadinessToggle)[data-tone=current]{color:var(--muted)}
 :is(.data-readiness-indicator:not(.query-card-readiness),#dataReadinessToggle):is([data-tone=minutes],[data-tone=recent],[data-tone=unknown]){color:var(--muted)}
 :is(.data-readiness-indicator:not(.query-card-readiness),#dataReadinessToggle)[data-tone=hours]{color:var(--gold)}
 :is(.data-readiness-indicator:not(.query-card-readiness),#dataReadinessToggle)[data-tone=days]{color:var(--bad)}
 .query-card:has(.query-card-readiness) .query-preview-refresh{display:none}
 .data-readiness-chart-controls{display:flex;align-items:flex-start;gap:8px}.data-readiness-chart-controls>.usage-tools-controls{flex:1;min-width:0}
-.data-guide.data-readiness-dialog{width:min(530px,calc(100vw - 24px));height:auto;max-height:calc(100dvh - 32px);overflow:hidden}
+.data-guide.data-readiness-dialog{width:min(530px,calc(100vw - 24px));height:fit-content;max-height:calc(100dvh - 32px);overflow:hidden}
 .data-readiness-dialog[open]{display:flex;flex-direction:column}
 .data-readiness-dialog .data-guide-header{position:static;flex:none;padding:18px 22px}
 .data-readiness-dialog .data-guide-header small{display:block;color:var(--muted);font-size:11px;margin-bottom:7px}
-.data-readiness-dialog .data-guide-body{display:block;min-height:0;overflow:auto;padding:18px 22px}
+.data-readiness-dialog .data-guide-body{display:block;flex:0 1 auto;min-height:0;overflow:auto;padding:18px 22px}
 .data-readiness-dialog .data-guide-body>p:first-child{margin:0 0 18px;font-size:13px;line-height:1.5}
 .data-readiness-times{display:flex;flex-wrap:wrap;gap:16px 30px;margin:0 0 22px;font-size:11px}.data-readiness-times>div{display:flex;gap:6px}.data-readiness-times dt{color:var(--muted)}.data-readiness-times dd{margin:0}
 .data-readiness-stages{list-style:none;padding:0;margin:0 0 20px;display:grid;gap:17px}
@@ -35,9 +35,5 @@
 
 :is(.data-readiness-indicator:not(.query-card-readiness),#dataReadinessToggle)[data-tone=orange]{color:light-dark(#b76020,#f0a064)}
 @media(max-width:600px){.data-readiness-dialog .data-guide-header,.data-readiness-dialog .data-guide-body,.data-readiness-footer{padding:16px}.data-readiness-preview{padding:10px 16px}.data-readiness-times{gap:10px;flex-direction:column}.data-readiness-footer{flex-wrap:wrap}}
-/* The table boundary stays visible with either collapsed or expanded controls. */
-.data-source-query{display:flex;align-items:flex-start;gap:6px}
-.data-source-query>:first-child{flex:1;min-width:0}
-.data-source-query>.data-readiness-indicator{margin-top:5px}
 :is(.mcp-metric,.thinking-stat-cards>div)>span:has(>.data-readiness-indicator){display:flex;align-items:center;justify-content:space-between;gap:6px}
 .data-readiness-region{position:relative}.data-readiness-region>.data-readiness-indicator{position:absolute;right:8px;top:8px;z-index:1}

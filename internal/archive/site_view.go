@@ -811,7 +811,7 @@ func validateViewShape(name string, value any) error {
 			return fmt.Errorf("needs timeline visibility selections by section")
 		}
 		for section, value := range object {
-			if !slices.Contains([]string{"modes", "events", "tools", "origins"}, section) {
+			if !slices.Contains([]string{"modes", "events", "tools", "origins", "sections"}, section) {
 				return fmt.Errorf("unknown timeline visibility section %q", section)
 			}
 			selection, ok := value.(map[string]any)
@@ -830,6 +830,9 @@ func validateViewShape(name string, value any) error {
 				if _, ok := value.(string); !ok {
 					return fmt.Errorf("%s.values needs strings", section)
 				}
+			}
+			if problem := validateAllHiddenSelection(selection, values); problem != "" {
+				return fmt.Errorf("%s: %s", section, problem)
 			}
 		}
 	case "thinking":

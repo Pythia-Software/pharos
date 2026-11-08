@@ -160,7 +160,13 @@ export function dashboardQueryLinks(dataset: UsageDataset, query: QueryState, sc
     {title:"Matching label observations",query:{...records,select:[{field:"fingerprint"},{field:"title"},{field:"label"},{field:"text"},{field:"occurred_at"}],hostState:{version:1,params:{label_results:["table"]}}}},
   ]:[
     ...(chart ? [{ title: `${measure}${keys.length ? ` by ${keys.join(" & ")}` : " totals"}`, query: chart }] : []),
-    ...(explorations.length ? explorations : [{ title: `${usageDatasets[dataset].label} records`, query: records }]),
+    ...(explorations.length ? explorations : dataset === "agent_events" && params.get("analyze_topic") === "agent_experience" ? [{
+      title: "Events to read",
+      query: { ...records,
+        select: ["family", "sentence", "subject", "response", "source", "occurred_at", "title", "probability"].map(field => ({ field })),
+        orderBy: [{ field: "probability", dir: "desc" as const }, { field: "occurred_at", dir: "desc" as const }, { field: "id", dir: "asc" as const }],
+      },
+    }] : [{ title: `${usageDatasets[dataset].label} records`, query: records }]),
   ]);
   return destinations.map(destination => {
     const original = ("dataset" in destination ? destination.dataset : dataset) as UsageDataset;
