@@ -174,7 +174,6 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const showBrowseHint=askShowBrowseHint({pending:!!pending&&!ai.hidden,browsing:!!pending?.browsing,presentation,hint:!!pending?.hint});
     browseHint.hidden=!showBrowseHint;
     if(showBrowseHint)browseButton.setAttribute('aria-describedby','pharos-browse-hint');else browseButton.removeAttribute('aria-describedby');
-    browseButton.title=showBrowseHint?'':'Picture in picture · keep browsing';
     windowClose.hidden=presentation!=='modal';
     // Keep the same close control available when switching to regular search.
     const headerHost=ai.hidden?product:find('.pharos-ai-inner');
@@ -504,7 +503,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const defaultButton = find('.pharos-save-default');
     defaultButton.setAttribute('aria-pressed',String(!!isDefault));
     defaultButton.setAttribute('aria-label',isDefault?'This selection is the default':'Make this selection the default');
-    defaultButton.dataset.tooltip = isDefault?'Default CLI, model, effort and speed for new questions':'Save this CLI, model, effort and speed as your default';
+    defaultButton.title = isDefault?'Current default':'Save default';
     defaultButton.querySelector('span').textContent = isDefault?'\u2605':'\u2606';
     syncComposer();
     if (enabled) autoFit();
