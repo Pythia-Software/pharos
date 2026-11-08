@@ -22,9 +22,10 @@ is due no later than the next normal release after acceptance.
 
 ## Baseline artifacts
 
-The rebased stack pins main commit
+The retained comparison baseline is main commit
 `108c0367bab0b94466fb0f1c8114029e8d4d4a3d` (schema 24, without the
 executor), recorded in the [task inventory](work-task-inventory.json).
+The stack is rebased onto main `bbec0bab`; the retained baseline stays fixed.
 Main now uses the native fingerprint renderer and shared file locks. A retained
 service and both probes must be rebuilt from this baseline and the same common
 probe bytes, with hashes recorded privately, before paired measurements count
@@ -193,9 +194,9 @@ engine is unavailable and an A/B comparison that would otherwise pass returns
 A probe arm (`probe-run`) runs the compiled probe test binary. The probe file
 uses only symbols present in both the retained source and the candidate, and
 drives the scheduled engine only through `POST /api/work` and `GET
-/api/work`, so it compiles against both and imports no runtime helper. In
-this PR no build has that API, so only classic arms can settle; a scheduled
-request fails the arm rather than running classic under another name. The
+/api/work`, so it compiles against both and imports no runtime helper. The
+retained baseline has no work API, so it can settle only classic arms; a
+scheduled request fails rather than running classic under another name. The
 probe:
 
 - restores production durability (catalog durability, the labeling ledger's
