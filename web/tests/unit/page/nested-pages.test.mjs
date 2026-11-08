@@ -27,9 +27,7 @@ test("every dashboard belongs to People, Agents or Outcomes and retains its dest
     assert.equal(nestedPageTrail(pages, 'dashboards:human')[1].label, 'People');
     assert.equal(nestedPageTrail(pages, 'dashboards:thinking-detail')[1].label, 'Agents');
     assert.equal(nestedPageTrail(pages, 'dashboards:agent_event_rates')[1].label, 'Agents');
-    assert.ok(pages.find(page => page.id === 'query').children.some(page => page.id === 'query:agent_event_rates'));
     assert.equal(nestedPageTrail(pages, 'dashboards:carbon')[1].label, 'Outcomes');
-    assert.ok(pages.find(page => page.id === 'query').children.every(page => page.href));
   }
   assert.equal(params.toString(), before);
 });
@@ -173,17 +171,29 @@ test('sidebar presentation updates keep the picker open while page and query cha
 });
 
 
-test("dataset navigation opens complete records independently of the current query", () => {
+test("dataset navigation groups every available table and opens complete records", () => {
   const current = new URLSearchParams({ analyze_mode: "query", analyze_data: "messages", q_messages: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "role", op: "=", value: "user" }] }), record_messages: "old keyword", window_dataset: "messages", window_days: "7" });
-  const pages = analyzePages(current, true).find(page => page.id === "query").children;
-  assert.deepEqual(pages.map(page => page.id), analyzeQueryDatasets.map(dataset => `query:${dataset}`));
-  for (const page of pages) {
-    const params = new URL(page.href, "https://pharos.test").searchParams;
-    const dataset = params.get("analyze_data"), query = decodeQueryStrict(params.get(`q_${dataset}`));
-    assert.ok(query, dataset);
-    assert.deepEqual(query.where, [], dataset);
-    assert.equal(query.grouping, undefined, dataset);
-    assert.equal([...params.keys()].some(key => key.startsWith("record_") || key.startsWith("window_")), false, dataset);
-    assert.equal(appLocation("/analyze", params).current, page.id);
+  const before = current.toString();
+  for (const previews of [false, true]) {
+    const tree = analyzePages(current, previews), groups = tree.find(page => page.id === "query").children;
+    assert.deepEqual(groups.map(group => group.label), ["Conversations & agent sessions", "Tools & context", "Usage & activity", "Agent events"]);
+    const pages = groups.flatMap(group => group.children);
+    const expected = analyzeQueryDatasets.filter(dataset => previews || !["agent_events", "agent_event_messages"].includes(dataset));
+    assert.deepEqual(pages.map(page => page.id).sort(), expected.map(dataset => `query:${dataset}`).sort());
+    assert.equal(new Set(pages.map(page => page.id)).size, pages.length);
+    for (const group of groups) {
+      assert.ok(group.children.length);
+      for (const page of group.children) {
+        const params = new URL(page.href, "https://pharos.test").searchParams;
+        const dataset = params.get("analyze_data"), query = decodeQueryStrict(params.get(`q_${dataset}`));
+        assert.ok(query, dataset);
+        assert.deepEqual(query.where, [], dataset);
+        assert.equal(query.grouping, undefined, dataset);
+        assert.equal([...params.keys()].some(key => key.startsWith("record_") || key.startsWith("window_")), false, dataset);
+        assert.equal(appLocation("/analyze", params).current, page.id);
+        assert.deepEqual(nestedPageTrail(tree, page.id).map(item => item.id), ["query", group.id, page.id]);
+      }
+    }
   }
+  assert.equal(current.toString(), before);
 });
