@@ -824,9 +824,13 @@ func copyFileSynced(src, dst string, info fs.FileInfo) error {
 	return err
 }
 
+// sameDevice reports whether a and b are known to be on one device. A device
+// that cannot be observed answers false: callers take false only as
+// "same-volume placement is not established" and fall back to copying or
+// refusing, never to a placement that needs one volume.
 func sameDevice(a, b string) bool {
-	var statA, statB syscall.Stat_t
-	return syscall.Stat(a, &statA) == nil && syscall.Stat(b, &statB) == nil && statA.Dev == statB.Dev
+	same, err := observeSameDevice(a, b)
+	return err == nil && same
 }
 
 // syncFile flushes a file through the drive's own cache: os.File.Sync is

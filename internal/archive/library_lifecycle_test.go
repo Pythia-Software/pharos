@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -80,6 +82,32 @@ func TestLibraryRegistryAssignmentAndCopies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The v1 descriptor keeps its fields, and directory_inode is the library
+	// directory's native inode.
+	written, err := os.ReadFile(descriptorPath(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err = json.Unmarshal(written, &fields); err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	if strings.Join(keys, " ") != "directory_inode id instance name version" || string(fields["version"]) != "1" {
+		t.Fatalf("descriptor fields changed: %s", written)
+	}
+	info, err := os.Stat(filepath.Dir(a.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inode, err := libraryDirectoryInode(info)
+	if err != nil || original.Inode != inode || string(fields["directory_inode"]) != strconv.FormatUint(inode, 10) {
+		t.Fatalf("directory_inode %s, want %d (%v)", fields["directory_inode"], inode, err)
+	}
 	moved := filepath.Join(filepath.Dir(filepath.Dir(a.Path)), "renamed")
 	if err = os.Rename(filepath.Dir(a.Path), moved); err != nil {
 		t.Fatal(err)
@@ -89,8 +117,11 @@ func TestLibraryRegistryAssignmentAndCopies(t *testing.T) {
 		t.Fatal(err)
 	}
 	descriptor, err := readLibraryDescriptor(cfg)
-	if err != nil || descriptor.ID != original.ID {
+	if err != nil || descriptor != original {
 		t.Fatal("directory rename lost identity", err)
+	}
+	if after, err := os.ReadFile(descriptorPath(cfg)); err != nil || string(after) != string(written) {
+		t.Fatalf("reading a moved library rewrote its descriptor: %s", after)
 	}
 	copyDir := filepath.Join(t.TempDir(), "copy")
 	if _, err = retainedTree(context.Background(), moved, copyDir, "", false); err != nil {
@@ -100,8 +131,8 @@ func TestLibraryRegistryAssignmentAndCopies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = readLibraryDescriptor(copied); err == nil {
-		t.Fatal("unmanaged writable copy was accepted")
+	if _, err = readLibraryDescriptor(copied); err == nil || errors.Is(err, errLibraryDirectoryUnobserved) || !strings.Contains(err.Error(), "copied library") {
+		t.Fatal("unmanaged writable copy was accepted", err)
 	}
 	stable, err := RecoverLibrary(context.Background(), copyDir, filepath.Join(t.TempDir(), "independent"), nil)
 	if err != nil {
@@ -110,6 +141,68 @@ func TestLibraryRegistryAssignmentAndCopies(t *testing.T) {
 	recovered, err := readLibraryDescriptor(stable)
 	if err != nil || recovered.Instance == original.Instance || recovered.RecoveredFrom != original.ID {
 		t.Fatal("recovery lost copy lineage", err)
+	}
+
+	// A directory whose inode cannot be observed is neither accepted nor
+	// treated as missing a descriptor, so nothing writes or repairs one,
+	// even when the cause is os.ErrNotExist.
+	dir := filepath.Dir(b.Path)
+	kept, err := os.ReadFile(descriptorPath(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unobserved := func(step string, err error, cause error) {
+		t.Helper()
+		if !errors.Is(err, errLibraryDirectoryUnobserved) || !errors.Is(err, cause) || libraryDescriptorMissing(err) {
+			t.Fatalf("%s: %v; want an unobserved directory caused by %v", step, err, cause)
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		stat  func(string) (os.FileInfo, error)
+		cause error
+	}{
+		{"missing directory", func(path string) (os.FileInfo, error) {
+			return nil, &os.PathError{Op: "stat", Path: path, Err: syscall.ENOENT}
+		}, os.ErrNotExist},
+		{"nil metadata", func(string) (os.FileInfo, error) { return nil, nil }, errFileObservationUnavailable},
+		{"foreign metadata", func(path string) (os.FileInfo, error) {
+			info, err := os.Stat(path)
+			return foreignMetadataInfo{info}, err
+		}, errFileObservationUnavailable},
+	} {
+		override(t, &statLibraryDirectory, tc.stat)
+		_, err := readLibraryDescriptor(b)
+		unobserved(tc.name+": read", err, tc.cause)
+		_, err = ensureLibraryDescriptor(b, "")
+		unobserved(tc.name+": ensure", err, tc.cause)
+		unobserved(tc.name+": protect", protectPendingEvidence(b), tc.cause)
+		unobserved(tc.name+": check", b.checkLibrary(testIdentity), tc.cause)
+		_, err = r.register(b, "")
+		unobserved(tc.name+": register", err, tc.cause)
+		if after, err := os.ReadFile(descriptorPath(b)); err != nil || string(after) != string(kept) {
+			t.Fatalf("%s: descriptor rewritten: %s", tc.name, after)
+		}
+	}
+	// A library without a descriptor gets none until its inode is observed.
+	if err = os.Remove(descriptorPath(b)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = ensureLibraryDescriptor(b, "")
+	unobserved("new descriptor", err, errFileObservationUnavailable)
+	if _, err = os.Stat(descriptorPath(b)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a descriptor was written without a directory inode", err)
+	}
+	override(t, &statLibraryDirectory, os.Stat)
+	created, err := ensureLibraryDescriptor(b, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err = os.Stat(dir); err != nil {
+		t.Fatal(err)
+	}
+	if inode, err = libraryDirectoryInode(info); err != nil || created.Inode != inode || created.Version != libraryFormatVersion {
+		t.Fatalf("new descriptor %+v, directory inode %d (%v)", created, inode, err)
 	}
 }
 func TestLibraryTransferRetainedEvidence(t *testing.T) {
@@ -594,6 +687,7 @@ func TestLibraryTransferRejectsNewerCatalogAndBusySource(t *testing.T) {
 		t.Fatal("target modified before compatibility check", err)
 	}
 }
+
 // leaseLockFailures are adapter results a lease's consumers must tell apart:
 // only the adapter's contention, however wrapped or joined, is another
 // holder. A raw errno is not the adapter's contract.

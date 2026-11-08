@@ -96,7 +96,7 @@ func compressCaptures(ctx context.Context, config Config, catalog *Catalog, done
 	}
 	if d, err := readLibraryDescriptor(config); err == nil && d.RetainPendingEvidence {
 		return nil
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	} else if err != nil && !libraryDescriptorMissing(err) {
 		return err
 	}
 	host := currentHost()
