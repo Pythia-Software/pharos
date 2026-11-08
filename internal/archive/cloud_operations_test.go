@@ -555,3 +555,70 @@ func TestCloudRestoresSQLiteRecordReplay(t *testing.T) {
 		})
 	}
 }
+
+// This Mac's running upload or verification is interrupted only when its
+// process is positively gone, or is this process without the job. A process
+// whose presence is unknown keeps the run and its verified state; another
+// Mac's run is never judged by a local process ID.
+func TestCloudInterruptRequiresAbsence(t *testing.T) {
+	const owner, verifier = 4242, 4343
+	host := currentHost().ID
+	running := cloudRun{ID: "run", State: "running", Phase: "uploading", OwnerHost: host, OwnerPID: owner,
+		VerificationState: "running", VerificationHost: host, VerificationPID: verifier, Verified: true}
+	interrupt := func(run cloudRun, active string) (cloudRun, bool) {
+		s := &Server{}
+		s.cloud.active = active
+		changed := s.interruptCloudRun(&run)
+		return run, changed
+	}
+	for name, answer := range livenessCases(owner) {
+		t.Run(name, func(t *testing.T) {
+			stubProcessLiveness(t, map[int]livenessAnswer{owner: answer, verifier: answer})
+			got, changed := interrupt(running, "")
+			if answer.state != processAbsent {
+				if changed || got != running {
+					t.Fatalf("a %s owner's run changed: %+v", name, got)
+				}
+				return
+			}
+			if !changed || got.State != "failed" || got.Phase != "interrupted" || !strings.Contains(got.Error, "Upload was interrupted") ||
+				got.VerificationState != "failed" || !strings.Contains(got.VerificationError, "Verification was interrupted") || got.Verified {
+				t.Fatalf("an ended owner's run: %+v", got)
+			}
+			// Another Mac's run with the same IDs is left to that Mac.
+			elsewhere := running
+			elsewhere.OwnerHost, elsewhere.VerificationHost = "another-mac", "another-mac"
+			if got, changed := interrupt(elsewhere, ""); changed || got != elsewhere {
+				t.Fatalf("another Mac's run changed: %+v", got)
+			}
+		})
+	}
+	t.Run("this process", func(t *testing.T) {
+		self := os.Getpid()
+		stubProcessLiveness(t, map[int]livenessAnswer{self: {processPresent, nil}, owner: {processUnknown, os.ErrPermission}})
+		upload := running
+		upload.OwnerPID = self
+		// This process with the job keeps it; without the job it was lost.
+		if got, changed := interrupt(upload, "run"); changed || got != upload {
+			t.Fatalf("the active job was interrupted: %+v", got)
+		}
+		got, changed := interrupt(upload, "")
+		if !changed || got.State != "failed" || got.VerificationState != "running" || !got.Verified {
+			t.Fatalf("this process's lost upload: %+v", got)
+		}
+		verification := running
+		verification.OwnerPID, verification.VerificationPID = owner, self
+		got, changed = interrupt(verification, "other")
+		if !changed || got.State != "running" || got.VerificationState != "failed" || got.Verified {
+			t.Fatalf("this process's lost verification: %+v", got)
+		}
+	})
+	t.Run("no process recorded", func(t *testing.T) {
+		observed := stubProcessLiveness(t, nil)
+		none := running
+		none.OwnerPID, none.VerificationPID = 0, -1
+		if got, changed := interrupt(none, ""); changed || got != none || len(observed.observed()) != 0 {
+			t.Fatalf("a run without an owner changed: %+v, observed %v", got, observed.observed())
+		}
+	})
+}
