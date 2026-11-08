@@ -198,13 +198,33 @@ func TestNativeApprovalsAreExplicit(t *testing.T) {
 	if err != nil || len(failures) == 0 {
 		t.Fatalf("native approval without constraint: %v, %v", failures, err)
 	}
-	for _, tag := range []string{"arm64", "darwin || amd64"} {
-		files[name] = &fstest.MapFile{Data: append([]byte("//go:build "+tag+"\n\n"), files[name].Data...)}
-		failures, err = checkBoundaries(files, map[string]string{name: "Architecture is not an OS boundary."}, nil)
-		if err != nil || len(failures) == 0 {
-			t.Fatalf("native approval with architecture-only escape %q: %v, %v", tag, failures, err)
-		}
-		files[name].Data = []byte("package example\nimport s \"syscall\"\nvar kill=s.Kill\n")
+	for _, tc := range []struct {
+		tag   string
+		gated bool
+	}{
+		{"arm64", false},
+		{"darwin || amd64", false},
+		{"darwin || 386", false},
+		{"darwin || integration", false},
+		{"cgo || integration", false},
+		{"darwin || (linux && integration) || custom", false},
+		{"!windows", false},
+		{"!(integration && !darwin)", false},
+		{"darwin", true},
+		{"darwin && arm64", true},
+		{"(darwin || linux) && !native_unsupported", true},
+		{"cgo && unix", true},
+		{"!(!darwin && !linux)", true},
+		{"!(!darwin || integration)", true},
+		{"(darwin && !cgo) || (linux && integration)", true},
+	} {
+		t.Run(tc.tag, func(t *testing.T) {
+			files[name] = &fstest.MapFile{Data: []byte("//go:build " + tc.tag + "\n\npackage example\nimport s \"syscall\"\nvar kill=s.Kill\n")}
+			failures, err = checkBoundaries(files, map[string]string{name: "Reviewed native mechanism."}, nil)
+			if err != nil || (len(failures) == 0) != tc.gated {
+				t.Fatalf("native approval with constraint %q: %v, %v; want gated=%v", tc.tag, failures, err, tc.gated)
+			}
+		})
 	}
 }
 

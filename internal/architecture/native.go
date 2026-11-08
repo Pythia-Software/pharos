@@ -77,6 +77,31 @@ func initializer(id *ast.Ident) ast.Expr {
 	return nil
 }
 
+// requiresNativeGate proves that every Boolean alternative requires a positive
+// OS/unix/cgo tag. Architecture and custom tags cannot supply that guarantee.
+// This proof is conservative: even contradictory unguarded branches are refused.
+func requiresNativeGate(expr constraint.Expr, negated bool) bool {
+	switch expr := expr.(type) {
+	case *constraint.TagExpr:
+		return !negated && (expr.Tag == "darwin" || expr.Tag == "linux" || expr.Tag == "windows" || expr.Tag == "unix" || expr.Tag == "cgo")
+	case *constraint.NotExpr:
+		return requiresNativeGate(expr.X, !negated)
+	case *constraint.AndExpr:
+		x, y := requiresNativeGate(expr.X, negated), requiresNativeGate(expr.Y, negated)
+		if negated {
+			return x && y
+		}
+		return x || y
+	case *constraint.OrExpr:
+		x, y := requiresNativeGate(expr.X, negated), requiresNativeGate(expr.Y, negated)
+		if negated {
+			return x || y
+		}
+		return x && y
+	}
+	return false
+}
+
 // inspectGo parses every platform's source. Import aliases and selector values
 // count too: assigning syscall.Kill to a variable is still native access.
 func inspectGo(name string, source []byte) ([]finding, bool, error) {
@@ -237,15 +262,7 @@ func inspectGo(name string, source []byte) ([]finding, bool, error) {
 				if err != nil {
 					return nil, false, err
 				}
-				// An OS/unix/cgo condition must limit the build, even when
-				// architecture tags match. An architecture-only gate is insufficient.
-				for _, target := range []string{"darwin", "linux", "windows"} {
-					if expr.Eval(func(value string) bool {
-						return value == target || value == "cgo" || value == "arm64" || value == "amd64" || value == "unix" && target != "windows"
-					}) && !expr.Eval(func(value string) bool { return value == "arm64" || value == "amd64" }) {
-						gated = true
-					}
-				}
+				gated = gated || requiresNativeGate(expr, false)
 			}
 		}
 	}

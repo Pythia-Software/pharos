@@ -15,15 +15,21 @@ const nativeModule = name => name === 'electron' || name.startsWith('@tauri-apps
 // Keep line offsets so failures point at the authored shell, not a virtual file.
 export function shellScripts(file, text) {
   const entries = [], scriptRanges = [], lines = offset => text.slice(0, offset).split('\n').length - 1;
-  const attribute = (tag, name) => new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(tag)?.slice(1).find(value => value !== undefined);
+  const attributes = tag => tag.matchAll(/([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g);
+  const attribute = (tag, name) => {
+    for (const match of attributes(tag)) {
+      if (match[1].toLowerCase() === name) return match[2] ?? match[3] ?? match[4] ?? '';
+    }
+    return undefined;
+  };
   let index = 0;
-  for (const match of text.matchAll(/<!--[\s\S]*?(?:-->|$)|<script\b([^>]*)>([\s\S]*?)(?:<\/script\s*>|$)/gi)) {
+  for (const match of text.matchAll(/<!--[\s\S]*?(?:-->|$)|<script(?=[\s/>])((?:[^<>"']|"[^"]*"|'[^']*')*)>([\s\S]*?)(?:<\/script\s*>|$)/gi)) {
     scriptRanges.push([match.index, match.index + match[0].length]);
     if (match[0].startsWith('<!--')) continue;
     const type = attribute(match[1], 'type')?.toLowerCase().split(';')[0].trim();
     if (attribute(match[1], 'src') !== undefined || type && !['module', 'text/javascript', 'application/javascript', 'text/ecmascript', 'application/ecmascript'].includes(type)) continue;
     if (!/<\/script\s*>$/i.test(match[0])) throw Error(`${file}:${lines(match.index) + 1}: unclosed executable script`);
-    const start = match.index + match[0].indexOf('>') + 1;
+    const start = match.index + '<script>'.length + match[1].length;
     entries.push({file, name: `${file}.script-${index++}.js`, text: match[2], lineOffset: lines(start)});
   }
   // Event attributes are executable too. Decode the HTML quoting commonly
@@ -36,7 +42,7 @@ export function shellScripts(file, text) {
   for (const tag of text.matchAll(/<[a-z][\w:-]*\b(?:[^<>"']|"[^"]*"|'[^']*')*>/gi)) {
     if (scriptRanges.some(([start, end]) => tag.index >= start && tag.index < end)) continue;
     const start = /^<[\w:-]+/.exec(tag[0])[0].length;
-    for (const match of tag[0].slice(start, -1).matchAll(/([\w:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/gi)) {
+    for (const match of attributes(tag[0].slice(start, -1))) {
       if (!/^on[a-z]+$/i.test(match[1])) continue;
       const body = match[2] ?? match[3] ?? match[4] ?? '';
       entries.push({file, name: `${file}.event-${index++}.js`, text: `function __event(event){${decode(body)}\n}`, lineOffset: lines(tag.index + start + match.index)});

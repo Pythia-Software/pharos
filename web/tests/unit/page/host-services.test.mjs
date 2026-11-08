@@ -206,6 +206,18 @@ test('host source discovery covers new nested scripts and executable shell fragm
   for (const file of ['web/src/new/feature.tsx', 'internal/archive/assets/new/shell.html', 'internal/archive/assets/new/shell.py', 'internal/uifeedback/assets/new.js']) assert.ok(findings.some(finding => finding.file === file), file);
   assert.equal(entries.filter(entry => entry.file.endsWith('shell.html')).length, 2, 'JSON is data; scripts and event handlers are code');
   assert.deepEqual(shellScripts('external.html', `<script src="host-services.js"></script><script type="application/ld+json">{}</script>`), []);
+  for (const attributes of [
+    `data-src="unused"`,
+    `data-type="application/json"`,
+    `data-note='src="unused" type="application/json"'`,
+    `data-note="quoted > character" data-type="application/json"`,
+    `data-type="application/json" TYPE="text/javascript"`,
+  ]) {
+    const scripts = shellScripts('attributes.html', `<script ${attributes}>navigator.clipboard.writeText('x')</script>`);
+    assert.equal(scripts.length, 1, attributes);
+    assert.ok(findHostBypasses(scripts).length, attributes);
+  }
+  assert.deepEqual(shellScripts('external-attributes.html', `<script data-src="unused" SRC="host-services.js">window.webkit</script><script data-type="text/javascript" TYPE="application/json">{}</script>`), []);
   assert.ok(findHostBypasses(shellScripts('handler.html', `<button onclick=window.webkit>Go</button>`)).length);
   assert.equal(shellScripts('valid.html', `<script>let onload = () => 1;</script>`).length, 1, 'JS assignments are not HTML event attributes');
   assert.deepEqual(shellScripts('inert.html', `<!-- <script>window.webkit</script> --><button title="example onclick='window.webkit'">Go</button>`), [], 'comments and quoted prose are not executable handlers');
