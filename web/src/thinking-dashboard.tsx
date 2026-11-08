@@ -1,3 +1,5 @@
+import { UsageDashboardLinks } from "./usage-workspace";
+import { thinkingQueryContext } from "./dashboard-query-adapters";
 import { DataReadinessIndicator } from "./data-readiness";
 import React, { useEffect, useRef, useState } from "react";
 import {
@@ -1181,6 +1183,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
           )}
         </div>
       ) : null}
+      <UsageDashboardLinks dataset="model_requests" schema={loadSchema(modelRequestDocument)} query={nativeQuery} context={thinkingQueryContext(state, nativeQuery.where, !detail)} />
     </section>
     </DashboardCardSourceContext.Provider>
   );

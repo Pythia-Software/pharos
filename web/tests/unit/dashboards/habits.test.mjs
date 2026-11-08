@@ -1,3 +1,8 @@
+import { habitsQueryContext } from "../../../src/dashboard-query-adapters";
+import { dashboardExplorations } from "../../../src/dashboard-query-explorations";
+import { dashboardQueryLinks } from "../../../src/dashboard-query-links";
+import { dashboardQuerySettings } from "../../../src/dashboard-query-settings";
+import { EMPTY_QUERY, encodeQuery, toQueryRequestV3 } from "@pythia-software/query-table-core";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { calendarValue, calendarWeeks, healthStats, level, monthLabels, normalizeHabitsSettings, punchcardGrid, recentWork, quartileLevels, toggleVacation, workdayShape, formatClock, formatGap } from "../../../src/habits-model";
@@ -188,4 +193,33 @@ test("Habits view links select the chart, with legacy section and pin restoratio
   assert.equal(readHabitsView(new URLSearchParams()), "calendar");
   assert.equal(readHabitsView(new URLSearchParams({ habits_shape_days: "14" })), "days");
   assert.equal(readHabitsView(new URLSearchParams({ habits_punchcard: "unattended" })), "punchcard");
+});
+
+
+test("Habits query cards keep actors, habit-day boundaries, weekday hiding and calculation settings", () => {
+  const data = { timezone: "America/Denver", today: "2026-11-03", period_start: "2025-01-01", settings: normalizeHabitsSettings({ dayStart: 4, engagedGap: 30 }), punchcard: { from: "2026-10-28", to: "2026-11-03" } };
+  const schema = loadSchema(rhythmDocument), view = { mode: "all", weeks: 53, calendar: "you", weekends: false, punchcard: "agents", range: "7", shapeDays: 7 };
+  const context = habitsQueryContext(data, "calendar", view);
+  const rows = [
+    { id: "friday", actor: "you", started_at: "2026-10-31T07:00:00Z", day: "2026-10-31", hour_of_day: "01", elapsed_hours: 1 },
+    { id: "saturday", actor: "you", started_at: "2026-10-31T11:00:00Z", day: "2026-10-31", hour_of_day: "05", elapsed_hours: 1 },
+    { id: "monday", actor: "you", started_at: "2026-11-03T08:00:00Z", day: "2026-11-03", hour_of_day: "01", elapsed_hours: 1 },
+    { id: "other-actor", actor: "automated", started_at: "2026-11-03T08:00:00Z", day: "2026-11-03", hour_of_day: "01", elapsed_hours: 1 },
+  ];
+  assert.deepEqual(applyQuery(rows, { ...EMPTY_QUERY, where: context.where }, schema).rows.map(row => row.id).sort(), ["friday", "monday"]);
+  for (const chart of ["calendar", "punchcard", "days"]) {
+    const context = habitsQueryContext(data, chart, view);
+    const suggestions = dashboardExplorations(context, schema);
+    assert.equal(suggestions.length, 4);
+    for (const item of suggestions) {
+      assert.equal(item.blocked, undefined);
+      assert.doesNotThrow(() => toQueryRequestV3(item.query, schema, { version: 3, profile: "qt-sqlite-v1", groupedRows: true, regexSourceFilters: true }));
+      assert.ok(encodeQuery(item.query));
+    }
+    const link = dashboardQueryLinks("rhythm", EMPTY_QUERY, schema, new URLSearchParams({ analyze_topic: "habits" }), context)[0];
+    const settings = dashboardQuerySettings("rhythm", new URL(link.href, "http://localhost").searchParams);
+    assert.deepEqual(JSON.parse(settings.habits_settings), data.settings);
+  }
+  const selected = habitsQueryContext(data, "calendar", view, "2026-10-30");
+  assert.deepEqual(applyQuery(rows, { ...EMPTY_QUERY, where: selected.where }, schema).rows.map(row => row.id), ["friday"]);
 });

@@ -1,3 +1,10 @@
+import { capabilities } from "../helpers/recipes.mjs";
+import { thinkingQueryContext, ribbonQueryContext } from "../../../src/dashboard-query-adapters";
+import { dashboardExplorations } from "../../../src/dashboard-query-explorations";
+import { dashboardQueryLinks } from "../../../src/dashboard-query-links";
+import { dashboardQuerySettings } from "../../../src/dashboard-query-settings";
+import { schemaDocuments } from "../../../src/schema-documents";
+import { coerceValue, loadSchema, toQueryRequestV3 } from "@pythia-software/query-table-core";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EMPTY_QUERY,decodeQueryStrict,encodeQuery} from '@pythia-software/query-table-core';
@@ -83,4 +90,35 @@ test('returning from request evidence respects edited population and preserves p
  const returned=new URL(usageDashboardReturn(source.searchParams).href,urlOrigin),restored=initialThinking(returned.searchParams);
  assert.equal(restored.view,'calendar');assert.equal(restored.groupBy,'model_effort');assert.equal(restored.model,'all');assert.equal(restored.range,'7d');
  assert.deepEqual(queryFromURL(source.href).query.where,where);
+});
+
+
+test("every Waiting and Thinking view has four scoped, executable query cards", () => {
+ const now=Date.parse('2026-11-03T19:00:00Z'),schema=loadSchema(schemaDocuments.model_requests),where=[{field:'provider',op:'=',value:'codex'}];
+ for(const [view]of thinkingViews)for(const [groupBy]of thinkingBreakdowns)for(const overview of [true,false]){
+  const state={...defaultThinking,view,groupBy,model:'gpt-test',effort:'high',range:'7d',timezone:'America/Denver'};
+  const context=thinkingQueryContext(state,where,overview,now),suggestions=dashboardExplorations(context,schema);
+  assert.equal(suggestions.length,4);
+  for(const item of suggestions){
+   assert.equal(item.blocked,undefined,`${view}/${groupBy}/${overview}: ${item.purpose}`);
+   assert.doesNotThrow(()=>toQueryRequestV3(item.query,schema,{...capabilities,regexSourceFilters:true}),`${view}/${groupBy}/${overview}: ${item.purpose} ${JSON.stringify(item.query.grouping?.keys)}`);
+   const population=(item.query.grouping?.source??item.query).where;
+   for(const term of [...where,...thinkingWhere(state,now)]) {
+    if(term.field!=='requested_at')assert.ok(population.some(candidate=>JSON.stringify(candidate)===JSON.stringify(term)));
+    else {const actual=population.find(candidate=>candidate.field===term.field&&candidate.op===term.op);assert.ok(actual);const a=Number(coerceValue('datetime',actual.value,now)),b=Number(coerceValue('datetime',term.value,now));assert.ok(term.op==='>='?a>=b:a<=b,'whole-period bounds stay inside the selected range');}
+   }
+  }
+ }
+});
+
+test("ribbon query cards retain selected identity, zoom and counting assumptions",()=>{
+ const selection={settings:{counting:'workspace',gap:30,repository:'pharos'},bounds:[Date.parse('2026-11-01T01:00Z'),Date.parse('2026-11-02T01:00Z')],selected:{workspace_id:'workspace-one',conversation_id:'conversation-one'}};
+ const context=ribbonQueryContext(selection),schema=loadSchema(schemaDocuments.parallelism);
+ const links=dashboardQueryLinks('parallelism',EMPTY_QUERY,schema,new URLSearchParams({analyze_topic:'parallelism'}),context);
+ assert.equal(links.length,4);
+ for(const item of links){
+  assert.ok((item.query.grouping?.source??item.query).where.some(term=>term.field==='unit_id'&&term.value==='workspace-one'));
+  const settings=dashboardQuerySettings('parallelism',new URL(item.href,urlOrigin).searchParams);
+  assert.deepEqual(JSON.parse(settings.parallelism_settings),{counting:'workspace',gap:30});
+ }
 });

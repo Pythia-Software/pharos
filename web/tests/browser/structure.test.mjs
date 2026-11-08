@@ -1500,7 +1500,16 @@ test("Card dashboard opens from the Card Library, fits, and supports changing vi
   await app.settled();
   assert.equal(await page.getByRole('alert').count(), 0, 'the matching analysis is available');
   assert.deepEqual(await layoutProblems(page), []);
-  await page.locator('.usage-query-destinations a').first().click();
+  for (const width of [1000, 390, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await app.settled();
+    await page.getByRole("navigation", { name: "Explore this dashboard" }).scrollIntoViewIfNeeded();
+    assert.deepEqual(await layoutProblems(page), []);
+    await app.shot(`dashboard-query-cards-${width}`);
+  }
+  const contributor = page.getByRole("navigation", { name: "Explore this dashboard" }).getByRole("link").first();
+  await contributor.focus();
+  await page.keyboard.press("Enter");
   await page.locator('.usage-workspace-table').waitFor();
   await page.getByRole('link', { name: /^Back to dashboard/ }).click();
   await page.locator('.usage-dashboard .usage-query-destinations a').first().waitFor();

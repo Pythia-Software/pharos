@@ -1,3 +1,4 @@
+import { ribbonQueryContext } from "./dashboard-query-adapters";
 import { optimizeTableTitle, optimizeTableSchemas, type OptimizeTableSchemas } from "./optimize-table-title";
 import messagesDocument from "../../schemas/messages.schema.json";
 import { DataReadinessModal, HeaderDataReadiness, BackgroundProcessingWorkload, DataReadinessEmpty, DataReadinessIndicator } from "./data-readiness";
@@ -129,7 +130,7 @@ import { agentEventFixLinks, agentEventRatesCatalog } from "./agent-event-rates-
 import { agentEventReadWhere } from "./agent-event-rates-model";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
-import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink, useDashboardHeadline } from "./usage-workspace";
+import { UsageWorkspace, DashboardQueryOverride, UsageWorkspaceLink, useDashboardHeadline } from "./usage-workspace";
 import { DashboardResultActions, CreateDashboardCard, DashboardCardSourceContext } from "./create-dashboard-card";
 import { ribbonCardTitle } from "./parallelism-ribbon-card";
 import { UsageQueryIdeas } from "./usage-query-ideas";
@@ -268,8 +269,6 @@ function makeTransport(dataset: Dataset, queryCapabilities: QueryCapabilitiesV3,
   const endpoint = (suffix = "", params?: URLSearchParams, collection = true, request?: { hostState?: HostQueryState }) => {
     const query = new URLSearchParams(collection ? extra : "");
     if (collection && host) new URLSearchParams(request?.hostState ? host.find(request.hostState) : host.current()).forEach((value, name) => query.set(name, value));
-    const carbon = new URLSearchParams(location.search).get("analyze_carbon");
-    if (dataset === "usage" && carbon) query.set("carbon_settings", carbon);
     params?.forEach((value, name) => query.set(name, value));
     return `/api/query/${dataset}${suffix}${query.size ? `?${query}` : ""}`;
   };
@@ -1146,15 +1145,15 @@ function ParallelismUsageDashboard() {
   const headline = useDashboardHeadline();
   // The ribbon comes first, so it titles the page; the catalog chart below
   // keeps its own title, and each has its own card.
-  return <CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={dashboardDefaults.parallelism} chartHeadline={false}
+  const queries = selection && (selection.selected || selection.settings.zoom) ? ribbonQueryContext(selection) : null;
+  return <DashboardQueryOverride.Provider value={queries}><CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={dashboardDefaults.parallelism} chartHeadline={false}
     summary={where => <ParallelismSettingsNote where={where} believed={settings} />}
     before={<>
       {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{ribbonCardTitle(selection?.settings ?? readConcurrencySettings())}</h2><DashboardResultActions target="ribbon" /></div>, headline) : null}
       <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
-      {selection ? <UsageDashboardLinks schema={schemas.parallelism} dataset="parallelism" query={parallelismSelectionQuery(selection)} /> : null}
       <p className="usage-dashboard-note">The query view contains the hourly occupancy records touching the selected range, with the same repository, counting, gap, and ribbon selection. Those records describe threaded activity; model-only timing remains in the chart.</p>
       {differs ? <p className="usage-dashboard-note" role="status">The ribbon uses this link’s counting and gap; the views below use your saved settings, with which the service builds its records. Change a setting in the ribbon to save it.</p> : null}
-    </>} />;
+    </>} /></DashboardQueryOverride.Provider>;
 }
 function ParallelismSettingsNote({ where, believed }: { where: WhereTerm[]; believed: ParallelismSettings }) {
   const result = useMetrics("parallelism", where, parallelismSettingsMetric);
