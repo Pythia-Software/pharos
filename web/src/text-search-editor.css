@@ -117,7 +117,7 @@
 .text-filter-clause > :is(label, span:not(.text-select, .text-wrapping-input)) { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0 4px; min-height: var(--query-control-height); }
 .text-filter-clause > label { white-space: nowrap; }
 .text-filter-subject, .text-filter-operator, .text-filter-note { color: var(--muted); font-weight: 400; }
-.text-filter-note { font-size: var(--fs-xs); letter-spacing: .04em; padding: 0 4px; cursor: help; }
+.text-filter-note { font-size: var(--fs-xs); letter-spacing: .04em; padding: 0 4px; cursor: default; }
 .text-filter-clause > :is(.text-wrapping-input, .text-growing-input, input:not([type=date])) { flex: 1 1 140px; }
 .text-filter-clause .text-select { max-width: 260px; }
 .text-search-editor .text-filter-clause > .text-select:has(> select[aria-label^="Filter operator"]) { color: var(--muted); font-weight: 400; }
