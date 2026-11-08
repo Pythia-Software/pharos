@@ -48,9 +48,9 @@ colours are checked against it (`TestAgentEventKindsAgreeEverywhere`, `PHAROS_UP
 the file).
 
 They back two query datasets, `agent_events` (events at or above the threshold) and `agent_event_messages`, and the
-dashboard's catalog (`web/src/agent-events-analysis-catalog.ts`). The dashboard also draws **events per 1,000 agent
-messages** by day or week, dividing by the messages read in each period under the same filters: the engine's parts
-split only additive measures, so this panel computes the rate from two grouped counts.
+Agent Experience dashboard's catalog (`web/src/agent-events-analysis-catalog.ts`). For rates per message read, use
+the Agent Events dashboard described below. The **Events to read** query card opens the matching event records,
+ordered by the model’s confidence, with links to their messages in the reader.
 
 ### Agent Events dashboard
 

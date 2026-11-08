@@ -105,7 +105,7 @@ function classifiedPrompt(id, parts) {
 const authoredPrompt = classifiedPrompt("human-mixed",humanPromptParts);
 const authoredTurnMessages = [authoredPrompt,
   ...Array.from({length:5},(_,index)=>[
-    {id:`review-${index}`,native_id:`review-${index}`,role:"assistant",kind:"delegation",call_id:`reviewer-${index}`,text:JSON.stringify({name:"Task",input:{subagent_type:`Reviewer ${index+1}`,prompt:["Review the parent turn structure","Check nested review groups","Verify human-written text highlighting","Check keyboard navigation","Check the narrow screen layout"][index]}})},
+    {id:index===0?"m-15":`review-${index}`,native_id:index===0?"m-15":`review-${index}`,role:"assistant",kind:"delegation",call_id:`reviewer-${index}`,text:JSON.stringify({name:"Task",input:{subagent_type:`Reviewer ${index+1}`,prompt:["Review the parent turn structure","Check nested review groups","Verify human-written text highlighting","Check keyboard navigation","Check the narrow screen layout"][index]}})},
     {id:`review-reply-${index}`,native_id:`review-reply-${index}`,role:"assistant",kind:"message",parent_native_id:`reviewer-${index}`,text:`Review ${index+1} complete. The assigned check passed.`},
   ]).flat(),
   {id:"nested-review",native_id:"nested-review",role:"assistant",kind:"delegation",call_id:"nested-reviewer",parent_native_id:"reviewer-0",text:JSON.stringify({name:"Task",input:{subagent_type:"Nested reviewer",prompt:"Check the child branch under Reviewer 1"}})},
@@ -404,6 +404,7 @@ const ROUTES = [
   { name: "Markdown links in Search", url: "/library", api: {...conversationResultAPI,...markdownLinkAPI}, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("link",{name:"Running dev server",exact:true}).waitFor();}, shown: ".result-turn-content .markdown-link" },
   { name: "Search nested reviews and human writing", url: "/library", api: authoredTurnAPI, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("button",{name:/Sub-agent · Reviewer 5/}).waitFor();}, shown: ".result-turn-content .human-written" },
   { name: "Transcript human writing", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".conversation-panel .human-written" },
+  { name: "Transcript expanded sub-agent", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".subagent-run", open: async page => { await page.locator(".subagent-run > summary").first().click(); }, shown: ".subagent-body" },
   { name: "Transcript agent event link", url: `${work}/conversation/${rootConversation}?reader_events=1&reader_event_link=e-review`, api: authoredTurnAPI, ready: ".conversation-panel.show-events mark.event-target.link-selected" },
   { name: "Search conversations", url: "/library", ready: ".conversation-result-card" },
   ...["turn", "sub-agent", "accordion", "summary", "preview"].map(selection => ({
@@ -1499,7 +1500,16 @@ test("Card dashboard opens from the Card Library, fits, and supports changing vi
   await app.settled();
   assert.equal(await page.getByRole('alert').count(), 0, 'the matching analysis is available');
   assert.deepEqual(await layoutProblems(page), []);
-  await page.locator('.usage-query-destinations a').first().click();
+  for (const width of [1000, 390, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await app.settled();
+    await page.getByRole("navigation", { name: "Explore this dashboard" }).scrollIntoViewIfNeeded();
+    assert.deepEqual(await layoutProblems(page), []);
+    await app.shot(`dashboard-query-cards-${width}`);
+  }
+  const contributor = page.getByRole("navigation", { name: "Explore this dashboard" }).getByRole("link").first();
+  await contributor.focus();
+  await page.keyboard.press("Enter");
   await page.locator('.usage-workspace-table').waitFor();
   await page.getByRole('link', { name: /^Back to dashboard/ }).click();
   await page.locator('.usage-dashboard .usage-query-destinations a').first().waitFor();

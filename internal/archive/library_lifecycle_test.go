@@ -1074,6 +1074,53 @@ func TestApplicationRemembersLibrarySummaries(t *testing.T) {
 }
 
 func TestApplicationSetupWithoutLibrary(t *testing.T) {
+	t.Run("page recovery waits for routing before the selected library is known", func(t *testing.T) {
+		app, err := newApplicationManager(t.Context(), filepath.Join(t.TempDir(), "Pharos.app"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := func(path, scope, token string) *httptest.ResponseRecorder {
+			r := httptest.NewRequest(http.MethodGet, path, nil)
+			r.Header.Set("Authorization", "Bearer "+token)
+			r.Header.Set("X-Pharos-Library", scope)
+			answered := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				w := httptest.NewRecorder()
+				app.ServeHTTP(w, r)
+				answered <- w
+			}()
+			select {
+			case w := <-answered:
+				return w
+			case <-time.After(2 * time.Second):
+				t.Fatal("readiness waited for the library to finish opening")
+				return nil
+			}
+		}
+		func() {
+			// Reproduce startup holding the routing lock throughout Initialize.
+			app.mu.Lock()
+			defer app.mu.Unlock()
+			if w := request("/api/ready", "", app.token); w.Code != http.StatusOK {
+				t.Fatal("catalog initialization must not change broker liveness", w.Code)
+			}
+			for _, scope := range []string{"", "selected-library"} {
+				w := request("/api/ready?routing=1", scope, app.token)
+				if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), `"ready":false`) {
+					t.Fatal("busy routing reported page readiness", w.Code, w.Body.String())
+				}
+			}
+			if w := request("/api/ready?routing=1", "", "wrong"); w.Code != http.StatusUnauthorized {
+				t.Fatal("routing readiness bypassed authentication", w.Code)
+			}
+		}()
+		if w := request("/api/ready?routing=1", "", app.token); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"ready":true`) {
+			t.Fatal("page recovery did not resume after initialization", w.Code, w.Body.String())
+		}
+		if len(app.children) != 0 {
+			t.Fatal("readiness started a library service")
+		}
+	})
 	t.Run("both shells load shared host services before their callers", func(t *testing.T) {
 		for name, page := range map[string]string{"library": appHTML(), "startup": applicationHTML()} {
 			include := `<script src="/assets/host-services.js"></script>`
@@ -1179,7 +1226,7 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 		// service's (the app's window asks before reloading a failed page).
 		ready := func(scope string) string {
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodGet, "/api/ready", nil)
+			r := httptest.NewRequest(http.MethodGet, "/api/ready?routing=1", nil)
 			r.Header.Set("Authorization", "Bearer "+app.token)
 			if scope != "" {
 				r.Header.Set("X-Pharos-Library", scope)

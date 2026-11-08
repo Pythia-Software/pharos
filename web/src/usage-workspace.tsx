@@ -3,6 +3,7 @@ import { analyzePages } from "./app-navigation-model";
 import React, { createContext, useContext, useEffect, useState } from "react";
 import {EMPTY_QUERY,encodeQuery,type FieldSchema,type QueryState } from "@pythia-software/query-table-core";
 import { dashboardQueryLinks } from "./dashboard-query-links";
+import { dashboardQueryPurposes, type DashboardQueryContext } from "./dashboard-query-explorations";
 import { Icon } from "./icons";
 import { ResetPage } from "./query-recovery";
 import { readUsageWorkspace, usageDashboardReturn, usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
@@ -17,14 +18,25 @@ export const UsageWorkspaceLink = PageLink;
 const DashboardHeadline = createContext<HTMLElement | null>(null);
 export const useDashboardHeadline = () => useContext(DashboardHeadline);
 
-export function UsageDashboardLinks({ dataset, query, schema }: { dataset: UsageDataset; query: QueryState; schema: FieldSchema }) {
+export const DashboardQueryOverride = createContext<DashboardQueryContext | null>(null);
+
+export function UsageDashboardLinks({ dataset, query, schema, context }: { dataset: UsageDataset; query: QueryState; schema: FieldSchema; context: DashboardQueryContext }) {
+  const override = useContext(DashboardQueryOverride);
+  const resolved = override ?? context;
   const params = new URLSearchParams(location.search);
-  return <div className="usage-dashboard-links">
-    <div className="usage-query-destinations">{dashboardQueryLinks(dataset, query, schema, params).map(link => <UsageWorkspaceLink className="usage-query-destination" key={link.title} href={link.href}>
-      <span className="usage-query-destination-heading"><strong>{link.title}</strong><Icon name="arrow-right" /></span>
-      {link.sentence.length ? <span className="usage-query-sentence">{link.sentence.map(part => <React.Fragment key={part.keyword}>{part.prefix}<strong>{part.keyword}</strong>{part.text ? ` ${part.text}` : ""}</React.Fragment>)}.</span> : null}
-    </UsageWorkspaceLink>)}</div>
-  </div>;
+  return <nav className="usage-dashboard-links" aria-label="Explore this dashboard">
+    <div className="usage-query-destinations">{dashboardQueryLinks(dataset, query, schema, params, resolved).map(link => {
+      const content = <>
+        <span className="usage-query-purpose">{dashboardQueryPurposes.find(purpose => purpose.id === link.purpose)!.label}</span>
+        <span className="usage-query-destination-heading"><strong>{link.title}</strong>{link.href ? <Icon name="arrow-right" /> : null}</span>
+        <span className="usage-query-note">{link.blocked ?? link.note}</span>
+        {!link.blocked && link.sentence.length ? <span className="usage-query-sentence">{link.sentence.map(part => <React.Fragment key={part.keyword}>{part.prefix}<strong>{part.keyword}</strong>{part.text ? ` ${part.text}` : ""}</React.Fragment>)}.</span> : null}
+      </>;
+      const className = `usage-query-destination usage-query-${link.purpose}`;
+      return link.href ? <UsageWorkspaceLink className={className} key={link.purpose} href={link.href}>{content}</UsageWorkspaceLink>
+        : <div className={className} key={link.purpose} aria-disabled="true">{content}</div>;
+    })}</div>
+  </nav>;
 }
 
 // New records arrive while a dashboard is open (Pharos MCP's own requests,

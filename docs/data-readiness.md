@@ -89,7 +89,6 @@ Coverage is attached to owned rendering boundaries, rather than DOM discovery:
 | Parallelism ribbon and supporting conversation table | ConcurrencyPanel |
 | Carbon estimate | Host boundary around the classic summary renderer |
 | Token, Human Words, Conversation, Tool Time and Agent Experience summary tiles | Each independent metric's label row |
-| Agent Experience rates and examples | Existing panel headings |
 | Efficiency, Risky actions and Fixes dashboards | Existing page heading; the tables use the query boundary |
 | Saved Home and Card Library cards | QueryCard; dashboard sources resolve through dashboardCardSource even without a query token |
 

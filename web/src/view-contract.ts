@@ -22,6 +22,7 @@ export const viewFields: Record<string, ViewField> = {
   timeline_visibility: field("timeline_visibility",["work"],"json","Timeline Key visibility by section: modes (message label IDs, including ? for uncategorized), events (friction, learning, second-look, choices), tools (action categories or error), origins (caller text source IDs). Optional sections selects whole layers by those same section IDs. Each optional selection is {values:string[],excluded:boolean}; allHidden:true with empty values and excluded:false hides the entire selection. absent or empty values shows everything in that section. Selections only hide visualization elements, preserving the clock and underlying records.",undefined,{}),
   timeline_columns: field("timeline_columns",["work"],"json","Timeline text column widths in CSS pixels: {execution,events,time:0}. Session and Events resize; the clock always fills the remaining space. Older fixed time widths are ignored. All rows share these widths.",undefined,{execution:175,events:165,time:0}),
   reader_view: field("reader_view",["work"],"enum","Single-agent conversation presentation. Conversation retains the standard transcript; Timeline shows recursive message-mode and tool-action ribbons.",["conversation","timeline"],"conversation"),
+  reader_navigator: field("reader_navigator",["work"],"strings","Sticky session navigators: any combination of timeline, context and turns; [] hides all bars. The shared window follows the visible transcript and clicking reveals its source message.",undefined,["timeline","context","turns"]),
   thinking_filters: field("analyze_filters",["analyze/thinking-overview","analyze/thinking-detail"],"text","Additional native Model Requests population filters. The dashboard range and model controls intersect these filters; dates are replaced when Range changes."),
   thinking: field("thinking",["analyze/thinking-overview","analyze/thinking-detail","analyze/query/model_requests"],"json","Thinking dashboard applied filters and presentation. All controls share one range; dates are half-open ISO bounds."),
   disclosures: field("disclosures", ["*"], "json", "Expanded content and settings sections by stable section/record identity; values are booleans. Transient menus and editor drafts are excluded."),
@@ -92,6 +93,7 @@ export const viewFields: Record<string, ViewField> = {
   sidebar_visible: field("sidebar_visible", ["work"], "boolean", "Show the workspace navigation sidebar."),
   sidebar_width: field("sidebar_width", ["work"], "text", "Workspace navigation sidebar width, 300–5000 pixels (site_link accepts a number or decimal string)."),
   search_state: field("text_builder", ["library"], "json", "Complete applied TextSearchDraft, including nested groups, syntax/literal/regex, match options and scope. Browse library/view/search_state for the template. Missing search fields are filled from that template by site_link."),
+  query_settings: field("analyze_query_settings", ["analyze/query/*"], "json", "Calculation settings captured by a dashboard query: carbon_settings, habits_settings or parallelism_settings, each a JSON string. The query source uses only its own settings."),
   carbon: field("analyze_carbon", ["analyze/carbon","analyze/query/*"], "json", "View-scoped Carbon assumptions; same shape as the Carbon controls."),
   parallelism: field("analyze_parallelism", ["analyze/parallelism","analyze/query/parallelism"], "json", "Ribbon mode, counting, gap, repository, range/custom bounds, selected workspace/agent, zoom and smoothingMinutes."),
   habits_view: field("habits_view", ["analyze/habits", "analyze/query/rhythm"], "enum", "The Habits chart to show. Its controls change with the view: activity calendar (calendar), weekday × hour punchcard (punchcard), or daily work schedule (days).", ["calendar", "punchcard", "days"], "calendar"),
@@ -181,6 +183,7 @@ export function parseViewValue(field: ViewField, raw: string): unknown {
   if (field.kind === "enum") { if (!field.values?.includes(raw)) throw new Error(`${field.param} has an unknown value.`); return raw; }
   if (field.kind === "json" || field.kind === "strings") {
     const value = JSON.parse(raw);
+    if(field.param==='reader_navigator'&&(!Array.isArray(value)||value.some(item=>!['timeline','context','turns'].includes(item))||new Set(value).size!==value.length))throw new Error('Unknown or repeated session navigator.');
     if (field.kind === "strings" ? !Array.isArray(value) || value.some(item => typeof item !== "string") : value === null || typeof value !== "object") throw new Error(`${field.param} has invalid state.`);
     if (["disclosures","reader_content","query_layout"].includes(field.param) && (Array.isArray(value)||Object.values(value).some(item=>typeof item!=="boolean")))throw new Error(`${field.param} needs booleans by stable identity.`);
     if (field.param==="chart_pins" && (Array.isArray(value)||Object.values(value).some(item=>typeof item!=="string")))throw new Error("Chart pins need bucket keys by chart identity.");
@@ -212,6 +215,7 @@ export function encodeViewValue(field: ViewField, value: unknown): string {
 export const delegatedViewFields: Record<string,{file:string; symbol:string}> = {
   label_results:{file:"web/src/message-label-results-model.ts",symbol:"messageLabelHostQuery"},
   dashboard_timezone:{file:"web/src/usage-dashboard-model.ts",symbol:"readDashboardLink"},
+  query_settings:{file:"web/src/dashboard-query-settings.ts",symbol:"dashboardQuerySettings"},
   carbon:{file:"internal/archive/assets/carbon.js",symbol:"syncSettingsURL"},
   parallelism:{file:"web/src/concurrency.tsx",symbol:"routeParameter"},
   record_keyword:{file:"web/src/host-query-state.ts",symbol:"recordKeywordHostQuery"},

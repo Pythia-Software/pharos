@@ -43,7 +43,7 @@ test('semantic detail targets preserve typed identities, reject ambiguous paths,
 });
 
 test('host view codecs preserve explicit false, empty values, ordered IDs and relative intent',()=>{
- const values={card_window:'today',card_filters:false,search_cards:{},delegation_columns:['cost','tokens'],reader_expanded:['message:m'],disclosures:{'row:r:input':true,'timeline-key':false},findings_rank:'tokens',timeline_visibility:{modes:{values:['C.report.finding','?'],excluded:false},events:{values:['friction'],excluded:true},tools:{values:['error'],excluded:true},origins:{values:['typed'],excluded:false}}};
+ const values={card_window:'today',card_filters:false,search_cards:{},delegation_columns:['cost','tokens'],reader_expanded:['message:m'],reader_navigator:['timeline','context','turns'],disclosures:{'row:r:input':true,'timeline-key':false},findings_rank:'tokens',timeline_visibility:{modes:{values:['C.report.finding','?'],excluded:false},events:{values:['friction'],excluded:true},tools:{values:['error'],excluded:true},origins:{values:['typed'],excluded:false}}};
  for(const [key,value]of Object.entries(values))assert.deepEqual(parseViewValue(viewFields[key],encodeViewValue(viewFields[key],value)),value,key);
  assert.equal(fieldsForPage('findings/settings').findings_rank,undefined);
  assert.equal(fieldsForPage('analyze/query/tool_calls','tool_calls').record_keyword.param,'record_tool_calls');
@@ -58,6 +58,8 @@ test('host view codecs preserve explicit false, empty values, ordered IDs and re
   else assert.throws(()=>encodeViewValue(viewFields.timeline_visibility,state));
  }
  assert.deepEqual(parseViewValue(viewFields.timeline_visibility,'{}'),{});
+ assert.deepEqual(parseViewValue(viewFields.reader_navigator,'[]'),[]);
+ for(const raw of ['[\"unknown\"]','[\"turns\",\"turns\"]','{}'])assert.throws(()=>parseViewValue(viewFields.reader_navigator,raw));
 });
 
 test('Safety links restore their own section, lifecycle, case and evidence disclosures',()=>{
@@ -455,4 +457,20 @@ test('every guide term and dataset round-trips through the shared view contract'
  }
  assert.equal(describeDataSource('parallelism','workspace').entity,'workspaces');
  assert.equal(describeDataSource('parallelism','agent').entity,'conversations');
+});
+
+
+test("dashboard query settings apply to every native request and explicit settings win", () => {
+ const values={carbon_settings:'{"pue":1.2}',habits_settings:'{"engagedGap":30,"dayStart":4}',parallelism_settings:'{"counting":"workspace","gap":30}'};
+ const view=new URL('http://localhost/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_query_settings:JSON.stringify(values)}));
+ for(const [dataset,name]of [['usage','carbon_settings'],['rhythm','habits_settings'],['parallelism','parallelism_settings']])for(const operation of ['query-v3','metrics','rows','stats','distinct','schema']){
+  const request=new URL(viewRequestURL('/api/query/'+dataset+'/'+operation,view),view.origin);
+  assert.equal(request.searchParams.get(name),values[name]);
+  assert.deepEqual([...request.searchParams.keys()],[name],"another source's settings do not leak into the request");
+ }
+ assert.equal(new URL(viewRequestURL('/api/query/rhythm/metrics?habits_settings=explicit',view),view.origin).searchParams.get('habits_settings'),'explicit');
+ assert.equal(viewRequestURL('https://elsewhere.test/api/query/rhythm/rows',view),'https://elsewhere.test/api/query/rhythm/rows');
+ assert.equal(viewRequestURL('/api/query/tool_calls/rows',view),'/api/query/tool_calls/rows');
+ const invalid=new URL('http://localhost/analyze?analyze_query_settings=%5B%5D');
+ assert.throws(()=>viewRequestURL('/api/query/rhythm/rows',invalid),/Invalid dashboard query settings/);
 });

@@ -324,6 +324,10 @@
       "field": "reader_labels"
     },
     {
+      "file": "web/src/reader-navigator.tsx",
+      "field": "reader_navigator"
+    },
+    {
       "file": "web/src/delegation.tsx",
       "field": "reader_view"
     },
@@ -3328,15 +3332,6 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "127eea5e22e68f67:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "mount",
-      "tag": "button",
-      "control": "'button', 'button-with-icon', 'Next failed action'",
-      "contract": "action",
-      "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
-    },
-    {
       "key": "3f6f4aa5f5684795:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "mount",
@@ -3409,15 +3404,6 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "6c12af565d87bcc7:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderConversation",
-      "tag": "button",
-      "control": "'button', 'chip model-search', conversation.model",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
       "key": "74fa28f1d8b00997:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
@@ -3437,6 +3423,15 @@
       "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
+      "key": "8a991071267cd86c:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderConversation",
+      "tag": "button",
+      "control": "'button', 'button-with-icon', 'Close All Turns'",
+      "contract": "reader",
+      "reason": "Opens or closes each turn; the reader stores each turn disclosure by stable message identity in the URL."
+    },
+    {
       "key": "91fac2acbf38cf4f:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
@@ -3444,6 +3439,15 @@
       "control": "'details', 'source-details'",
       "contract": "reader",
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
+    },
+    {
+      "key": "a411f1fa02129dc8:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderConversation",
+      "tag": "button",
+      "control": "'button', 'button-with-icon', 'Open All Turns'",
+      "contract": "reader",
+      "reason": "Opens or closes each turn; the reader stores each turn disclosure by stable message identity in the URL."
     },
     {
       "key": "ae4e84b69857b628:0",
@@ -3465,15 +3469,6 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "ccb645811b24e75e:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderConversation",
-      "tag": "button",
-      "control": "'button', 'button-with-icon', 'Collapse all'",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
       "key": "e22fe96ffa687282:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
@@ -3488,15 +3483,6 @@
       "owner": "renderConversation",
       "tag": "input",
       "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "edeb69afa954fcef:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderConversation",
-      "tag": "button",
-      "control": "'button', 'button-with-icon', 'Expand all'",
       "contract": "reader",
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
@@ -3676,24 +3662,6 @@
       "reason": "Address-bar visibility is a transient navigation editor."
     },
     {
-      "key": "ee5d557122c20749:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationMap",
-      "tag": "button",
-      "control": "'button', `conversation-map-turn ${turn.dataset.human==='true'?'human':''}`",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "186a193e3b10cdc4:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupTokenOverview",
-      "tag": "button",
-      "control": "'button', 'token-marker '+(sample.compact?'compaction-marker'+(sample.trigger?' '+sample.trigger+'-compaction':''):'event-marker')",
-      "contract": "action",
-      "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
-    },
-    {
       "key": "5a0abc4e1c9b4583:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "setUsageSummaryOpen",
@@ -3857,15 +3825,6 @@
       "control": "'button', '', status.running || !status.needed ? 'Close' : 'Later'",
       "contract": "action",
       "reason": "Library upgrade/migration preview or mutation action, not an applied content query."
-    },
-    {
-      "key": "eca88c5aa1a147f6:0",
-      "file": "web/src/agent-event-examples.tsx",
-      "owner": "AgentEventExamples",
-      "tag": "button",
-      "control": "onClick={() => setShown(value => value + 24)}",
-      "contract": "transient",
-      "reason": "Shows more example events in the panel; how many are shown is not part of the view and resets on reload."
     },
     {
       "key": "103123ac664d233e:0",
@@ -5168,6 +5127,26 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
+      "key": "04b33fe3eee75c33:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "data-view-field=\"sidebar_visible\" onClick={showSessions}",
+      "binding": "sidebar_visible",
+      "contract": "view.sidebar_visible",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "04b33fe3eee75c33:1",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "data-view-field=\"sidebar_visible\" onClick={showSessions}",
+      "binding": "sidebar_visible",
+      "contract": "view.sidebar_visible",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "2562bc8689ddb3ca:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5204,15 +5183,6 @@
       "binding": "delegation_tint",
       "contract": "view.delegation_tint",
       "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "5eba9ec1822f23d8:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "button",
-      "control": "onClick={() => openExternal(n.external_parent!, n.parent_id)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
       "key": "7387f1cf2fb13437:0",
@@ -5279,26 +5249,6 @@
       "control": "onClick={() => single ? setReaderView(t) : display(t)} onKeyDown={(event) => { if ( ![\"ArrowLeft\", \"ArrowRight\", \"Home\", \"End\"].includes( event.key, ) ) return; event.preventDefault(); const nextIndex = event.key === \"Home\" ? 0 : event.key === \"End\" ? tabs.length - 1 : (index + (event.key === \"ArrowRight\" ? 1 : tabs.length - 1)) % tabs.length; if (single) setReaderView(tabs[nextIndex]); else display(tabs[nextIndex]); event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>(\"button\")[nextIndex].focus(); }}",
       "contract": "view.reader_view",
       "reason": "Single-agent tabs bind reader_view through useViewState; workspace tabs use the existing explorer URL owner (readDelegationRoute/display), including keyboard selection and workspace-history restoration."
-    },
-    {
-      "key": "c26a1ddf974ec6cc:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "button",
-      "control": "onClick={() => openNode(n)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "cbf5b8d632cafc7c:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "ViewDisclosure",
-      "control": "viewKey=\"delegation:scope\"",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound by the shared view-state primitive."
     },
     {
       "key": "ef8df6715bf8aa5d:0",
@@ -7357,6 +7307,52 @@
       "control": "onClick={onReset}",
       "contract": "action",
       "reason": "Retry/reset execute query actions; reset writes the resulting definition."
+    },
+    {
+      "key": "5c536168277a2959:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "button",
+      "control": "aria-label=\"Browse session timeline\" onFocus={event=>{const band=host.current?.querySelector<HTMLElement>('.reader-navigator-window');event.currentTarget.dataset.position=band?.dataset.position||'0';}} onClick={event=>{event.stopPropagation();jump(Number(event.currentTarget.dataset.position??0));}} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const button=event.currentTarget,previous=Number(button.dataset.position??0),next=event.key==='Home'?0:event.key==='End'?1:Math.max(0,Math.min(1,previous+(event.key==='ArrowLeft'?-.02:.02)));button.dataset.position=String(next);jump(next);}}",
+      "contract": "transient",
+      "reason": "Source navigation scrolls and highlights through the existing reader materialization handlers without taking keyboard focus. Keyboard browsing and the automatic window are transient scroll state; navigator choices bind reader_navigator."
+    },
+    {
+      "key": "7465388f7cf601a9:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "div",
+      "control": "aria-label=\"Session timeline. Click to reveal a message.\" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width);}}",
+      "contract": "transient",
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
+    },
+    {
+      "key": "79fbf467b09870f1:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "button",
+      "control": "onClick={()=>{const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}",
+      "contract": "transient",
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
+    },
+    {
+      "key": "889adb994f9d4635:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "input",
+      "control": "data-view-field=\"reader_navigator\" checked={shown.includes(choice)} onChange={event=>{const checked=event.currentTarget.checked;setShown(previous=>choices.filter(item=>item===choice?checked:previous.includes(item)));}}",
+      "binding": "reader_navigator",
+      "contract": "view.reader_navigator",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "e4dc3a33e88064d4:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "button",
+      "control": "onClick={()=>data.jumpContext(entry)}",
+      "contract": "transient",
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
     },
     {
       "key": "110c067b8fa806e8:0",

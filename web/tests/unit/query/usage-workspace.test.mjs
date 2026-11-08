@@ -1,4 +1,5 @@
 import scatter from "../../../../schemas/scatter.schema.json";
+import { schemaDocuments } from "../../../src/schema-documents";
 import messagesSchema from "../../../../schemas/messages.schema.json";
 import { queryCapabilities } from '../../support/query-server.mjs';
 import messageLabels from "../../../../schemas/message_labels.schema.json";
@@ -179,10 +180,30 @@ test("tool-summary drilldowns use calls when every predicate describes the same 
   const links = dashboardQueryLinks("tools", chart, loadSchema(tools), new URLSearchParams({ analyze_topic: "tools" }));
   assert.equal(links.length, 4);
   for (const link of links) {
-    const url = new URL(link.href, "http://localhost"), query = decodeQueryStrict(url.searchParams.get("q_tool_calls"));
-    assert.equal(readUsageWorkspace(url.searchParams).dataset, "tool_calls");
+    const url = new URL(link.href, "http://localhost"), target = readUsageWorkspace(url.searchParams).dataset, query = decodeQueryStrict(url.searchParams.get(`q_${target}`));
+    assert.equal(target, link.purpose === "contributors" ? "tool_calls" : "tools");
     assert.deepEqual((query.grouping?.source ?? query).where.slice(0, where.length), where);
-    assert.doesNotThrow(() => toQueryRequestV3(query, loadSchema(toolCalls), queryCapabilities));
+    assert.doesNotThrow(() => toQueryRequestV3(query, loadSchema(schemaDocuments[target]), queryCapabilities));
+  }
+  // Exercise the public links after their source conversion, including
+  // metrics whose contributor rank names a rollup-only field.
+  for (const view of ["compare", "trend"]) for (const metric of Object.keys(toolsAnalysisCatalog.measures)) {
+    const state = { view, metric, split: "tool_name", minSamples: 0 };
+    const supporting = view === "trend" ? trendQuery(toolsAnalysisCatalog, state, where).supporting : analysisQuery(toolsAnalysisCatalog, state, where).supporting;
+    const contextual = dashboardQueryLinks("tools", supporting, loadSchema(tools), new URLSearchParams({ analyze_topic: "tools" }), { catalog: toolsAnalysisCatalog, state, where, supporting });
+    for (const link of contextual) {
+      const params = new URL(link.href, "http://localhost").searchParams, target = params.get("analyze_data");
+      const query = decodeQueryStrict(params.get(`q_${target}`));
+      assert.doesNotThrow(() => toQueryRequestV3(query, loadSchema(schemaDocuments[target]), queryCapabilities), `${view}/${metric}: ${link.purpose}`);
+    }
+    if (metric === "truncation_rate") {
+      const contributor = contextual.find(link => link.purpose === "contributors");
+      const params = new URL(contributor.href, "http://localhost").searchParams;
+      assert.equal(params.get("analyze_data"), "tool_calls");
+      const query = decodeQueryStrict(params.get("q_tool_calls"));
+      const input = [{ id: "complete", provider: "codex", truncated: false }, { id: "truncated", provider: "codex", truncated: true }];
+      assert.deepEqual(applyQuery(input, query, loadSchema(toolCalls)).rows.map(row => row.id), ["truncated", "complete"], "truncated calls lead their evidence table");
+    }
   }
   const summaryFilter = { ...chart, where: [...where, { field: "call_count", op: ">", value: "5" }] };
   const retained = dashboardQueryLinks("tools", summaryFilter, loadSchema(tools), new URLSearchParams());
@@ -364,6 +385,22 @@ test("dashboard destinations describe their encoded query and consolidate record
   assert.deepEqual(query, original);
 });
 
+test("Agent Experience links to matching events ordered by confidence", () => {
+  const where = [{ field: "family_group", op: "=", value: "Friction" }, { field: "repository_name", op: "=", value: "pharos" }];
+  const chart = { ...EMPTY_QUERY, where, aggregations: [{ id: "events", op: "count", groupBy: ["day", "family_group"], label: "Events" }] };
+  const links = dashboardQueryLinks("agent_events", chart, loadSchema(agentEvents), new URLSearchParams({ analyze_topic: "agent_experience" }));
+  assert.equal(links.length, 4);
+  const link = links[0];
+  assert.equal(link.purpose, "contributors");
+  const params = new URL(link.href, "http://localhost").searchParams;
+  const query = decodeQueryStrict(params.get("q_agent_events"));
+  assert.equal(readUsageWorkspace(params).dataset, "agent_events");
+  assert.deepEqual(query.where, where);
+  assert.deepEqual(query.orderBy.map(({ field, dir }) => [field, dir]), [["probability", "desc"], ["occurred_at", "desc"], ["id", "asc"]]);
+  for (const field of ["family", "sentence", "subject", "response", "source"]) assert.ok(query.select.some(column => column.field === field));
+  assert.doesNotThrow(() => toQueryRequestV3(query, loadSchema(agentEvents), { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true }));
+});
+
 test("dashboard filter descriptions preserve alternatives, negations, empties and date gaps", () => {
   const schema = loadSchema(usage);
   const query = { ...EMPTY_QUERY, where: [
@@ -389,16 +426,17 @@ test("dashboard previews distinguish source and group filters and retain custom 
   const schema = loadSchema(usage), source = { ...EMPTY_QUERY, orderBy: [{ field: "total_tokens", dir: "asc" }], where: [{ field: "repository_name", op: "=", value: "pharos" }] };
   const query = { ...EMPTY_QUERY, grouping: { source, keys: [], summaries: [{ id: "total", label: "Total tokens", op: "sum", field: "total_tokens" }], representative: null }, where: [{ field: "total", op: ">", value: "1000" }], orderBy: [{ field: "total", dir: "desc" }] };
   const links = dashboardQueryLinks("usage", query, schema, new URLSearchParams());
-  const details = Object.fromEntries(links[0].details.map(detail => [detail.label, detail.values]));
+  const inspected = links.find(link => link.purpose === "inspect"), contributors = links.find(link => link.purpose === "contributors");
+  const details = Object.fromEntries(inspected.details.map(detail => [detail.label, detail.values]));
   assert.deepEqual(details.Filters, ["Repository is pharos"]);
   assert.deepEqual(details["Group filters"], ["Total tokens is greater than 1000"]);
   assert.equal(details["Group by"], undefined);
   assert.deepEqual(details.Sort, ["Total tokens descending"]);
-  const sentence = dashboardQuerySentence(links[0].details);
+  const sentence = dashboardQuerySentence(inspected.details);
   assert.deepEqual(sentence.map(part => part.keyword), ["Show", "where", "keeping groups where", "sorted by"]);
   assert.equal(sentence.map(part => `${part.prefix}${part.keyword}${part.text ? ` ${part.text}` : ""}`).join(""), "Show Total tokens where Repository is pharos, keeping groups where Total tokens is greater than 1000, sorted by Total tokens descending");
-  assert.deepEqual(links[1].details.find(detail => detail.label === "Sort").values, ["Cost (API $) descending"]);
-  assert.deepEqual(links[1].query.where, source.where);
+  assert.deepEqual(contributors.query.grouping.source.where, source.where);
+  assert.deepEqual(contributors.query.where, query.where, "contributor groups retain HAVING instead of broadening into records");
   const ungrouped = dashboardQueryLinks("usage", EMPTY_QUERY, schema, new URLSearchParams());
   assert.ok(ungrouped.every(link => !link.details.some(detail => detail.label === "Filters")));
   assert.deepEqual(dashboardQueryDetails(schema, EMPTY_QUERY), [], "empty filters, grouping and sorting have no row, including implicit schema defaults");
@@ -417,7 +455,7 @@ test("all eight dashboards offer four distinct native queries that retain source
   const configs = [
     ["tokens", "usage", { op: "sum", field: "total_tokens", groupBy: ["day", "model_family"], label: "Tokens" }],
     ["carbon", "usage", { op: "sum", field: "co2e_g", groupBy: ["day", "carbon_tier"], label: "Estimated CO₂e" }],
-    ["human", "writing", { op: "sum", field: "typed_words", groupBy: ["repository_name"], label: "Typed words" }],
+    ["human", "writing_messages", { op: "sum", field: "typed_words", groupBy: ["repository_name"], label: "Typed words" }],
     ["skills", "skill_usages", trendClause(skillsAnalysisCatalog, { metric: "records", split: "skill_name" })],
     ["time", "tool_calls", trendClause(toolTimeAnalysisCatalog, { metric: "time", split: "activity" })],
     ["parallelism", "parallelism", { op: "sum", field: "unit_hours", groupBy: ["repository_name"], label: "Active unit hours" }],
@@ -425,7 +463,7 @@ test("all eight dashboards offer four distinct native queries that retain source
     ["mcp", "mcp_calls", analysisQuery(mcpAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_name" }, []).clause],
   ];
   for (const [topic, dataset, metric] of configs) {
-    const schema = loadSchema(documents[dataset]);
+    const schema = loadSchema(schemaDocuments[dataset]);
     const where = [{ field: dataset === "mcp_calls" ? "query_source" : "repository_name", op: "=", value: "pharos" }];
     const query = { ...EMPTY_QUERY, fitToScreen: false, where, aggregations: [{ ...metric, id: "chart" }] }, original = structuredClone(query);
     const links = dashboardQueryLinks(dataset, query, schema, new URLSearchParams({ analyze_topic: topic, analyze_carbon: '{"scenario":"high"}' }));
@@ -437,8 +475,9 @@ test("all eight dashboards offer four distinct native queries that retain source
       const restored = decodeQueryStrict(url.searchParams.get(`q_${target}`));
       assert.deepEqual(restored, normalizeQueryState(link.query));
       assert.equal(restored.fit, "screen", `${topic}: ${link.title} fits its columns to the screen`);
-      assert.doesNotThrow(() => toQueryRequestV3(restored, loadSchema(documents[target]), { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true }), `${topic}: ${link.title}`);
-      assert.deepEqual((restored.grouping?.source ?? restored).where.slice(0, where.length), where);
+      assert.doesNotThrow(() => toQueryRequestV3(restored, loadSchema(schemaDocuments[target]), { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true }), `${topic}: ${link.title}`);
+      const expected = target === "messages" ? [{ field: "role", op: "=", value: "user" }, { field: "has_authorship", op: "=", value: "true" }, { field: "authorship_repository_name", op: "=", value: "pharos" }] : where;
+      assert.deepEqual((restored.grouping?.source ?? restored).where.slice(0, expected.length), expected);
       assert.equal(readUsageWorkspace(url.searchParams).topic, topic);
       if (topic === "carbon") assert.equal(url.searchParams.get("analyze_carbon"), '{"scenario":"high"}');
       assert.ok(link.details.every(detail => detail.values.length));
@@ -447,27 +486,24 @@ test("all eight dashboards offer four distinct native queries that retain source
   }
 });
 
-test("focused dashboard queries execute group thresholds and weighted measures", () => {
-  const skillLinks = dashboardQueryLinks("skill_usages", { ...EMPTY_QUERY, aggregations: [trendClause(skillsAnalysisCatalog, { metric: "records", split: "skill_name" })] }, loadSchema(skillUsages), new URLSearchParams());
-  const repeats = skillLinks.find(link => link.query.grouping?.summaries.some(column => column.id === "explore_body_bytes"));
-  const evidence = [
-    { id: "1", skill_name: "review", conversation_id: "a", title: "First", evidence_type: "file_load", content_bytes: 100, created_at: "2026-10-01T00:00:00Z" },
-    { id: "2", skill_name: "review", conversation_id: "a", title: "Latest", evidence_type: "file_load", content_bytes: -1, created_at: "2026-10-02T00:00:00Z" },
-    { id: "3", skill_name: "review", conversation_id: "b", evidence_type: "file_load", content_bytes: 200 },
-    { id: "4", skill_name: "review", conversation_id: "b", evidence_type: "explicit_invocation", content_bytes: 200 },
+test("contextual queries keep group thresholds and pool rate denominators", () => {
+  const state = { view: "compare", metric: "failure_rate", split: "tool_name", minSamples: 3 };
+  const supporting = analysisQuery(toolsAnalysisCatalog, state, []).supporting;
+  const context = { catalog: toolsAnalysisCatalog, state, where: [], supporting };
+  const links = dashboardQueryLinks("tools", supporting, loadSchema(tools), new URLSearchParams({ analyze_topic: "tools" }), context);
+  const input = [
+    { id: "one", tool_name: "shell", provider: "codex", call_count: 1, error_count: 1 },
+    { id: "two", tool_name: "shell", provider: "codex", call_count: 9, error_count: 0 },
+    { id: "three", tool_name: "read", provider: "codex", call_count: 2, error_count: 1 },
   ];
-  const rows = applyQuery(evidence, repeats.query, loadSchema(skillUsages)).rows;
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].conversation_id, "a");
-  assert.equal(rows[0].explore_count, 2);
-  assert.equal(rows[0].explore_body_bytes, 100);
-  assert.equal(rows[0].explore_name, "Latest");
-
-  const toolLinks = dashboardQueryLinks("tools", analysisQuery(toolsAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_category" }, []).query, loadSchema(tools), new URLSearchParams());
-  const failures = toolLinks.find(link => link.query.grouping?.summaries.some(column => column.id === "explore_errors"));
-  const rates = applyQuery([{ id: "1", tool_name: "shell", provider: "codex", call_count: 1, error_count: 1 }, { id: "2", tool_name: "shell", provider: "codex", call_count: 1, error_count: 0 }], failures.query, loadSchema(toolCalls)).rows;
-  assert.equal(rates[0].explore_errors, 1);
-  assert.equal(rates[0].explore_calls, 2);
+  const inspected = applyQuery(input, links.find(link => link.purpose === "inspect").query, loadSchema(tools)).rows;
+  assert.equal(inspected.length, 1, "the minimum counts calls, not rollup rows");
+  assert.equal(inspected[0].analysis_value, .1, "the rate pools one failed call over ten calls");
+  const examples = applyQuery(input, links.find(link => link.purpose === "contributors").query, loadSchema(tools)).rows;
+  assert.equal(examples.length, 1, "representative evidence keeps the same group threshold");
+  assert.equal(examples[0].analysis_value, .1);
+  assert.deepEqual(links.find(link => link.purpose === "contributors").query.where, links.find(link => link.purpose === "inspect").query.where);
+  assert.ok(links.find(link => link.purpose === "contributors").query.grouping.representative, "source examples remain inside their eligible groups");
 });
 
 test("the live audit provides 25 valid, distinct queries per dataset and dashboard", () => {
@@ -854,7 +890,7 @@ test("Drilldown ordering reads a conversation forward and browses populations ne
   const human = usageRowLinks("writing", { id: "work" }).find(link => link.kind === "messages");
   const scoped = decodeQueryStrict(new URL(human.href, "http://localhost").searchParams.get("q_messages"));
   assert.deepEqual(applyQuery(rows, scoped, messages).rows.map(row => row.id), ["early", "late"]);
-  const [dashboard] = dashboardQueryLinks("writing_messages", { ...EMPTY_QUERY, where }, schema, new URLSearchParams());
+  const dashboard = dashboardQueryLinks("writing_messages", { ...EMPTY_QUERY, where }, schema, new URLSearchParams()).find(link => link.purpose === "inspect");
   assert.deepEqual(applyQuery(rows, dashboard.query, messages).rows.map(row => row.id), ["early", "late"]);
   assert.equal(dashboard.query.fit, "screen");
   const across = orderedUsageQuery("writing_messages", EMPTY_QUERY);
@@ -1049,4 +1085,12 @@ test("writing freshness distinguishes a partial turn from caught up", () => {
   assert.doesNotMatch(authorshipStatusText({...status, pending_messages: 0, stale: false, complete_at: null}), /current as of/);
   assert.match(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 1}), /await overnight refinement/);
   assert.doesNotMatch(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 1}), /current as of/);
+});
+
+
+test("a trend's time breakdown and period produce one distinct native group key", () => {
+  const query = { ...EMPTY_QUERY, aggregations: [{ id: "tokens", op: "sum", field: "total_tokens", groupBy: ["week", "week"], label: "Tokens" }] };
+  const grouped = groupedDashboardQuery(query);
+  assert.deepEqual(grouped.grouping.keys, ["week"]);
+  assert.doesNotThrow(() => toQueryRequestV3(grouped, loadSchema(usage), { version: 3, profile: "qt-sqlite-v1", groupedRows: true }));
 });

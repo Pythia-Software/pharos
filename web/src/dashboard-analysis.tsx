@@ -209,7 +209,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
         set({ selection: { values: [], excluded: false } });
       }}>Make this the population</button></> : null}</p> : null}
     {children}
-    <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} />
+    <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} context={{ catalog, state: view, where, supporting: analysis.supporting }} />
     <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" && !analysis.native ? "" : ` Select a ${view.view === "scatter" ? "point" : view.compareAs === "share" ? "slice" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>
   </section>;
 }

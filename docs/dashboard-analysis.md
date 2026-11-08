@@ -15,7 +15,7 @@ card maps onto it, and the phases that adopt it.
 
 Two measures now lives in [Scatter Plots](scatter-plots.md), which pairs metrics
 across dashboard sources with searchable, grouped X/Y pickers. Conversations
-are the default point type; workspaces and messages have their own supported
+are the default point type; workspaces, agent sessions and messages have their own supported
 metrics. Individual dashboard menus omit the scatter view. Recommended scatter
 cards use the standalone source and URL contract for both previews and links.
 The historical phases below describe the shared engine's implementation.
@@ -1299,3 +1299,44 @@ host parameter and uses the same query, sort and pagination. Both presentations
 reuse the Thread Ribbon; Table can drill from a conversation into observations.
 See [the label experience](message-labels.md)
 for its observation grain, pending coverage and portable URL contracts.
+
+
+## Contextual query cards
+
+Each dashboard offers one set of four query cards in a stable order: green
+**Find contributors**, blue **Inspect this view**, purple **Compare another
+breakdown**, and amber **Change perspective**. Purpose names accompany the
+colours as eyebrows above neutral titles. Cards use four columns by default,
+then two or one as the available width narrows. The question, columns and native query change with the selected
+metric, view, counting unit, breakdown, filters, range and legend selection.
+
+`dashboard-query-explorations.ts` plans these queries from the resolved
+`AnalysisCatalog` and current state, using the same analysis/trend builders as
+the chart. Comparisons prefer a different supported dimension and avoid ones
+fixed by population filters. The fourth card changes the time perspective or
+shows another distinct comparison or a rate's parts. Equivalent questions do
+not become separate recommendations merely by changing labels, columns or sort
+order. A state without a distinct supported question keeps its purpose card
+with an explanation and no navigation link.
+
+Native query tables expose chart inputs: period values before smoothing,
+accumulation and share normalization, the hourly/daily occurrences behind a
+cycle, or token inputs to derived Carbon components. The cards say so. Rates
+pool their numerator and denominator. Group-filtered evidence retains HAVING
+and adds a representative source record per group, with native Detail for the
+full evidence; it does not silently flatten eligible groups into all records.
+A minimum on a new breakdown is applied to each new group and is described as
+such. A legend selection beyond the query predicate budget cannot open an
+unfiltered replacement.
+
+`dashboard-query-adapters.ts` supplies the bespoke contexts for Waiting /
+Thinking, Habits and a selected or zoomed Parallelism ribbon. The ribbon
+replaces the lower chart's quartet while selected, rather than adding another
+four. Habits keeps the selected actor, range, selected day and habit-day
+boundary (including after-midnight hours in weekday-only calendars).
+
+Carbon, Habits and Parallelism calculation settings travel in the registered
+`analyze_query_settings` URL field. `viewRequestURL` applies only the destination
+dataset's settings to every native request, including metrics and record
+details; explicit request parameters take precedence. Query return links keep
+the dashboard's controls and filter-edit reconciliation.

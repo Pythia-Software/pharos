@@ -862,6 +862,7 @@ export const defaultApi = {
 
   // Settings.
   "GET /api/feedback/diagnostics": { service: "Recent service diagnostics" },
+  "POST /api/feedback/screenshot": { url: "file:///tmp/pharos-annotation-fixture/screenshot.jpg" },
   "POST /api/logs/page": ({ body }) => ({ recorded: body?.events?.length ?? 0 }),
   "GET /api/logs/summary": () => logsSummary,
   "GET /api/logs/source": ({ query }) => logsSource(query.get("id")),

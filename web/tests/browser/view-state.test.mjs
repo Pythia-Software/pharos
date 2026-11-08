@@ -141,7 +141,12 @@ test('Timeline pending events stay announced for a collapsed session, after rest
 });
 
 test('workspace sidebar visibility and width restore without leaving the selected conversation',{skip},async t=>{
- const app=await open(t,{url:`/work/${workID}/conversation/${rootConversation}?sidebar_width=460`,ready:'.conversation-panel .turn'}),{page}=app;
+ const api={'GET /api/work/:id/conversations/:conversation':request=>{
+  const conversation=defaultApi['GET /api/work/:id/conversations/:conversation'](request);
+  if(request.params.conversation!=='conv-child')return {...conversation,machine:'Unknown',execution_machine:'Unknown'};
+  return {...conversation,machine:'Laptop',execution_machine:'Worker',effort:'medium',messages:conversation.messages.filter(message=>message.role!=='user')};
+ }};
+ const app=await open(t,{api,url:`/work/${workID}/conversation/${rootConversation}?sidebar_width=460`,ready:'.conversation-panel .turn'}),{page}=app;
  const show=page.getByRole('button',{name:'Show agent sessions',exact:true}),hide=page.getByRole('button',{name:'Hide agent sessions',exact:true});
  const divider=page.getByRole('separator',{name:'Resize agent sessions sidebar',exact:true});
  assert.equal(await divider.getAttribute('aria-valuenow'),'460');
@@ -154,6 +159,33 @@ test('workspace sidebar visibility and width restore without leaving the selecte
  await page.goForward();await show.waitFor();await show.click();await app.settled();
  assert.equal(await divider.getAttribute('aria-valuenow'),'340');
  assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
+ const context=()=>page.locator('.conversation-panel .delegation-context');
+ const children=()=>context().getByRole('button',{name:'1 child session',exact:true});
+ await page.locator('.delegation-session-heading').waitFor();
+ assert.equal(await children().isVisible(),false);
+ const chips=()=>page.locator('.conversation-panel .conversation-title-content > .chips');
+ assert.equal(await chips().getByText(/^(Machine|Execution machine):/).count(),0);
+ assert.equal(await chips().getByText(/^Effort:/).count(),0);
+ assert.equal(await chips().getByText('claude-opus-5-5',{exact:true}).count(),0);
+ assert.equal(await context().getByText(/This agent session/).count(),0);
+ await hide.click();await children().waitFor();await app.shot('collapsed-root');
+ const rootURL=new URL(page.url());await children().click();await hide.waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootURL.searchParams.get('conversation'));
+ await page.getByRole('table',{name:'Agent session hierarchy and usage'}).getByRole('button',{name:'Open session Review implementation',exact:true}).click();
+ await page.locator('.conversation-panel [data-message-id="conv-child-reply"]').first().waitFor();
+ assert.ok(await chips().getByText('Machine: Laptop',{exact:true}).isVisible());
+ assert.ok(await chips().getByText('Execution machine: Worker',{exact:true}).isVisible());
+ assert.ok(await chips().getByText('1 turn',{exact:true}).isVisible());
+ assert.equal(await page.locator('.turn-list > .turn').count(),1);
+ await hide.click();const parent=()=>context().getByRole('button',{name:'Parent session',exact:true});
+ await parent().waitFor();await children().waitFor();await app.shot('collapsed-child');
+ const childURL=new URL(page.url());await parent().click();await hide.waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),childURL.searchParams.get('conversation'));
+ assert.equal(new URL(page.url()).searchParams.get('delegation_session'),childURL.searchParams.get('delegation_session'));
+ assert.equal(await parent().isVisible(),false);assert.equal(await children().isVisible(),false);
+ await page.setViewportSize({width:390,height:900});await children().waitFor();
+ await children().click();await page.getByRole('dialog',{name:'Agent sessions'}).waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),childURL.searchParams.get('conversation'));
 });
 
 for(const width of [1440,390])test(`workspace Timeline beside a reader expands before editing at ${width}px`,{skip},async t=>{
@@ -846,6 +878,35 @@ test('reader category and disclosure state survive a fresh browser', {skip},asyn
  assert.equal(await fresh.page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
  assert.equal(await fresh.page.locator('.turn').first().evaluate(element=>element.open),wasOpen);
  assert.equal(await fresh.page.locator('.turn').first().getByRole('button',{name:'Collapse turn ask',exact:true}).getAttribute('aria-expanded'),'true');
+ await fresh.page.getByRole('button',{name:'Close All Turns',exact:true}).click();
+ assert.ok(await fresh.page.locator('.turn').evaluateAll(turns=>turns.length>1&&turns.every(turn=>!turn.open)));
+ await fresh.page.getByRole('button',{name:'Open All Turns',exact:true}).click();
+ assert.ok(await fresh.page.locator('.turn').evaluateAll(turns=>turns.length>1&&turns.every(turn=>turn.open)));
+});
+
+test('sub-agent assignments and recorded output restore their disclosures', {skip},async t=>{
+ const event=(id,kind,text,extra={})=>({id,native_id:id,role:'assistant',kind,text:typeof text==='string'?text:JSON.stringify(text),created_at:'2026-10-01T00:00:00Z',...extra});
+ const messages=[event('prompt','message','Review the change',{role:'user'}),
+  event('m-15','delegation',{name:'Task',input:{subagent_type:'Reviewer',description:'Review the cache',prompt:'Inspect the cache and report the result.'}},{call_id:'child'}),
+  event('child-reply','message','The cache is safe.',{parent_native_id:'child'}),
+  event('result','delegation_result',{content:'Async agent launched successfully. Internal launch metadata.'},{call_id:'child'})];
+ const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages})};
+ const first=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,api,ready:'.subagent-run'}),{page}=first;
+ const run=page.locator('.subagent-run').first(),summary=run.locator(':scope > summary');
+ assert.match(await summary.innerText(),/Reviewer.*Review the cache/);
+ assert.doesNotMatch(await summary.innerText(),/Async agent launched/);
+ await summary.click();
+ await run.locator('.subagent-assignment').getByText('Inspect the cache and report the result.',{exact:true}).waitFor();
+ await run.getByText('The cache is safe.',{exact:true}).waitFor();
+ assert.equal(await run.getByText('Async agent launched successfully. Internal launch metadata.',{exact:true}).isVisible(),false);
+ await first.shot('subagent-expanded');
+ await run.getByText('Recorded output and metadata',{exact:true}).click();
+ await run.getByText('Async agent launched successfully. Internal launch metadata.',{exact:true}).waitFor();
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('reader_expanded')||'[]').length>=2);
+ const fresh=await open(t,{url:path(page),api,ready:'.subagent-run'});
+ await fresh.page.getByText('The cache is safe.',{exact:true}).waitFor();
+ await fresh.page.getByText('Async agent launched successfully. Internal launch metadata.',{exact:true}).waitFor();
+ assert.equal(await fresh.page.evaluate(()=>document.activeElement===document.body),true);
 });
 
 test('dynamic message reveal materializes its target without taking keyboard focus, and linked attention opens once', {skip},async t=>{
@@ -1042,15 +1103,6 @@ test('header navigation clears source attention and explicit destination links r
  assert.deepEqual(new URL(page.url()).searchParams.getAll('highlight'),['page']);assert.equal(new URL(page.url()).searchParams.get('reveal'),'page');
 });
 
-
-test('Next failed action reveals retained failures without a script error',{skip},async t=>{
- const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,ready:'.conversation-panel'}),{page}=app;
- const next=page.getByRole('button',{name:'Next failed action',exact:true});
- await next.click();
- await page.waitForFunction(()=>[...document.querySelectorAll('.tool-event.error')].some(item=>item.open));
- await next.click();await app.settled();
- assert.ok(await page.locator('.tool-event.error').count());
-});
 
 test('page Find stepping moves the landing highlight without a server search',{skip},async t=>{
  const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&highlight=text:please look`,ready:'.pharos-find'}),{page}=app;
@@ -1556,7 +1608,7 @@ test('Data Guide terms and example restore and return focus',{skip},async t=>{
 });
 
 test('message card labels and sentence events restore independently in the reader',{skip},async t=>{
- const at='2026-11-05T14:00:00Z',prompt='Please review the importer and keep the existing CSV format. Show the evidence before changing the parser.',thought='I should compare the parser with the saved fixtures first. The import fails when a quoted cell contains a newline. I will preserve that cell and add a focused check.',reply='The parser now keeps quoted newlines inside their cells. The existing fixtures pass, and the added check covers the failing import.';
+ const at='2026-11-05T14:00:00Z',prompt='Please review the importer and keep the existing CSV format. Show the evidence before changing the parser.',thought='I should compare the parser with the saved fixtures first. The import fails when a quoted cell contains a newline. I will preserve that cell and add a focused check.'+' Additional context.'.repeat(30),reply='The parser now keeps quoted newlines inside their cells. The existing fixtures pass, and the added check covers the failing import.';
  const labeled=(id,role,kind,text,label,segment,seconds)=>({id,native_id:id,role,kind,text,created_at:new Date(Date.parse(at)+seconds*1000).toISOString(),labels:{ids:[label],probs:{[label]:.94},segment}});
  const messages=[labeled('tint-prompt','user','message',prompt,'P.request.work.implement','H-typed',0),labeled('tint-thinking','assistant','reasoning',thought,'C.deliberation.plan','TH',10),labeled('tint-reply','assistant','message',reply,'C.report.verification','AR',25)];
  const sentence='The import fails when a quoted cell contains a newline.';
@@ -1574,8 +1626,20 @@ test('message card labels and sentence events restore independently in the reade
  await reasoning.locator('summary').click();
  await page.locator('.thinking-card mark.agent-event').waitFor();
  assert.equal(await page.getByText(sentence,{exact:false}).count()>0,true);
- await page.locator('.thinking-card').hover();await page.getByRole('tooltip').waitFor();
- assert.match(await page.getByRole('tooltip').textContent(),/Plan/);
+ const card=page.locator('.thinking-card'),tip=page.getByRole('tooltip');
+ await card.hover({position:{x:3,y:3}});await tip.waitFor();
+ assert.match(await tip.textContent(),/Plan/);
+ await card.locator('.message-prose').hover();assert.equal(await tip.isVisible(),false,'message text does not show the card label');
+ await card.locator('mark.agent-event').hover();assert.match(await tip.textContent(),/Obstacle/,'highlighted sentence still shows its event');
+ await card.hover({position:{x:3,y:3}});await tip.waitFor();
+ await page.mouse.down();assert.equal(await tip.isVisible(),false,'pressing to select hides the tooltip');
+ await card.locator('.message-prose').hover();await card.hover({position:{x:3,y:3}});
+ assert.equal(await tip.isVisible(),false,'dragging does not reopen the tooltip');await page.mouse.up();
+ await card.locator('.message-toggle').hover();assert.equal(await tip.isVisible(),false,'card controls do not show the label');
+ await card.locator('.message-toggle').click();assert.equal(await card.locator('.message-toggle').getAttribute('aria-expanded'),'true');
+ const human=page.locator('.speaker-row.human[data-label-family]').first();
+ await human.hover({position:{x:3,y:3}});await tip.waitFor();assert.match(await tip.textContent(),/Implement/);
+ await human.locator('.message-prose').hover();assert.equal(await tip.isVisible(),false);
  await page.mouse.move(0,0);
  await app.shot('message-card-tints-dark');
  await page.getByRole('checkbox',{name:'Message labels',exact:true}).uncheck();await app.settled();

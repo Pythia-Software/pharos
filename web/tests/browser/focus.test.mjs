@@ -1356,7 +1356,7 @@ test("conversation navigation focuses the requested reader unless focus moved wh
   assert.equal(await page.locator(".work-heading h1").evaluate(element => { element.focus(); return element === document.activeElement; }), false, "returning to the overview leaves its title unfocusable");
 });
 
-for (const merged of [false, true]) test(`transcript rails follow layout changes in ${merged ? "merged" : "split"} workspaces`, { skip }, async t => {
+for (const merged of [false, true]) test(`transcript navigators follow layout changes in ${merged ? "merged" : "split"} workspaces`, { skip }, async t => {
   const api = merged ? {
     "GET /api/work/:id": call => {
       const work = defaultApi["GET /api/work/:id"](call);
@@ -1367,18 +1367,43 @@ for (const merged of [false, true]) test(`transcript rails follow layout changes
       return { ...data, rows: data.rows.slice(0, 1), focus: data.focus.slice(0, 1), session_count: 1, total: 1 };
     },
   } : {};
-  const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", api, preferences: { "pharos-show-nav-button": true } });
+  const { page, settled, shot } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", api, preferences: { "pharos-show-nav-button": true } });
   await activateHeaderTool(page, "navigatorToggle");
   await page.locator("#navigator.open").waitFor();
   await page.evaluate(() => document.querySelector("main").scrollTo(0, 1200));
-  await page.locator(".conversation-map.visible").waitFor();
+  await page.locator('.reader-navigator').waitFor();
+  for(const name of ['Timeline','Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).isChecked(),true,'all navigators are shown by default');
+  await page.getByRole('checkbox', {name:'Turns',exact:true}).check();
+  await page.getByRole('checkbox', {name:'Context',exact:true}).check();
+  await page.locator('.turn').nth(6).evaluate(turn=>turn.scrollIntoView({block:'center',behavior:'instant'}));
   await settled();
   const tops = await page.evaluate(() => {
     const header = document.querySelector("body > header").getBoundingClientRect().bottom;
-    return { header, rails: [...document.querySelectorAll(".conversation-map, .token-map, .conversation-map-window")].filter(rail => rail.getClientRects().length).map(rail => [rail.className, rail.getBoundingClientRect().top]) };
+    return { header, rails: [...document.querySelectorAll(".reader-navigator-host")].filter(rail => rail.getClientRects().length).map(rail => [rail.className, rail.getBoundingClientRect().top]) };
   });
   assert.ok(tops.rails.length, "the rails are shown");
   for (const [name, top] of tops.rails) assert.ok(top >= tops.header - 1, `${name} starts at ${top}, above the header's bottom at ${tops.header}`);
+
+  await shot('session-navigator');
+  const navigator = page.locator('.reader-navigator');
+  await page.getByRole('checkbox', {name:'Timeline',exact:true}).uncheck();
+  assert.equal(await navigator.locator('.reader-navigator-timeline').count(),0);
+  await page.getByRole('checkbox', {name:'Context',exact:true}).uncheck();
+  await page.getByRole('checkbox', {name:'Turns',exact:true}).uncheck();
+  assert.equal(await navigator.locator('.reader-navigator-track').count(),0);
+  await page.getByRole('checkbox', {name:'Timeline',exact:true}).check();
+  await page.getByRole('checkbox', {name:'Turns',exact:true}).check();
+  await navigator.getByRole('button', {name:'Browse session timeline'}).focus();
+  await page.keyboard.press('End');
+  await settled();
+  assert.ok(await navigator.getByRole('button', {name:'Browse session timeline'}).evaluate(button=>button===document.activeElement),'revealing a message keeps keyboard focus in the navigator');
+  const saved = page.url();
+  await page.reload();
+  await page.locator('.reader-navigator-timeline').waitFor();
+  await settled();
+  assert.equal(await page.getByRole('checkbox', {name:'Turns',exact:true}).isChecked(),true);
+  assert.equal(await page.getByRole('checkbox', {name:'Context',exact:true}).isChecked(),false);
+  assert.equal(new URL(page.url()).searchParams.get('reader_navigator'),new URL(saved).searchParams.get('reader_navigator'));
 
   if (merged) {
     // The overview grows without resizing the transcript or its scrollport.
@@ -1389,14 +1414,117 @@ for (const merged of [false, true]) test(`transcript rails follow layout changes
       await settled();
       await page.locator(".turn").nth(6).evaluate(turn => turn.scrollIntoView({ block: "center", behavior: "instant" }));
       await page.waitForFunction(() => {
-        const turns = [...document.querySelectorAll(".conversation-map-turn")];
-        const marker = turns[6], band = document.querySelector(".conversation-map-viewport");
-        if (!marker.classList.contains("current")) return false;
-        const bounds = marker.getBoundingClientRect(), viewport = band.getBoundingClientRect(), middle = (bounds.top + bounds.bottom) / 2;
-        return middle >= viewport.top && middle <= viewport.bottom;
+        const turns = [...document.querySelectorAll(".reader-navigator-turn")];
+        const marker = turns[6], band = document.querySelector(".reader-navigator-window");
+        const bounds = marker.getBoundingClientRect(), viewport = band.getBoundingClientRect(), middle = (bounds.left + bounds.right) / 2;
+        return middle >= viewport.left && middle <= viewport.right;
       });
     }
   }
+});
+
+test('overlapping context profiles reveal the stream actually clicked', {skip}, async t=>{
+  const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-context .token-marker'});
+  const entries=await page.evaluate(()=>document.querySelector('.conversation-panel').navigatorData.contexts.map(entry=>({id:entry.message.id,size:entry.sample.size,title:entry.title})));
+  const parent=entries.find(entry=>entry.size===150200),child=entries.find(entry=>entry.id==='m-17');
+  assert.ok(parent&&child,'the fixture has overlapping main and subagent profiles');
+  const parentButton=page.getByRole('button',{name:parent.title,exact:true});
+  const childButton=page.getByRole('button',{name:child.title,exact:true});
+  const parentBounds=await parentButton.boundingBox(),childBounds=await childButton.boundingBox();
+  const clickX=(Math.max(parentBounds.x,childBounds.x)+Math.min(parentBounds.x+parentBounds.width,childBounds.x+childBounds.width))/2;
+  assert.ok(clickX>Math.max(parentBounds.x,childBounds.x)&&clickX<Math.min(parentBounds.x+parentBounds.width,childBounds.x+childBounds.width));
+  // This point is inside both buttons' rectangles, above the smaller profile.
+  await page.mouse.click(clickX,parentBounds.y+parentBounds.height*.9);
+  await page.waitForFunction(id=>[...document.querySelectorAll('.token-highlight')].some(target=>target.closest('[data-message-id]')?.dataset.messageId===id),parent.id);
+  await settled();
+  // Keyboard activation still reaches the small profile.
+  await childButton.focus();await page.keyboard.press('Enter');
+  await page.waitForFunction(id=>[...document.querySelectorAll('.token-highlight')].some(target=>target.closest('[data-message-id]')?.dataset.messageId===id),child.id);
+});
+
+test('untimed session navigator draws calls and failures and reveals by message order', {skip}, async t=>{
+  const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-timeline',api:{
+    'GET /api/work/:id/conversations/:conversation':call=>{
+      const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
+      if(call.params.conversation!=='conv-root')return body;
+      const event=(id,kind,text,extra={})=>({id,native_id:id,kind,role:'assistant',created_at:null,text:typeof text==='string'?text:JSON.stringify(text),...extra});
+      return {...body,messages:[event('prompt','message','Check the files',{role:'user'}),
+        event('command','tool_call',{name:'Bash',input:{command:'check'}},{call_id:'cmd'}),
+        event('result','tool_result',{exit_code:1,content:'Process exited with code 1'},{call_id:'cmd'}),
+        event('delegate','delegation',{name:'Task',input:{description:'Review files'}},{call_id:'agent'}),
+        event('done','delegation_result',{content:'Reviewed'},{call_id:'agent'}),
+        event('reply','message','Finished checking the files')]};
+    },
+  }});
+  const navigator=page.locator('.reader-navigator'),key=navigator.getByLabel('Timeline key');
+  for(const name of ['Run','Delegation','Error'])assert.ok(await key.getByText(name,{exact:true}).isVisible());
+  assert.ok(await navigator.getByText('Message order · timestamps unavailable',{exact:true}).isVisible());
+  await navigator.getByRole('button',{name:'Browse session timeline'}).focus();
+  await page.keyboard.press('End');await settled();
+  await page.waitForFunction(()=>{
+    const target=document.querySelector('[data-message-id="reply"].authorship-target'),bounds=target?.getBoundingClientRect();
+    return bounds?.height>0&&bounds.top<innerHeight&&bounds.bottom>document.querySelector('.reader-navigator-host').getBoundingClientRect().bottom;
+  });
+});
+
+test('session navigator scrolling reuses transcript geometry on a long session', {skip}, async t=>{
+  const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root?reader_navigator=${encodeURIComponent(JSON.stringify(['timeline','context','turns']))}`,ready:'.reader-navigator-turn',api:{
+    'GET /api/work/:id/conversations/:conversation':call=>{
+      const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
+      if(call.params.conversation!=='conv-root')return body;
+      return {...body,messages:Array.from({length:160},(_,turn)=>Array.from({length:12},(_,index)=>{
+        const context=index%2===1;
+        return {id:`nav-${turn}-${index}`,native_id:`nav-${turn}-${index}`,role:index===0?'user':context?'system':'assistant',kind:context?'metadata':'message',
+          text:context?JSON.stringify({type:'token_count',info:{total_token_usage:{total_tokens:(turn*12+index)*20000},last_token_usage:{input_tokens:12000+turn*100+index*20,output_tokens:500}}}):`Turn ${turn+1}, message ${index+1}: `+'Retained transcript text. '.repeat(5),
+          created_at:new Date(Date.UTC(2026,9,1)+turn*60000+index*1000).toISOString()};
+      })).flat()};
+    },
+  }});
+  assert.equal(await page.locator('.token-marker').count(),960,'the fixture exercises hundreds of context profiles');
+  await page.getByRole('button',{name:/^Close (All )?Turns$/i}).click();
+  await settled();
+  // Warm the sticky transition before instrumenting the scroll path.
+  await page.locator('.turn').nth(2).evaluate(turn=>turn.scrollIntoView({block:'start',behavior:'instant'}));
+  await settled();
+  const measureScroll=()=>page.evaluate(async()=>{
+    const scroller=document.querySelector('.workspace-reader-content'),list=document.querySelector('.turn-list'),maximum=scroller.scrollHeight-scroller.clientHeight;
+    const original=Element.prototype.getBoundingClientRect;let transcriptReads=0;const gaps=[];
+    Element.prototype.getBoundingClientRect=function(){if(this===list||list.contains(this))transcriptReads++;return original.call(this);};
+    const frame=()=>new Promise(resolve=>requestAnimationFrame(resolve));
+    try{for(let i=1;i<=20;i++){const start=performance.now();scroller.scrollTop=maximum*i/20;await frame();await frame();gaps.push(performance.now()-start);}}
+    finally{Element.prototype.getBoundingClientRect=original;}
+    return{transcriptReads,maxFramePair:Math.round(Math.max(...gaps)),slowFramePairs:gaps.filter(gap=>gap>50).length};
+  });
+  const measurements=await measureScroll();
+  assert.equal(measurements.transcriptReads,0,'scrolling must not remeasure transcript targets');
+  t.diagnostic(JSON.stringify({fixture:'160 turns / 1,920 messages / 960 context samples, collapsed',...measurements}));
+  await page.getByRole('button',{name:/^Open (All )?Turns$/i}).click();
+  await settled();
+  const expanded=await measureScroll();
+  assert.equal(expanded.transcriptReads,0,'expanded history also reuses cached geometry');
+  t.diagnostic(JSON.stringify({fixture:'160 turns / 1,920 messages / 960 context samples, expanded',...expanded}));
+  t.diagnostic(JSON.stringify({fixture:'same expanded transcript, all navigators, repeat traversal',...await measureScroll()}));
+  await page.getByRole('checkbox',{name:'Context',exact:true}).uncheck();
+  await settled();
+  t.diagnostic(JSON.stringify({fixture:'same expanded transcript, timeline and turns',...await measureScroll()}));
+  await page.getByRole('checkbox',{name:'Turns',exact:true}).uncheck();
+  await settled();
+  t.diagnostic(JSON.stringify({fixture:'same expanded transcript, timeline only',...await measureScroll()}));
+  for(const name of ['Timeline','Context','Turns'])await page.getByRole('checkbox',{name,exact:true}).uncheck();
+  await settled();
+  t.diagnostic(JSON.stringify({fixture:'same expanded transcript, all navigators hidden',...await measureScroll()}));
+  await page.getByRole('checkbox',{name:'Timeline',exact:true}).check();
+  await settled();
+  await page.locator('.turn').nth(80).evaluate(turn=>turn.scrollIntoView({block:'center',behavior:'instant'}));
+  await page.waitForFunction(()=>!document.querySelector('.reader-navigator-window').hidden);
+  // Opening and closing content must refresh the layout without relocating focus.
+  await page.locator('.turn').nth(80).locator(':scope > summary').click();
+  await settled();
+  assert.ok(await page.locator('.reader-navigator-position').textContent());
+  await page.setViewportSize({width:390,height:844});
+  await settled();
+  assert.ok(await page.locator('.reader-navigator').isVisible());
+  assert.ok(await page.locator('.workspace-reader-content').evaluate(element=>element.scrollWidth<=element.clientWidth+1),'navigator fits a narrow reader');
 });
 
 for (const trigger of ["context jump", "scroll"]) test(`a ${trigger} reaches a paginated event and its child conversation link`, { skip }, async t => {
@@ -1408,24 +1536,27 @@ for (const trigger of ["context jump", "scroll"]) test(`a ${trigger} reaches a p
       const event = (id, kind, text, extra = {}) => ({ id, native_id: id, kind, role: "assistant", text: typeof text === "string" ? text : JSON.stringify(text), created_at: "2026-10-01T00:00:00Z", ...extra });
       return { ...body, messages: [
         event("prompt", "message", "Review the changes", { role: "user" }),
+        event("multiblock", "message", {message:{role:'assistant',content:[{type:'text',text:'First retained block.'},{type:'text',text:'Second retained block.'},{type:'tool_use',id:'multi-read-1',name:'Read',input:{file_path:'a.go'}},{type:'tool_use',id:'multi-read-2',name:'Read',input:{file_path:'b.go'}}]}}),
         ...Array.from({ length: 52 }, (_, i) => event(`call-${i}`, "tool_call", { name: "Bash", input: { command: `check ${i}` } }, { call_id: `call-${i}` })),
         event("m-15", "delegation", { name: "Task", input: { description: "Review implementation", subagent_type: "Reviewer" } }, { call_id: "child" }),
         event("context", "metadata", { type: "token_count", info: { total_token_usage: { total_tokens: 40000 }, last_token_usage: { input_tokens: 30000, output_tokens: 500 } } }),
       ] };
     } },
   });
+  await page.locator(".delegation-inbox-heading").waitFor();
   assert.equal(calls.filter(call => call.path.endsWith("/delegation")).length, 1, "the deep link loads delegation analysis once for the selected conversation");
   if (trigger === "scroll") {
     await page.evaluate(() => { const scroller = document.querySelector(".workspace-reader-content"); scroller.scrollTop = scroller.scrollHeight; });
-    await page.getByRole("button", { name: /codex.*Open child/ }).waitFor();
+    await page.getByRole("button", { name: /Open conversation/ }).waitFor();
   }
-  await page.locator(".token-marker").last().evaluate(marker => marker.click());
+  await page.getByRole('checkbox', {name:'Context',exact:true}).check();
+  await page.locator(".token-marker").last().click();
   await page.waitForFunction(() => {
     const target = document.querySelector(".token-highlight");
     const bounds = target?.getBoundingClientRect();
     return bounds?.height > 0 && bounds.bottom > 0 && bounds.top < innerHeight;
   });
-  const child = page.getByRole("button", { name: /codex.*Open child/ });
+  const child = page.getByRole("button", { name: /Open conversation/ });
   await child.click();
   await settled();
   assert.ok(await page.getByRole("article", { name: "User message", exact: true }).getByText("Review the change (conv-child)", { exact: true }).isVisible());
@@ -1604,6 +1735,13 @@ test("annotated element screenshots render, the annotation surfaces stay on scre
   await page.setViewportSize({ width: 360, height: 420 });
   const box = await onScreen(page.locator(".feedback-toolbar"));
   assert.equal(box, true, `expanded toolbar at [${box}] in 360×420`);
+  // The browser adapter may ask for clipboard permission; use its acknowledged
+  // transfer boundary while exercising real capture, IndexedDB and export.
+  await page.evaluate(() => { window.pharosHost.clipboard.writeText = async () => {}; });
+  const exported = page.waitForResponse(response => response.url().endsWith('/api/feedback/screenshot'));
+  await page.locator('#feedbackCopy').click();
+  await exported;
+  await page.waitForFunction(() => document.getElementById('feedbackToastMessage').textContent.startsWith('Copied 1 annotation'));
   await page.locator("#feedbackSend").click();
   const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
   await dialog.waitFor();
@@ -2909,11 +3047,19 @@ for(const width of [1440,390])test(`Data freshness follows the native modal and 
   await picker.selectOption('days');await page.waitForFunction(()=>document.getElementById('dataReadinessTitle')?.textContent.includes('2 days'));
   await picker.selectOption('missing');await page.locator('.data-readiness-empty').first().waitFor();
   assert(await page.locator('.data-readiness-empty [role="progressbar"]').count()>0);
+  await page.setViewportSize({width,height:320});
+  const constrained=await dialog.locator('.data-guide-body').evaluate(element=>({client:element.clientHeight,scroll:element.scrollHeight}));
+  assert(constrained.scroll>constrained.client,'long update details scroll inside a short viewport');
+  assert(await dialog.getByRole('link',{name:'Update settings'}).isVisible());
+  await page.setViewportSize({width,height:1000});
   await picker.selectOption('clear');await page.waitForFunction(()=>document.getElementById('dataReadinessTitle')?.textContent==='Up to date as of 6 minutes ago');
+  const compact=await dialog.boundingBox();
+  assert(compact.height<900,'short update details do not fill the viewport');
   await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
   await shot('current-check');
   await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=human'));
   await activateHeaderTool(page,'dataReadinessToggle');await dialog.waitFor();
+  await shot('update-details');
   const updated={...status,freshness:status.freshness.map(row=>row.domain==='an.authorship'?{...row,pending_since:null,behind:{state:'current'},reason:null,as_of:new Date().toISOString()}:row)};
   push('/api/status/stream',updated);await page.waitForFunction(()=>/Up to date|No updates waiting|Showing saved results/.test(document.getElementById('dataReadinessTitle')?.textContent));
   await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
@@ -2939,7 +3085,7 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  const upgrade={...background.view.items.find(item=>item.id==='writing-refine'),id:'upgrade',label:'Library upgrade',verb:'Upgrading the library',fixed:true};
  background.view.items.push(upgrade);background.view.cadences.find(cadence=>cadence.id==='daily').items.push('upgrade');
  const status={...idleStatus,background:background.view};
- const {page,settled,push}=await open(t,{url:'/library?query_layout='+queryLayout,viewport:{width,height:1000},ready:'[data-readiness-result="query:library"]',api:{'GET /api/background':background,'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
+ const {page,settled,push,shot}=await open(t,{url:'/library?query_layout='+queryLayout,viewport:{width,height:1000},ready:'[data-readiness-result="query:library"]',api:{'GET /api/background':background,'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
  const dialog=page.locator('#dataReadinessDialog');
  const check=async (selector)=>{
   const button=page.locator(selector).first();await button.waitFor();
@@ -2975,6 +3121,11 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  ]){
   await page.evaluate(url=>window.pharosNavigate(url),url);
   await check(`[data-readiness-result="${identity}"]`);
+  if(identity==='events:examples'&&process.env.PHAROS_UI_SCREENSHOTS){
+   await activateHeaderTool(page,'dataReadinessToggle');await dialog.waitFor();
+   await shot('agent-experience-update-details');
+   await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+  }
   if(identity==='query:safety'){
    const table=page.locator('.safety-table .data-source-query');
    await table.getByTitle('Configure auto-update').click();

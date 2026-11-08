@@ -1,5 +1,6 @@
 import scatterDocument from "../../schemas/scatter.schema.json";
 import { scatterAnalysisCatalog } from "./scatter-analysis-catalog";
+import { ribbonQueryContext } from "./dashboard-query-adapters";
 import { optimizeTableTitle, optimizeTableSchemas, type OptimizeTableSchemas } from "./optimize-table-title";
 import messagesDocument from "../../schemas/messages.schema.json";
 import { DataReadinessModal, HeaderDataReadiness, BackgroundProcessingWorkload, DataReadinessEmpty, DataReadinessIndicator } from "./data-readiness";
@@ -30,6 +31,7 @@ import "./uifeedback/pharos-client";
 import { dataSources } from "./data-taxonomy-model";
 import { DataTaxonomyModal, openDataTaxonomy, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
+import { installReaderNavigator } from "./reader-navigator";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { ConversationCard, ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary, openableProps, type ResultTarget } from "./conversation-results";
 import { TextSearchEditor } from "./text-search-editor";
@@ -128,12 +130,10 @@ import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDataset
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
 import { agentEventFixLinks, agentEventRatesCatalog } from "./agent-event-rates-catalog";
-import { AgentEventExamples } from "./agent-event-examples";
-import { AgentEventRates } from "./agent-event-rates";
-import { agentEventReadWhere, daySpan, eventRates, ratePeriod } from "./agent-event-rates-model";
+import { agentEventReadWhere } from "./agent-event-rates-model";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
-import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink, useDashboardHeadline } from "./usage-workspace";
+import { UsageWorkspace, DashboardQueryOverride, UsageWorkspaceLink, useDashboardHeadline } from "./usage-workspace";
 import { DashboardResultActions, CreateDashboardCard, DashboardCardSourceContext } from "./create-dashboard-card";
 import { ribbonCardTitle } from "./parallelism-ribbon-card";
 import { UsageQueryIdeas } from "./usage-query-ideas";
@@ -273,8 +273,6 @@ function makeTransport(dataset: Dataset, queryCapabilities: QueryCapabilitiesV3,
   const endpoint = (suffix = "", params?: URLSearchParams, collection = true, request?: { hostState?: HostQueryState }) => {
     const query = new URLSearchParams(collection ? extra : "");
     if (collection && host) new URLSearchParams(request?.hostState ? host.find(request.hostState) : host.current()).forEach((value, name) => query.set(name, value));
-    const carbon = new URLSearchParams(location.search).get("analyze_carbon");
-    if (dataset === "usage" && carbon) query.set("carbon_settings", carbon);
     params?.forEach((value, name) => query.set(name, value));
     return `/api/query/${dataset}${suffix}${query.size ? `?${query}` : ""}`;
   };
@@ -1153,15 +1151,15 @@ function ParallelismUsageDashboard() {
   const headline = useDashboardHeadline();
   // The ribbon comes first, so it titles the page; the catalog chart below
   // keeps its own title, and each has its own card.
-  return <CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={dashboardDefaults.parallelism} chartHeadline={false}
+  const queries = selection && (selection.selected || selection.settings.zoom) ? ribbonQueryContext(selection) : null;
+  return <DashboardQueryOverride.Provider value={queries}><CatalogDashboard catalog={catalog} linkCatalog={parallelismCatalogShape} dataset="parallelism" name="parallelism" defaults={dashboardDefaults.parallelism} chartHeadline={false}
     summary={where => <ParallelismSettingsNote where={where} believed={settings} />}
     before={<>
       {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{ribbonCardTitle(selection?.settings ?? readConcurrencySettings())}</h2><DashboardResultActions target="ribbon" /></div>, headline) : null}
       <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
-      {selection ? <UsageDashboardLinks schema={schemas.parallelism} dataset="parallelism" query={parallelismSelectionQuery(selection)} /> : null}
       <p className="usage-dashboard-note">The query view contains the hourly occupancy records touching the selected range, with the same repository, counting, gap, and ribbon selection. Those records describe threaded activity; model-only timing remains in the chart.</p>
       {differs ? <p className="usage-dashboard-note" role="status">The ribbon uses this link’s counting and gap; the views below use your saved settings, with which the service builds its records. Change a setting in the ribbon to save it.</p> : null}
-    </>} />;
+    </>} /></DashboardQueryOverride.Provider>;
 }
 function ParallelismSettingsNote({ where, believed }: { where: WhereTerm[]; believed: ParallelismSettings }) {
   const result = useMetrics("parallelism", where, parallelismSettingsMetric);
@@ -1350,26 +1348,10 @@ function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
     {card("In thinking", total ? `${(100 * value(events, "thinking") / total).toFixed(0)}%` : "—", "of these events were in agents' private reasoning")}
   </div></>;
 }
-// The rate panel: events by day and kind group over messages read by day,
-// under the dashboard's filters (the event-only ones narrow the events).
-const agentEventDailyEvents: AggregationClause[] = [{ id: "events", op: "count", groupBy: ["day", "family_group"] }];
-const agentEventDailyRead: AggregationClause[] = [{ id: "read", op: "count", groupBy: ["day"] }];
-function AgentExperienceRates({ where }: { where: WhereTerm[] }) {
-  const events = useMetrics("agent_events", where, agentEventDailyEvents);
-  const read = useMetrics("agent_event_messages", readWhere(where), agentEventDailyRead);
-  const readBuckets = read.metrics.find(metric => metric.id === "read")?.buckets ?? [];
-  const period = ratePeriod(daySpan(readBuckets));
-  const periods = eventRates(events.metrics.find(metric => metric.id === "events")?.buckets ?? [], readBuckets, period);
-  return <AgentEventRates periods={periods} period={period} loading={events.loading || read.loading} error={events.error || read.error} />;
-}
 function AgentExperienceDashboard() {
   return <CatalogDashboard catalog={agentEventsAnalysisCatalog} dataset="agent_events" name="agent-experience" defaults={dashboardDefaults.agent_experience}
     summary={where => <AgentExperienceSummary where={where} />}
-    panels={where => <>
-      <AgentExperienceRates where={where} />
-      <p className="usage-dashboard-note">Events are sentences a small model judged to express one kind of event, found from keyword candidates in agents' visible replies and thinking. It is model output, not review: expect some misses and false alarms, and compare rates rather than reading single counts. Confidence threshold 0.5.</p>
-      <AgentEventExamples where={where} queryURL={usageWorkspaceURL({ mode: "query", dataset: "agent_events", query: { ...EMPTY_QUERY, where } })} />
-    </>} />;
+    after={<p className="usage-dashboard-note">Events are sentences a small model judged to express one kind of event, found from keyword candidates in agents' visible replies and thinking. It is model output, not review: expect some misses and false alarms. Compare rates in <UsageWorkspaceLink href={usageWorkspaceURL({ mode: "dashboards", topic: "agent_event_rates" })}>Agent Events</UsageWorkspaceLink> rather than reading single counts. Confidence threshold 0.5.</p>} />;
 }
 
 // Agent Events: how often each kind of event occurs, over agent_event_rates
@@ -1655,7 +1637,7 @@ for (const [id, component] of mounts) {
   const element = document.getElementById(id);
   if (element) createRoot(element).render(<PageErrorBoundary><LazyPage host={element}>{component}</LazyPage></PageErrorBoundary>);
 }
-startFindingsChrome(); installWorkspaceInbox(); installDelegationExplorer();
+startFindingsChrome(); installWorkspaceInbox(); installDelegationExplorer(); installReaderNavigator();
 if (concurrencyPrototypeEnabled) {
   const modalHost = document.createElement("div");
   modalHost.id = "parallelismModal";document.body.append(modalHost);

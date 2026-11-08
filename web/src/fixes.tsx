@@ -7,7 +7,7 @@ import { ViewDisclosure } from "./view-disclosure";
 import { OptimizePlaceFilter, OptimizeRank } from "./optimize-controls";
 import { OptimizeCard, OptimizeCart, OptimizeSelectionBar } from "./optimize-shared";
 import { Icon } from "./icons";
-import { eventReaderURL } from "./agent-event-examples";
+import { primaryUsageSource } from "./usage-row-model";
 import { onFixesChange } from "./dataset-refresh";
 import { safetyURL } from "./safety-route";
 import type { AgentEventsCoverage } from "./agent-events-freshness";
@@ -298,7 +298,7 @@ function FixDetailView({ id, overview, back, backLabel, act, onReview }: { id: s
 }
 
 function FixQuote({ quote }: { quote: Quote }) {
-  const href = eventReaderURL({ workspace_id: quote.workspace_id, conversation_id: quote.conversation_id, message_id: quote.message_id });
+  const href = primaryUsageSource("agent_events", { workspace_id: quote.workspace_id, conversation_id: quote.conversation_id, message_id: quote.message_id });
   return <li>
     <blockquote>{quote.sentence}</blockquote>
     {quote.about && quote.about !== quote.sentence ? <p className="fixes-about"><span>About</span> {quote.about}</p> : null}

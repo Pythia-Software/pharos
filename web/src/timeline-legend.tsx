@@ -10,7 +10,20 @@ import {ViewDisclosure} from './view-disclosure';
 import {useViewEntry} from './view-state';
 import {sliceGroupState,type LegendAction} from './chart-selection';
 import {timelineSelection,timelineSectionVisible,timelineGroupCounts,type TimelineVisibility,type TimelineVisibilitySection,type TimelineVisibilityKey} from './timeline-visibility';
-import {eventGroup,type AgentEventLink} from './event-link-layout';
+import {EVENT_GROUPS,eventGroup,type AgentEventLink} from './event-link-layout';
+
+/** Compact, read-only key for a single summary ribbon. Shares the timeline's
+ * family palette, event shapes and tool swatches without its filter menus. */
+export function TimelineKey({messages,taxonomy,marks,events}:{messages:LabelMessage[];taxonomy:Taxonomy;marks:ActivityMark[];events:AgentEventLink[]}){
+  const families=timelineModeGroups(messages,taxonomy),tools=[...new Set(marks.map(mark=>mark.category))];
+  return <div className="reader-navigator-key" aria-label="Timeline key">
+    {families.map(family=><span key={family.id}><i style={{background:stateColor(family.id)}}/>{family.name}</span>)}
+    {messages.some(message=>!functionStates(message,'label').length)?<span><i style={{background:stateColor('?')}}/>Uncategorized</span>:null}
+    {EVENT_GROUPS.filter(group=>events.some(event=>event.group===group.name)).map(group=><span key={group.key}><EventGlyph group={group.name}/>{group.short}</span>)}
+    {tools.map(id=><span key={id}><i className="lt-tool-swatch" style={{color:`var(--activity-${id})`}}/>{({read:'Read',write:'Write',run:'Run',git:'Git',network:'Network',delegate:'Delegation',wait:'Wait',poll:'Poll',other:'Other'} as Record<string,string>)[id]??id}</span>)}
+    {marks.some(mark=>mark.error)?<span><i className="lt-tool-swatch" style={{color:'var(--activity-error)'}}/>Error</span>:null}
+  </div>;
+}
 
 /** Use the same elapsed attribution and text composition as the drawn ribbons. */
 export function timelineLegendWindow(streams:{id?:string;messages:LabelMessage[];marks:ActivityMark[];neighbors?:LabelMessage[];caller?:boolean}[],range:TimeRange){
