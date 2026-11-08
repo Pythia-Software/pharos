@@ -10,11 +10,11 @@
 :is(.data-readiness-indicator:not(.query-card-readiness),#dataReadinessToggle)[data-tone=days]{color:var(--bad)}
 .query-card:has(.query-card-readiness) .query-preview-refresh{display:none}
 .data-readiness-chart-controls{display:flex;align-items:flex-start;gap:8px}.data-readiness-chart-controls>.usage-tools-controls{flex:1;min-width:0}
-.data-guide.data-readiness-dialog{width:min(530px,calc(100vw - 24px));height:auto;max-height:calc(100dvh - 32px);overflow:hidden}
+.data-guide.data-readiness-dialog{width:min(530px,calc(100vw - 24px));height:fit-content;max-height:calc(100dvh - 32px);overflow:hidden}
 .data-readiness-dialog[open]{display:flex;flex-direction:column}
 .data-readiness-dialog .data-guide-header{position:static;flex:none;padding:18px 22px}
 .data-readiness-dialog .data-guide-header small{display:block;color:var(--muted);font-size:11px;margin-bottom:7px}
-.data-readiness-dialog .data-guide-body{display:block;min-height:0;overflow:auto;padding:18px 22px}
+.data-readiness-dialog .data-guide-body{display:block;flex:0 1 auto;min-height:0;overflow:auto;padding:18px 22px}
 .data-readiness-dialog .data-guide-body>p:first-child{margin:0 0 18px;font-size:13px;line-height:1.5}
 .data-readiness-times{display:flex;flex-wrap:wrap;gap:16px 30px;margin:0 0 22px;font-size:11px}.data-readiness-times>div{display:flex;gap:6px}.data-readiness-times dt{color:var(--muted)}.data-readiness-times dd{margin:0}
 .data-readiness-stages{list-style:none;padding:0;margin:0 0 20px;display:grid;gap:17px}
