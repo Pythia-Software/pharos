@@ -195,6 +195,11 @@ func TestWorkReplica(t *testing.T) {
 		if err := replay.check(); err != nil {
 			t.Fatal(err)
 		}
+		// Every primary and arrival request must still be inspectable when
+		// the probe awaits it, within the work API's ended-request summaries.
+		if requested == "scheduled" && len(descriptor.Phases)+len(replay.Arrivals) > replicaRequestLimit {
+			t.Fatalf("a scheduled replay has at most %d phases and arrivals together", replicaRequestLimit)
+		}
 	}
 	memoryPlan := replicaMemoryPlan{IntervalSeconds: 5}
 	if descriptor.Memory != nil {
@@ -385,8 +390,24 @@ func TestWorkReplica(t *testing.T) {
 	defer cancelWork(nil)
 	var arrivals *replicaArrivals
 	arrivalsDone := make(chan error, 1)
+	demanded := []string{}
+	for _, kind := range replicaKinds {
+		if slices.Contains(units, kind) {
+			demanded = append(demanded, kind)
+		}
+	}
 	if replay != nil {
 		arrivals = newReplicaArrivals(replay, started, cancelWork)
+		// The scheduled engine hears of each arrival as new recent demand,
+		// sent once the arrival is indexed and its evidence recorded. This
+		// simulates explicit recent demand on arrival, not the service's
+		// full daemon cadence; classic continues its whole pass instead.
+		if executed != "classic" {
+			arrivals.demandKinds = demanded
+			arrivals.demand = func(context.Context, int) (uint64, error) {
+				return replicaDemandRecent(server, config.APIToken, demanded)
+			}
+		}
 		background.Go(func() {
 			arrivalsDone <- arrivals.run(pollCtx, func(index int) (string, error) {
 				memory.sample("arrival:" + replay.Arrivals[index].Name)
@@ -563,6 +584,9 @@ func TestWorkReplica(t *testing.T) {
 		}
 		return ended
 	}
+	// primaryPhases names the primary phases by request id, so an arrival
+	// request that joined one is reported as such.
+	primaryPhases := map[uint64][]string{}
 	switch {
 	case len(descriptor.Stages) > 0:
 		for _, stage := range descriptor.Stages {
@@ -587,6 +611,7 @@ func TestWorkReplica(t *testing.T) {
 		ids := make([]uint64, len(descriptor.Phases))
 		for i, phase := range descriptor.Phases {
 			ids[i] = submit(phase)
+			primaryPhases[ids[i]] = append(primaryPhases[ids[i]], phase.Name)
 		}
 		ended := await(ids, func(i int) string { return descriptor.Phases[i].Name })
 		requests := []any{}
@@ -628,10 +653,18 @@ func TestWorkReplica(t *testing.T) {
 		case <-ctx.Done():
 			fail("replay arrivals did not finish: %v", ctx.Err())
 		}
-		demanded := []string{}
-		for _, kind := range replicaKinds {
-			if slices.Contains(units, kind) {
-				demanded = append(demanded, kind)
+		// Every arrival's own recent demand must also have ended, succeeded.
+		if arrivals.demand != nil {
+			ids, firsts, total := arrivals.requestIDs()
+			if total != len(replay.Arrivals) {
+				fail("replay: %d of %d arrivals sent recent demand", total, len(replay.Arrivals))
+			}
+			ended := await(ids, func(i int) string { return "arrival:" + firsts[i] })
+			arrivals.requestsEnded(ended, primaryPhases)
+			for _, id := range ids {
+				if facts := ended[id]; facts["state"] != "succeeded" {
+					fail("arrival request %v ended %v: %v", facts["id"], facts["state"], facts["reason"])
+				}
 			}
 		}
 		deadline := time.Now().Add(replay.settleTimeout())
@@ -1150,6 +1183,11 @@ func TestWorkReplicaCPUWindow(t *testing.T) {
 // that the engine has not picked up by the time its demanded work ends.
 const replicaFollowupRounds = 3
 
+// replicaRequestLimit is the work API's ended-request summaries
+// (workEndedRequestLimit), restated so the probe compiles on a baseline
+// without the scheduled engine.
+const replicaRequestLimit = 16
+
 // replicaReplay is a deterministic schedule of recent arrivals. Each one
 // writes production-derived provider files from a frozen arm input into an
 // arm-private source folder, then runs the service's background Capture &
@@ -1365,6 +1403,21 @@ type replicaArrivalReport struct {
 	began, applied time.Time
 }
 
+// replicaArrivalRequest is the recent demand one applied arrival sent.
+// Repeated demand with the same intent joins a live request, so its id can
+// be an earlier arrival's (JoinedArrival) or, found once the requests have
+// ended, a primary phase's (JoinedPhases).
+type replicaArrivalRequest struct {
+	Arrival          string         `json:"arrival"`
+	Scope            string         `json:"scope"`
+	Kinds            []string       `json:"kinds"`
+	RequestID        uint64         `json:"request_id"`
+	SubmittedSeconds float64        `json:"submitted_seconds"`
+	JoinedArrival    *string        `json:"joined_arrival"`
+	JoinedPhases     []string       `json:"joined_phases"`
+	Facts            map[string]any `json:"facts"`
+}
+
 type replicaArrivals struct {
 	mu        sync.Mutex
 	plan      *replicaReplay
@@ -1375,6 +1428,12 @@ type replicaArrivals struct {
 	rounds    int
 	followups []any
 	settledAt *float64
+	// demand, when set before run, sends recent demand for demandKinds once
+	// each arrival is applied and its evidence recorded, and returns the
+	// work request's id; its error fails the arrival like any other.
+	demand      func(ctx context.Context, index int) (uint64, error)
+	demandKinds []string
+	requests    []replicaArrivalRequest
 }
 
 // newReplicaArrivals schedules plan's arrivals from started; stop cancels
@@ -1490,6 +1549,21 @@ func (a *replicaArrivals) arrive(ctx context.Context, apply func(int) (string, e
 		entry.FilesSHA256, entry.CaptureIndexSeconds, entry.PendingAtApply = digest, replicaSeconds(took), &observed
 		entry.applied, entry.AppliedSeconds = applied, replicaSeconds(applied.Sub(a.started))
 		a.mu.Unlock()
+		if a.demand == nil {
+			continue
+		}
+		submitted := time.Now()
+		id, err := a.demand(ctx, index)
+		if err != nil {
+			return fmt.Errorf("arrival %s: recent demand: %w", arrival.Name, err)
+		}
+		a.mu.Lock()
+		request := replicaArrivalRequest{Arrival: arrival.Name, Scope: "recent", Kinds: a.demandKinds, RequestID: id, SubmittedSeconds: submitted.Sub(a.started).Seconds()}
+		if i := slices.IndexFunc(a.requests, func(earlier replicaArrivalRequest) bool { return earlier.RequestID == id }); i >= 0 {
+			request.JoinedArrival = &a.requests[i].Arrival
+		}
+		a.requests = append(a.requests, request)
+		a.mu.Unlock()
 	}
 	final, err := census(ctx)
 	if err != nil {
@@ -1528,6 +1602,30 @@ func (a *replicaArrivals) ready(checked, at time.Time) {
 	}
 }
 
+// requestIDs is the distinct work requests the arrivals' demand reached,
+// with the arrival that first reached each, and how many arrivals sent it.
+func (a *replicaArrivals) requestIDs() (ids []uint64, firsts []string, total int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, request := range a.requests {
+		if !slices.Contains(ids, request.RequestID) {
+			ids, firsts = append(ids, request.RequestID), append(firsts, request.Arrival)
+		}
+	}
+	return ids, firsts, len(a.requests)
+}
+
+// requestsEnded records each arrival request's ended facts and the primary
+// phases (by request id) that share its request.
+func (a *replicaArrivals) requestsEnded(ended map[uint64]map[string]any, phases map[uint64][]string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for i := range a.requests {
+		request := &a.requests[i]
+		request.Facts, request.JoinedPhases = ended[request.RequestID], append([]string{}, phases[request.RequestID]...)
+	}
+}
+
 func (a *replicaArrivals) settled(rounds int, followups []any, seconds float64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1538,8 +1636,28 @@ func (a *replicaArrivals) report(host string) map[string]any {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return map[string]any{"input": a.plan.Input, "source": a.plan.Source.Name, "kind": a.plan.Source.Kind, "host": host,
-		"identity": maps.Clone(a.identity), "arrivals": slices.Clone(a.entries), "followup_rounds": a.rounds, "followups": a.followups, "settled_seconds": a.settledAt,
-		"basis": "Each arrival writes its frozen input bytes into an arm-private source folder and runs the service's background Capture & index item for that source; count_query and the declared conversations' messages (by provider, account and native ID) must increase, and the account's undeclared conversations must not change. Settlement needs every arrival applied, ready_checks and every kind's pending_checks empty; classic follow-ups re-drain the demanded kinds and scheduled follow-ups submit recent demand."}
+		"identity": maps.Clone(a.identity), "arrivals": slices.Clone(a.entries), "requests": append([]replicaArrivalRequest{}, a.requests...),
+		"followup_rounds": a.rounds, "followups": a.followups, "settled_seconds": a.settledAt,
+		"basis": "Each arrival writes its frozen input bytes into an arm-private source folder and runs the service's background Capture & index item for that source; count_query and the declared conversations' messages (by provider, account and native ID) must increase, and the account's undeclared conversations must not change. On the scheduled engine each applied arrival then submits explicit recent demand for every demanded kind (requests), as new recent demand on arrival, not the service's full daemon cadence; classic continues its whole pass and gets no arrival demand. Settlement needs every arrival applied, every arrival request succeeded, ready_checks and every kind's pending_checks empty; classic follow-ups re-drain the demanded kinds and scheduled follow-ups submit recent demand."}
+}
+
+// replicaDemandRecent submits recent demand for kinds through the work API
+// and returns the request's id. It reports instead of failing the test, so
+// an arrival's goroutine can call it.
+func replicaDemandRecent(server *Server, token string, kinds []string) (uint64, error) {
+	status, value, err := probeJSON(server, token, http.MethodPost, "/api/work", map[string]any{"action": "recent", "kinds": kinds})
+	if err != nil {
+		return 0, err
+	}
+	if status != http.StatusAccepted || value["scope"] != "recent" {
+		return 0, fmt.Errorf("work request refused (%d %v)", status, value["error"])
+	}
+	number, _ := value["request_id"].(json.Number)
+	id, err := number.Int64()
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("no request id in %v", value)
+	}
+	return uint64(id), nil
 }
 
 func checksEmpty(ctx context.Context, db *sql.DB, queries []string) (bool, error) {
@@ -1795,6 +1913,7 @@ func TestWorkReplicaArrivals(t *testing.T) {
 	writeSourceFile(t, filepath.Join(input, "-proj", "s1.jsonl"),
 		claudeLine("s1", "u1", "first", "/proj", 1)+claudeLine("s1", "u2", "second", "/proj", 2)+claudeLine("s1", "u3", "third", "/proj", 3))
 	writeSourceFile(t, filepath.Join(input, "-proj", "s2.jsonl"), claudeLine("s2", "v1", "first", "/proj", 4)+claudeLine("s2", "v2", "second", "/proj", 5))
+	writeSourceFile(t, filepath.Join(input, "-proj", "s3.jsonl"), claudeLine("s3", "w1", "first", "/proj", 7)+claudeLine("s3", "w2", "second", "/proj", 8))
 	for _, session := range []string{"s5", "s6", "s8", "s9"} {
 		writeSourceFile(t, filepath.Join(input, "-proj", session+".jsonl"), claudeLine(session, session+"-1", "first", "/proj", 6))
 	}
@@ -1813,21 +1932,46 @@ func TestWorkReplicaArrivals(t *testing.T) {
 		return n, err
 	}
 	pending := func(context.Context) (bool, error) { return false, nil }
-	// play runs a schedule beside a work context it may cancel.
+	// play runs a schedule beside a work context it may cancel, with demand,
+	// when set, as its arrival demand; playing is the schedule it runs.
+	var demand func(context.Context, int) (uint64, error)
+	var playing *replicaArrivals
 	play := func(plan *replicaReplay) (*replicaArrivals, context.Context, error) {
 		work, cancel := context.WithCancelCause(t.Context())
 		t.Cleanup(func() { cancel(nil) })
 		arrivals := newReplicaArrivals(plan, time.Now(), cancel)
+		arrivals.demand, arrivals.demandKinds, playing = demand, []string{"analysis.timing"}, arrivals
 		err := arrivals.run(t.Context(), func(index int) (string, error) {
 			return replicaApplyArrival(t.Context(), server, plan, input, dir, index, clock)
 		}, count, pending, func(ctx context.Context) (replicaCensus, error) { return plan.identityCensus(ctx, catalog.DB) })
 		return arrivals, work, err
 	}
+	// Arrival demand is sent only once the arrival's evidence is recorded;
+	// a second arrival reaching the same live request joins it.
+	demand = func(_ context.Context, index int) (uint64, error) {
+		entry := playing.report("replay-host")["arrivals"].([]replicaArrivalReport)[index]
+		if entry.AppliedSeconds == nil || entry.PendingAtApply == nil || entry.CountAfter == nil || entry.IdentityMessagesAfter == nil || entry.FilesSHA256 == "" {
+			return 0, fmt.Errorf("demanded before the evidence was recorded: %+v", entry)
+		}
+		return 7, nil
+	}
 	arrivals, work, err := play(replay)
+	demand = nil
 	if err != nil || work.Err() != nil {
 		t.Fatal(err, work.Err())
 	}
 	result := arrivals.report("replay-host")
+	if requests := result["requests"].([]replicaArrivalRequest); len(requests) != 2 || requests[0].Arrival != "a1" || requests[0].RequestID != 7 || requests[0].JoinedArrival != nil ||
+		requests[1].JoinedArrival == nil || *requests[1].JoinedArrival != "a1" || requests[1].Scope != "recent" || requests[1].Kinds[0] != "analysis.timing" || requests[1].Facts != nil {
+		t.Fatalf("each applied arrival records its request: %+v", requests)
+	}
+	if ids, firsts, total := arrivals.requestIDs(); !slices.Equal(ids, []uint64{7}) || !slices.Equal(firsts, []string{"a1"}) || total != 2 {
+		t.Fatalf("a joined request is awaited once: %v %v %d", ids, firsts, total)
+	}
+	arrivals.requestsEnded(map[uint64]map[string]any{7: {"state": "succeeded"}}, map[uint64][]string{7: {"recent"}})
+	if requests := arrivals.report("replay-host")["requests"].([]replicaArrivalRequest); requests[1].Facts["state"] != "succeeded" || !slices.Equal(requests[1].JoinedPhases, []string{"recent"}) {
+		t.Fatalf("ended facts and a shared primary phase are reported: %+v", requests)
+	}
 	report := result["arrivals"].([]replicaArrivalReport)
 	if *report[0].CountBefore != 0 || *report[0].CountAfter != 1 || *report[1].CountAfter != 3 || report[1].LateSeconds == nil {
 		t.Fatalf("each arrival adds only its new lines: %+v", report)
@@ -1918,6 +2062,25 @@ func TestWorkReplicaArrivals(t *testing.T) {
 	}
 	if failure, interrupted := replicaFailure(t.Context(), "labels: boom"); failure != "labels: boom" || interrupted != "" {
 		t.Fatal("without a failed arrival the work's own failure stands")
+	}
+	if requests := extendedReport["requests"].([]replicaArrivalRequest); requests == nil || len(requests) != 0 {
+		t.Fatalf("without arrival demand no requests are recorded: %v", requests)
+	}
+	// Refused demand fails its applied arrival, cancels the work with that
+	// cause, and stops the schedule before the next arrival.
+	demand = func(context.Context, int) (uint64, error) { return 0, errors.New("work request refused (409 boom)") }
+	refused := replicaTestReplay(replicaArrival{Name: "b1", Files: []replicaArrivalFile{{Path: "-proj/s3.jsonl", Lines: replicaLines(1)}}},
+		replicaArrival{Name: "b2", Files: []replicaArrivalFile{{Path: "-proj/s3.jsonl"}}})
+	refused.Identity.NativeIDs = []string{"s3"}
+	stopped := failed("refused demand", refused, "arrival b1: recent demand: work request refused (409 boom)", true, true).report("replay-host")
+	demand = nil
+	if entries := stopped["arrivals"].([]replicaArrivalReport); entries[0].PendingAtApply == nil || entries[1].StartedSeconds != nil || len(stopped["requests"].([]replicaArrivalRequest)) != 0 {
+		t.Fatalf("the refused arrival keeps its evidence and the next never starts: %+v %v", entries, stopped["requests"])
+	}
+	// The helper reports a refusal rather than failing the test: this server
+	// runs no scheduled work.
+	if _, err := replicaDemandRecent(server, config.APIToken, []string{"analysis.timing"}); err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("refused demand is an error: %v", err)
 	}
 }
 
