@@ -91,9 +91,8 @@ type resourceHistoryTask struct {
 	State     string    `json:"state"`
 	Libraries []string  `json:"libraries,omitempty"`
 	Started   time.Time `json:"started_at"`
-	// RunStarted is when it began running, if known: zero for work that
-	// waited in a queue, whose start is then the first tick that saw it
-	// running.
+	// RunStarted is the recorded first transition to running. Older task
+	// reporters may omit it; their start is the first tick that saw them run.
 	RunStarted time.Time `json:"run_started_at,omitzero"`
 	// source is the library whose service reported the task ("" for the
 	// collector's own registry).
@@ -914,9 +913,7 @@ func unreadableProcesses(processes []resourceProcess, readings map[int]resourceR
 }
 
 // resourceHistoryTasks are the top-level operations that have not ended,
-// with their states, for markers. An operation registered running began
-// running when it was registered; one that was queued has no recorded run
-// start, so its marker is observed.
+// with their states and recorded first transition to running, for markers.
 func resourceHistoryTasks(ops []*Op) []resourceHistoryTask {
 	tasks := []resourceHistoryTask{}
 	for _, op := range ops {

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
-import { defaultApi, workID, eventStream, busyStatus } from "./fixtures.mjs";
+import { defaultApi, workID, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 test('Settings switches keep keyboard focus and their saved state across Settings and Analyze', {skip}, async t => {
@@ -69,6 +69,112 @@ test('Settings switches keep keyboard focus and their saved state across Setting
   await mcp.waitFor();
   await settled();
   assert.equal(await mcp.getAttribute('aria-checked'), 'false');
+});
+
+test('Background CPU allowance and task Stop/Resume keep keyboard focus across their redraws', {skip}, async t => {
+  const background = structuredClone(workBackgroundDocument), posts = [];
+  let held = true, cpuUsed = 2, covered = 12, historyLive = false, finishHistory, delayInspection = false, finishPoll;
+  const pollStarted = Promise.withResolvers();
+  const {page, settled} = await open(t, {url:'/settings/sync', ready:'#backgroundSchedule [data-card=work] .bg-work-row', api: {
+    'GET /api/background': () => background,
+    'POST /api/work/settings': ({body}) => { background.work.cpu_slots = body.cpu_slots; return background; },
+    'GET /api/work': () => {
+      const value = workInspection();
+      value.state.authority.cpu_cap = background.work.cpu_slots;
+      value.state.authority.cpu_allocated = cpuUsed;
+      value.state.requests[0].sealed = covered;
+      if (historyLive) value.state.requests.push({id: 9, scope: 'backfill', explicit: true, state: 'running', kinds: ['analysis.labels'], members: 50, sealed: 0});
+      if (!held) Object.assign(value.state.tasks.find(task => task.kind === 'analysis.labels'), {state: 'queued', blocker: null});
+      if (delayInspection) {
+        delayInspection = false;
+        pollStarted.resolve();
+        return new Promise(resolve => { finishPoll = () => resolve(value); });
+      }
+      return value;
+    },
+    'POST /api/work': ({body}) => {
+      posts.push(body);
+      if (body.action === 'backfill') {
+        historyLive = true;
+        return new Promise(resolve => { finishHistory = () => resolve({request_id: 9}); });
+      }
+      if (['stop', 'resume'].includes(body.action)) held = body.action === 'stop';
+      return {changed: true};
+    },
+  }});
+  const allowance = page.locator('[data-focus-key="work:cpu"]');
+  await allowance.focus();
+  const saved = page.waitForRequest(request => request.url().endsWith('/api/work/settings') && request.method() === 'POST');
+  await allowance.selectOption('2');
+  assert.deepEqual((await saved).postDataJSON(), {cpu_slots: 2});
+  await page.waitForFunction(() => document.activeElement?.dataset.focusKey === 'work:cpu' && document.activeElement.value === '2');
+  await page.waitForFunction(() => document.querySelector('[data-card="work"] .bg-state')?.textContent.includes('2 of 2'));
+  cpuUsed = 1; covered = 18;
+  // Polling must keep updating work and other cards while the select keeps
+  // keyboard focus; it must not require the user to tab away first.
+  background.cost.text = 'about 6 h';
+  await page.evaluate(() => window.pharosBackground.refresh(true));
+  await page.waitForFunction(() => document.querySelector('[data-card="work"] .bg-state')?.textContent.includes('1 of 2') &&
+    document.querySelector('[data-request="7"]')?.textContent.includes('18 of 40'));
+  assert.equal(await allowance.evaluate(element => element === document.activeElement), true);
+
+  // Polling keeps an in-flight action disabled even while the CPU select
+  // is focused; completion must retain the server model's disabled state.
+  const history = page.locator('[data-focus-key="work:backfill"]');
+  delayInspection = true;
+  await page.evaluate(() => { window.backgroundPoll = window.pharosBackground.refresh(true); });
+  await pollStarted.promise;
+  const posting = page.waitForRequest(request => request.url().endsWith('/api/work') && request.method() === 'POST');
+  await history.click();
+  await posting;
+  await allowance.focus();
+  assert.equal(await history.isDisabled(), true);
+  const posted = page.waitForResponse(response => response.url().endsWith('/api/work') && response.request().method() === 'POST');
+  finishHistory();
+  await posted;
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await history.isDisabled(), true, 'an action stays pending while an earlier poll delays its reconciliation');
+  finishPoll();
+  await page.evaluate(() => window.backgroundPoll);
+  await page.locator('[data-request="9"]').waitFor();
+  assert.equal(await history.isDisabled(), true);
+  assert.equal(await allowance.evaluate(element => element === document.activeElement), true);
+
+  // A refused save restores the saved choice without moving keyboard focus.
+  // Return the fetch refusal locally so no deliberate HTTP error pollutes
+  // the browser harness's unexpected-network-error assertions.
+  await page.evaluate(() => {
+    const fetch = window.fetch;
+    window.fetch = (url, options) => String(url).endsWith('/api/work/settings')
+      ? Promise.resolve({ok: false, status: 409, json: async () => ({error: 'The CPU allowance is fixed by the environment.'})})
+      : fetch(url, options);
+  });
+  await allowance.selectOption('3');
+  await page.waitForFunction(() => document.activeElement?.dataset.focusKey === 'work:cpu' && document.activeElement.value === '2');
+  // Resume and Stop replace each other on the same task row; focus follows.
+  const hold = page.locator('[data-focus-key="work:hold:analysis.labels"]');
+  for (const [action, next] of [['resume', 'stop'], ['stop', 'resume']]) {
+    await hold.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(next => {
+      const element = window.document.activeElement;
+      return element?.isConnected && element.dataset.focusKey === 'work:hold:analysis.labels' && element.dataset.action === next && !element.disabled;
+    }, next);
+    assert.deepEqual(posts.at(-1), {action, kind: 'analysis.labels'});
+  }
+  await page.evaluate(() => {
+    const fetch = window.fetch;
+    window.fetch = (url, options) => String(url) === '/api/work' && options?.method === 'POST'
+      ? Promise.resolve({ok: false, status: 409, json: async () => ({error: 'The task is no longer running.'})})
+      : fetch(url, options);
+  });
+  await hold.focus();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => !document.querySelector('[data-focus-key="work:hold:analysis.labels"]')?.disabled && document.activeElement?.dataset.focusKey === 'work:hold:analysis.labels');
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.evaluate(() => window.pharosBackground.refresh(true));
+  assert.equal(await page.evaluate(() => document.activeElement === document.body), true, 'a rejected action cannot restore focus on a later poll');
+  await settled();
 });
 
 test('Library setup keeps focus in its modal and returns to the choice after cancelling a flow', {skip}, async t => {
@@ -550,6 +656,30 @@ test("Unified activity panel holds focus and its disclosure across refreshes", {
     assert.ok(await stop.evaluate(element => document.activeElement === element), 'an ancestor wait moved focus');
   }
   await app.shot("refreshed");
+  // The resource history: keys inspect and pin a time, and only keyboard
+  // inspection is announced; Escape first clears the inspection, keeping
+  // focus and the panel, and only then closes the panel.
+  const strip = panel.locator('[data-history]');
+  const announced = () => strip.getByRole('status').textContent();
+  await strip.focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForFunction(() => document.querySelector('#pharosStatusPanel [data-history] [role=status]')?.textContent);
+  const reading = await announced();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(text => document.querySelector('#pharosStatusPanel [data-history] [role=status]')?.textContent !== text, reading);
+  const pinned = await announced();
+  const box = await strip.locator('svg').first().boundingBox();
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height / 2);
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2);
+  assert.equal(await announced(), pinned, 'moving the pointer announced a reading');
+  await strip.focus();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(text => document.querySelector('#pharosStatusPanel [data-history] [role=status]')?.textContent !== text, pinned);
+  assert.ok(await panel.isVisible(), 'Escape on an inspected strip closed the panel');
+  assert.ok(await strip.evaluate(element => document.activeElement === element), 'clearing the inspection moved focus');
+  await page.keyboard.press('Escape');
+  await panel.waitFor({ state: 'detached' });
+  assert.ok(await chip.evaluate(element => document.activeElement === element), 'closing did not return focus to the chip');
 });
 
 // Eject when safe keeps checking while the window is hidden: a hidden page

@@ -54,7 +54,7 @@ The audit reviewed 178 disclosure/expansion source sites, including 41 previousl
 |---|---|
 | Layout settings | `menuBarPreferences`, `headerSettings`, `quickStatsSettings` |
 | Capture/index settings | `sync:history`, `sync:sources`, `sync:repairs`, `sync:diagnostics`, `sync:forecast:<run ID>` |
-| Background schedule items | `background:<item ID>`; several rows may open together |
+| Background schedule items | `background:<item ID>`; several rows may open together. The Work card's finished requests and export use `background:work:details` |
 | Connected cloud schedules | `cloud:schedule:<destination ID>`; IDs survive renaming and reordering |
 | Library health and app location | `library:drive-health`, `library:application` |
 | Drive-status sections | `overlay=drive` plus `status:cadence:<cadence ID>`, `status:support`, or `library:activity:<activity ID>:<started_at>:details` |

@@ -15,6 +15,12 @@ when its owner starts it, which happens with the scheduled engine. Until then
 Pharos samples only while someone is looking, as §10 of background-work.md
 says, and the history routes answer `available: false`.
 
+Collection ownership is chosen at process startup. The app broker starts its
+collector when scheduled execution is selected by the process environment.
+Managed services delegate only when that broker actually collects; otherwise
+a scheduled service collects its own history. Library configuration never
+selects the engine, and registering another library needs no ownership scan.
+
 ## One collector per process tree
 
 | Process | Collector | Scope label |
@@ -111,9 +117,9 @@ it as not measured. Ownership never comes from matching a process name.
 - **Markers.** Start and end markers for top-level operations come from the
   tasks reported at each tick. Queued and blocked work is not load: a task
   gets a start marker only once it is seen running. The start is the time it
-  began running when that is known (an operation registered running);
-  otherwise, for work that waited in a queue, it is the first tick that saw
-  it running, marked `observed: true`. Once started, a task that becomes
+  began running, recorded at its first transition to running; when an older
+  reporter omits that time, it is the first tick that saw it running, marked
+  `observed: true`. Once started, a task that becomes
   blocked keeps its start. An end is the first tick that no longer reported
   the task (`observed: true`). `mark` lets an owner record an exact end in
   its place; where no owner calls it, ends are observed. A task from a

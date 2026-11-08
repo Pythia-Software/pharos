@@ -22,9 +22,10 @@ is due no later than the next normal release after acceptance.
 
 ## Baseline artifacts
 
-The rebased stack pins main commit
+The retained comparison baseline is main commit
 `108c0367bab0b94466fb0f1c8114029e8d4d4a3d` (schema 24, without the
 executor), recorded in the [task inventory](work-task-inventory.json).
+The stack is rebased onto main `269374e5`; the retained baseline stays fixed.
 Main now uses the native fingerprint renderer and shared file locks. A retained
 service and both probes must be rebuilt from this baseline and the same common
 probe bytes, with hashes recorded privately, before paired measurements count
@@ -41,8 +42,8 @@ earlier diagnostic and preparation runs used it. Those results predate the
 main integration and must be repeated with the schema-24 baseline.
 
 `TestWorkPreviousBinaryRecovery` passed against the retained schema-24
-binary during this review cycle. The fast Go suite, the two probe fixture
-tests and 26 harness fixture tests also passed. The recovery test is a small
+binary during this review cycle. The integrated fast and full Go suites, population/CPU-policy/CPU-window
+probe fixtures and 31 harness fixture tests also passed. The recovery test is a small
 deterministic fake-model storage oracle, not model throughput evidence:
 
 - interrupt a bounded producer pass after a parent edit, so the fork stays
@@ -193,9 +194,9 @@ engine is unavailable and an A/B comparison that would otherwise pass returns
 A probe arm (`probe-run`) runs the compiled probe test binary. The probe file
 uses only symbols present in both the retained source and the candidate, and
 drives the scheduled engine only through `POST /api/work` and `GET
-/api/work`, so it compiles against both and imports no runtime helper. In
-this PR no build has that API, so only classic arms can settle; a scheduled
-request fails the arm rather than running classic under another name. The
+/api/work`, so it compiles against both and imports no runtime helper. The
+retained baseline has no work API, so it can settle only classic arms; a
+scheduled request fails rather than running classic under another name. The
 probe:
 
 - restores production durability (catalog durability, the labeling ledger's
@@ -363,6 +364,39 @@ accounted under those admitted coarse phases, not an invisible new worker.
 Interactive Thinking fits keep their existing admission; the background CPU
 control does not throttle interactive queries or claim Mac-wide enforcement.
 
+## Review-cycle validation (November 7)
+
+The stack was rebased bottom-up onto main `269374e5`, including its reader
+admission controls, before final verification. All 22 new inline findings
+were addressed in their owning PRs. Independent reviews covered the common
+harness, executor, domain routing and resource UI, with a final narrow review
+of broker ownership and model invocation waits. Lower prefixes received
+focused checks and the integrated stack received the checks below.
+
+| Check | Result |
+| --- | --- |
+| `go test -short ./...` and `go test ./...` | Passed (four test processes) |
+| Targeted `go test -race` | Passed: sharing, modes, retry, timed policy, label sessions, resource history, lease ownership, held requests and labeler-manager lifetime |
+| `go vet -tags probe ./internal/archive` | Passed |
+| Actual retained-binary proofs | Passed: previous-binary recovery and recovery after scheduled publication, plus the common population/CPU-window fixture tests |
+| `npm --prefix web run check` | Passed, including 1,545 unit tests (three skipped) |
+| `npm --prefix web run test:full` | Passed, 1,545 tests (three skipped) |
+| Selected browser focus/layout checks | 14 passed, including wide/narrow Work and activity-panel states |
+| Isolated Python experiment-harness fixtures | 31 passed |
+
+View controls and site-map artifacts were regenerated and reviewed. The
+race-enabled cancellation case now keeps interrupted labels pending rather
+than charging a failure; failed durable fork marks force rediscovery in
+both model domains. Broker and standalone history collectors retain a slower
+idle lease cache;
+status checks fresh ownership independently, invalidates every stale cache key
+and wakes collection when a new CLI starts. Resource ownership does not add
+duplicate eject blockers, and cached ownership cannot survive PID reuse.
+Failure-held dirty conversations do not starve cache warming; held background
+runs withdraw without a failed outcome, and a model request waits on ordinary
+authorship contention while yielding to another model invocation owner. These
+are correctness and tooling checks, not realistic throughput acceptance.
+
 ## Evidence status
 
 Historical diagnostic runs used the schema-23 baseline. One preparation arm
@@ -372,11 +406,13 @@ unsuitable for acceptance. The subsequent reference arm failed because
 labels returned before full settlement. No successful paired result exists.
 
 Nothing in this PR is release acceptance. No version-3 A/A or A/B
-comparison against the schema-24 baseline has run. Still unmet: the
+comparison against the schema-24 baseline has run. Still unmet:
 normalization of the corpus to schema 24 with that binary, representative
 and full-settlement pairs,
-full-corpus recapture/reindex, and actual recent arrival during coarse
-history (no source replay). The classic executor stays the default.
+full-corpus recapture/reindex, actual recent arrival during coarse history
+(source replay is not implemented), and quantification/admission of retained
+preparation-context memory. Context memory is shared process memory, not an
+enforced per-task grant. The classic executor stays the default.
 
 ## Review cycle 3 comparison policy
 

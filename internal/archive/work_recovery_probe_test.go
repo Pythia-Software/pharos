@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gbdubs/pharos/internal/labeler/labelertest"
 )
@@ -105,6 +107,118 @@ func TestWorkPreviousBinaryRecovery(t *testing.T) {
 	}
 	if edited := storedLabels(t, reopened.DB)["rollback-new"]; edited == "" || edited == recovered["rollback-new"] {
 		t.Fatal("the edited message was not relabeled from its new inputs")
+	}
+}
+
+// TestWorkScheduledPublicationRecovery is the same rollback oracle after the
+// selected engine publishes through its real service path (POST /api/work,
+// the executor daemon and the adapters), followed by edits the candidate
+// never processed. The old binary must recover them; a forced full classic
+// rebuild must then relabel nothing, so the scheduled publication equals the
+// classic result; and a new scheduled process must pick up a later edit.
+//
+//	PHAROS_WORK_BASELINE=/absolute/path/pharos go test -tags probe \
+//	  -run '^TestWorkScheduledPublicationRecovery$' ./internal/archive
+func TestWorkScheduledPublicationRecovery(t *testing.T) {
+	baseline := os.Getenv("PHAROS_WORK_BASELINE")
+	if baseline == "" {
+		t.Skip("set PHAROS_WORK_BASELINE to the retained pre-refactor binary")
+	}
+	baseline, err := filepath.Abs(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := labeledCatalog(t)
+	settings := labelsTestSettings(t, "ok")
+	settings.Enabled = true
+	config := testConfig(t)
+	config.CatalogPath, config.WorkEngine, config.BackgroundCPUs, config.Labels = c.Path, "scheduled", 2, settings
+	s := testServer(t, config, c)
+	publishScheduled(t, s, config.APIToken)
+	if published := storedLabels(t, c.DB); len(published) == 0 {
+		t.Fatal("the scheduled engine published no labels")
+	}
+	// Edits after the candidate's publication that it never processes.
+	execTx(t, c.DB,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,started_at) VALUES('rollback-fork','ws-main','codex','local','rollback-fork','c-root',0,'2026-09-01T12:00:00.000Z')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('rollback-message','rollback-fork','rollback-message','user','message','Make this work on tablets too','rollback-hash','2026-09-02T13:00:00.000Z',1100)`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('rollback-new','c-root','rollback-new','assistant','message','Updated after the candidate published.','rollback-new-hash','2026-09-01T14:00:00.000Z',1101)`)
+	settleServer(t, s)
+	path := c.Path
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	old := runRetainedLabels(t, baseline, path, settings)
+	if !old.Complete || old.Cut || old.ConversationsBuilt < 1 || old.ConversationsFailed != 0 || old.MessagesFailed != 0 {
+		t.Fatalf("retained binary did not recover after the scheduled publication: %+v", old)
+	}
+	reopened, err := OpenCatalog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	var dirty int
+	if err := reopened.DB.QueryRow(`SELECT count(*) FROM message_labels_dirty`).Scan(&dirty); err != nil || dirty != 0 {
+		t.Fatalf("old binary left pending work after the scheduled publication: %d %v", dirty, err)
+	}
+	recovered := storedLabels(t, reopened.DB)
+	if recovered["rollback-message"] == "" || recovered["rollback-new"] == "" {
+		t.Fatal("the old writer's state is missing a label for the fork or the parent's new message")
+	}
+	full, err := reopened.RunLabels(t.Context(), settings, LabelsRunOptions{Full: true})
+	if err != nil || !full.Complete || full.MessagesLabeled != 0 || full.MessagesRemoved != 0 || full.MessagesFailed != 0 {
+		t.Fatalf("scheduled-then-old labels differ from the forced full classic result: %+v %v", full, err)
+	}
+	if labels := storedLabels(t, reopened.DB); !maps.Equal(labels, recovered) {
+		t.Fatal("a forced full classic rebuild changed the recovered labels")
+	}
+
+	execTx(t, reopened.DB, `UPDATE messages SET text='An edit made after the old binary ran',content_hash='rollback-edited' WHERE id='rollback-new'`)
+	next := testConfig(t)
+	next.CatalogPath, next.WorkEngine, next.BackgroundCPUs, next.Labels = path, "scheduled", 2, settings
+	again := testServer(t, next, reopened)
+	publishScheduled(t, again, next.APIToken)
+	settleServer(t, again)
+	if edited := storedLabels(t, reopened.DB)["rollback-new"]; edited == "" || edited == recovered["rollback-new"] {
+		t.Fatal("the scheduled engine did not relabel the edit made after the old binary ran")
+	}
+}
+
+// publishScheduled backfills every current kind through the work API and
+// waits for that request to succeed.
+func publishScheduled(t *testing.T, s *Server, token string) {
+	t.Helper()
+	response := apiCall(t, s, token, http.MethodPost, "/api/work", map[string]any{"action": "backfill"})
+	var accepted struct {
+		RequestID uint64 `json:"request_id"`
+	}
+	if response.Code != http.StatusAccepted || json.Unmarshal(response.Body.Bytes(), &accepted) != nil || accepted.RequestID == 0 {
+		t.Fatalf("work request refused: %d %s", response.Code, response.Body.String())
+	}
+	var facts map[string]any
+	waitUntil(t, time.Minute, "the scheduled backfill", func() bool {
+		var state struct {
+			Engine string `json:"engine"`
+			State  struct {
+				Requests []map[string]any `json:"requests"`
+				Ended    []map[string]any `json:"ended"`
+			} `json:"state"`
+		}
+		if json.Unmarshal(apiCall(t, s, token, http.MethodGet, "/api/work", nil).Body.Bytes(), &state) != nil || state.Engine != "scheduled" {
+			t.Fatal("this process is not running the scheduled engine")
+		}
+		for _, item := range append(state.State.Requests, state.State.Ended...) {
+			terminal := item["state"] == "succeeded" || item["state"] == "failed" || item["state"] == "cancelled" || item["state"] == "interrupted"
+			if id, _ := item["id"].(float64); uint64(id) == accepted.RequestID && terminal {
+				facts = item
+				return true
+			}
+		}
+		return false
+	})
+	if facts["state"] != "succeeded" {
+		t.Fatalf("scheduled backfill ended %v: %v", facts["state"], facts["reason"])
 	}
 }
 
