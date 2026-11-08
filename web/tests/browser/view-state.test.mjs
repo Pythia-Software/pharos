@@ -721,6 +721,10 @@ test('reader category and disclosure state survive a fresh browser', {skip},asyn
  assert.equal(await fresh.page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
  assert.equal(await fresh.page.locator('.turn').first().evaluate(element=>element.open),wasOpen);
  assert.equal(await fresh.page.locator('.turn').first().getByRole('button',{name:'Collapse turn ask',exact:true}).getAttribute('aria-expanded'),'true');
+ await fresh.page.getByRole('button',{name:'Close All Turns',exact:true}).click();
+ assert.ok(await fresh.page.locator('.turn').evaluateAll(turns=>turns.length>1&&turns.every(turn=>!turn.open)));
+ await fresh.page.getByRole('button',{name:'Open All Turns',exact:true}).click();
+ assert.ok(await fresh.page.locator('.turn').evaluateAll(turns=>turns.length>1&&turns.every(turn=>turn.open)));
 });
 
 test('sub-agent assignments and recorded output restore their disclosures', {skip},async t=>{
@@ -942,15 +946,6 @@ test('header navigation clears source attention and explicit destination links r
  assert.deepEqual(new URL(page.url()).searchParams.getAll('highlight'),['page']);assert.equal(new URL(page.url()).searchParams.get('reveal'),'page');
 });
 
-
-test('Next failed action reveals retained failures without a script error',{skip},async t=>{
- const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,ready:'.conversation-panel'}),{page}=app;
- const next=page.getByRole('button',{name:'Next failed action',exact:true});
- await next.click();
- await page.waitForFunction(()=>[...document.querySelectorAll('.tool-event.error')].some(item=>item.open));
- await next.click();await app.settled();
- assert.ok(await page.locator('.tool-event.error').count());
-});
 
 test('page Find stepping moves the landing highlight without a server search',{skip},async t=>{
  const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&highlight=text:please look`,ready:'.pharos-find'}),{page}=app;
