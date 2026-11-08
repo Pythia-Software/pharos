@@ -57,6 +57,21 @@ test("origin cards explore the metric and breakdown promised by their covers", t
 test("every saved card preview executes the original population, calculation and presentation across windows", t => {
   bookmarkFixture(t, []);
   for (const recipe of queryRecipes.filter(recipe => !recipe.retired && recipe.destination)) {
+    if (recipe.destination.topic === 'scatter') {
+      // Keep the fixture small by lowering the preview's point budget. High-X
+      // records with no drawable Y must not displace valid lower-X points.
+      const budget = 2;
+      const bounded = {...recipe,measures:recipe.measures.map(metric=>({...metric,groupLimit:budget})),cover:{...defaultCardCover(recipe),maxGroups:budget}};
+      const {metric,metricY,unit} = recipe.destination.chart;
+      const point = (id,x,y) => ({id:`${unit}:${id}`,entity_id:id,point_kind:unit,provider:'claude',repository_name:'pharos',...(x===undefined?{}:{[metric]:x}),...(y===undefined?{}:{[metricY]:y})});
+      const rows = [[200,null],[190,undefined],[180,0],[170,-1],[null,20],[undefined,21],[0,22],[-1,23]]
+        .map(([x,y],index)=>point(`bad-${index}`,x,y));
+      rows.push(point('valid-a',3,9),point('valid-b',2,8),point('valid-c',1,7));
+      const item=instantiateRecipe(bounded,null,clock),cover=cardCoverQuery(item.query,bounded,defaultCardCover(bounded));
+      const result=core.evaluateMetrics(rows,cover.query,schemas.scatter).metrics.find(metric=>metric.id===cover.metricId);
+      assert.equal(result.groupCount,3,recipe.id);
+      assert.deepEqual(result.buckets.map(bucket=>[bucket.value,bucket.y]),[[3,9],[2,8]],recipe.id);
+    }
     for (const days of [1, 7, 30, 90, 180, 365, null]) {
       const item = instantiateRecipe(recipe, days, clock);
       const job = savedCardPreviewJob(item.url, schemas[recipe.dataset]);
@@ -757,27 +772,27 @@ test("direct older card links restore the current mapping from the retained sour
   legacy.searchParams.set("analyze_filters", core.encodeQuery(core.EMPTY_QUERY));
   legacy.searchParams.set("analyze_chart", JSON.stringify({ view: "trend", metric: "words" }));
   const exact = core.normalizeQueryState(item.query);
-  exact.grouping.source.where.push({ field: "root_effort", op: "=", value: "high" });
+  (exact.grouping?.source ?? exact).where.push({ field: "provider", op: "=", value: "codex" });
   legacy.searchParams.set(`q_${recipe.dataset}`, core.encodeQuery(exact));
   const restored = new URL(await resolveCardDashboardURL(legacy.href), location.origin).searchParams;
-  assert.equal(restored.get("analyze_topic"), "activity");
-  assert.equal(restored.get("analyze_data"), "conversation_activity");
+  assert.equal(restored.get("analyze_topic"), "scatter");
+  assert.equal(restored.get("analyze_data"), "scatter");
   assert.equal(JSON.parse(restored.get("analyze_chart")).view, "scatter");
-  assert.deepEqual(core.decodeQueryStrict(restored.get("analyze_filters")).where, exact.grouping.source.where);
+  assert.deepEqual(core.decodeQueryStrict(restored.get("analyze_filters")).where, (exact.grouping?.source ?? exact).where);
   assert.equal([...restored.keys()].some(key => /^(card_|q_|window_)/.test(key)), false);
   for (const timezone of [undefined, "Asia/Tokyo"]) {
-    const window = { days: 1, field: recipe.field, mode: "today", ...timezone ? { timezone } : {} };
+    const window = { days: 1, field: recipe.field, untilField: "first_at", mode: "today", ...timezone ? { timezone } : {} };
     const yesterday = resolveRollingQuery(exact, window, new Date("2026-11-02T18:00:00Z"));
     const today = new URL(queryURL(recipe.dataset, yesterday), location.origin);
     for (const [key, value] of legacy.searchParams) if (!key.startsWith("q_")) today.searchParams.set(key, value);
     today.searchParams.set("window_mode", "today"); today.searchParams.set("window_days", "1");
-    today.searchParams.set("window_field", recipe.field); today.searchParams.set("window_dataset", recipe.dataset);
+    today.searchParams.set("window_field", recipe.field); today.searchParams.set("window_until_field", "first_at"); today.searchParams.set("window_dataset", recipe.dataset);
     if (timezone) today.searchParams.set("window_timezone", timezone);
     const params = new URL(await resolveCardDashboardURL(today.href), location.origin).searchParams;
     assert.equal(params.get("analyze_window"), "today");
     assert.equal(params.get("analyze_timezone"), timezone ?? null);
-    const read = readDashboardLink(params, recipe.destination.chart, () => true, analysisCatalogs.activity.time);
-    assert.deepEqual(read.where, resolveRollingQuery(exact, window).grouping.source.where);
+    const read = readDashboardLink(params, recipe.destination.chart, () => true, analysisCatalogs.scatter.time);
+    assert.deepEqual(read.where, (resolveRollingQuery(exact, window).grouping?.source ?? resolveRollingQuery(exact, window)).where);
   }
 });
 
@@ -785,15 +800,15 @@ test("direct older card links resolve durable sources and report unavailable sou
   bookmarkFixture(t, []);
   const recipe = queryRecipes.find(recipe => recipe.id === "session-human-output"), item = instantiateRecipe(recipe, null, clock);
   const exact = core.normalizeQueryState(item.query);
-  exact.grouping.source.where.push({ field: "root_effort", op: "=", value: "high" });
+  (exact.grouping?.source ?? exact).where.push({ field: "provider", op: "=", value: "codex" });
   const legacy = new URL(item.url, location.origin);
   legacy.searchParams.set("analyze_topic", "human"); legacy.searchParams.set("analyze_data", "writing_messages");
   legacy.searchParams.set(`q_${recipe.dataset}`, "@cccccccccccccccccccccc");
   const fetch = global.fetch; t.after(() => { global.fetch = fetch; });
   global.fetch = async () => Response.json({ version: 1, code: "cccccccccccccccccccccc", token: core.encodeQuery(exact), createdAt: 0 });
   const params = new URL(await resolveCardDashboardURL(legacy.href), location.origin).searchParams;
-  assert.equal(params.get("analyze_topic"), "activity");
-  assert.deepEqual(core.decodeQueryStrict(params.get("analyze_filters")).where, exact.grouping.source.where);
+  assert.equal(params.get("analyze_topic"), "scatter");
+  assert.deepEqual(core.decodeQueryStrict(params.get("analyze_filters")).where, (exact.grouping?.source ?? exact).where);
   global.fetch = async () => new Response("Unavailable", { status: 404 });
   legacy.searchParams.set(`q_${recipe.dataset}`, "@dddddddddddddddddddddd");
   await assert.rejects(resolveCardDashboardURL(legacy.href));

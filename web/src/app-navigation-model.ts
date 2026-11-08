@@ -6,7 +6,7 @@ import { safetyURL } from "./safety-route";
 import { fixesURL } from "./fixes-route";
 import { logsRoute, logSourceFromParams, logSourceNavigationID } from "./logs-model";
 import { agentEventDatasets, agentEventTopics, agentEventsEnabled } from "./agent-events-flag";
-import { canonicalAnalyzeURL, readUsageWorkspace, analyzeQueryDatasets, usageDatasets, usageDatasetTopics, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { canonicalAnalyzeURL, readUsageWorkspace, analyzeQueryDatasets, usageDatasets, usageDatasetTopics, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 
 export const findingsPages: readonly NestedPage[] = [
   { id: "findings:dashboard", label: "Dashboard", href: "/findings" },
@@ -39,7 +39,7 @@ const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   compaction: "Agents", skills: "Agents", calls: "Agents", tools: "Agents", time: "Agents",
   parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents", session_shape: "Agents", agent_event_rates: "Agents",
   "thinking-overview": "Agents", "thinking-detail": "Agents",
-  tokens: "Outcomes", carbon: "Outcomes",
+  tokens: "Outcomes", carbon: "Outcomes", scatter: "Outcomes",
 };
 
 // Query tables are grouped by the records they contain, not dashboard topic.
@@ -70,7 +70,7 @@ export function analyzePages(params: URLSearchParams, previews = agentEventsEnab
     { id: "dashboards", label: "Dashboards", children: (["People", "Agents", "Outcomes"] as const).map(label => ({
       id: `dashboards:${label.toLowerCase()}`, label,
       children: Object.entries(usageTopics).filter(([topic]) => dashboardGroups[topic as UsageTopic] === label && (previews || !agentEventTopics.has(topic)))
-        .map(([topic, item]) => ({ id: `dashboards:${topic}`, label: item.label, href: usageWorkspaceURL({ mode: "dashboards", topic: topic as UsageTopic, report: "" }, params) })),
+        .map(([topic, item]) => ({ id: `dashboards:${topic}`, label: item.label, href: usageWorkspaceURL({ mode: "dashboards", topic: topic as UsageTopic, dataset: usageTopicDatasets[topic as UsageTopic], report: "" }, params) })),
     })) },
     { id: "query", label: "Query tables", children: queryGroups.map(group => ({
       id: `query-group:${group.id}`, label: group.label,

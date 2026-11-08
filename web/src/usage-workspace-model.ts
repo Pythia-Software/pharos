@@ -11,6 +11,7 @@ import { mapTermPredicates } from "./where-terms";
 // Analyze owns guided dashboards and the full query surfaces. Explicit older
 // analysis URLs remain available while their specialized controls migrate.
 export const usageDatasets = {
+  scatter: { label: "Scatter plot points", description: "Measurements matched by conversation, workspace, agent session or message identity.", field: "title", searchLabel: "Point titles" },
   messages: { label: "Messages", description: "Every retained prompt, reply, thinking block and tool message, with authorship evidence where available.", field: "text", searchLabel: "Message text" },
   people_message_labels:{label:"People message labels",description:"Message classifications within People dashboard populations.",field:"label",searchLabel:"Message label"},
   message_labels:{label:"Message labels",description:"What messages do, labeling coverage and matching conversations.",field:"text",searchLabel:"Labeled message text"},
@@ -44,6 +45,7 @@ export const analyzeQueryDatasets = [
 ] as const satisfies readonly UsageDataset[];
 export type UsageMode = "dashboards" | "query";
 export const engineUsageTopics = {
+  scatter: { label: "Scatter Plots", description: "Compare measures across dashboards, with one point per conversation, workspace, agent session or message." },
   compaction: { label: "Compaction", description: "Count context compactions and compare human and agent-app triggers across providers, models and repositories." },
   labels:{label:"Message Labels",description:"Explore conversation functions over time, compare labels and follow their matching conversations."},
   activity: { label: "Conversations", description: "How many conversations are you having, and how much do they produce? Explore conversations, your messages and model output across models and repositories." },
@@ -68,12 +70,14 @@ export const usageTopics = { ...engineUsageTopics,
 } as const;
 export type UsageTopic = keyof typeof usageTopics;
 export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
+  scatter: "scatter",
   messages: "human",
   people_message_labels:"labels", message_labels:"labels",
   compactions: "compaction", model_requests: "thinking-detail", usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
   tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", rhythm: "work_hours", tl1_attempts: "tokens", agent_events: "agent_experience", agent_event_messages: "agent_experience", agent_event_rates: "agent_event_rates", session_shape: "session_shape",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
+  scatter: "scatter",
   compaction:"compactions", labels:"message_labels",
   "thinking-overview":"model_requests", "thinking-detail":"model_requests",
   calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", habits: "rhythm", work_hours: "rhythm", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage", agent_experience: "agent_events", agent_event_rates: "agent_event_rates", session_shape: "session_shape",
@@ -82,6 +86,7 @@ export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
 // Fields that hold a dashboard's dates, by dataset: its range, and the day
 // predicates a link may translate it into (the tools rollup's text day).
 const timeFields: Record<UsageDataset, string[]> = {
+  scatter: ["first_at", "last_at"],
   messages: ["sent_at", "day", "week", "month"],
   people_message_labels:["sent_at"], message_labels:["occurred_at"],
   compactions: ["occurred_at"], model_requests: ["requested_at"],

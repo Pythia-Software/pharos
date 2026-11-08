@@ -1,3 +1,4 @@
+import { scatterAnalysisCatalog } from "../../../src/scatter-analysis-catalog";
 // Exemplar cards expressed as Tokens and Cost dashboard states. Each pair runs
 // the card's own chart query and the dashboard's analysis query over the same
 // usage ledger with Query Table's in-process evaluation, grouping stages
@@ -71,12 +72,14 @@ test("model-session-costs: per-conversation cost distributions by root model, fi
   assert.equal(dashboard.hiddenGroups, 3, "Sonnet, GPT-5 and Antigravity Opus are reported as hidden");
 });
 
-test("session-token-cost: one point per conversation, tokens against cost", () => {
-  const { card, dashboard, clause } = pair("session-token-cost", { view: "scatter", unit: "conversation", metric: "tokens", metricY: "cost", split: "provider_model" });
-  assert.equal(clause.display.kind, "scatter");
-  const points = buckets => byKeys(buckets, bucket => [round(bucket.value), round(bucket.y)]);
-  assert.ok(Object.keys(points(card.buckets)).length >= 10);
-  assert.deepEqual(points(dashboard.buckets), points(card.buckets), "same keys: top-level provider, model, conversation");
+test("session-token-cost: standalone card and dashboard draw identical matched entity measurements", () => {
+  const recipe=recipeById("session-token-cost"),item=instantiateRecipe(recipe,30,new Date(now));
+  const entities=Array.from({length:12},(_,index)=>({id:`conversation:${index}`,entity_id:String(index),point_kind:"conversation",provider:index%2?"claude":"codex",first_at:now-1000,last_at:now-1000,tokens_tokens:(index+1)*100,tokens_cost:index*.01}));
+  const card=cardCoverQuery(item.query,recipe),dashboard=analysisQuery(scatterAnalysisCatalog,recipe.destination.chart,(item.query.grouping?.source??item.query).where);
+  const result=query=>core.evaluateMetrics(entities,query,schemas.scatter,{now}).metrics[0];
+  const points=buckets=>byKeys(buckets,bucket=>[round(bucket.value),round(bucket.y)]);
+  assert.equal(dashboard.clause.display.kind,"scatter");
+  assert.deepEqual(points(result(dashboard.query).buckets),points(result(card.query).buckets.filter(bucket=>bucket.value>0&&bucket.y>0)));
 });
 
 // Trend cards. Each opens its destination chart on Over time; the card's own

@@ -49,7 +49,7 @@
   {
    "id": "spend",
    "label": "Tokens and cost",
-   "pages": ["analyze/tokens","analyze/query/usage","cards"],
+   "pages": ["analyze/tokens","analyze/scatter","analyze/query/usage","cards"],
    "signals": ["spend.tokens","spend.change"]
   },
   {

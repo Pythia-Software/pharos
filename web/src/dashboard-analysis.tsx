@@ -1,3 +1,4 @@
+import { ScatterMetricPicker } from "./scatter-metric-picker";
 import { DataReadinessIndicator, DataReadinessEmpty } from "./data-readiness";
 import React, { useEffect, useMemo, useState } from "react";
 import { MAX_WHERE_CLAUSES, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldDef, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
@@ -76,10 +77,14 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange, 
   // chooses: shares, display and scale. The %ile levels stay the reader's.
   const adjustable = !catalog.present;
   const content = <>
-    {onView ? <AnalysisViewControl catalog={catalog} state={view} onChange={onView} /> : null}
-    {grouped ? <ChartSelect label="Count each" value={view.unit} options={unitOptions} title="What one observation is" onChange={next => set({ unit: next })} /> : null}
-    <ChartSelect label={view.view === "scatter" ? "X metric" : "Metric"} value={view.metric} options={Object.entries(catalog.measures).map(([id, item]): [string, string, string?] => [id, item.label, view.view === "distribution" && item.noDistribution ? item.noDistribution : view.view === "distribution" && view.unit === records && !unit && !item.value ? `${item.label} has no value per ${catalog.records.label.toLowerCase()} to distribute` : trend ? notTrended(item) : undefined])} onChange={metric => set({ metric })} />
-    {view.view === "scatter" ? <ChartSelect label="Y metric" value={view.metricY} options={Object.entries(catalog.measures).map(([id, item]): [string, string, string?] => [id, item.label, id === view.metric ? "Choose a different measure from X" : undefined])} onChange={metricY => set({ metricY })} /> : null}
+    {onView && catalog.views?.length !== 1 ? <AnalysisViewControl catalog={catalog} state={view} onChange={onView} /> : null}
+    {grouped ? <ChartSelect label="Count each" value={view.unit} options={view.view === "scatter" ? unitOptions.filter(([id]) => id !== records) : unitOptions} title="What one observation is" onChange={next => set(catalog.dataset === "scatter" ? normalizeAnalysis(catalog, { ...view, unit: next }) : { unit: next })} /> : null}
+    {view.view === "scatter" && catalog.dataset === "scatter" ? <>
+      <ScatterMetricPicker label="X axis" value={view.metric} other={view.metricY} unit={view.unit} catalog={catalog} onChange={metric => set({ metric })} />
+      <ScatterMetricPicker label="Y axis" value={view.metricY} other={view.metric} unit={view.unit} catalog={catalog} onChange={metricY => set({ metricY })} />
+    </> : <>
+      <ChartSelect label="Metric" value={view.metric} options={Object.entries(catalog.measures).map(([id, item]): [string, string, string?] => [id, item.label, view.view === "distribution" && item.noDistribution ? item.noDistribution : view.view === "distribution" && view.unit === records && !unit && !item.value ? `${item.label} has no value per ${catalog.records.label.toLowerCase()} to distribute` : trend ? notTrended(item) : undefined])} onChange={metric => set({ metric })} />
+    </>}
     {view.view !== "cycle" ? <ChartSelect label={view.view === "scatter" ? "Color by" : "Breakdown"} value={view.split} options={breakdowns} title={trend ? "How each period is divided into series" : undefined}
       onChange={split => set({ split, selection: { values: [], excluded: false }, ...trend ? { seriesLimit: 15 } : {} })} /> : null}
     {view.view === "compare" && unit ? <ChartSelect label="Combine" value={view.reduce} options={analysisReductions.map(([id]): [AnalysisReduce, string, string?] => [id, reductionLabel(id, measure, unit), id === "total" && !unitTotal(measure) ? `${measure.label} does not add up across ${subjects}` : id === "total" && unit.recordsAlike ? `Each is one ${catalog.records.label.toLowerCase()}: Count each ${catalog.records.plural} shows the same totals` : undefined])} title={`How each group's ${subjects} combine`} onChange={reduce => set({ reduce })} /> : null}

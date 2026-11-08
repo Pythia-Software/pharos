@@ -1,3 +1,4 @@
+import scatterDocument from "../../schemas/scatter.schema.json";
 import messagesDocument from "../../schemas/messages.schema.json";
 import peopleMessageLabelsDocument from "../../schemas/people_message_labels.schema.json";
 // Runtime timestamp validation and the generated agent/Go contract share these schemas.
@@ -25,6 +26,7 @@ import agentEventRatesDocument from "../../schemas/agent_event_rates.schema.json
 import sessionShapeDocument from "../../schemas/session_shape.schema.json";
 
 export const schemaDocuments = {
+  scatter: scatterDocument,
   messages: messagesDocument,
   people_message_labels:peopleMessageLabelsDocument, message_labels:messageLabelsDocument,
   compactions: compactionsDocument, model_requests: modelRequestsDocument, library: libraryDocument, usage: usageDocument, writing: writingDocument, conversation_activity: conversationActivityDocument,

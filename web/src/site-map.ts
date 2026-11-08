@@ -176,7 +176,7 @@ const allShapes: Record<AnalysisView, Shape[]> = {
   scatter: [shape("unit", [[]]), shape("metric", [[]]), shape("metricY", [["metric"]], ["metric"]), shape("split", [["unit","metric"]])],
   cycle: [shape("unit", [[]]), shape("split", [[]]), shape("metric", [[]]), shape("cycle", [[]], ["self"]), shape("cycleOn", [["cycle"]]), shape("reduce", [["metric"]], ["metric", "self"])],
 };
-const drawShapes = (topic: UsageTopic, view: AnalysisView) => presents(topic) ? allShapes[view].filter(item => !presentedKeys.includes(item.option)) : allShapes[view];
+const drawShapes = (topic: UsageTopic, view: AnalysisView) => topic === "scatter" && view === "scatter" ? [shape("unit", [[]]), shape("metric", [["unit"]], ["unit"]), shape("metricY", [["unit", "metric"]], ["unit", "metric"]), shape("split", [["unit", "metric"]])] : presents(topic) ? allShapes[view].filter(item => !presentedKeys.includes(item.option)) : allShapes[view];
 // A topic's chart keys by view, for canonicalChart.
 const topicKeys = (topic: UsageTopic) => Object.fromEntries(Object.keys(chartKeys).map(view => [view, topicChartKeys(topic, view as AnalysisView)])) as Record<AnalysisView, string[]>;
 // The defaults normalizeAnalysis fills multiple_periods' inputs with.
@@ -464,7 +464,7 @@ function legacyNames(topic: UsageTopic): { legacy?: LegacyName[] } {
 function dashboardFacts(topic: UsageTopic) {
   const catalog = analysisCatalogs[topic] ?? fail(`no catalog for ${topic}`);
   if (catalog.dataset !== usageTopicDatasets[topic]) fail(`${topic} draws ${catalog.dataset} but opens ${usageTopicDatasets[topic]}`);
-  const views = Object.fromEntries(availableViews(catalog).map(([view, label]) => [view, viewFacts(topic, view, label)]));
+  const views = Object.fromEntries(availableViews(catalog).filter(([view]) => view !== "scatter" || topic === "scatter").map(([view, label]) => [view, viewFacts(topic, view, label)]));
   const unavailable = Object.fromEntries(allAnalysisViews.flatMap(([view]) => viewUnavailable(catalog, view) ? [[view, viewUnavailable(catalog, view)!]] : []));
   return {
     dataset: catalog.dataset, time: catalog.time, merge_defaults: dashboardDefaults[topic], ...legacyNames(topic),
@@ -685,6 +685,7 @@ const thinkingDaysOption: Option = { name: "days", param: "thinking", key: "rang
 // dashboard cannot become a page that takes only filters.
 type DashboardLinks = { standalone: true } | { catalog: true } | { options: Option[]; days: Option };
 const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
+  scatter: { catalog: true },
   compaction: { catalog: true }, labels:{catalog:true},
   activity: { catalog: true }, human: { catalog: true }, tokens: { catalog: true }, skills: { catalog: true }, calls: { catalog: true },
   tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, work_hours: { catalog: true }, habits: { standalone: true }, mcp: { catalog: true }, carbon: { catalog: true },

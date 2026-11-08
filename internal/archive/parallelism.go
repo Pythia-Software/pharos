@@ -1383,7 +1383,7 @@ func (c *Catalog) parallelismQueryRows(ctx context.Context, fields libraryFields
 // against the request's clock. Each source decides which predicates are safe
 // to apply before staging; the query engine still applies the full filter.
 func (s *Server) mapRowsWhere(dataset string, where []querytable.WhereTerm, clock time.Time) [][]querytable.WhereTerm {
-	if dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" && dataset != "people_message_labels" || len(where) == 0 {
+	if dataset != "scatter" && dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" && dataset != "people_message_labels" || len(where) == 0 {
 		return nil
 	}
 	schema, err := s.queryTableSchema(dataset)

@@ -1,0 +1,2242 @@
+{
+  "name": "pharos_scatter",
+  "version": 1,
+  "idField": "id",
+  "defaultLimit": 50,
+  "defaultSort": [
+    {
+      "field": "entity_id",
+      "dir": "asc"
+    }
+  ],
+  "tiebreakSort": [
+    {
+      "field": "id",
+      "dir": "asc"
+    }
+  ],
+  "defaultSelect": [
+    {
+      "field": "title"
+    },
+    {
+      "field": "point_kind"
+    },
+    {
+      "field": "human_typed"
+    },
+    {
+      "field": "tokens_cost"
+    }
+  ],
+  "fields": [
+    {
+      "name": "id",
+      "label": "Point ID",
+      "type": "text",
+      "group": "Point",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "entity_id",
+      "label": "Point",
+      "type": "text",
+      "group": "Point",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"entity_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "point_kind",
+      "label": "Point type",
+      "type": "text",
+      "group": "Point",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"point_kind\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "title",
+      "label": "Title",
+      "type": "text",
+      "group": "Point",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"title\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "provider",
+      "label": "Provider",
+      "type": "text",
+      "group": "Point",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"provider\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "repository_name",
+      "label": "Repository",
+      "type": "text",
+      "group": "Point",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"repository_name\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "model",
+      "label": "Model",
+      "type": "text",
+      "group": "Point",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"model\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "first_at",
+      "label": "First matching record",
+      "type": "datetime",
+      "group": "Point",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"first_at\"",
+          "datetimeFormat": "utc-millis"
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "last_at",
+      "label": "Last matching record",
+      "type": "datetime",
+      "group": "Point",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"last_at\"",
+          "datetimeFormat": "utc-millis"
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "human_typed",
+      "label": "Typed words",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Typed words are text you typed or dictated; pastes, copied agent output, templates, attachments, app instructions and automated prompts are counted separately.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"human_typed\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "human_words",
+      "label": "User words",
+      "type": "number",
+      "group": "Human Words",
+      "description": "All user words count every word of each classified user message, whatever its source; Text source splits them.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"human_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "human_typed_messages",
+      "label": "Messages with typed text",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Messages holding at least one typed or dictated word.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"human_typed_messages\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "human_messages",
+      "label": "User messages",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Every classified user message, including those holding only supplied text.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"human_messages\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "human_conversations",
+      "label": "Conversations",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Distinct conversations with a matching message. A conversation in several groups counts once in each, so groups do not add up to the total.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"human_conversations\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "human_typed_share",
+      "label": "Typed share of words",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Typed words divided by all user words, pooled over each group's messages rather than averaging per-message shares.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"human_typed_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "human_words_per_message",
+      "label": "Typed words per typed message",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Typed words divided by messages holding any, pooled; messages without typed text do not dilute it.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"human_words_per_message\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "human_copied_share",
+      "label": "Messages with copied text (%)",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Messages holding text matched to an earlier conversation, divided by all messages, pooled.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"human_copied_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_tokens",
+      "label": "Tokens",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Tokens include cached input and reported reasoning output.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_cost",
+      "label": "API cost (USD)",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "API cost is the list-price equivalent, including assumed and partial prices; unpriced usage has no cost and adds nothing.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_cost\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_priced_cost",
+      "label": "Fully priced API cost (USD)",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Only fully priced usage (price_status=priced) is included; assumed, partial and unpriced usage is left out of every measure in this view.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_priced_cost\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_input",
+      "label": "Input tokens",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Input includes cache reads and cache writes.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_input\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_output",
+      "label": "Output tokens",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Output includes reported reasoning output.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_output\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_cache_read_share",
+      "label": "Cache read share (%)",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Cache reads divided by all input, cache writes included, weighted by tokens rather than averaging per-record percentages.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_cache_read_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_output_share",
+      "label": "Output token share (%)",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Output tokens divided by all recorded tokens, weighted by tokens.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_output_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_delegating_share",
+      "label": "Conversations using delegation",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Top-level conversations with an active delegated execution divided by all top-level conversations with matching usage. Over time computes each period separately; smoothing averages those period shares.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_delegating_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_delegated_share",
+      "label": "Delegated share of tokens",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Tokens from delegated runs divided by all matching tokens, grouped by their top-level conversation when a conversation unit is chosen.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_delegated_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_root_conversations",
+      "label": "Top-level conversations with usage",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Distinct top-level conversations with matching usage, delegated runs folded into their roots.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_root_conversations\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_conversations",
+      "label": "Conversations with usage",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Distinct conversations with usage. A conversation using several groups counts once in each, so groups do not add up to the total.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_conversations\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_agent_sessions",
+      "label": "Agent sessions",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Distinct agent sessions with usage. A session using several groups counts once in each.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_agent_sessions\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_delegated_runs",
+      "label": "Delegated runs",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Distinct delegated executions with usage; the top-level run is not one. Handles and child transcripts count once.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_delegated_runs\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tokens_average_fanout",
+      "label": "Average direct child runs per delegating agent",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Distinct direct child executions divided by their distinct recorded parents, including initiating agents and nested parents. Each parent has equal weight; only parents with matching positive-token child usage count. Repeated days and linked transcripts count once within each period. Periods with no delegation have no value. Smoothing, when selected, averages period means; it does not recalculate distinct counts across periods.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tokens_average_fanout\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "activity_conversations",
+      "label": "Active conversations",
+      "type": "number",
+      "group": "Conversations",
+      "description": "Distinct top-level conversations with a human message or recorded output in the range, including their delegated activity. A conversation in several groups counts once in each, so groups do not add up to the total.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"activity_conversations\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "activity_messages",
+      "label": "Human messages",
+      "type": "number",
+      "group": "Conversations",
+      "description": "Classified user messages holding any text besides app instructions and automated prompts.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"activity_messages\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "activity_output",
+      "label": "Conversation output tokens",
+      "type": "number",
+      "group": "Conversations",
+      "description": "Recorded model output attributed to each conversation.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"activity_output\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "calls_time",
+      "label": "Recorded tool time",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Recorded durations can overlap and may include approval waits. Their sum is tool time, not elapsed wall time.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"calls_time\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "calls_calls",
+      "label": "Tool calls",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Every recorded call counts once, including errors and calls without a duration.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"calls_calls\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "calls_mean_time",
+      "label": "Mean tool call duration",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Recorded duration divided by calls with a duration, pooled over each group's calls; calls without timing are left out.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"calls_mean_time\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "calls_failures",
+      "label": "Failed calls",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Calls recorded as errors. A shell command’s non-zero exit can be expected, such as a search with no matches.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"calls_failures\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "calls_failure_rate",
+      "label": "Tool failure rate (%)",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Failed calls divided by all matching calls, pooled over each group.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"calls_failure_rate\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "calls_truncation_rate",
+      "label": "Tool truncation rate (%)",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Calls with truncated results divided by all matching calls.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"calls_truncation_rate\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "calls_conversations",
+      "label": "Conversations reached",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Distinct agent conversations with matching calls; a conversation can appear in several groups.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"calls_conversations\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "calls_repositories",
+      "label": "Repositories reached",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Distinct repositories with matching calls; a repository can appear in several groups.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"calls_repositories\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "calls_carried_tokens",
+      "label": "Context carried",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Attributed tool-result tokens carried into later requests.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"calls_carried_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "calls_result_tokens",
+      "label": "Result tokens",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Tokens a call's result added to the context, measured or estimated from retained result text.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"calls_result_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "skills_records",
+      "label": "Skill evidence records",
+      "type": "number",
+      "group": "Skills",
+      "description": "Observed invocations, file loads and app-reported loads. A load does not prove a skill was followed.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"skills_records\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "skills_body",
+      "label": "Saved instruction size",
+      "type": "number",
+      "group": "Skills",
+      "description": "Body volume sums known positive recorded sizes, including repeated loads; evidence without a recorded size is left out.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"skills_body\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "skills_conversations",
+      "label": "Conversations reached",
+      "type": "number",
+      "group": "Skills",
+      "description": "Distinct conversations with skill evidence. A conversation with several skills counts once in each, so groups do not add up to the total.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"skills_conversations\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "skills_repositories",
+      "label": "Repositories reached",
+      "type": "number",
+      "group": "Skills",
+      "description": "Distinct repositories holding matching skill evidence; a repository can appear under several skills.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"skills_repositories\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "skills_loads",
+      "label": "Distinct file-load calls",
+      "type": "number",
+      "group": "Skills",
+      "description": "Distinct tool calls that loaded a skill file; duplicate evidence for one call counts once.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"skills_loads\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "compaction_compactions",
+      "label": "Compactions",
+      "type": "number",
+      "group": "Compaction",
+      "description": "Counts boundary events, including consecutive compactions and boundaries without later usage. Human means manual; machine means automatic. Claude records the trigger; Codex infers it from turn position. Unknown triggers remain separate.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"compaction_compactions\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "compaction_conversations",
+      "label": "Conversations with compactions",
+      "type": "number",
+      "group": "Compaction",
+      "description": "Distinct recorded conversations with a compaction. A conversation may appear under several triggers, so groups do not add up to the total.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"compaction_conversations\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_sessions",
+      "label": "Agent sessions",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Agent sessions: each conversation once, a delegated run as its own session. Mirrors and aliases of one session count once.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_sessions\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_active_hours",
+      "label": "Active hours",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Time between consecutive messages, counting gaps of 300 seconds or less; a longer gap counts as zero.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_active_hours\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_active_time",
+      "label": "Active time per session",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Active time divided by sessions with timestamps, pooled. Per session it is the value the distribution draws.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_active_time\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_messages",
+      "label": "Messages",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Every message of the session's own stream; an embedded sub-agent's messages are its own.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_messages\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_typed_messages",
+      "label": "Typed human messages",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "User messages holding text you typed or dictated. Pasted, quoted, re-sent, template, harness and automated text does not count. Only sessions whose prompts are all classified.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_typed_messages\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_tool_calls",
+      "label": "Tool calls",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "The session's own tool calls, in sessions the tool ledger covers.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_tool_calls\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_autonomy",
+      "label": "Tool calls per typed message",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Tool calls per message holding text you typed (a session with none counts one), pooled: summed calls over summed messages. Pasted or quoted text alone does not count as a message.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_autonomy\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_calls_per_words",
+      "label": "Tool calls per 100 typed words",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Tool calls per 100 words you typed, pooled: summed calls over summed typed words. Only sessions where you typed something; pasted and quoted text is not typed.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_calls_per_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_turn_cycle",
+      "label": "Mean session median turn cycle",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Each session's median gap from a typed human message to the agent's next message, leaving out gaps over 1,800 seconds. Pooled over groups it is the mean of those medians; the distribution draws them.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_turn_cycle\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_active_share",
+      "label": "Active share of wall time",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Active time divided by first-to-last message time, pooled over sessions.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_active_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_context_peak",
+      "label": "Peak context share",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Each session's largest request input divided by its model's context window, the figure the reader's context rail uses; only sessions whose window is known. Pooled over groups it is the mean of the sessions' peaks.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_context_peak\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_one_shot_rate",
+      "label": "One-shot edit turns",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Human turns with an edit and no edit–verify–edit retry on one file, divided by turns with an edit, pooled.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_one_shot_rate\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_steering_load",
+      "label": "Steering load",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Typed messages with a correction cue in the typed text, divided by typed messages, pooled. Pasted text is never a correction.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_steering_load\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_verification",
+      "label": "Verified handbacks",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Handbacks after an edit in which a test or build command ran after the last edit, divided by handbacks after an edit, pooled.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_verification\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_failure_rate",
+      "label": "Failure rate",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Failed calls divided by tool calls, pooled. Rejections, interrupts and hook blocks are not failures.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_failure_rate\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_failed_calls",
+      "label": "Failed calls",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Calls that failed, other than your rejections, interrupts and hook blocks.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_failed_calls\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_rejections",
+      "label": "Rejections",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Calls you rejected.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_rejections\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_interrupts",
+      "label": "Interrupts",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Calls interrupted before they finished.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_interrupts\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_hook_blocks",
+      "label": "Hook blocks",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Calls a hook blocked.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_hook_blocks\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_identical_retries",
+      "label": "Identical retries",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Runs of three or more consecutive calls with the same tool and byte-identical input; each run adds its length less one.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_identical_retries\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_thrash_retries",
+      "label": "Edit–verify–edit retries",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Within one human turn, an edit to a file, then a test or build command, then another edit to that file. Read-only commands are not verification.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_thrash_retries\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_churned_files",
+      "label": "Churned files",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Files edited three or more times within fewer than 10 messages.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_churned_files\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_mid_task_compactions",
+      "label": "Mid-task compactions",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Compactions with at least two tool names both among the 10 calls before and the 5 after.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_mid_task_compactions\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_context_pressure",
+      "label": "Sessions over 90% of context",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Sessions whose peak context exceeded 90% of the model's window; only sessions whose window is known.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_context_pressure\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_corrections",
+      "label": "Corrections",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Typed messages with a correction cue in the typed text.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_corrections\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_long_unprompted_runs",
+      "label": "Long unprompted runs",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Runs of more than 150 tool calls with no typed human message between them.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_long_unprompted_runs\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_ended_on_failure",
+      "label": "Ended on a failed call",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Experimental: the session's last tool call failed and nothing you typed follows. It does not say the work was abandoned.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_ended_on_failure\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_forensic_events",
+      "label": "Forensic events",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Every signal's count added up: a way to find sessions to read, not a score.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_forensic_events\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_experience_events",
+      "label": "Agent events",
+      "type": "number",
+      "group": "Agent Experience",
+      "description": "Sentences the model judged to express a kind of event, at or above its confidence threshold. A sentence can count under more than one kind.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"agent_experience_events\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_experience_conversations",
+      "label": "Conversations with events",
+      "type": "number",
+      "group": "Agent Experience",
+      "description": "Distinct agent conversations with a matching event; a conversation can appear in several groups.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"agent_experience_conversations\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_experience_messages",
+      "label": "Messages with events",
+      "type": "number",
+      "group": "Agent Experience",
+      "description": "Distinct agent messages (visible replies or thinking blocks) with a matching event.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"agent_experience_messages\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_experience_repositories",
+      "label": "Repositories with events",
+      "type": "number",
+      "group": "Agent Experience",
+      "description": "Distinct repositories with a matching event.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"agent_experience_repositories\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_experience_thinking_share",
+      "label": "Share in thinking",
+      "type": "number",
+      "group": "Agent Experience",
+      "description": "Events found in agents' private reasoning, divided by all matching events. Visible replies are the rest.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"agent_experience_thinking_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_experience_explained_share",
+      "label": "Share with a stated cause",
+      "type": "number",
+      "group": "Agent Experience",
+      "description": "Events whose cause the model found in a sentence other than the event's own, divided by all matching events.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"agent_experience_explained_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_event_rates_per_thousand",
+      "label": "Events per 1,000 messages read",
+      "type": "number",
+      "group": "Agent Events",
+      "description": "Matching events divided by the agent messages the events pass read (replies and thinking blocks), per 1,000. A message can hold several events.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"agent_event_rates_per_thousand\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_event_rates_message_share",
+      "label": "Share of messages read with an event",
+      "type": "number",
+      "group": "Agent Events",
+      "description": "Agent messages with at least one matching event, divided by the agent messages the pass read.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"agent_event_rates_message_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_event_rates_turn_share",
+      "label": "Share of turns with an event",
+      "type": "number",
+      "group": "Agent Events",
+      "description": "Turns with at least one matching event in a message read, divided by the turns with a message read. A turn is a prompt and what followed it; a turn counts in every group it has messages in.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"agent_event_rates_turn_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_event_rates_conversation_share",
+      "label": "Share of conversations with an event",
+      "type": "number",
+      "group": "Agent Events",
+      "description": "Conversations with at least one matching event, divided by the conversations with a message read. A conversation counts in every group it has messages in; a delegated subagent is a conversation of its own.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"agent_event_rates_conversation_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_event_rates_events",
+      "label": "Events",
+      "type": "number",
+      "group": "Agent Events",
+      "description": "Sentences the model judged to express a kind of event, at or above its confidence threshold. Counts follow how much agents worked; the rates divide by what the pass read.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"agent_event_rates_events\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_event_rates_messages",
+      "label": "Messages read",
+      "type": "number",
+      "group": "Agent Events",
+      "description": "Agent messages the events pass read: the denominator of the per-message rates. A kind filter does not change it.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"agent_event_rates_messages\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "labels_messages",
+      "label": "Messages",
+      "type": "number",
+      "group": "Message Labels",
+      "description": "Distinct matching messages. A message can carry several labels. Shares divide by all distinct messages in each interval; labels can overlap.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"labels_messages\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "labels_conversations",
+      "label": "Conversations",
+      "type": "number",
+      "group": "Message Labels",
+      "description": "Distinct retained conversations with a matching label.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"labels_conversations\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "labels_labels",
+      "label": "Distinct message labels",
+      "type": "number",
+      "group": "Message Labels",
+      "description": "Different accepted specific labels, including explicit coverage states.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"labels_labels\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "labels_observations",
+      "label": "Label matches",
+      "type": "number",
+      "group": "Message Labels",
+      "description": "One observation per most-specific accepted label, or one coverage observation when no label is accepted. Messages with several labels contribute several matches.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"labels_observations\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "carbon_co2",
+      "label": "Estimated CO₂e (g)",
+      "type": "number",
+      "group": "Carbon Impact",
+      "description": "Estimated with your Carbon Impact assumptions (estimate range, facility overhead, grid and input sensitivity); token counts are reported, energy and CO₂e are modeled. Models are assigned to size tiers by name; unmatched models use the default tier.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"carbon_co2\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "carbon_energy",
+      "label": "Estimated electricity (Wh)",
+      "type": "number",
+      "group": "Carbon Impact",
+      "description": "Facility electricity: IT energy times facility overhead (PUE). Estimated with your Carbon Impact assumptions (estimate range, facility overhead, grid and input sensitivity); token counts are reported, energy and CO₂e are modeled. Models are assigned to size tiers by name; unmatched models use the default tier.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"carbon_energy\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "work_hours_wall_hours",
+      "label": "Agent wall hours",
+      "type": "number",
+      "group": "Work Hours",
+      "description": "Wall hours are clock time: each record holds its share of the hour, one over the agents (or, for you, conversations) active at once, so groups add up without counting an hour twice. Your time and your agents' overlap: add them only within one.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"work_hours_wall_hours\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "work_hours_active_hours",
+      "label": "Active agent hours",
+      "type": "number",
+      "group": "Work Hours",
+      "description": "Active hours count each agent's own time, so two agents working through one hour are two hours.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"work_hours_active_hours\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "work_hours_parallel_hours",
+      "label": "Hours with parallel agents",
+      "type": "number",
+      "group": "Work Hours",
+      "description": "Wall time with two or more agents active at once, shared among them as wall hours are.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"work_hours_parallel_hours\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "work_hours_messages",
+      "label": "Typed messages during activity hours",
+      "type": "number",
+      "group": "Work Hours",
+      "description": "Messages with text you typed, counted in the hour you sent them.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"work_hours_messages\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "work_hours_typed_words",
+      "label": "Typed words during activity hours",
+      "type": "number",
+      "group": "Work Hours",
+      "description": "Words you typed, from Human Words' classification.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"work_hours_typed_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "work_hours_turns",
+      "label": "Agent turns started",
+      "type": "number",
+      "group": "Work Hours",
+      "description": "Agent turns, each counted in the hour its prompt was sent.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"work_hours_turns\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "work_hours_at_once",
+      "label": "Agents at once during work hours",
+      "type": "number",
+      "group": "Work Hours",
+      "description": "Active time over wall time, pooled: the time-weighted number of agents working together while any is. For you it is always one.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"work_hours_at_once\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "work_hours_conversations",
+      "label": "Conversations with activity hours",
+      "type": "number",
+      "group": "Work Hours",
+      "description": "Distinct top-level conversations active in each group. One active in several groups counts in each.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"work_hours_conversations\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "parallelism_agent_hours",
+      "label": "Workspace hours",
+      "type": "number",
+      "group": "Parallelism",
+      "description": "Workspace hours count each active workspace's time, so two workspaces working through one hour are two workspace hours.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"parallelism_agent_hours\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "parallelism_active_hours",
+      "label": "Active hours",
+      "type": "number",
+      "group": "Parallelism",
+      "description": "Active hours are wall time with any workspace active. Each record holds its share of that time (one over the workspaces active at once), so groups add up to the wall time without counting an hour twice.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"parallelism_active_hours\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "parallelism_parallel_hours",
+      "label": "Hours with two or more at once",
+      "type": "number",
+      "group": "Parallelism",
+      "description": "Wall time with two or more workspaces active at once, shared among them as active hours are.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"parallelism_parallel_hours\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "parallelism_at_once",
+      "label": "Workspaces at once while active",
+      "type": "number",
+      "group": "Parallelism",
+      "description": "Agent time divided by wall time with any workspace active, pooled over each group's records: the time-weighted number of workspaces working together while any is.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"parallelism_at_once\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "parallelism_agents",
+      "label": "Active conversations",
+      "type": "number",
+      "group": "Parallelism",
+      "description": "Distinct workspaces active in each group. One active in several groups counts in each.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"parallelism_agents\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "work_hours_engaged_hours",
+      "label": "Your engaged hours",
+      "type": "number",
+      "group": "Work Hours",
+      "description": "Estimated engaged human time, shared among top-level conversations active at once. Human and agent hours can overlap and are measured separately.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"work_hours_engaged_hours\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "writing_messages_chars",
+      "label": "User message characters",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Characters in classified user messages; other message roles and unclassified text have no measurement.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"writing_messages_chars\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "writing_messages_pasted_words",
+      "label": "Pasted words",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Words classified as likely pasted text.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"writing_messages_pasted_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "writing_messages_copied_words",
+      "label": "Copied or re-sent words",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Words matched to previous agent output or earlier user text.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"writing_messages_copied_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "writing_messages_prompt_words",
+      "label": "Template and attachment words",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Words in templates and attachment references.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"writing_messages_prompt_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "writing_messages_machine_words",
+      "label": "App and automation words",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Words supplied by the app or automation.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"writing_messages_machine_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "usage_uncached_input_tokens",
+      "label": "Uncached input tokens",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Input tokens excluding cache reads and writes.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"usage_uncached_input_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "usage_cache_read_input_tokens",
+      "label": "Cache read tokens",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Recorded cache reads.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"usage_cache_read_input_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "usage_cache_creation_input_tokens",
+      "label": "Cache write tokens",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Recorded cache writes.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"usage_cache_creation_input_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "usage_reasoning_output_tokens",
+      "label": "Reasoning tokens",
+      "type": "number",
+      "group": "Tokens and Cost",
+      "description": "Reasoning output reported by the source; unavailable measurements remain missing.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"usage_reasoning_output_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "model_requests_gap_seconds",
+      "label": "Response wait",
+      "type": "number",
+      "group": "Waiting and Thinking",
+      "description": "Mean recorded wait after tool results, in seconds; requests without timing are excluded.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"model_requests_gap_seconds\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "model_requests_input_tokens",
+      "label": "Mean request input",
+      "type": "number",
+      "group": "Waiting and Thinking",
+      "description": "Mean input tokens per recorded model request.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"model_requests_input_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "model_requests_output_tokens",
+      "label": "Mean request output",
+      "type": "number",
+      "group": "Waiting and Thinking",
+      "description": "Mean output tokens per recorded model request.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"model_requests_output_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tool_calls_lines_added",
+      "label": "Lines added",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Recorded lines added by tool calls.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tool_calls_lines_added\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tool_calls_lines_removed",
+      "label": "Lines removed",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Recorded lines removed by tool calls.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tool_calls_lines_removed\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tool_calls_result_bytes",
+      "label": "Tool result bytes",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Recorded result size in bytes.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tool_calls_result_bytes\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "tool_calls_input_bytes",
+      "label": "Tool input bytes",
+      "type": "number",
+      "group": "Tool Calls and Time",
+      "description": "Recorded tool input size in bytes.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"tool_calls_input_bytes\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_wall_seconds",
+      "label": "Wall time",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Last message time minus first.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_wall_seconds\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_idle_seconds",
+      "label": "Idle time",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Wall time minus active time.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_idle_seconds\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_files_edited",
+      "label": "Files edited",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Distinct files touched by edit-family tools that did not fail.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_files_edited\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_subagents",
+      "label": "Delegated agents",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Delegated runs the session launched: embedded and linked sub-agent sessions, and headless agent runs its shell commands started.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_subagents\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_turn_cycles",
+      "label": "Turn cycles",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Typed human messages answered by an assistant message within 1,800 seconds.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_turn_cycles\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_first_response_seconds",
+      "label": "First response wait",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "The same gap for the first typed human message only.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_first_response_seconds\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_turn_cycle_p90_seconds",
+      "label": "Turn cycle p90",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "90th percentile of the same gaps.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_turn_cycle_p90_seconds\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_max_unprompted_tool_calls",
+      "label": "Longest unprompted tool run",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "The longest run of tool calls with no typed human message between them.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_max_unprompted_tool_calls\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_failure_streak_max",
+      "label": "Longest failure streak",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Longest run of consecutive failed calls. Empty without enough evidence.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_failure_streak_max\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_context_peak_tokens",
+      "label": "Peak context tokens",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Largest request input, cached input included, in the session's own stream. Empty without enough evidence.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_context_peak_tokens\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_verified_handbacks",
+      "label": "Verified handbacks",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Handbacks after an edit where a test, build or lint command ran after the last edit. Empty without enough evidence.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_verified_handbacks\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "session_shape_unverified_handbacks",
+      "label": "Unverified handbacks",
+      "type": "number",
+      "group": "Session Shape",
+      "description": "Edit handbacks without a verification after the last edit. Empty without enough evidence.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"session_shape_unverified_handbacks\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    }
+  ]
+}

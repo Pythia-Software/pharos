@@ -1,3 +1,4 @@
+import scatter from "../../../../schemas/scatter.schema.json";
 import messagesDocument from "../../../../schemas/messages.schema.json";
 import peopleMessageLabels from "../../../../schemas/people_message_labels.schema.json";
 import messageLabels from "../../../../schemas/message_labels.schema.json";
@@ -35,7 +36,7 @@ export { core, instantiateRecipe, queryRecipes, cardCoverQuery };
 
 // Every dataset the repository defines a schema for.
 export const schemas = Object.fromEntries(Object.entries({
-  messages: messagesDocument, people_message_labels:peopleMessageLabels, message_labels:messageLabels, compactions, model_requests: modelRequests, activity, conversation_activity: conversationActivity, findings, library, mcp_calls: mcpCalls, parallelism, rhythm, skill_usages: skillUsages, tl1_attempts: tl1Attempts, tool_calls: toolCalls, tools, usage, writing, writing_messages: writingMessages, agent_events: agentEvents, agent_event_messages: agentEventMessages, agent_event_rates: agentEventRates, session_shape: sessionShape, fixes, safety,
+  scatter, messages: messagesDocument, people_message_labels:peopleMessageLabels, message_labels:messageLabels, compactions, model_requests: modelRequests, activity, conversation_activity: conversationActivity, findings, library, mcp_calls: mcpCalls, parallelism, rhythm, skill_usages: skillUsages, tl1_attempts: tl1Attempts, tool_calls: toolCalls, tools, usage, writing, writing_messages: writingMessages, agent_events: agentEvents, agent_event_messages: agentEventMessages, agent_event_rates: agentEventRates, session_shape: sessionShape, fixes, safety,
 }).map(([dataset, document]) => [dataset, core.loadSchema(document)]));
 export { execution, queryCapabilities as capabilities } from "../../support/query-server.mjs";
 export const day = 86400000;
