@@ -1222,6 +1222,47 @@ test("the findings prompt review takes focus, keeps it and returns it on Escape"
   await holdsFocus(page, dialog, review);
 });
 
+for (const scenario of [
+  { name: "Risky action", url: "/findings?optimize_area=safety&view=table&safety_case=safety_sample", api: "/api/findings/safety", id: "safety_sample", collection: "cases", detail: ".safety-detail", remove: "In prompt · Remove", add: "Add to prompt" },
+  { name: "Fix", url: "/findings?optimize_area=fixes&view=table&fixes_item=fix_sample", api: "/api/findings/fixes", id: "fix_sample", collection: "items", detail: ".fixes-detail", remove: "In prompt · Remove", add: "Add to prompt" },
+  { name: "Efficiency finding", url: "/findings?finding=failure%3Arepo%3Arepo_explo%3Adef", api: "/api/findings", id: "failure:repo:repo_explo:def", collection: "findings", detail: ".findings-detail", remove: "Remove from prompt", add: "Add to Prompt Cart" },
+]) {
+  test(`${scenario.name} detail keeps its prompt cart usable`, { skip }, async t => {
+    const overview = structuredClone(defaultApi[`GET ${scenario.api}`]);
+    const card = overview[scenario.collection].find(item => item.id === scenario.id);
+    const membership = structuredClone(card.cart);
+    const cart = structuredClone(overview.cart);
+    const initialDetail = defaultApi[`GET ${scenario.api}/:id`]({ params: { id: scenario.id } });
+    const api = {
+      [`GET ${scenario.api}`]: () => overview,
+      [`GET ${scenario.api}/:id`]: () => ({ ...initialDetail, cart: card.cart }),
+      [`POST ${scenario.api}/:id/action`]: ({ body }) => {
+        if (body.action === "cart_remove") { card.cart = null; overview.cart = []; }
+        if (body.action === "cart_add") { card.cart = membership; overview.cart = structuredClone(cart); }
+        return { ok: true };
+      },
+    };
+    const { page, shot } = await open(t, { url: scenario.url, viewport: { width: 1920, height: 1050 }, api, ready: scenario.detail });
+    const cartPanel = page.locator(".findings-cart:visible");
+    await cartPanel.locator("li").waitFor();
+    assert.equal(await cartPanel.count(), 1, "the detail has one visible prompt cart");
+    assert.equal(await page.locator("#findingsCart").count(), 1, "the hidden table does not duplicate the cart");
+    await shot("cart");
+    await cartPanel.locator("button.primary").click();
+    const dialog = page.locator('.findings-dialog[role="dialog"]');
+    await dialog.waitFor();
+    await dialog.getByRole("button", { name: "Keep in cart" }).click();
+    await page.locator(scenario.detail).getByRole("button", { name: scenario.remove, exact: true }).click();
+    await cartPanel.locator(".findings-cart-empty").waitFor();
+    await page.locator(scenario.detail).getByRole("button", { name: scenario.add, exact: true }).click();
+    await cartPanel.locator("li").waitFor();
+    await page.setViewportSize({ width: 320, height: 800 });
+    await cartPanel.scrollIntoViewIfNeeded();
+    assert.equal(await cartPanel.isVisible(), true, "the cart remains accessible on a narrow screen");
+    await shot("phone-cart");
+  });
+}
+
 test("page Find inside an ARIA modal searches only the modal and Escape closes Find before the modal", { skip }, async t => {
   const { page, settled } = await open(t, { url: "/findings", ready: ".findings-card" });
   await press(page.locator(".findings-cart button.primary").first());
