@@ -1275,12 +1275,15 @@ function transcriptHighlightControl(panel,conversation,messages){
   for(const name of changes)addEventListener(name,follow);
   box.dispose=()=>{for(const name of changes)removeEventListener(name,follow)};
   panel.addEventListener('pointerover',event=>{
+    if(event.buttons){hideLabelTip();return}
     const events=panel.classList.contains('show-events'),labels=panel.classList.contains('show-labels');
     const eventMark=events&&event.target.closest?.('mark.agent-event,mark.event-context'),eventCard=eventMark&&eventMark.closest('[data-agent-events]');
     if(eventCard?.eventView){showEventTip(eventsAtMark(eventCard.eventView,eventMark),event);return}
-    const card=labels&&event.target.closest?.('[data-label-family]');
+    // Only the tinted background shows message labels, leaving text and controls unobscured.
+    const card=labels&&event.target;
     if(card?.labelMessage)showLabelTip(messageLabelView(card.labelMessage,labelTaxonomy),event);else hideLabelTip()});
-  panel.addEventListener('pointermove',event=>{if(labelTip&&!labelTip.hidden)placeLabelTip(event)});
+  panel.addEventListener('pointerdown',hideLabelTip);
+  panel.addEventListener('pointermove',event=>{if(event.buttons)hideLabelTip();else if(labelTip&&!labelTip.hidden)placeLabelTip(event)});
   panel.addEventListener('pointerleave',hideLabelTip);
   apply();return box;
 }
