@@ -73,16 +73,16 @@ export function dashboardFilterDescriptions(schema: LinkSchema, query: QueryStat
 
 // Describe the very same query encoded in the destination, including source
 // WHERE vs grouped HAVING. Empty sections are omitted.
-export function dashboardQueryDetails(schema: LinkSchema, query: QueryState): QueryLinkDetail[] {
+export function dashboardQueryDetails(schema: LinkSchema, query: QueryState, resultSchema: LinkSchema = schema): QueryLinkDetail[] {
   const source = query.grouping?.source ?? query;
   const filters = dashboardFilterDescriptions(schema, source, source.where);
   const sorts = query.orderBy;
   return [
     { label: "Filters", values: filters },
-    ...query.grouping && query.where.length ? [{ label: "Group filters", values: dashboardFilterDescriptions(schema, query, query.where) }] : [],
-    ...query.grouping ? [{ label: "Measures", values: query.grouping.summaries.filter(column => column.op !== "row" && column.op !== "link").map(column => fieldLabel(schema, query, column.id)) }] : [],
+    ...query.grouping && query.where.length ? [{ label: "Group filters", values: dashboardFilterDescriptions(resultSchema, query, query.where) }] : [],
+    ...query.grouping ? [{ label: "Measures", values: query.grouping.summaries.filter(column => column.op !== "row" && column.op !== "link").map(column => fieldLabel(resultSchema, query, column.id)) }] : [],
     { label: "Group by", values: query.grouping?.keys.map(key => groupKeyLabel(schema, source, key)) ?? [] },
-    { label: "Sort", values: sorts.map(sort => `${fieldLabel(schema, query, sort.field)}${sort.extract ? ` matching /${sort.extract.regex}/` : ""} ${sort.dir === "desc" ? "descending" : "ascending"}${sort.nulls === "first" ? " (empty first)" : ""}`) },
+    { label: "Sort", values: sorts.map(sort => `${fieldLabel(resultSchema, query, sort.field)}${sort.extract ? ` matching /${sort.extract.regex}/` : ""} ${sort.dir === "desc" ? "descending" : "ascending"}${sort.nulls === "first" ? " (empty first)" : ""}`) },
   ].filter(detail => detail.values.length);
 }
 

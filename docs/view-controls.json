@@ -7533,6 +7533,17 @@
       "reason": "Requests an explicit background refresh; does not change view state."
     },
     {
+      "key": "7b453e50dd2c9c68:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyTableContext",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`safety-check:${focus.rule}:questions`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "0f43a5c72d8a7da5:0",
       "file": "web/src/search-composer.tsx",
       "owner": "HomeSearch",

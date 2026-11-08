@@ -1177,8 +1177,6 @@ export function FindingsPage({ copy, table, safetyTable, fixesTable }: { copy: C
   return <>
     {body}
     {table ? <div className="findings-page findings-table" hidden={reviewArea || route.view !== "table"}>
-      <div className="view-heading findings-heading"><div><h1>Findings table</h1><p className="muted">Every finding as a row, with its state, kind of fix, likely monthly saving and verified results. Group, filter and chart them like any table.</p></div>
-      </div>
       {table}
     </div> : null}
     {group && !reviewArea ? <ReviewDialog group={group} copy={copy} onClose={() => setReview("")} onCopied={() => { setReview(""); void reload(); say("Copied. Measuring has started."); }} /> : null}

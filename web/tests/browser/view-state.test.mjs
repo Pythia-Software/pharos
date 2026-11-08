@@ -1285,7 +1285,10 @@ test('Risky actions table edits are Back/Forward steps that restore the table',{
  await page.goForward();
  await page.waitForFunction(()=>/\/srv\/c/.test(document.querySelector('.safety-table .qt-row')?.textContent??''));
  assert.deepEqual(read().orderBy,[{field:'subject',dir:'desc'}]);
-
+ const questions=page.locator('details').filter({has:page.getByText('Questions for each notice',{exact:true})});
+ await questions.locator('summary').click();
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('disclosures') || '{}')['safety-check:permissions:questions'] === true);
+ await page.reload(); await page.waitForFunction(()=>document.querySelector('.optimize-table-questions')?.open);
 });
 
 
