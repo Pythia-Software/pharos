@@ -2264,10 +2264,22 @@ async function openAskOverlay(t, width) {
 
 test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip}, async t => {
   const {page,shot,modal,editor}=await openAskOverlay(t,1440);
+  await page.evaluate(()=>{
+    const original=window.fetch;window.askDraftAttempts=0;
+    window.fetch=(input,options)=>{
+      if(String(input)==='/api/ask/session'&&options?.method==='POST'&&++window.askDraftAttempts===1)
+        return Promise.resolve(new Response(JSON.stringify({error:'Pharos is busy'}),{status:503,headers:{'Content-Type':'application/json'}}));
+      return original(input,options);
+    };
+  });
   assert.ok(await editor.evaluate(element=>element===document.activeElement));
   await page.locator('body>header .brand').evaluate(element=>element.focus());
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'the overlay must keep focus');
   await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
+  await page.waitForFunction(()=>window.askDraftAttempts>=1);
+  assert.ok(await modal.locator('.pharos-notice').isHidden(),'a retrying draft save does not show an error');
+  await page.waitForFunction(()=>window.askDraftAttempts>=2);
+  assert.ok(await modal.locator('.pharos-notice').isHidden(),'the recovered save leaves no error');
   const reachable=element=>{const box=element.getBoundingClientRect(),target=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return box.left>=0&&box.right<=innerWidth&&(element===target||element.contains(target));};
   const removeContext=modal.getByRole('button',{name:'Remove page context',exact:true});
   for(const name of ['Clear','Close Ask Pharos','Remove page context'])assert.ok(await modal.getByRole('button',{name,exact:true}).evaluate(reachable),name+' must stay reachable');

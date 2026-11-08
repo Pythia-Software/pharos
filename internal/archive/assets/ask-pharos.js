@@ -387,7 +387,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     history[push?'pushState':'replaceState'](history.state,'',href);
     window.dispatchEvent(new Event('pharos:uri-changed'));
   }
-  function flushDraft(){clearTimeout(draftTimer);draftTimer=null;const payload=draftPending;draftPending=null;if(payload)writeQueue=writeQueue.catch(()=>{}).then(()=>api('session',payload)).then(()=>clearNotice('draft'),error=>report(error,{source:'draft',lead:'Your draft wasn\u2019t saved.'}));return writeQueue;}
+  function flushDraft(){clearTimeout(draftTimer);draftTimer=null;const payload=draftPending;draftPending=null;if(payload)writeQueue=writeQueue.catch(()=>{}).then(()=>askRetryBackground(()=>api('session',payload))).then(()=>clearNotice('draft'),error=>report(error,{source:'draft',lead:'Your draft wasn\u2019t saved.'}));return writeQueue;}
   function saveChat(touch=true){
     if(disposed)return;
     surfaceRestorePending=false;
@@ -1150,6 +1150,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   function syncTheme(){appearance=document.documentElement.dataset.theme==='dark'?'dark':'light';drawEdge();drawIdeas();}
   const themeObserver=new MutationObserver(syncTheme);themeObserver.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme','style']});
   const configChanged=event=>{if(event.detail!==root)void refreshStatus().then(visitChanged).catch(report);};listen(window,'pharos:ask-config',configChanged);
+  const saveVisit=askVisitRecovery(input=>api('visits',input),()=>askVisitInput({stored:JSON.parse(localStorage.getItem('pharos-history-v1')||'[]'),titleFor:(url,page)=>window.historyTitle?.(url,page)}),()=>clearNotice('visits'));
   const visitChanged=event=>{
     if(!accessEnabled)return;
     const entry=event?.detail?.entry;
@@ -1157,7 +1158,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     try{
       input=askVisitInput({entry,replaced:event?.detail?.replaced,stored:entry?[]:JSON.parse(localStorage.getItem('pharos-history-v1')||'[]'),titleFor:(url,page)=>window.historyTitle?.(url,page)});
     }catch{return;}
-    void askWriteVisit(()=>api('visits',input)).catch(report);
+    void askWriteVisit(()=>saveVisit(input)).catch(error=>report(error,{source:'visits',lead:'Page history wasn\u2019t saved for Ask Pharos.'}));
   };
   listen(window,'pharos:visit',visitChanged);
   const routeChanged=()=>{surfaceRestorePending=false;sessionLoads.invalidate();openingSession=null;flushDraft();if(presentation==='modal')closeOverlay();syncFullscreen();restoreHome();if(!['home','page'].includes(presentation))return;if(!askChatPage(location.pathname)){if(pending)browse();}else if(accessEnabled){const id=new URL(location.href).searchParams.get('ask_chat');if(id&&id!==activeSessionId)void openSession(id);else if(!id&&activeSessionId)clearChat(false);else{if(id)regularOverride=false;render();}}};

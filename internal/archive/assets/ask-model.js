@@ -42,7 +42,7 @@ function askSuggestionRetryDelay(attempt) {
 async function askReadResponse(response, onProgress) {
   if (!response.ok || !response.headers.get('Content-Type')?.includes('application/x-ndjson')) {
     const result=await response.json();
-    if(!response.ok)throw new Error(result.error||'Ask Pharos request failed');
+    if(!response.ok){const error=new Error(result.error||'Ask Pharos request failed');error.status=response.status;throw error;}
     return result;
   }
   const reader=response.body.getReader(),decoder=new TextDecoder();
@@ -210,11 +210,34 @@ function askHistoryRow(session, {now = Date.now(), labels = {}} = {}) {
     when: [session.updatedAt ? (turns ? 'Last active ' : 'Edited ') + askHistoryFullDate(session.updatedAt) : '', started].filter(Boolean).join(' · '),
   };
 }
+// Retry only safe background writes, never a question that may have started a CLI.
+// The bounded retries leave persistent failures visible to the user.
+async function askRetryBackground(write, wait = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  for(let attempt=0;;attempt++) {
+    try{return await write();}
+    catch(error){
+      if(attempt>=2 || !(error instanceof TypeError || [502,503,504].includes(error?.status)))throw error;
+      await wait(500*2**attempt);
+    }
+  }
+}
+// A later incremental visit cannot repair an earlier missed replacement.
+function askVisitRecovery(write, snapshot, reconciled) {
+  let needsReconcile=false;
+  return async input=>{
+    const current=needsReconcile?snapshot():input;
+    try {
+      const result=await write(current);
+      if(current.reconcile){needsReconcile=false;reconciled();}
+      return result;
+    } catch(error) {needsReconcile=true;throw error;}
+  };
+}
 // Keep snapshots/replacements ahead of later removals, even on slow requests.
 // A failed write must not prevent the next deletion or clear from running.
 let askVisitWrites = Promise.resolve();
 function askWriteVisit(write) {
-  const result = askVisitWrites.then(write);
+  const result = askVisitWrites.then(()=>askRetryBackground(write));
   askVisitWrites = result.catch(() => {});
   return result;
 }
