@@ -663,6 +663,21 @@ final class FakeFolderPicker: ArchiveFolderPicker {
                         expect(!service.pageLoading, "navigation after an ignored error does not rearm the startup beacon")
                     }
                 }
+                // A live broker whose routing probe is busy must enter the
+                // waiting screen on the first timeout, then restore the exact
+                // failed page once catalog initialization lets routing answer.
+                StartupResponse.ready = false
+                let target = URL(string: "/library?nav_collapsed=1", relativeTo: service.url!)!.absoluteURL
+                coordinator.webView(page, didStartProvisionalNavigation: nil)
+                coordinator.webView(page, didFailProvisionalNavigation: nil, withError: NSError(
+                    domain: NSURLErrorDomain, code: NSURLErrorTimedOut,
+                    userInfo: [NSURLErrorFailingURLErrorKey: target]
+                ))
+                until("busy routing did not enter page recovery") { service.pageWaiting }
+                expect(service.pageError == nil, "catalog initialization must not become a terminal page error")
+                StartupResponse.ready = true
+                until("page recovery did not resume after catalog initialization") { !service.pageWaiting }
+                expect(service.pageError == nil && service.takePageTarget() == target, "recovery preserves the failed route and its view state")
                 // An explicit install asks first and stops nothing while
                 // work cannot stop in time; it reports what it waits for.
                 try FileManager.default.removeItem(at: signalFile)
