@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -49,13 +51,43 @@ func (c *Catalog) ensureFingerprintImages(ctx context.Context) error {
 		// Bootstrap metadata only. Never render or discard the last good PNGs
 		// during library open; the background queue resumes the backfill.
 		if _, err := tx.ExecContext(ctx, `INSERT INTO fingerprint_entities(entity,id,revision) SELECT 'conversation',id,lower(hex(randomblob(16))) FROM conversations WHERE 1 ON CONFLICT(entity,id) DO NOTHING;
-INSERT INTO fingerprint_entities(entity,id,revision) SELECT 'workspace',id,lower(hex(randomblob(16))) FROM workspaces WHERE 1 ON CONFLICT(entity,id) DO NOTHING;
-UPDATE fingerprint_entities SET dirty=1,attempts=0,next_attempt=0,last_error='';`); err != nil {
+INSERT INTO fingerprint_entities(entity,id,revision) SELECT 'workspace',id,lower(hex(randomblob(16))) FROM workspaces WHERE 1 ON CONFLICT(entity,id) DO NOTHING;`); err != nil {
+			return err
+		}
+		if same := fingerprintSameImages[version]; slices.Contains(same, previous) {
+			if err := adoptFingerprintImages(ctx, tx, version, same); err != nil {
+				return err
+			}
+		} else if _, err := tx.ExecContext(ctx, `UPDATE fingerprint_entities SET dirty=1,attempts=0,next_attempt=0,last_error=''`); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('fingerprint_renderer',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, version)
 		return err
 	})
+}
+
+// adoptFingerprintImages stamps images an earlier, identical renderer drew as
+// the current renderer's, and settles each queued entity whose images are
+// then complete at its revision. Only a version change queues an entity with
+// complete current images, so this undoes that requeue and nothing else: an
+// entity whose sources changed has images of an older revision and stays queued.
+func adoptFingerprintImages(ctx context.Context, tx *sql.Tx, version string, same []string) error {
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(same)), ",")
+	args := []any{version}
+	for _, earlier := range same {
+		args = append(args, earlier)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE fingerprint_images SET renderer=? WHERE renderer IN (`+marks+`)`, args...); err != nil {
+		return err
+	}
+	complete := func(events int) string {
+		return `(SELECT COUNT(*) FROM fingerprint_images i WHERE i.entity=fingerprint_entities.entity AND i.entity_id=fingerprint_entities.id AND i.events=` + strconv.Itoa(events) + ` AND i.revision=fingerprint_entities.revision AND i.renderer=?1)=?2`
+	}
+	// events_mask bit 1 asks for the event appearance (events=1), bit 2 for the
+	// event-hidden one (events=0), as publishFingerprintImages counts them.
+	_, err := tx.ExecContext(ctx, `UPDATE fingerprint_entities SET dirty=0,priority=0,attempts=0,next_attempt=0,last_error=''
+WHERE dirty=1 AND (events_mask&1=0 OR `+complete(1)+`) AND (events_mask&2=0 OR `+complete(0)+`)`, version, fingerprintImagesPerAppearance())
+	return err
 }
 
 // Invalidation is in the source transaction, including writes by another

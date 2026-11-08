@@ -5,7 +5,6 @@ import (
 	"container/list"
 	"context"
 	"crypto/sha256"
-	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -20,21 +19,25 @@ import (
 	"github.com/fogleman/gg"
 )
 
-// Hash all native layout/raster sources so a changed renderer automatically
-// requeues durable images. No generated JavaScript is embedded in the service.
-//
-//go:embed fingerprint_prepare.go fingerprint_layout.go fingerprint_svg.go fingerprint_render.go
-var fingerprintRendererSources embed.FS
+// fingerprintVersion names the images the renderer draws, not its source, so
+// a refactor that draws the same pixels keeps every stored PNG. It is the
+// digest of the parity corpus's expected PNGs (testdata/fingerprint-rendering.json);
+// TestFingerprintRendererVersion fails until it matches them, so a change to
+// the pixels requeues the cache. A change the corpus cannot see needs a case.
+const fingerprintVersion = "f7ea49c741bc794714a5e576351d6b2155373b0deff22630dae1e939b042277a"
 
-var fingerprintVersion = func() string {
-	digest := sha256.New()
-	for _, name := range []string{"fingerprint_prepare.go", "fingerprint_layout.go", "fingerprint_svg.go", "fingerprint_render.go"} {
-		source, _ := fingerprintRendererSources.ReadFile(name)
-		digest.Write([]byte(name + "\n"))
-		digest.Write(source)
-	}
-	return hex.EncodeToString(digest.Sum(nil))
-}()
+// fingerprintSameImages lists, for a renderer version, earlier renderer IDs
+// whose stored PNGs it draws byte for byte. Opening a library with one of them
+// restamps its images rather than rendering every entity again. Keyed by the
+// current version, so a new version starts with none.
+var fingerprintSameImages = map[string][]string{
+	// 0.8.9's Goja renderer, and 0.9.0's hash of the native sources. Checked
+	// against 12,000 stored images of 3,000 entities in a production library.
+	"f7ea49c741bc794714a5e576351d6b2155373b0deff22630dae1e939b042277a": {
+		"8329d65b2cc0ad8cab8947c710244f131bb5e823c29a3a1cd44e0ffc8518803f",
+		"b1cdc0a362d785aa637946f89e877f4071f611f0b34421289b985e3881bad62e",
+	},
+}
 
 func fingerprintRendererVersion() string { return fingerprintVersion }
 

@@ -25,6 +25,45 @@ type fingerprintWorker struct {
 	renderer  fingerprintImageRenderer
 	secondary fingerprintImageRenderer
 	active    [2]*fingerprintEntity
+	pass      fingerprintPass
+}
+
+// fingerprintPass is the one "Render fingerprints" operation both workers
+// report into, so Background Processing shows one row with their combined
+// count. It ends, with the first error either saw, when the last one leaves.
+type fingerprintPass struct {
+	mu    sync.Mutex
+	pass  *daemonPass
+	users int
+	err   error
+}
+
+func (p *fingerprintPass) join(ctx context.Context, c *Catalog) *daemonPass {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.users == 0 {
+		p.pass, p.err = c.beginPass(ctx, "maintenance.fingerprints", triggerSchedule), nil
+	}
+	p.users++
+	return p.pass
+}
+
+func (p *fingerprintPass) worked(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pass.worked(n, "fingerprint")
+}
+
+func (p *fingerprintPass) leave(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.err == nil {
+		p.err = err
+	}
+	if p.users--; p.users == 0 {
+		p.pass.end(p.err)
+		p.pass = nil
+	}
 }
 
 var fingerprintRenderTimeout = 2 * time.Minute
@@ -196,10 +235,11 @@ func (s *Server) maintainFingerprintImagesSecondary(ctx context.Context) {
 
 func (s *Server) maintainFingerprintImagesLoop(ctx context.Context, secondary bool) {
 	c := s.Catalog
+	shared := &c.fingerprints.pass
 	var pass *daemonPass
 	defer func() {
 		if pass != nil {
-			pass.end(ctx.Err())
+			shared.leave(ctx.Err())
 		}
 	}()
 	var pruneAt time.Time
@@ -209,7 +249,7 @@ func (s *Server) maintainFingerprintImagesLoop(ctx context.Context, secondary bo
 		battery := settings.Battery.onPower(cadenceFrequent, s.cachedPower(ctx))
 		if err != nil || settings.Mode != "on" || settings.cadence(item) != cadenceFrequent || c.backgroundPaused(ctx, time.Now()) || battery == batteryWait || secondary && battery == batterySlower {
 			if pass != nil {
-				pass.end(nil)
+				shared.leave(nil)
 				pass = nil
 			}
 			if !waitFingerprintWorker(ctx, time.Second) {
@@ -221,7 +261,7 @@ func (s *Server) maintainFingerprintImagesLoop(ctx context.Context, secondary bo
 			return
 		}
 		if pass == nil {
-			pass = c.beginPass(ctx, "maintenance.fingerprints", triggerSchedule)
+			pass = shared.join(ctx, c)
 		}
 		if !secondary && time.Since(pruneAt) > time.Minute {
 			prune := c.beginPass(ctx, "maintenance.fingerprints", triggerSchedule)
@@ -232,10 +272,10 @@ func (s *Server) maintainFingerprintImagesLoop(ctx context.Context, secondary bo
 		var more bool
 		pass.runIO(ctx, func(ctx context.Context) { more, err = c.refreshFingerprintImages(ctx) })
 		if more {
-			pass.worked(1, "fingerprint")
+			shared.worked(1)
 		}
 		if !more || err != nil {
-			pass.end(err)
+			shared.leave(err)
 			pass = nil
 			if err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Fingerprint cache: %v\n", err)
