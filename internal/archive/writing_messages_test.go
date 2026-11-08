@@ -143,6 +143,25 @@ func TestWritingMessagesFilterBySpanAndSplitText(t *testing.T) {
 			t.Fatalf("message %s grouping lost known membership: %#v", sample.field, groups)
 		}
 	}
+	// The Human Words distribution groups by conversation before producing a
+	// histogram. Exercise the budget with a small, complete population.
+	override(t, &queryV3MaxGroups, 2)
+	q := groupRequest("conversation_id", qt.SummaryColumn{ID: "analysis_value", Op: "sum", Field: "typed_words"})
+	q.Rows = false
+	q.Result.Where = []qt.WhereTerm{{Field: "analysis_value", Op: "is_not_null"}}
+	q.Metrics = []qt.AggSpec{{ID: "analysis", Op: "count", Field: "analysis_value", Distribution: &qt.MetricDistribution{Kind: "histogram", Input: "[analysis_value]", Bins: 10}}}
+	groups, _, err := server.executeQueryV3(t.Context(), "writing_messages", nil, PharosWritingMessagesSchema(), q)
+	if err != nil || len(groups.Metrics) != 1 || groups.Metrics[0].Error != "" || len(groups.Metrics[0].Buckets) != 1 {
+		t.Fatalf("conversation distribution: %+v, %v", groups.Metrics, err)
+	}
+	histogram, ok := groups.Metrics[0].Buckets[0].Distribution.(*qt.MetricHistogramDistribution)
+	if !ok || histogram.N != 2 {
+		t.Fatalf("conversation distribution omitted a group: %+v", groups.Metrics[0])
+	}
+	queryV3MaxGroups = 1
+	if _, _, err := server.executeQueryV3(t.Context(), "writing_messages", nil, PharosWritingMessagesSchema(), q); err == nil || !strings.Contains(err.Error(), "group population exceeds host budget") {
+		t.Fatalf("conversation distribution beyond the budget: %v", err)
+	}
 }
 
 func TestAuthoredTextIsClippedOnARuneBoundary(t *testing.T) {

@@ -445,9 +445,8 @@ APP_HTML = r'''<!doctype html>
       </div>
     </section>
     <section id="askSettings" class="settings-section" data-settings-route="/settings/ask" data-page-title="Ask Pharos" data-page-description="Choose your CLI, model, effort, and AI preferences on this Mac." aria-labelledby="settingsPageHeading" hidden><div id="askSettingsPage"></div></section>
-    <section id="optionalBehaviors" class="settings-section" data-settings-route="/settings/preferences" data-page-title="App preferences" data-page-description="Choose fingerprint display, lighthouse behavior, activity preferences, and your feedback contact email." aria-labelledby="settingsPageHeading" hidden>
+    <section id="optionalBehaviors" class="settings-section" data-settings-route="/settings/preferences" data-page-title="App preferences" data-page-description="Choose lighthouse behavior, activity preferences, and your feedback contact email." aria-labelledby="settingsPageHeading" hidden>
       <div class="optional-behavior"><div><h3 id="uncertainRelatedWorkTitle">Show uncertain related work</h3><p id="uncertainRelatedWorkDescription" class="muted">Include dotted-line related work in workspace agent sessions, timelines, and conversations. These relationships are lower confidence. Off by default.</p></div><button id="uncertainRelatedWork" class="toggle" type="button" role="switch" aria-labelledby="uncertainRelatedWorkTitle" aria-describedby="uncertainRelatedWorkDescription" aria-checked="false"></button></div>
-      <div class="optional-behavior"><div><h3 id="fingerprintEventsTitle">Agent events in fingerprints</h3><p id="fingerprintEventsDescription" class="muted">Show recorded event markers and arcs to earlier text in conversation and workspace fingerprints. On by default.</p></div><button id="fingerprintEvents" class="toggle" type="button" role="switch" aria-labelledby="fingerprintEventsTitle" aria-describedby="fingerprintEventsDescription" aria-checked="true"></button></div>
       <div class="optional-behavior"><div><h3 id="lighthouseSpinOnClickTitle">Lighthouse spins on click</h3><p id="lighthouseSpinOnClickDescription" class="muted">Turn the lighthouse beam once around when you click the door of the lighthouse in the menu bar.</p></div><button id="lighthouseSpinOnClick" class="toggle" type="button" role="switch" aria-labelledby="lighthouseSpinOnClickTitle" aria-describedby="lighthouseSpinOnClickDescription" aria-checked="false"></button></div>
       <div class="optional-behavior"><div><h3 id="lighthouseLoadingIndicatorTitle">Lighthouse loading indicator</h3><p id="lighthouseLoadingIndicatorDescription" class="muted">Turn the lighthouse beam while sources are indexed and while pages load. The drive badge pulses while the library is busy either way.</p></div><button id="lighthouseLoadingIndicator" class="toggle" type="button" role="switch" aria-labelledby="lighthouseLoadingIndicatorTitle" aria-describedby="lighthouseLoadingIndicatorDescription" aria-checked="false"></button></div>
       <div class="optional-behavior"><div><h3 id="pauseIndexingForQueriesTitle">Pause indexing during queries</h3><p id="pauseIndexingForQueriesDescription" class="muted">Give queries priority by pausing indexing and library maintenance while they run. Sustained browsing or agent queries can delay indexing. Off by default; changes apply without restarting.</p></div><button id="pauseIndexingForQueries" class="toggle" type="button" role="switch" aria-labelledby="pauseIndexingForQueriesTitle" aria-describedby="pauseIndexingForQueriesDescription" aria-checked="false"></button></div>
@@ -705,7 +704,7 @@ const SETTINGS_PAGES=Object.fromEntries(Array.from(document.querySelectorAll('[d
 const FEEDBACK_CONTACT_KEY='pharos-feedback-contact-email';
 $('#feedbackContactEmail').oninput=event=>{const email=event.target.value.trim();if(email)pharosPrefs.set(FEEDBACK_CONTACT_KEY,email);else pharosPrefs.remove(FEEDBACK_CONTACT_KEY)};
 function showSettingsPage(){const path=location.pathname in SETTINGS_PAGES?location.pathname:'/settings';for(const [route,id] of Object.entries(SETTINGS_PAGES))$('#'+id).hidden=route!==path;if(path==='/settings')loadHealth();if(path==='/settings/sources')loadSources();if(path==='/settings/preferences')$('#feedbackContactEmail').value=pharosPrefs.get(FEEDBACK_CONTACT_KEY,'');document.querySelector('main').scrollTop=0}
-function show(name,fromLocation=false){if(['sources','activity','health'].includes(name))name='settings';document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===name));document.querySelectorAll('button[data-view]').forEach(x=>x.classList.toggle('active',x.dataset.view===(name==='detail'?'library':name)));if(!fromLocation&&ROUTES.has(name))setRoute(name==='home'?'/':'/'+name);if(name==='settings')showSettingsPage();if(name==='home'||name==='cards')document.querySelector('main').scrollTop=0;if(name==='analyze')window.pharosQueryTables?.refreshDashboards('usage');renderFeedbackPins();window.dispatchEvent(new CustomEvent('pharos:view',{detail:name}))}
+function show(name,fromLocation=false){if(name!=='detail')workspaceLoad?.abort();if(['sources','activity','health'].includes(name))name='settings';document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===name));document.querySelectorAll('button[data-view]').forEach(x=>x.classList.toggle('active',x.dataset.view===(name==='detail'?'library':name)));if(!fromLocation&&ROUTES.has(name))setRoute(name==='home'?'/':'/'+name);if(name==='settings')showSettingsPage();if(name==='home'||name==='cards')document.querySelector('main').scrollTop=0;if(name==='analyze')window.pharosQueryTables?.refreshDashboards('usage');renderFeedbackPins();window.dispatchEvent(new CustomEvent('pharos:view',{detail:name}))}
 function isLegacyLibraryURL(url){return url.pathname==='/'&&(url.searchParams.has('q_library')||url.searchParams.has('search'))}
 function routeFromLocation(){const url=new URL(location.href);if(url.pathname==='/settings/header'){url.pathname='/settings/layout';url.searchParams.set('disclosures',JSON.stringify({...window.pharosView?.read('disclosures',{}),headerSettings:true}));url.searchParams.set('reveal','section:headerSettings');history.replaceState(null,'',url)}if(url.pathname==='/mcp'){url.pathname='/analyze';url.searchParams.set('analyze_topic','mcp');url.searchParams.set('analyze_data','mcp_calls');url.searchParams.set('analyze_mode',url.searchParams.has('q_mcp_calls')?'query':'dashboards');history.replaceState(null,'',url)}if(url.pathname==='/tools'){url.pathname='/analyze';url.searchParams.set('tools_view',url.searchParams.get('tools_view')||'calls');history.replaceState(null,'',url)}if(isLegacyLibraryURL(url)){url.pathname='/library';history.replaceState(null,'',url)}if(['/','/home'].includes(url.pathname)&&(url.searchParams.get('cards')==='library'||['card_search','card_data','card_topic','card_kind','card_sort'].some(key=>url.searchParams.get(key)))){url.pathname='/cards';history.replaceState(null,'',url)}let path=location.pathname,name=path.slice(1);if(path.startsWith('/work/')&&path.length>6){let id;try{const parts=path.slice(6).split('/');if(parts.length!==1&&!(parts.length===3&&parts[1]==='conversation'))throw new Error('Invalid work URI');id=decodeURIComponent(parts[0])}catch{feedbackToast('Invalid work URI');return}void detail(id,true).catch(()=>{show('library',true);feedbackToast('Work unavailable')})}else{if(path==='/settings/optimization'){path='/findings';name='findings';const params=new URLSearchParams(location.search);params.set('view','settings');history.replaceState(null,'',path+'?'+params)}if(['sources','activity','health'].includes(name)){path=name==='sources'?'/settings/sources':'/settings';history.replaceState(null,'',path+location.search)}if(path in SETTINGS_PAGES)name='settings';show(ROUTES.has(name)?name:path==='/'?'home':'library',true);recordVisit()}window.dispatchEvent(new Event('pharos:route'));syncNavigator()}
 document.querySelectorAll('button[data-view]').forEach(b=>b.onclick=()=>{if(b.dataset.view==='analyze'){openHistoryEntry('/analyze');return}if(b.dataset.view==='findings'&&location.pathname==='/findings'&&location.search){openHistoryEntry('/findings');return}show(b.dataset.view)});$('#back').onclick=()=>show('library');$('.brand').onclick=event=>{if(event.metaKey||event.ctrlKey||event.shiftKey||event.button)return;event.preventDefault();show('home')};
@@ -741,7 +740,7 @@ function loadBookmarks(){const value=pharosPrefs.get(BOOKMARKS_KEY,[]);return Ar
 function saveBookmarks(items){pharosPrefs.set(BOOKMARKS_KEY,items);syncBookmarkState();window.dispatchEvent(new Event('pharos:bookmarks'))}
 function currentPageURL(){return bookmarkPageURL()}
 function syncBookmarkState(){const marked=loadBookmarks().some(item=>bookmarkPageURL(item.url)===currentPageURL()),add=$('#bookmarkAdd'),toggle=$('#bookmarksToggle');add.replaceChildren(...iconLabel('star',marked?'This page is bookmarked':'Bookmark this page'));add.disabled=marked;toggle.title=marked?'Bookmarks (this page is bookmarked)':'Bookmarks';const star=$('#bookmarkStar'),label=marked?'Edit bookmark':'Bookmark this page';star.classList.toggle('bookmarked',marked);star.setAttribute('aria-label',label);star.title=label}
-function openHistoryEntry(url){history.pushState(null,'',url);routeFromLocation()}
+function openHistoryEntry(url){if(new URL(url,location.href).pathname.startsWith('/conversation/')){location.assign(url);return}history.pushState(null,'',url);routeFromLocation()}
 async function createBookmark(){const promoted=await window.pharosQueryTables?.createLink?.(),parsed=new URL(promoted?.url||location.href),url=bookmarkPageURL(parsed.href),visit=loadHistory().find(entry=>entry.url===url),item={id:crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`,url,title:visit?.title||historyTitle(url),created_at:Date.now(),query:promoted?.query,dataset:promoted?.dataset,savedAt:Date.now()};saveBookmarks([...loadBookmarks(),item]);return item}
 async function addBookmark(){try{renderBookmarks((await createBookmark()).id)}catch(error){feedbackToast(`Bookmark failed: ${error.message}`)}}
 let bookmarkPopoverId=null;
@@ -1474,13 +1473,28 @@ function setupTokenOverview(panel,conversation={}){
 
 }
 
-function detail(id,fromLocation=false){if(fromLocation&&workspaceInbox?.workspace===id&&document.querySelector('#detail.active'))return workspaceLocation?.();return pageLoad(()=>renderDetail(id,fromLocation))}
-let delegationExplorer=null,workspaceInbox=null,workspaceLocation=null;
-async function renderDetail(id,fromLocation){
+async function detail(id,fromLocation=false){if(!fromLocation)setRoute('/work/'+encodeURIComponent(id));try{if(workspaceInbox?.workspace===id&&document.querySelector('#detail.active'))return await workspaceLocation?.();return await pageLoad(()=>renderDetail(id))}catch(error){if(error.name!=='AbortError')throw error}}
+let delegationExplorer=null,workspaceInbox=null,workspaceLocation=null,workspaceLoad=null;
+async function renderDetail(id){
+workspaceLoad?.abort();const load=new AbortController();workspaceLoad=load;const signal=load.signal;
 workspaceInbox?.destroy();workspaceInbox=null;workspaceLocation=null;
 delegationExplorer?.destroy();delegationExplorer=null;
 const includeUncertain=pharosPrefs.get('pharos-uncertain-related-work',false)===true;
-const w=await api('/api/work/'+encodeURIComponent(id)+(includeUncertain?'?include_uncertain=1':''));show('detail',true);if(!fromLocation)setRoute('/work/'+encodeURIComponent(id));recordVisit(false,w.title||'Untitled workspace');conversationMapCleanups.splice(0).forEach(cleanup=>cleanup());
+const w=await api('/api/work/'+encodeURIComponent(id)+(includeUncertain?'?include_uncertain=1':''),{signal});if(signal.aborted)return;
+const routeConversation=()=>{const parts=location.pathname.split('/');return parts.length===5&&parts[3]==='conversation'?decodeURIComponent(parts[4]):new URLSearchParams(location.search).get('conversation')||''};
+const requestedConversation=routeConversation(),missingConversation=requestedConversation&&![...(w.conversations||[]),...(w.peer_conversations||[])].some(c=>c.id===requestedConversation);
+// Saved links can pair a conversation with an outdated workspace. Resolve its stable
+// identity before mounting a merged reader, which otherwise hides the overview
+// without ever loading the requested conversation.
+if(missingConversation){
+ const resolutionPath=location.pathname;
+ const references=await api('/api/query-object-references',{method:'POST',body:JSON.stringify({references:[{objectType:'pharos_conversations',key:{id:requestedConversation}}]}),signal});
+ // A completed lookup may only redirect or mount the route that requested it.
+ if(signal.aborted||workspaceLoad!==load||location.pathname!==resolutionPath||routeConversation()!==requestedConversation)return;
+ const target=references[0]?.href&&new URL(references[0].href,location.href),workspace=target?.pathname.match(/^\/work\/([^/]+)\/conversation\//)?.[1];
+ if(workspace&&decodeURIComponent(workspace)!==id){target.search=location.search;history.replaceState(null,'',target.pathname+target.search);return renderDetail(decodeURIComponent(workspace))}
+}
+show('detail',true);recordVisit(false,w.title||'Untitled workspace');conversationMapCleanups.splice(0).forEach(cleanup=>cleanup());
 const root=$('#detailBody');root.replaceChildren();
 for(const key of ['prs','attempts','handoffs','changes','metrics','conversations','identity_links'])w[key] ||= [];
 const disclosure=(label,className)=>{const d=node('details',className);d.append(node('summary','',label));return d};
@@ -1510,27 +1524,31 @@ const readerStates=new Map();
 const rememberReader=()=>{const panel=host.querySelector('.conversation-panel:not(.conversation-loading)');if(activeIndex<0||!panel)return;readerStates.set(conversations[activeIndex].id,{scroll:host.scrollTop,turns:[...panel.querySelectorAll('.turn-list > .turn')].map(turn=>turn.open)})};
 // Conversations arrive one at a time; only the mounted one keeps its messages.
 const conversationPath=c=>`/api/work/${encodeURIComponent(c.peer?c.workspace_id:id)}/conversations/${encodeURIComponent(c.id)}`;
-const loadConversation=async index=>{const c=conversations[index];if(!c.messages){const full=await api(conversationPath(c));Object.assign(c,full)}for(const other of conversations)if(other!==c&&other.id)delete other.messages;return c};
+const loadConversation=async(index,ticket)=>{const c=conversations[index];if(!c.messages){const full=await api(conversationPath(c),{signal});if(signal.aborted||ticket!==mounting)return null;Object.assign(c,full)}for(const other of conversations)if(other!==c&&other.id)delete other.messages;return c};
 // Finding text across conversations runs on the service; the page holds one.
 // Each result counts a conversation's matching events that the Show filter
 // shows and hides; without show every kind counts as shown, and an empty
 // show (Custom with nothing checked) shows none.
-const searchConversations=async({term,output=true,regex=false,caseSensitive=false,show=null})=>{if(!term)return[];const params=new URLSearchParams({q:term});if(output)params.set('output','1');if(regex)params.set('regex','1');if(caseSensitive)params.set('case','1');if(Array.isArray(show))params.set('show',show.join(','));const workspaces=[...new Set([id,...conversations.filter(c=>c.peer).map(c=>c.workspace_id)])];const results=await Promise.all(workspaces.map(workspace=>api(`/api/work/${encodeURIComponent(workspace)}/find?${params}`).then(result=>result.conversations||[],()=>[])));return results.flat().map(item=>({...item,index:conversations.findIndex(c=>c.id===item.id)})).filter(item=>item.index>=0)};
+const searchConversations=async({term,output=true,regex=false,caseSensitive=false,show=null})=>{if(!term)return[];const params=new URLSearchParams({q:term});if(output)params.set('output','1');if(regex)params.set('regex','1');if(caseSensitive)params.set('case','1');if(Array.isArray(show))params.set('show',show.join(','));const workspaces=[...new Set([id,...conversations.filter(c=>c.peer).map(c=>c.workspace_id)])];const results=await Promise.all(workspaces.map(workspace=>api(`/api/work/${encodeURIComponent(workspace)}/find?${params}`,{signal}).then(result=>result.conversations||[],()=>[])));return results.flat().map(item=>({...item,index:conversations.findIndex(c=>c.id===item.id)})).filter(item=>item.index>=0)};
 const findConversations=async term=>(await searchConversations({term})).map(item=>item.index);
 const conversationLabel=i=>{const other=conversations[i];return[`${i+1}. ${other.peer?peerRoleLabel(other.peer_role)+' · ':''}${other.provider||'Agent'}`,other.started_at?timeLabel(other.started_at):null,shortText(displayText({role:'user',text:other.first_prompt||''})||other.native_id||'Conversation',80)].filter(Boolean).join(' · ')};
 const matchingLibraryConversation=async query=>{const term=query.trim(),words=term.split(/\s+/).filter(Boolean);if(!term)return-1;const hits=await findConversations(term);if(hits.length||words.length<2)return hits[0]??-1;const each=await Promise.all(words.map(word=>findConversations(word)));return each[0].find(i=>each.every(list=>list.includes(i)))??-1};
 
-const updateConversationURL=(index,mode='push',message='',session='',at='',call='')=>{const params=new URLSearchParams(location.search);if(activeIndex>=0&&params.get('conversation')!==conversations[index].id){params.delete('highlight');params.delete('reveal')}params.set('conversation',conversations[index].id);if(message)params.set('message',message);else params.delete('message');if(session)params.set('delegation_session',session);else params.delete('delegation_session');if(at&&!message)params.set('at',at);else params.delete('at');if(call&&message)params.set('call',call);else params.delete('call');const path=`/work/${encodeURIComponent(id)}/conversation/${encodeURIComponent(conversations[index].id)}`,url=path+'?'+params;if(mode==='push'&&url!==location.pathname+location.search)history.pushState(null,'',url);else history.replaceState(null,'',url);syncNavigator()};
+const updateConversationURL=(index,mode='push',message='',session='',at='',call='')=>{const params=new URLSearchParams(location.search);if(activeIndex>=0&&params.get('conversation')!==conversations[index].id){params.delete('highlight');params.delete('reveal');params.delete('reader_event_link')}params.set('conversation',conversations[index].id);if(message)params.set('message',message);else params.delete('message');if(session)params.set('delegation_session',session);else params.delete('delegation_session');if(at&&!message)params.set('at',at);else params.delete('at');if(call&&message)params.set('call',call);else params.delete('call');const path=`/work/${encodeURIComponent(id)}/conversation/${encodeURIComponent(conversations[index].id)}`,url=path+'?'+params;if(mode==='push'&&url!==location.pathname+location.search)history.pushState(null,'',url);else history.replaceState(null,'',url);syncNavigator()};
 let selector;
 // A merged workspace's overview leads the reader; it stays as conversations load.
 // Only this workspace's inbox reads into this host.
 const showReader=content=>host.replaceChildren(...workspaceInbox?.reader===host&&workspaceInbox.merged?[workspaceInbox.lead]:[],content);
 const mount=async index=>{
+if(signal.aborted)return;
 const ticket=++mounting;activeIndex=index;conversationMapCleanups.splice(0).forEach(cleanup=>cleanup());
 const c=conversations[index];if(!c.messages)showReader(node('section','panel conversation-panel conversation-loading',`Loading conversation${c.message_count?` · ${Number(c.message_count).toLocaleString()} messages`:''}…`));
 // A load that outlives its workspace page must not touch the one now shown.
-try{await loadConversation(index);if(!window.pharosReaderKeys)await new Promise(resolve=>addEventListener('pharos:reader-keys-ready',resolve,{once:true}))}catch(error){if(ticket===mounting&&host.isConnected)showReader(node('section','panel conversation-panel badtext',`Conversation unavailable: ${error.message||error}`));return}
-if(ticket!==mounting||!host.isConnected)return;
+try{
+ if(!await loadConversation(index,ticket))return;
+ if(!window.pharosReaderKeys)await new Promise(resolve=>{const ready=()=>{removeEventListener('pharos:reader-keys-ready',ready);signal.removeEventListener('abort',ready);resolve()};addEventListener('pharos:reader-keys-ready',ready,{once:true});signal.addEventListener('abort',ready,{once:true});if(signal.aborted)ready()});
+}catch(error){if(signal.aborted)return;if(ticket===mounting&&host.isConnected)showReader(node('section','panel conversation-panel badtext',`Conversation unavailable: ${error.message||error}`));return}
+if(signal.aborted||ticket!==mounting||!host.isConnected)return;
 c.title||=w.title;showReader(renderConversation(c,roots));
 const panel=host.querySelector('.conversation-panel');bindReaderView(panel);
 mountSessionSignals(panel,`${conversationPath(c)}/signals`);
@@ -1539,16 +1557,17 @@ if(delegationExplorer){const context=node('div');panel.querySelector('.conversat
 if(conversations.length>1&&!window.pharosDelegation){const choice=node('div','conversation-choice'),label=node('label','',`Showing conversation #${index+1} from this workspace`);selector=node('select','conversation-selector');selector.id='workspaceConversation';selector.setAttribute('aria-label','Choose conversation from this workspace');label.htmlFor=selector.id;conversations.forEach((other,i)=>{const option=node('option','',conversationLabel(i));option.value=String(i);selector.append(option)});selector.value=String(index);selector.onchange=()=>selectConversation(Number(selector.value));choice.append(label,selector);panel.querySelector('.conversation-head').prepend(choice)}
 };
 const selectConversation=async(index,{message='',session='',at='',call='',historyMode='push',focusReader=true}={})=>{
-if(index<0||index>=conversations.length)return;
+if(signal.aborted||index<0||index>=conversations.length)return;
 const focused=document.activeElement;
 const same=index===activeIndex&&host.querySelector('.conversation-panel:not(.conversation-loading)');
 if(!same)rememberReader();
 updateConversationURL(index,historyMode,message,session,at,call);workspaceInbox?.setViewer(true);
 if(!same)await mount(index);
-if(index!==activeIndex||!host.isConnected||workspaceInbox&&!workspaceInbox.viewing)return;
+if(signal.aborted||index!==activeIndex||!host.isConnected||workspaceInbox&&!workspaceInbox.viewing)return;
 await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-if(index!==activeIndex||!host.isConnected||workspaceInbox&&!workspaceInbox.viewing)return;
+if(signal.aborted||index!==activeIndex||!host.isConnected||workspaceInbox&&!workspaceInbox.viewing)return;
 const panel=host.querySelector('.conversation-panel:not(.conversation-loading)');if(!panel)return;
+panel.querySelector('.linked-message-unavailable')?.remove();
 if(focusReader&&!new URLSearchParams(location.search).has('reveal')&&(document.activeElement===focused||document.activeElement===document.body)){panel.tabIndex=-1;panel.focus({preventScroll:true});}
 const anchor=message||transcriptAnchor(conversationMessages(conversations[index]),{at});
 if(anchor)revealMessage(host,anchor,true,call);
@@ -1566,15 +1585,15 @@ if(paths.size){const files=disclosure(`Files · ${paths.size}`,'work-disclosure 
 for(const [path,{changes,conversation}] of paths){const row=node('div','file-index-row'),button=node('button','file-index-link',path);button.title='Find actions for this file in the conversation';button.disabled=!conversations.length;
 button.onclick=async()=>{let index=conversations.findIndex(c=>c.id===conversation);if(index<0)index=(await findConversations(path))[0]??-1;if(index<0){button.disabled=true;button.title='No retained conversation mentions this file';return}files.open=false;await selectConversation(index);window.pharosFind?.open(path);host.scrollIntoView({behavior:'smooth',block:'start'})};row.append(button);if(changes.length)row.append(node('span','meta',changes.map(c=>[c.classification,c.status,c.complete?'':'excerpt/incomplete'].filter(Boolean).join(' · ')).join('; ')));files.append(row)}controls.append(files)}
 if(controls.childNodes.length)header.append(controls);root.append(header);
+if(missingConversation){const notice=node('p','coverage-warning','The linked conversation is no longer available in this workspace.'+(conversations.length===1&&!conversations[0].parent_id?' Showing the retained conversation.':conversations.length?' Choose a retained agent session below.':''));notice.setAttribute('role','status');root.append(notice)}
 const warnings=conversations.filter(c=>/partial|incomplete|missing|truncat|failed/i.test(c.coverage||''));
 if(warnings.length)root.append(node('div','coverage-warning',`Transcript coverage: ${warnings.map(c=>`${c.provider||'Agent'} · ${c.coverage}`).join('; ')}. Some activity may be unavailable.`));
 if(/partial|incomplete|failed/i.test(w.preservation_completeness||''))root.append(node('div','coverage-warning',`Preservation · ${w.preservation_completeness}. See Archive details.`));
-const routeConversation=()=>{const parts=location.pathname.split('/');return parts.length===5&&parts[3]==='conversation'?decodeURIComponent(parts[4]):new URLSearchParams(location.search).get('conversation')||''};
 const focus=new URLSearchParams(location.search),focusIndex=conversations.findIndex(c=>c.id===routeConversation()),matchedIndex=focusIndex<0?await matchingLibraryConversation(focus.get('search')||''):-1,initialIndex=Math.max(0,focusIndex,matchedIndex);
-const explorer=node('div','delegation-host');
+if(signal.aborted)return;const explorer=node('div','delegation-host');
 root.append(explorer,host,archive);
 const mountExplorer=()=>{
-if(delegationExplorer||!explorer.isConnected||!window.pharosDelegation||!window.pharosInbox)return;
+if(signal.aborted||delegationExplorer||!explorer.isConnected||!window.pharosDelegation||!window.pharosInbox)return;
 host.querySelector('.conversation-choice')?.remove();
 const openOverview=()=>{rememberReader();const params=new URLSearchParams(location.search);params.delete('conversation');params.delete('message');params.delete('at');params.delete('call');history.pushState(null,'',`/work/${encodeURIComponent(id)}${params.size?'?'+params:''}`);workspaceInbox.setViewer(false);syncNavigator()};
 workspaceInbox=window.pharosInbox.mount({root,workspace:id,overview:[...root.children].filter(el=>el!==host),reader:host,onOverview:openOverview,onLayout:(compact,splitReader)=>delegationExplorer?.layout(compact,splitReader)});
@@ -1590,10 +1609,10 @@ if(activeIndex>=0&&routeConversation()){
 workspaceInbox.setViewer(true);
 const index=activeIndex,params=new URLSearchParams(location.search);
 if(host.querySelector('.conversation-panel:not(.conversation-loading)'))void mount(index).then(()=>{if(index===activeIndex&&routeConversation()===conversations[index].id)void selectConversation(index,{message:params.get('message')||'',at:params.get('at')||'',call:params.get('call')||'',session:params.get('delegation_session')||'',historyMode:'replace',focusReader:false})});
-}else if(workspaceInbox.merged&&!routeConversation()&&matchedIndex<0)void selectConversation(0,{historyMode:'replace',focusReader:false});
+}else if(workspaceInbox.merged&&(!routeConversation()||missingConversation)&&matchedIndex<0)void selectConversation(0,{historyMode:'replace',focusReader:false});
 };
 mountExplorer();if(!window.pharosDelegation)addEventListener('pharos:delegation-ready',mountExplorer,{once:true});
-workspaceLocation=async()=>{window.dispatchEvent(new Event('pharos:workspace-history'));const routed=conversations.findIndex(c=>c.id===routeConversation()),index=routed<0&&workspaceInbox?.merged?0:routed;if(index>=0)await selectConversation(index,{message:new URLSearchParams(location.search).get('message')||'',at:new URLSearchParams(location.search).get('at')||'',call:new URLSearchParams(location.search).get('call')||'',session:new URLSearchParams(location.search).get('delegation_session')||'',historyMode:'replace'});else{rememberReader();workspaceInbox?.setViewer(false)}};
+workspaceLocation=async()=>{if(routeConversation()&&!conversations.some(c=>c.id===routeConversation()))return renderDetail(id);window.dispatchEvent(new Event('pharos:workspace-history'));const routed=conversations.findIndex(c=>c.id===routeConversation()),index=routed<0&&workspaceInbox?.merged?0:routed;if(index>=0)await selectConversation(index,{message:new URLSearchParams(location.search).get('message')||'',at:new URLSearchParams(location.search).get('at')||'',call:new URLSearchParams(location.search).get('call')||'',session:new URLSearchParams(location.search).get('delegation_session')||'',historyMode:'replace',focusReader:false});else{rememberReader();workspaceInbox?.setViewer(false)}};
 if(conversations.length){if(focusIndex>=0||matchedIndex>=0)await selectConversation(initialIndex,{message:focus.get('message')||'',at:focus.get('at')||'',call:focus.get('call')||'',session:focus.get('delegation_session')||'',historyMode:'replace',focusReader:false})}else{const notice=empty('No conversation was retained for this workspace.');archive.before(notice)};
 if(!conversations.length&&w.summary){const summary=node('section','panel');summary.append(node('h2','','Retained account · transcript unavailable'));for(const key of ['initiation','outcome','failures'])if(w.summary[key]){summary.append(node('div','meta',key),contentView(w.summary[key]))}archiveBody.prepend(summary)}
 }
@@ -1704,14 +1723,9 @@ const PAUSE_INDEXING_FOR_QUERIES_KEY='pharos-pause-indexing-for-queries-v1';
 function setPauseIndexingForQueries(on,save=true){const toggle=$('#pauseIndexingForQueries');toggle.classList.toggle('on',on);toggle.setAttribute('aria-checked',String(on));if(!save)return;pharosPrefs.set(PAUSE_INDEXING_FOR_QUERIES_KEY,on);pharosPrefs.flush?.()}
 setPauseIndexingForQueries(pharosPrefs.get(PAUSE_INDEXING_FOR_QUERIES_KEY,false)===true,false);
 $('#pauseIndexingForQueries').onclick=()=>setPauseIndexingForQueries(pharosPrefs.get(PAUSE_INDEXING_FOR_QUERIES_KEY,false)!==true);
-const FINGERPRINT_EVENTS_KEY='pharos-fingerprint-events';
 function setUncertainRelatedWork(on,save=true){const toggle=$('#uncertainRelatedWork');toggle.classList.toggle('on',on);toggle.setAttribute('aria-checked',String(on));if(save)pharosPrefs.set('pharos-uncertain-related-work',on)}
 setUncertainRelatedWork(pharosPrefs.get('pharos-uncertain-related-work',false)===true,false);
 $('#uncertainRelatedWork').onclick=()=>setUncertainRelatedWork(pharosPrefs.get('pharos-uncertain-related-work',false)!==true);
-
-function setFingerprintEvents(on,save=true){const toggle=$('#fingerprintEvents');toggle.classList.toggle('on',on);toggle.setAttribute('aria-checked',String(on));if(save){pharosPrefs.set(FINGERPRINT_EVENTS_KEY,on);dispatchEvent(new CustomEvent('pharos:fingerprint-events-changed'))}}
-setFingerprintEvents(pharosPrefs.get(FINGERPRINT_EVENTS_KEY,true)!==false,false);
-$('#fingerprintEvents').onclick=()=>setFingerprintEvents(pharosPrefs.get(FINGERPRINT_EVENTS_KEY,true)===false);
 // Three significant figures with a unit: 22.3B, 5.
 function sigFigs(value,prefix=''){if(value==null||!Number.isFinite(Number(value)))return'—';const units=['','k','M','B','T'];let amount=Number(Number(value).toPrecision(3)),power=0;while(Math.abs(amount)>=1000&&power<units.length-1){amount=Number((amount/1000).toPrecision(3));power++}return prefix+String(amount)+units[power]}
 function carbonSummaryValue(bucket){const factors=usageSummaryData?.carbon_factors;if(!factors)return null;const stored=pharosPrefs.get('pharos-carbon-v1',{}),saved=stored&&typeof stored==='object'?stored:{},scenario=['low','central','high'].includes(saved.scenario)?saved.scenario:'central',pueScenario=['low','central','high'].includes(saved.pueScenario)?saved.pueScenario:'central',inputScale=saved.inputSensitivity==='third'?5/3:1,grid=factors.grids.find(item=>item.key===saved.grid),gridValue=saved.grid==='custom'?Math.max(0,Number(saved.customGrid)||0):(grid||factors.grids.find(item=>item.key===factors.default_grid))?.g_co2e_per_kwh||0;let wh=0;for(const [tierKey,counts] of Object.entries(bucket.carbon_tokens||{})){const tier=factors.tiers.find(item=>item.key===tierKey);if(!tier)continue;for(const [category,count] of Object.entries(counts)){const ratio=category==='output'?1:(factors.ratios[category]?.[scenario]??1)*inputScale;wh+=Number(count||0)/1e6*(tier.output_wh_per_mtok?.[scenario]||0)*ratio}}const grams=wh*(factors.pue?.[pueScenario]||1)*gridValue/1000;const amount=grams>=1e6?`${sigFigs(grams/1e6)} t`:grams>=1e3?`${sigFigs(grams/1e3)} kg`:`${sigFigs(grams)} g`;return{amount,grams}}
@@ -1824,7 +1838,8 @@ function revealMessage(host,id,keepMessage=false,call=''){
 if(!keepMessage){const params=new URLSearchParams(location.search);params.delete('message');params.delete('call');history.replaceState(null,'',location.pathname+(params.size?`?${params}`:''))}
 const panel=host.querySelector('.conversation-panel');panel?.reveal?.(message=>message.id===id&&(!call||message.call_id===call));
 const selector=`[data-message-id="${CSS.escape(id)}"]`+(call?`[data-call-id="${CSS.escape(call)}"]`:''),target=id&&(host.querySelector('.event-body'+selector)||host.querySelector(selector));
-if(!target){host.scrollIntoView({block:'start'});return}
+panel?.querySelector('.linked-message-unavailable')?.remove();
+if(!target){if(panel&&id){const notice=node('p','coverage-warning linked-message-unavailable','The linked message or tool call is not retained in this conversation.');notice.setAttribute('role','status');panel.querySelector('.conversation-head')?.append(notice)}host.scrollIntoView({block:'start'});return}
 exemptFromTranscriptFilter(panel,target);for(let el=target;el&&el!==host;el=el.parentElement){if(el.tagName==='DETAILS')el.open=true}
 markTranscriptTarget(target)
 }

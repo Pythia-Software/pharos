@@ -102,6 +102,10 @@ func TestQueryV3ReleasesAdmissionAfterExecutionError(t *testing.T) {
 	if active != 0 || queued != 0 || catalog.reader().Stats().InUse != 0 {
 		t.Fatalf("failed execution retained a slot or connection: active=%d queued=%d readers=%d", active, queued, catalog.reader().Stats().InUse)
 	}
+	queryV3MaxGroups = 3
+	if result, _, err := server.executeQueryV3(ctx, "tool_calls", nil, PharosToolCallsSchema(), q); err != nil || result.Total != 3 {
+		t.Fatalf("all groups within the budget: %+v, %v", result, err)
+	}
 	q.Source.Where = []qt.WhereTerm{{Field: "id", Op: "=", Value: "call-0"}}
 	if _, _, err := server.executeQueryV3(ctx, "tool_calls", nil, PharosToolCallsSchema(), q); err != nil {
 		t.Fatalf("query after a failed execution could not use admission: %v", err)
