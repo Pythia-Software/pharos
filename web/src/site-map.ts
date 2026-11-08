@@ -558,7 +558,7 @@ type SiteCard = {
   url: { path: string; params: Array<[string, ParamSpec]> };
 };
 export const recipeTextWindows = Object.fromEntries(rollingWindowDays.map(days => [String(days), Object.fromEntries(["{days}", "{period}", "{lastDays}"].map(token => [token, describeRecipeText(token, days)]))]));
-const cardPage = (recipe: QueryRecipe) => recipe.habits ? "analyze/habits" : recipe.thinking ? `analyze/${recipe.thinking.overview?"thinking-overview":"thinking-detail"}` : recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : `analyze/query/${recipe.dataset}`;
+const cardPage = (recipe: QueryRecipe) => recipe.habits ? "analyze/habits" : recipe.thinking ? `analyze/${recipe.thinking.overview?"thinking-overview":"thinking-detail"}` : recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : recipe.dataset === "safety" || recipe.dataset === "fixes" ? `findings/${recipe.dataset}/table` : `analyze/query/${recipe.dataset}`;
 
 export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const windows = recipe.period ? [] : [...rollingWindowDays];
