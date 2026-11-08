@@ -69,6 +69,39 @@ test('new Quick Stats metrics and calendar columns are opt-in and survive saved 
   for(const [value,format,want] of [[null,'duration','—'],[undefined,'percent','—'],[0,'duration','0s'],[500,'duration','500ms'],[60000,'duration','1m'],[3590000,'duration','1h 0m'],[7200000,'duration','2h 0m'],[0,'percent','0%'],[33.3333,'percent','33.3%']]) assert.equal(stats.formatQuickStatsValue(value,format),want);
 });
 
+test('Quick Stats mark message and tool-call counts approximate when copied history is unresolved', () => {
+  const stats = loadClassicScript('quick-stats.js');
+  const partial = {occurrence_coverage: 'partial', unresolved_occurrences: 3, message_observations: 12, tool_call_observations: 5};
+  for (const field of ['message_count', 'user_messages', 'assistant_messages', 'tool_calls', 'failed_tool_calls', 'tool_failure_rate']) {
+    const coverage = stats.quickStatsOccurrenceCoverage(field, partial);
+    assert.equal(coverage?.mark, '≈', field);
+    assert.match(coverage.note, /3 retained observations/);
+  }
+  assert.match(stats.quickStatsOccurrenceCoverage('tool_calls', partial).note, /5 tool calls are retained/);
+  // Complete coverage, and metrics copies cannot affect, stay exact.
+  assert.equal(stats.quickStatsOccurrenceCoverage('message_count', {...partial, occurrence_coverage: 'complete'}), null);
+  assert.equal(stats.quickStatsOccurrenceCoverage('tokens', partial), null);
+  assert.equal(stats.quickStatsOccurrenceCoverage('message_count', {}), null);
+  // A transcript-level partial without unresolved observations still explains itself.
+  assert.match(stats.quickStatsOccurrenceCoverage('message_count', {occurrence_coverage: 'partial', unresolved_occurrences: 0, occurrence_partial_conversations: 2}).note, /2 transcripts may include copied history/);
+});
+
+test('Quick Stats never show conversation or run counts as exact when ancestry or identity is unresolved', () => {
+  const stats = loadClassicScript('quick-stats.js');
+  const partial = {ancestry_coverage: 'partial', unrooted_conversations: 1, identity_uncertain_conversations: 2, ancestry_qualified_conversations: 0};
+  for (const field of ['active_conversations', 'delegated_runs']) {
+    const coverage = stats.quickStatsAncestryCoverage(field, partial);
+    assert.equal(coverage?.mark, '≈', field);
+    assert.match(coverage.note, /1 active transcript has no known top-level conversation/);
+    assert.match(coverage.note, /2 transcripts have unresolved execution identity/);
+  }
+  const qualified = stats.quickStatsAncestryCoverage('delegated_runs', {ancestry_coverage: 'qualified', ancestry_qualified_conversations: 3});
+  assert.equal(qualified?.mark, '?');
+  assert.match(qualified.note, /inferred or unverified link/);
+  assert.equal(stats.quickStatsAncestryCoverage('active_conversations', {ancestry_coverage: 'complete'}), null);
+  assert.equal(stats.quickStatsAncestryCoverage('tokens', partial), null, 'usage totals do not depend on ancestry');
+});
+
 const summary = value => ({generated_at: '2026-11-07T18:00:00Z', windows: [{key: 'today', tokens: value}]});
 function cacheStorage() {
   const saved = new Map();

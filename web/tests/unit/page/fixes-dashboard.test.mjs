@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fixesBoundsPreview, fixesDashboard, fixesFacts, fixesHiddenNote, fixesHiddenReason, fixesKindsPresent, fixesLeadQuote, fixesPlaces, fixesRanked } from "../../../src/fixes-model";
+import { fixesBoundsPreview, fixesDashboard, fixesEventsFreshness, fixesFacts, fixesHiddenNote, fixesHiddenReason, fixesKindsPresent, fixesLeadQuote, fixesPlaces, fixesRanked } from "../../../src/fixes-model";
 import { optimizeSelectionPlan } from "../../../src/optimize-model";
 import { decodeQueryStrict } from "@pythia-software/query-table-core";
 import { fixDetailURL, fixesHiddenTableURL, fixesTableFocus } from "../../../src/fixes-route";
@@ -99,4 +99,15 @@ test("a lead is quoted only when it says more than the title", () => {
   assert.equal(fixesLeadQuote({ title: "`uv` missing from app's environment", lead: "`uv` is not installed here." }), "`uv` is not installed here.");
   assert.equal(fixesLeadQuote({ title: "Something" }), "");
   assert.equal(fixesLeadQuote({ title: "`npm test` could not run", lead: "Test status: `npm test` could not run." }), "");
+});
+
+test("fixes counts read as approximate while the events they group wait for a rebuild, and exact once current", () => {
+  assert.deepEqual(fixesEventsFreshness({ state: "current", pending_conversations: 0, withheld_conversations: 0 }), { mark: "", note: "" });
+  assert.deepEqual(fixesEventsFreshness(undefined), { mark: "", note: "" });
+  const pending = fixesEventsFreshness({ state: "pending", pending_conversations: 3, withheld_conversations: 1 });
+  assert.equal(pending.mark, "≈");
+  // Fixes keep counting those events, so the note never says they are left out.
+  assert.match(pending.note, /^Events for 3 conversations are waiting to be rebuilt .* still count here\. These counts may change\. /);
+  assert.doesNotMatch(pending.note, /left out/);
+  assert.match(fixesEventsFreshness({ state: "unknown" }).note, /^Conversations changed since the last events run/);
 });

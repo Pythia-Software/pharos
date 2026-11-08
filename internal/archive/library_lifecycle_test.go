@@ -260,7 +260,19 @@ func TestLibraryTransferRetainedEvidence(t *testing.T) {
 		`INSERT INTO machines(id,label,kind) VALUES('portable-mac','Portable Mac','device')`,
 		`INSERT INTO host_machines(host_id,machine_id) VALUES('host-a','portable-mac')`,
 		`INSERT INTO origin_observations(conversation_id,evidence_key,channel,machine_id,execution_machine_id,priority,evidence,channel_priority,machine_priority,execution_priority) VALUES('`+conversation+`','portable-test','desktop','portable-mac','portable-mac',100,'explicit fixture',100,100,100)`,
+		// A claim another writer owns (re-indexing the source replaces only
+		// its own adapter's and record claims) travels as stored.
+		`INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,authority,rule,detail_json) VALUES('`+conversation+`','k-lineage','claude-group','parent','conversation','','synthesized','fallback','claude-root-fallback/v1','{"reason":"no-acknowledgement"}')`,
+		`INSERT INTO execution_evidence_state(conversation_id,version,input,id_policy) VALUES('`+conversation+`','`+executionEvidenceVersion+`','ingest','unclassified/v1') ON CONFLICT(conversation_id) DO UPDATE SET input='ingest'`,
 	)
+	claims, err := queryMaps(c.DB, "SELECT * FROM execution_claims ORDER BY conversation_id,claim_key")
+	if err != nil || len(claims) == 0 {
+		t.Fatal("fixture has no execution claims", err)
+	}
+	states, err := queryMaps(c.DB, "SELECT * FROM execution_evidence_state ORDER BY conversation_id")
+	if err != nil {
+		t.Fatal(err)
+	}
 	evidence, err := queryMaps(c.DB, "SELECT * FROM copy_evidence ORDER BY conversation_id")
 	if err != nil || len(evidence) == 0 {
 		t.Fatal("fixture did not associate raw evidence", err)
@@ -277,6 +289,13 @@ func TestLibraryTransferRetainedEvidence(t *testing.T) {
 	actual, err := queryMaps(c.DB, "SELECT * FROM copy_evidence ORDER BY conversation_id")
 	if err != nil || jsonText(actual) != jsonText(evidence) {
 		t.Fatal("move lost raw authority", actual, evidence, err)
+	}
+	movedClaims, err := queryMaps(c.DB, "SELECT * FROM execution_claims ORDER BY conversation_id,claim_key")
+	if err != nil || jsonText(movedClaims) != jsonText(claims) {
+		t.Fatal("move lost execution evidence", movedClaims, claims, err)
+	}
+	if movedStates, err := queryMaps(c.DB, "SELECT * FROM execution_evidence_state ORDER BY conversation_id"); err != nil || jsonText(movedStates) != jsonText(states) {
+		t.Fatal("move lost execution evidence state", movedStates, states, err)
 	}
 	publishOrigins(t, c)
 	origins, err := c.conversationOrigins(t.Context())
@@ -1710,6 +1729,7 @@ func remapLifecycleIdentities(t *testing.T, config Config, prefix string) {
 		{"agent_sessions", "id"}, {"agent_sessions", "parent_id"},
 		{"agent_session_messages", "agent_session_id"}, {"agent_session_usage", "agent_session_id"}, {"agent_session_token_evidence", "agent_session_id"},
 		{"model_requests", "agent_session_id"}, {"tool_calls", "agent_session_id"}, {"skill_usages", "agent_session_id"},
+		{"model_requests", "source_message_id"}, {"model_requests", "final_message_id"},
 	} {
 		if _, err = tx.Exec("UPDATE "+item.table+" SET "+item.column+"=?||"+item.column+" WHERE "+item.column+" IS NOT NULL", prefix); err != nil {
 			t.Fatal(err)
@@ -1762,8 +1782,104 @@ func TestLibraryTransferPreservesNewerWriterAndMapsNativeIdentity(t *testing.T) 
 	})
 	t.Run("legacy stored identities", func(t *testing.T) {
 		a, b := lifecycleLibraries(t)
+		// A root and a child that copied its first request, by normal
+		// ingestion. The request rows link the messages that carried their
+		// usage by catalog-local ID; one from before the final link has none.
+		// Skill usages name their evidence and body messages the same way.
+		usage := func(native, at string) MessageRecord {
+			return MessageRecord{NativeID: native, Role: "assistant", Kind: "message", Selected: true, CreatedAt: at,
+				RawText: `{"type":"assistant","message":{"id":"` + native + `","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":100,"output_tokens":10}}}`}
+		}
+		old, own := usage("native-old", "2026-01-01T10:00:00Z"), usage("native-own", "2026-01-01T12:00:00Z")
+		c := reopenCatalog(t, a.CatalogPath)
+		tx, err := c.DB.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err = ingestWorkspace(tx, WorkspaceRecord{SourceID: "family", SourceKind: "codex", Account: "local", Conversations: []ConversationRecord{
+			{NativeID: "family-root", Provider: "codex", Account: "local", Messages: []MessageRecord{old}},
+			{NativeID: "family-child", Provider: "codex", Account: "local", ParentNativeID: "family-root", AgentDepth: 1, Messages: []MessageRecord{old, own}},
+		}}, false); err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+		if err = tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.DB.Exec(`UPDATE model_requests SET final_message_id=NULL WHERE conversation_id=(SELECT id FROM conversations WHERE native_id='family-root');
+		 INSERT INTO skill_usages(id,workspace_id,conversation_id,evidence_message_id,body_message_id,skill_name,evidence_type,status)
+		 SELECT 'skill-'||e.native_id,c.workspace_id,c.id,e.id,b.id,'probe','tool','used' FROM conversations c
+		 JOIN messages e ON e.conversation_id=c.id LEFT JOIN messages b ON b.conversation_id=c.id AND b.native_id='native-old' AND e.native_id='native-own'
+		 WHERE c.native_id='family-child'`)
+		c.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The family's requests with the native IDs their links name and the
+		// roles occurrence ownership gives them, its sessions' reconciled
+		// tokens and its raw messages; and every link that names no message.
+		family := func(config Config) (state string, owned int, dangling int) {
+			t.Helper()
+			c := reopenCatalog(t, config.CatalogPath)
+			defer c.Close()
+			r, err := resolveExecutionsFrom(t.Context(), c.DB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			o, err := r.Occurrences(t.Context(), c.DB, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requests, err := queryMaps(c.DB, `SELECT r.id,c.native_id conversation,r.native_id request,r.model,r.speed,r.input_tokens,r.output_tokens,r.total_tokens,
+			 COALESCE(s.native_id,'(unlinked)') source,COALESCE(f.native_id,'(unlinked)') final FROM model_requests r JOIN conversations c ON c.id=r.conversation_id
+			 LEFT JOIN messages s ON s.id=r.source_message_id LEFT JOIN messages f ON f.id=r.final_message_id WHERE c.native_id LIKE 'family-%' ORDER BY 2,3`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range requests {
+				role := o.Lookup(sourceRef{sourceRequest, firstString(row["id"])}, sourceRef{}).Role
+				if row["conversation"] == "family-child" && role == occurrenceOriginal {
+					owned++
+				}
+				row["role"] = string(role)
+				delete(row, "id")
+			}
+			sessions, err := queryMaps(c.DB, `SELECT c.native_id conversation,SUM(a.total_tokens) tokens,group_concat(a.usage_status) status FROM agent_sessions a
+			 JOIN conversations c ON c.id=a.conversation_id WHERE c.native_id LIKE 'family-%' GROUP BY 1 ORDER BY 1`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			messages, err := queryMaps(c.DB, `SELECT c.native_id conversation,m.native_id,m.content_hash,m.raw_text FROM messages m
+			 JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id LIKE 'family-%' ORDER BY 1,2`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Skill usages name the messages that evidence them and hold their body.
+			skills, err := queryMaps(c.DB, `SELECT s.id,c.native_id conversation,COALESCE(e.native_id,'(dangling)') evidence,
+			 CASE WHEN s.body_message_id IS NULL THEN '(null)' ELSE COALESCE(b.native_id,'(dangling)') END body FROM skill_usages s
+			 JOIN conversations c ON c.id=s.conversation_id LEFT JOIN messages e ON e.id=s.evidence_message_id LEFT JOIN messages b ON b.id=s.body_message_id
+			 WHERE c.native_id LIKE 'family-%' ORDER BY 1`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM model_requests r WHERE r.source_message_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM messages WHERE id=r.source_message_id)
+			 OR r.final_message_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM messages WHERE id=r.final_message_id))
+			 + (SELECT COUNT(*) FROM skill_usages s WHERE NOT EXISTS(SELECT 1 FROM messages WHERE id=s.evidence_message_id)
+			 OR s.body_message_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM messages WHERE id=s.body_message_id))`).Scan(&dangling); err != nil {
+				t.Fatal(err)
+			}
+			return jsonText(map[string]any{"requests": requests, "sessions": sessions, "messages": messages, "skills": skills}), owned, dangling
+		}
+		want, owned, dangling := family(a)
+		if owned != 1 || dangling != 0 || !strings.Contains(want, `"final":"native-old","input_tokens":100,"model":`) || !strings.Contains(want, `"role":"`+string(occurrenceInherited)+`"`) || !strings.Contains(want, `"final":"(unlinked)"`) ||
+			!strings.Contains(want, `{"body":"native-old","conversation":"family-child","evidence":"native-own","id":"skill-native-own"}`) ||
+			!strings.Contains(want, `{"body":"(null)","conversation":"family-child","evidence":"native-old","id":"skill-native-old"}`) {
+			t.Fatalf("ingested family: %d own child requests, %d dangling links: %s", owned, dangling, want)
+		}
 		remapLifecycleIdentities(t, a, "legacy-")
-		var err error
+		if got, _, _ := family(a); got != want {
+			t.Fatalf("remapping the source's identities changed its family: %s, want %s", got, want)
+		}
 		for _, divergent := range []bool{false, true} {
 			if divergent {
 				remapLifecycleIdentities(t, b, "destination-")
@@ -1773,7 +1889,7 @@ func TestLibraryTransferPreservesNewerWriterAndMapsNativeIdentity(t *testing.T) 
 				}{{a, "source-only"}, {b, "target-only"}} {
 					c := reopenCatalog(t, input.config.CatalogPath)
 					_, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,text,content_hash)
- SELECT ?,id,?,'user',?,'new' FROM conversations;`, input.id, input.id, input.id)
+ SELECT ?,id,?,'user',?,'new' FROM conversations WHERE native_id NOT LIKE 'family-%';`, input.id, input.id, input.id)
 					c.Close()
 					if err != nil {
 						t.Fatal(err)
@@ -1785,14 +1901,20 @@ func TestLibraryTransferPreservesNewerWriterAndMapsNativeIdentity(t *testing.T) 
 			}
 			c := reopenCatalog(t, b.CatalogPath)
 			var links int
-			err = c.DB.QueryRow(`SELECT COUNT(*) FROM agent_session_messages am JOIN messages m ON m.id=am.message_id JOIN agent_sessions a ON a.id=am.agent_session_id`).Scan(&links)
+			err = c.DB.QueryRow(`SELECT COUNT(*) FROM agent_session_messages am JOIN messages m ON m.id=am.message_id JOIN agent_sessions a ON a.id=am.agent_session_id
+			 JOIN conversations c ON c.id=a.conversation_id WHERE c.native_id NOT LIKE 'family-%'`).Scan(&links)
 			c.Close()
-			want := 2
+			wantLinks := 2
 			if divergent {
-				want = 4
+				wantLinks = 4
 			}
-			if err != nil || links != want {
-				t.Fatal("import lost stored message/session references", links, want, err)
+			if err != nil || links != wantLinks {
+				t.Fatal("import lost stored message/session references", links, wantLinks, err)
+			}
+			// Request links follow the destination's IDs for the same native
+			// messages: the copied request stays inherited, the child owns one.
+			if got, owned, dangling := family(b); got != want || owned != 1 || dangling != 0 {
+				t.Fatalf("divergent=%v: %d own child requests, %d dangling links: %s, want %s", divergent, owned, dangling, got, want)
 			}
 		}
 	})

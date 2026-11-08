@@ -42,49 +42,81 @@ func conversationTokenEvidence(messages []MessageRecord) []streamTokenEvidence {
 		if m.Kind != "delegation_result" || !known {
 			continue
 		}
-		var result struct {
-			Content []struct{ Type, Text string }
-			IsError bool `json:"is_error"`
+		if _, total, ok := agentUsageFooterOf(launch.Text, m.Text); ok {
+			evidence = append(evidence, streamTokenEvidence{stream: m.CallID, index: i, total: total})
 		}
-		if json.Unmarshal([]byte(m.Text), &result) != nil || result.IsError || len(result.Content) == 0 {
-			continue
-		}
-		last := result.Content[len(result.Content)-1]
-		if last.Type != "text" {
-			continue
-		}
-		match := agentUsageFooter.FindStringSubmatch(last.Text)
-		if match == nil {
-			continue
-		}
-		agent := match[1]
-		if match[2] != "(use SendMessage with to: '"+agent+"', summary: '<5-10 word recap>' to continue this agent)" {
-			continue
-		}
-		input := mapValueDefault(mapValueDefault(parseJSONValue(launch.Text))["input"])
-		if resume := firstString(input["resume"]); resume != "" && resume != agent {
-			continue
-		}
-		// A contradictory typed identity is not trustworthy footer evidence.
-		details := mapValueDefault(mapValueDefault(parseJSONValue(m.Text))["details"])
-		if id := firstString(details["agentId"]); id != "" && id != agent {
-			continue
-		}
-		total, err := strconv.ParseInt(match[3], 10, 64)
-		if err != nil || total <= 0 || total > 1<<53-1 {
-			continue
-		}
-		// Reject duplicate trailers, even if one is attached to report prose.
-		trailers := 0
-		for _, block := range result.Content {
-			trailers += strings.Count(block.Text, "<usage>subagent_tokens:")
-		}
-		if trailers != 1 {
-			continue
-		}
-		evidence = append(evidence, streamTokenEvidence{stream: m.CallID, index: i, total: total})
 	}
 	return evidence
+}
+
+// agentUsageFooterTrailer begins every harness usage footer.
+const agentUsageFooterTrailer = "<usage>subagent_tokens:"
+
+// agentUsageFooterMarker is the part of the trailer a stored JSON result
+// keeps verbatim (encoders may escape its angle brackets), for SQL that reads
+// a result in full only when it may hold a footer.
+const agentUsageFooterMarker = "subagent_tokens:"
+
+// agentUsageFooterOf validates a harness usage footer on the result of an
+// Agent or Task launch call (launch is the call's body) and returns the agent
+// it names and the tokens it reports.
+func agentUsageFooterOf(launch, result string) (agent string, total int64, ok bool) {
+	call := mapValueDefault(parseJSONValue(launch))
+	if !matchesFold(firstString(call["tool"], call["name"]), "Agent", "Task") {
+		return "", 0, false
+	}
+	agent, total, ok = agentUsageFooterResult(result)
+	if !ok {
+		return "", 0, false
+	}
+	input := mapValueDefault(call["input"])
+	if resume := firstString(input["resume"]); resume != "" && resume != agent {
+		return "", 0, false
+	}
+	return agent, total, true
+}
+
+// agentUsageFooterResult is the result side of agentUsageFooterOf: the
+// footer is the result's last text block, exactly once, under no error or
+// contradicting typed identity.
+func agentUsageFooterResult(text string) (agent string, total int64, ok bool) {
+	var result struct {
+		Content []struct{ Type, Text string }
+		IsError bool `json:"is_error"`
+	}
+	if json.Unmarshal([]byte(text), &result) != nil || result.IsError || len(result.Content) == 0 {
+		return "", 0, false
+	}
+	last := result.Content[len(result.Content)-1]
+	if last.Type != "text" {
+		return "", 0, false
+	}
+	match := agentUsageFooter.FindStringSubmatch(last.Text)
+	if match == nil {
+		return "", 0, false
+	}
+	agent = match[1]
+	if match[2] != "(use SendMessage with to: '"+agent+"', summary: '<5-10 word recap>' to continue this agent)" {
+		return "", 0, false
+	}
+	// A contradictory typed identity is not trustworthy footer evidence.
+	details := mapValueDefault(mapValueDefault(parseJSONValue(text))["details"])
+	if id := firstString(details["agentId"]); id != "" && id != agent {
+		return "", 0, false
+	}
+	total, err := strconv.ParseInt(match[3], 10, 64)
+	if err != nil || total <= 0 || total > 1<<53-1 {
+		return "", 0, false
+	}
+	// Reject duplicate trailers, even if one is attached to report prose.
+	trailers := 0
+	for _, block := range result.Content {
+		trailers += strings.Count(block.Text, agentUsageFooterTrailer)
+	}
+	if trailers != 1 {
+		return "", 0, false
+	}
+	return agent, total, true
 }
 
 // The ledger remains the accounting authority. These fields distinguish where

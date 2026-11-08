@@ -191,20 +191,20 @@ const metricSpecs = metricKeys.map(id => ({ id, label: { start: "First evidence"
   unit: id === "cost" ? "usd" : durations.has(id) ? "ms" : id === "start" ? "date" : "count", definition: `Definition for ${id}` }));
 const metric = (value, quality = "observed") => ({ value, quality, known: value === null ? 0 : 1, total: 1 });
 const sessionEnd = start + 300000;
-function session(id, conversation, parent, provider, outline, depth, label, tokens) {
+function session(id, conversation, parent, provider, depth, label, tokens) {
   const self = Object.fromEntries(metricKeys.map(key => [key, metric(0)]));
   Object.assign(self, { tokens: metric(tokens), calls: metric(3), files: metric(depth === 0 ? 1 : 2), filesRead: metric(4), messages: metric(12), events: metric(2), cost: metric(tokens / 1000), clock: metric(300000), start: metric(start), wait: metric(null, "unknown"), modelTime: metric(null, "unknown"), backgroundTime: metric(null, "unknown") });
-  return { id, workspace_id: workID, conversation_id: conversation, parent_id: parent, provider, outline, depth, label, model: provider === "codex" ? "gpt-test" : "claude-test", effort: "medium", coverage: "complete", usage_status: "reported-reconciled",
+  return { id, workspace_id: workID, conversation_id: conversation, parent_id: parent, provider, depth, ancestry: { state: parent ? "resolved" : "root", depth }, label, model: provider === "codex" ? "gpt-test" : "claude-test", effort: "medium", coverage: "complete", usage_status: "reported-reconciled",
     order: depth, child_count: depth < 2 ? 1 : 0, start, end: sessionEnd, subtree_start: start, subtree_end: sessionEnd, self, all: { ...self } };
 }
 const sessions = [
-  session("s-root", rootConversation, "", "claude", "1", 0, longTitle, 100000),
-  { ...session("s-child", "conv-child", "s-root", "codex", "1.1", 1, "Review implementation", 60000), message_id: "m-15" },
-  { ...session("s-nested", "conv-nested", "s-child", "claude", "1.1.1", 2, "Review timing", 30000), message_id: "conv-child-reply" },
+  session("s-root", rootConversation, "", "claude", 0, longTitle, 100000),
+  { ...session("s-child", "conv-child", "s-root", "codex", 1, "Review implementation", 60000), message_id: "m-15" },
+  { ...session("s-nested", "conv-nested", "s-child", "claude", 2, "Review timing", 30000), message_id: "conv-child-reply" },
 ];
 function delegation(query) {
   const search = (query.get("search") || "").toLowerCase();
-  const rows = sessions.filter(row => !search || row.label.toLowerCase().includes(search) || row.outline === "1");
+  const rows = sessions.filter(row => !search || row.label.toLowerCase().includes(search) || !row.parent_id);
   return { snapshot: "fixture-v1", rows, ancestors: [], focus: sessions, matched: Object.fromEntries(rows.map(row => [row.id, true])), total: rows.length, session_count: sessions.length, offset: 0, next_cursor: "",
     metrics: metricSpecs, maxima: { self: Object.fromEntries(metricKeys.map(key => [key, key === "tokens" ? 100000 : 300000])), all: Object.fromEntries(metricKeys.map(key => [key, key === "tokens" ? 190000 : 300000])) },
     totals: { ...sessions[0].all, clock: metric(300000), total: metric(900000) }, start, end: sessionEnd, density: Array.from({ length: 120 }, (_, i) => i % 13), warnings: [] };
@@ -946,6 +946,40 @@ export const defaultApi = {
   "GET /api/work/:id/parallel": ({ query }) => parallel(query),
   "GET /api/work/:id/preview": ({ params, query }) => workPreview(params.id, query),
   "GET /api/work/:id/find": { conversations: [] },
+};
+
+// Evidence the explorer and event views cannot settle yet, for layout and URL
+// restoration only (the states themselves are tested in Go and node): an ≈
+// session count, a row whose relatives the family bound left out (loaded by
+// delegation_relatives), and events waiting for a rebuild.
+const eventsPending = { state: "pending", pending_conversations: 4, withheld_conversations: 2 };
+const omittedRelatives = [1, 2].map(n => ({ ...session(`s-relative-${n}`, `conv-relative-${n}`, "s-child", "claude", 2, `Omitted relative ${n} with a long session label`, 10000), order: 2 + n }));
+export const pendingEvidenceApi = {
+  "GET /api/work/:id/delegation": ({ query }) => {
+    const data = delegation(query), loaded = (query.get("relatives") || "").split(",").includes("s-child");
+    // As the server does, a collapse leaves descendants out of rows but not out of the counts.
+    const collapsed = new Set((query.get("collapsed") || "").split(",").filter(Boolean)), all = [...data.rows, ...loaded ? omittedRelatives : []];
+    const parents = new Map(all.map(row => [row.id, row.parent_id])), hidden = row => { for (let id = parents.get(row.id); id; id = parents.get(id)) if (collapsed.has(id)) return true; return false; };
+    const rows = all.filter(row => !hidden(row)).map(row => row.id === "s-child" && !loaded ? { ...row, children_omitted: omittedRelatives.length } : row.id === "s-nested" ? { ...row, events_pending: true } : row);
+    return { ...data, rows, focus: [...data.focus, ...loaded ? omittedRelatives : []], matched: Object.fromEntries(rows.map(row => [row.id, true])), total: rows.length, session_count: sessions.length + omittedRelatives.length, session_count_uncertain: 1, events_pending_sessions: 1 };
+  },
+  "GET /api/work/:id/parallel": ({ query }) => { const data = parallel(query); return { ...data, lanes: data.lanes.map(lane => lane.session === "s-nested" ? { ...lane, events_pending: true } : lane) }; },
+  "GET /api/labels/conversations/:id": async call => ({ ...await defaultApi["GET /api/labels/conversations/:id"](call), events_pending: 1, events_pending_conversations: [call.params.id] }),
+  // Result cards draw the stored image: one whose events are withheld is a
+  // stale image (not current) that says how many conversations wait.
+  "POST /api/fingerprints": async call => {
+    const answer = await defaultApi["POST /api/fingerprints"](call);
+    return { ...answer, items: answer.items.map(item => call.body.events === false ? item : { ...item, state: "pending", stale: true, events_pending: 1 }) };
+  },
+  // Every event conversation is withheld: nothing reads as scanned, yet the
+  // pages say a rebuild is pending rather than that nothing was ever read.
+  "* /api/query/:dataset/:operation": async ({ params, body, query }) => {
+    if (!/^agent_event/.test(params.dataset)) return defaultApi["* /api/query/:dataset/:operation"]({ params, body, query });
+    const answer = schemas[params.dataset] && answerQuery(params.operation, body, [], schemas[params.dataset], { now, id: query.get("id") });
+    return answer && { ...answer, coverage: eventsPending };
+  },
+  "GET /api/findings/fixes": { ...fixesFixtures, events_freshness: eventsPending },
+  "GET /api/findings/safety": { ...safetyFixtures, events_freshness: eventsPending, cases: [...safetyFixtures.cases, { ...safetyFixtures.cases[0], id: "safety_safeguard", rule: "safeguard-test", danger: "medium", title: "A test safeguard was weakened", cart: undefined }] },
 };
 
 // Settings → Logs: a crash in the service's last run and a page error. As

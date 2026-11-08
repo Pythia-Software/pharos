@@ -1,10 +1,13 @@
 import type { AggregationClause, GroupingDefinition, SummaryColumn, WhereTerm } from "@pythia-software/query-table-core";
 import type { QueryRecipe } from "./curiosity-data";
+import type { CardQualifier } from "./card-qualifier";
 
 export type CardExploration = {
   keys: string[]; summaries: SummaryColumn[]; representative?: GroupingDefinition["representative"];
   having?: WhereTerm[]; valueField: string; unit: string; subjects: string; action: string;
   labelFields?: string[]; context?: { field: string; label: string; unit?: string }[];
+  /** A summary column counting rows the card's result does not establish exactly. */
+  qualifier?: CardQualifier;
   coverMetric?: AggregationClause;
   tieBreakField?: string;
 };

@@ -10,9 +10,10 @@ import { Icon } from "./icons";
 import { eventReaderURL } from "./agent-event-examples";
 import { onFixesChange } from "./dataset-refresh";
 import { safetyURL } from "./safety-route";
+import type { AgentEventsCoverage } from "./agent-events-freshness";
 import { type FixesView, fixesURL, fixDetailURL, fixesHiddenTableURL, fixesStateLabels } from "./fixes-route";
 import {
-  fixesBoundsPreview, fixesDashboard, fixesFacts, fixesHiddenNote, fixesHiddenReason, fixesKindsPresent, fixesLeadQuote, fixesPlaces, fixesRange,
+  fixesBoundsPreview, fixesDashboard, fixesEventsFreshness, fixesFacts, fixesHiddenNote, fixesHiddenReason, fixesKindsPresent, fixesLeadQuote, fixesPlaces, fixesRange,
   fixesRankExplanations, fixesRankLabels, type FixCard, type FixCount, type FixesBounds, type FixesRank, type FixesState, type FixGuidanceHit, type FixStatus,
 } from "./fixes-model";
 import { useSelection, type SelectionApi } from "@pythia-software/query-table-react";
@@ -31,7 +32,7 @@ const place = { one: "place", many: "places" };
 type Overview = {
   items: FixCard[]; summary: Record<FixesState, number>; hidden: { stale: number; rare: number; intended?: number; total: number };
   bounds: FixesBounds; default_bounds: FixesBounds; cart: CartGroup[]; targets: Target[];
-  built_at: string | null; end: string | null; in_scope_events: string; excluded_events: number; safeguard_events: number; prompt_limit: number; coverage: string;
+  built_at: string | null; end: string | null; events_freshness?: AgentEventsCoverage; in_scope_events: string; excluded_events: number; safeguard_events: number; prompt_limit: number; coverage: string;
 };
 type Quote = { event_id: string; sentence: string; about?: string; kind: string; kind_label: string; repository: string; model: string; day: string; source: string; workspace_id?: string; conversation_id: string; message_id: string };
 type CommitNote = { repository: string; sha: string; day: string; subject: string; term: string; events_after?: number };
@@ -95,6 +96,7 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
     : selected ? "One recurring problem, the agents' own words about it, and where the fix probably belongs."
       : "Problems agents keep running into across separate work items, which one change to guidance, the environment, a tool or docs could prevent. Tick cards to copy a prompt for your agent; a problem that recurs after its handoff opens again.";
   const hiddenNote = overview ? fixesHiddenNote(shown.hidden, overview.bounds) : "";
+  const freshness = fixesEventsFreshness(overview?.events_freshness);
   const stateTips: Record<FixesState, string> = {
     open: "Problems to act on. Your settings hide the quiet and the rare ones.",
     handed_off: "You handed these to an agent. A problem that recurs after its handoff moves back to Open.",
@@ -114,7 +116,7 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
             {!overview.built_at ? <div className="findings-empty"><strong>No fixes yet.</strong><p>Fixes are grouped from agent events in the background, after the agent events pass has read your conversations. Turn it on in Settings → Background Processing; grouping follows on its own.</p></div> : null}
             <div className="findings-toolbar">
               <div className="findings-tabs" role="tablist" aria-label="Fixes by state">
-                {(Object.keys(fixesStateLabels) as FixesState[]).map(state => <button role="tab" key={state} aria-selected={list === state} title={stateTips[state]} data-view-field="fixes_list" onClick={() => setList(state)}>{fixesStateLabels[state]} <span className="findings-count">{shown.counts[state]}</span></button>)}
+                {(Object.keys(fixesStateLabels) as FixesState[]).map(state => <button role="tab" key={state} aria-selected={list === state} title={stateTips[state]} data-view-field="fixes_list" onClick={() => setList(state)}>{fixesStateLabels[state]} <span className="findings-count">{freshness.mark}{shown.counts[state]}</span></button>)}
               </div>
               <OptimizePlaceFilter places={fixesPlaces(items)} value={where} onChange={setWhere} label="Show fixes for" viewField="fixes_place" />
               <FixesKindFilter items={items} value={kind} onChange={setKind} />
@@ -122,6 +124,7 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
                 {showHidden ? "Showing" : "Show"} {shown.hidden.total.toLocaleString()} hidden</button> : null}
               <OptimizeRank value={rank} onChange={setRank} options={fixesRankLabels} explanations={fixesRankExplanations} viewField="fixes_rank" />
             </div>
+            {freshness.note ? <p className="findings-muted" role="status">{freshness.note}</p> : null}
             <div className="findings-layout with-cart">
               <section className="fixes-cards" aria-label="Recurring problems">
                 <OptimizeSelectionBar selection={selection} copy={copy} items={items} api={api} area="fixes" changed={changed} noun={noun} place={place} promptLimit={overview.prompt_limit} />
@@ -138,7 +141,7 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
             </div>
             <ViewDisclosure viewKey="fixes:coverage" className="safety-coverage" summary={<>What Pharos grouped{overview.built_at ? ` · updated ${date(overview.built_at)}` : ""}</>}>
               <p>{overview.built_at ? `${Number(overview.in_scope_events || 0).toLocaleString()} agent events in scope${overview.end ? `, through ${date(overview.end)}` : ""}. ` : ""}{overview.coverage}</p>
-              <p>{overview.excluded_events ? `${plural(overview.excluded_events, "event")} about your own requests were left out: they are about how a task was asked, not something to fix in the setup. ` : ""}Which events count as the same problem, the kind of fix and where it belongs are rules of thumb over the agents' words; counts are exact. No language model runs to make these cards or their prompts.</p>
+              <p>{overview.excluded_events ? `${plural(overview.excluded_events, "event")} about your own requests were left out: they are about how a task was asked, not something to fix in the setup. ` : ""}Which events count as the same problem, the kind of fix and where it belongs are rules of thumb over the agents' words; counts are exact{freshness.note ? " once events are rebuilt" : ""}. No language model runs to make these cards or their prompts.</p>
               <p>{overview.safeguard_events ? <>{plural(overview.safeguard_events, "event")} where an agent got around a safeguard (skipped a test, worked around a restriction) are notices in <a href={safetyURL()}>Risky actions</a>, one per instance, rather than fixes. A card says when its conversations hold any.</> : <>Agents getting around a safeguard raise notices in <a href={safetyURL()}>Risky actions</a> rather than fixes.</>}</p>
               <a href={fixesURL("settings")}>Fixes settings and refresh</a>
             </ViewDisclosure>

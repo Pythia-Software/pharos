@@ -23,7 +23,7 @@ import (
 type copilotAdapter struct{ baseAdapter }
 
 // copilotExtractor versions the parser; bump it when parsing changes.
-const copilotExtractor = "copilot-v2"
+const copilotExtractor = "copilot-v3-parent-fallback"
 
 func (a *copilotAdapter) partExtractor() string { return copilotExtractor }
 
@@ -327,6 +327,10 @@ type copilotAgent struct {
 	effort       string
 	// parent is the agent whose call started this one: "" for the session.
 	parent string
+	// launched is whether that call was found. Without it the session stands
+	// in as the parent, and the record says it fell back (fallback).
+	launched bool
+	fallback string
 }
 
 func (a *copilotAdapter) record(session copilotSession, events []map[string]any, workspace map[string]string) *WorkspaceRecord {
@@ -435,10 +439,12 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			// The agent whose call started this one, which is the session's
 			// for a subagent the session started.
 			if c := calls[firstString(data["toolCallId"])]; c != nil && c.agent != agentID {
-				agent.parent = c.agent
+				agent.parent, agent.launched = c.agent, true
 				if parent := agents[c.agent]; parent != nil && c.agent != "" {
 					agent.conversation.AgentDepth = parent.conversation.AgentDepth + 1
 				}
+			} else if !agent.launched {
+				agent.fallback = "unmatched-tool-call"
 			}
 			agent.conversation.AgentNickname = firstString(data["agentDisplayName"], data["agentName"])
 			agent.conversation.AgentPath = firstString(data["agentName"], data["agentType"])
@@ -807,6 +813,12 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			conversation.NativeID = sessionID
 		} else {
 			conversation.ParentNativeID = defaultString(agent.parent, sessionID)
+			if !agent.launched {
+				// The call that started the agent is not in this log (another
+				// agent's, or a rotated session's): the session is a default
+				// that names the family, not the parent.
+				conversation.Evidence = append(conversation.Evidence, sessionParentFallback("copilot", a.config.Account, sessionID, defaultString(agent.fallback, "no-start-event")))
+			}
 		}
 		conversation.StartedAt, conversation.EndedAt = conversation.Messages[0].CreatedAt, conversation.Messages[len(conversation.Messages)-1].CreatedAt
 		record.Conversations = append(record.Conversations, conversation)

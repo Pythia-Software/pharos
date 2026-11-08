@@ -207,6 +207,9 @@ test("the reader offers each highlight the conversation has marks for, each show
     [['writing', 'reader_writing', true], ['events', 'reader_events', true], ['labels', 'reader_labels', true]]);
   assert.deepEqual(plain(options[1].legend), [{ name: 'Friction', className: 'event-friction' }]);
   assert.equal(options[1].note, '1 event in 1 of 1 agent messages read');
+  // Events awaiting a rebuild stay inspectable here, but never read as current.
+  const rebuilding = reader.readerHighlightOptions({ ...conversation, agent_events: { messages_read: 1, pending: true } }, [human, agent]);
+  assert.match(rebuilding[1].note, /^1 event in 1 of 1 agent messages read\. Waiting to be rebuilt .* may change$/);
   assert.deepEqual(plain(options[2].legend), [{ name: 'Report', family: 'C.report' }]);
   // Human writing is on by default and the classifiers are opt-in; a link
   // wins over the saved choice, which wins over the default.

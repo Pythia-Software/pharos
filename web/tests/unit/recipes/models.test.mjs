@@ -179,6 +179,23 @@ test("messages and output scatter sums separate human and output events without 
   assert.equal(clause.display.yScale.mode,"log");
 });
 
+test("messages and output points under an inferred or unverified top-level conversation qualify the card", async () => {
+  const { cardQualification } = await import("../../../src/card-qualifier");
+  const { recipe } = card("session-human-output");
+  assert.equal(recipe.dataset, "conversation_activity");
+  assert.ok(recipe.exploration.qualifier, "activity root cohorts carry the root-quality qualifier");
+  const common = { root_provider: "one", root_model_family: "alpha", event_at: now - 1000, human_messages: 1, output_tokens: 10 };
+  const rows = [
+    { ...common, id: "a", root_conversation_id: "observed", conversation_id: "observed", root_quality: "observed" },
+    { ...common, id: "b", root_conversation_id: "legacy", conversation_id: "legacy-child", root_quality: "unverified" },
+    { ...common, id: "c", root_conversation_id: "legacy", conversation_id: "legacy", root_quality: "observed" },
+  ];
+  const groups = destination("session-human-output", rows);
+  assert.deepEqual(groups.map(row => [row.root_conversation_id, row.lineage_qualified]).sort(), [["legacy", 1], ["observed", 0]]);
+  assert.match(cardQualification(groups, recipe.exploration.qualifier, true).note, /^1 group includes conversations placed under a top-level conversation through an inferred or unverified link$/);
+  assert.equal(cardQualification(destination("session-human-output", [rows[0]]), recipe.exploration.qualifier, true), null);
+});
+
 test("three role shares count distinct sessions per model, include parent roots, and retain pure roles", () => {
   const rows=[fact('single-a',{agent_session_id:'single',session_role:'singleton'}),fact('parent',{agent_session_id:'parent',session_role:'parent'}),fact('parent-repeat',{agent_session_id:'parent',session_role:'parent'}),fact('sub-a',{agent_session_id:'sub-a',session_role:'subagent'}),fact('sub-b',{agent_session_id:'sub-b',session_role:'subagent'}),fact('parent-other-model',{agent_session_id:'parent',model_family:'beta',session_role:'parent'}),fact('unknown-role',{agent_session_id:'unknown',session_role:null}),fact('missing-id',{agent_session_id:null,session_role:'subagent'}),fact('inactive',{agent_session_id:'inactive',session_role:'singleton',total_tokens:0})];
   const {recipe,query}=card('model-agent-roles'),clause=cardCoverQuery(query,recipe).query.aggregations[0];

@@ -38,6 +38,10 @@ type historyRecovery struct {
 // derived today are retained as observed values, never certified as raw input.
 var historyWorkspaceTables = []string{
 	"workspaces", "repositories", "hosts", "conversations", "messages", "workspace_sightings", "conversation_sightings", "copy_versions", "copy_evidence", "declared_native_aliases", "conversation_identity_links", "conversation_group_membership",
+	// Typed execution evidence an adapter retained before filtering cannot be
+	// re-derived from the restored rows (docs/execution-evidence-backfill.md);
+	// its state says which provider read recorded it.
+	"execution_claims", "execution_evidence_state",
 	"agent_sessions", "agent_session_usage", "agent_session_token_evidence", "agent_session_messages", "model_requests", "tool_calls", "tool_commands", "tool_urls", "skill_usages", "conversation_instructions", "work_items", "task_attempts", "handoffs", "change_sets", "change_files", "pull_requests", "work_pr_links", "metrics", "metric_ledger",
 }
 
@@ -177,7 +181,9 @@ func exportHistoryRecovery(ctx context.Context, tx *sql.Tx, u historyUnit, oracl
 		"workspace_sightings": "workspace_id=?", "conversation_sightings": "conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?)",
 		"copy_versions": "workspace_id=?", "copy_evidence": "workspace_id=?", "declared_native_aliases": "conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?)",
 		"conversation_identity_links": "left_id IN (SELECT id FROM conversations WHERE workspace_id=?)", "conversation_group_membership": "workspace_id=?",
-		"agent_sessions": "workspace_id=?", "agent_session_usage": "agent_session_id IN (SELECT id FROM agent_sessions WHERE workspace_id=?)", "agent_session_token_evidence": "agent_session_id IN (SELECT id FROM agent_sessions WHERE workspace_id=?)", "agent_session_messages": "agent_session_id IN (SELECT id FROM agent_sessions WHERE workspace_id=?)",
+		"execution_claims":         "conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?) ORDER BY conversation_id,claim_key",
+		"execution_evidence_state": "conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?) ORDER BY conversation_id",
+		"agent_sessions":           "workspace_id=?", "agent_session_usage": "agent_session_id IN (SELECT id FROM agent_sessions WHERE workspace_id=?)", "agent_session_token_evidence": "agent_session_id IN (SELECT id FROM agent_sessions WHERE workspace_id=?)", "agent_session_messages": "agent_session_id IN (SELECT id FROM agent_sessions WHERE workspace_id=?)",
 		"model_requests": "conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?)",
 		"tool_calls":     "workspace_id=?", "tool_commands": "tool_call_id IN (SELECT id FROM tool_calls WHERE workspace_id=?)", "tool_urls": "tool_call_id IN (SELECT id FROM tool_calls WHERE workspace_id=?)", "skill_usages": "conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?)", "conversation_instructions": "conversation_id IN (SELECT id FROM conversations WHERE workspace_id=?)", "work_items": "workspace_id=?", "task_attempts": "work_item_id IN (SELECT id FROM work_items WHERE workspace_id=?)",
 		"handoffs": "workspace_id=?", "change_sets": "workspace_id=?", "change_files": "change_set_id IN (SELECT id FROM change_sets WHERE workspace_id=?)",
@@ -471,7 +477,8 @@ func (c *Catalog) applyHistoryRecovery(ctx context.Context, e historyRecovery) (
 		// Base entities are made by the production writer; their exact source
 		// fields and supplemental observations are retained separately. FTS,
 		// vectors, tool caches and checkpoints are regenerated, never copied.
-		skip := []string{"workspaces", "repositories", "hosts", "conversations", "messages", "conversation_identity_links", "copy_evidence", "conversation_parents"}
+		skip := []string{"workspaces", "repositories", "hosts", "conversations", "messages", "conversation_identity_links", "copy_evidence", "conversation_parents",
+			"execution_claims", "execution_evidence_state"}
 		for _, o := range e.Observations {
 			if slices.Contains(skip, o.Kind) {
 				continue
@@ -485,6 +492,9 @@ func (c *Catalog) applyHistoryRecovery(ctx context.Context, e historyRecovery) (
 			if err = restoreHistoryObservation(ctx, tx, o, true); err != nil {
 				return err
 			}
+		}
+		if err = restoreHistoryExecutionEvidence(ctx, tx, e, id); err != nil {
+			return err
 		}
 		// Work items have now been restored with their original IDs. Preserve
 		// each conversation's actual association, including an absent one.

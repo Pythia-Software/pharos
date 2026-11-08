@@ -349,6 +349,50 @@ CREATE TABLE IF NOT EXISTS conversation_launches (
   program TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS conversation_launches_parent_idx ON conversation_launches(parent_id);
+-- Typed execution evidence (docs/execution-evidence-backfill.md): what a
+-- provider asserted or a named parser rule derived about launches, parents
+-- and copied history, kept apart from the graph that resolution builds from
+-- it. origin is native, derived, legacy or synthesized; object is a lookup
+-- key (see executionNativeKey), so a claim can name a transcript not yet
+-- indexed. source says which writer owns the row: replace one source's
+-- claims, never another's.
+CREATE TABLE IF NOT EXISTS execution_claims (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  claim_key TEXT NOT NULL,
+  source TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  object TEXT NOT NULL DEFAULT '',
+  origin TEXT NOT NULL,
+  authority TEXT NOT NULL DEFAULT '',
+  rule TEXT NOT NULL,
+  namespace TEXT NOT NULL DEFAULT '',
+  id_kind TEXT NOT NULL DEFAULT '',
+  locator TEXT NOT NULL DEFAULT '',
+  detail_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY(conversation_id, claim_key)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS execution_claims_object_idx ON execution_claims(object) WHERE object<>'';
+-- Which extractor wrote a conversation's claims, and from what: 'ingest'
+-- read the provider record, 'retained' re-derived them from stored rows. A
+-- conversation without a row has only legacy evidence: its parent_id and
+-- links are materialized decisions of unknown provenance.
+CREATE TABLE IF NOT EXISTS execution_evidence_state (
+  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+  version TEXT NOT NULL,
+  input TEXT NOT NULL,
+  id_policy TEXT NOT NULL
+);
+INSERT OR IGNORE INTO meta(key,value) VALUES('execution_evidence_generation','0');
+CREATE TRIGGER IF NOT EXISTS execution_claims_insert AFTER INSERT ON execution_claims BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='execution_evidence_generation';
+END;
+CREATE TRIGGER IF NOT EXISTS execution_claims_delete AFTER DELETE ON execution_claims BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='execution_evidence_generation';
+END;
+CREATE TRIGGER IF NOT EXISTS execution_claims_update AFTER UPDATE ON execution_claims BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='execution_evidence_generation';
+END;
 -- Derived after authorship (peer_links.go): independently started work that
 -- worked on the same change, such as a review and the conversation it
 -- reviewed. Both sides are mirror representatives of top-level workspaces;
@@ -414,6 +458,11 @@ CREATE INDEX IF NOT EXISTS agent_sessions_delegation_message_idx ON agent_sessio
 -- The Library's subagent columns count sessions per workspace inside its
 -- maintenance write transactions; without this they scan the whole table.
 CREATE INDEX IF NOT EXISTS agent_sessions_workspace_idx ON agent_sessions(workspace_id, native_id);
+-- Inverse execution lookups (execution_dependencies.go): which launches name
+-- a child transcript, and which sessions a session parented. A publication
+-- guard walks them inside its write transaction.
+CREATE INDEX IF NOT EXISTS agent_sessions_child_idx ON agent_sessions(child_conversation_id);
+CREATE INDEX IF NOT EXISTS agent_sessions_parent_idx ON agent_sessions(parent_id);
 
 -- Hourly usage ledger beneath agent_sessions: each session's reconciled usage
 -- split by the UTC hour and model of the accounting events that reported it.
@@ -539,7 +588,12 @@ CREATE TABLE IF NOT EXISTS model_requests (
   total_tokens INTEGER NOT NULL DEFAULT 0,
   context_growth_tokens INTEGER,
   compacted_before INTEGER NOT NULL DEFAULT 0,
-  tool_call_count INTEGER NOT NULL DEFAULT 0
+  tool_call_count INTEGER NOT NULL DEFAULT 0,
+  -- The messages of the request's first and last usage events (joined
+  -- anonymous events keep the largest output's counts, which may be
+  -- neither's): what occurrence ownership classifies the request by.
+  source_message_id TEXT,
+  final_message_id TEXT
 );
 CREATE INDEX IF NOT EXISTS model_requests_conversation_idx ON model_requests(conversation_id, sequence);
 
@@ -1426,11 +1480,8 @@ CREATE TRIGGER IF NOT EXISTS parallelism_messages_delete AFTER DELETE ON message
 WHEN old.role IN ('user','assistant') OR old.kind IN ('tool_result','delegation_result') BEGIN
  INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
 END;
-CREATE TRIGGER IF NOT EXISTS parallelism_messages_update AFTER UPDATE OF conversation_id,role,kind,created_at ON messages
-WHEN (old.conversation_id,old.role,old.kind,old.created_at) IS NOT (new.conversation_id,new.role,new.kind,new.created_at) BEGIN
- INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
- INSERT INTO parallelism_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
-END;
+-- parallelism_messages_update is installed by ensureParallelismActivity,
+-- which replaces an older definition on existing catalogs.
 -- Messages owned by an embedded sub-agent (not the 'main' session) are not
 -- the conversation's own timing. A cascaded delete finds its session gone.
 CREATE TRIGGER IF NOT EXISTS parallelism_session_messages_insert AFTER INSERT ON agent_session_messages

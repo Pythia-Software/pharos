@@ -51,8 +51,21 @@ func TestSessionShapeRebuildProbe(t *testing.T) {
 		}
 		t.Logf("%s: %d conversations in %s (slowest %s: %s)", name, len(ids), time.Since(started).Round(time.Millisecond), slowestID, slowest.Round(time.Millisecond))
 	}
+	// Parallelism classifies messages with the catalog's occurrence index,
+	// built once per snapshot (parallelismIndexAt), so time it apart from the
+	// per-conversation derivations.
+	at := time.Now()
+	resolution, err := resolveExecutionsFrom(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	occurrences, err := resolution.Occurrences(ctx, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("execution resolution + catalog occurrences: %s", time.Since(at).Round(time.Millisecond))
 	// Warm both alike: Parallelism first reads the same message index pages.
-	measure("parallelism", func(id string) error { _, err := readParallelismActivity(ctx, db, id); return err })
+	measure("parallelism", func(id string) error { _, err := readParallelismActivity(ctx, db, occurrences, id); return err })
 	measure("session shape", func(id string) error { _, _, err := deriveSessionShapeOf(ctx, db, id); return err })
-	measure("parallelism, again", func(id string) error { _, err := readParallelismActivity(ctx, db, id); return err })
+	measure("parallelism, again", func(id string) error { _, err := readParallelismActivity(ctx, db, occurrences, id); return err })
 }

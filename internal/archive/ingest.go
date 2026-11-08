@@ -740,6 +740,16 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 }
 
 func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture, force bool, repositoryOptions ...repositoryOptions) (int, int, error) {
+	conversations, messages, err := ingestRecordContext(ctx, tx, record, allowReclamation, host, source, fromCapture, force, repositoryOptions...)
+	if err != nil {
+		return conversations, messages, err
+	}
+	// What the record changed in execution evidence elsewhere reaches the
+	// labels and events built on it in the same transaction.
+	return conversations, messages, markExecutionDependents(ctx, tx)
+}
+
+func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture, force bool, repositoryOptions ...repositoryOptions) (int, int, error) {
 	// The caller already holds the catalog writer. Check cancellation within
 	// this atomic record, but never pause for queries while holding that lock.
 	if err := ctx.Err(); err != nil {
@@ -936,6 +946,11 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 			if added {
 				merged[claim.id] = true
 			}
+			if added || len(conversation.Evidence) > 0 {
+				if err := writeExecutionEvidence(tx, claim.id, conversation, "ingest", false); err != nil {
+					return 0, 0, err
+				}
+			}
 			if err := linkAliases(tx, claim.id, conversation.Aliases); err != nil {
 				return 0, 0, err
 			}
@@ -1027,6 +1042,11 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 			return 0, 0, err
 		}
 		if err := linkAliases(tx, conversationID, conversation.Aliases); err != nil {
+			return 0, 0, err
+		}
+		// After keepStoredMessages, so a partial read's claims include the
+		// launches and results it kept.
+		if err := writeExecutionEvidence(tx, conversationID, conversation, "ingest", true); err != nil {
 			return 0, 0, err
 		}
 		input := conversationDeliveryDigest(workspaceID, delivered)

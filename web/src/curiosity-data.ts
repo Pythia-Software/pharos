@@ -14,6 +14,7 @@ import { toolFlowRecipes, refineToolFlowRecipe } from "./tool-flow-recipes";
 import { skillsInstructionsRecipes, refineSkillsInstructionsRecipe } from "./skills-instructions-recipes";
 import { researchRecipes, refineResearchRecipe } from "./research-recipes";
 import { tokenUsageRecipes, refineTokenUsageRecipe } from "./token-usage-recipes";
+import { qualifyLineage } from "./card-qualifier";
 import { delegationRecipes, refineDelegationRecipe } from "./delegation-recipes";
 import { steeringRecipes, refineSteeringRecipe } from "./steering-recipes";
 import { apiCostRecipes, refineApiCostRecipe } from "./api-cost-recipes";
@@ -121,7 +122,7 @@ const baseRecipes: QueryRecipe[] = [
   ...weekdayRecipes,
   ...habitsCardRecipes,
 ];
-export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe).map(refineCardDestination);
+export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe).map(qualifyLineage).map(refineCardDestination);
 
 export const supportsToday = (recipe: QueryRecipe) => !recipe.period && !recipe.weekday && !recipe.trend?.completeDays && !recipe.humanStudy && !["tl1_attempts", "findings"].includes(recipe.dataset);
 export function describeRecipeText(text: string, days: WindowChoice | null): string {

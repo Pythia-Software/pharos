@@ -301,6 +301,7 @@ func TestPeopleMessageLabelsChooseHighestConfidenceAndKeepMissingCoverage(t *tes
  ('people-b','people-conv','H-typed',0,x'00000000',1,1,'b','people-test','test','2026-09-01');
  INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('people-conv','test',4,'2026-09-01');
  DELETE FROM message_labels_dirty`)
+	stampExecutionDigests(t, c)
 	srv := testServer(t, config, c)
 	query := func(scope string, extra ...qt.WhereTerm) qt.QueryResultV3 {
 		t.Helper()

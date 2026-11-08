@@ -1,5 +1,5 @@
 {
-  "index_version": "cursor-v1",
+  "index_version": "cursor-v3-bounded-copies",
   "records": [
     {
       "SourceID": "c0000000-0000-4000-8000-000000000001",
@@ -443,6 +443,22 @@
               "SourceOrder": 0,
               "Selected": true
             }
+          ],
+          "Evidence": [
+            {
+              "Kind": "suppressed_record",
+              "Subject": "composer:task-c0000000-0000-4000-8000-000000000005",
+              "Object": "native:cursor|local|c0000000-0000-4000-8000-000000000003",
+              "Origin": "native",
+              "Rule": "cursor-echo-subagent/v1",
+              "IDKind": "native-event",
+              "Locator": "composer:task-c0000000-0000-4000-8000-000000000005",
+              "Detail": {
+                "echo_parent": "c0000000-0000-4000-8000-000000000004",
+                "reason": "copied-spawn-call",
+                "spawn_call": "call-2\nfc_2"
+              }
+            }
           ]
         },
         {
@@ -497,6 +513,29 @@
               "RawText": "{\"id\":\"f2\",\"type\":\"cursor_bubble\"}",
               "SourceOrder": 0,
               "Selected": true
+            }
+          ],
+          "Evidence": [
+            {
+              "Kind": "history_copy",
+              "Subject": "conversation",
+              "Object": "native:cursor|local|c0000000-0000-4000-8000-000000000002",
+              "Origin": "native",
+              "Rule": "cursor-fork-length-at-spawn/v1",
+              "IDKind": "native-event",
+              "Detail": {
+                "boundary_ordinal": 5,
+                "copied": 5,
+                "copied_calls": [
+                  "call-2\nfc_2"
+                ],
+                "first_id": "b1000000-0000-4000-8000-000000000001",
+                "ids_hash": "2112fd0322cacd72",
+                "last_id": "b1000000-0000-4000-8000-000000000001/t:call-2\nfc_2",
+                "mapping": "shared-native-ids",
+                "parent_deleted": false,
+                "parent_read": true
+              }
             }
           ]
         },

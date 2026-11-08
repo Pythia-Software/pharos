@@ -103,3 +103,24 @@ test('run boxes sum canonical own usage before sampling',()=>{
 test('explicit TL1 revisits sum attempts as a separate population',()=>{
  const attempts=[{id:'a',project:'p',task_id:'task',revisit:true,attempt_count:3,started_at:now-1000},{id:'b',project:'p',task_id:'task',revisit:false,attempt_count:9,started_at:now-1000}];assert.equal(table('tl1-revisits',attempts)[0].card_attempt_count,3);
 });
+
+test('lineage cards count unverified, inferred and conflicted runs but never present them as exact',async()=>{
+ const {cardQualification,usesLineage}=await import('../../../src/card-qualifier');
+ const {queryRecipes}=await import('../../../src/curiosity-data');
+ const depth=queryRecipes.find(r=>r.id==='delegation-depth');
+ assert.ok(usesLineage(depth)&&depth.exploration.qualifier,'depth cards carry the shared ancestry qualifier');
+ for(const id of ['task-delegated-runs','delegation-breadth','repository-delegated-share','run-effort-token-ranges'])assert.ok(queryRecipes.find(r=>r.id===id)?.exploration?.qualifier,id);
+ assert.equal(queryRecipes.find(r=>r.id==='repository-token-share')?.exploration?.qualifier,undefined,'cards without lineage fields are unaffected');
+ const quality=(id,extra)=>fact(id,{delegated_run_depth_quality:'observed',root_quality:'observed',run_identity:'exact',...extra});
+ const rows=[quality('parent',{total_tokens:1000}),quality('observed',{delegated_session_id:'a',delegated_run_depth:1}),quality('legacy',{delegated_session_id:'b',delegated_run_depth:2,delegated_run_depth_quality:'unverified'}),quality('conflict',{delegated_session_id:'c',delegated_run_depth:1,run_identity:'uncertain'})];
+ const groups=table('delegation-depth',rows);
+ // Every run still counts; the qualified column says which are not exact.
+ assert.deepEqual(groups.map(r=>[r.delegated_run_depth,r.lineage_qualified]).sort(),[[1,0],[1,1],[2,1]]);
+ // Groups are counted, never summed sessions, so a session in two groups is not counted twice.
+ assert.deepEqual(cardQualification(groups,depth.exploration.qualifier,true),{mark:'≈',note:'2 groups include sessions counted through an inferred or unverified link, or with unresolved identity'});
+ // A usage row without a session still qualifies through its conversation.
+ const sessionless=table('delegation-depth',[quality('parent'),quality('orphan',{agent_session_id:null,conversation_id:'conv-x',delegated_session_id:'x',delegated_run_depth:1,run_identity:'uncertain'})]);
+ assert.equal(sessionless.find(r=>r.delegated_run_depth===1).lineage_qualified,1);
+ assert.match(cardQualification(groups,depth.exploration.qualifier,false).note,/^At least 2 /);
+ assert.equal(cardQualification(table('delegation-depth',[quality('parent'),quality('observed',{delegated_session_id:'a',delegated_run_depth:1})]),depth.exploration.qualifier,true),null,'exact lineage stays unmarked');
+});

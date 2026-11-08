@@ -65,6 +65,11 @@ type ConversationRecord struct {
 	// messages not yet indexed, never replacing what a read of the
 	// conversation itself wrote.
 	Copy bool `json:"Copy,omitempty"`
+	// Evidence holds typed execution claims the adapter retained before it
+	// filtered or reconciled the source (execution_evidence.go): copy
+	// boundaries, suppressed records. Claims derivable from the record's own
+	// messages are derived at ingest instead.
+	Evidence []EvidenceRecord `json:"Evidence,omitempty"`
 	// Observed is the version of the source this copy was read from (see
 	// sourceVersion); not part of the record's digest.
 	Observed int64 `json:"-"`

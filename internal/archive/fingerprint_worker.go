@@ -69,6 +69,9 @@ func (p *fingerprintPass) leave(err error) {
 
 var fingerprintRenderTimeout = 2 * time.Minute
 
+// fingerprintInputReadHook, when set (tests), runs after a unit reads its input.
+var fingerprintInputReadHook func()
+
 func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 	if c.readOnly || c.queryOnly {
 		return false, nil
@@ -146,6 +149,30 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 	} else if needed&1 != 0 {
 		needed = 1
 	}
+	// While the appearance rests on superseded execution evidence
+	// (fingerprintExecutionPending) it waits, backing off: drawn so, it would
+	// read current if the change were undone before any mark. A mark, and the
+	// run that clears it, requeue it (fingerprintSourceTriggers). The input is
+	// classified at one execution source generation: the pending sets move
+	// only with it or with writes that move the revision, so a read that
+	// straddles a change is not drawn. It is conservative: any execution
+	// source write counts, related or not, so the retry takes the same
+	// backoff, bounding repeated reads while an ingest writes.
+	generation, tracked, err := executionSourceGeneration(ctx, c.reader())
+	if err != nil {
+		return false, err
+	}
+	superseded, err := fingerprintExecutionPending(ctx, c.reader(), entity, id, needed == 1)
+	if err != nil {
+		return false, err
+	}
+	if superseded {
+		delay := min(300, 5*(1<<min(attempts, 6)))
+		return true, c.writeTransaction(ctx, "defer superseded fingerprint", func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `UPDATE fingerprint_entities SET attempts=attempts+1,next_attempt=unixepoch()+? WHERE entity=? AND id=? AND revision=?`, delay, entity, id, revision)
+			return err
+		})
+	}
 	renderCtx, cancel := context.WithTimeout(ctx, fingerprintRenderTimeout)
 	defer cancel()
 	input, err := c.messageLabelFingerprintInput(renderCtx, id, entity == "workspace", 0, true)
@@ -154,6 +181,19 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 			_, err := tx.ExecContext(ctx, `DELETE FROM fingerprint_entities WHERE entity=? AND id=? AND revision=?`, entity, id, revision)
 			return err
 		})
+	}
+	if err == nil && fingerprintInputReadHook != nil {
+		fingerprintInputReadHook()
+	}
+	if err == nil && tracked {
+		var after int64
+		if after, _, err = executionSourceGeneration(ctx, c.reader()); err == nil && after != generation {
+			delay := min(300, 5*(1<<min(attempts, 6)))
+			return true, c.writeTransaction(ctx, "retry fingerprint after an execution change", func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `UPDATE fingerprint_entities SET attempts=attempts+1,next_attempt=unixepoch()+? WHERE entity=? AND id=? AND revision=?`, delay, entity, id, revision)
+				return err
+			})
+		}
 	}
 	if err == nil && renderer == nil {
 		renderer, err = newFingerprintRenderer()

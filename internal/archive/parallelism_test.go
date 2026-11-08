@@ -1,7 +1,9 @@
 package archive
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
@@ -110,7 +112,7 @@ func seedParallelism(t *testing.T, c *Catalog) {
 			parts := strings.Fields(text)
 			at, _ := time.Parse(time.RFC3339, parts[2])
 			exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,source_order,created_at) VALUES(?,?,?,?,?,'','h',?,?)`,
-				fmt.Sprint(conversation, "-", i), conversation, fmt.Sprint(i), parts[0], parts[1], i, formatTime(at))
+				fmt.Sprint(conversation, "-", i), conversation, fmt.Sprint(conversation, "-event-", i), parts[0], parts[1], i, formatTime(at))
 		}
 	}
 	// The 08:30 response belongs to an embedded sub-agent, not cv-b1's own turn.
@@ -646,30 +648,428 @@ func TestParallelismIncremental(t *testing.T) {
 		t.Fatal(err)
 	}
 	for id, stored := range activities {
-		fresh, err := readParallelismActivity(t.Context(), c.DB, id)
+		fresh, err := freshParallelismActivity(t, c.DB, id)
 		if err != nil || !reflect.DeepEqual(fresh, stored) {
 			t.Fatalf("%s: stored %v, derived %v (%v)", id, stored, fresh, err)
 		}
 	}
-	// New timing rules derive every conversation again.
-	if _, err := c.DB.Exec("UPDATE meta SET value='0' WHERE key='parallelism_activity_version'"); err != nil {
-		t.Fatal(err)
+	// New timing rules, or new shared resolution rules under the same timing
+	// rules (what a catalog last opened before a resolver change records),
+	// derive every conversation again on open, though no source moved.
+	stored := countRows(t, c, "SELECT COUNT(*) FROM parallelism_activity")
+	for _, previous := range []string{"0", parallelismActivityVersion} {
+		if _, err := c.DB.Exec("UPDATE meta SET value=? WHERE key='parallelism_activity_version'", previous); err != nil {
+			t.Fatal(err)
+		}
+		if count, err := c.refreshParallelism(t.Context(), 100, true); count != 0 || err != nil {
+			t.Fatalf("%s: precondition, nothing is dirty before the open: %d %v", previous, count, err)
+		}
+		if err := c.ensureParallelismActivity(); err != nil {
+			t.Fatal(err)
+		}
+		if countRows(t, c, "SELECT COUNT(*) FROM parallelism_activity") != 0 || countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty") != countRows(t, c, "SELECT COUNT(*) FROM conversations") ||
+			countRows(t, c, "SELECT COUNT(*) FROM meta WHERE key='parallelism_activity_version' AND value=?", parallelismStoredVersion) != 1 {
+			t.Fatalf("%s: version change did not mark every conversation", previous)
+		}
+		// Maintenance leaves the work to a page that is already doing it.
+		c.parallelismMu.Lock()
+		count, err := c.refreshParallelism(t.Context(), 100, false)
+		_, busy := c.refreshParallelismFor(t.Context(), []string{"cv-n1"})
+		c.parallelismMu.Unlock()
+		if count != 0 || err != nil || !errors.Is(busy, errWorkDomainBusy) {
+			t.Fatal(count, err, busy)
+		}
+		if count, err := c.refreshParallelism(t.Context(), 100, true); count != countRows(t, c, "SELECT COUNT(*) FROM conversations") || err != nil {
+			t.Fatalf("%s: refresh after the open: %d, %v", previous, count, err)
+		}
+		if countRows(t, c, "SELECT COUNT(*) FROM parallelism_activity") != stored {
+			t.Fatalf("%s: stored activity not derived again", previous)
+		}
+		activities, err = c.parallelismActivities(t.Context(), cutoff)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for id, got := range activities {
+			fresh, err := freshParallelismActivity(t, c.DB, id)
+			if err != nil || !reflect.DeepEqual(fresh, got) {
+				t.Fatalf("%s %s: stored %v, derived %v (%v)", previous, id, got, fresh, err)
+			}
+		}
 	}
+	// Opening again under the same rules keeps everything stored.
 	if err := c.ensureParallelismActivity(); err != nil {
 		t.Fatal(err)
 	}
-	if countRows(t, c, "SELECT COUNT(*) FROM parallelism_activity") != 0 || countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty") != countRows(t, c, "SELECT COUNT(*) FROM conversations") ||
-		countRows(t, c, "SELECT COUNT(*) FROM meta WHERE key='parallelism_activity_version' AND value=?", parallelismActivityVersion) != 1 {
-		t.Fatal("version change did not mark every conversation")
+	if countRows(t, c, "SELECT COUNT(*) FROM parallelism_activity") != stored || countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty") != 0 {
+		t.Fatal("an open under the same rules marked work")
 	}
-	// Maintenance leaves the work to a page that is already doing it.
-	c.parallelismMu.Lock()
-	count, err := c.refreshParallelism(t.Context(), 100, false)
-	_, busy := c.refreshParallelismFor(t.Context(), []string{"cv-n1"})
-	c.parallelismMu.Unlock()
-	if count != 0 || err != nil || !errors.Is(busy, errWorkDomainBusy) {
-		t.Fatal(count, err, busy)
+}
+
+// A parent gaining the original of a child's message, at a time inside its
+// existing spans, reclassifies the child's copy without moving the parent's
+// own spans: the child's stored activity is derived again. An append no copy
+// shares re-derives only the parent, and a typed copy declaration marks its
+// transcript.
+func TestParallelismCopiesFollowOwnershipElsewhere(t *testing.T) {
+	c := executionFixture(t, executionFixtureConversation{id: "root"}, executionFixtureConversation{id: "child", parent: "root", depth: 1})
+	t0 := c.clock().Add(-3 * time.Hour).UTC().Truncate(time.Minute)
+	at := func(minutes int) string { return t0.Add(time.Duration(minutes) * time.Minute).Format(timeLayout) }
+	fixtureExec(t, c, `UPDATE conversations SET started_at=?,ended_at=?`, at(0), at(60))
+	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected) VALUES
+	 ('r-u','root','r-u','user','message','go','h1',?1,1),('r-a','root','r-a','assistant','message','done','h2',?3,1),
+	 ('c-u0','child','c-u0','user','message','check','h0',?6,1),('c-copy','child','evt-1','assistant','message','early','h3',?2,1),
+	 ('c-u','child','c-u','user','message','next','h4',?4,1),('c-a','child','c-a','assistant','message','own','h5',?5,1)`,
+		at(0), at(5), at(10), at(30), at(40), at(4))
+	refresh := func() int {
+		t.Helper()
+		n, err := c.refreshParallelism(t.Context(), 100, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
 	}
+	stored := func(id string) []byte {
+		t.Helper()
+		var turns, spans []byte
+		if err := c.DB.QueryRow(`SELECT turns,model_spans FROM parallelism_activity WHERE conversation_id=?`, id).Scan(&turns, &spans); err != nil {
+			t.Fatal(err)
+		}
+		return append(turns, spans...)
+	}
+	refresh()
+	rootBefore, childBefore := stored("root"), stored("child")
+	// The parent's original of the child's 00:05 reply arrives, inside the
+	// parent's 00:00–00:10 turn.
+	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected) VALUES('r-orig','root','evt-1','assistant','message','early','h3',?,1)`, at(5))
+	refresh()
+	if !bytes.Equal(stored("root"), rootBefore) {
+		t.Fatal("precondition: the parent's own spans moved")
+	}
+	fresh, err := freshParallelismActivity(t, c.DB, "child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(stored("child"), childBefore) || !bytes.Equal(stored("child"), append(encodeSpans(fresh.Turns), encodeSpans(fresh.ModelSpans)...)) {
+		t.Fatalf("the child's stored activity still counts its copy: stored %x, derived %+v", stored("child"), fresh)
+	}
+	// An append whose event ID no copy shares re-derives the parent alone.
+	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected) VALUES('r-other','root','evt-other','assistant','message','more','h6',?,1)`, at(6))
+	if n := refresh(); n != 1 {
+		t.Fatalf("an unrelated parent append re-derived %d conversations", n)
+	}
+	// A catalog from a released build has the update trigger that watched
+	// only timing fields; opening it installs the current one.
+	fixtureExec(t, c, `DROP TRIGGER parallelism_messages_update;
+	 CREATE TRIGGER parallelism_messages_update AFTER UPDATE OF conversation_id,role,kind,created_at ON messages
+	 WHEN (old.conversation_id,old.role,old.kind,old.created_at) IS NOT (new.conversation_id,new.role,new.kind,new.created_at) BEGIN
+	  INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+	  INSERT INTO parallelism_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+	 END`)
+	if err := c.ensureParallelismActivity(); err != nil {
+		t.Fatal(err)
+	}
+	// Correcting the parent's event ID makes the child's reply its own again:
+	// the parent is marked, and its dependents compare what they own.
+	fixtureExec(t, c, `UPDATE messages SET native_id='evt-1-corrected' WHERE id='r-orig'`)
+	if countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty WHERE conversation_id='root'") != 1 {
+		t.Fatal("an event-ID correction left the parent's activity current")
+	}
+	refresh()
+	if fresh, err = freshParallelismActivity(t, c.DB, "child"); err != nil || !bytes.Equal(stored("child"), childBefore) || !bytes.Equal(stored("child"), append(encodeSpans(fresh.Turns), encodeSpans(fresh.ModelSpans)...)) {
+		t.Fatalf("the child's stored activity missed the correction: stored %x, derived %+v (%v)", stored("child"), fresh, err)
+	}
+	fixtureExec(t, c, `UPDATE messages SET evidence_locator='corrected' WHERE id='r-orig'`)
+	if countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty WHERE conversation_id='root'") != 1 {
+		t.Fatal("a locator correction left the parent's activity current")
+	}
+	refresh()
+	// A typed copy declaration marks the transcript that declares it.
+	fixtureExec(t, c, `INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule) VALUES('child','k','record',?,'conversation','native:codex|local|root','native','codex-session-meta/v1')`, evidenceHistoryCopy)
+	if countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty WHERE conversation_id='child'") != 1 {
+		t.Fatal("a typed copy declaration left the child's activity current")
+	}
+}
+
+// A fork's copies of its parent's launch calls carry their own event IDs, so
+// only the resolution (same call, body and namespace up the ancestry) proves
+// them copied. Parallelism times with that same classification: the copies
+// at 00:10 and 00:20 open no turn, fresh or stored, and Delegation and Quick
+// stats place the fork at its own prompt.
+func TestParallelismExcludesCopiedLaunchCalls(t *testing.T) {
+	c, _ := testCatalog(t)
+	base := c.clock().Add(-2 * time.Hour).UTC().Truncate(time.Minute)
+	at := func(seconds int) string { return base.Add(time.Duration(seconds) * time.Second).Format(time.RFC3339) }
+	launch := func(native, call string, seconds int) MessageRecord {
+		return MessageRecord{NativeID: native, Role: "assistant", Kind: "delegation", CallID: call, Text: `{"tool":"spawn_agent","input":{"message":"Review ` + call + `"}}`, CreatedAt: at(seconds), Selected: true}
+	}
+	ingestRecordTx(t, c, WorkspaceRecord{SourceID: "fork", SourceKind: "codex", Account: "local", Conversations: []ConversationRecord{
+		{NativeID: "root", Provider: "codex", Account: "local", Messages: []MessageRecord{
+			{NativeID: "u0", Role: "user", Kind: "message", Text: "Split", CreatedAt: at(0), Selected: true}, launch("d1", "c1", 10), launch("d2", "c2", 20)}},
+		{NativeID: "fork", Provider: "codex", Account: "local", ParentNativeID: "root", AgentDepth: 1, Messages: []MessageRecord{
+			launch("fork-d1", "c1", 10), launch("fork-d2", "c2", 20),
+			{NativeID: "fork-u", Role: "user", Kind: "message", Text: "Own prompt", CreatedAt: at(60), Selected: true}}},
+		{NativeID: "other", Provider: "codex", Account: "local", Messages: []MessageRecord{
+			{NativeID: "o-u", Role: "user", Kind: "message", Text: "Unrelated", CreatedAt: at(100), Selected: true},
+			{NativeID: "o-a", Role: "assistant", Kind: "message", Text: "Done", CreatedAt: at(110), Selected: true}}},
+	}})
+	var fork, workspace string
+	if err := c.DB.QueryRow(`SELECT id,workspace_id FROM conversations WHERE native_id='fork'`).Scan(&fork, &workspace); err != nil {
+		t.Fatal(err)
+	}
+	r, err := resolveExecutionsFrom(t.Context(), c.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := r.Occurrences(t.Context(), c.DB, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMapsContext(t.Context(), c.DB, `SELECT id FROM messages WHERE conversation_id=? AND kind='delegation'`, fork)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("fixture: %d copied launches (%v)", len(rows), err)
+	}
+	for _, row := range rows {
+		if got := full.Lookup(sourceRef{sourceMessage, firstString(row["id"])}, sourceRef{}); got.Role != occurrenceInherited {
+			t.Fatalf("precondition: the shared classification must mark the copied launch %v inherited: %+v", row["id"], got)
+		}
+	}
+	// A request whose usage events are a copied launch call is copied history
+	// too, a copy of the request its original opened.
+	fixtureExec(t, c, `INSERT INTO model_requests(id,conversation_id,sequence,source_message_id,final_message_id)
+	 SELECT 'req-'||m.native_id,m.conversation_id,0,m.id,m.id FROM messages m WHERE m.native_id IN ('d1','fork-d1')`)
+	if full, err = r.Occurrences(t.Context(), c.DB, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := full.Lookup(sourceRef{sourceRequest, "req-fork-d1"}, sourceRef{}); got.Role != occurrenceInherited || got.Canonical != (sourceRef{sourceRequest, "req-d1"}) {
+		t.Fatalf("the request of a copied launch call: %+v", got)
+	}
+	if got := full.Lookup(sourceRef{sourceRequest, "req-d1"}, sourceRef{}); got.Role != occurrenceOriginal {
+		t.Fatalf("the original launch's request: %+v", got)
+	}
+	fresh, err := freshParallelismActivity(t, c.DB, fork)
+	if err != nil || len(fresh.Turns) != 0 || len(fresh.ModelSpans) != 0 {
+		t.Fatalf("copied launch calls opened the fork's own activity: %+v (%v)", fresh, err)
+	}
+	if _, err := c.refreshParallelism(t.Context(), 100, true); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := c.parallelismActivities(t.Context(), "")
+	if err != nil || !reflect.DeepEqual(stored[fork], fresh) {
+		t.Fatalf("stored %+v, fresh %+v (%v)", stored[fork], fresh, err)
+	}
+	snapshot, err := c.readDelegationSnapshot(t.Context(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range snapshot.Nodes {
+		if n.ConversationID == fork && (n.Start == nil || *n.Start != float64(base.Add(60*time.Second).UnixMilli())) {
+			t.Fatalf("Delegation places the fork at its copies: start=%v", n.Start)
+		}
+	}
+	window := &usageSummaryWindow{From: at(5), Until: at(30)}
+	if err := c.addQuickStatsCounts(t.Context(), map[string]any{"windows": []*usageSummaryWindow{window}}); err != nil {
+		t.Fatal(err)
+	}
+	// The root's two launches are its own calls; the fork's copies are
+	// observations only.
+	if window.DelegatedRuns != 0 || window.ToolCalls != 2 || window.ToolCallObservations != 4 {
+		t.Fatalf("Quick stats count the fork active at its copies: %+v", window.quickStatsCounts)
+	}
+	// Inputs only the resolution reads, which no parallelism trigger watches:
+	// once the execution source generation moves, the stored derivations the
+	// changes can reach are compared, not every stored one, and those whose
+	// classification changed are derived again.
+	type sweep struct {
+		full     bool
+		compared int
+	}
+	var sweeps []sweep
+	saved := parallelismSweepHook
+	t.Cleanup(func() { parallelismSweepHook = saved })
+	parallelismSweepHook = func(full bool, compared int) { sweeps = append(sweeps, sweep{full, compared}) }
+	refresh := func(label string, want int) sweep {
+		t.Helper()
+		sweeps = nil
+		if n, err := c.refreshParallelism(t.Context(), 100, true); err != nil || n != want {
+			t.Fatalf("%s: refresh re-derived %d, want %d (%v)", label, n, want, err)
+		}
+		if len(sweeps) == 0 {
+			return sweep{}
+		}
+		return sweeps[0]
+	}
+	if got := refresh("idle", 0); got != (sweep{}) {
+		t.Fatalf("an idle refresh compared fingerprints: %+v", got)
+	}
+	unrelated := func(label, id string, seconds int) sweep {
+		t.Helper()
+		fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected) SELECT ?,id,?,'assistant','message','more',?,?,1 FROM conversations WHERE native_id='other'`, id, id, id, at(seconds))
+		return refresh(label, 1)
+	}
+	if got := unrelated("an unrelated append", "o-late", 120); got.full || got.compared != 1 {
+		t.Fatalf("an unrelated append compared %+v, want only its own transcript", got)
+	}
+	corrected := `{"tool":"spawn_agent","input":{"message":"Corrected"}}`
+	session := func(native string) string {
+		return `(SELECT id FROM agent_sessions WHERE delegation_message_id=(SELECT id FROM messages WHERE native_id='` + native + `'))`
+	}
+	// Once both launches are the fork's own, they are its 00:10–00:20 turn.
+	for _, step := range []struct {
+		label, write string
+		triggered    bool // a parallelism trigger marks it as well
+		turns        int
+	}{
+		{"the fork's recorded parent is removed", `UPDATE conversations SET parent_id=NULL WHERE native_id='fork'`, true, 1},
+		{"its parent is restored", `UPDATE conversations SET parent_id=(SELECT id FROM conversations WHERE native_id='root') WHERE native_id='fork'`, true, 0},
+		{"the original launch's body is corrected", `UPDATE messages SET text='` + corrected + `',content_hash='corrected' WHERE native_id='d1'`, false, 0},
+		{"the copy's body is corrected to match", `UPDATE messages SET text='` + corrected + `',content_hash='corrected' WHERE native_id='fork-d1'`, false, 0},
+		{"one copy's session reports usage of its own", `UPDATE agent_sessions SET total_tokens=10,input_tokens=10 WHERE id=` + session("fork-d2"), false, 0},
+		{"the other copy's session does too", `UPDATE agent_sessions SET total_tokens=10,input_tokens=10 WHERE id=` + session("fork-d1"), false, 1},
+	} {
+		fixtureExec(t, c, step.write)
+		if n := countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty"); !step.triggered && n != 0 {
+			t.Fatalf("%s: precondition: a parallelism trigger saw it (%d dirty)", step.label, n)
+		}
+		reading, err := c.parallelismActivities(t.Context(), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := refresh(step.label, 1); got.full || got.compared == 0 || got.compared > 2 {
+			t.Fatalf("%s: the sweep compared %+v, want the fork and its parent at most", step.label, got)
+		}
+		if stored, err = c.parallelismActivities(t.Context(), ""); err != nil {
+			t.Fatal(err)
+		}
+		if fresh, err = freshParallelismActivity(t, c.DB, fork); err != nil || !reflect.DeepEqual(stored[fork], fresh) || !reflect.DeepEqual(reading[fork], fresh) || len(fresh.Turns) != step.turns {
+			t.Fatalf("%s: stored %+v, read before refresh %+v, fresh %+v (%v)", step.label, stored[fork], reading[fork], fresh, err)
+		}
+	}
+	// Without the sweep's cursor, or once the snapshot it swept is no longer
+	// cached, nothing proves the changes' reach: every stored one is compared.
+	fixtureExec(t, c, `DELETE FROM meta WHERE key=?`, parallelismExecutionKey)
+	if got := refresh("no cursor", 0); !got.full || got.compared != 3 {
+		t.Fatalf("a missing cursor compared %+v, want all 3", got)
+	}
+	c.execution.mu.Lock()
+	c.execution.current, c.execution.earlier = nil, nil
+	c.execution.mu.Unlock()
+	if got := unrelated("an append after the swept snapshot left the cache", "o-later", 130); !got.full || got.compared != 3 {
+		t.Fatalf("an evicted base compared %+v, want all 3", got)
+	}
+	if got := unrelated("the next append", "o-last", 140); got.full || got.compared != 1 {
+		t.Fatalf("the sweep after a full one compared %+v, want only the append's transcript", got)
+	}
+	// With nothing stored and nothing dirty, a moved generation builds no
+	// occurrence index, on the page read or in maintenance.
+	builds := 0
+	savedBuild := executionOccurrenceBuildHook
+	t.Cleanup(func() { executionOccurrenceBuildHook = savedBuild })
+	executionOccurrenceBuildHook = func() { builds++ }
+	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected) SELECT 'o-none',id,'o-none','assistant','message','more','o-none',?,1 FROM conversations WHERE native_id='other'`, at(150))
+	fixtureExec(t, c, `DELETE FROM parallelism_occurrences; DELETE FROM parallelism_activity; DELETE FROM parallelism_dirty`)
+	if _, err := c.parallelismActivities(t.Context(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := refresh("nothing stored", 0); got != (sweep{}) || builds != 0 {
+		t.Fatalf("with nothing stored: compared %+v, %d occurrence index builds", got, builds)
+	}
+}
+
+// A transcript's recorded ancestry is an input of its descendants' copies:
+// moving the middle of root → middle → leaf under another root, which holds
+// the original of the leaf's reply, re-derives the leaf though the middle's
+// own spans stay equal. A catalog with an older trigger definition gets the
+// current one on open; a no-op update and other transcripts derive nothing.
+func TestParallelismFollowsAncestryChanges(t *testing.T) {
+	c := executionFixture(t, executionFixtureConversation{id: "first"}, executionFixtureConversation{id: "second"},
+		executionFixtureConversation{id: "middle", parent: "first", depth: 1}, executionFixtureConversation{id: "leaf", parent: "middle", depth: 2},
+		executionFixtureConversation{id: "other"})
+	t0 := c.clock().Add(-3 * time.Hour).UTC().Truncate(time.Minute)
+	at := func(minutes int) string { return t0.Add(time.Duration(minutes) * time.Minute).Format(timeLayout) }
+	fixtureExec(t, c, `UPDATE conversations SET started_at=?,ended_at=?`, at(0), at(60))
+	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected) VALUES
+	 ('s-a','second','evt-x','assistant','message','reply','h1',?1,1),
+	 ('m-u','middle','m-u','user','message','go','h2',?1,1),('m-a','middle','m-a','assistant','message','done','h3',?2,1),
+	 ('l-u','leaf','l-u','user','message','check','h4',?3,1),('l-a','leaf','evt-x','assistant','message','reply','h5',?4,1),
+	 ('o-u','other','o-u','user','message','hi','h6',?1,1),('o-a','other','o-a','assistant','message','hello','h7',?2,1)`, at(1), at(2), at(10), at(12))
+	// The trigger an older build installed under the same name.
+	fixtureExec(t, c, `DROP TRIGGER parallelism_conversations_update;
+	 CREATE TRIGGER parallelism_conversations_update AFTER UPDATE OF workspace_id ON conversations BEGIN SELECT 1; END`)
+	if err := c.ensureParallelismActivity(); err != nil {
+		t.Fatal(err)
+	}
+	refresh := func() int {
+		t.Helper()
+		n, err := c.refreshParallelism(t.Context(), 100, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	stored := func(id string) []byte {
+		t.Helper()
+		var turns, spans []byte
+		if err := c.DB.QueryRow(`SELECT turns,model_spans FROM parallelism_activity WHERE conversation_id=?`, id).Scan(&turns, &spans); err != nil {
+			t.Fatal(err)
+		}
+		return append(turns, spans...)
+	}
+	refresh()
+	middleBefore, leafBefore := stored("middle"), stored("leaf")
+	fixtureExec(t, c, `UPDATE conversations SET parent_id=parent_id WHERE id='middle'`)
+	if n := countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty"); n != 0 {
+		t.Fatalf("a no-op parent update marked %d conversations", n)
+	}
+	fixtureExec(t, c, `UPDATE conversations SET parent_id='second' WHERE id='middle'`)
+	if countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty WHERE conversation_id='middle'") != 1 {
+		t.Fatal("a parent change left the transcript's activity current")
+	}
+	if n := refresh(); n != 2 {
+		t.Fatalf("a parent change re-derived %d conversations, want the middle and the leaf", n)
+	}
+	if !bytes.Equal(stored("middle"), middleBefore) {
+		t.Fatal("precondition: the middle's own spans moved")
+	}
+	fresh, err := freshParallelismActivity(t, c.DB, "leaf")
+	if err != nil || bytes.Equal(stored("leaf"), leafBefore) || !bytes.Equal(stored("leaf"), append(encodeSpans(fresh.Turns), encodeSpans(fresh.ModelSpans)...)) {
+		t.Fatalf("the leaf's stored activity still counts the reply its new ancestor holds: stored %x, derived %+v (%v)", stored("leaf"), fresh, err)
+	}
+	// A derivation from before the last sweep was never compared by it: it is
+	// not published, and its conversation stays dirty for a current one.
+	fixtureExec(t, c, `UPDATE conversations SET parent_id='first' WHERE id='middle'`)
+	tx, err := c.reader().BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, cutoff := parallelismPeriod(c.clock())
+	batch, err := deriveParallelismBatch(t.Context(), tx, c.parallelismIndexAt(t.Context(), tx), cutoff, 100, nil, true)
+	_ = tx.Rollback()
+	if err != nil || len(batch) == 0 {
+		t.Fatal(batch, err)
+	}
+	fixtureExec(t, c, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, parallelismExecutionKey, fmt.Sprint(batch[0].generation+1))
+	if err := c.publishParallelism(t.Context(), batch); err != nil {
+		t.Fatal(err)
+	}
+	if countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty WHERE conversation_id='middle'") != 1 {
+		t.Fatal("a derivation older than the sweep was published")
+	}
+}
+
+// freshParallelismActivity times id against a classification resolved from
+// q's rows alone, without the shared cache: what the stored activity must
+// equal.
+func freshParallelismActivity(t *testing.T, q queryer, id string) (parallelismActivity, error) {
+	t.Helper()
+	r, err := resolveExecutionsFrom(t.Context(), q)
+	if err != nil {
+		return parallelismActivity{}, err
+	}
+	occurrences, err := r.Occurrences(t.Context(), q, nil)
+	if err != nil {
+		return parallelismActivity{}, err
+	}
+	return readParallelismActivity(t.Context(), q, occurrences, id)
 }
 
 func TestParallelismEmptyCatalog(t *testing.T) {

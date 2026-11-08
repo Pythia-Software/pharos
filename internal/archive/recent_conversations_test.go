@@ -111,7 +111,7 @@ func TestRecentConversationsCatalog(t *testing.T) {
 		t.Fatalf("stored previews and helper shapes: %+v", got)
 	}
 	execTx(t, catalog.DB, labelsSchemaDDL, agentEventsLedgerDDL,
-		`INSERT INTO message_labels_conversations VALUES('2','s',2,'x'),('3','s',2,'x'),('4','s',0,'x')`,
+		`INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('2','s',2,'x'),('3','s',2,'x'),('4','s',0,'x')`,
 		`INSERT INTO agent_events_conversations(conversation_id,structure,built_at) VALUES('2','s','x'),('3','s','x')`,
 		`INSERT INTO message_labels_dirty VALUES('3','changed')`,
 		`INSERT INTO agent_events_dirty VALUES('3','changed')`)

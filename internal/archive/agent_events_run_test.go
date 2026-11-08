@@ -93,13 +93,6 @@ func agentEventsCatalog(t *testing.T) *Catalog {
 			t.Fatal(err)
 		}
 	}
-	// A fork without a start time copies its parent's history in order: its
-	// copy of the root's first reply is inherited, not its own.
-	if _, err := tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected,source_order)
-		SELECT 'm-f3-a','c-fork3','m-f3-a','assistant','message','I will look into the export button.','h-f3a','2026-09-01T12:01:00.000Z',1,source_order
-		FROM messages WHERE id='m-f3-1'`); err != nil {
-		t.Fatal(err)
-	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +137,11 @@ func agentEventsStored(t *testing.T, catalog *Catalog, message string) map[strin
 func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 	catalog := agentEventsCatalog(t)
 	labels, settings := agentEventsTestSettings(t)
+	// A fork of c-root whose first reply is a copy of the root's: the
+	// provider recorded the root's event ID on it (m-a1's native ID).
+	execTx(t, catalog.DB, `INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES('c-ev-fork','ws-main','claude','local','c-ev-fork','c-root',0);
+ INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected,source_order)
+ VALUES('m-evf-a','c-ev-fork','m-a1','assistant','message','I will look into the export button.','h-evf-a','2026-09-01T12:01:00.000Z',1,1)`)
 	stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -252,29 +250,31 @@ func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 		t.Fatalf("a deleted message kept events %v", got)
 	}
 
-	// A parent's corrected reply no longer matches its fork's copy, which
-	// becomes the fork's own reply: the fork is looked at again, even when a
-	// limited run stops before it (its own dirty mark keeps it pending).
+	// The parent's reply's event ID is corrected, so the fork's message no
+	// longer copies it and becomes the fork's own reply. Only the parent's
+	// rows changed; the fork's execution dependencies did, so it is looked
+	// at again, even when a limited run stops before it (the mark at the
+	// run's start keeps it pending).
 	readMessage := func(id string) bool {
 		var n int
 		_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages WHERE message_id=?`, id).Scan(&n)
 		return n > 0
 	}
-	if readMessage("m-f3-a") {
+	if readMessage("m-evf-a") {
 		t.Fatal("the fork's copy of its parent's reply was read as its own")
 	}
-	execTx(t, catalog.DB, `UPDATE messages SET text='I will look into the export button first.' WHERE id='m-a1'`)
+	execTx(t, catalog.DB, `UPDATE messages SET native_id='m-a1-corrected' WHERE id='m-a1'`)
 	if _, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Limit: 1}); err != nil {
 		t.Fatal(err)
 	}
 	var pendingFork int
-	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_events_dirty WHERE conversation_id='c-fork3'`).Scan(&pendingFork)
-	if !readMessage("m-f3-a") && pendingFork == 0 {
+	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_events_dirty WHERE conversation_id='c-ev-fork'`).Scan(&pendingFork)
+	if !readMessage("m-evf-a") && pendingFork == 0 {
 		t.Fatal("a limited run dropped the fork of a changed conversation")
 	}
 	forked, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
-	if err != nil || !forked.Complete || !readMessage("m-f3-a") {
-		t.Fatalf("after the parent's edit: %+v %v; the fork's reply read: %v", forked, err, readMessage("m-f3-a"))
+	if err != nil || !forked.Complete || !readMessage("m-evf-a") {
+		t.Fatalf("after the parent's correction: %+v %v; the fork's reply read: %v", forked, err, readMessage("m-evf-a"))
 	}
 
 	// Rows another verifier made (an import's have no input hash) are
@@ -1012,8 +1012,15 @@ func TestAgentEventsSessionScoresSelectedConversations(t *testing.T) {
 	}
 
 	// A fork created after discovery and built by a step follows its parent,
-	// as the forks discovery saw do.
+	// as the forks discovery saw do. It joins c-root's execution, which the
+	// context resolved without it, so the step discovers again first.
 	execTx(t, catalog.DB, `INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,started_at) VALUES('c-fork-late','ws-main','codex','local','c-fork-late','c-root',0,'2026-09-02T13:00:00.000Z')`)
+	if step, err := session.Run(t.Context(), []string{"c-fork-late"}, 0); err != nil || !step.Rediscover || session.Discovered() {
+		t.Fatalf("a late fork built with a context that never resolved it: %+v %v", step, err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	agentEventsStepDone(t, catalog, session, "c-fork-late")
 	if token := agentEventsDirtyToken(t, catalog, "c-fork-late"); token != "" {
 		t.Fatalf("the late fork is dirty before its parent changed: %q", token)
@@ -1071,6 +1078,31 @@ func TestAgentEventsSessionScoresSelectedConversations(t *testing.T) {
 
 	if full, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Full: true}); err != nil || full.MessagesScored != 0 || full.MessagesRemoved != 0 {
 		t.Fatalf("session steps differ from a full run: %+v %v", full, err)
+	}
+	// Execution evidence alone changes after discovery, by a writer that
+	// marks nothing: a step discovers again, and discovery propagates the
+	// change before it reads the ledger.
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, catalog.DB, `INSERT INTO origin_observations(conversation_id,evidence_key,priority,evidence,parent_native_id,parent_provider,parent_account)
+		SELECT 'c-daily2','late-link',1,'test',native_id,provider,account FROM conversations WHERE id='c-late'`)
+	if step, err := session.Run(t.Context(), []string{"c-daily2"}, 0); err != nil || !step.Rediscover || session.Discovered() {
+		t.Fatalf("a step after its execution evidence changed: %+v %v", step, err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if behind, err := executionDependentsBehind(t.Context(), catalog.reader()); err != nil || behind != 0 || agentEventsDirtyToken(t, catalog, "c-daily2") == "" {
+		t.Fatalf("discovery did not propagate the change (%d behind, %v)", behind, err)
+	}
+	agentEventsStepDone(t, catalog, session, "c-daily2")
+	// A job a step enrolls itself carries its context's digest, so
+	// publication keeps it rather than requeue it.
+	execTx(t, catalog.DB, `UPDATE messages SET text=text||' (edited)' WHERE id='m-d2'`)
+	agentEventsStepDone(t, catalog, session, "c-daily2")
+	if token := agentEventsDirtyToken(t, catalog, "c-daily2"); token != "" {
+		t.Fatalf("a step's own enrollment was requeued: %q", token)
 	}
 	// A changed verifier needs a new session.
 	manifest := filepath.Join(settings.ModelDir, "manifest.json")

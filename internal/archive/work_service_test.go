@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -880,5 +881,128 @@ func TestConversationWorkFiltersHeldConversationsBeforeItsMessageLimit(t *testin
 	sel, err := writing.Next(t.Context(), pop)
 	if err != nil || sel.Phase != "" || len(sel.Units) == 0 || slices.ContainsFunc(sel.Units, func(member workMember) bool { return member.ID == "c-root" }) {
 		t.Fatalf("a held conversation hid healthy work behind its messages: %+v %v", sel, err)
+	}
+}
+
+// Stored activity whose copied history only the resolution decides goes
+// stale on an execution evidence change no parallelism trigger sees. The
+// selected timing work must not count it current: it re-derives it, whether
+// a batch runs before the admitted sweep or after it, and the direct step
+// does too, while a conversation the change cannot reach stays done.
+func TestParallelismWorkSweepsExecutionEvidenceChanges(t *testing.T) {
+	c, _ := testCatalog(t)
+	base := c.clock().Add(-2 * time.Hour).UTC().Truncate(time.Minute)
+	at := func(seconds int) string { return base.Add(time.Duration(seconds) * time.Second).Format(time.RFC3339) }
+	launch := func(native, call string, seconds int) MessageRecord {
+		return MessageRecord{NativeID: native, Role: "assistant", Kind: "delegation", CallID: call, Text: `{"tool":"spawn_agent","input":{"message":"Review ` + call + `"}}`, CreatedAt: at(seconds), Selected: true}
+	}
+	ingestRecordTx(t, c, WorkspaceRecord{SourceID: "fork", SourceKind: "codex", Account: "local", Conversations: []ConversationRecord{
+		{NativeID: "root", Provider: "codex", Account: "local", Messages: []MessageRecord{
+			{NativeID: "u0", Role: "user", Kind: "message", Text: "Split", CreatedAt: at(0), Selected: true}, launch("d1", "c1", 10), launch("d2", "c2", 20)}},
+		{NativeID: "fork", Provider: "codex", Account: "local", ParentNativeID: "root", AgentDepth: 1, Messages: []MessageRecord{
+			launch("fork-d1", "c1", 10), launch("fork-d2", "c2", 20),
+			{NativeID: "fork-u", Role: "user", Kind: "message", Text: "Own prompt", CreatedAt: at(60), Selected: true}}},
+		{NativeID: "other", Provider: "codex", Account: "local", Messages: []MessageRecord{
+			{NativeID: "o-u", Role: "user", Kind: "message", Text: "Unrelated", CreatedAt: at(100), Selected: true},
+			{NativeID: "o-a", Role: "assistant", Kind: "message", Text: "Done", CreatedAt: at(110), Selected: true}}},
+	}})
+	var fork, other string
+	if err := c.DB.QueryRow(`SELECT (SELECT id FROM conversations WHERE native_id='fork'),(SELECT id FROM conversations WHERE native_id='other')`).Scan(&fork, &other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.refreshParallelism(t.Context(), 100, true); err != nil {
+		t.Fatal(err)
+	}
+	// stale reports whether the fork's stored activity differs from a fresh
+	// derivation, after checking nothing marked it.
+	stale := func(label string) bool {
+		t.Helper()
+		if n := countRows(t, c, "SELECT COUNT(*) FROM parallelism_dirty WHERE conversation_id=?", fork); n != 0 {
+			t.Fatalf("%s: precondition: the fork is marked (%d dirty)", label, n)
+		}
+		var turns, spans []byte
+		if err := c.DB.QueryRow(`SELECT turns,model_spans FROM parallelism_activity WHERE conversation_id=?`, fork).Scan(&turns, &spans); err != nil {
+			t.Fatal(err)
+		}
+		fresh, err := freshParallelismActivity(t, c.DB, fork)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return !bytes.Equal(append(turns, spans...), append(encodeSpans(fresh.Turns), encodeSpans(fresh.ModelSpans)...))
+	}
+	if stale("stored") {
+		t.Fatal("precondition: the stored activity is not current")
+	}
+	task := (&Server{Catalog: c}).parallelismWorkTask()
+	library := &workPopulation{}
+	prepare := func(label string) {
+		t.Helper()
+		sel, err := task.Next(t.Context(), library)
+		if err != nil || sel.Phase != "prepare" {
+			t.Fatalf("%s: a new execution source generation was not prepared: %+v %v", label, sel, err)
+		}
+		if _, err := task.RunBatch(t.Context(), sel, workAllocation{CPUs: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prepare("first")
+	if sel, err := task.Next(t.Context(), library); err != nil || sel.Phase != "" || len(sel.Units) != 0 {
+		t.Fatalf("a swept, current library selected work: %+v %v", sel, err)
+	}
+	// The preparation sweeps under the domain's lock, as refreshes do.
+	evidence := func(tokens int) {
+		t.Helper()
+		fixtureExec(t, c, `UPDATE agent_sessions SET total_tokens=?1,input_tokens=?1 WHERE delegation_message_id IN (SELECT id FROM messages WHERE native_id IN ('fork-d1','fork-d2'))`, tokens)
+	}
+	evidence(10) // the copies' sessions report usage of their own
+	c.parallelismMu.Lock()
+	sel, err := task.Next(t.Context(), library)
+	if err == nil {
+		_, err = task.RunBatch(t.Context(), sel, workAllocation{CPUs: 1})
+	}
+	c.parallelismMu.Unlock()
+	var blocked *workError
+	if !errors.As(err, &blocked) || blocked.blocker.Reason != workBlockedWriter {
+		t.Fatalf("a held lock did not block the preparation: %+v %v", sel, err)
+	}
+	if !stale("usage of their own") {
+		t.Fatal("precondition: the evidence change left the fork's activity current")
+	}
+	if pending, err := c.parallelismPendingFor(t.Context(), []string{fork, other, "gone"}); err != nil || !slices.Equal(pending, workDomainIDs([]string{fork, other})) {
+		t.Fatalf("before the sweep, stored activity read as current: %v %v", pending, err)
+	}
+	// A selected batch admitted before the sweep sweeps first.
+	selected := func(label string) {
+		t.Helper()
+		revisions, err := c.readWorkRevisions(t.Context(), []string{fork, other})
+		if err != nil {
+			t.Fatal(err)
+		}
+		units := []workMember{{fork, revisions[fork]}, {other, revisions[other]}}
+		out, err := task.RunBatch(t.Context(), workSelection{Units: units, CPUs: 1}, workAllocation{CPUs: 1})
+		if err != nil || len(out.Committed) != 2 || stale(label) {
+			t.Fatalf("%s: selected work counted stale activity current: %+v %v", label, out, err)
+		}
+	}
+	selected("selected before the sweep")
+	prepare("after the selected sweep")
+	// After the admitted sweep the queue names the fork itself.
+	evidence(0)
+	if !stale("usage withdrawn") {
+		t.Fatal("precondition: withdrawing the usage left the fork's activity current")
+	}
+	prepare("usage withdrawn")
+	if sel, err := task.Next(t.Context(), library); err != nil || !slices.ContainsFunc(sel.Units, func(m workMember) bool { return m.ID == fork }) || slices.ContainsFunc(sel.Units, func(m workMember) bool { return m.ID == other }) {
+		t.Fatalf("the sweep did not queue the fork alone: %+v %v", sel, err)
+	}
+	selected("selected after the sweep")
+	// The direct step sweeps too.
+	evidence(10)
+	if !stale("usage again") {
+		t.Fatal("precondition: the evidence change left the fork's activity current")
+	}
+	step, err := c.refreshParallelismFor(t.Context(), []string{fork, other})
+	if err != nil || !slices.Equal(step.Done, workDomainIDs([]string{fork, other})) || stale("direct") {
+		t.Fatalf("the direct step left stale activity: %+v %v", step, err)
 	}
 }

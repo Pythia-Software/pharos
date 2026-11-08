@@ -29,14 +29,28 @@ const messageLabelMaskIndexSQL = "CREATE INDEX IF NOT EXISTS message_labels_mask
 
 var messageLabelDataset = messageLabelLiveDataset("")
 
+// messageLabelLiveDataset is messageLabelLiveDatasetFor with the unmarked
+// fallback, for SQL read without the catalog (executionUnmarkedFallbackSQL).
+func messageLabelLiveDataset(conversations string) sqlDataset {
+	return messageLabelLiveDatasetFor(conversations, executionUnmarkedFallbackSQL("message_labels_conversations"))
+}
+
+// Labels of a conversation that is dirty, or whose execution evidence changed
+// without a mark yet (unmarked: executionUnmarkedSQL, "" for none), read as
+// unlabeled: pending, never old attribution presented as current.
+//
 // Restrict both messages and mask decoding when only a pending subset needs
 // live projection. The selector is host-owned SQL, never request text.
-func messageLabelLiveDataset(conversations string) sqlDataset {
+func messageLabelLiveDatasetFor(conversations, unmarked string) sqlDataset {
+	if unmarked != "" {
+		unmarked = "\n AND m.conversation_id NOT IN (" + unmarked + ")"
+	}
 	source := `FROM messages m
  JOIN conversations c ON c.id=m.conversation_id
  LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories repo ON repo.id=w.repository_id
  LEFT JOIN message_authorship ma ON ma.message_id=m.id
  LEFT JOIN message_labels l ON l.message_id=m.id AND EXISTS(SELECT 1 FROM message_labels_conversations complete WHERE complete.conversation_id=m.conversation_id) AND NOT EXISTS(SELECT 1 FROM message_labels_dirty dirty WHERE dirty.conversation_id=m.conversation_id)
+ ` + unmarked + `
  LEFT JOIN message_labels_models lm ON lm.model=l.model
  LEFT JOIN (
  WITH taxonomy AS MATERIALIZED (
@@ -85,12 +99,27 @@ func messageLabelLiveDataset(conversations string) sqlDataset {
 
 // Optional labeling ledgers are created by the background labeler. Querying an
 // unlabelled library must expose its missing coverage without creating tables.
+//
+// Datasets resting on execution evidence read the current unmarked set
+// (executionUnmarkedSQL) when they are routed: it is computed once per source
+// generation and propagation state, and both move the cached-view generation.
 func (c *Catalog) sqlDatasetFor(dataset string) (sqlDataset, bool) {
+	ctx := context.Background()
 	table, ok := sqlDatasetFor(dataset)
+	if (dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "agent_event_rates") && ok {
+		// Leave out events resting on superseded execution evidence once the
+		// events ledger exists (agent_events.go); imports alone have none.
+		// Rates leave out the conversation's messages from both sides.
+		if present, err := agentEventsLedgerPresent(ctx, c.reader()); err == nil && present {
+			alias := map[string]string{"agent_events": "e", "agent_event_messages": "a", "agent_event_rates": "f"}[dataset]
+			return withheldAgentEvents(table, alias, agentEventsWithheldSQLFor(ctx, c.reader())), true
+		}
+		return table, ok
+	}
 	if dataset == "compactions" {
 		// Read stored boundaries once they are complete; until then, and in a
 		// catalog opened without Initialize, derive them from message bodies.
-		if ready, err := compactionBoundariesReady(context.Background(), c.reader()); err == nil && ready {
+		if ready, err := compactionBoundariesReady(ctx, c.reader()); err == nil && ready {
 			return compactionStoredDataset, true
 		}
 		return table, ok
@@ -98,10 +127,12 @@ func (c *Catalog) sqlDatasetFor(dataset string) (sqlDataset, bool) {
 	if dataset != "message_labels" || !ok {
 		return table, ok
 	}
+	unmarked := executionUnmarkedSQL(ctx, c.reader(), "message_labels_conversations")
 	var ready string
 	if err := c.reader().QueryRow("SELECT value FROM meta WHERE key='message_label_facts_ready'").Scan(&ready); err == nil && ready == messageLabelFactsVersion() {
-		return messageLabelStoredDataset(c.hasLabelsLedger()), true
+		return messageLabelStoredDataset(c.hasLabelsLedger(), unmarked), true
 	}
+	table = messageLabelLiveDatasetFor("", unmarked)
 	// Older read-only snapshots need not have the additive index yet. Retain
 	// their valid query path instead of forcing an unavailable index.
 	var indexed int
