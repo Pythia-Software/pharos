@@ -462,15 +462,15 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 	if _, err := c.DB.Exec(`INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule) VALUES('review-c','late','record','launch_outcome','launch:call-late','','derived','test/v1')`); err != nil {
 		t.Fatal(err)
 	}
-	group, err := c.workGroupSnapshot(t.Context(), "impl", nil)
+	resolvedGroup, err := c.workGroupSnapshot(t.Context(), "impl", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ownSnapshot, _ := c.delegationSnapshot(t.Context(), "impl")
 	reviewSnapshot, _ := c.delegationSnapshot(t.Context(), "review")
-	if group.Revision != ownSnapshot.Revision || group.Revision != reviewSnapshot.Revision || group.projection.res == nil ||
-		!slices.Equal(group.members[reviewID], reviewSnapshot.members[reviewID]) || len(group.members[reviewID]) == 0 {
-		t.Fatalf("group revision %v (own %v, review %v), members %v", group.Revision, ownSnapshot.Revision, reviewSnapshot.Revision, group.members[reviewID])
+	if resolvedGroup.Revision != ownSnapshot.Revision || resolvedGroup.Revision != reviewSnapshot.Revision || resolvedGroup.projection.res == nil ||
+		!slices.Equal(resolvedGroup.members[reviewID], reviewSnapshot.members[reviewID]) || len(resolvedGroup.members[reviewID]) == 0 {
+		t.Fatalf("group revision %v (own %v, review %v), members %v", resolvedGroup.Revision, ownSnapshot.Revision, reviewSnapshot.Revision, resolvedGroup.members[reviewID])
 	}
 
 	// Parts resolved at different revisions are never one graph: the group is
@@ -491,19 +491,19 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 		return &changed, nil
 	})
 	stale = 1
-	if group, err = c.workGroupSnapshot(t.Context(), "impl", []string{"retry"}); err != nil || group.ByID[reviewID] == nil || stale != 0 ||
+	if resolvedGroup, err = c.workGroupSnapshot(t.Context(), "impl", []string{"retry"}); err != nil || resolvedGroup.ByID[reviewID] == nil || stale != 0 ||
 		!slices.Equal(asked["review"], []string{"retry"}) {
 		t.Fatal("a retry composes the group", err, stale, asked)
 	}
 	stale = workGroupAttempts
-	if group, err = c.workGroupSnapshot(t.Context(), "impl", []string{"settle"}); err != nil || group.ByID[reviewID] != nil || group.GroupTotals != nil ||
-		!slices.Contains(group.Warnings, "Related work is changing; its agent sessions are left out until it settles.") {
-		t.Fatal("mixed revisions show the work alone", err, group)
+	if resolvedGroup, err = c.workGroupSnapshot(t.Context(), "impl", []string{"settle"}); err != nil || resolvedGroup.ByID[reviewID] != nil || resolvedGroup.GroupTotals != nil ||
+		!slices.Contains(resolvedGroup.Warnings, "Related work is changing; its agent sessions are left out until it settles.") {
+		t.Fatal("mixed revisions show the work alone", err, resolvedGroup)
 	}
-	if shared, _ := read(c, t.Context(), "impl", []string{"settle"}); slices.Contains(shared.Warnings, group.Warnings[len(group.Warnings)-1]) {
+	if shared, _ := read(c, t.Context(), "impl", []string{"settle"}); slices.Contains(shared.Warnings, resolvedGroup.Warnings[len(resolvedGroup.Warnings)-1]) {
 		t.Fatal("the warning changed the cached snapshot")
 	}
-	if group, err = c.workGroupSnapshot(t.Context(), "impl", []string{"settle"}); err != nil || group.ByID[reviewID] == nil {
+	if resolvedGroup, err = c.workGroupSnapshot(t.Context(), "impl", []string{"settle"}); err != nil || resolvedGroup.ByID[reviewID] == nil {
 		t.Fatal("a settled group composes", err)
 	}
 	// Work without certain peers keeps its own snapshot.
