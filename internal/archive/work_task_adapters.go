@@ -47,6 +47,17 @@ func (s *Server) workDefinitions(authority *workAuthority) ([]workDefinition, er
 			step, next, err := c.refreshMessageLabelFactsFor(ctx, ids, factsBudget)
 			factsBudget = next
 			return step, err
+		},
+		// Selections never claim readiness. Once a library page finds the
+		// whole queue empty, the global refresh publishes it under its own
+		// generation guard, or stores a batch that arrived meanwhile.
+		tailPending: c.messageLabelFactsReadyPending,
+		tail: func(ctx context.Context) (int, error) {
+			count, timing, err := c.refreshMessageLabelFactsBudget(ctx, factsBudget)
+			if err == nil && count > 0 {
+				factsBudget = messageLabelFactsNextBudget(factsBudget, timing.hold)
+			}
+			return count, err
 		}}
 	labels := &modelWorkTask{server: s, authority: authority, kind: "analysis.labels", limit: labelsChainLimit,
 		config: func(ctx context.Context, power powerState) modelWorkConfig {

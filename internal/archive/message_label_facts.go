@@ -425,6 +425,15 @@ func (c *Catalog) refreshMessageLabelFacts(ctx context.Context) (int, error) {
 	return count, err
 }
 
+// messageLabelFactsReadyPending is whether the whole queue is empty but the
+// current version's readiness is not yet published.
+func (c *Catalog) messageLabelFactsReadyPending(ctx context.Context) (bool, error) {
+	var pending bool
+	err := c.reader().QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM message_label_facts_dirty)
+ AND COALESCE((SELECT value FROM meta WHERE key='message_label_facts_ready'),'')<>?`, messageLabelFactsVersion()).Scan(&pending)
+	return pending, err
+}
+
 func (c *Catalog) refreshMessageLabelFactsBudget(ctx context.Context, messages int) (int, messageLabelFactsTiming, error) {
 	return c.refreshMessageLabelFactsOf(ctx, messages, nil)
 }

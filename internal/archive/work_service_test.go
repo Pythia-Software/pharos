@@ -75,6 +75,161 @@ func TestWorkServicePipelinesRealSelectedDomains(t *testing.T) {
 	}
 }
 
+// Label query facts become readable from the stored dataset only once the
+// whole queue is empty: a finite drain is no such claim, an ordinary
+// library pass publishes it through the global refresh, and a published
+// version settles without further batches.
+func TestWorkServiceLabelFactsReadinessFollowsTheWholeQueue(t *testing.T) {
+	c := labeledCatalog(t)
+	config := testConfig(t)
+	config.CatalogPath, config.WorkEngine = c.Path, "scheduled"
+	s := testServer(t, config, c)
+	if s.workError != nil {
+		t.Fatal(s.workError)
+	}
+	w := s.work
+	w.once.Do(func() {})
+	ctx := t.Context()
+	if err := c.ensureMessageLabelFacts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ready := func() bool {
+		t.Helper()
+		value, err := c.metaValue(ctx, "message_label_facts_ready")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value == messageLabelFactsVersion()
+	}
+	dirty := func() int {
+		t.Helper()
+		var n int
+		if err := c.DB.QueryRowContext(ctx, `SELECT count(*) FROM message_label_facts_dirty`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	finish := func(request *workOperation) {
+		t.Helper()
+		waitUntil(t, 10*time.Second, "the facts request", func() bool {
+			w.runner.Pump()
+			select {
+			case <-request.done:
+				return true
+			default:
+				return false
+			}
+		})
+		if err := w.wait(ctx, request); err != nil {
+			t.Fatalf("%v\n%+v", err, w.runner.Inspect())
+		}
+	}
+	execTx(t, c.DB, `DELETE FROM meta WHERE key='message_label_facts_ready'`, `DELETE FROM message_label_facts_dirty`,
+		`INSERT INTO message_label_facts_dirty(conversation_id) VALUES('c-root'),('c-other')`)
+
+	// A finite drain of c-root leaves c-other pending and claims nothing.
+	_, request, err := w.submit(ctx, workRequestSpec{Kinds: []string{kindLabelFacts}, Mode: "projection", Priority: workPriorityForeground, Explicit: true,
+		Build: func(ctx context.Context, b *workInventoryBuilder) error {
+			return c.freezeWorkPopulation(ctx, b, time.Time{}, time.Time{}, []string{"c-root"})
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finish(request)
+	if pending, err := c.messageLabelFactsPendingFor(ctx, []string{"c-root", "c-other"}); err != nil || !slices.Equal(pending, []string{"c-other"}) || ready() {
+		t.Fatalf("a finite drain: pending %v %v, ready %v", pending, err, ready())
+	}
+	// Selected completion of the last queued conversation is no claim either.
+	_, request, err = w.submit(ctx, workRequestSpec{Kinds: []string{kindLabelFacts}, Mode: "projection", Priority: workPriorityForeground, Explicit: true,
+		Build: func(ctx context.Context, b *workInventoryBuilder) error {
+			return c.freezeWorkPopulation(ctx, b, time.Time{}, time.Time{}, []string{"c-other"})
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finish(request)
+	if dirty() != 0 || ready() {
+		t.Fatalf("a finite drain of the whole queue: %d dirty, ready %v", dirty(), ready())
+	}
+
+	// The ordinary schedule still has demand for an empty, unready queue,
+	// and its library pass publishes readiness.
+	s.submitPendingFacts(ctx)
+	library := 0
+	for _, q := range w.runner.Inspect().Requests {
+		if q.Key == "maintenance:"+kindLabelFacts+":backfill" {
+			library++
+		}
+	}
+	// The same key coalesces with the scheduled request.
+	if _, request, err = w.submitContinuing(ctx, kindLabelFacts, workPriorityBackfill); err != nil {
+		t.Fatal(err)
+	}
+	finish(request)
+	if library != 1 || !ready() {
+		t.Fatalf("the library pass: %d requests, ready %v", library, ready())
+	}
+	// Published: no further demand, and a library page settles at once.
+	s.submitPendingFacts(ctx)
+	for _, q := range w.runner.Inspect().Requests {
+		if q.Key == "maintenance:"+kindLabelFacts+":backfill" {
+			t.Fatalf("a ready, empty queue was resubmitted: %+v", q)
+		}
+	}
+	defs, err := s.workDefinitions(w.authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var task *conversationWorkTask
+	for _, def := range defs {
+		if def.Kind == kindLabelFacts {
+			task = def.Task.(*conversationWorkTask)
+		}
+	}
+	next := func() workSelection {
+		t.Helper()
+		for range 2 {
+			selection, err := task.Next(ctx, &workPopulation{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if selection.Phase != "prepare" {
+				return selection
+			}
+			if _, err := task.RunBatch(ctx, selection, workAllocation{CPUs: selection.CPUs}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Fatal("preparation did not settle")
+		return workSelection{}
+	}
+	if selection := next(); selection.Phase != "" || len(selection.Units) != 0 {
+		t.Fatalf("a ready queue: %+v", selection)
+	}
+
+	// A conversation queued between Next and the readiness step is stored by
+	// the global refresh, not covered by a premature claim.
+	execTx(t, c.DB, `DELETE FROM meta WHERE key='message_label_facts_ready'`)
+	selection := next()
+	if selection.Phase != "cleanup" {
+		t.Fatalf("an empty, unready queue: %+v", selection)
+	}
+	execTx(t, c.DB, `INSERT INTO message_label_facts_dirty(conversation_id) VALUES('c-other')`)
+	result, err := task.RunBatch(ctx, selection, workAllocation{CPUs: selection.CPUs})
+	if err != nil || result.Work != 1 || !result.Remaining || dirty() != 0 || ready() {
+		t.Fatalf("a racing queue entry: %+v %v, %d dirty, ready %v", result, err, dirty(), ready())
+	}
+	if selection = next(); selection.Phase != "cleanup" {
+		t.Fatalf("after the racing entry: %+v", selection)
+	}
+	if result, err = task.RunBatch(ctx, selection, workAllocation{CPUs: selection.CPUs}); err != nil || result.Remaining || !ready() {
+		t.Fatalf("readiness after the racing entry: %+v %v, ready %v", result, err, ready())
+	}
+	if selection = next(); selection.Phase != "" || len(selection.Units) != 0 {
+		t.Fatalf("a published queue: %+v", selection)
+	}
+}
+
 type heldServiceTask struct {
 	started chan context.Context
 	done    atomic.Bool
