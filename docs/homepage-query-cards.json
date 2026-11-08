@@ -24084,9 +24084,7 @@
           },
           "label": "Friction events per 1,000 messages read",
           "display": {
-            "kind": "bar-vertical",
-            "xLabel": "Week starting",
-            "yLabel": "Events per 1,000 messages",
+            "kind": "bar-horizontal",
             "format": {
               "kind": "number",
               "decimals": 1
@@ -24097,12 +24095,12 @@
       "cover": {
         "mode": "source",
         "metricId": "friction_by_week",
-        "kind": "bar-vertical",
+        "kind": "bar-horizontal",
         "maxGroups": 14,
         "showOther": false,
         "showLegend": false,
         "showHeadline": false,
-        "height": 240
+        "height": 300
       },
       "action": "Explore Agent Events",
       "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
