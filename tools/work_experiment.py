@@ -967,6 +967,16 @@ def gate(baseline, candidate, floor):
             "regression": gated and (value is None or value >= REJECT_RATIO)}
 
 
+def spread_exceeds_gate(entries):
+    """A/A has no preferred arm: large speedups are noise, too."""
+    for entry in entries:
+        if entry["gated"]:
+            low, high = sorted((entry["baseline"], entry["candidate"]))
+            if low == 0 or high / low >= REJECT_RATIO:
+                return True
+    return False
+
+
 def compare(baseline, candidate, mode="ab", retained_sha256=None):
     """Paired verdict. A/B needs the retained baseline and a proven candidate engine."""
     for report in (baseline, candidate):
@@ -1012,8 +1022,9 @@ def compare(baseline, candidate, mode="ab", retained_sha256=None):
                      [*totals.values(), *startup.values(), *(step[key] for step in steps for key in ("wall", "cpu"))])
     result = {"mode": mode, "semantic_parity": parity, "totals": totals, "steps": steps, "startup": startup}
     if mode == "aa":
-        return {**result, "noise": "exceeds-gate" if regression or not parity else "within-gate",
-                "release_gate": "not-applicable"}
+        spread = spread_exceeds_gate([*totals.values(), *startup.values(), *(step[key] for step in steps for key in ("wall", "cpu"))])
+        return {**result, "spread_exceeds_gate": spread,
+                "noise": "exceeds-gate" if spread or not parity else "within-gate", "release_gate": "not-applicable"}
     rejected = not parity or regression
     verdict = "rejected" if rejected else "refused" if blockers else "incomplete"
     return {**result, "rejected": rejected, "release_gate": verdict, "blockers": blockers,
@@ -1764,9 +1775,10 @@ def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
     if mode == "aa":
         # A/A measures the noise every later pair is judged against, so it is
         # refused on the same host-noise rule before any verdict.
-        verdict = "refused" if blockers else "exceeds-gate" if regression or not parity \
+        spread = spread_exceeds_gate([*metrics.values(), *startup.values(), *arrival_readiness.values()])
+        verdict = "refused" if blockers else "exceeds-gate" if spread or not parity \
             else "incomplete" if missing else "within-gate"
-        return {**result, "noise": verdict, "release_gate": "not-applicable"}
+        return {**result, "spread_exceeds_gate": spread, "noise": verdict, "release_gate": "not-applicable"}
     rejected = not parity or regression
     return {**result, "rejected": rejected,
             "release_gate": "rejected" if rejected else "refused" if blockers else "incomplete",

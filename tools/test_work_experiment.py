@@ -783,6 +783,9 @@ class ProbeArmTests(Fixture):
             work.compare_probe(unpinned, self.probe_report(), "ab", old)
         quiet = compare(self.probe_report("baseline", old), "aa")
         self.assertEqual((quiet["release_gate"], quiet["noise"]), ("not-applicable", "within-gate"))
+        faster = compare(self.probe_report("baseline", old, t_settled=70.0), "aa")
+        self.assertEqual(faster["noise"], "exceeds-gate")
+        self.assertTrue(faster["spread_exceeds_gate"])
 
     def test_probe_cpu_allowances_are_reported_and_mismatches_refused(self):
         old = "b" * 64
