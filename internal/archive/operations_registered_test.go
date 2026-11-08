@@ -23,6 +23,7 @@ var registryFiles = map[string]bool{"operations.go": true, "operations_service.g
 // count and fails the test, so it needs its own reason too; new structural
 // work starts an operation instead.
 var unregisteredWorkAllowed = map[string]allowedWork{
+	"resource_owner.go:collectResourceHistory":    {1, "joined read-only task metadata requests, bounded by the collector deadline; no catalog writes"},
 	"service.go:spawn":                            {1, "the primitive under start and daemon"},
 	"service.go:stopFor":                          {1, "the stop's own wait for workers and the catalog close"},
 	"service.go:serveUntilStopped":                {2, "request handling: the HTTP server and the second-signal watchdog"},

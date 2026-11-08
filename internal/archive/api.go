@@ -100,7 +100,11 @@ type Server struct {
 	freshFiles freshnessFileCache
 	// resources samples this process and its library's other Pharos
 	// processes for the status snapshot (resources.go).
-	resources *resourceSampler
+	resources           *resourceSampler
+	work                *workService
+	workError           error
+	resourceBrokerOwned bool
+	historyLeases       resourceLeaseCache // owned only by the history collector
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
@@ -126,11 +130,16 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		catalog.RepositorySeparate = config.RepositorySeparate
 		catalog.setCaptureRoot(config.CaptureRoot)
 	}
+	server.resourceBrokerOwned = os.Getenv("PHAROS_RESOURCE_OWNER") == "broker"
+	server.workError = server.configureWork()
 	return server
 }
 func (s *Server) Config() Config { s.configMu.RLock(); defer s.configMu.RUnlock(); return s.config }
 
 func (s *Server) Serve() error {
+	if s.workError != nil {
+		return s.workError
+	}
 	config := s.Config()
 	use, err := fileLease(libraryUseLock(config), false)
 	if err != nil {
@@ -173,6 +182,9 @@ func (s *Server) Serve() error {
 	// Requests are cancelled when the service stops.
 	server := &http.Server{Handler: s, ReadHeaderTimeout: 5 * time.Second, BaseContext: func(net.Listener) context.Context { return s.life.ctx }}
 	s.startJournal()
+	if s.work != nil {
+		s.work.startLoop()
+	}
 	s.daemon("maintainLibrary", s.Catalog.maintainLibrary)
 	s.daemon("maintainSubstringIndex", s.Catalog.maintainSubstringIndex)
 	s.daemon("maintainToolOutputIndex", s.Catalog.maintainToolOutputIndex)
@@ -544,6 +556,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"ok": true}, 200)
 		}
 	case path == "/api/diagnostics/profile":
+		w.Header().Set("X-Pharos-Profile-Labels", strings.Join(taskProfileLabelKeys, ","))
 		seconds, _ := strconv.Atoi(r.URL.Query().Get("seconds"))
 		if seconds < 1 || seconds > 60 {
 			writeError(w, fmt.Errorf("seconds must be 1 to 60"), 400)
@@ -675,6 +688,18 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, map[string]any{"substring": progress, "tool_output": toolOutput}, err)
 	case path == "/api/library/status":
 		writeJSON(w, s.libraryStatus(), http.StatusOK)
+	case path == "/api/resources/history":
+		serveResourceHistory(w, r, s.resources.history, "")
+	case path == "/api/resources/active":
+		writeJSON(w, map[string]any{"tasks": resourceHistoryTasks(s.ops.running())}, http.StatusOK)
+	case path == "/api/operations/resources":
+		writeJSON(w, s.ops.resourceLedger.export(r.URL.Query().Get("kind"), time.Now()), http.StatusOK)
+	case path == "/api/work":
+		if s.work == nil {
+			writeJSON(w, map[string]any{"engine": "classic", "available": false}, http.StatusOK)
+		} else {
+			writeJSON(w, map[string]any{"engine": "scheduled", "scope": "this process", "state": s.work.inspection()}, http.StatusOK)
+		}
 	case path == "/api/operations":
 		s.serveOperations(w, r)
 	case path == "/api/status":
@@ -782,6 +807,10 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 
 	case strings.HasPrefix(path, "/api/sync/") || path == "/api/library/update":
 		s.postIncrementalSync(w, r, body)
+	case path == "/api/work/settings":
+		s.postWorkSettings(w, r, body)
+	case path == "/api/work":
+		s.postWork(w, r, body)
 	case path == "/api/background/settings":
 		s.postBackgroundSettings(w, r, body)
 	case path == "/api/background/run":
