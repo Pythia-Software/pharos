@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gbdubs/pharos/internal/platform/filelock"
+	"github.com/gbdubs/pharos/internal/platform/fsinfo"
 )
 
 // backupFixture is a library with a catalog, captures, a host file and
@@ -1255,5 +1256,35 @@ func TestBackupFlushFailureKeepsThePreviousBackup(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestEnsureFreeKeepsItsMargin(t *testing.T) {
+	dir := t.TempDir()
+	asked := fakeCapacity(t, map[string]fsinfo.Space{dir: {TotalBytes: 1 << 40, AvailableBytes: uint64(captureFreeMargin) + 4096}}, nil)
+	if err := ensureFree(dir, 4096); err != nil {
+		t.Fatal("exactly the margin left:", err)
+	}
+	var destination backupDestinationError
+	if err := ensureFree(dir, 4097); !errors.As(err, &destination) || !strings.Contains(err.Error(), "only 1.1 GB is free") {
+		t.Fatal(err)
+	}
+	if err := ensureFree(dir, -1); !errors.As(err, &destination) || !errors.Is(err, fsinfo.ErrRange) {
+		t.Fatal(err)
+	}
+	// An unknown capacity refuses the write as a destination problem and
+	// keeps its cause; it is not an empty drive.
+	fakeCapacity(t, nil, map[string]error{dir: syscall.EIO})
+	err := ensureFree(dir, 1)
+	if !errors.As(err, &destination) || !errors.Is(err, syscall.EIO) || strings.Contains(err.Error(), "0 B") {
+		t.Fatal(err)
+	}
+	// Writing nothing needs no reading.
+	*asked = nil
+	if err := ensureFree(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	if total, free := diskUsage(dir); total != 0 || free != 0 {
+		t.Fatalf("the display reading of an unknown capacity: %d, %d", total, free)
 	}
 }

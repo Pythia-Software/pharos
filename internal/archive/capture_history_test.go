@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gbdubs/pharos/internal/platform/filelock"
+	"github.com/gbdubs/pharos/internal/platform/fsinfo"
 )
 
 func historyFixture(t *testing.T) (*Catalog, Config, string) {
@@ -1303,5 +1304,23 @@ func TestHistoryBackfillsCompressedFiles(t *testing.T) {
 		if u.Kind == "orphan-native" || u.Gap != "" && u.Kind == "file" {
 			t.Fatal("planning after the backfill found an unrecognised copy", u)
 		}
+	}
+}
+
+// A plan's free space is informational: it is outside the plan's ID, and an
+// unknown capacity shows as zero rather than failing the plan.
+func TestHistoryPlanFreeBytesIsInformational(t *testing.T) {
+	_, config, _ := historyFixture(t)
+	override(t, &diskCapacity, func(string) (fsinfo.Space, error) {
+		return fsinfo.Space{TotalBytes: 1 << 40, AvailableBytes: 1 << 30}, nil
+	})
+	known, e := planHistory(t.Context(), config, historyScope{})
+	if e != nil || known.FreeBytes != 1<<30 {
+		t.Fatal(known.FreeBytes, e)
+	}
+	override(t, &diskCapacity, func(string) (fsinfo.Space, error) { return fsinfo.Space{}, fsinfo.ErrUnsupported })
+	unknown, e := planHistory(t.Context(), config, historyScope{})
+	if e != nil || unknown.FreeBytes != 0 || unknown.ID != known.ID {
+		t.Fatal(unknown.FreeBytes, unknown.ID, known.ID, e)
 	}
 }
