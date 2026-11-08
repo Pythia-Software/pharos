@@ -2260,6 +2260,13 @@ async function openAskOverlay(t, width) {
 test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip}, async t => {
   const {page,shot,modal,editor}=await openAskOverlay(t,1440);
   assert.ok(await editor.evaluate(element=>element===document.activeElement));
+  const fullscreen = modal.getByRole('button',{name:'Full screen',exact:true});
+  await fullscreen.hover();
+  await page.waitForFunction(() => {
+    const button = document.querySelector('.pharos-fullscreen');
+    const tooltip = getComputedStyle(button, '::after');
+    return tooltip.content === '"Full screen"' && tooltip.visibility === 'visible';
+  }, null, {timeout: 3000});
   await page.locator('body>header .brand').evaluate(element=>element.focus());
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'the overlay must keep focus');
   await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});

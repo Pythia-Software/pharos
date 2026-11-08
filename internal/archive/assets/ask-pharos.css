@@ -23,8 +23,10 @@
 @media(prefers-reduced-motion:reduce){.pharos-glow .pharos-glow-paint *{animation:none!important;transition:none!important}}
 
 
-#pharos-ask:is(.pharos-composer-actions [data-tooltip],.pharos-save-default){position:relative}
-#pharos-ask:is(.pharos-composer-actions [data-tooltip],.pharos-save-default):is(:hover,:focus-visible)::after{content:attr(data-tooltip);position:absolute;right:0;bottom:calc(100% + 9px);z-index:10;width:max-content;max-width:180px;padding:6px 9px;border-radius:6px;background:var(--pharos-ink);color:var(--pharos-panel);font:12px/1.4 -apple-system,sans-serif;box-shadow:0 3px 12px color-mix(in srgb,var(--pharos-ink) 15%,transparent);pointer-events:none}
+#pharos-ask .pharos-composer-actions [data-tooltip]{position:relative}
+@keyframes pharos-tooltip-delay{from{visibility:hidden}to{visibility:visible}}
+#pharos-ask .pharos-composer-actions [data-tooltip]:is(:hover,:focus-visible)::after{content:attr(data-tooltip);position:absolute;right:0;bottom:calc(100% + 9px);z-index:10;width:max-content;max-width:180px;padding:6px 9px;border-radius:6px;background:var(--pharos-ink);color:var(--pharos-panel);font:12px/1.4 -apple-system,sans-serif;box-shadow:0 3px 12px color-mix(in srgb,var(--pharos-ink) 15%,transparent);pointer-events:none;animation:pharos-tooltip-delay 0s 700ms backwards}
+#pharos-ask .pharos-composer-actions [data-tooltip]:focus-visible::after{animation:none}
 #pharos-ask .pharos-product{--pharos-product-padding:26px;box-sizing:border-box;max-width:690px;margin:0 auto;padding:34px var(--pharos-product-padding) 28px;background:var(--pharos-bg);color:var(--pharos-ink);border:1px solid var(--pharos-line);border-radius:14px;font:14px/1.5 "Avenir Next",Avenir,-apple-system,sans-serif}
 #pharos-ask .pharos-product *{box-sizing:border-box}
 #pharos-ask .pharos-product [hidden]{display:none!important}
