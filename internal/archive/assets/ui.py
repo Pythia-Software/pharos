@@ -118,10 +118,9 @@ APP_HTML = r'''<!doctype html>
     .diff-line.add{background:color-mix(in srgb,var(--sea) 10%,transparent);color:var(--sea)}
     .diff-line.remove{background:color-mix(in srgb,var(--bad) 9%,transparent);color:var(--bad)}
     .diff-line.hunk{color:var(--muted)}
-    .subagent-run{margin:5px 0 9px;border:1px solid var(--line);border-left:3px solid var(--sea);border-radius:4px;background:color-mix(in srgb,var(--sea) 4%,var(--panel))}
-    .subagent-run>summary{align-items:flex-start;padding:8px 10px;gap:9px}.subagent-run>summary::before{font-size:var(--fs-xl);line-height:1.1;color:var(--muted)}
-    .subagent-run .subagent-summary-prompt{font-size:var(--fs-sm);font-weight:600}.subagent-run .subagent-summary-outcome{font-size:var(--fs-xs);color:var(--muted)}.subagent-summary-text{flex:1;min-width:0}.subagent-run .subagent-summary-stats{align-self:center}
-    .subagent-body{padding:0 10px 8px 10px;border-top:1px solid var(--line)}.subagent-body .timeline-entry{grid-template-columns:38px minmax(0,1fr)}
+    .subagent-run{margin:0;border:0;border-radius:0;background:none}
+    .subagent-run>summary{font-weight:400}.subagent-run>summary .activity-title{flex:0 0 auto;min-width:35px}.subagent-summary-stats{display:flex;align-items:center;flex-shrink:0}
+    .subagent-body{margin:0 0 4px 20px;padding:2px 8px 4px;border-left:1px solid var(--line)}.subagent-body .timeline-entry{grid-template-columns:38px minmax(0,1fr)}.subagent-assignment{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-xs);line-height:1.45}.subagent-details>summary{color:var(--muted)}
     .conversation-map{position:fixed;z-index:5;right:10px;top:var(--conversation-rail-top,72px);bottom:34px;display:none;width:30px;padding:3px;background:var(--panel);border:1px solid var(--line)}
     .conversation-map.visible{display:block}
     .token-column{display:flex;flex-direction:column;align-items:stretch;flex:0 0 var(--token-column-width,60px);width:var(--token-column-width,60px);min-width:0;gap:3px}.conversation-panel:not(.has-token-usage) .token-column{display:none}
@@ -144,7 +143,7 @@ APP_HTML = r'''<!doctype html>
   </style>
   <style>
     /* Compact operation groups; chip previews and full action details are independent. */
-    .action-row .tool-event>summary::before{display:none}
+    .action-row .tool-event>summary::before,.subagent-run>summary::before{display:none}
     .kind-icon{display:inline-block;flex:0 0 15px;width:15px;color:var(--muted);font:var(--fs-base)/1.3 ui-monospace,SFMono-Regular,monospace;text-align:center}
     .action-row .activity-title{flex:0 0 auto;min-width:42px}
     .action-chips{display:flex;flex:1;min-width:0;flex-wrap:wrap;align-items:center;gap:5px}
@@ -168,7 +167,7 @@ APP_HTML = r'''<!doctype html>
     .message-kind{position:absolute;left:-22px;top:0;height:1.45em;display:grid;place-items:center;line-height:1;color:var(--sea)}.speaker-row.human{padding-left:29px}.human .message-kind{color:var(--gold)}
     .message-raw-button{position:absolute;top:0;right:-5px;padding:1px 4px;font:var(--fs-xs) ui-monospace,SFMono-Regular,monospace;color:var(--muted)}
     .message-card>.raw-event>summary{display:none}.message-card>.raw-event[hidden]{display:none}
-    @media(max-width:760px){.action-row .tool-event>summary{gap:5px;flex-wrap:wrap}.action-chips{flex-basis:65%}.line-details-hint{font-size:var(--fs-3xs)}.file-chip{font-size:var(--fs-xs)}.speaker-row.agent{padding-right:8px}.message-prose{font-size:var(--fs-base)}.chip-preview{margin-left:0}}
+    @media(max-width:760px){.action-row .tool-event>summary{gap:5px;flex-wrap:wrap}.action-chips{flex-basis:65%}.line-details-hint{font-size:var(--fs-3xs)}.file-chip{font-size:var(--fs-xs)}.speaker-row.agent{padding-right:8px}.message-prose{font-size:var(--fs-base)}.chip-preview{margin-left:0}.subagent-body{margin-left:6px;padding-left:5px}.subagent-body .timeline-entry{grid-template-columns:24px minmax(0,1fr);gap:4px}.subagent-body .speaker-row.agent{padding-left:19px}}
   </style>
   <style>
     .peer-strip{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 2px;min-width:0}.peer-strip-label{color:var(--muted);font-size:var(--fs-sm)}.peer-chip{color:inherit;text-decoration:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.peer-chip:hover{border-color:var(--accent)}.peer-chip.uncertain{border-style:dashed;color:var(--muted)}.peer-reasons{flex-basis:100%;font-size:var(--fs-sm)}.peer-reasons summary{color:var(--accent);cursor:pointer;width:max-content}.peer-reasons li.uncertain{color:var(--muted)}.peer-reader-note{margin:0 0 6px;color:var(--muted);font-size:var(--fs-sm)}.handoff-markers{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;min-width:0}.tool-event summary .handoff-markers{display:inline-flex;margin:0 0 0 8px}.handoff-marker{border:1px solid var(--line);border-radius:20px;padding:1px 8px;font-size:var(--fs-xs);color:var(--accent);text-decoration:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.handoff-marker.uncertain{border-style:dashed;color:var(--muted)}
@@ -194,8 +193,6 @@ APP_HTML = r'''<!doctype html>
     .speaker-row.human{padding-left:24px}.message-kind{left:-19px;top:0}
     .message-prose,.todo-item{font-size:var(--fs-sm);line-height:1.45}
     .action-row .tool-event>summary,.subagent-run>summary{min-height:23px;padding:1px 0;gap:6px;font-size:var(--fs-xs)}
-    .subagent-run{margin:5px 0 9px;border:1px solid var(--line);border-left:3px solid var(--sea);border-radius:4px;background:color-mix(in srgb,var(--sea) 4%,var(--panel))}
-    .subagent-run>summary{padding:8px 10px;gap:9px;align-items:flex-start}.subagent-run>summary::before{font-size:var(--fs-xl);line-height:1.1}
     .action-row .activity-title{min-width:35px;font-size:var(--fs-xs)}.kind-icon{font-size:var(--fs-sm);flex-basis:14px;width:14px}
     .action-chips{gap:3px}.file-chip{font-size:var(--fs-2xs);line-height:1.45;padding:0 3px;gap:2px}.file-chip .file-copy{font-size:var(--fs-2xs)}
     .query-chip{font-size:var(--fs-2xs);padding:0 4px}.command-target{font-size:var(--fs-xs)}
@@ -355,7 +352,7 @@ APP_HTML = r'''<!doctype html>
     .turn>summary::before,.tool-event>summary::before,.subagent-run>summary::before,.xml-node>summary::before{content:'';display:inline-block;flex:0 0 12px;width:12px;height:12px;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m9.5 5.5 6.5 6.5-6.5 6.5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m9.5 5.5 6.5 6.5-6.5 6.5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat}
     .turn[open]>summary::before,.tool-event[open]>summary::before,.subagent-run[open]>summary::before,.xml-node[open]>summary::before{content:'';transform:rotate(90deg)}
     .xml-node:not([open])>summary::before{content:''}
-    .action-row .tool-event>summary::before{display:none}
+    .action-row .tool-event>summary::before,.subagent-run>summary::before{display:none}
     .xml-node>summary::before{position:absolute;left:-13px;top:2px;line-height:normal}
     .health{grid-template-columns:repeat(4,minmax(0,1fr))}
     @media(max-width:1050px){.health{grid-template-columns:repeat(3,minmax(0,1fr))}}
@@ -1080,13 +1077,14 @@ function renderSequence(messages,context){
     const message=visible[index];let entry;
     if(message.kind==='delegation'){
       const input=toolPayload(message).input,children=context.childrenByParent.get(message.call_id)||context.childrenByParent.get(message.native_id)||[],results=context.delegationResultsByCall.get(message.call_id)||[];
-      const run=node('details','subagent-run conversation-event'),summary=node('summary',''),body=node('div','subagent-body'),failed=results.some(item=>item.kind==='error'||toolPayload(item).raw?.is_error),replies=children.filter(item=>item.kind==='message'),activities=children.filter(item=>item.kind!=='message'),nested=children.filter(item=>item.kind==='delegation'),agentName=input.subagent_type||input.agent_type||input.name||input.task_name||'Sub-agent',prompt=input.description||input.prompt||input.task||toolPreview(message),result=results.at(-1),resultContent=toolPayload(result||{}).raw?.content,outcome=replies.length?displayText(replies.at(-1)):typeof resultContent==='string'?resultContent:displayText(result)||'';
-      const summaryText=node('div','subagent-summary-text'),stats=node('div','subagent-summary-stats');summaryText.append(node('span','turn-number',agentName),node('div','subagent-summary-prompt',shortText(prompt,160)),node('div','subagent-summary-outcome',shortText(outcome||(failed?'Failed':results.length?'Returned':children.length?`${children.length} events`:'No result'),120)));
-      for(const [count,singular,plural] of [[replies.length,'reply','replies'],[activities.length,'activity','activities'],[nested.length,'sub-agent','sub-agents']])if(count)stats.append(node('span','mini-count',`${count} ${count===1?singular:plural}`));
-      summary.append(summaryText,stats);
+      const run=node('details','subagent-run conversation-event'),summary=node('summary',''),body=node('div','subagent-body'),failed=toolFailed(message,results),agentName=input.subagent_type||input.agent_type||input.name||input.task_name||'Sub-agent',prompt=input.description||input.prompt||input.task||toolPreview(message),assignment=input.prompt||input.task||input.description||prompt,stats=node('span','subagent-summary-stats');
+      const target=node('span','activity-target',shortText([agentName,prompt].filter(Boolean).join(' · '),240));target.title=[agentName,prompt].filter(Boolean).join(' · ');
+      summary.append(kindIcon('agent'),node('span','activity-title','Delegate'),target,stats);
+      if(failed)summary.append(node('span','activity-status badtext','Failed'));
+      summary.append(node('span','line-details-hint','Details'));
       attachTokenBadge(summary,[message,...results],true);
       run.owned=ownedMessages([message],context);run.spendOwned=run.owned.filter(item=>item!==message&&!results.includes(item));
-      run.materialize=()=>{if(run.classList.contains('materialized'))return;run.classList.add('materialized');run.removeAttribute('data-pharos-find-pending');body.append(toolEvent(message,results,context.turnStart).querySelector('.event-body'),renderSequence(children,{...context,ancestors:new Set([...(context.ancestors||[]),message.native_id])}));transcriptMaterialized(body)};
+      run.materialize=()=>{if(run.classList.contains('materialized'))return;run.classList.add('materialized');run.removeAttribute('data-pharos-find-pending');if(assignment){const section=node('div','tool-detail-section');section.append(node('span','tool-detail-label','Assignment'),node('div','subagent-assignment',String(assignment)));body.append(section)}body.append(renderSequence(children,{...context,ancestors:new Set([...(context.ancestors||[]),message.native_id])}));const details=toolEvent(message,results,context.turnStart);details.classList.add('subagent-details');details.querySelector(':scope > summary').replaceChildren(node('span','','Recorded output and metadata'));body.append(details);transcriptMaterialized(body)};
       findLazily(run,()=>run.owned,()=>run.materialize());summary.addEventListener('click',()=>{if(!run.open)run.materialize()});run.addEventListener('toggle',()=>{if(run.open)run.materialize()});
       run.append(summary,body);entry=timelineEntry(run,message,context.turnStart,'subagent-entry');
     }else if(message.kind==='message'){entry=narrativeEvent(message,context.turnStart,context.workspace)}
@@ -1863,7 +1861,7 @@ function bindReaderView(panel){
  const key=element=>{if(element.dataset.viewKey)return '';if(element.dataset.pharosDisclosure)return element.dataset.pharosDisclosure;const message=element.dataset.messageId||element.sourceMessages?.[0]?.id||element.closest('[data-message-id]')?.dataset.messageId,call=element.dataset.callId||element.sourceMessages?.[0]?.call_id;return call?'call:'+call+':'+(element.classList[0]||'content')+(element.dataset.jsonPath?':'+element.dataset.jsonPath:''):message?'message:'+message+':'+(element.classList[0]||'content')+(element.dataset.jsonPath?':'+element.dataset.jsonPath:''):element.id?'section:'+element.id:''};
  // Keep each native default before applying URL overrides. Restoring an
  // absent/empty override must agree with reopening that URL in a fresh reader.
- const known=new WeakMap();const restore=(force=false,roots=[panel])=>{const opened=new Set(api.read('reader_expanded',[])),closed=new Set(api.read('reader_collapsed',[]));for(const detail of roots.flatMap(root=>[...root.matches('details')?[root]:[],...root.querySelectorAll('details')])){const id=key(detail);if(!id||!force&&known.has(detail))continue;const state=known.get(detail)||{initial:detail.open,current:detail.open};known.set(detail,state);detail.dataset.pharosDisclosure=id;const open=readerDisclosureOpen(id,opened,closed,state.initial);if(open)detail.materialize?.();detail.open=open;state.current=open}};
+ const known=new WeakMap();const restore=(force=false,roots=[panel])=>{const opened=new Set(api.read('reader_expanded',[])),closed=new Set(api.read('reader_collapsed',[])),queue=roots.flatMap(root=>[...root.matches('details')?[root]:[],...root.querySelectorAll('details')]),visited=new Set();for(let i=0;i<queue.length;i++){const detail=queue[i];if(visited.has(detail))continue;visited.add(detail);const id=key(detail);if(!id||!force&&known.has(detail))continue;const state=known.get(detail)||{initial:detail.open,current:detail.open};known.set(detail,state);detail.dataset.pharosDisclosure=id;const open=readerDisclosureOpen(id,opened,closed,state.initial);if(open){detail.materialize?.();queue.push(...detail.querySelectorAll('details'))}detail.open=open;state.current=open}};
  restore();
  const toggled=event=>{const detail=event.target;if(!(detail instanceof HTMLDetailsElement))return;const id=key(detail),state=known.get(detail);if(!id||state?.current===detail.open)return;if(state)state.current=detail.open;const next=readerDisclosureToggle(id,detail.open,api.read('reader_expanded',[]),api.read('reader_collapsed',[]));api.writeAll({reader_expanded:next.expanded,reader_collapsed:next.collapsed})};
  panel.addEventListener('toggle',toggled,true);

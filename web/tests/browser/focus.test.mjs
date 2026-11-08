@@ -1417,7 +1417,7 @@ for (const trigger of ["context jump", "scroll"]) test(`a ${trigger} reaches a p
   assert.equal(calls.filter(call => call.path.endsWith("/delegation")).length, 1, "the deep link loads delegation analysis once for the selected conversation");
   if (trigger === "scroll") {
     await page.evaluate(() => { const scroller = document.querySelector(".workspace-reader-content"); scroller.scrollTop = scroller.scrollHeight; });
-    await page.getByRole("button", { name: /codex.*Open child/ }).waitFor();
+    await page.getByRole("button", { name: /Open conversation/ }).waitFor();
   }
   await page.locator(".token-marker").last().evaluate(marker => marker.click());
   await page.waitForFunction(() => {
@@ -1425,7 +1425,7 @@ for (const trigger of ["context jump", "scroll"]) test(`a ${trigger} reaches a p
     const bounds = target?.getBoundingClientRect();
     return bounds?.height > 0 && bounds.bottom > 0 && bounds.top < innerHeight;
   });
-  const child = page.getByRole("button", { name: /codex.*Open child/ });
+  const child = page.getByRole("button", { name: /Open conversation/ });
   await child.click();
   await settled();
   assert.ok(await page.getByRole("article", { name: "User message", exact: true }).getByText("Review the change (conv-child)", { exact: true }).isVisible());
