@@ -275,6 +275,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureAgentEventsSchema(); err != nil {
 		return fmt.Errorf("initialize agent events: %w", err)
 	}
+	if err := c.ensureAgentEventFactsSchema(); err != nil {
+		return fmt.Errorf("initialize agent event facts: %w", err)
+	}
 	if err := c.ensureFindingsSchema(); err != nil {
 		return fmt.Errorf("initialize findings tables: %w", err)
 	}

@@ -210,8 +210,18 @@ func TestCompactLibraryLeavesTheCatalogWhenItCannotFinish(t *testing.T) {
 	t.Run("no room for the copy", func(t *testing.T) {
 		config := compactFixture(t)
 		free := compactPragma(t, config.CatalogPath, "freelist_count")
-		override(t, &compactDiskFree, func(string) uint64 { return 0 })
+		override(t, &compactDiskFree, func(string) (uint64, error) { return 0, nil })
 		if _, err := CompactLibrary(t.Context(), config, nil); err == nil || !strings.Contains(err.Error(), "free on the library's drive") {
+			t.Fatal(err)
+		}
+		unchanged(t, config, free)
+	})
+	t.Run("free space that cannot be read", func(t *testing.T) {
+		config := compactFixture(t)
+		free := compactPragma(t, config.CatalogPath, "freelist_count")
+		// A failed reading of plenty is still a failure.
+		override(t, &compactDiskFree, func(string) (uint64, error) { return 1 << 62, syscall.EIO })
+		if _, err := CompactLibrary(t.Context(), config, nil); !errors.Is(err, syscall.EIO) || !strings.Contains(err.Error(), "cannot tell how much space is free") {
 			t.Fatal(err)
 		}
 		unchanged(t, config, free)

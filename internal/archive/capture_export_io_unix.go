@@ -83,16 +83,14 @@ func (d *exportDir) self() (exportStat, error) {
 	return exportStatOf(&st), nil
 }
 
-// entries lists d's names through a handle of its own, so listing never
-// moves another reader's position.
-func (d *exportDir) entries() ([]string, error) {
+// list opens a listing of d's names through a handle of its own, so
+// listing never moves another reader's position.
+func (d *exportDir) list() (*exportLister, error) {
 	fd, err := unix.Openat(d.fd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: d.path, Err: err}
 	}
-	f := os.NewFile(uintptr(fd), d.path)
-	defer f.Close()
-	return f.Readdirnames(-1)
+	return &exportLister{f: os.NewFile(uintptr(fd), d.path)}, nil
 }
 
 // openRead opens name below d to read it: without following a link, and

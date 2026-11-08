@@ -13,7 +13,6 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -102,7 +101,7 @@ func compressCaptures(ctx context.Context, config Config, catalog *Catalog, done
 	}
 	if d, err := readLibraryDescriptor(config); err == nil && d.RetainPendingEvidence {
 		return nil
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	} else if err != nil && !libraryDescriptorMissing(err) {
 		return err
 	}
 	host := currentHost()
@@ -897,25 +896,42 @@ func (o *compressionOutcomes) save(dir string, manifest *captureManifest) error 
 }
 
 // spaceCheckedWriter keeps the capture free-space margin while an encoded
-// file grows, checking every few megabytes rather than on every block.
+// file grows. It checks when pending reaches 64 MiB or a write is the first
+// since the last check, which as written includes every write after a check.
+// A failed check refuses that write and every later one.
 type spaceCheckedWriter struct {
 	w       io.Writer
 	dir     string
 	pending int64
+	err     error
 }
 
 func (s *spaceCheckedWriter) Write(b []byte) (int, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
 	if s.pending += int64(len(b)); s.pending >= 64<<20 || s.pending == int64(len(b)) {
-		var stat syscall.Statfs_t
-		if err := syscall.Statfs(s.dir, &stat); err != nil {
-			return 0, err
-		}
-		if int64(stat.Bavail)*int64(stat.Bsize)-s.pending < captureFreeMargin {
-			return 0, fmt.Errorf("capture drive: needs %d bytes free to compress", s.pending+captureFreeMargin)
+		if s.err = s.checkSpace(); s.err != nil {
+			return 0, s.err
 		}
 		s.pending = 0
 	}
 	return s.w.Write(b)
+}
+
+func (s *spaceCheckedWriter) checkSpace() error {
+	space, err := diskCapacity(s.dir)
+	if err != nil {
+		return fmt.Errorf("capture drive: cannot tell how much space is free to compress: %w", err)
+	}
+	need, err := spaceNeeded(s.pending, captureFreeMargin)
+	if err != nil {
+		return fmt.Errorf("capture drive: %w", err)
+	}
+	if space.AvailableBytes < need {
+		return fmt.Errorf("capture drive: needs %d bytes free to compress", need)
+	}
+	return nil
 }
 
 // compressCapturesLoop is the service daemon that runs compression passes.

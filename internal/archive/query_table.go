@@ -466,7 +466,7 @@ func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
 	if dataset == "compactions" {
 		return c.currentCompactionBoundaries(ctx)
 	}
-	if dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "message_labels" {
+	if dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "agent_event_rates" || dataset == "message_labels" {
 		return nil // imported (agent_events.go); nothing to bring up to date
 	}
 	if dataset == "model_requests" {

@@ -70,7 +70,7 @@
       return merged.slice(Math.max(0, from));
     };
     return {...next, since: previous.since ?? null,
-      samples: columns(previous.samples, next.samples, ['t', 'cpu', 'memory', 'disk', 'cpu_partial', 'disk_partial', 'processes']),
+      samples: columns(previous.samples, next.samples, ['t', 'cpu', 'memory', 'disk', 'cpu_partial', 'disk_partial', 'memory_partial', 'processes']),
       gpu: next.gpu || previous.gpu ? columns(previous.gpu, next.gpu, ['t', 'value', 'partial']) : null,
       segments: events(previous.segments, next.segments, event => `${event.t}:${event.reason}`, true),
       coverage: events(previous.coverage, next.coverage, event => String(event.t), true),

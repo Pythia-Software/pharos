@@ -6,7 +6,7 @@ export type FreshnessRow = {
   behind: {state: string; count?: number | null; unit?: string | null};
   reason?: {code: string; text: string; detail?: string} | null;
   catching_up?: string | null; catching_up_label?: string | null; next?: string | null; next_at?: string | null;
-  pending_since?: string | null; output_missing?: boolean; task_id?: string;
+  pending_since?: string | null; output_missing?: boolean; task_id?: string; task_ids?: string[];
 };
 export type ProcessingItem = {id: string; label: string; cadence?: string; cadence_label?: string; state: string; state_label?: string; next_at?: string | null; as_of?: string | null; why?: string; feeds?: string; error?: string | null};
 export type ProcessingOperation = {id: string; kind?: string; state: string; label: string; detail?: string; step?: {done?: number | null; total?: number | null; unit?: string | null; name?: string; fraction?: number | null} | null; children?: ProcessingOperation[]};
@@ -47,7 +47,7 @@ const domainScopes: Record<string,string[]> = {
   parallelism:sources,rhythm:[...sources,'an.authorship'],tl1_attempts:sources,
   session_shape:[...sources,'an.ledger','an.authorship'],
   message_labels:[...sources,'an.authorship','@labels'],people_message_labels:[...sources,'an.authorship','@labels'],
-  agent_events:[...sources,'@agent_events'],agent_event_messages:[...sources,'@agent_events'],
+  agent_events:[...sources,'@agent_events'],agent_event_messages:[...sources,'@agent_events'],agent_event_rates:[...sources,'@agent_events'],
   findings:[...sources,'findings'],safety:[...sources,'an.ledger','findings'],fixes:[...sources,'@agent_events','findings'],
   mcp_calls:['@mcp'],
 };
@@ -120,6 +120,8 @@ export function readinessStageDescription(stage:ReadinessStage):string {
   // Keep actionable timing when there is no timestamp. Do not expose the
   // service's indexing terminology or discard its manual-update requirement.
   if(!stage.nextAt&&(!code||code==='changed')&&nextChecks[stage.next])return nextChecks[stage.next];
+  // Captured data waits only for the task that reads it; say which schedule.
+  if(code==='not-indexed'&&nextChecks[stage.next])return nextChecks[stage.next];
   if(code&&stageReasons[code])return stageReasons[code];
   return stage.state==='unknown'?'Pharos can’t check this part of the data yet.':stage.state==='paused'?'Automatic updates are paused.':stage.state==='failed'?'The last update couldn’t finish. Check update settings.':stage.state==='blocked'?'Waiting for another update to finish.':'';
 }
@@ -134,16 +136,101 @@ export function readinessProgressText(stage:ReadinessStage):string {
   const unit=count===1?sourceUnit.replace(/s$/,''):sourceUnit.endsWith('s')?sourceUnit:sourceUnit+'s';
   return hasDone?`${done.toLocaleString()}${hasTotal?' of '+total.toLocaleString():''} ${unit}${hasTotal?'':' done'}`:typeof stage.count==='number'?`${stage.count.toLocaleString()} ${unit} waiting`:'No progress details yet';
 }
+// Stages with no counts or operation have no progress to draw.
+export function readinessHasProgress(stage:ReadinessStage):boolean {
+  const number=(value:unknown)=>typeof value==='number'&&Number.isFinite(value);
+  return Boolean(stage.operation)||number(stage.operation?.step?.done??stage.done)||number(stage.operation?.step?.total??stage.total)||number(stage.count);
+}
+export const readinessClock=(at:number|null,now=Date.now())=>at===null?'Time unavailable':new Date(at).toLocaleString(undefined,{...(new Date(at).toDateString()===new Date(now).toDateString()?{}:{month:'short',day:'numeric'}),hour:'numeric',minute:'2-digit'});
+export function readinessNextText(at:number|null,now=Date.now()):string {
+  if(at===null)return '';
+  if(at<=now)return `Due since ${readinessClock(at,now)}`;
+  // Round to the unit shown: 9 h 59 min away reads as 10 hours, not 9.
+  const ms=at-now,unit=ms<60*minute?minute:ms<1440*minute?60*minute:1440*minute;
+  return `Next update ${readinessClock(at,now)}, in ${readinessAge(Math.max(minute,Math.round(ms/unit)*unit))}`;
+}
+// A schedule hint for a stage without a planned time, unless its reason
+// already says the same thing.
+function readinessStageTiming(stage:ReadinessStage,description:string):string {
+  const hint=stage.nextAt?'':nextChecks[stage.next]??'';
+  return hint===description?'':hint;
+}
+export type ReadinessGroupSection='attention'|'running'|'waiting'|'unknown'|'done';
+export type ReadinessGroup = {key: string; label: string; status: string; section: ReadinessGroupSection; subjects: string[]; detail: string; nextAt: number | null; stages: ReadinessStage[]; progress: ReadinessStage | null};
+const sectionOrder:ReadinessGroupSection[]=['attention','running','waiting','unknown','done'];
+function readinessSection(stage:ReadinessStage):ReadinessGroupSection {
+  const state=stage.operation?.state??stage.state;
+  return state==='current'?'done':['running','queued','stopping'].includes(state)?'running':['behind','blocked','scheduled'].includes(state)?'waiting':state==='unknown'?'unknown':'attention';
+}
+// A per-source label is "<step> (<source>)" or "<step> (<source> on <Mac>)".
+function stageParts(stage:ReadinessStage):{step:string;subject:string} {
+  const match=/^(.*?) \((.+)\)$/.exec(stage.label);
+  return match?{step:match[1],subject:match[2]}:{step:stage.label,subject:''};
+}
+// Sources are listed once per Mac: "claude, codex on Studio".
+export function readinessSubjects(subjects:string[]):string[] {
+  const order:string[]=[],sources=new Map<string,string[]>();
+  for(const subject of subjects.filter(Boolean)){
+    const at=subject.indexOf(' on '),host=at<0?'':subject.slice(at+4),source=at<0?subject:subject.slice(0,at);
+    if(!sources.has(host)){sources.set(host,[]);order.push(host);}
+    sources.get(host)!.push(source);
+  }
+  return order.map(host=>sources.get(host)!.join(', ')+(host?' on '+host:''));
+}
+// Per-source stages that share a step, state, explanation and next time are
+// one row; every finished step is a single Done row. Problems come first,
+// then work in progress, then waiting work.
+export function readinessGroups(stages:ReadinessStage[]):ReadinessGroup[] {
+  const groups=new Map<string,ReadinessGroup>(),subjects=new Map<string,string[]>();
+  for(const stage of stages){
+    const section=readinessSection(stage),{step,subject}=stageParts(stage);
+    const description=section==='done'?'':readinessStageDescription(stage),timing=section==='done'?'':readinessStageTiming(stage,description);
+    const nextAt=section==='done'?null:timeValue(stage.nextAt);
+    const status=section==='done'?'Done':readinessStageState(stage),detail=[description,timing].filter(Boolean).join(' ');
+    const key=section==='done'?'done':JSON.stringify([step,status,detail,nextAt,stage.operation?.id??null]);
+    const group=groups.get(key);
+    if(group){group.stages.push(stage);subjects.get(key)!.push(subject);continue;}
+    groups.set(key,{key,label:section==='done'?'Done':step,status,section,subjects:[],detail,nextAt,stages:[stage],progress:null});subjects.set(key,[subject]);
+  }
+  const result=[...groups.values()].sort((a,b)=>sectionOrder.indexOf(a.section)-sectionOrder.indexOf(b.section));
+  for(const group of result){
+    group.subjects=group.section==='done'?readinessDoneSteps(group.stages):readinessSubjects(subjects.get(group.key)!);
+    // One operation's progress covers every source it is catching up.
+    const first=group.stages[0];
+    group.progress=group.section!=='done'&&readinessHasProgress(first)&&(group.stages.length===1||first.operation&&group.stages.every(stage=>stage.operation?.id===first.operation!.id))?first:null;
+  }
+  return result;
+}
+// Done steps, with how many sources and Macs each covered.
+function readinessDoneSteps(stages:ReadinessStage[]):string[] {
+  const steps=new Map<string,string[]>();
+  for(const stage of stages){const {step,subject}=stageParts(stage);if(!steps.has(step))steps.set(step,[]);if(subject)steps.get(step)!.push(subject);}
+  return [...steps].map(([step,subjects])=>{
+    if(!subjects.length)return step;
+    const hosts=new Set(subjects.map(subject=>subject.indexOf(' on ')<0?'':subject.slice(subject.indexOf(' on ')+4)));
+    const sources=`${subjects.length} source${subjects.length===1?'':'s'}`;
+    return `${step} (${hosts.has('')||hosts.size<2?sources:`${sources} on ${hosts.size} Macs`})`;
+  });
+}
 function readinessCopy(kind:ReadinessModel['kind'],checkedAt:number|null,lag:number|null,now:number) {
   const label=kind==='unknown'?'Update status unavailable':kind==='missing'?'No results yet':kind==='saved'?'Showing saved results':kind==='scheduled'?'Update scheduled':kind==='current'?checkedAt===null?'No updates waiting':`Up to date as of ${readinessAge(Math.max(0,now-checkedAt))} ago`:lag===null?'Update needed':`${readinessAge(lag)} behind`;
   const sentence=kind==='unknown'?'Pharos can’t tell whether all the data shown here is up to date.':kind==='missing'?'Pharos needs to finish these steps before it can show results.':kind==='saved'?'Refresh this view to check for newer results.':kind==='scheduled'?'Some changes are waiting for the next scheduled update.':kind==='current'?checkedAt===null?'The last check time is unavailable.':'Activity since then may not appear here yet.':'Some changes are not included in these results yet.';
   return {label,sentence};
 }
+// The service's words for each cadence, as nextChecks reads them.
+const cadenceNext:Record<string,string>={frequent:'updates within minutes',hourly:'updates with the next hourly update',daily:'updates with the next daily update',manual:'updates with the next manual index'};
 function stageOf(row: FreshnessRow, snapshot: ReadinessSnapshot): ReadinessStage {
-  const item=snapshot.background?.items?.find(item=>item.id===itemFor(row.domain,row.task_id));
+  // Several tasks can catch a row up (captures: Preserve originals and Other
+  // sources). Only the schedule knows which runs first, so use the soonest
+  // planned one and describe its cadence rather than the ledger's guess.
+  const owners=row.task_ids?.length?row.task_ids:[itemFor(row.domain,row.task_id)];
+  const candidates=owners.flatMap(id=>snapshot.background?.items?.filter(item=>item.id===id).slice(0,1)??[]);
+  const planned=candidates.filter(item=>timeValue(item.next_at)!==null).sort((a,b)=>timeValue(a.next_at)!-timeValue(b.next_at)!);
+  const item=planned[0]??candidates[0];
+  const next=owners.length>1&&item?.cadence&&cadenceNext[item.cadence]?cadenceNext[item.cadence]:row.next??'';
   const operations=flatOperations(snapshot.operations??[]);
   const operation=operations.find(operation=>operation.id===row.catching_up);
-  return {id:row.domain,label:readinessStageLabel(row.domain,row.label),state:operation?.state??row.behind.state,reason:row.reason?.text??'',next:row.next??'',nextAt:row.next_at??item?.next_at,
+  return {id:row.domain,label:readinessStageLabel(row.domain,row.label),state:operation?.state??row.behind.state,reason:row.reason?.text??'',next,nextAt:row.next_at??item?.next_at,
     count:row.behind.count,unit:row.behind.unit,done:operation?.step?.done,total:operation?.step?.total,operation,item,row};
 }
 export function readinessModel(snapshot: ReadinessSnapshot | null, scopes: ReadinessScope[], now=Date.now(), unavailable=false): ReadinessModel {
@@ -162,7 +249,9 @@ export function readinessModel(snapshot: ReadinessSnapshot | null, scopes: Readi
   const sourceRows=stages.flatMap(stage=>stage.id.startsWith('conv:')&&stage.row?[stage.row]:[]);
   const checks=sourceRows.map(row=>timeValue(row.as_of));
   const checkedAt=checks.length&&checks.every(at=>at!==null)?Math.min(...checks as number[]):null;
-  const nexts=stages.map(stage=>timeValue(stage.nextAt)).filter((at): at is number=>at!==null);
+  // The next check that can change what is waiting, when anything is.
+  const pending=stages.filter(stage=>stage.state!=='current');
+  const nexts=(pending.some(stage=>timeValue(stage.nextAt)!==null)?pending:stages).map(stage=>timeValue(stage.nextAt)).filter((at): at is number=>at!==null);
   const nextAt=nexts.length?Math.min(...nexts):null;
   const stagesFor=(scope:ReadinessScope)=>stages.filter(stage=>readinessDomains(scope).some(pattern=>matches(pattern,stage.id)));
   // A missing source is incomplete coverage, not proof that a displayed result

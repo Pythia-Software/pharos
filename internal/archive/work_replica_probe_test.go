@@ -946,7 +946,7 @@ func replicaCPUNow() replicaCPU {
 	reading := replicaCPU{at: time.Now(), usage: map[string]float64{}, complete: true}
 	read := func(pid int) {
 		usage, err := processUsageOf(pid)
-		if err != nil {
+		if err != nil || !usage.cpuKnown(false) || usage.Started == 0 {
 			reading.complete = false
 			return
 		}
@@ -1752,11 +1752,11 @@ type replicaMemorySample struct {
 	Label                string            `json:"label"`
 	Unix                 float64           `json:"unix"`
 	Seconds              *float64          `json:"seconds"`
-	SelfFootprint        uint64            `json:"self_footprint"`
-	SelfResident         uint64            `json:"self_resident"`
-	DescendantsFootprint uint64            `json:"descendants_footprint"`
+	SelfFootprint        *uint64           `json:"self_footprint"`
+	SelfResident         *uint64           `json:"self_resident"`
+	DescendantsFootprint *uint64           `json:"descendants_footprint"`
 	Descendants          map[string]int    `json:"descendants"`
-	TreeFootprint        uint64            `json:"tree_footprint"`
+	TreeFootprint        *uint64           `json:"tree_footprint"`
 	Complete             bool              `json:"complete"`
 	Go                   map[string]uint64 `json:"go"`
 }
@@ -1764,34 +1764,47 @@ type replicaMemorySample struct {
 // replicaMemoryNow reads this process tree's physical memory. A process
 // that cannot be read leaves the sample incomplete, never smaller.
 func replicaMemoryNow(label string) replicaMemorySample {
+	return replicaMemorySnapshot(label, resourceBasis, processUsageOf, resourceProcessTable())
+}
+
+// replicaMemorySnapshot keeps native observation separate from tree arithmetic.
+// Only a physical-footprint reader can populate the physical fields; runtime
+// memory remains available independently in Go. Unknown values serialize null.
+func replicaMemorySnapshot(label, basis string, read func(int) (processUsage, error), nodes []processNode) replicaMemorySample {
 	sample := replicaMemorySample{Label: label, Unix: replicaUnix(time.Now()), Descendants: map[string]int{}, Complete: true}
 	self := os.Getpid()
-	if usage, err := processUsageOf(self); err == nil {
-		sample.SelfFootprint, sample.SelfResident = usage.Footprint, usage.Resident
-	} else {
-		sample.Complete = false
-	}
-	if nodes := resourceProcessTable(); nodes == nil {
-		sample.Complete = false
-	} else {
-		children, names := map[int][]int{}, map[int]string{}
-		for _, node := range nodes {
-			children[node.Parent], names[node.PID] = append(children[node.Parent], node.PID), node.Name
+	if usage, err := read(self); err == nil && basis == resourceBasisKernel {
+		if usage.Known.has(counterMemory) {
+			sample.SelfFootprint = new(usage.Footprint)
 		}
-		for frontier := []int{self}; len(frontier) > 0; frontier = frontier[1:] {
-			for _, child := range children[frontier[0]] {
-				frontier = append(frontier, child)
-				usage, err := processUsageOf(child)
-				if err != nil {
-					sample.Complete = false
-					continue
-				}
-				sample.DescendantsFootprint += usage.Footprint
-				sample.Descendants[names[child]]++
+		if usage.Known.has(counterResident) {
+			sample.SelfResident = new(usage.Resident)
+		}
+	}
+	descendants, descendantsKnown := uint64(0), nodes != nil && basis == resourceBasisKernel
+	children, names := map[int][]int{}, map[int]string{}
+	for _, node := range nodes {
+		children[node.Parent], names[node.PID] = append(children[node.Parent], node.PID), node.Name
+	}
+	for frontier := []int{self}; len(frontier) > 0; frontier = frontier[1:] {
+		for _, child := range children[frontier[0]] {
+			frontier = append(frontier, child)
+			sample.Descendants[names[child]]++
+			usage, err := read(child)
+			if err != nil || !usage.Known.has(counterMemory) || basis != resourceBasisKernel {
+				descendantsKnown = false
+				continue
 			}
+			descendants += usage.Footprint
 		}
 	}
-	sample.TreeFootprint = sample.SelfFootprint + sample.DescendantsFootprint
+	if descendantsKnown {
+		sample.DescendantsFootprint = &descendants
+		if sample.SelfFootprint != nil {
+			sample.TreeFootprint = new(*sample.SelfFootprint + descendants)
+		}
+	}
+	sample.Complete = sample.TreeFootprint != nil && sample.SelfResident != nil
 	var stats runtime.MemStats
 	runtime.ReadMemStats(&stats)
 	sample.Go = map[string]uint64{"heap_alloc": stats.HeapAlloc, "heap_inuse": stats.HeapInuse, "heap_idle": stats.HeapIdle,
@@ -1850,18 +1863,18 @@ func replicaRetention(samples []replicaMemorySample, plan replicaMemoryPlan) map
 		"coverage": map[string]any{"samples": len(samples), "interval_seconds": plan.IntervalSeconds, "idle_seconds": plan.IdleSeconds, "complete": complete}}
 	for key, label := range map[string]string{"work_start": "work-start", "settled": "settled", "idle_end": "idle", "idle_released": "idle-released"} {
 		retention[key] = nil
-		if sample := last(label); sample != nil {
-			retention[key] = sample.TreeFootprint
+		if sample := last(label); sample != nil && sample.TreeFootprint != nil {
+			retention[key] = *sample.TreeFootprint
 		}
 	}
 	if idle := last("idle"); idle != nil {
 		retention["descendants_at_idle_end"] = idle.Descendants
 	}
 	start, released := last("work-start"), last("idle-released")
-	if start != nil && released != nil && start.Complete && released.Complete {
-		retention["retained_bytes"] = int64(released.TreeFootprint) - int64(start.TreeFootprint)
-		retention["retained_self_bytes"] = int64(released.SelfFootprint) - int64(start.SelfFootprint)
-		retention["retained_descendants_bytes"] = int64(released.DescendantsFootprint) - int64(start.DescendantsFootprint)
+	if start != nil && released != nil && start.Complete && released.Complete && start.TreeFootprint != nil && released.TreeFootprint != nil && start.SelfFootprint != nil && released.SelfFootprint != nil && start.DescendantsFootprint != nil && released.DescendantsFootprint != nil {
+		retention["retained_bytes"] = int64(*released.TreeFootprint) - int64(*start.TreeFootprint)
+		retention["retained_self_bytes"] = int64(*released.SelfFootprint) - int64(*start.SelfFootprint)
+		retention["retained_descendants_bytes"] = int64(*released.DescendantsFootprint) - int64(*start.DescendantsFootprint)
 		retention["retained_go_heap_inuse_bytes"] = int64(released.Go["heap_inuse"]) - int64(start.Go["heap_inuse"])
 	}
 	return retention
@@ -2225,20 +2238,55 @@ func TestWorkReplicaArrivals(t *testing.T) {
 // Samples cover live descendants by name; retention is unavailable, never
 // zero, without both complete ends.
 func TestWorkReplicaMemory(t *testing.T) {
-	child := exec.Command("/bin/sleep", "30")
-	if err := child.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = child.Process.Kill(); _ = child.Wait() }()
-	sample := replicaMemoryNow("work-start")
-	if sample.SelfFootprint == 0 || sample.Go["sys"] == 0 {
-		t.Fatalf("this process's footprint and runtime: %+v", sample)
-	}
-	if !sample.Complete {
-		t.Skip("descendants cannot be read on this platform; samples report complete=false")
-	}
-	if sample.Descendants["sleep"] != 1 || sample.DescendantsFootprint == 0 || sample.TreeFootprint != sample.SelfFootprint+sample.DescendantsFootprint {
-		t.Fatalf("a live child is in the tree: %+v", sample)
+	t.Run("native", func(t *testing.T) {
+		if runtime.GOOS != "darwin" {
+			t.Skip("physical footprint and process-tree reader are macOS only")
+		}
+		child := exec.Command("/bin/sleep", "30")
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = child.Process.Kill(); _ = child.Wait() }()
+		sample := replicaMemoryNow("work-start")
+		if sample.Go["sys"] == 0 {
+			t.Fatalf("this process's footprint and runtime: %+v", sample)
+		}
+		if !sample.Complete {
+			t.Fatalf("native footprint observation was incomplete: %+v", sample)
+		}
+		if sample.Descendants["sleep"] != 1 || sample.DescendantsFootprint == nil || *sample.DescendantsFootprint == 0 || sample.TreeFootprint == nil || *sample.TreeFootprint != *sample.SelfFootprint+*sample.DescendantsFootprint {
+			t.Fatalf("a live child is in the tree: %+v", sample)
+		}
+	})
+
+	self := os.Getpid()
+	for _, tc := range []struct {
+		name, basis                                  string
+		own, child                                   resourceCounters
+		ownMemory, childMemory, treeMemory, complete bool
+	}{
+		{"known zero", resourceBasisKernel, counterMemory | counterResident, counterMemory, true, true, true, true},
+		{"unknown self memory", resourceBasisKernel, counterResident, counterMemory, false, true, false, false},
+		{"unknown child memory", resourceBasisKernel, counterMemory | counterResident, 0, true, false, false, false},
+		{"unknown resident", resourceBasisKernel, counterMemory, counterMemory, true, true, true, false},
+		{"runtime approximation", "go-runtime", counterMemory, counterMemory, false, false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			read := func(pid int) (processUsage, error) {
+				if pid == self {
+					return processUsage{Known: tc.own}, nil
+				}
+				return processUsage{Known: tc.child}, nil
+			}
+			sample := replicaMemorySnapshot("test", tc.basis, read, []processNode{{PID: self + 1, Parent: self, Name: "worker"}})
+			if (sample.SelfFootprint != nil) != tc.ownMemory || (sample.DescendantsFootprint != nil) != tc.childMemory ||
+				(sample.TreeFootprint != nil) != tc.treeMemory || sample.Complete != tc.complete || sample.Go["sys"] == 0 {
+				t.Fatalf("physical and runtime counter coverage: %+v", sample)
+			}
+			if sample.TreeFootprint != nil && *sample.TreeFootprint != 0 {
+				t.Fatalf("known zero memory changed: %+v", sample)
+			}
+		})
 	}
 	memory := &replicaMemory{}
 	memory.sample("startup")
@@ -2248,7 +2296,7 @@ func TestWorkReplicaMemory(t *testing.T) {
 		t.Fatalf("samples before work have negative seconds: %+v", samples)
 	}
 	at := func(label string, self, descendants uint64, complete bool) replicaMemorySample {
-		return replicaMemorySample{Label: label, SelfFootprint: self, DescendantsFootprint: descendants, TreeFootprint: self + descendants, Complete: complete,
+		return replicaMemorySample{Label: label, SelfFootprint: &self, DescendantsFootprint: &descendants, TreeFootprint: new(self + descendants), Complete: complete,
 			Descendants: map[string]int{"pharos-labeler-ort": 1}, Go: map[string]uint64{"heap_inuse": self / 2}}
 	}
 	plan := replicaMemoryPlan{IntervalSeconds: 5, IdleSeconds: 60}

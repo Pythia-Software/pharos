@@ -106,7 +106,7 @@ func TestTaskResourcesKeepBasisAndAllocationApart(t *testing.T) {
 	r.holdBuffer(32)()
 	free()
 
-	usage := map[int]processUsage{77: {CPUSeconds: 10, Footprint: 500e6, Started: 9}}
+	usage := map[int]processUsage{77: {Known: counterOwnCPU | counterMemory, CPUSeconds: 10, Footprint: 500e6, Started: 9}}
 	read := func(pid int) (processUsage, error) {
 		value, ok := usage[pid]
 		if !ok {
@@ -115,7 +115,7 @@ func TestTaskResourcesKeepBasisAndAllocationApart(t *testing.T) {
 		return value, nil
 	}
 	helper := r.helperStartWith(77, "labeler", true, read)
-	usage[77] = processUsage{CPUSeconds: 12.5, Footprint: 600e6, Started: 9}
+	usage[77] = processUsage{Known: counterOwnCPU | counterMemory, CPUSeconds: 12.5, Footprint: 600e6, Started: 9}
 	helper.end()
 	helper.end()
 	sharedHelper := r.helperStartWith(77, "labeler", true, read)
@@ -159,7 +159,7 @@ func TestTaskResourcesKeepBasisAndAllocationApart(t *testing.T) {
 
 	// A replaced helper is unavailable, never a negative or foreign delta.
 	replaced := r.helperStartWith(77, "labeler", true, read)
-	usage[77] = processUsage{CPUSeconds: 1, Started: 10}
+	usage[77] = processUsage{Known: counterOwnCPU | counterMemory, CPUSeconds: 1, Started: 10}
 	replaced.end()
 	if last := r.view(clock).Helpers[2]; last.CPU.Value != nil || last.CPU.Basis != basisUnavailable {
 		t.Fatalf("replaced helper: %+v", last)
@@ -249,6 +249,25 @@ func TestResourceLeaseProbesAreReused(t *testing.T) {
 		t.Fatal("a replacement PID inherited the old lease's ownership")
 	}
 
+	// An unavailable reader or process identity is unknown coverage, never
+	// proof of an absent process. A later good read can recover the same
+	// cached lease without waking the drive to re-probe its file.
+	cache.started[lease] = identity
+	cache.read = func(int) (processUsage, error) { return processUsage{}, nil }
+	override(t, &observeProcess, func(int) (processPresence, error) { return processUnknown, errProcessLivenessUnsupported })
+	if cache.probe([]string{path}, at.Add(3*time.Second))[0].Live || len(cache.omitted) != 1 {
+		t.Fatal("an unknown lease must be unmeasured with explicit coverage")
+	}
+	cache.read = func(int) (processUsage, error) { return processUsage{Started: identity}, nil }
+	if !cache.probe([]string{path}, at.Add(4*time.Second))[0].Live || len(cache.omitted) != 0 {
+		t.Fatal("a transient observation failure erased cached lease ownership")
+	}
+	cache.read = func(int) (processUsage, error) { return processUsage{}, os.ErrNotExist }
+	override(t, &observeProcess, func(int) (processPresence, error) { return processAbsent, nil })
+	if cache.probe([]string{path}, at.Add(5*time.Second))[0].Live || len(cache.omitted) != 0 {
+		t.Fatal("confirmed process absence is not missing coverage")
+	}
+
 	// Standalone collection must use the same idle-drive policy as the
 	// app broker, rather than its status reader's one-second lease cache.
 	servicePath := filepath.Join(t.TempDir(), "leases")
@@ -278,5 +297,53 @@ func TestResourceLeaseProbesAreReused(t *testing.T) {
 	}
 	if probes := service.historyLeases.probe([]string{servicePath}, at.Add(4*time.Second)); len(probes) != 1 || service.historyLeases.at[servicePath] != at.Add(3*time.Second) {
 		t.Fatal("one stale mark forced more than one probe")
+	}
+}
+
+// Platform readers can provide any subset of counters. Missing data or an
+// unverifiable identity must never become measured zero, while CPU failure
+// does not erase a valid endpoint memory reading.
+func TestTaskHelperCountersAndIdentity(t *testing.T) {
+	base := processUsage{Known: counterOwnCPU | counterMemory, CPUSeconds: 10, Footprint: 500, Started: 9}
+	end := processUsage{Known: counterOwnCPU | counterMemory, CPUSeconds: 12, Footprint: 600, Started: 9}
+	for _, tc := range []struct {
+		name          string
+		start, finish processUsage
+		cpu, memory   bool
+	}{
+		{"all", base, end, true, true},
+		{"real zero", processUsage{Known: counterOwnCPU | counterMemory, Started: 9}, processUsage{Known: counterOwnCPU | counterMemory, Started: 9}, true, true},
+		{"no counters", processUsage{Started: 9}, processUsage{Started: 9}, false, false},
+		{"CPU only", base, processUsage{Known: counterOwnCPU, CPUSeconds: 12, Started: 9}, true, false},
+		{"memory only", base, processUsage{Known: counterMemory, Footprint: 600, Started: 9}, false, true},
+		{"missing initial CPU", processUsage{Known: counterMemory, Footprint: 500, Started: 9}, end, false, true},
+		{"reset CPU", base, processUsage{Known: counterOwnCPU | counterMemory, CPUSeconds: 1, Footprint: 600, Started: 9}, false, true},
+		{"unknown identity", processUsage{Known: base.Known}, processUsage{Known: end.Known}, false, false},
+		{"lost identity", base, processUsage{Known: end.Known}, false, false},
+		{"replaced", base, processUsage{Known: end.Known, Started: 10}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTaskResources(taskIdentity{Kind: "analysis.labels"}, time.Now)
+			usage := tc.start
+			scope := r.helperStartWith(77, "labeler", true, func(int) (processUsage, error) { return usage, nil })
+			usage = tc.finish
+			scope.end()
+			view := r.view(time.Now())
+			helper := view.Helpers[0]
+			if (helper.CPU.Value != nil) != tc.cpu || (helper.Footprint.Value != nil) != tc.memory {
+				t.Fatalf("counter availability: %+v", helper)
+			}
+			cpu := view.CPU["helpers"]
+			if tc.cpu {
+				if cpu.Basis != basisMeasured || cpu.Value == nil || *cpu.Value != tc.finish.CPUSeconds-tc.start.CPUSeconds {
+					t.Fatalf("own CPU delta: %+v", cpu)
+				}
+			} else if cpu.Value != nil || cpu.Basis != basisUnavailable || helper.CPU.Basis != basisUnavailable {
+				t.Fatalf("unavailable CPU counted as measured: %+v %+v", cpu, helper)
+			}
+			if tc.memory && (*helper.Footprint.Value != float64(tc.finish.Footprint) || helper.CounterBasis != resourceBasis) {
+				t.Fatalf("endpoint memory with reader basis: %+v", helper)
+			}
+		})
 	}
 }

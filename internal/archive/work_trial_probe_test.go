@@ -225,11 +225,11 @@ type trialSample struct {
 	Label           string             `json:"label"`
 	Seconds         float64            `json:"seconds"`
 	Unix            float64            `json:"unix"`
-	SelfFootprint   uint64             `json:"self_footprint"`
-	SelfResident    uint64             `json:"self_resident"`
+	SelfFootprint   *uint64            `json:"self_footprint"`
+	SelfResident    *uint64            `json:"self_resident"`
 	Descendants     map[string]int     `json:"descendants"`
-	DescendantsFoot uint64             `json:"descendants_footprint"`
-	TreeFootprint   uint64             `json:"tree_footprint"`
+	DescendantsFoot *uint64            `json:"descendants_footprint"`
+	TreeFootprint   *uint64            `json:"tree_footprint"`
 	Complete        bool               `json:"complete"`
 	Go              map[string]uint64  `json:"go"`
 	Authority       workAuthorityFacts `json:"authority"`
@@ -552,36 +552,10 @@ func (tr *trial) counts(label string) map[string]int64 {
 // sample records physical and Go memory with the inspection, and checks the
 // inspection's bounds.
 func (tr *trial) sample(label string) {
-	s := trialSample{Label: label, Seconds: tr.seconds(), Unix: replicaUnix(time.Now()), Descendants: map[string]int{}, Complete: true}
-	if self, err := processUsageOf(os.Getpid()); err == nil {
-		s.SelfFootprint, s.SelfResident = self.Footprint, self.Resident
-	} else {
-		s.Complete = false
-	}
-	nodes := resourceProcessTable()
-	if nodes == nil {
-		s.Complete = false
-	}
-	children := map[int][]processNode{}
-	for _, node := range nodes {
-		children[node.Parent] = append(children[node.Parent], node)
-	}
-	for frontier := []int{os.Getpid()}; len(frontier) > 0; frontier = frontier[1:] {
-		for _, child := range children[frontier[0]] {
-			s.Descendants[child.Name]++
-			if usage, err := processUsageOf(child.PID); err == nil {
-				s.DescendantsFoot += usage.Footprint
-			} else {
-				s.Complete = false
-			}
-			frontier = append(frontier, child.PID)
-		}
-	}
-	s.TreeFootprint = s.SelfFootprint + s.DescendantsFoot
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	s.Go = map[string]uint64{"heap_alloc": m.HeapAlloc, "heap_inuse": m.HeapInuse, "heap_idle": m.HeapIdle,
-		"heap_released": m.HeapReleased, "sys": m.Sys, "stack_inuse": m.StackInuse, "num_gc": uint64(m.NumGC)}
+	memory := replicaMemoryNow(label)
+	s := trialSample{Label: label, Seconds: tr.seconds(), Unix: memory.Unix, SelfFootprint: memory.SelfFootprint,
+		SelfResident: memory.SelfResident, Descendants: memory.Descendants, DescendantsFoot: memory.DescendantsFootprint,
+		TreeFootprint: memory.TreeFootprint, Complete: memory.Complete, Go: memory.Go}
 	in, bytes, err := tr.read()
 	if err != nil {
 		s.Complete = false

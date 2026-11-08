@@ -323,3 +323,17 @@ unavailable measurement or contaminated comparison stays unresolved.
 
 All production activation and comparison-path retirement decisions remain gated
 by those results. See [the acceptance protocol](work-execution-acceptance.md).
+
+## Portability integration after the trials
+
+The stack now includes the November 7–8 platform adapters through master
+`e0d34885`. [The portability contract](work-portability.md) separates portable
+scheduling and cooperative CPU grants from native observations and actions.
+Task accounting and resource history preserve unavailable counters, verified
+process identity and memory lower bounds. The two manual probes share one
+physical-memory sampler: missing physical counters are null, while Go runtime
+memory is recorded separately. These changes do not extend native OS support.
+
+The production-copy measurements above remain evidence for their recorded
+source commits. No performance trial was rerun for this integration, and no
+performance acceptance or production activation is implied.

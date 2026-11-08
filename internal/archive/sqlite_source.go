@@ -13,9 +13,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
+	"github.com/gbdubs/pharos/internal/platform/fsinfo"
 	"modernc.org/sqlite"
 )
 
@@ -230,11 +230,17 @@ var (
 	sqliteCopyHook     func(path string)
 )
 
-// sqliteReadOnlyVolume says whether path is on a volume mounted read-only
-// (MNT_RDONLY, ST_RDONLY), the one place an unlocked read cannot see a write.
-var sqliteReadOnlyVolume = func(path string) bool {
-	var stat syscall.Statfs_t
-	return syscall.Statfs(path, &stat) == nil && stat.Flags&1 != 0
+// sqliteMountReadOnly observes path's native read-only mount flag; tests
+// replace it.
+var sqliteMountReadOnly = fsinfo.ReadOnlyMount
+
+// sqliteReadOnlyVolume says whether path is affirmatively on a volume
+// mounted read-only, the one place an unlocked read cannot see a write. A
+// mount that cannot be observed, or a platform that cannot observe one, is
+// not read-only here: its database takes the locked or copied path.
+func sqliteReadOnlyVolume(path string) bool {
+	readOnly, err := sqliteMountReadOnly(path)
+	return err == nil && readOnly
 }
 
 func sqliteURI(path string) string { return (&url.URL{Scheme: "file", Path: path}).String() }
@@ -427,10 +433,15 @@ func copyFileContext(ctx context.Context, src, dst string) error {
 
 var sweepSQLiteCopiesOnce sync.Once
 
+// sqliteCopyProcessStart is processStartTime, overridable by tests.
+var sqliteCopyProcessStart = processStartTime
+
 // sweepSQLiteCopies removes the copies of processes that have ended. Each
 // copy's folder is named for the process that made it; a process with that
 // ID that started after the folder was made, this one included, has reused
-// the ID.
+// the ID. Only positive absence or that start-time proof removes a copy; a
+// process whose presence is unknown keeps it, and a folder not named for a
+// single positive process ID is left alone.
 func sweepSQLiteCopies() {
 	entries, err := os.ReadDir(sqliteCopyRoot)
 	if err != nil {
@@ -439,12 +450,13 @@ func sweepSQLiteCopies() {
 	for _, entry := range entries {
 		name, _, _ := strings.Cut(entry.Name(), "-")
 		pid, err := strconv.Atoi(name)
-		if err != nil {
+		if err != nil || pid <= 0 || strconv.Itoa(pid) != name {
 			continue
 		}
-		ended := syscall.Kill(pid, 0) == syscall.ESRCH
+		state, _ := observeProcess(pid)
+		ended := state == processAbsent
 		if !ended {
-			started, known := processStartTime(pid)
+			started, known := sqliteCopyProcessStart(pid)
 			info, err := entry.Info()
 			ended = known && err == nil && started.After(info.ModTime())
 		}
