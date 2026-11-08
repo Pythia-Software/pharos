@@ -187,8 +187,11 @@ func TestStatusSnapshotCarriesTheLastMeasuredStorage(t *testing.T) {
 	if _, ok := library()["storage_bytes"]; ok {
 		t.Fatal("storage before any drive check")
 	}
-	drives.cached(config)
-	drives.store(config, &driveState{sizes: librarySizes{LibraryBytes: 1_234_567}, checked: time.Now()})
+	if _, _, err := drives.cached(config); err != nil {
+		t.Fatal(err)
+	}
+	key, _, _ := driveKey(config)
+	drives.store(config, &driveState{identity: key, sizes: librarySizes{LibraryBytes: 1_234_567}, checked: time.Now()})
 	override(t, &statusCoalesce, 0)
 	if got := library()["storage_bytes"]; got != float64(1_200_000) {
 		t.Fatalf("storage from the last drive check, to two figures: %v", got)
