@@ -186,8 +186,8 @@ unsigned `device:inode` plans have always stored). A capture root whose identity
 cannot be read is not planned, and protection refuses before writing any job
 state unless the root still has the plan's identity; platforms that report no
 identity cannot plan a backfill yet. Jobs persist their cursor, budget,
-rollback hash, protected input paths, phase and errors on the capture drive. They can be rediscovered without the
-live catalog. No receipt depends solely on a temporary file or an index marker.
+rollback hash, protected input paths, phase and errors on the capture drive.
+They can be rediscovered without the live catalog. No receipt depends solely on a temporary file or an index marker.
 Immutable envelopes deduplicate across identical observations; their receipt
 carries the particular rollback snapshot's provenance.
 
