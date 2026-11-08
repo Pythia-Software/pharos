@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS agent_events_conversations (
   conversation_id TEXT PRIMARY KEY,
   structure TEXT NOT NULL,
   built_at TEXT NOT NULL,
-  since TEXT NOT NULL DEFAULT ''
+  since TEXT NOT NULL DEFAULT '',
+  execution_digest TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS agent_events_dirty (
   conversation_id TEXT PRIMARY KEY,
@@ -47,8 +48,11 @@ CREATE TABLE IF NOT EXISTS agent_events_dirty (
 `
 
 // agentEventsLedgerVersion 2 records each conversation's horizon (since:
-// the earliest time it was read from, ” for all of it).
-const agentEventsLedgerVersion = "2"
+// the earliest time it was read from, ” for all of it); 3 the execution
+// dependency digest it was built against, so a read can tell rows built on
+// superseded execution evidence (agentEventsExecutionCurrent); 4 the members
+// of each component built at (ensureExecutionDependencyMembers).
+const agentEventsLedgerVersion = "4"
 
 // agentEventStoreFloor is the lowest probability stored: rows between it and
 // agentEventThreshold are not events, but let a later threshold be studied
@@ -77,10 +81,20 @@ func (c *Catalog) ensureAgentEventsLedger(ctx context.Context) error {
 				return err
 			}
 		}
+		if err := addColumnIfMissing(ctx, tx, "agent_events_conversations", "execution_digest", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+		if err := ensureExecutionDependencyMembers(ctx, tx); err != nil {
+			return err
+		}
 		for _, statement := range itemDirtyTriggers("agent_events_dirty", "agent_events_dirty_") {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("%s: %w", statement[:60], err)
 			}
+		}
+		// The ledger's tables are image sources (fingerprint_cache.go).
+		if err := fingerprintSourceTriggers(ctx, tx); err != nil {
+			return err
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('agent_events_ledger_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, agentEventsLedgerVersion)
 		return err
@@ -265,16 +279,22 @@ type AgentEventsRunOptions struct {
 // AgentEventsRunStats describe a run.
 type AgentEventsRunStats struct {
 	Conversations, ConversationsBuilt, ConversationsRemoved, ConversationsFailed int
-	MessagesScored, MessagesUnchanged, MessagesRemoved, MessagesBefore           int
-	Candidates, Stored, Events                                                   int
-	Cut, Complete                                                                bool
-	Prepare, Infer, Write, Total                                                 time.Duration
-	progress                                                                     agentEventsCounts
+	// ConversationsStale were built against execution evidence that changed
+	// before they could be stored; they stay pending.
+	ConversationsStale                                                 int
+	MessagesScored, MessagesUnchanged, MessagesRemoved, MessagesBefore int
+	Candidates, Stored, Events                                         int
+	Cut, Complete                                                      bool
+	Prepare, Infer, Write, Total                                       time.Duration
+	progress                                                           agentEventsCounts
 }
 
 // agentEventsConversation is one conversation's pending work.
 type agentEventsConversation struct {
 	id, token, structure string
+	// dependency is the execution dependency digest it was built against;
+	// storeAgentEvents stores it only while that is current.
+	dependency string
 	// since is the horizon the conversation is read from ('' for all of it).
 	since    string
 	messages []*agentEventsMessage
@@ -349,6 +369,13 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 	}
 	if err := c.ensureAgentEventsLedger(dctx); err != nil {
 		return stats, err
+	}
+	if !opts.DryRun {
+		// Execution evidence another writer changed reaches this ledger's
+		// dirty marks before planning reads them.
+		if err := c.propagateExecutionChanges(dctx); err != nil {
+			return stats, err
+		}
 	}
 	builder, err := newLabelsItemBuilder(dctx, c.reader())
 	if err != nil {
@@ -652,7 +679,7 @@ func (c *Catalog) agentEventsWork(ctx context.Context, builder *labelsItemBuilde
 		// were left unread ('~' is a version 1 row, horizon unknown).
 		widened := built && horizons[id] != since && (horizons[id] == "~" || since == "" || horizons[id] != "" && since < horizons[id])
 		if all || !built || previous != structure || tokens[id] != "" || otherModel || widened {
-			jobs = append(jobs, &agentEventsConversation{id: id, token: tokens[id], structure: structure, since: since})
+			jobs = append(jobs, &agentEventsConversation{id: id, token: tokens[id], structure: structure, since: since, dependency: p.executionDigests[id]})
 		}
 	}
 	gone := []string{}
@@ -668,7 +695,7 @@ func (c *Catalog) agentEventsWork(ctx context.Context, builder *labelsItemBuilde
 		if err := c.writeTransaction(ctx, "remove agent events of deleted conversations", func(tx *sql.Tx) error {
 			for _, id := range gone {
 				for _, statement := range []string{`DELETE FROM agent_events WHERE conversation_id=?`, `DELETE FROM agent_event_messages WHERE conversation_id=?`,
-					`DELETE FROM agent_events_conversations WHERE conversation_id=?`} {
+					`DELETE FROM agent_events_conversations WHERE conversation_id=?`, `DELETE FROM agent_events_execution_stale WHERE conversation_id=?`} {
 					if _, err := tx.ExecContext(ctx, statement, id); err != nil {
 						return err
 					}
@@ -770,9 +797,32 @@ func (c *Catalog) storeAgentEvents(ctx context.Context, identity string, convers
 	lexicon, _ := agentEventLexicon()
 	at := now()
 	var removed, stored, eventsTotal int
+	stale := 0
+	if beforeDerivedPublication != nil {
+		beforeDerivedPublication()
+	}
 	err := c.writeTransaction(ctx, "store agent events", func(tx *sql.Tx) error {
-		removed, stored, eventsTotal = 0, 0, 0
+		removed, stored, eventsTotal, stale = 0, 0, 0, 0
+		captured := make(map[string]string, len(conversations))
 		for _, conversation := range conversations {
+			captured[conversation.id] = conversation.dependency
+		}
+		publication, err := publishExecutionDependents(ctx, tx, "agent_events_conversations", captured)
+		if err != nil {
+			return err
+		}
+		current := publication.current
+		for _, conversation := range conversations {
+			if !current[conversation.id] {
+				// Built against execution evidence that changed since; keep it
+				// pending rather than store an obsolete attribution.
+				if _, err := tx.ExecContext(ctx, `INSERT INTO agent_events_dirty(conversation_id,token) VALUES(?,hex(randomblob(8)))
+					ON CONFLICT(conversation_id) DO NOTHING`, conversation.id); err != nil {
+					return err
+				}
+				stale++
+				continue
+			}
 			for _, id := range conversation.stale {
 				for _, statement := range []string{`DELETE FROM agent_events WHERE message_id=?`, `DELETE FROM agent_event_messages WHERE message_id=?`} {
 					if _, err := tx.ExecContext(ctx, statement, id); err != nil {
@@ -841,21 +891,28 @@ func (c *Catalog) storeAgentEvents(ctx context.Context, identity string, convers
 					return err
 				}
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO agent_events_conversations(conversation_id,structure,built_at,since) VALUES(?,?,?,?)
-				ON CONFLICT(conversation_id) DO UPDATE SET structure=excluded.structure, built_at=excluded.built_at, since=excluded.since`, conversation.id, conversation.structure, at, conversation.since); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO agent_events_conversations(conversation_id,structure,built_at,since,execution_digest) VALUES(?,?,?,?,?)
+				ON CONFLICT(conversation_id) DO UPDATE SET structure=excluded.structure, built_at=excluded.built_at, since=excluded.since,
+				execution_digest=excluded.execution_digest`, conversation.id, conversation.structure, at, conversation.since, conversation.dependency); err != nil {
 				return err
 			}
 			// Only the mark this run read: one written since stays for the next run.
 			if _, err := tx.ExecContext(ctx, `DELETE FROM agent_events_dirty WHERE conversation_id=? AND token=?`, conversation.id, conversation.token); err != nil {
 				return err
 			}
+			// Published against current evidence (checked above, in this
+			// transaction): its rows are shown again.
+			if _, err := tx.ExecContext(ctx, `DELETE FROM agent_events_execution_stale WHERE conversation_id=?`, conversation.id); err != nil {
+				return err
+			}
 		}
-		return nil
+		return publication.finish(ctx, tx)
 	})
 	if err == nil {
 		stats.MessagesRemoved += removed
 		stats.Stored += stored
 		stats.Events += eventsTotal
+		stats.ConversationsStale += stale
 	}
 	return err
 }
@@ -992,10 +1049,19 @@ func (c *Catalog) agentEventsStatus(ctx context.Context, config Config) (map[str
 	var tables int
 	if err := c.DB.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('agent_events_conversations','agent_events_dirty')`).Scan(&tables); err == nil && tables == 2 {
 		var built, dirty int
-		if err := c.DB.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM agent_events_conversations), (SELECT count(*) FROM agent_events_dirty)`).Scan(&built, &dirty); err != nil {
+		// Changed: dirty, or resting on an execution change not marked yet.
+		if err := c.DB.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM agent_events_conversations), (SELECT count(*) FROM (SELECT conversation_id FROM agent_events_dirty UNION `+
+			executionUnmarkedSQL(ctx, c.DB, "agent_events_conversations")+`))`).Scan(&built, &dirty); err != nil {
 			return nil, err
 		}
 		status["conversations_built"], status["conversations_changed"] = built, dirty
+		// Built against execution evidence that has changed since: their rows
+		// stand until the next run rebuilds them, and say so.
+		stale, err := agentEventsExecutionStale(ctx, c.DB)
+		if err != nil {
+			return nil, err
+		}
+		status["conversations_stale"] = stale
 	}
 	return status, nil
 }

@@ -105,6 +105,12 @@ func TestHistoryCatalogRecoveryOffline(t *testing.T) {
 	if _, err := tx.Exec(`INSERT INTO pull_requests(id,host,repository_id,number) VALUES('unlinked-pr','github.com','unrelated-repo',9)`); err != nil {
 		t.Fatal(err)
 	}
+	// Evidence an adapter retained before filtering (a Cursor echo, say) is
+	// not derivable from the restored rows, so recovery carries it.
+	if _, err := tx.Exec(`INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule)
+		SELECT id,'retained','adapter','suppressed_record','composer:echo','','native','cursor-echo-subagent/v1' FROM conversations WHERE native_id='session'`); err != nil {
+		t.Fatal(err)
+	}
 	commitSeed(t, tx)
 	expectedRepositories, err := queryMaps(c.DB, "SELECT * FROM repositories WHERE id<>'unrelated-repo' ORDER BY id")
 	if err != nil {
@@ -142,6 +148,10 @@ func TestHistoryCatalogRecoveryOffline(t *testing.T) {
 		prs, err := queryMaps(fresh.DB, "SELECT * FROM pull_requests ORDER BY id")
 		if err != nil || jsonText(prs) != jsonText(expectedPRs) {
 			t.Fatal("PR repository dependencies were not restored", prs, err)
+		}
+		var retained int
+		if err := fresh.DB.QueryRow(`SELECT COUNT(*) FROM execution_claims WHERE claim_key='retained' AND source='adapter'`).Scan(&retained); err != nil || retained != 1 {
+			t.Fatal("retained execution evidence was not recovered", retained, err)
 		}
 	})
 	expectedPositions, err := queryMaps(c.DB, "SELECT id,source_order FROM messages ORDER BY id")

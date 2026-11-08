@@ -26,7 +26,8 @@ func TestTaskOriginsInheritAcrossProvidersAndMirrors(t *testing.T) {
 			t.Fatalf("%s: %#v", id, origins[id])
 		}
 	}
-	if origins["c"]["channel_status"] != "inherited" {
+	// c's root is reached through an inferred command launch.
+	if origins["c"]["channel_status"] != "inherited_inferred" {
 		t.Fatal(origins["c"])
 	}
 }
@@ -427,6 +428,80 @@ func TestTaskOriginStatisticsThreeDimensions(t *testing.T) {
 	expected := integer(baseline.(map[string]any)["groups"].([]map[string]any)[0]["values"].(map[string]any)["tokens"])
 	if len(groups) != 2 || total != expected {
 		t.Fatalf("origin grouping changed totals: %#v", value)
+	}
+}
+
+// Origins follow the shared execution lineage, not only the tables their own
+// triggers watch: a late launch result that makes a child's root known, and
+// its deletion, republish the child's inherited channel through the
+// ordinary pass. A change the lineage does not read republishes nothing.
+func TestTaskOriginsFollowExecutionEvidence(t *testing.T) {
+	c := executionFixture(t, executionFixtureConversation{id: "root"}, executionFixtureConversation{id: "child", depth: 1})
+	fixtureExec(t, c, `UPDATE conversations SET harness='codex/codex_desktop' WHERE id='root'`)
+	fixtureLaunch(t, c, "launch", "root", "s-root", "", "", 0)
+	channel := func(label string) any {
+		t.Helper()
+		origins, err := publishedOrigins(c, t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if origins["root"]["channel"] != "desktop" {
+			t.Fatalf("%s: precondition, the root's channel: %#v", label, origins["root"])
+		}
+		return origins["child"]["channel"]
+	}
+	if got := channel("no result"); got != nil {
+		t.Fatalf("the child has a root before any evidence names it: %v", got)
+	}
+	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,call_id,content_hash) VALUES('result-launch','root','result-launch','tool','delegation_result','{"agent_id":"child"}','call-launch','result-launch')`)
+	if got := channel("late result"); got != "desktop" {
+		t.Fatalf("a late launch result left the child's origin unpublished: %v", got)
+	}
+	// Evidence the lineage does not read publishes nothing.
+	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('note','root','note','user','message','more','note')`)
+	if published, err := c.publishOrigins(t.Context()); err != nil || published {
+		t.Fatalf("an unrelated append republished origins: %v %v", published, err)
+	}
+	fixtureExec(t, c, `DELETE FROM messages WHERE id='result-launch'`)
+	if got := channel("result deleted"); got != nil {
+		t.Fatalf("the deleted result's lineage is still published: %v", got)
+	}
+	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,call_id,content_hash) VALUES('result-launch','root','result-launch','tool','delegation_result','{"agent_id":"child"}','call-launch','result-launch')`)
+	// The same lineage as typed evidence (backfill), then corrected: the
+	// typed claim is withdrawn with its source.
+	if _, err := c.BackfillExecutionEvidence(t.Context(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := channel("typed evidence"); got != "desktop" {
+		t.Fatalf("typed evidence lost the child's origin: %v", got)
+	}
+	fixtureExec(t, c, `DELETE FROM messages WHERE id='result-launch'`)
+	fixtureExec(t, c, `DELETE FROM execution_claims WHERE conversation_id='root' AND kind='launch_outcome'`)
+	if got := channel("typed claim withdrawn"); got != nil {
+		t.Fatalf("the withdrawn claim's lineage is still published: %v", got)
+	}
+	// Origins published under older rules, by this resolver or the shared
+	// resolution (what a catalog last opened before a resolver change
+	// records), are published again on open, though no source moved.
+	for _, previous := range []string{"1", originResolverVersion} {
+		fixtureExec(t, c, `UPDATE conversation_origins SET channel='desktop' WHERE conversation_id='child'`)
+		fixtureExec(t, c, `UPDATE meta SET value=? WHERE key='origin_resolver_version'`, previous)
+		if published, err := c.publishOrigins(t.Context()); err != nil || published {
+			t.Fatalf("%s: precondition, nothing is out of date before the open: %v %v", previous, published, err)
+		}
+		if err := c.ensureOriginSchema(); err != nil {
+			t.Fatal(err)
+		}
+		if got := channel(previous + ": opened"); got != nil {
+			t.Fatalf("%s: origins from older rules are still published: %v", previous, got)
+		}
+	}
+	// Opening again under the same rules publishes nothing.
+	if err := c.ensureOriginSchema(); err != nil {
+		t.Fatal(err)
+	}
+	if published, err := c.publishOrigins(t.Context()); err != nil || published {
+		t.Fatalf("an open under the same rules republished origins: %v %v", published, err)
 	}
 }
 

@@ -134,6 +134,12 @@ func (c *Catalog) workFileTargets(workspaceID string) ([]map[string]any, error) 
 // such messages carry text_clipped/raw_clipped and are fetched whole with
 // MessageOriginal when the reader expands them.
 func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[string]any, error) {
+	return c.WorkConversationContext(context.Background(), workspaceID, conversationID)
+}
+
+// WorkConversationContext is WorkConversation stopping with ctx (the
+// request), including the freshness reads of its labels and events.
+func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conversationID string) (map[string]any, error) {
 	rows, err := queryMaps(c.reader(), "SELECT * FROM conversations WHERE id=? AND workspace_id=?", conversationID, workspaceID)
 	if err != nil || len(rows) == 0 {
 		return nil, err
@@ -147,12 +153,12 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	attachLabels, labelsSummary, err := c.messageLabelsAttacher(conversationID)
+	attachLabels, labelsSummary, err := c.messageLabelsAttacherContext(ctx, conversationID, nil)
 	if err != nil {
 		return nil, err
 	}
 	// Agent events (agent_events.go).
-	attachEvents, eventsSummary, linkEvents, err := c.agentEventsAttacher(conversationID)
+	attachEvents, eventsSummary, linkEvents, err := c.agentEventsAttacherContext(ctx, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +187,7 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 			clipReaderMessage(message)
 		}
 	}
-	messages, err := queryMapsTransformContext(context.Background(), c.reader(), "SELECT "+readerMessageColumns+",source_order FROM messages WHERE conversation_id=?", prepare, conversationID)
+	messages, err := queryMapsTransformContext(ctx, c.reader(), "SELECT "+readerMessageColumns+",source_order FROM messages WHERE conversation_id=?", prepare, conversationID)
 	if err != nil {
 		return nil, err
 	}

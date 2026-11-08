@@ -339,6 +339,39 @@
           "expr": "r.\"root_title\""
         }
       }
+    },
+    {
+      "name": "root_quality",
+      "label": "Root quality",
+      "type": "enum",
+      "group": "Attribution",
+      "description": "How the root conversation (and every root cohort field) was established: observed, inferred through an inferred command launch, or unverified through a stored link or family membership of unknown provenance.",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {"value": "observed", "label": "Observed"},
+            {"value": "inferred", "label": "Inferred"},
+            {"value": "unverified", "label": "Unverified"}
+          ]
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "root_quality",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"root_quality\""
+        }
+      }
     }
   ]
 }

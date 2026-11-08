@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -444,6 +445,66 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 	lanes := get("/api/work/impl/parallel?sessions=" + firstString(review["id"]))
 	if len(lanes["lanes"].([]any)) != 1 {
 		t.Fatalf("review lane missing from the timeline: %v", lanes)
+	}
+	// The peer's lane reads its own transcript at the group's revision.
+	labelled := get("/api/work/impl/parallel?labels=1&sessions=" + firstString(review["id"]))["lanes"].([]any)
+	messages := map[string]bool{}
+	for _, m := range asSlice(labelled[0].(map[string]any)["messages"]) {
+		messages[firstString(m.(map[string]any)["id"])] = true
+	}
+	if !messages["review-ask"] || !messages["review-done"] || messages["impl-ask"] {
+		t.Fatalf("review lane messages = %v", messages)
+	}
+
+	// The group keeps each part's members and the revision every part shares,
+	// and an evidence commit composes it again from the new snapshots.
+	reviewID := firstString(review["id"])
+	if _, err := c.DB.Exec(`INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule) VALUES('review-c','late','record','launch_outcome','launch:call-late','','derived','test/v1')`); err != nil {
+		t.Fatal(err)
+	}
+	group, err := c.workGroupSnapshot(t.Context(), "impl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownSnapshot, _ := c.delegationSnapshot(t.Context(), "impl")
+	reviewSnapshot, _ := c.delegationSnapshot(t.Context(), "review")
+	if group.Revision != ownSnapshot.Revision || group.Revision != reviewSnapshot.Revision || group.projection.res == nil ||
+		!slices.Equal(group.members[reviewID], reviewSnapshot.members[reviewID]) || len(group.members[reviewID]) == 0 {
+		t.Fatalf("group revision %v (own %v, review %v), members %v", group.Revision, ownSnapshot.Revision, reviewSnapshot.Revision, group.members[reviewID])
+	}
+
+	// Parts resolved at different revisions are never one graph: the group is
+	// composed again, and while they keep differing the work shows alone and
+	// nothing mixed is cached. Relatives reach every part. (Relatives that
+	// name no row give each case its own cache key.)
+	read, stale := workGroupPart, 0
+	asked := map[string][]string{}
+	override(t, &workGroupPart, func(c *Catalog, ctx context.Context, workspace string, relatives []string) (*delegationSnapshot, error) {
+		s, err := read(c, ctx, workspace, relatives)
+		asked[workspace] = relatives
+		if err != nil || s == nil || workspace != "review" || stale == 0 {
+			return s, err
+		}
+		stale--
+		changed := *s
+		changed.Revision.Generation--
+		return &changed, nil
+	})
+	stale = 1
+	if group, err = c.workGroupSnapshot(t.Context(), "impl", []string{"retry"}); err != nil || group.ByID[reviewID] == nil || stale != 0 ||
+		!slices.Equal(asked["review"], []string{"retry"}) {
+		t.Fatal("a retry composes the group", err, stale, asked)
+	}
+	stale = workGroupAttempts
+	if group, err = c.workGroupSnapshot(t.Context(), "impl", []string{"settle"}); err != nil || group.ByID[reviewID] != nil || group.GroupTotals != nil ||
+		!slices.Contains(group.Warnings, "Related work is changing; its agent sessions are left out until it settles.") {
+		t.Fatal("mixed revisions show the work alone", err, group)
+	}
+	if shared, _ := read(c, t.Context(), "impl", []string{"settle"}); slices.Contains(shared.Warnings, group.Warnings[len(group.Warnings)-1]) {
+		t.Fatal("the warning changed the cached snapshot")
+	}
+	if group, err = c.workGroupSnapshot(t.Context(), "impl", []string{"settle"}); err != nil || group.ByID[reviewID] == nil {
+		t.Fatal("a settled group composes", err)
 	}
 	// Work without certain peers keeps its own snapshot.
 	if rows := get("/api/work/other/delegation")["rows"].([]any); len(rows) != 1 {

@@ -531,8 +531,13 @@ func TestLabelsWriterDrainsWhileStopping(t *testing.T) {
 			ctx, stop := context.WithCancel(t.Context())
 			defer stop()
 			run := &labelsRun{c: catalog, identity: "test", stats: &LabelsRunStats{}, cancel: stop}
+			// The digest a builder captures before reading (newLabelsItemBuilder).
+			digests, err := executionDependencyDigests(t.Context(), catalog.DB)
+			if err != nil {
+				t.Fatal(err)
+			}
 			jobs := make(chan *labelsJob, 1)
-			jobs <- &labelsJob{conversation: "c-root", token: "pending", structure: "test", units: 1, complete: true,
+			jobs <- &labelsJob{conversation: "c-root", token: "pending", structure: "test", units: 1, complete: true, dependency: digests["c-root"],
 				messages: []*labelsMessage{{id: "m-h1", conversation: "c-root", segment: "H-typed", hash: "test", seqs: [][]int32{{1}}, probs: []float32{1}, mask: 1}}}
 			close(jobs)
 			done := make(chan error, 1)
@@ -1235,6 +1240,7 @@ func TestWorkspaceLabelFingerprint(t *testing.T) {
  INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('first','test',1,'2026-01-01'),('second','test',1,'2026-01-01');
  DELETE FROM message_labels_dirty;
  INSERT INTO message_labels_dirty(conversation_id,token) VALUES('second','dirty')`)
+	stampExecutionDigests(t, c)
 	body = read("ribbon-work", 200)
 	messages = check(body, 2)
 	if body["pending"] != true || len(messages[0].(map[string]any)["labels"].([]any)) != 1 || len(messages[1].(map[string]any)["labels"].([]any)) != 0 || messages[1].(map[string]any)["chunks"] != float64(0) {
@@ -1311,6 +1317,7 @@ func TestMessageLabelQueryProjection(t *testing.T) {
 		}
 	}
 	execTx(t, c.DB, `INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('label-conv','test',2,'2026-01-01')`)
+	stampExecutionDigests(t, c)
 	rows = read()
 	if signal, err := askLabelCoverage(t.Context(), &askSignalRun{c: c}); err != nil || signal.Score <= 0 || signal.Support != 1 {
 		t.Fatalf("completed label signal: %+v %v", signal, err)
@@ -1444,7 +1451,7 @@ func TestMessageLabelFacts(t *testing.T) {
 	}
 	parity := func() {
 		t.Helper()
-		live := messageLabelDataset
+		live := messageLabelLiveDatasetFor("", executionUnmarkedSQL(ctx, c.reader(), "message_labels_conversations"))
 		if !c.hasLabelsLedger() {
 			live = messageLabelWithoutLedger(live)
 		}
@@ -1499,6 +1506,7 @@ func TestMessageLabelFacts(t *testing.T) {
  ('facts-b1','facts-b','AT',48,x'00000000',1,1,'c','classifier','test','2026-01-01');
  INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('facts-a','test',2,'2026-01-01'),('facts-b','test',1,'2026-01-01');
  DELETE FROM message_labels_dirty`)
+	stampExecutionDigests(t, c)
 	parity()
 	// A selected batch publishes only its conversations and claims no
 	// readiness; an empty selection publishes nothing.
@@ -1527,9 +1535,10 @@ func TestMessageLabelFacts(t *testing.T) {
 	projectedParity := func() {
 		t.Helper()
 		stored, _ := c.sqlDatasetFor("message_labels")
+		live := messageLabelLiveDatasetFor("", executionUnmarkedSQL(ctx, c.reader(), "message_labels_conversations"))
 		for _, selected := range [][]string{{"text"}, {"model", "provider", "source"}, {"repository_name", "title", "fingerprint"}, {"day", "week", "month"}, {"label", "family", "label_status"}, {"segment", "label_model", "labeled_at"}} {
 			fields := append([]string{"id", "message_id"}, selected...)
-			if actual, expected := read(stored.project(fields)), read(messageLabelDataset.project(fields)); !reflect.DeepEqual(actual, expected) {
+			if actual, expected := read(stored.project(fields)), read(live.project(fields)); !reflect.DeepEqual(actual, expected) {
 				t.Fatalf("projected fields %v differ: %v / %v", selected, actual, expected)
 			}
 		}
@@ -2139,9 +2148,17 @@ func TestLabelsSessionFollowsLaterChangesWithItsWarmContext(t *testing.T) {
 		}
 	}
 	// A conversation created after discovery is built, not reported current.
+	// The context resolved no execution for it (no lineage or copied
+	// history), so the step discovers again first.
 	execTx(t, catalog.DB,
 		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,agent_depth,started_at) VALUES('c-session-new','ws-main','codex','local','c-session-new',0,'2026-09-05T12:00:00.000Z')`,
 		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-sn1','c-session-new','m-sn1','assistant','message','Started a new session.','hash-m-sn1','2026-09-05T12:00:00.000Z',1300)`)
+	if step, err := session.Run(t.Context(), []string{"c-session-new"}, 0); err != nil || !step.Rediscover || session.Discovered() {
+		t.Fatalf("a new conversation built with a context that never resolved it: %+v %v", step, err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if step, err := session.Run(t.Context(), []string{"c-session-new"}, 0); err != nil || !slices.Equal(step.Done, []string{"c-session-new"}) || labelCount(t, catalog, "WHERE message_id='m-sn1'") != 1 {
 		t.Fatalf("a new conversation: %+v %v", step, err)
 	}
@@ -2157,7 +2174,7 @@ func TestLabelsSessionFollowsLaterChangesWithItsWarmContext(t *testing.T) {
 	if step, err := session.Run(t.Context(), []string{"c-session-new"}, 0); err != nil || !slices.Equal(step.Done, []string{"c-session-new"}) {
 		t.Fatalf("after the newer revision: %+v %v", step, err)
 	}
-	if session.contexts != 2 || session.discoveries != 2 {
+	if session.contexts != 3 || session.discoveries != 3 {
 		t.Fatalf("small steps rebuilt the context %d times, discovered %d times", session.contexts, session.discoveries)
 	}
 	if threads := labelerHelloThreads(t, hellos); len(threads) != 1 {
@@ -2170,6 +2187,63 @@ func TestLabelsSessionFollowsLaterChangesWithItsWarmContext(t *testing.T) {
 	if full, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{Full: true}); err != nil || full.MessagesLabeled != 0 || full.MessagesRemoved != 0 {
 		t.Fatalf("session steps differ from a full run: %+v %v", full, err)
 	}
+
+	// Execution evidence alone changes after discovery, by a writer that
+	// marks nothing: a claim-only link from c-daily2 to c-late.
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := catalog.labelingInputsGeneration(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, catalog.DB, `INSERT INTO origin_observations(conversation_id,evidence_key,priority,evidence,parent_native_id,parent_provider,parent_account)
+		SELECT 'c-daily2','late-link',1,'test',native_id,provider,account FROM conversations WHERE id='c-late'`)
+	if behind, err := executionDependentsBehind(t.Context(), catalog.reader()); err != nil || behind == 0 {
+		t.Fatalf("precondition: the link left nothing unmarked (%d, %v)", behind, err)
+	}
+	// The discovered inventory is older than the library's inputs, so an
+	// empty library page is no coverage claim.
+	if moved, err := catalog.labelingInputsGeneration(t.Context()); err != nil || moved == inputs {
+		t.Fatalf("an evidence-only change kept the inputs generation %q (%v)", moved, err)
+	}
+	// A step over it discovers again rather than build on the context's
+	// superseded lineage.
+	if step, err := session.Run(t.Context(), []string{"c-daily2"}, 0); err != nil || !step.Rediscover || session.Discovered() {
+		t.Fatalf("a step after its execution evidence changed: %+v %v", step, err)
+	}
+	// Discovery propagates the change before it reads the ledger.
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if behind, err := executionDependentsBehind(t.Context(), catalog.reader()); err != nil || behind != 0 {
+		t.Fatalf("discovery left the change unpropagated (%d, %v)", behind, err)
+	}
+	if labelsDirtyToken(t, catalog, "c-daily2") == "" {
+		t.Fatal("discovery did not mark c-daily2, whose digest moved")
+	}
+	digested := func(id string) {
+		t.Helper()
+		current, err := executionDependencyDigestsFor(t.Context(), catalog.reader(), []string{id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stored string
+		if err := catalog.DB.QueryRow(`SELECT execution_digest FROM message_labels_conversations WHERE conversation_id=?`, id).Scan(&stored); err != nil || stored == "" || stored != current[id] {
+			t.Fatalf("%s stored digest %q, current %q (%v)", id, stored, current[id], err)
+		}
+	}
+	if step, err := session.Run(t.Context(), []string{"c-daily2"}, 0); err != nil || !slices.Equal(step.Done, []string{"c-daily2"}) || labelsDirtyToken(t, catalog, "c-daily2") != "" {
+		t.Fatalf("after discovery: %+v %v", step, err)
+	}
+	digested("c-daily2")
+	// A job a step enrolls itself (a new token) carries the digest its
+	// context resolved, so publication keeps it rather than requeue it.
+	execTx(t, catalog.DB, `UPDATE messages SET text=text||' (edited)' WHERE id='m-d2'`)
+	if step, err := session.Run(t.Context(), []string{"c-daily2"}, 0); err != nil || !slices.Equal(step.Done, []string{"c-daily2"}) || labelsDirtyToken(t, catalog, "c-daily2") != "" {
+		t.Fatalf("a step's own enrollment: %+v %v", step, err)
+	}
+	digested("c-daily2")
 }
 
 func TestLabelsSessionAllocations(t *testing.T) {
@@ -2400,6 +2474,17 @@ func TestLabelsSessionFollowsLinksMadeAfterDiscovery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A conversation recorded after discovery has no execution in the
+	// context (lineage, copied history): its first step discovers again.
+	rediscover := func(id string) {
+		t.Helper()
+		if step, err := session.Run(t.Context(), []string{id}, 0); err != nil || !step.Rediscover || session.Discovered() {
+			t.Fatalf("%s built with a context that never resolved it: %+v %v", id, step, err)
+		}
+		if err := session.Discover(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	clean := func() {
 		t.Helper()
 		rows, err := queryMapsContext(t.Context(), catalog.DB, `SELECT conversation_id FROM message_labels_dirty`)
@@ -2417,6 +2502,7 @@ func TestLabelsSessionFollowsLinksMadeAfterDiscovery(t *testing.T) {
 
 	// A re-sender recorded after discovery and built by a step.
 	resend("c-reuse")
+	rediscover("c-reuse")
 	labelsStepDone(t, catalog, session, "c-reuse")
 	clean()
 	change("c-src", "m-src-more")
@@ -2429,6 +2515,7 @@ func TestLabelsSessionFollowsLinksMadeAfterDiscovery(t *testing.T) {
 	execTx(t, catalog.DB,
 		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,started_at) VALUES('c-fork-late','ws-main','codex','local','c-fork-late','c-root',0,'2026-09-02T13:00:00.000Z')`,
 		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-fork-late','c-fork-late','m-fork-late','user','message','continue later','hash-m-fork-late','2026-09-02T13:00:00.000Z',1600)`)
+	rediscover("c-fork-late")
 	labelsStepDone(t, catalog, session, "c-fork-late")
 	clean()
 	if _, err := catalog.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-root-more','c-root','m-root-more','assistant','message','One more thing.','hash-m-root-more','2026-09-01T15:00:00.000Z',1501)`); err != nil {
@@ -2439,7 +2526,7 @@ func TestLabelsSessionFollowsLinksMadeAfterDiscovery(t *testing.T) {
 		t.Fatal("a change of c-root left its late fork without a mark")
 	}
 	clean()
-	if session.discoveries != 1 {
+	if session.discoveries != 3 {
 		t.Fatalf("%d discoveries before another run wrote", session.discoveries)
 	}
 

@@ -166,6 +166,11 @@ func (s *agentEventsSession) Discover(ctx context.Context) error {
 	if err := c.ensureAgentEventsLedger(ctx); err != nil {
 		return err
 	}
+	// Execution evidence another writer changed reaches this ledger's dirty
+	// marks before discovery reads them, as in RunAgentEvents.
+	if err := c.propagateExecutionChanges(ctx); err != nil {
+		return err
+	}
 	s.discovered.Store(false)
 	builder, err := newLabelsItemBuilder(ctx, c.reader())
 	if err != nil {
@@ -554,7 +559,7 @@ func (s *agentEventsSession) refresh(ctx context.Context, ids []string) (bool, e
 		skip := token == "" && since != "" && ended != "" && ended < since
 		widened := built && horizon != since && (horizon == "~" || since == "" || horizon != "" && since < horizon)
 		if !skip && (!built || changed || integer(row["other"]) != 0 || widened) {
-			s.setJob(id, &agentEventsConversation{id: id, token: token, structure: structure, since: since})
+			s.setJob(id, &agentEventsConversation{id: id, token: token, structure: structure, since: since, dependency: p.executionDigests[id]})
 		} else {
 			s.setJob(id, nil)
 		}
@@ -599,7 +604,7 @@ func (s *agentEventsSession) markForks(ctx context.Context, sources []string) er
 	since := agentEventsHorizon(s.since)
 	for _, id := range forks {
 		if p.conversations[id] != nil && s.jobs[id] == nil {
-			s.setJob(id, &agentEventsConversation{id: id, token: tokens[id], structure: labelsStructure(p, s.builder.sessions, id), since: since})
+			s.setJob(id, &agentEventsConversation{id: id, token: tokens[id], structure: labelsStructure(p, s.builder.sessions, id), since: since, dependency: p.executionDigests[id]})
 		}
 	}
 	return nil

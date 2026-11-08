@@ -3,6 +3,7 @@ import messagesDocument from "../../schemas/messages.schema.json";
 import { DataReadinessModal, HeaderDataReadiness, BackgroundProcessingWorkload, DataReadinessEmpty, DataReadinessIndicator } from "./data-readiness";
 import { startReadiness } from "./data-readiness-store";
 import {peopleMessageLabelCatalog} from "./people-message-labels";
+import { agentEventDatasets, agentEventItemPendingMessage, agentEventsFreshnessMark, agentEventsFreshnessNote, agentEventsNeverRead, useAgentEventsCoverage } from "./agent-events-freshness";
 import peopleMessageLabelsDocument from "../../schemas/people_message_labels.schema.json";
 import { formatUSD } from "./currency";
 import { installOverflowTitles } from "./overflow-tooltip";
@@ -562,6 +563,11 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
           const detail = await queryRequest<Row>(`/api/tool-calls/${encodeURIComponent(String(id))}`, { signal });
           for (const field of ["input_text", "input_text_bytes", "input_text_truncated", "result_text", "result_text_bytes", "result_text_truncated", "result_details", "commands", "urls", "request", "next_request"]) row[field] = detail[field];
         }
+        if (!row && (agentEventDatasets as readonly string[]).includes(dataset)) {
+          // Withheld until its events are rebuilt: pending, not gone.
+          const pending = agentEventItemPendingMessage(dataset, await queryRequest<{ row?: unknown; pending?: boolean }>(`/api/query/${dataset}/item?id=${encodeURIComponent(String(id))}`, { signal }));
+          if (pending) throw new Error(pending);
+        }
         return row ? { row, loadedFields: Object.keys(row) } : null;
       } },
     onRefresh: () => { openedSearches.current.clear(); const current=apiRef.current;const selectedWindow=readRollingWindow(new URLSearchParams(location.search),dataset);if(selectedWindow?.mode==="today")current.setQuery(previous=>resolveRollingQuery(previous,selectedWindow));const renewed=refreshTodayHost(apiRef.current.query.hostState); if(renewed && !sameHostState(renewed,apiRef.current.query.hostState))apiRef.current.setQuery(previous=>({...previous,hostState:renewed,offset:0})); },
@@ -596,6 +602,9 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   }, [visible, receipt?.key, receipt?.status]);
   // Empty states describe the rows: a failed metric alone does not empty them.
   const failed = api.execution ? api.execution.rows === "failed" : Boolean(api.error);
+  // Agent-event rows the server withheld or is rebuilding read as pending.
+  const agentEventsCoverage = useAgentEventsCoverage();
+  const eventsNote = (agentEventDatasets as readonly string[]).includes(dataset) ? agentEventsFreshnessNote(agentEventsCoverage) : "";
   const resultsView = dataset==="message_labels"?labelResultsMode(api.query):searchResultsView(api.query, dataset === "library" ? readLibraryHost(hostState).view : "table");
   const attentionSchema = api.itemDetails?.schema.name;
   const detailsReady = nativeDetailsReady({ visible: Boolean(visible), restored: api.restoration.ready, loading: api.loading, rows: api.execution?.rows, schema: attentionSchema });
@@ -711,6 +720,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
     {selectionBar && !api.query.grouping ? selectionBar(api) : null}
+    {eventsNote ? <p className="usage-dashboard-note" role="status">{eventsNote}</p> : null}
     <DataReadinessEmpty id={`query:${dataset}`} title={dataSources[dataset].label} dataset={dataset} query={api.query} empty={api.execution?.rows==="succeeded"&&!api.loading&&!api.error&&api.rows.length===0}>{dataset==="message_labels"&&resultsView==="cards"?<MessageLabelCards api={api}/>:dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
 
       : <DataTable
@@ -728,7 +738,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
       onNavigate={navigateLink}
       total={api.total}
       loading={api.loading}
-      emptyMessage={api.loading ? "Loading results…" : failed ? failedMessage : searching ? "No workspaces match this search and these filters." : emptyMessages[dataset]}
+      emptyMessage={api.loading ? "Loading results…" : failed ? failedMessage : searching ? "No workspaces match this search and these filters." : eventsNote ? `No current rows match. ${eventsNote}` : emptyMessages[dataset]}
       classNames={{ empty: api.loading ? "pharos-table-loading" : undefined }}
       {...(api.query.grouping ? { trailing: (row: Row) => {
         const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, groupKeyField(key)));
@@ -1324,14 +1334,16 @@ function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
   const value = (result: typeof events, id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const loading = events.loading || read.loading, error = events.error || read.error;
   const messages = value(events, "messages"), scanned = value(read, "read"), total = value(events, "events");
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:agent_events:${label}`} title={label} dataset="agent_events" query={{where}} /></span><strong>{loading ? "Loading…" : error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
-  if (!loading && !error && !scanned) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. They are read in the background once agent events are turned on in Settings → Background Processing; the first run downloads a small model.</p>;
-  return <div className="mcp-metrics dashboard-stats" aria-label="Agent Experience summary" aria-busy={loading}>
+  // Withheld or rebuilding events make every count here provisional.
+  const coverage = useAgentEventsCoverage(), mark = agentEventsFreshnessMark(coverage), note = agentEventsFreshnessNote(coverage);
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:agent_events:${label}`} title={label} dataset="agent_events" query={{where}} /></span><strong>{loading ? "Loading…" : error ? "Unavailable" : `${amount === "—" ? "" : mark}${amount}`}</strong><small>{detail}</small></div>;
+  if (!loading && !error && agentEventsNeverRead(scanned, coverage)) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. They are read in the background once agent events are turned on in Settings → Background Processing; the first run downloads a small model.</p>;
+  return <>{note ? <p className="usage-dashboard-note" role="status">{note}</p> : null}<div className="mcp-metrics dashboard-stats" aria-label="Agent Experience summary" aria-busy={loading}>
     {card("Events", total.toLocaleString(), "matching sentences in agents' replies and thinking")}
     {card("Messages with an event", scanned ? `${(100 * messages / scanned).toFixed(1)}%` : "—", `${messages.toLocaleString()} of ${scanned.toLocaleString()} agent messages read`)}
     {card("Conversations with an event", value(events, "conversations").toLocaleString(), `of ${value(read, "conversations").toLocaleString()} conversations read`)}
     {card("In thinking", total ? `${(100 * value(events, "thinking") / total).toFixed(0)}%` : "—", "of these events were in agents' private reasoning")}
-  </div>;
+  </div></>;
 }
 // The rate panel: events by day and kind group over messages read by day,
 // under the dashboard's filters (the event-only ones narrow the events).
@@ -1369,13 +1381,15 @@ function AgentEventRatesSummary({ where }: { where: WhereTerm[] }) {
   const result = useMetrics("agent_event_rates", where, agentEventRateSummaryMetrics);
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const read = value("read"), events = value("events");
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
-  if (!result.loading && !result.error && !read) return <p className="usage-dashboard-note" role="status">No agent messages read for events match these filters. Messages are read in the background once agent events are turned on in Settings → Background Processing, and these rates are prepared after each pass.</p>;
-  return <div className="mcp-metrics dashboard-stats" aria-label="Agent Events summary" aria-busy={result.loading}>
+  // Rates leave out the same withheld conversations as the other event datasets.
+  const coverage = useAgentEventsCoverage(), mark = agentEventsFreshnessMark(coverage), note = agentEventsFreshnessNote(coverage);
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : `${amount === "—" ? "" : mark}${amount}`}</strong><small>{detail}</small></div>;
+  if (!result.loading && !result.error && agentEventsNeverRead(read, coverage)) return <p className="usage-dashboard-note" role="status">No agent messages read for events match these filters. Messages are read in the background once agent events are turned on in Settings → Background Processing, and these rates are prepared after each pass.</p>;
+  return <>{note ? <p className="usage-dashboard-note" role="status">{note}</p> : null}<div className="mcp-metrics dashboard-stats" aria-label="Agent Events summary" aria-busy={result.loading}>
     {card("Messages read", read.toLocaleString(), `agent replies and thinking blocks, in ${value("turns").toLocaleString()} turns and ${value("conversations").toLocaleString()} conversations`)}
     {card("Events per 1,000 messages", read ? Math.round(1000 * events / read).toLocaleString() : "—", `${events.toLocaleString()} matching events`)}
     {card("Messages with an event", read ? `${(100 * value("with") / read).toFixed(1)}%` : "—", `${value("with").toLocaleString()} of the messages read`)}
-  </div>;
+  </div></>;
 }
 // What to do about friction: Fixes groups recurring events into changes to
 // guidance, environment, tools or docs, by the kinds this population names.

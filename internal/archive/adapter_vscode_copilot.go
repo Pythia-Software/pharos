@@ -31,7 +31,7 @@ import (
 type vscodeCopilotAdapter struct{ baseAdapter }
 
 // vscodeCopilotExtractor versions the parser; bump it when parsing changes.
-const vscodeCopilotExtractor = "vscode-copilot-v2-capture-client"
+const vscodeCopilotExtractor = "vscode-copilot-v3-parent-fallback"
 
 func (a *vscodeCopilotAdapter) partExtractor() string { return vscodeCopilotExtractor }
 
@@ -726,7 +726,7 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 				if started != nil {
 					child := subagent(callID)
 					child.conversation.AgentNickname, child.prompt, child.reply = started.conversation.AgentNickname, started.prompt, started.reply
-					child.conversation.Model, child.parent = started.conversation.Model, firstString(call.item["subAgentInvocationId"])
+					child.conversation.Model, child.parent, child.launched = started.conversation.Model, firstString(call.item["subAgentInvocationId"]), true
 				}
 				for _, compaction := range boundaries[position] {
 					messages = append(messages, vscodeCompactionRecord(at(position), id, compaction))
@@ -817,6 +817,11 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 		if len(child.Messages) == 0 {
 			continue
 		}
+		if !agent.launched {
+			// Only the agent's own calls were read, not the call that started
+			// it: the session is a default that names the family.
+			child.Evidence = append(child.Evidence, sessionParentFallback("vscode-copilot", a.config.Account, sessionID, "no-start-call"))
+		}
 		child.Provider, child.Account, child.Origin, child.Coverage = "vscode-copilot", a.config.Account, origin, "complete"
 		child.Harness, child.HarnessVersionFirst, child.HarnessVersionLast = "vscode-copilot", versionFirst, version
 		child.StartedAt, child.EndedAt = child.Messages[0].CreatedAt, child.Messages[len(child.Messages)-1].CreatedAt
@@ -851,6 +856,9 @@ type vscodeSubagent struct {
 	// parent is the subagent that started this one, when subagents may
 	// start their own; otherwise the session.
 	parent string
+	// launched is whether the call that started it was read. Without it the
+	// session stands in as the parent, and the record says it fell back.
+	launched bool
 }
 
 // vscodeToolMessages are a tool call and its result. A subagent's call also

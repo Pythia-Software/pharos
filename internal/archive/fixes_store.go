@@ -587,7 +587,13 @@ func (c *Catalog) FixesOverview(ctx context.Context) (map[string]any, error) {
 	safeguards := 0
 	_ = c.reader().QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM agent_events WHERE family='circumventing_constraint' AND probability>=%g", agentEventThreshold)).Scan(&safeguards)
 	hidden["total"] = hidden["stale"] + hidden["rare"] + hidden["intended"]
-	return map[string]any{"items": cards, "summary": summary, "hidden": hidden, "bounds": bounds, "default_bounds": fixesDefaultBounds,
+	// Events waiting for a rebuild (their transcript or the execution
+	// evidence they were read with changed) still count until it runs.
+	freshness, err := agentEventsCoverage(ctx, c.reader())
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"items": cards, "events_freshness": freshness, "summary": summary, "hidden": hidden, "bounds": bounds, "default_bounds": fixesDefaultBounds,
 		"cart": carts, "targets": places, "built_at": nilIfEmpty(built), "end": nilIfEmpty(end), "in_scope_events": inScope,
 		"excluded_events": excludedTotal, "safeguard_events": safeguards, "prompt_limit": fixesPromptLimit, "version": fixesVersion,
 		"coverage": "Agent events from the last 90 days the events pass scanned, grouped by what they say. Events about your own request (unclear instructions, assumptions, disagreeing) are left out; getting around a safeguard is in Risky actions."}, nil

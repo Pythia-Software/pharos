@@ -4,13 +4,14 @@ import { CartPanel, ReviewDialog, type CartGroup, type Target } from "./findings
 import { useViewState } from "./view-state";
 import { ViewDisclosure } from "./view-disclosure";
 import { OptimizePlaceFilter, OptimizeRank } from "./optimize-controls";
-import { safetyShortName, safetyDashboardPlaces, safetyDashboardChecks, safetyDangerLabels, safetyRankLabels, safetyRankExplanations, safetyPromptLimit, safetyCartChecks, type SafetyCheckSummary, type SafetyDanger, type SafetyRank } from "./safety-dashboard-model";
+import { safetyShortName, safetyDashboardPlaces, safetyDashboardChecks, safetyDangerLabels, safetyRankLabels, safetyRankExplanations, safetyPromptLimit, safetyCartChecks, safetyEventRule, safetyEventsFreshness, type SafetyCheckSummary, type SafetyDanger, type SafetyRank } from "./safety-dashboard-model";
 import { OptimizeCard, OptimizeCart, OptimizeSelectionBar } from "./optimize-shared";
 import { type SafetyView, safetyURL, safetyCheckTableURL, safetyStateLabels, safetyTableFocus } from "./safety-route";
 import { predicatesOf, type QueryState, type WhereClause } from "@pythia-software/query-table-core";
 import { optimizeTableRemainder, type OptimizeTableSchemas } from "./optimize-table-title";
 import { useSelection, type SelectionApi } from "@pythia-software/query-table-react";
 import { onSafetyChange } from "./dataset-refresh";
+import type { AgentEventsCoverage } from "./agent-events-freshness";
 
 const api = "/api/findings/safety";
 type State = "open" | "handed_off" | "dismissed";
@@ -18,7 +19,7 @@ type Card = { id: string; rule: string; danger: SafetyDanger; subject: string; t
 // quote evidence is an agent's own sentence (a safeguard check) rather than a command.
 type Evidence = { id: string; call_id: string; message_id: string; at: string; command: string; cwd: string; cwd_basis: string; status: string; outcome: string; conditional: boolean; path: string; quote?: boolean };
 type Detail = Card & { questions: string[]; evidence: Evidence[] };
-type Overview = { cases: Card[]; summary: Record<State, number>; cart: CartGroup[]; targets: Target[]; built_at: string | null; scanned_calls: string; coverage: string };
+type Overview = { cases: Card[]; summary: Record<State, number>; cart: CartGroup[]; targets: Target[]; built_at: string | null; scanned_calls: string; coverage: string; events_freshness?: AgentEventsCoverage };
 
 async function request<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -69,6 +70,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
   const group = overview?.cart.find(item => item.target === review);
   const places = safetyDashboardPlaces(overview?.cases ?? []);
   const checks = safetyDashboardChecks(overview?.cases ?? [], list, place, rank);
+  const freshness = safetyEventsFreshness(overview?.events_freshness);
   // Ticking a check card selects every notice it summarizes, so a whole check
   // goes into one prompt (one per location) or is closed at once.
   const listed = useMemo(() => checks.flatMap(check => check.ids), [overview, list, place]);
@@ -115,11 +117,12 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
           <OptimizePlaceFilter places={places} value={place} onChange={setPlace} label="Show risky actions for" viewField="safety_place" />
           <OptimizeRank value={rank} onChange={setRank} options={safetyRankLabels} explanations={safetyRankExplanations} viewField="safety_rank" />
         </div>
+        {freshness.note ? <p className="findings-muted" role="status">{freshness.note}</p> : null}
         {list === "handed_off" ? <p className="findings-muted">You have handed these notices to an agent. Repeats accumulate here; a new target, broader operation, or stronger execution evidence can need fresh attention.</p> : null}
         <div className="findings-layout with-cart">
           {checks.length ? <section className="safety-check-cards" aria-label="Risky actions by check">
             <SafetySelectionBar selection={selection} copy={copy} />
-            <div className="safety-check-grid">{checks.map(check => <SafetyCheckCard key={check.rule} check={check} place={place} selection={selection} href={safetyCheckTableURL(check.rule, { state: list, target: place })} />)}</div>
+            <div className="safety-check-grid">{checks.map(check => <SafetyCheckCard key={check.rule} check={check} mark={safetyEventRule(check.rule) ? freshness.mark : ""} place={place} selection={selection} href={safetyCheckTableURL(check.rule, { state: list, target: place })} />)}</div>
           </section> : <div className="findings-empty"><strong>{place ? "No notices for this location." : list === "open" ? "No open risky action notices." : list === "handed_off" ? "Nothing handed off yet." : "Nothing closed."}</strong><p>{place ? "Choose Everywhere to see every notice in this list." : list === "open" ? "Supported commands have not raised an open notice. Coverage and uncertainties are below." : "Your notices will appear here."}</p></div>}
           <SafetyCheckCart cart={overview.cart} onReview={next => setReview(next.target)} />
         </div>
@@ -227,13 +230,13 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString
 // One check's notices at a glance: what they share (one location, one
 // directory, a recurring resource) before what varies, then when, how much,
 // and what is new. The checkbox selects every notice on the card.
-function SafetyCheckCard({ check, place, selection, href }: { check: SafetyCheckSummary; place: string; selection: SelectionApi; href: string }) {
+function SafetyCheckCard({ check, mark, place, selection, href }: { check: SafetyCheckSummary; mark: string; place: string; selection: SelectionApi; href: string }) {
   const where = place ? null : check.locations === 1 ? `${check.count === 1 ? "In" : "All in"} ${check.places[0]?.label}`
     : `${check.places.map(item => `${item.label} ${item.count}`).join(" · ")}${check.morePlaces ? ` · ${plural(check.morePlaces, "more location")}` : ""}`;
   const single = check.count === 1;
   const facts = [range(check.first_seen_at, check.last_seen_at), plural(check.calls, "call"), check.fresh ? `${check.fresh.toLocaleString()} with new evidence` : "", check.inPrompt ? `${check.inPrompt.toLocaleString()} in a prompt` : ""].filter(Boolean);
   const chips = <>{check.danger ? <DangerChip danger={check.danger} /> : null}{check.recent ? <span className="findings-chip safety-recent">Recent</span> : null}</>;
-  return <OptimizeCard ids={check.ids} selection={selection} className="safety-check-card" target={`safety-check:${check.rule}`} count={check.count} countLabel={plural(check.count, "notice")}
+  return <OptimizeCard ids={check.ids} selection={selection} className="safety-check-card" target={`safety-check:${check.rule}`} count={check.count} countLabel={mark + plural(check.count, "notice")}
     label={`Select ${single ? "the notice" : `all ${check.count.toLocaleString()} notices`}: ${check.title}`}>
     <div className="safety-check-head"><strong className="safety-check-title">{check.title}</strong>{chips}</div>
     {where ? <span className="safety-check-where">{where}</span> : null}

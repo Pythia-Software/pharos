@@ -254,6 +254,7 @@ func (p *agentEventsPipeline) run(ctx context.Context, cancel context.CancelFunc
 	p.stats.Stored += writeResult.stats.Stored
 	p.stats.Events += writeResult.stats.Events
 	p.stats.MessagesRemoved += writeResult.stats.MessagesRemoved
+	p.stats.ConversationsStale += writeResult.stats.ConversationsStale
 	if writeResult.err != nil {
 		// A canceled save must not hide the inference error that stopped it.
 		if err != nil && (errors.Is(writeResult.err, context.Canceled) || errors.Is(writeResult.err, context.DeadlineExceeded)) {

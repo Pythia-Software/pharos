@@ -377,6 +377,19 @@ func TestNestedAgentTokenEvidence(t *testing.T) {
 			if evidence := conversationTokenEvidence(messages); len(evidence) != check.want {
 				t.Fatalf("evidence = %+v, want %d", evidence, check.want)
 			}
+			// The typed producer accepts the launch from the same footer and
+			// nothing else; a Codex record also reads tool_result rows.
+			for _, provider := range []string{"claude", "codex"} {
+				footers := 0
+				for _, claim := range conversationExecutionEvidence(ConversationRecord{Provider: provider, NativeID: "root", Messages: messages}) {
+					if claim.Kind == evidenceLaunchOutcome && claim.Rule == "harness-usage-footer/v1" && claim.Detail["handle"] == "agent-one" {
+						footers++
+					}
+				}
+				if footers != check.want {
+					t.Fatalf("%s typed footer outcomes = %d, want %d", provider, footers, check.want)
+				}
+			}
 			if got := conversationTokenCounts(messages)["total_tokens"]; got != 0 {
 				t.Fatalf("untyped observation entered accounting: %v", got)
 			}
@@ -422,6 +435,17 @@ func TestNestedAgentTokenEvidence(t *testing.T) {
 	}
 	if *s.Totals["tokens"].Value != 200000 || *root.All["tokens"].Value != 200000 || root.All["cost"].Value == nil {
 		t.Fatalf("overlapping evidence inflated totals: %+v", s.Totals)
+	}
+	// The footer also creates the child when the transcript's typed evidence
+	// predates it (an older catalog): the stored-row reading accepts it too.
+	if _, err = c.DB.Exec(`DELETE FROM execution_claims; UPDATE execution_evidence_state SET version='execution-evidence-v3'`); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = c.delegationSnapshot(context.Background(), workspace); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.ByID[child.ID]; len(s.Nodes) != 2 || n == nil || n.Self["tokens"].Value == nil || *n.Self["tokens"].Value != 116837 || *s.Totals["tokens"].Value != 200000 {
+		t.Fatalf("stored-row reading lost the footer's child: nodes=%d child=%+v", len(s.Nodes), n)
 	}
 	var ledger int64
 	if err = c.DB.QueryRow(`SELECT SUM(total_tokens) FROM agent_session_usage`).Scan(&ledger); err != nil || ledger != 200000 {

@@ -40,6 +40,43 @@ function normalizeQuickStatsLayout(saved, metrics = quickStatsMetrics()) {
 }
 // The detail request is opt-in; ordinary token/cost summaries stay small.
 const QUICK_STATS_DETAIL_METRICS = quickStatsMetrics().map(row => row[1]).filter(id => !QUICK_STATS_DEFAULT_METRICS.includes(id) && !['agent_time_ms', 'active_time_ms'].includes(id));
+// Message and tool-call counts exclude history a transcript copied from its
+// ancestry. Where the evidence could not tell a retained observation from a
+// copy, the count keeps it and is only approximate; say so, with the raw
+// observation counts, rather than presenting it as exact.
+const QUICK_STATS_OCCURRENCE_FIELDS = {
+  message_count: 'message_observations', user_messages: 'message_observations', assistant_messages: 'message_observations',
+  tool_calls: 'tool_call_observations', failed_tool_calls: 'tool_call_observations', tool_failure_rate: 'tool_call_observations',
+};
+function quickStatsOccurrenceCoverage(field, bucket) {
+  const observations = QUICK_STATS_OCCURRENCE_FIELDS[field];
+  if (!observations || bucket?.occurrence_coverage !== 'partial') return null;
+  const raw = Number(bucket[observations]), unresolved = Number(bucket.unresolved_occurrences) || 0, transcripts = Number(bucket.occurrence_partial_conversations) || 0;
+  const kind = observations === 'message_observations' ? 'messages' : 'tool calls';
+  const retained = Number.isFinite(raw) ? ` ${raw.toLocaleString()} ${kind} are retained, including copies.` : '';
+  const reasons = [
+    unresolved ? `${unresolved.toLocaleString()} retained observation${unresolved === 1 ? '' : 's'} could not be told apart from copied history, so ${unresolved === 1 ? 'it is' : 'they are'} counted.` : '',
+    transcripts ? `${transcripts.toLocaleString()} transcript${transcripts === 1 ? '' : 's'} may include copied history the evidence cannot account for.` : '',
+  ].filter(Boolean).join(' ') || 'Copied history could not be fully told apart.';
+  return {mark: '≈', note: `Approximate: ${reasons}${retained}`};
+}
+// Conversation and run counts follow the shared ancestry resolution
+// (ancestry_coverage): partial when a transcript's top-level conversation is
+// unknown or its execution identity is in an unresolved conflict, qualified
+// when some are counted under a root reached only through an inferred or
+// unverified link. Never present either as an exact count.
+const QUICK_STATS_ANCESTRY_FIELDS = ['active_conversations', 'delegated_runs'];
+function quickStatsAncestryCoverage(field, bucket) {
+  const coverage = bucket?.ancestry_coverage;
+  if (!QUICK_STATS_ANCESTRY_FIELDS.includes(field) || (coverage !== 'partial' && coverage !== 'qualified')) return null;
+  const count = (key, one, many) => { const n = Number(bucket[key]) || 0; return n ? `${n.toLocaleString()} ${n === 1 ? one : many}` : ''; };
+  const notes = [
+    count('unrooted_conversations', 'active transcript has no known top-level conversation and is not counted.', 'active transcripts have no known top-level conversation and are not counted.'),
+    count('identity_uncertain_conversations', 'transcript has unresolved execution identity, so distinct counts that include it are not exact.', 'transcripts have unresolved execution identity, so distinct counts that include them are not exact.'),
+    count('ancestry_qualified_conversations', 'transcript is counted under a top-level conversation reached only through an inferred or unverified link.', 'transcripts are counted under a top-level conversation reached only through an inferred or unverified link.'),
+  ].filter(Boolean);
+  return coverage === 'partial' ? {mark: '≈', note: `Approximate: ${notes.join(' ')}`} : {mark: '?', note: `Not verified: ${notes.join(' ')}`};
+}
 
 // Like homepage covers, show the last snapshot while revalidating and reuse
 // results for one minute in this page. These two small responses are local to

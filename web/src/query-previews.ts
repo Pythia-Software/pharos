@@ -1,4 +1,6 @@
 import { formatUSD } from "./currency";
+import { agentEventDatasetOf, agentEventsFreshnessMark, agentEventsFreshnessNote, reportQueryCoverage, type AgentEventsCoverage } from "./agent-events-freshness";
+import { cardQualification } from "./card-qualifier";
 import { isOriginDimension, originLabel, loadOriginMetadata } from "./origin-dimensions";
 import { apiCostTrendQuery, apiCostTrendFacts, buildApiCostTrend, usesApiCostTrend, type CostTimeBucket } from "./api-cost-trend";
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
@@ -48,7 +50,7 @@ export type QueryPreview = {
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget; groups?: number };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
 type Context = { schema: FieldSchema; execution: ComputedExecution; queryCapabilities: QueryCapabilitiesV3 };
-type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
+type Payload = { now?: number; coverage?: AgentEventsCoverage; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
 const cache = new Map<string, Cached>();
 export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); invalidateConcurrencyData(); }
@@ -73,6 +75,7 @@ async function fetchPreview<T>(url: string, signal?: AbortSignal, request?: unkn
     const response = await fetch(url, { signal: controller.signal, ...(request === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) }) });
     const body = await response.json();
     if (!response.ok) throw new PreviewHTTPError(typeof body.error === "string" ? body.error : body.error?.message ?? "Preview unavailable", response.status);
+    reportQueryCoverage(url, body);
     return body;
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
 }
@@ -163,6 +166,15 @@ function smoothingQuery(job: PreviewJob, query: QueryState, now: number): QueryS
 }
 
 type SmoothingHistory = { query: QueryState; payload: Payload };
+// An agent-event card whose rows the server withheld or is rebuilding is not a
+// confirmed count: mark its summary and say why (agentEventsCoverage).
+export function withAgentEventsFreshness(preview: QueryPreview, dataset: string, payload: { coverage?: AgentEventsCoverage }): QueryPreview {
+  if (!agentEventDatasetOf(`/api/query/${dataset}/query-v3`)) return preview;
+  const note = agentEventsFreshnessNote(payload.coverage);
+  if (!note) return preview;
+  return { ...preview, summary: `${agentEventsFreshnessMark(payload.coverage)}${preview.summary}`, note: [note, preview.note].filter(Boolean).join(" · ") };
+}
+
 function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema: FieldSchema, history?: SmoothingHistory): QueryPreview {
   const options = job.options ?? {}, recipe = options.recipe;
   const searchNote = payload.find?.search ? payload.find.search.complete ? "This search batch" : "Partial search batch; open the search to continue" : undefined;
@@ -258,6 +270,11 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     ready &&= eligible;
   }
   const preview: QueryPreview = { density: (options.cover ?? recipe?.cover)?.density, stackBy: (options.cover ?? recipe?.cover)?.stackBy, coverHeight: (options.cover ?? recipe?.cover)?.height, legendColumns: (options.cover ?? recipe?.cover)?.legendColumns, state: ready ? "ready" : "empty", total, summary, note: notes.filter(Boolean).join(" · ") || undefined, metrics, fields: schema.fields, coverMetricId: clause.id };
+  const qualified = query.grouping ? cardQualification(payload.rows, recipe?.exploration?.qualifier, (payload.rows?.length ?? 0) >= (Number(payload.total) || 0)) : null;
+  if (qualified) {
+    preview.summary = `${qualified.mark}${preview.summary}`;
+    preview.note = [qualified.note, preview.note].filter(Boolean).join(" · ");
+  }
   const minimum = (options.cover ?? recipe?.cover)?.minSamples;
   if (!ready && recipe?.emptyLabel) preview.emptyLabel = recipe.emptyLabel;
   if (!ready && minimum && (clause.distribution?.kind === "box" || clause.expressionY)) preview.emptyLabel = `No groups with at least ${minimum} ${(options.cover ?? recipe?.cover)?.sampleUnit ?? (!query.grouping && ["tool_calls", "mcp_calls"].includes(job.dataset) ? "calls" : "conversations")}`;
@@ -500,7 +517,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     const complete = () => {
       if (done || signal?.aborted || !visible || historyQuery && !history) return;
       try {
-        const preview = previewOf(item.job, item.query, visible.payload, visible.schema, historyQuery && history ? { query: historyQuery, payload: history.payload } : undefined);
+        const preview = withAgentEventsFreshness(previewOf(item.job, item.query, visible.payload, visible.schema, historyQuery && history ? { query: historyQuery, payload: history.payload } : undefined), item.job.dataset, visible.payload);
         done = true; publish(item.job.id, preview);
       } catch (error) { fail(error); }
     };

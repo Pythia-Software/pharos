@@ -1156,4 +1156,8 @@ button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--
 .delegation-ancestor .lt-session-identity:not(.is-interactive):not([aria-current="true"]) strong{color:var(--muted)}
 .delegation-parallel.is-preview .delegation-lane-scroll{border:1px solid var(--line);border-radius:4px}
 
+/* A session named inside a note; reads as a link, behaves as a button. */
+.delegation-inline-link{padding:0;border:0;background:none;color:inherit;font:inherit;text-decoration:underline;cursor:pointer}
+.delegation-relatives{position:absolute;right:0;bottom:2px;z-index:3;padding-left:4px;background:var(--panel);color:var(--muted);font-size:var(--fs-xs)}
+
 .delegation-token-evidence { color: var(--muted); font-size: var(--fs-sm); margin: 8px 0; max-width: 85ch; }

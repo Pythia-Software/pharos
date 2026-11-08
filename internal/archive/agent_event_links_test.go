@@ -1,10 +1,13 @@
 package archive
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"math"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -212,4 +215,218 @@ func TestAgentEventTargetsServedToViews(t *testing.T) {
 	if conversation := readFingerprint("/api/labels/conversations/c"); len(conversation["agent_events"].([]any)) != 0 {
 		t.Fatalf("conversation events exceed the message sample: %v", conversation)
 	}
+}
+
+// A ribbon never draws events resting on superseded execution evidence as
+// current: they are left out, exactly as the Agent Experience datasets leave
+// them out, and events_pending says so apart from label freshness, until the
+// ordinary events run republishes them.
+func TestRibbonEventsFollowAgentEventsFreshness(t *testing.T) {
+	ctx := t.Context()
+	c := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	config := testConfig(t)
+	config.CatalogPath = c.Path
+	srv := testServer(t, config, c)
+	run := func() {
+		t.Helper()
+		if stats, err := c.RunLabels(ctx, labels, LabelsRunOptions{}); err != nil || !stats.Complete {
+			t.Fatalf("labels: %+v %v", stats, err)
+		}
+		if stats, err := c.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{}); err != nil || !stats.Complete {
+			t.Fatalf("agent events: %+v %v", stats, err)
+		}
+	}
+	read := func(path string) (events int, eventsPending float64, labelsPending any) {
+		t.Helper()
+		w := apiCall(t, srv, config.APIToken, http.MethodGet, path, nil)
+		var body map[string]any
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+			t.Fatalf("ribbon %s: %d %s", path, w.Code, w.Body.String())
+		}
+		for _, event := range body["agent_events"].([]any) {
+			if strings.HasPrefix(firstString(event.(map[string]any)["message_id"]), "m-ev-") {
+				events++
+			}
+		}
+		pending, _ := body["events_pending"].(float64)
+		return events, pending, body["pending"]
+	}
+	pendingIDs := func(path string) (ids []string) {
+		t.Helper()
+		var body struct {
+			Pending []string `json:"events_pending_conversations"`
+		}
+		if w := apiCall(t, srv, config.APIToken, http.MethodGet, path, nil); json.Unmarshal(w.Body.Bytes(), &body) != nil {
+			t.Fatal(w.Body.String())
+		}
+		return body.Pending
+	}
+	// The events ledger is created by the first run, after the catalog opened.
+	if countRows(t, c, `SELECT COUNT(*) FROM sqlite_master WHERE name='agent_events_conversations'`) != 0 {
+		t.Fatal("precondition: the events ledger exists before the first run")
+	}
+	run()
+	for _, path := range []string{"/api/labels/conversations/c-events", "/api/labels/workspaces/ws-main"} {
+		if events, pending, _ := read(path); events == 0 || pending != 0 {
+			t.Fatalf("%s current: events=%d events_pending=%v", path, events, pending)
+		}
+	}
+	built, _, _ := read("/api/labels/conversations/c-events")
+	// The cached ribbon image follows the same freshness, for both
+	// appearances: with events (mask 1) and event-hidden (mask 2), whose
+	// labels follow it too. drawn records what each drawing was given.
+	renderer, err := newFingerprintRenderer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type drawing struct{ mask, events, labeled int }
+	var drawn []drawing
+	c.fingerprints.renderer = fingerprintRenderFunc(func(ctx context.Context, input any, mask int) (fingerprintRendered, error) {
+		d := drawing{mask: mask}
+		for _, event := range input.(map[string]any)["events"].([]map[string]any) {
+			if strings.HasPrefix(firstString(event["message_id"]), "m-ev-") {
+				d.events++
+			}
+		}
+		for _, message := range input.(map[string]any)["conversation"].(map[string]any)["messages"].([]map[string]any) {
+			// Pending labels are drawn as no labelled chunks.
+			if integer(message["chunks"]) > 0 {
+				d.labeled++
+			}
+		}
+		drawn = append(drawn, d)
+		return renderer.Render(ctx, input, mask)
+	})
+	image := func(label string, events bool) fingerprintMetadata {
+		t.Helper()
+		m, err := c.fingerprintMetadata(ctx, fingerprintRequest{"conversation", "c-events", "wide"}, events)
+		if err != nil {
+			t.Fatal(label, err)
+		}
+		return m
+	}
+	ready := func(label string, hidden, shown bool) {
+		t.Helper()
+		if h, e := image(label, false), image(label, true); (h.State == "ready") != hidden || (e.State == "ready") != shown || h.State != "ready" && !h.Stale || e.State != "ready" && !e.Stale {
+			t.Fatalf("%s: event-hidden %+v, with events %+v; want ready %v and %v, otherwise stale", label, h, e, hidden, shown)
+		}
+	}
+	queued := func() int {
+		return countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE entity='conversation' AND id='c-events' AND dirty=1`)
+	}
+	// Each unit draws one appearance, event-hidden first.
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET events_mask=3 WHERE entity='conversation' AND id='c-events'`)
+	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	labeled := drawn[0].labeled
+	ready("current", true, true)
+	if want := []drawing{{2, built, labeled}, {1, built, labeled}}; labeled == 0 || !slices.Equal(drawn, want) || queued() != 0 {
+		t.Fatalf("current drawings %v, want %v with labels; queued %d", drawn, want, queued())
+	}
+	// An execution change made and undone while a unit reads its input,
+	// before any mark, is not drawn: the unit is retried and then draws the
+	// unchanged labels and events.
+	var parent sql.NullString
+	var depth int
+	if err := c.DB.QueryRow(`SELECT parent_id,agent_depth FROM conversations WHERE id='c-child'`).Scan(&parent, &depth); err != nil {
+		t.Fatal(err)
+	}
+	override(t, &fingerprintInputReadHook, func() {
+		execTx(t, c.DB, `UPDATE conversations SET parent_id='c-events',agent_depth=1 WHERE id='c-child'`)
+		if _, err := c.DB.Exec(`UPDATE conversations SET parent_id=?,agent_depth=? WHERE id='c-child'`, parent, depth); err != nil {
+			t.Fatal(err)
+		}
+	})
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET revision='requeued' WHERE entity='conversation' AND id='c-events'`)
+	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	if len(drawn) != 2 || queued() != 1 {
+		t.Fatalf("a read that straddled an execution change was drawn: %v queued %d", drawn, queued())
+	}
+	// The retry backs off like any deferral, so reads are bounded while
+	// unrelated execution writes go on.
+	if backoff := countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE entity='conversation' AND id='c-events' AND attempts=1 AND next_attempt>unixepoch()`); backoff != 1 {
+		t.Fatal("a straddled read was retried without backoff")
+	}
+	ready("straddled read", false, false)
+	fingerprintInputReadHook = nil
+	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	ready("after the undone change", true, true)
+	if want := []drawing{{2, built, labeled}, {1, built, labeled}}; !slices.Equal(drawn[2:], want) {
+		t.Fatalf("after the undone change: %v, want %v", drawn[2:], want)
+	}
+	drawn = nil
+	// A writer that marks nothing moves c-child under c-events.
+	if err := c.writeTransaction(ctx, "repair", func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE conversations SET parent_id='c-events',agent_depth=1 WHERE id='c-child'`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/labels/conversations/c-events", "/api/labels/workspaces/ws-main"} {
+		if events, pending, _ := read(path); events != 0 || pending == 0 {
+			t.Fatalf("%s stale attribution drawn as current: events=%d events_pending=%v", path, events, pending)
+		}
+		if ids := pendingIDs(path); !slices.Contains(ids, "c-events") {
+			t.Fatalf("%s pending conversations = %v", path, ids)
+		}
+	}
+	// Before any mark both appearances keep their revision but are not
+	// current (the labels too rest on the superseded evidence), and neither
+	// is drawn.
+	ready("before the mark", false, false)
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET revision='requeued' WHERE entity='conversation' AND id='c-events'`)
+	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	if len(drawn) != 0 || queued() != 1 {
+		t.Fatalf("drawn on superseded evidence before the mark: %v queued %d", drawn, queued())
+	}
+	// Once marked, the labels are ordinary labeling backlog: the event-hidden
+	// appearance is drawn without them and is current. The events appearance
+	// is queued but not drawn without its events.
+	if err := c.propagateExecutionChanges(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if countRows(t, c, `SELECT COUNT(*) FROM agent_events_execution_stale WHERE conversation_id='c-events'`) != 1 {
+		t.Fatal("propagation did not mark c-events")
+	}
+	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	ready("after the mark", true, false)
+	if want := []drawing{{2, 0, 0}}; !slices.Equal(drawn, want) || queued() != 1 {
+		t.Fatalf("after the mark: %v, want %v; queued %d", drawn, want, queued())
+	}
+	run()
+	for _, path := range []string{"/api/labels/conversations/c-events", "/api/labels/workspaces/ws-main"} {
+		if events, pending, labelsPending := read(path); events != built || pending != 0 || labelsPending == true {
+			t.Fatalf("%s republished: events=%d (want %d) events_pending=%v labels pending=%v", path, events, built, pending, labelsPending)
+		}
+	}
+	// The run that clears the mark requeues the image, drawn with them again.
+	if dirty := countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE entity='conversation' AND id='c-events' AND dirty=1 AND attempts=0`); dirty != 1 {
+		t.Fatal("clearing the mark did not requeue the image")
+	}
+	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	ready("republished", true, true)
+	if want := []drawing{{2, 0, 0}, {2, built, labeled}, {1, built, labeled}}; !slices.Equal(drawn, want) || queued() != 0 {
+		t.Fatalf("republished: %v, want %v; queued %d", drawn, want, queued())
+	}
+	// Ordinary labeling backlog never holds an image back: drawn without the
+	// pending labels, current, and requeued again as labeling moves.
+	execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('c-events','backlog')`)
+	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	renderFingerprintTestEntity(t, c, "conversation", "c-events")
+	ready("labeling backlog", true, true)
+	if want := []drawing{{2, built, 0}, {1, built, 0}}; !slices.Equal(drawn[3:], want) || queued() != 0 {
+		t.Fatalf("labeling backlog: %v, want %v; queued %d", drawn[3:], want, queued())
+	}
+	// The ledger created during this session already requeues images: a
+	// write to its build stamp alone (an executable that records no digest)
+	// withholds the events and queues the image, without a reopen.
+	execTx(t, c.DB, `UPDATE agent_events_conversations SET execution_digest='' WHERE conversation_id='c-events'`)
+	if queued() != 1 {
+		t.Fatal("a ledger-stamp write did not queue the image")
+	}
+	ready("ledger stamp", false, false)
 }

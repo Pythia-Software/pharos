@@ -119,6 +119,13 @@ func fingerprintSourceTriggers(ctx context.Context, tx *sql.Tx) error {
 		{"agent_session_messages", "(SELECT conversation_id FROM messages WHERE id=%s.message_id)", nil},
 		{"agent_events", "conversation_id", nil},
 		{"agent_event_messages", "conversation_id", nil},
+		// Marking a conversation's events stale, the run that clears the
+		// mark, and its events build stamp (whose execution digest decides
+		// whether they are withheld) change what its ribbon may draw
+		// (fingerprintExecutionPending); message_labels_conversations is the
+		// labels' stamp.
+		{"agent_events_execution_stale", "conversation_id", nil},
+		{"agent_events_conversations", "conversation_id", nil},
 		{"message_labels", "conversation_id", nil},
 		{"message_labels_conversations", "conversation_id", nil},
 		{"message_labels_dirty", "conversation_id", nil},

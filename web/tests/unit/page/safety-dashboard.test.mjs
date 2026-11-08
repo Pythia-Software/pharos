@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EMPTY_QUERY, decodeQueryStrict, loadSchema } from "@pythia-software/query-table-core";
-import { safetyResourceName, safetyShortName, safetyCommonDirectory, safetyDashboardPlaces, safetyDashboardChecks, safetySelectionPlan, safetyCartChecks } from "../../../src/safety-dashboard-model";
+import { safetyResourceName, safetyShortName, safetyCommonDirectory, safetyDashboardPlaces, safetyDashboardChecks, safetySelectionPlan, safetyCartChecks, safetyEventRule, safetyEventsFreshness } from "../../../src/safety-dashboard-model";
 import { safetyCheckTableURL, safetyTableFocus } from "../../../src/safety-route";
 import fixesDocument from "../../../../schemas/fixes.schema.json";
 import safetyDocument from "../../../../schemas/safety.schema.json";
@@ -202,4 +202,15 @@ test("grouped Optimize headings use source and result catalogues for their filte
   assert.match(optimizeTableRemainder(safetySchemas.source, safetyQuery, [{ field: "rule", op: "=", value: "credentials" }], safetySchemas.result), /Danger is Dangerous/);
   const plain = optimizeTableSchemas({ ...api, query: source });
   assert.equal(plain.source, plain.result, "ungrouped tables use their computed catalogue");
+});
+
+test("only safeguard checks, which read agent events, are qualified while those events wait for a rebuild", () => {
+  assert.deepEqual(safetyEventsFreshness({ state: "current", pending_conversations: 0 }), { mark: "", note: "" });
+  const pending = safetyEventsFreshness({ state: "pending", pending_conversations: 1, withheld_conversations: 0 });
+  assert.equal(pending.mark, "≈");
+  assert.match(pending.note, /^Safeguard notices come from agent events\. Events for 1 conversation are waiting .* These counts may change\.$/);
+  assert.equal(safetyEventRule("safeguard-test"), true);
+  assert.equal(safetyEventRule("safeguard-other"), true);
+  // Command checks never read events, so their counts stay unmarked.
+  assert.equal(safetyEventRule("credential-copy"), false);
 });

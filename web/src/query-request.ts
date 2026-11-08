@@ -1,4 +1,5 @@
 import { QueryError, errorCodeForStatus, queryErrorFromBody, type QueryErrorOptions } from "@pythia-software/query-table-core";
+import { reportQueryCoverage } from "./agent-events-freshness";
 import { normalizeConcurrencySettings } from "./concurrency-settings";
 // Linked assumptions apply to every request made by that view, including
 // dashboards, source tables, item details and computed metrics. Explicit
@@ -69,6 +70,7 @@ export async function queryRequest<T>(url: string, init: RequestInit = {}, timeo
       return {};
     });
     signal.throwIfAborted();
+    if (response.ok) reportQueryCoverage(url, body);
     if (!response.ok) {
       const issue = queryErrorFromBody(body, response.status) ?? new QueryError(errorCodeForStatus(response.status), (typeof body.error === "string" ? body.error : body.error?.message) || `Request failed with HTTP ${response.status}`, { status: response.status });
       throw new QueryRequestError(issue.message, response.status, issue.code, issue);

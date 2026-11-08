@@ -124,6 +124,15 @@ func (c *Catalog) fingerprintMetadata(ctx context.Context, item fingerprintReque
 			fresh = fresh && integer(row["current"]) != 0 && firstString(row["renderer"]) == fingerprintRendererVersion()
 		}
 	}
+	if len(result.Images) == len(fingerprintThemes) && fresh {
+		// Execution evidence superseded since the image was drawn, including
+		// before any mark, makes it stale; none is drawn meanwhile.
+		if superseded, err := fingerprintExecutionPending(ctx, c.reader(), item.Entity, item.ID, events); err != nil {
+			return result, err
+		} else if superseded {
+			fresh = false
+		}
+	}
 	if len(result.Images) == len(fingerprintThemes) {
 		if fresh {
 			result.State = "ready"
@@ -132,6 +141,39 @@ func (c *Catalog) fingerprintMetadata(ctx context.Context, item fingerprintReque
 		}
 	}
 	return result, nil
+}
+
+// fingerprintExecutionPending reports whether the ribbon of an entity rests
+// on superseded execution evidence that no write has yet told the image cache
+// about: labels the next propagation would mark (the ribbon draws them
+// pending, so blank), and, for the events appearance, events left out
+// (withheldAgentEvents, marked or not). Ordinary labeling backlog is not
+// included: it is in message_labels_dirty, which requeues images as it moves.
+func fingerprintExecutionPending(ctx context.Context, q queryer, entity, id string, events bool) (bool, error) {
+	ledgers, err := queryMapsContext(ctx, q, `SELECT name FROM sqlite_master WHERE type='table' AND name IN ('message_labels_conversations','agent_events_conversations')`)
+	if err != nil {
+		return false, err
+	}
+	var sets []string
+	for _, row := range ledgers {
+		switch firstString(row["name"]) {
+		case "message_labels_conversations":
+			sets = append(sets, `SELECT id FROM (`+executionUnmarkedSQL(ctx, q, "message_labels_conversations")+`)`)
+		case "agent_events_conversations":
+			if events {
+				sets = append(sets, `SELECT conversation_id FROM (`+agentEventsWithheldSQLFor(ctx, q)+`)`)
+			}
+		}
+	}
+	if len(sets) == 0 {
+		return false, nil
+	}
+	scope := "id=?"
+	if entity == "workspace" {
+		scope = "workspace_id=?"
+	}
+	rows, err := queryMapsContext(ctx, q, `SELECT 1 FROM conversations WHERE `+scope+` AND id IN (`+strings.Join(sets, " UNION ")+`) LIMIT 1`, id)
+	return len(rows) > 0, err
 }
 
 func (s *Server) getFingerprintPNG(w http.ResponseWriter, r *http.Request) {

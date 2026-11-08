@@ -19,6 +19,19 @@ export function messageLabelFingerprintCache<Value>(load:(id:string)=>Promise<Va
   clear(){entries.clear();},
  };
 }
+// What a ribbon says about itself beside its marks: a bounded sample, labels
+// still being produced, and events left out until they are rebuilt for
+// changed evidence (events_pending, apart from label freshness: the
+// conversation reader still shows those events, marked pending).
+export function messageLabelRibbonNotes(value:{truncated?:boolean;pending?:boolean;events_pending?:number}|undefined):{badge:string;note:string}[] {
+ if(!value)return [];
+ const events=Number(value.events_pending)||0;
+ return [
+  value.truncated?{badge:'Sample',note:'Fingerprint uses a bounded retained-message sample'}:null,
+  value.pending?{badge:'Labeling',note:'Some labels are still being produced'}:null,
+  events?{badge:'Events pending',note:`Events for ${events.toLocaleString()} conversation${events===1?' are':'s are'} left out until they are rebuilt for changed session evidence`}:null,
+ ].filter((n):n is {badge:string;note:string}=>Boolean(n));
+}
 export function messageLabelConversationQuery(source:QueryState):QueryState {
  return {...EMPTY_QUERY,limit:40,fit:"screen" as const,hostState:{version:1,params:{...source.hostState?.params,label_results:['cards']}},grouping:{source:{...(source.grouping?.source??source),offset:0,aggregations:[]},keys:['fingerprint'],summaries:[
  {id:'conversation_title',op:'row',field:'title',label:'Conversation'},{id:'conversation_workspace',op:'row',field:'workspace_id',label:'Workspace'},

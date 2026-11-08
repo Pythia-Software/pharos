@@ -1,5 +1,5 @@
 export type FingerprintRequest = {entity: 'conversation' | 'workspace'; id: string; profile: 'wide' | 'card'; events: boolean};
-export type FingerprintImage = Omit<FingerprintRequest, 'events'> & {state: 'ready' | 'pending' | 'retrying' | 'not_found'; images: Partial<Record<'light' | 'dark', string>>; href?: string; stale?: boolean};
+export type FingerprintImage = Omit<FingerprintRequest, 'events'> & {state: 'ready' | 'pending' | 'retrying' | 'not_found'; images: Partial<Record<'light' | 'dark', string>>; href?: string; stale?: boolean; truncated?: boolean; pending?: boolean; events_pending?: number};
 export type FingerprintSnapshot = {image?: FingerprintImage; error?: string};
 type Entry = {request: FingerprintRequest; snapshot: FingerprintSnapshot; listeners: Set<() => void>; due: number; touched: number};
 const keyOf = (r: FingerprintRequest) => JSON.stringify([r.entity, r.id, r.profile, r.events]);

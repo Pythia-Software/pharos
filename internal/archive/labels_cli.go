@@ -199,7 +199,8 @@ func (c *Catalog) LabelsStatus(ctx context.Context, settings LabelerSettings) (m
 		"labeled_messages":    `SELECT COUNT(*) FROM message_labels`,
 		"units":               `SELECT COALESCE(SUM(units),0) FROM message_labels_conversations`,
 		"built_conversations": `SELECT COUNT(*) FROM message_labels_conversations`,
-		"dirty_conversations": `SELECT COUNT(*) FROM message_labels_dirty`,
+		// Dirty, or resting on execution changes not yet marked.
+		"dirty_conversations": `SELECT COUNT(*) FROM (SELECT conversation_id FROM message_labels_dirty UNION ` + executionUnmarkedSQL(ctx, c.DB, "message_labels_conversations") + `)`,
 		"other_model":         `SELECT COUNT(*) FROM message_labels WHERE model<>? OR contract<>?`,
 	} {
 		var value int64

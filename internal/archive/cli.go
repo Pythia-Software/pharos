@@ -324,6 +324,8 @@ func Run(arguments []string) error {
 			return runFindingsCLI(catalog, args)
 		case "labels":
 			return runLabelsCLI(ctx, config, catalog, op, args, os.Stdout, os.Stderr)
+		case "execution-evidence":
+			return runExecutionEvidenceCLI(ctx, catalog, op, args, os.Stdout, os.Stderr)
 		case "health":
 			value := catalog.Health()
 			value["storage"] = storage(config)
@@ -378,6 +380,11 @@ func cliCatalogOperation(command string, args []string) OperationSpec {
 		return OperationSpec{Kind: "index.captures"}
 	case "labels":
 		return labelsCLIOperation(args)
+	case "execution-evidence":
+		// status only reads.
+		if firstOf(args) == "run" {
+			return OperationSpec{Kind: "catalog.execution-evidence"}
+		}
 	}
 	return OperationSpec{}
 }
@@ -561,7 +568,7 @@ func firstOf(args []string) string {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,agent-events,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,agent-events,execution-evidence,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
 
 }
 func urlQueryEscape(value string) string {
