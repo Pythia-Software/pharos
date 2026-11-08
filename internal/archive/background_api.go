@@ -586,7 +586,8 @@ func batteryHeadline(policy batteryPolicy, power powerState) map[string]any {
 // projected from the items' measured costs.
 func (s *Server) backgroundDayCost(ctx context.Context, settings backgroundSettings, costs map[string]itemCost, at time.Time) map[string]any {
 	since := at.Add(-24 * time.Hour)
-	frequent, checks, idle, peak := 0.0, 0, 0, int64(0)
+	// peak is null when no run in the window read its RSS.
+	frequent, checks, idle, peak := 0.0, 0, 0, (*int64)(nil)
 	activeHours := map[string]bool{}
 	for _, sample := range s.Catalog.automaticSamples(ctx, 400) {
 		finished, ok := parseTime(sample.FinishedAt)
@@ -595,7 +596,9 @@ func (s *Server) backgroundDayCost(ctx context.Context, settings backgroundSetti
 		}
 		frequent += sample.Seconds
 		checks++
-		peak = max(peak, sample.Peak)
+		if sample.Peak != nil && (peak == nil || *sample.Peak > *peak) {
+			peak = sample.Peak
+		}
 		if sample.Workspaces == 0 {
 			idle++
 		} else {
