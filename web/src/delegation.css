@@ -1021,7 +1021,7 @@
 /* The disclosure keeps its Key control available beside either presentation. */
 .lt-key-disclosure{display:inline}
 .lt-timeline-legend.is-readonly{position:relative;z-index:11}
-.lt-timeline-legend.is-readonly :is(.usage-legend-item,.lt-key-open){cursor:zoom-in}
+.lt-timeline-legend.is-readonly :is(.usage-legend-item,.lt-key-open){cursor:pointer}
 .lt-key-open{background:none;color:var(--ink);font:inherit}
 .lt-key-disclosure::details-content{display:contents}
 .lt-timeline-legend.is-compact{display:flex;flex-wrap:wrap;align-items:center;gap:0 3px}
@@ -1076,7 +1076,7 @@
 /* The sidebar clock is a static overview; session identities remain live.
    Activating the clock preserves saved columns, window and disclosures. */
 .delegation-parallel.is-preview{position:relative;--lt-execution:clamp(110px,40%,175px)!important;--lt-events:0px!important;--lt-time:minmax(0,1fr)!important;--lt-min-width:0px!important}
-.lt-preview-activate{position:absolute;inset:0;z-index:10;width:100%;padding:0;border:0;border-radius:0;background:transparent;cursor:zoom-in;text-align:right;color:var(--accent)}
+.lt-preview-activate{position:absolute;inset:0;z-index:10;width:100%;padding:0;border:0;border-radius:0;background:transparent;cursor:pointer;text-align:right;color:var(--accent)}
 .lt-preview-activate>span{position:absolute;right:0;top:0;display:inline-flex;align-items:center;gap:4px;padding:2px 4px;background:var(--panel);font-size:10px}
 .lt-preview-activate .app-icon{width:12px;height:12px}
 .lt-preview-activate:hover{background:color-mix(in srgb,var(--gold) 4%,transparent)}
