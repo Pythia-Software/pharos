@@ -2144,6 +2144,24 @@ test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip},
   assert.ok(await brand.evaluate(element=>element===document.activeElement),'ordinary search results must allow background interaction');
 });
 
+test('Ask Pharos errors float over full screen and dismiss without moving it @ 390', {skip}, async t => {
+  // A saved CLI that is no longer installed reports without a failed request.
+  const {page,shot}=await open(t,{url:'/ask',viewport:{width:390,height:700},ready:'#askPage .pharos-notice:not([hidden])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection:{provider:'Removed',model:'',effort:'Default'}},providers:[{id:'Codex'}]},
+  }});
+  const notice=page.locator('#askPage .pharos-notice');
+  assert.match(await notice.getByRole('alert').textContent(),/Removed is unavailable/);
+  const surface=page.locator('#askPage .pharos-product > :not(.pharos-notice-anchor):not([hidden])').first();
+  const shown=await surface.boundingBox(),box=await notice.boundingBox(),ask=await page.locator('#askPage .pharos-product').boundingBox();
+  assert.ok(box.x>=ask.x&&box.x+box.width<=ask.x+ask.width&&box.y>=ask.y,'the message stays on screen over Ask');
+  await shot('ask-error-notice');
+  await notice.getByRole('button',{name:'Dismiss message',exact:true}).focus();
+  await page.keyboard.press('Enter');
+  await notice.waitFor({state:'hidden'});
+  assert.deepEqual(await surface.boundingBox(),shown,'showing the message must not move Ask');
+  assert.ok(await page.evaluate(()=>!!document.activeElement?.closest('#askPage .pharos-product')),'dismissing keeps focus in Ask');
+});
+
 test('Ask Pharos full screen moves the chat to its own page and back @ 390', {skip}, async t => {
   const {page,shot,modal,editor,state}=await openAskOverlay(t,390);
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
