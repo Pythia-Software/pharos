@@ -989,6 +989,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:caf6314fa213596e:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-history-close cursor-interaction\" aria-label=\"Close chat history\" title=\"Close (Escape)\">",
+      "contract": "editing",
+      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
       "key": "fragment:cb3c3de9ef456866:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -1048,15 +1057,6 @@
       "owner": "<html:fragment>",
       "tag": "button",
       "control": "<button type=\"button\" class=\"pharos-plain pharos-recovery-clear cursor-interaction\">",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
-      "key": "fragment:eff75d161337f3d9:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-history-close cursor-interaction\" aria-label=\"Close chat history\">",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
