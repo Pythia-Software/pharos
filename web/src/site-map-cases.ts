@@ -225,6 +225,7 @@ function nodeCases(map: SiteMap) {
   const route = { mode: "rank" as const, sort: "cost", scope: "self", direction: "asc", collapsed: ["session-b", "session-a"], selected: "session-c", range: [1767268800000, 1767272400000] as [number, number] };
   const reader = new URL(conversationRowURL({ workspace_id: "workspace-1", conversation_id: "conversation-2" })!, "http://localhost");
   for (const [key, value] of Object.entries(delegationRouteValues(route))) if (value) reader.searchParams.set(key, value);
+  reader.searchParams.set("reader_navigator", JSON.stringify(["timeline","context","turns"]));
   reader.searchParams.set("explorer", "timeline");
   add("work", reader.pathname + reader.search, { work_id: "workspace-1", conversation: "conversation-2", ...route, collapsed: [...route.collapsed].sort(), tab: "timeline" });
   for (const scope of ["self", "all"]) {

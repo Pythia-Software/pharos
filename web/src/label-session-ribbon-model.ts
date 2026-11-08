@@ -12,7 +12,7 @@ const activityNames:Record<string,string>={read:'Read',write:'Write',run:'Run',g
 const group=(id:string,title:string,children:RibbonNode[]):RibbonNode=>({id,title,children,items:children.flatMap(child=>child.items)});
 
 
-export function activityCategory(tool:LabelTool):string{
+export function activityCategory(tool:Pick<LabelTool,'name'|'category'|'command_category'>):string{
  const name=tool.name.toLowerCase(),cat=(tool.category??'').toLowerCase(),command=(tool.command_category??'').toLowerCase();
  if(['wait_agent','wait','taskoutput'].includes(name))return 'wait';
  if(/sleep|poll/.test(name)||name==='write_stdin')return 'poll';
