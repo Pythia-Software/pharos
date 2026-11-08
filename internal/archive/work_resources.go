@@ -383,7 +383,10 @@ func (s *taskHelperScope) end() {
 			if s.start.Known.has(counterOwnCPU) && finish.Known.has(counterOwnCPU) && finish.CPUSeconds >= s.start.CPUSeconds {
 				observation.CPUSeconds = new(finish.CPUSeconds - s.start.CPUSeconds)
 			} else {
-				observation.Note += " CPU counters were unavailable or reset during the interval."
+				if observation.Note != "" {
+					observation.Note += " "
+				}
+				observation.Note += "CPU counters were unavailable or reset during the interval."
 			}
 			if finish.Known.has(counterMemory) {
 				observation.FootprintBytes = new(finish.Footprint)
