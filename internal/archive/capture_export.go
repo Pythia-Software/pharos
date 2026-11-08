@@ -70,12 +70,24 @@ type captureExportLimitSet struct {
 	Decoded   int64 // original (decoded) bytes across the export
 }
 
+// captureExportInspectionLimits bounds one pass over a directory tree the
+// export did not write (a capture's source directory, or an export being
+// verified), whatever that tree declares; tests lower it.
+type captureExportInspectionLimits struct {
+	Entries int // names examined in one pass: files, directories and names left out alike
+	Depth   int // directory levels below the export root (captures/<host>/<source> is 3)
+}
+
 var (
-	captureExportLimits = captureExportLimitSet{Metadata: 16 << 20, Members: 100_000, PathBytes: 4096, Stored: 1 << 40, Decoded: 1 << 40}
+	captureExportLimits     = captureExportLimitSet{Metadata: 16 << 20, Members: 100_000, PathBytes: 4096, Stored: 1 << 40, Decoded: 1 << 40}
+	captureExportInspection = captureExportInspectionLimits{Entries: 200_000, Depth: 128}
 	// captureExportHook injects failures and pauses in tests at named steps:
-	// "copy" (before each member, rel names it), "staged" (the complete
-	// stage before it is verified; rel is its path), "flush", "rename" and
-	// "published" (each durability flush after the rename).
+	// "scan" (each batch of names read from a directory; rel names the
+	// directory, "." for the inspected root), "copy" (before each member,
+	// rel names it), "recheck" (before each member is reread at the end of
+	// the freeze), "staged" (the complete stage before it is verified; rel is
+	// its path), "flush", "rename" and "published" (each durability flush
+	// after the rename).
 	captureExportHook func(step, rel string) error
 
 	errCaptureExportDurability = errors.New("the export was published, but its durability could not be confirmed")
@@ -442,9 +454,8 @@ type exportSource struct {
 // directory: each stored member with its recorded claim, and the
 // directories an export materializes.
 type exportClosure struct {
-	members   []string
-	claims    map[string]capturedVersion
-	emptyDirs []string
+	members []string
+	claims  map[string]capturedVersion
 	// prefix is the source directory relative to the export,
 	// captures/<host>/<source>/.
 	prefix string
@@ -589,37 +600,36 @@ func (m *captureManifest) exportClosure(host, source string) (exportClosure, err
 		}
 	}
 
-	// Directories: every member's ancestors, and each mapped root that has
-	// no member, which an export materializes empty.
-	dirs := map[string]bool{}
-	addAncestors := func(rel string) {
-		for dir := path.Dir(rel); dir != "." && !dirs[dir]; dir = path.Dir(dir) {
-			dirs[dir] = true
+	// Directories: every member's ancestors. A mapped root must name a latest
+	// member or a directory holding one; only the files root may be mapped
+	// with none, and an export then materializes it empty. Absent evidence
+	// (a vanished file, an undeclared empty directory) never becomes a
+	// directory.
+	dirs, currentDirs := map[string]bool{}, map[string]bool{}
+	addAncestors := func(set map[string]bool, rel string) {
+		for dir := path.Dir(rel); dir != "." && !set[dir]; dir = path.Dir(dir) {
+			set[dir] = true
 		}
 	}
 	for _, rel := range c.members {
-		addAncestors(rel)
+		addAncestors(dirs, rel)
+		if current[rel] {
+			addAncestors(currentDirs, rel)
+		}
 	}
 	for _, mapping := range m.PathMap {
 		rel := mapping.Captured
-		if current[rel] || dirs[rel] {
-			continue
-		}
-		if _, member := c.claims[rel]; member {
+		_, member := c.claims[rel]
+		switch {
+		case current[rel] || currentDirs[rel]:
+		case member:
 			return c, fmt.Errorf("mapped root %s is an earlier version, not a latest capture", rel)
+		case rel == captureFilesDir:
+			dirs[rel] = true
+		default:
+			return c, fmt.Errorf("mapped root %s names neither a latest capture nor a directory holding one", rel)
 		}
-		for dir := path.Dir(rel); dir != "."; dir = path.Dir(dir) {
-			if _, member := c.claims[dir]; member {
-				return c, fmt.Errorf("mapped root %s lies under the captured file %s", rel, dir)
-			}
-		}
-		if !slices.Contains(c.emptyDirs, rel) {
-			c.emptyDirs = append(c.emptyDirs, rel)
-		}
-		dirs[rel] = true
-		addAncestors(rel)
 	}
-	slices.Sort(c.emptyDirs)
 	for rel := range c.claims {
 		if dirs[rel] {
 			return c, fmt.Errorf("%s is both a captured file and a directory", rel)
@@ -639,6 +649,11 @@ func (m *captureManifest) exportClosure(host, source string) (exportClosure, err
 	slices.Sort(c.dirs)
 	if err := checkExportPaths(c.files, c.dirs); err != nil {
 		return c, err
+	}
+	for _, dir := range c.dirs {
+		if strings.Count(dir, "/")+1 > captureExportInspection.Depth {
+			return c, fmt.Errorf("%w: a directory is more than %d levels deep", errCaptureExportScope, captureExportInspection.Depth)
+		}
 	}
 	return c, nil
 }
@@ -768,21 +783,17 @@ func stageCaptureExport(ctx context.Context, rootDir, hostDir, sourceDir, stage 
 		return CaptureExport{}, err
 	}
 	c := src.closure
-	if err = checkSourceRoot(sourceDir); err != nil {
+	inspect := newExportInspection(ctx, len(c.prefix), strings.Count(c.prefix, "/"))
+	if err = inspect.checkSourceRoot(sourceDir); err != nil {
 		return CaptureExport{}, err
 	}
-	present, err := enumerateNative(ctx, sourceDir)
+	present, err := inspect.enumerateNative(sourceDir, c.claims)
 	if err != nil {
 		return CaptureExport{}, err
 	}
 	for _, rel := range c.members {
 		if _, ok := present[rel]; !ok {
 			return CaptureExport{}, fmt.Errorf("declared member %s is missing from the capture", rel)
-		}
-	}
-	for _, rel := range c.emptyDirs {
-		if _, ok := present[rel]; ok {
-			return CaptureExport{}, fmt.Errorf("mapped root %s is a file the manifest does not declare", rel)
 		}
 	}
 
@@ -810,6 +821,7 @@ func stageCaptureExport(ctx context.Context, rootDir, hostDir, sourceDir, stage 
 		return CaptureExport{}, fmt.Errorf("%w: its metadata exceeds the stored-byte limit", errCaptureExportScope)
 	}
 	sources := map[string]exportStat{}
+	copied := map[string]string{}
 	for _, rel := range c.members {
 		if err = exportHook("copy", rel); err != nil {
 			return CaptureExport{}, err
@@ -818,14 +830,14 @@ func stageCaptureExport(ctx context.Context, rootDir, hostDir, sourceDir, stage 
 		if err != nil {
 			return CaptureExport{}, err
 		}
-		sources[rel] = st
+		sources[rel], copied[rel] = st, file.SHA256
 		envelope.Files = append(envelope.Files, file)
 	}
 	slices.SortFunc(envelope.Files, func(a, b CaptureExportFile) int { return strings.Compare(a.Path, b.Path) })
 
 	// Before the freeze ends: the metadata still holds the same bytes, every
-	// member is the file that was copied, unchanged, and nothing began a
-	// layout this export cannot carry.
+	// member is the file that was copied and still holds the bytes that were
+	// copied, and nothing began a layout this export cannot carry.
 	for _, meta := range []struct {
 		dir  *exportDir
 		name string
@@ -840,13 +852,10 @@ func stageCaptureExport(ctx context.Context, rootDir, hostDir, sourceDir, stage 
 			return CaptureExport{}, fmt.Errorf("%s changed while it was exported", meta.name)
 		}
 	}
+	buffer := make([]byte, 1<<20)
 	for _, rel := range c.members {
-		st, ok, err := sourceDir.statPath(rel)
-		if err != nil {
+		if err = recheckExportMember(ctx, sourceDir, rel, sources[rel], copied[rel], buffer); err != nil {
 			return CaptureExport{}, err
-		}
-		if !ok || !st.sameFile(sources[rel]) {
-			return CaptureExport{}, fmt.Errorf("%s changed while it was exported", rel)
 		}
 	}
 	if err = checkNoHistoryBackfill(rootDir); err != nil {
@@ -877,22 +886,142 @@ func checkNoHistoryBackfill(rootDir *exportDir) error {
 	return nil
 }
 
-// checkSourceRoot admits, at the top of a source's capture directory, only
-// the manifest, files and history, and the state an export leaves out:
-// the index marker and lock, compression outcomes and reader leases.
-func checkSourceRoot(sourceDir *exportDir) error {
-	names, err := sourceDir.entries()
+// recheckExportMember rereads rel's stored bytes, just before the freeze
+// ends, through the same confined handles as the copy, and requires them to
+// hash to digest, the copied member's stored SHA-256, with the file's
+// identity, type, size and modification time unchanged since the copy,
+// before and after the reread, and still at its name. It reads at most the
+// copied size plus one byte, without decoding, and charges nothing to the
+// export's byte budget: the bytes were counted when they were copied. A
+// mismatch fails the export; nothing in the capture is repaired. Any finite
+// check can still be raced by a writer outside the lock protocol.
+func recheckExportMember(ctx context.Context, sourceDir *exportDir, rel string, copied exportStat, digest string, buffer []byte) error {
+	if err := exportHook("recheck", rel); err != nil {
+		return err
+	}
+	f, before, err := sourceDir.openReadFile(rel)
 	if err != nil {
 		return err
 	}
-	slices.Sort(names)
-	for _, name := range names {
-		st, ok, err := sourceDir.stat(name)
-		if err != nil {
+	defer f.Close()
+	changed := fmt.Errorf("%s changed while it was exported", rel)
+	if !before.sameFile(copied) {
+		return changed
+	}
+	sum := sha256.New()
+	src := &recordCountReader{r: io.NewSectionReader(f, 0, copied.Size+1), ctx: ctx}
+	if _, err = io.CopyBuffer(sum, src, buffer); err != nil {
+		return err
+	}
+	after, err := fstatExport(f)
+	if err != nil {
+		return err
+	}
+	again, ok, err := sourceDir.statPath(rel)
+	if err != nil {
+		return err
+	}
+	if src.n != copied.Size || !after.sameFile(before) || !ok || !again.sameFile(before) || hex.EncodeToString(sum.Sum(nil)) != digest {
+		return changed
+	}
+	return nil
+}
+
+// exportInspection is one bounded pass over a directory tree the export did
+// not write. Every name it examines counts against one budget, whether it
+// is kept, left out or descended into; paths and depths are measured from
+// the export's root (base and depth give the inspected root's own), and
+// cancellation is checked before every name. Exceeding a bound fails the
+// pass rather than skipping what is left.
+type exportInspection struct {
+	ctx      context.Context
+	limits   captureExportInspectionLimits
+	base     int // export-relative bytes before a path relative to the inspected root
+	depth    int // export-relative depth of the inspected root
+	examined int
+}
+
+func newExportInspection(ctx context.Context, base, depth int) *exportInspection {
+	return &exportInspection{ctx: ctx, limits: captureExportInspection, base: base, depth: depth}
+}
+
+// scan calls visit with each name in dir, read in batches; rel names dir
+// relative to the inspected root ("" for the root itself).
+func (in *exportInspection) scan(dir *exportDir, rel string, visit func(name string) error) error {
+	if err := in.ctx.Err(); err != nil {
+		return err
+	}
+	lister, err := dir.list()
+	if err != nil {
+		return err
+	}
+	defer lister.Close()
+	label := rel
+	if label == "" {
+		label = "."
+	}
+	for {
+		names, err := lister.next(exportListBatch)
+		if err != nil && !errors.Is(err, io.EOF) {
 			return err
 		}
-		if !ok {
-			continue
+		if len(names) > 0 {
+			if hookErr := exportHook("scan", label); hookErr != nil {
+				return hookErr
+			}
+		}
+		slices.Sort(names)
+		for _, name := range names {
+			if ctxErr := in.ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			if in.examined++; in.examined > in.limits.Entries {
+				return fmt.Errorf("%w: inspecting it would examine more than %d entries", errCaptureExportScope, in.limits.Entries)
+			}
+			if visitErr := visit(name); visitErr != nil {
+				return visitErr
+			}
+		}
+		if err != nil || len(names) == 0 {
+			return nil
+		}
+	}
+}
+
+// child is name's path below rel, within the path bound.
+func (in *exportInspection) child(rel, name string) (string, error) {
+	child := name
+	if rel != "" {
+		child = rel + "/" + name
+	}
+	if in.base+len(child) > captureExportLimits.PathBytes {
+		return "", fmt.Errorf("%w: it holds a path longer than %d bytes", errCaptureExportScope, captureExportLimits.PathBytes)
+	}
+	return child, nil
+}
+
+// descend opens the directory name in dir, child below the inspected root,
+// within the depth bound, and runs fn on it.
+func (in *exportInspection) descend(dir *exportDir, name, child string, fn func(*exportDir) error) error {
+	if in.depth+strings.Count(child, "/")+1 > in.limits.Depth {
+		return fmt.Errorf("%w: it holds directories more than %d levels deep", errCaptureExportScope, in.limits.Depth)
+	}
+	sub, err := dir.sub(name)
+	if err != nil {
+		return err
+	}
+	defer sub.Close()
+	return fn(sub)
+}
+
+// checkSourceRoot admits, at the top of a source's capture directory, only
+// the manifest, files and history, and the state an export leaves out:
+// the index marker and lock, compression outcomes and reader leases.
+func (in *exportInspection) checkSourceRoot(sourceDir *exportDir) error {
+	return in.scan(sourceDir, "", func(name string) error {
+		st, ok, err := sourceDir.stat(name)
+		if err != nil || !ok {
+			return err
 		}
 		want := exportTypeRegular
 		switch {
@@ -911,15 +1040,16 @@ func checkSourceRoot(sourceDir *exportDir) error {
 		if st.Type != want {
 			return fmt.Errorf("%s in the capture is not a %s", name, map[uint32]string{exportTypeRegular: "regular file", exportTypeDir: "directory"}[want])
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
-// enumerateNative lists every regular file and directory under the
-// source's files/ and history/, relative to the source directory, and
-// fails on a link or special node anywhere there.
-func enumerateNative(ctx context.Context, sourceDir *exportDir) (map[string]exportStat, error) {
-	files, dirs := map[string]exportStat{}, map[string]bool{}
+// enumerateNative walks the source's files/ and history/, failing on a
+// link or special node anywhere there, and returns the declared members it
+// finds as regular files, relative to the source directory. Unreferenced
+// regular files are examined and left out.
+func (in *exportInspection) enumerateNative(sourceDir *exportDir, declared map[string]capturedVersion) (map[string]exportStat, error) {
+	present := map[string]exportStat{}
 	for _, top := range []string{captureFilesDir, captureHistoryDir} {
 		st, ok, err := sourceDir.stat(top)
 		if err != nil {
@@ -931,52 +1061,74 @@ func enumerateNative(ctx context.Context, sourceDir *exportDir) (map[string]expo
 		if !st.isDir() {
 			return nil, fmt.Errorf("%s in the capture is not a directory", top)
 		}
-		if err = walkExportTree(ctx, sourceDir, top, files, dirs); err != nil {
+		if err = in.descend(sourceDir, top, top, func(dir *exportDir) error { return in.walkNative(dir, top, declared, present) }); err != nil {
 			return nil, err
 		}
 	}
-	return files, nil
+	return present, nil
 }
 
-// walkExportTree records rel, a directory below base, and everything in it.
-func walkExportTree(ctx context.Context, base *exportDir, rel string, files map[string]exportStat, dirs map[string]bool) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	dir, err := base.subPath(rel)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	dirs[rel] = true
-	names, err := dir.entries()
-	if err != nil {
-		return err
-	}
-	slices.Sort(names)
-	for _, name := range names {
+func (in *exportInspection) walkNative(dir *exportDir, rel string, declared map[string]capturedVersion, present map[string]exportStat) error {
+	return in.scan(dir, rel, func(name string) error {
+		child, err := in.child(rel, name)
+		if err != nil {
+			return err
+		}
 		st, ok, err := dir.stat(name)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("%s/%s disappeared while it was listed", rel, name)
+			return fmt.Errorf("%s disappeared while it was listed", child)
 		}
-		child := rel + "/" + name
 		switch st.Type {
 		case exportTypeRegular:
-			files[child] = st
-		case exportTypeDir:
-			if err = walkExportTree(ctx, base, child, files, dirs); err != nil {
-				return err
+			if _, member := declared[child]; member {
+				present[child] = st
 			}
+			return nil
+		case exportTypeDir:
+			return in.descend(dir, name, child, func(sub *exportDir) error { return in.walkNative(sub, child, declared, present) })
 		case exportTypeSymlink:
 			return fmt.Errorf("%s is a symbolic link", child)
-		default:
-			return fmt.Errorf("%s is not a regular file or directory", child)
 		}
-	}
-	return nil
+		return fmt.Errorf("%s is not a regular file or directory", child)
+	})
+}
+
+// walkDeclared checks an export's tree below rel against the closure its
+// metadata declares: each name must be a declared file or directory, of
+// that type, and anything else is refused as soon as it is seen, without
+// listing what is inside it. seen collects what was found.
+func (in *exportInspection) walkDeclared(dir *exportDir, rel string, files, dirs, seen map[string]bool) error {
+	return in.scan(dir, rel, func(name string) error {
+		child, err := in.child(rel, name)
+		if err != nil {
+			return err
+		}
+		st, ok, err := dir.stat(name)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("%s disappeared while it was listed", child)
+		}
+		switch {
+		case st.Type == exportTypeSymlink:
+			return fmt.Errorf("%s is a symbolic link", child)
+		case st.Type != exportTypeRegular && st.Type != exportTypeDir:
+			return fmt.Errorf("%s is not a regular file or directory", child)
+		case files[child] && st.isRegular():
+			seen[child] = true
+			return nil
+		case dirs[child] && st.isDir():
+			seen[child] = true
+			return in.descend(dir, name, child, func(sub *exportDir) error { return in.walkDeclared(sub, child, files, dirs, seen) })
+		case st.isDir():
+			return fmt.Errorf("the export has an undeclared directory %s", child)
+		}
+		return fmt.Errorf("the export has an undeclared file %s", child)
+	})
 }
 
 // readExportMetadata reads the bounded metadata file name in dir.
@@ -1155,14 +1307,23 @@ func checkExportMember(ctx context.Context, f *os.File, st exportStat, claim cap
 }
 
 // verifyExportDir checks the export rooted at dir; see VerifyCaptureExport.
+// The tree it may hold is derived from the envelope and metadata before it
+// is walked, so an undeclared entry is refused when it is first seen.
 func verifyExportDir(ctx context.Context, dir *exportDir) (CaptureExport, error) {
-	names, err := dir.entries()
+	inspect := newExportInspection(ctx, 0, 0)
+	top := map[string]bool{}
+	err := inspect.scan(dir, "", func(name string) error {
+		if name != captureExportCaptures && name != captureExportEnvelope {
+			return fmt.Errorf("an export holds exactly %s and %s/, not %s", captureExportEnvelope, captureExportCaptures, name)
+		}
+		top[name] = true
+		return nil
+	})
 	if err != nil {
 		return CaptureExport{}, err
 	}
-	slices.Sort(names)
-	if !slices.Equal(names, []string{captureExportCaptures, captureExportEnvelope}) {
-		return CaptureExport{}, fmt.Errorf("an export holds exactly %s and %s/, not %v", captureExportEnvelope, captureExportCaptures, names)
+	if len(top) != 2 {
+		return CaptureExport{}, fmt.Errorf("an export holds exactly %s and %s/", captureExportEnvelope, captureExportCaptures)
 	}
 	f, st, err := dir.openRead(captureExportEnvelope)
 	if err != nil {
@@ -1178,10 +1339,6 @@ func verifyExportDir(ctx context.Context, dir *exportDir) (CaptureExport, error)
 		return CaptureExport{}, fmt.Errorf("%s: %w", captureExportEnvelope, err)
 	}
 
-	files, dirs := map[string]exportStat{}, map[string]bool{}
-	if err = walkExportTree(ctx, dir, captureExportCaptures, files, dirs); err != nil {
-		return CaptureExport{}, err
-	}
 	host, source := envelope.HostID, envelope.SourceName
 	if !validCaptureName(host) || !validCaptureName(source) {
 		return CaptureExport{}, errors.New("the envelope names an invalid host or source")
@@ -1234,24 +1391,33 @@ func verifyExportDir(ctx context.Context, dir *exportDir) (CaptureExport, error)
 	for _, file := range envelope.Files {
 		paths = append(paths, file.Path)
 	}
-	present := make([]string, 0, len(files))
-	for rel := range files {
-		present = append(present, rel)
-	}
-	slices.Sort(present)
 	if !slices.Equal(paths, c.files) {
 		return CaptureExport{}, fmt.Errorf("the envelope lists %d files where the manifest declares %d", len(paths), len(c.files))
 	}
-	if !slices.Equal(present, c.files) {
-		return CaptureExport{}, exportSetDifference("file", c.files, present)
+
+	files, dirs := map[string]bool{}, map[string]bool{}
+	for _, rel := range c.files {
+		files[rel] = true
 	}
-	presentDirs := make([]string, 0, len(dirs))
-	for rel := range dirs {
-		presentDirs = append(presentDirs, rel)
+	for _, rel := range c.dirs {
+		dirs[rel] = true
 	}
-	slices.Sort(presentDirs)
-	if !slices.Equal(presentDirs, c.dirs) {
-		return CaptureExport{}, exportSetDifference("directory", c.dirs, presentDirs)
+	seen := map[string]bool{captureExportCaptures: true}
+	err = inspect.descend(dir, captureExportCaptures, captureExportCaptures, func(sub *exportDir) error {
+		return inspect.walkDeclared(sub, captureExportCaptures, files, dirs, seen)
+	})
+	if err != nil {
+		return CaptureExport{}, err
+	}
+	for _, set := range []struct {
+		kind  string
+		paths []string
+	}{{"file", c.files}, {"directory", c.dirs}} {
+		for _, rel := range set.paths {
+			if !seen[rel] {
+				return CaptureExport{}, fmt.Errorf("the export is missing the %s %s", set.kind, rel)
+			}
+		}
 	}
 
 	budget := &exportBudget{stored: int64(len(hostRaw) + len(manifestRaw))}
@@ -1275,20 +1441,6 @@ func verifyExportDir(ctx context.Context, dir *exportDir) (CaptureExport, error)
 		}
 	}
 	return envelope, nil
-}
-
-func exportSetDifference(kind string, want, have []string) error {
-	for _, rel := range have {
-		if _, found := slices.BinarySearch(want, rel); !found {
-			return fmt.Errorf("the export has an undeclared %s %s", kind, rel)
-		}
-	}
-	for _, rel := range want {
-		if _, found := slices.BinarySearch(have, rel); !found {
-			return fmt.Errorf("the export is missing the %s %s", kind, rel)
-		}
-	}
-	return fmt.Errorf("the export's %ss differ from its declaration", kind)
 }
 
 // parseExportEnvelope accepts exactly the canonical envelope, optionally
