@@ -3,11 +3,15 @@ package archive
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -260,6 +264,17 @@ func TestLoginShellEnvToleratesNoiseAndHangs(t *testing.T) {
 		}
 		return path
 	}
+	// A background child records its pid; the test kills any survivor.
+	child := func(name string) int {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		pid, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil || convErr != nil || pid <= 0 {
+			t.Fatalf("background child pid %q: %v %v", data, err, convErr)
+		}
+		t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+		return pid
+	}
 	t.Setenv("CLAUDE_CONFIG_DIR", "/profiles/claude work")
 	t.Setenv("CODEX_HOME", "")
 	// Arguments are -l -i -c SCRIPT.
@@ -268,20 +283,56 @@ func TestLoginShellEnvToleratesNoiseAndHangs(t *testing.T) {
 	if err != nil || values["CLAUDE_CONFIG_DIR"] != "/profiles/claude work" || len(values) != 1 {
 		t.Fatalf("noisy shell = %v, %v", values, err)
 	}
-	// Waiting for the shell would take 30 s.
+	// Waiting for the shell would take 30 s; the deadline kills its whole
+	// process group, including the background job.
 	started := time.Now()
-	if _, err := loginShellEnv(script("hangs", "sleep 30 &\nsleep 30\n"), probeEnvNames(), 300*time.Millisecond); err == nil || time.Since(started) > 10*time.Second {
+	hangs := script("hangs", "sleep 30 &\necho $! > "+filepath.Join(dir, "hangs.pid")+"\nsleep 30\n")
+	if _, err := loginShellEnv(hangs, probeEnvNames(), time.Second); err == nil || !strings.Contains(err.Error(), "did not finish within") || time.Since(started) > 10*time.Second {
 		t.Fatalf("hanging shell returned %v after %s", err, time.Since(started))
 	}
+	hung := child("hangs.pid")
+	waitUntil(t, 5*time.Second, "the timed-out shell's background job to exit", func() bool {
+		return errors.Is(syscall.Kill(hung, 0), syscall.ESRCH)
+	})
 	// A background job holding stdout open must not hold up the probe: waiting
 	// for it would take until the 10 s timeout.
 	started = time.Now()
-	values, err = loginShellEnv(script("holder", "eval \"$4\"\nsleep 15 &\n"), probeEnvNames(), 10*time.Second)
+	values, err = loginShellEnv(script("holder", "eval \"$4\"\nsleep 15 &\necho $! > "+filepath.Join(dir, "holder.pid")+"\n"), probeEnvNames(), 10*time.Second)
 	if err != nil || values["CLAUDE_CONFIG_DIR"] == "" || time.Since(started) > 5*time.Second {
 		t.Fatalf("background job: %v, %v after %s", values, err, time.Since(started))
 	}
+	child("holder.pid")
 	if _, err := loginShellEnv(script("silent", "exit 0\n"), probeEnvNames(), time.Second); err == nil {
 		t.Fatal("a shell that printed nothing was accepted")
+	}
+	// Without complete markers, the shell's own failure is the error.
+	failing := script("failing", "echo 'startup error'\nexit 4\n")
+	var exit *exec.ExitError
+	if _, err := loginShellEnv(failing, probeEnvNames(), 2*time.Second); !errors.As(err, &exit) || exit.ExitCode() != 4 || !strings.HasPrefix(err.Error(), failing+": ") {
+		t.Fatalf("failing shell = %v", err)
+	}
+	// Where the process group cannot be isolated, the shell never runs.
+	launched := filepath.Join(dir, "launched")
+	marked := script("marked", "touch "+launched+"\neval \"$4\"\n")
+	t.Run("configuration refusal", func(t *testing.T) {
+		override(t, &loginShellProcessConfig, func(*exec.Cmd) error { return errProcessIsolationUnsupported })
+		if values, err := loginShellEnv(marked, probeEnvNames(), 2*time.Second); values != nil || !errors.Is(err, errProcessIsolationUnsupported) || !strings.HasPrefix(err.Error(), marked+": ") {
+			t.Fatalf("refused shell = %v, %v", values, err)
+		}
+	})
+	t.Run("disabled probing", func(t *testing.T) {
+		t.Setenv("PHAROS_PROBE_SHELL", "0")
+		t.Setenv("SHELL", marked)
+		override(t, &loginShellProcessConfig, func(*exec.Cmd) error {
+			t.Error("disabled probing configured a shell")
+			return errProcessIsolationUnsupported
+		})
+		if values, err := cachedLoginShellEnv(probeEnvNames()); values != nil || err != nil {
+			t.Fatalf("disabled probe = %v, %v", values, err)
+		}
+	})
+	if _, err := os.Stat(launched); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused or disabled shell ran: %v", err)
 	}
 	t.Run("cache follows selected tools", func(t *testing.T) {
 		t.Setenv("PHAROS_PROBE_SHELL", "1")
@@ -302,10 +353,16 @@ func TestLoginShellEnvToleratesNoiseAndHangs(t *testing.T) {
 			if err != nil || len(values) != 1 || values[name] == "" {
 				t.Fatal("previous tool choice hid this tool's override", name, values, err)
 			}
+			if shellEnvCache.key != noisy+"\x00"+name {
+				t.Fatalf("cache key = %q", shellEnvCache.key)
+			}
 		}
 		values, err := cachedLoginShellEnv(probeEnvNames())
 		if err != nil || len(values) != len(probeEnvNames()) {
 			t.Fatal("full CLI discovery reused a partial result", values, err)
+		}
+		if shellEnvCache.key != noisy+"\x00"+strings.Join(probeEnvNames(), "\x00") {
+			t.Fatalf("cache key = %q", shellEnvCache.key)
 		}
 	})
 }
