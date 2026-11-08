@@ -334,6 +334,30 @@ relative to one core. RSS/heap peaks are sampled; sub-second peaks can be
 missed. Allocations are process-wide, and OS I/O counters are **block counts,
 not measured bytes**. Duty-cycle estimates are not a power-consumption SLA.
 
+Where the figures come from depends on the platform (`resources_*.go`): on
+macOS CPU and block counts come from `getrusage` and RSS from
+`proc_pid_rusage`'s resident size, with `ps -o rss` as the fallback; on Linux
+CPU and block counts come from `getrusage` and RSS from `ps`. No other
+platform has OS counters implemented: there CPU, RSS and block counts are
+unavailable, and only Go allocation and heap figures are measured (a Go heap
+figure is never stored as RSS). The `measurement_limits` text says which basis
+applies.
+
+A figure that could not be read is **unavailable, not zero**: `cpu_seconds`,
+`cpu_percent_one_core`, `rss_baseline_bytes`, `rss_observed_peak_bytes`,
+`read_blocks`, `written_blocks` and a phase's `cpu_seconds` are `null` in the
+stored sample and the API. A run or phase has CPU only when both of its ends
+were read (its own CPU and its completed children's) and the counter did not
+go backwards; a failed baseline is never a delta from zero, and a reset is not
+a negative cost. Each phase takes its own baseline. The RSS peak is the
+highest reading that succeeded (a failed reading leaves a known peak alone;
+a run with no reading has none), with the same sampled-peak limitation. Run
+history recorded before this kept its numbers and is not rewritten; a field it
+lacks stays missing. The workload statistics count every run's elapsed time,
+but CPU, RSS and the CPU-duty estimate only from runs that measured them
+(zeros included); each metric's `samples` says how many, `last` is the newest
+measured value, and a metric no run measured is `null`.
+
 Reproduce workloads with scratch catalogs only:
 
 ```sh

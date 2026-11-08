@@ -913,7 +913,7 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 		slices.ContainsFunc(total.Processes[len(want):], func(r resourceReading) bool { return !strings.HasPrefix(r.Role, "worker:") }) {
 		t.Fatalf("the machine's total: %v, want %v and any workers", got, want)
 	}
-	if !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == 0 {
+	if !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == nil || *total.MemoryBytes == 0 {
 		t.Fatalf("the total's line: %+v", total)
 	}
 	entries := document["libraries"].([]map[string]any)
