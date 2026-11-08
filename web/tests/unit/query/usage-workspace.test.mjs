@@ -363,6 +363,21 @@ test("dashboard destinations describe their encoded query and consolidate record
   assert.deepEqual(query, original);
 });
 
+test("Agent Experience links to matching events ordered by confidence", () => {
+  const where = [{ field: "family_group", op: "=", value: "Friction" }, { field: "repository_name", op: "=", value: "pharos" }];
+  const chart = { ...EMPTY_QUERY, where, aggregations: [{ id: "events", op: "count", groupBy: ["day", "family_group"], label: "Events" }] };
+  const links = dashboardQueryLinks("agent_events", chart, loadSchema(agentEvents), new URLSearchParams({ analyze_topic: "agent_experience" }));
+  const link = links.find(item => item.title === "Events to read");
+  assert.ok(link);
+  const params = new URL(link.href, "http://localhost").searchParams;
+  const query = decodeQueryStrict(params.get("q_agent_events"));
+  assert.equal(readUsageWorkspace(params).dataset, "agent_events");
+  assert.deepEqual(query.where, where);
+  assert.deepEqual(query.orderBy.map(({ field, dir }) => [field, dir]), [["probability", "desc"], ["occurred_at", "desc"], ["id", "asc"]]);
+  for (const field of ["family", "sentence", "subject", "response", "source"]) assert.ok(query.select.some(column => column.field === field));
+  assert.doesNotThrow(() => toQueryRequestV3(query, loadSchema(agentEvents), { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true }));
+});
+
 test("dashboard filter descriptions preserve alternatives, negations, empties and date gaps", () => {
   const schema = loadSchema(usage);
   const query = { ...EMPTY_QUERY, where: [

@@ -189,7 +189,7 @@
 .query-box-scale-label,.query-box-key { color:var(--muted); font-size:9px; }
 .query-box-rows { display:flex; flex:1; flex-direction:column; justify-content:space-around; gap:8px; position:relative; min-height:0; }
 .query-box-gridline { position:absolute; top:0; bottom:0; width:1px; background:var(--line); opacity:.5; }
-.query-box-row { position:relative; min-height:34px; padding:2px 0; cursor:help; }
+.query-box-row { position:relative; min-height:34px; padding:2px 0; cursor:default; }
 .query-shared-box.is-dense .query-box-rows { justify-content:space-evenly; gap:2px; }
 .query-shared-box.is-dense .query-box-row { min-height:0; padding:0; }
 .query-shared-box.is-dense .query-box-marks { margin:1px 3px; }
@@ -224,7 +224,7 @@
 .query-role-label>span { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .query-role-label small { flex:none; color:var(--muted); font-size:8px; }
 .query-role-track { display:flex; height:8px; margin:4px 0; border-radius:2px; overflow:hidden; }
-.query-role-track i { display:block; height:100%; cursor:help; }
+.query-role-track i { display:block; height:100%; cursor:default; }
 .query-role-values { color:var(--muted); font-size:8px; }
 /* Compact rows retain the common axis and full hover statistics. */
 .query-shared-box.is-dense { gap:6px; }

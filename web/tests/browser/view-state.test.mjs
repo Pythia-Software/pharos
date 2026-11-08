@@ -1608,7 +1608,7 @@ test('Data Guide terms and example restore and return focus',{skip},async t=>{
 });
 
 test('message card labels and sentence events restore independently in the reader',{skip},async t=>{
- const at='2026-11-05T14:00:00Z',prompt='Please review the importer and keep the existing CSV format. Show the evidence before changing the parser.',thought='I should compare the parser with the saved fixtures first. The import fails when a quoted cell contains a newline. I will preserve that cell and add a focused check.',reply='The parser now keeps quoted newlines inside their cells. The existing fixtures pass, and the added check covers the failing import.';
+ const at='2026-11-05T14:00:00Z',prompt='Please review the importer and keep the existing CSV format. Show the evidence before changing the parser.',thought='I should compare the parser with the saved fixtures first. The import fails when a quoted cell contains a newline. I will preserve that cell and add a focused check.'+' Additional context.'.repeat(30),reply='The parser now keeps quoted newlines inside their cells. The existing fixtures pass, and the added check covers the failing import.';
  const labeled=(id,role,kind,text,label,segment,seconds)=>({id,native_id:id,role,kind,text,created_at:new Date(Date.parse(at)+seconds*1000).toISOString(),labels:{ids:[label],probs:{[label]:.94},segment}});
  const messages=[labeled('tint-prompt','user','message',prompt,'P.request.work.implement','H-typed',0),labeled('tint-thinking','assistant','reasoning',thought,'C.deliberation.plan','TH',10),labeled('tint-reply','assistant','message',reply,'C.report.verification','AR',25)];
  const sentence='The import fails when a quoted cell contains a newline.';
@@ -1626,8 +1626,20 @@ test('message card labels and sentence events restore independently in the reade
  await reasoning.locator('summary').click();
  await page.locator('.thinking-card mark.agent-event').waitFor();
  assert.equal(await page.getByText(sentence,{exact:false}).count()>0,true);
- await page.locator('.thinking-card').hover({position:{x:5,y:5}});await page.getByRole('tooltip').waitFor();
- assert.match(await page.getByRole('tooltip').textContent(),/Plan/);
+ const card=page.locator('.thinking-card'),tip=page.getByRole('tooltip');
+ await card.hover({position:{x:3,y:3}});await tip.waitFor();
+ assert.match(await tip.textContent(),/Plan/);
+ await card.locator('.message-prose').hover();assert.equal(await tip.isVisible(),false,'message text does not show the card label');
+ await card.locator('mark.agent-event').hover();assert.match(await tip.textContent(),/Obstacle/,'highlighted sentence still shows its event');
+ await card.hover({position:{x:3,y:3}});await tip.waitFor();
+ await page.mouse.down();assert.equal(await tip.isVisible(),false,'pressing to select hides the tooltip');
+ await card.locator('.message-prose').hover();await card.hover({position:{x:3,y:3}});
+ assert.equal(await tip.isVisible(),false,'dragging does not reopen the tooltip');await page.mouse.up();
+ await card.locator('.message-toggle').hover();assert.equal(await tip.isVisible(),false,'card controls do not show the label');
+ await card.locator('.message-toggle').click();assert.equal(await card.locator('.message-toggle').getAttribute('aria-expanded'),'true');
+ const human=page.locator('.speaker-row.human[data-label-family]').first();
+ await human.hover({position:{x:3,y:3}});await tip.waitFor();assert.match(await tip.textContent(),/Implement/);
+ await human.locator('.message-prose').hover();assert.equal(await tip.isVisible(),false);
  await page.mouse.move(0,0);
  await app.shot('message-card-tints-dark');
  await page.getByRole('checkbox',{name:'Message labels',exact:true}).uncheck();await app.settled();
