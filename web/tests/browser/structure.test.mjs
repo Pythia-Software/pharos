@@ -381,7 +381,8 @@ const ROUTES = [
       assert.equal(await unmeasured.getAttribute('aria-valuenow'), null, 'unknown work is accessible without a fabricated percentage');
     },
   },
-  { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
+  { name: "Home", url: "/", ready: ".home-recent-grid .conversation-result-card" },
+  { name: "Home without recent conversations", url: "/", ready: ".home-recent-empty", api: { "GET /api/library/recent-conversations": { items: [] } } },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",
     check: page => page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input")) },
   { name: "Home search before date", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).click(); await page.getByRole("combobox", { name: "Date comparison", exact: true }).selectOption("to"); }, shown: ".home-search-disclosure.is-expanded" },
@@ -1184,6 +1185,19 @@ test("dashboard catalog stays readable while a preview is pending", { skip }, as
     await settled();
     await page.unroute('**/api/query/tl1_attempts/*', hold);
   }
+});
+
+test('Recent conversation links open the selected conversation and search', { skip }, async t => {
+  const { page, settled, calls } = await open(t, { url: '/', ready: '.home-recent-grid .conversation-result-card' });
+  assert.equal(calls.some(call => /\/api\/work\/.+\/conversations\//.test(call.path)), false, 'previews do not load transcripts');
+  await page.locator('.home-recent-grid .conversation-result-title').first().click();
+  await page.waitForURL(url => url.pathname === `/work/${workID}/conversation/${rootConversation}`);
+  await page.locator('#detail .conversation-panel:not(.conversation-loading)').first().waitFor();
+  await settled();
+  await page.goBack();
+  await page.locator('.home-recent-search').click();
+  await page.waitForURL(url => url.pathname === '/library' && url.searchParams.get('view') === 'conversation');
+  await page.locator('#queryTableLibrary .conversation-result-card').first().waitFor();
 });
 
 test('pages without section menus use the full window', { skip }, async t => {
