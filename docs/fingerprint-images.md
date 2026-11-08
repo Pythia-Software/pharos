@@ -56,6 +56,25 @@ fresh random generation prevents a render for a deleted ID from publishing onto
 an entity later recreated with that same ID. Rolled-back source writes have no
 cache effect.
 
+Rendering waits while the analysis chain is running or its tools, writing,
+related-conversation, message-label or agent-event stages have pending generations.
+Disabled message-label and agent-event analyses do not hold rendering for ordinary
+backlog; stored evidence known to be superseded still cannot be stamped current.
+An interrupted analysis keeps its pending generation, so stopping a run does not
+make its fingerprints eligible. Outside the chain, dirty labels or agent events
+and superseded execution evidence hold the affected conversation and its workspace
+until that analysis completes. Both event appearances wait. Waiting entities keep
+their last good images and queue state; they do not render interim images, write
+retry attempts or increment rendering progress. Ready entities can progress past
+a higher-priority entity waiting on analysis. Expired-blob cleanup still runs.
+
+Hourly, Daily and Ad hoc passes run fingerprints after the analysis stages and
+writing refinement. If analysis is still pending, the pass records neither
+success nor failure and retains its request for a later background check. It
+resumes when work becomes eligible even if continuous rendering is disabled;
+scheduled retries retain scheduled priority and power policy. A requested
+maintenance task likewise stays blocked rather than acknowledging an empty pass.
+
 Opening a catalog adds queue metadata for existing entities. A changed renderer
 version requeues existing images while retaining the last good PNGs, unless
 `fingerprintSameImages` records that the earlier renderer drew the same images:
