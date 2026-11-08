@@ -346,3 +346,26 @@ recorded trial reports have not been rewritten. The present harness supervises
 its original POSIX process group; detached, reparented descendants are outside
 that cleanup guarantee and require a separate validated supervisor before a
 workload that creates them can be admitted.
+
+Portability integration checks on the final code passed:
+
+- Go fast and full suites (archive package: 38.40 s and 48.03 s).
+- Focused resource-accounting race checks, plus five repeated race runs of
+  the lease, helper-counter and concurrent-maintenance fixtures.
+- Actual retained-binary recovery/publication fixtures, probe memory/CPU
+  fixtures and lifecycle guard/report/verdict fixtures.
+- Node 24 web checks and full matrix: 1,560 passed, three skipped in each.
+- Both focused background-control/activity-panel browser cases passed.
+- All 39 Python experiment-harness tests passed.
+- Linux amd64 archive test-binary cross-compilation, including manual probes,
+  and Windows amd64 production-source cross-compilation passed with cgo off.
+  Windows archive test compilation still stops on existing `syscall.Flock`
+  uses in `app_update_test.go`; that file is unchanged by this stack. No
+  native Linux or Windows execution or support is claimed.
+
+The first full-suite attempt exposed an unsynchronized call-count map shared
+by the concurrent fake tasks in `TestRunLibraryReportsEachKindAndWithdrawsOnCancel`.
+That fixture now synchronizes its writes and snapshot; the repeated race
+checks and subsequent full suite passed. The independent review's unverified
+self-lease, helper-note and incomplete probe-CPU findings were also resolved.
+Private logs and review receipts remain under `.context/portability/`.
