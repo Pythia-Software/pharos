@@ -3400,15 +3400,6 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "6c12af565d87bcc7:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderConversation",
-      "tag": "button",
-      "control": "'button', 'chip model-search', conversation.model",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
       "key": "74fa28f1d8b00997:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
@@ -5141,6 +5132,26 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
+      "key": "04b33fe3eee75c33:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "data-view-field=\"sidebar_visible\" onClick={showSessions}",
+      "binding": "sidebar_visible",
+      "contract": "view.sidebar_visible",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "04b33fe3eee75c33:1",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "data-view-field=\"sidebar_visible\" onClick={showSessions}",
+      "binding": "sidebar_visible",
+      "contract": "view.sidebar_visible",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "2562bc8689ddb3ca:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5177,15 +5188,6 @@
       "binding": "delegation_tint",
       "contract": "view.delegation_tint",
       "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "5eba9ec1822f23d8:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "button",
-      "control": "onClick={() => openExternal(n.external_parent!, n.parent_id)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
       "key": "7387f1cf2fb13437:0",
@@ -5252,26 +5254,6 @@
       "control": "onClick={() => single ? setReaderView(t) : display(t)} onKeyDown={(event) => { if ( ![\"ArrowLeft\", \"ArrowRight\", \"Home\", \"End\"].includes( event.key, ) ) return; event.preventDefault(); const nextIndex = event.key === \"Home\" ? 0 : event.key === \"End\" ? tabs.length - 1 : (index + (event.key === \"ArrowRight\" ? 1 : tabs.length - 1)) % tabs.length; if (single) setReaderView(tabs[nextIndex]); else display(tabs[nextIndex]); event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>(\"button\")[nextIndex].focus(); }}",
       "contract": "view.reader_view",
       "reason": "Single-agent tabs bind reader_view through useViewState; workspace tabs use the existing explorer URL owner (readDelegationRoute/display), including keyboard selection and workspace-history restoration."
-    },
-    {
-      "key": "c26a1ddf974ec6cc:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "button",
-      "control": "onClick={() => openNode(n)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "cbf5b8d632cafc7c:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "ViewDisclosure",
-      "control": "viewKey=\"delegation:scope\"",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound by the shared view-state primitive."
     },
     {
       "key": "ef8df6715bf8aa5d:0",
