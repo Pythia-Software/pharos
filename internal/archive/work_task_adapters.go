@@ -232,7 +232,9 @@ func runConversationWork(ctx context.Context, c *Catalog, selection workSelectio
 	if err != nil {
 		var classified *workError
 		switch {
-		case errors.Is(err, errWorkDomainBusy) || errors.Is(err, errLabelsRunning):
+		case errors.Is(err, errWorkDomainBusy) || errors.Is(err, errLabelsRunning) || errors.Is(err, errAgentEventsRunning):
+			// Another holder (a CLI pass, say) has the lock: wait for it.
+			// Only contention wraps these sentinels, never a failed lock.
 			return workBatchResult{}, workBlocked(workBlocker{Reason: workBlockedWriter, Detail: err.Error()})
 		case errors.Is(err, labelrt.ErrBudget):
 			// The model cache (memory, the shared GPU, a draining runner) is
@@ -654,7 +656,7 @@ func (t *modelWorkTask) RunBatch(ctx context.Context, selection workSelection, a
 		return t.session.Run(ctx, ids, t.limit)
 	})
 	t.failed.charged(selection, err, workRevisionNow(t.server.Catalog))
-	if errors.Is(err, errLabelsSessionStale) {
+	if errors.Is(err, errLabelsSessionStale) || errors.Is(err, errAgentEventsSessionStale) {
 		t.closeSession()
 		t.server.work.runner.InterruptKinds([]string{t.kind}, "the analysis model changed; reissue the request for its new input policy")
 		return workBatchResult{Work: 1, Remaining: true}, nil
@@ -669,6 +671,9 @@ func (s *Server) currentPopulationKinds() []string {
 	kinds := []string{"analysis.authorship", "maintenance.parallelism", "maintenance.labels.query"}
 	if s.Config().Labels.Enabled {
 		kinds = append(kinds, "analysis.labels")
+	}
+	if s.work != nil && s.work.runner.byKind[kindSessionShape] != nil {
+		kinds = append(kinds, kindSessionShape)
 	}
 	if s.work != nil && s.work.runner.byKind["analysis.agent_events"] != nil && s.agentEventsEnabled(s.life.ctx) {
 		kinds = append(kinds, "analysis.agent_events")

@@ -127,6 +127,36 @@ func TestScheduledCommandsShareOneProcessAuthority(t *testing.T) {
 	}
 }
 
+func TestScheduledCommandDetachedWritingSharesItsAllowance(t *testing.T) {
+	override(t, &cliAuthority, nil)
+	c, config := testCatalog(t)
+	config.WorkEngine, config.BackgroundCPUs = "scheduled", 1
+	ops, err := beginCLIOperations(config, c, "index", "analysis.authorship")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ops.close()
+	if workAuthorityFor(t.Context(), c) != ops.authority {
+		t.Fatal("detached work lost the command's authority")
+	}
+	held, err := acquireWorkCPU(withWorkAuthority(t.Context(), ops.authority), nil, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Release()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if !c.startAuthorshipInContext("test-generation", ctx) {
+		t.Fatal("writing did not start")
+	}
+	waitUntil(t, 5*time.Second, "detached writing's CPU admission", func() bool { return ops.authority.facts().CPUWaiters == 1 })
+	cancel()
+	waitUntil(t, 5*time.Second, "detached writing to stop while waiting", func() bool { return !c.authorshipRunning() })
+	if facts := ops.authority.facts(); facts.CPUAllocated != 1 || facts.CPUWaiters != 0 {
+		t.Fatalf("detached work escaped or leaked its allowance: %+v", facts)
+	}
+}
+
 // A slot count saved on a drive, an engine name in a library's config, and a
 // stale environment value never stop a library opening on another Mac.
 func TestWorkSettingsArePortableAcrossMacs(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 )
 
 // Interface preferences live in the catalog's ui_preferences table, so a
@@ -75,6 +76,9 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 	if len(updates) == 0 && len(deletes) == 0 {
 		return nil
 	}
+	_, setsEvents := updates[agentEventsFlag]
+	checkEvents := c.work != nil && (setsEvents || slices.Contains(deletes, agentEventsFlag))
+	wasEventsEnabled := checkEvents && c.work.server.agentEventsEnabled(ctx)
 	err := c.writeTransaction(ctx, "ui-preferences", func(tx *sql.Tx) error {
 		for key, value := range updates {
 			if _, err := tx.Exec("INSERT INTO ui_preferences(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
@@ -91,6 +95,10 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 	c.flags.invalidate()
 	if err == nil {
 		c.rememberSavedFlags(updates, deletes)
+		if checkEvents && wasEventsEnabled != c.work.server.agentEventsEnabled(ctx) {
+			c.work.runner.InterruptKinds([]string{"analysis.agent_events"}, "agent analysis policy changed; reissue the request with the current analyses")
+			c.work.runner.Wake()
+		}
 	}
 	return err
 }

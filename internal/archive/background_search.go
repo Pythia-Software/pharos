@@ -52,6 +52,9 @@ type searchBatch struct {
 // backgroundSearch catches up the same projections and index backfills the
 // continuous daemons maintain, for an Hourly/Daily pass or an explicit Run now.
 func (c *Catalog) backgroundSearch(ctx context.Context) error {
+	if c.work != nil {
+		return c.work.backgroundSearchWork(ctx, c)
+	}
 	// Stop holds projection work and cancels a batch already in progress.
 	// The independent search-index backfills still run, as their daemons do.
 	if projection, done, running := c.libraryPass(ctx); running {
