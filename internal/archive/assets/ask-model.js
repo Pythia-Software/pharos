@@ -305,18 +305,6 @@ async function askRetryBackground(write, wait = ms => new Promise(resolve => set
     }
   }
 }
-// A later incremental visit cannot repair an earlier missed replacement.
-function askVisitRecovery(write, snapshot, reconciled) {
-  let needsReconcile=false;
-  return async input=>{
-    const current=needsReconcile?snapshot():input;
-    try {
-      const result=await write(current);
-      if(current.reconcile){needsReconcile=false;reconciled();}
-      return result;
-    } catch(error) {needsReconcile=true;throw error;}
-  };
-}
 // Keep snapshots/replacements ahead of later removals, even on slow requests.
 // A failed write must not prevent the next deletion or clear from running.
 let askVisitWrites = Promise.resolve();
@@ -324,6 +312,40 @@ function askWriteVisit(write) {
   const result = askVisitWrites.then(()=>askRetryBackground(write));
   askVisitWrites = result.catch(() => {});
   return result;
+}
+// Automatic visits are disposable. Keep at most one pending update while a
+// writer is busy; reconcile the current history after coalescing or failure.
+// The shared queue still orders these writes with explicit history removals.
+function askBufferVisits(write, snapshot, enqueue = askWriteVisit) {
+  let active=false, dirty=false, reconcile=false, latest=null, timer=null, delay=150, stopped=false;
+  const schedule=ms=>{if(!stopped&&!active&&timer===null)timer=setTimeout(run,ms);};
+  async function run(){
+    timer=null;
+    if(stopped||active||!dirty)return;
+    active=true;
+    try{
+      await enqueue(async()=>{
+        if(stopped)return;
+        const input=latest, full=snapshot();
+        const visit=input?.visits?.[0];
+        const retained=visit&&full.visits.some(item=>item.url===visit.url&&item.at===visit.at);
+        const current=reconcile||!input||input.reconcile||!retained?full:input;
+        dirty=false;reconcile=false;latest=null;
+        try { return await write(current); }
+        catch(error) { reconcile=true; throw error; }
+      });
+      delay=150;
+    }catch{
+      dirty=true;reconcile=true;delay=Math.min(delay*2,30000);
+    }finally{
+      active=false;
+      if(dirty)schedule(delay);
+    }
+  }
+  return {
+    add(input){if(dirty)reconcile=true;dirty=true;latest=input;schedule(150);},
+    stop(){stopped=true;clearTimeout(timer);timer=null;},
+  };
 }
 // Keep a little of the preceding reply for context, then the latest exchange.
 // The viewport budget wins when a single exchange is itself very long.

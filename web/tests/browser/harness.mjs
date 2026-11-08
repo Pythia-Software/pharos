@@ -94,6 +94,7 @@ function serve(routes, state, record) {
       if (state.inbox) return response.end(asset("index.html", inboxRoot));
       if (path === "/app") return response.end(applicationHTML());
       let page = state.concurrency ? html.replace("<html", "<html data-concurrency-prototype") : html;
+      if (state.managedSession) page = page.replace('<head>', '<head><script>window.pharosManagedSession='+JSON.stringify(state.managedSession).replace(/</g, '\\u003c')+';</script>');
       if (state.managedLibrary) {
         page = page.replace('<head>', '<head><script>window.pharosManagedLibrary='+JSON.stringify(state.managedLibrary).replace(/</g, '\\u003c')+';</script>')
           .replace('<div id="settingsContent" class="settings-content">', '<div id="settingsContent" class="settings-content">'+asset('managed-library.html'))
@@ -152,8 +153,8 @@ let shotCount = 0;
 // it ends), the API `calls` made so far, and `push(path, document)`, which
 // sends an event on the open event streams of path (see eventStream in
 // fixtures.mjs).
-export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, concurrency = false, managedLibrary = null, inbox = false, ready } = {}) {
-  const state = { concurrency, managedLibrary, inbox, preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [], streams: {} };
+export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, concurrency = false, managedLibrary = null, managedSession = null, inbox = false, ready } = {}) {
+  const state = { concurrency, managedLibrary, managedSession, inbox, preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [], streams: {} };
   const errors = [], failed = [], calls = [], inflight = new Set();
   let wake = () => {};
   const routes = [...routeTable(api), ...(inbox ? [] : routeTable(defaultApi))];

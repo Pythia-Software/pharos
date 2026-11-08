@@ -96,6 +96,8 @@ type Catalog struct {
 	ingestRuns atomic.Int32
 	// flags caches feature flags read from ui_preferences (feature_flags.go).
 	flags featureFlagCache
+	// sessionPreferences buffers disposable UI state while the writer is busy.
+	sessionPreferences sessionPreferenceBuffer
 }
 
 func OpenCatalog(path string) (*Catalog, error) {
@@ -158,6 +160,7 @@ func filepathDir(path string) string {
 
 func (c *Catalog) Close() error {
 	cliWriteCheck("close")
+	c.closeSessionPreferences()
 	c.closeDerivedCache()
 	if c.labelers != nil {
 		c.labelers.Close()

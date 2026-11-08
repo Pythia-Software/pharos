@@ -482,16 +482,42 @@ test('a retrying visit stays ahead of a later deletion', async () => {
   timers.shift()();await Promise.all([visit,removal]);
   assert.deepEqual(events,['visit','visit','remove']);
 });
-test('a missed visit is reconciled from current history before the error clears', async () => {
-  let history=['new'],failed=true,cleared=0;
-  const writes=[];
-  const save=model.askVisitRecovery(input=>{writes.push(plain(input));if(failed)throw new Error('busy');},()=>({reconcile:true,visits:[...history]}),()=>cleared++);
-  await assert.rejects(save({reconcile:false,visits:['old']}),/busy/);
-  history=['newer'];failed=false;
-  await save({reconcile:false,visits:['new']});
-  await save({reconcile:false,visits:['last']});
-  assert.deepEqual(writes,[{reconcile:false,visits:['old']},{reconcile:true,visits:['newer']},{reconcile:false,visits:['last']}]);
-  assert.equal(cleared,1);
+test('automatic visits coalesce while busy and reconcile after failure or deletion', async () => {
+  const timers=[],writes=[];
+  const queued=loadClassicScript('ask-model.js',{setTimeout:fn=>{timers.push(fn);return timers.length},clearTimeout(){}});
+  const first={url:'/one',at:1,title:'One'},second={url:'/two',at:2,title:'Two'},third={url:'/three',at:3,title:'Three'};
+  let history=[first],finish;
+  const buffer=queued.askBufferVisits(input=>{writes.push(plain(input));if(writes.length===1)return new Promise(resolve=>{finish=resolve});if(writes.length===2)throw new Error('busy');},
+    ()=>({reconcile:true,visits:[...history]}),write=>write());
+  buffer.add({reconcile:false,visits:[first]});
+  const running=timers.shift()();
+  history=[third,second,first];buffer.add({reconcile:false,visits:[second]});buffer.add({reconcile:false,visits:[third]});
+  finish();await running;
+  assert.equal(timers.length,1,'many visits leave only one pending write');
+  await timers.shift()();
+  assert.deepEqual(writes[1],{reconcile:true,visits:[third,second,first]});
+  history=[];
+  await timers.shift()();
+  assert.deepEqual(writes[2],{reconcile:true,visits:[]},'retry uses history after an explicit clear');
+  buffer.stop();
+
+  // Exercise the real retry queue: a later visit can arrive after one
+  // attempt fails, but before askRetryBackground starts its next attempt.
+  const retryTimers=[],attempts=[];
+  const retrying=loadClassicScript('ask-model.js',{setTimeout:(fn,ms)=>{retryTimers.push({fn,ms});return retryTimers.length},clearTimeout(){}});
+  history=[first];
+  const retryBuffer=retrying.askBufferVisits(async input=>{
+    attempts.push(plain(input));
+    if(attempts.length===1)throw Object.assign(new Error('busy'),{status:503});
+  },()=>({reconcile:true,visits:[...history]}));
+  retryBuffer.add({reconcile:false,visits:[first],replaces:{url:'/old',at:0}});
+  const retryingWrite=retryTimers.shift().fn();
+  while(!retryTimers.length)await Promise.resolve();
+  assert.equal(retryTimers[0].ms,500);
+  history=[second,first];retryBuffer.add({reconcile:false,visits:[second]});
+  retryTimers.shift().fn();await retryingWrite;
+  assert.deepEqual(attempts[1],{reconcile:true,visits:[second,first]},'the retry reconciles both visits and removes superseded entries');
+  retryBuffer.stop();
 });
 test('a single visit replaces one entry, while a full history write reconciles the private store', () => {
   const visit={url:'/analyze',at:2,title:'Analyze'};
