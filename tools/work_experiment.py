@@ -612,15 +612,33 @@ def process_table():
     return table
 
 
+def _still_present(pid):
+    """Whether pid still exists; a process this user may not signal exists too."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+# Windows from samples without per-sample coverage (earlier reports) prove nothing.
+COVERAGE_BASIS = "tree-coverage-v1"
+
+
 class TreeSampler(threading.Thread):
     """Samples a process tree about once a second.
 
     Simultaneous memory is the largest observed sum of the tree's physical
     footprints, so a spike between samples can be missed. Disk bytes are each
     process's counters at its last sample: a process's final second before it
-    exits is missed, so they are lower bounds. CPU is never taken from here;
-    the command's wait4 rusage is the CPU total. Other processes' CPU is recorded
-    as host noise, never subtracted.
+    exits is missed, so they are lower bounds. A process that vanished before
+    its read is that same lower bound; one still present whose counters or
+    identity cannot be read, or a counter that went backwards, makes the
+    affected figures incomplete, never a smaller number. CPU is
+    never taken from here; the command's wait4 rusage is the CPU total. Other
+    processes' CPU is recorded as host noise, never subtracted.
     """
 
     def __init__(self, root_pid, interval=1.0):
@@ -630,9 +648,12 @@ class TreeSampler(threading.Thread):
         self.processes, self.samples, self.errors = {}, 0, []
         self.peak = {"footprint_bytes": 0, "resident_bytes": 0, "processes": 0, "at_seconds": None}
         self.noise = {"load1": [], "other_cpu_percent": []}
-        # (Unix time, {process: (footprint, read, written)}, other-process CPU) per sample,
-        # so a run's own phase boundaries can scope memory, disk and noise afterwards.
+        # (Unix time, {process: (footprint, read, written)}, other-process CPU, unreadable
+        # present processes) per sample, so a run's own phase boundaries can scope memory,
+        # disk and noise afterwards.
         self.series = []
+        # Present processes that could not be read (up to five named), and counters that went backwards.
+        self.unreadable, self.counter_resets = {"samples": 0, "readings": 0, "examples": []}, 0
 
     def tree(self, table):
         members, frontier = {self.root}, [self.root]
@@ -653,13 +674,22 @@ class TreeSampler(threading.Thread):
         members = self.tree(table)
         now = time.monotonic() - self.started
         footprint = resident = 0
-        at, readings = time.time(), {}
+        at, readings, unreadable = time.time(), {}, 0
         for pid in members:
             info = _RusageInfoV4()
-            if self.libc is None or self.libc.proc_pid_rusage(pid, 4, ctypes.byref(info)) != 0:
+            if self.libc is None or self.libc.proc_pid_rusage(pid, 4, ctypes.byref(info)) != 0 \
+                    or not info.proc_start_abstime:
+                # A vanished child is the normal sampling lower bound; a present one is a gap.
+                if self.libc is not None and _still_present(pid):
+                    unreadable += 1
+                    if len(self.unreadable["examples"]) < 5:
+                        self.unreadable["examples"].append({"name": table[pid][3], "at_seconds": now})
                 continue
             key = f"{pid}:{info.proc_start_abstime}"
             entry = self.processes.setdefault(key, {"name": table[pid][3], "first_seconds": now})
+            if info.diskio_bytesread < entry.get("disk_read_bytes", 0) \
+                    or info.diskio_byteswritten < entry.get("disk_written_bytes", 0):
+                self.counter_resets += 1
             entry.update(last_seconds=now, disk_read_bytes=info.diskio_bytesread,
                          disk_written_bytes=info.diskio_byteswritten,
                          lifetime_max_footprint_bytes=info.lifetime_max_phys_footprint)
@@ -667,13 +697,16 @@ class TreeSampler(threading.Thread):
             footprint += info.phys_footprint
             resident += info.resident_size
         self.samples += 1
+        if unreadable:
+            self.unreadable["samples"] += 1
+            self.unreadable["readings"] += unreadable
         if footprint > self.peak["footprint_bytes"]:
             self.peak = {"footprint_bytes": footprint, "resident_bytes": resident, "processes": len(members),
                          "at_seconds": now}
         self.noise["load1"].append(os.getloadavg()[0])
         other = sum(row[2] for pid, row in table.items() if pid not in members)
         self.noise["other_cpu_percent"].append(other)
-        self.series.append((at, readings, other))
+        self.series.append((at, readings, other, unreadable))
 
     def run(self):
         while not self.stop_event.is_set():
@@ -694,25 +727,44 @@ class TreeSampler(threading.Thread):
         Each figure is as exact as its 1 s samples: a process's disk bytes are
         its last reading inside the window less its last reading at or before
         the start (0 if first seen inside), so each edge is within about one
-        sample interval, and I/O after a process's final sample is missed."""
+        sample interval, and I/O after a process's final sample is missed.
+
+        A sample inside the window that could not read a present process makes
+        memory and disk unavailable; one at the start edge, or a counter that
+        went backwards, makes disk unavailable. Coverage records why."""
         if self.libc is None:
             return {"basis": "unavailable", "reason": "no libproc process sampling on this host"}
         inside = [sample for sample in self.series if start <= sample[0] <= end]
         if not inside:
             return {"basis": "unavailable", "reason": "no process-tree sample fell inside this window"}
-        before, last = {}, {}
-        for at, readings, _other in self.series:
+        before, edge_unreadable = {}, 0
+        for at, readings, _other, unreadable in self.series:
             if at > start:
                 break
             before.update(readings)
-        for _at, readings, _other in inside:
-            last.update(readings)
-        disk = lambda index: sum(reading[index] - before.get(key, (0, 0, 0))[index] for key, reading in last.items())
-        noise = [other for *_rest, other in inside]
+            edge_unreadable = unreadable
+        previous, last, resets = dict(before), {}, 0
+        for _at, readings, _other, _unreadable in inside:
+            for key, reading in readings.items():
+                old = previous.get(key)
+                if old is not None and (reading[1] < old[1] or reading[2] < old[2]):
+                    resets += 1
+                previous[key] = last[key] = reading
+        unreadable = sum(sample[3] for sample in inside)
+        memory_complete = unreadable == 0
+        disk_complete = memory_complete and edge_unreadable == 0 and resets == 0
+        disk = lambda index: sum(reading[index] - before.get(key, (0, 0, 0))[index]
+                                 for key, reading in last.items()) if disk_complete else None
+        noise = [sample[2] for sample in inside]
+        peak = max(sum(r[0] for r in sample[1].values()) for sample in inside)
         return {"basis": "1s process-tree samples inside the window; footprint peak can miss spikes; disk bytes "
                          "are within one sample interval at each edge",
                 "samples": len(inside),
-                "peak_footprint_bytes": max(sum(r[0] for r in readings.values()) for _at, readings, _o in inside),
+                "coverage": {"basis": COVERAGE_BASIS, "memory": "complete" if memory_complete else "incomplete",
+                             "disk": "complete" if disk_complete else "incomplete",
+                             "unreadable_readings": unreadable, "unreadable_at_start": edge_unreadable,
+                             "counter_resets": resets},
+                "peak_footprint_bytes": peak if memory_complete else None,
                 "disk_read_bytes": disk(1), "disk_written_bytes": disk(2),
                 "host_noise": {"other_cpu_percent_mean": sum(noise) / len(noise), "other_cpu_percent_max": max(noise),
                                "basis": "ps %cpu of every process outside the measured tree (100 = one core)"}}
@@ -727,6 +779,11 @@ class TreeSampler(threading.Thread):
                      "simultaneous sum and can miss spikes; disk bytes are lower bounds (final second of each "
                      "process missed); CPU comes from the command's wait4 rusage, not samples",
             "samples": self.samples, "errors": self.errors,
+            # Recorded, never gated: whole-process figures beside an incomplete coverage are lower bounds.
+            "coverage": {"basis": COVERAGE_BASIS,
+                         "memory": "incomplete" if self.unreadable["readings"] else "complete",
+                         "disk": "incomplete" if self.unreadable["readings"] or self.counter_resets else "complete",
+                         "unreadable": self.unreadable, "counter_resets": self.counter_resets},
             "peak_simultaneous": self.peak,
             "max_process_lifetime_footprint_bytes": max(
                 (p["lifetime_max_footprint_bytes"] for p in self.processes.values()), default=0),
@@ -781,6 +838,18 @@ def _wait_command(process, timeout):
     return process.returncode, usage, state["timed_out"]
 
 
+# Exact per-command accounting needs these; there is no weaker substitute.
+SUPERVISION_PRIMITIVES = ("waitid", "P_PID", "WEXITED", "WNOWAIT", "wait4", "waitstatus_to_exitcode",
+                          "killpg", "setsid")
+
+
+def require_supervision():
+    """Refuse a host lacking the POSIX process-supervision primitives."""
+    missing = [name for name in SUPERVISION_PRIMITIVES if not hasattr(os, name)]
+    if missing:
+        raise RuntimeError(f"this host cannot supervise measured commands: os lacks {', '.join(missing)}")
+
+
 def supervised(argv, env, log_path, timeout, cwd=None, windows=None):
     """Run one measured command in its own process group with tree sampling.
 
@@ -790,7 +859,12 @@ def supervised(argv, env, log_path, timeout, cwd=None, windows=None):
     when it exits are killed and reported, because their CPU would otherwise
     be missing. windows, called once the command has exited, names the
     command's own phases as Unix-time spans; each gets the samples inside it.
+
+    A host without waitid(WNOWAIT), wait4 and process groups is refused before
+    any file is created or command launched. A descendant that leaves for its
+    own process group and is reparented is neither sampled nor stopped.
     """
+    require_supervision()
     at = time.monotonic()
     entry = {"command": argv[1] if len(argv) > 1 else argv[0], "exit_code": None, "cpu_basis": CPU_BASIS,
              "cpu_seconds": None}
@@ -883,6 +957,7 @@ def schema_version(database):
 def run(binary, master, destination, descriptor, role, retained_sha256=None):
     """One arm. A failed, erroring or timed-out arm still leaves a report, unsettled."""
     validate_descriptor(descriptor)
+    require_supervision()
     if role not in ("baseline", "candidate"):
         raise ValueError("role is baseline or candidate")
     if retained_sha256 is not None and not SHA256.match(retained_sha256):
@@ -1415,6 +1490,7 @@ def probe_run(probe, probe_sha256, master, destination, descriptor, role, engine
     probe observed executing. A baseline is the probe compiled from the
     retained source, identified by its hash."""
     validate_probe_descriptor(descriptor)
+    require_supervision()
     master, destination = master.resolve(), destination.resolve()
     if role not in ("baseline", "candidate") or engine not in ("classic", "scheduled"):
         raise ValueError("role is baseline or candidate; engine is classic or scheduled")
@@ -1586,8 +1662,25 @@ def _window_cpu(report, path):
     return _metric(section, ("cpu_seconds",))
 
 
+def _window_resource(report, path):
+    """A sampled window figure, or None unless its coverage proves it complete.
+
+    Windows recorded before coverage was reported prove nothing; a complete
+    zero stays zero."""
+    section = report
+    for key in path[:-1]:
+        section = section.get(key) if isinstance(section, dict) else None
+    coverage = section.get("coverage") if isinstance(section, dict) else None
+    kind = "memory" if path[-1] == "peak_footprint_bytes" else "disk"
+    if not isinstance(coverage, dict) or coverage.get("basis") != COVERAGE_BASIS or coverage.get(kind) != "complete":
+        return None
+    return _metric(section, path[-1:])
+
+
 def _probe_metric(report, path):
-    return _window_cpu(report, path) if path[-1] in ("work", "startup") else _metric(report, path)
+    if path[-1] in ("work", "startup"):
+        return _window_cpu(report, path)
+    return _window_resource(report, path) if "windows" in path else _metric(report, path)
 
 
 def noise_problems(role, report):

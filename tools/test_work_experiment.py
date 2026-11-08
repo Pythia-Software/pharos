@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 import sqlite3
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -747,6 +748,8 @@ class ProbeArmTests(Fixture):
                             "host_noise": {"other_cpu_percent_mean": 10.0}},
                             "windows": {"work": {"peak_footprint_bytes": 1 << 30, "disk_read_bytes": 1 << 30,
                                                  "disk_written_bytes": 1 << 30,
+                                                 "coverage": {"basis": work.COVERAGE_BASIS, "memory": "complete",
+                                                              "disk": "complete"},
                                                  "host_noise": {"other_cpu_percent_mean": 10.0}},
                                         "readiness": {"host_noise": {"other_cpu_percent_mean": 10.0}}}},
                 "probe": probe}
@@ -861,6 +864,30 @@ class ProbeArmTests(Fixture):
         no_window = self.probe_report()
         del no_window["process"]["windows"]["work"]
         self.assertEqual(compare(no_window)["release_gate"], "refused")
+        # A window that could not read a present process is unavailable, not its smaller sum,
+        # even when the lower bound already looks like a regression.
+        unread = self.probe_report()
+        unread["process"]["windows"]["work"]["coverage"]["memory"] = "incomplete"
+        unread["process"]["windows"]["work"]["peak_footprint_bytes"] = 4 << 30
+        result = compare(unread)
+        self.assertIn("peak_footprint_bytes", result["missing_metrics"])
+        self.assertNotIn("disk_read_bytes", result["missing_metrics"])
+        self.assertEqual((result["rejected"], result["release_gate"]), (False, "incomplete"))
+        reset = self.probe_report()
+        reset["process"]["windows"]["work"]["coverage"]["disk"] = "incomplete"
+        self.assertLessEqual({"disk_read_bytes", "disk_written_bytes"}, set(compare(reset)["missing_metrics"]))
+        # Earlier windows without coverage stay readable but cannot pass, even A/A.
+        legacy = self.probe_report("baseline", old)
+        del legacy["process"]["windows"]["work"]["coverage"]
+        result = work.compare_probe(baseline, legacy, "aa", old)
+        self.assertEqual(result["noise"], "incomplete")
+        self.assertEqual(result["metrics"]["disk_read_bytes"]["candidate"], None)
+        # A complete zero is a known zero, so growth from it is gated.
+        quiet = self.probe_report("baseline", old)
+        quiet["process"]["windows"]["work"]["disk_written_bytes"] = 0
+        result = work.compare_probe(quiet, self.probe_report(), "ab", old)
+        self.assertEqual(result["metrics"]["disk_written_bytes"]["baseline"], 0)
+        self.assertTrue(result["rejected"])
 
     def test_unavailable_or_bursty_noise_refuses_pairs_and_aa(self):
         old = "b" * 64
@@ -923,15 +950,89 @@ class ProbeArmTests(Fixture):
     def test_window_scopes_memory_disk_and_noise_to_its_span(self):
         sampler = work.TreeSampler(os.getpid())
         sampler.libc = object()  # the samples below stand in for proc_pid_rusage readings
-        sampler.series = [(10.0, {"probe": (900, 100, 1000)}, 5.0),        # startup: before the window
-                          (11.0, {"probe": (100, 150, 1100)}, 20.0),
-                          (12.0, {"probe": (200, 170, 1200), "worker": (300, 40, 7)}, 40.0),
-                          (13.0, {"probe": (900, 400, 9000)}, 500.0)]      # post-settlement checks
+        sampler.series = [(10.0, {"probe": (900, 100, 1000)}, 5.0, 0),        # startup: before the window
+                          (11.0, {"probe": (100, 150, 1100)}, 20.0, 0),
+                          (12.0, {"probe": (200, 170, 1200), "worker": (300, 40, 7)}, 40.0, 0),
+                          (13.0, {"probe": (900, 400, 9000)}, 500.0, 0)]      # post-settlement checks
         window = sampler.window(10.5, 12.5)
         self.assertEqual((window["samples"], window["peak_footprint_bytes"]), (2, 500))
         self.assertEqual((window["disk_read_bytes"], window["disk_written_bytes"]), (70 + 40, 200 + 7))
+        self.assertEqual((window["coverage"]["memory"], window["coverage"]["disk"]), ("complete", "complete"))
         self.assertEqual(window["host_noise"]["other_cpu_percent_mean"], 30.0)
         self.assertEqual(sampler.window(12.6, 12.9)["basis"], "unavailable")
+        # A present process unread inside the window leaves memory and disk unavailable;
+        # one unread at the start edge leaves only disk unavailable.
+        sampler.series[2] = (12.0, {"probe": (200, 170, 1200)}, 40.0, 1)
+        window = sampler.window(10.5, 12.5)
+        self.assertEqual((window["peak_footprint_bytes"], window["disk_read_bytes"]), (None, None))
+        self.assertEqual(window["coverage"]["unreadable_readings"], 1)
+        self.assertIn("other_cpu_percent_mean", window["host_noise"])
+        window = sampler.window(12.5, 13.5)
+        self.assertEqual((window["peak_footprint_bytes"], window["disk_written_bytes"]), (900, None))
+        self.assertEqual(window["coverage"]["unreadable_at_start"], 1)
+        # A counter that went backwards invalidates disk across the reset, not memory.
+        sampler.series[2] = (12.0, {"probe": (200, 170, 5)}, 40.0, 0)
+        window = sampler.window(10.5, 12.5)
+        self.assertEqual((window["peak_footprint_bytes"], window["disk_written_bytes"]), (200, None))
+        self.assertEqual((window["coverage"]["disk"], window["coverage"]["counter_resets"]), ("incomplete", 1))
+        # A complete window with no I/O reports a known zero.
+        sampler.series = [(10.0, {"probe": (100, 5, 5)}, 0.0, 0), (11.0, {"probe": (100, 5, 5)}, 0.0, 0)]
+        self.assertEqual(sampler.window(10.5, 11.5)["disk_read_bytes"], 0)
+
+    def test_sampler_separates_vanished_children_from_unreadable_present_ones(self):
+        root, child, gone, other = 100, 101, 102, 200
+        table = {root: (1, root, 0.0, "probe"), child: (root, root, 0.0, "pharos-labeler-ort"),
+                 gone: (root, root, 0.0, "git"), other: (1, other, 25.0, "Finder")}
+        readings = {root: (7, 1000, 10, 20)}
+
+        def proc_pid_rusage(pid, _flavor, ref):
+            if pid not in readings:
+                return -1
+            info = ref._obj
+            info.proc_start_abstime, info.phys_footprint, info.diskio_bytesread, info.diskio_byteswritten = readings[pid]
+            return 0
+
+        sampler = work.TreeSampler(root)
+        sampler.libc = types.SimpleNamespace(proc_pid_rusage=proc_pid_rusage)
+        with mock.patch.object(work, "process_table", return_value=table), \
+                mock.patch.object(work, "_still_present", side_effect=lambda pid: pid != gone):
+            sampler.sample()  # the child is present but unreadable; git exited before its read
+            readings[child] = (0, 500, 0, 0)  # identity unreadable
+            sampler.sample()
+            readings.update({child: (9, 500, 1, 1), root: (7, 1000, 5, 20)})  # root's read counter reset
+            sampler.sample()
+        self.assertEqual([sample[3] for sample in sampler.series], [1, 1, 0])
+        self.assertEqual(sampler.series[0][2], 25.0)
+        summary = sampler.summary()
+        self.assertEqual((summary["coverage"]["memory"], summary["coverage"]["disk"]), ("incomplete", "incomplete"))
+        self.assertEqual((summary["coverage"]["unreadable"]["readings"], summary["coverage"]["counter_resets"]), (2, 1))
+        self.assertEqual([e["name"] for e in summary["coverage"]["unreadable"]["examples"]], ["pharos-labeler-ort"] * 2)
+        # Only vanished children: the usual lower bound, still complete.
+        sampler = work.TreeSampler(root)
+        sampler.libc = types.SimpleNamespace(proc_pid_rusage=proc_pid_rusage)
+        with mock.patch.object(work, "process_table", return_value=table), \
+                mock.patch.object(work, "_still_present", return_value=False):
+            sampler.sample()
+        self.assertEqual(sampler.summary()["coverage"]["disk"], "complete")
+        self.assertEqual(sampler.window(0, sampler.series[0][0] + 1)["coverage"]["memory"], "complete")
+
+    def test_hosts_without_posix_supervision_are_refused_before_any_launch(self):
+        master = self.master()
+        probe, sha = self.binary("unsupervised-probe")
+        saved = os.WNOWAIT
+        del os.WNOWAIT
+        try:
+            with mock.patch.object(work.subprocess, "Popen", side_effect=AssertionError("launched")), \
+                    mock.patch.object(work, "TreeSampler", side_effect=AssertionError("sampled")):
+                with self.assertRaisesRegex(RuntimeError, "WNOWAIT"):
+                    work.supervised(["/bin/true"], {"PATH": "/usr/bin:/bin"}, self.root / "log", 20)
+                self.assertFalse((self.root / "log").exists())
+                with self.assertRaisesRegex(RuntimeError, "WNOWAIT"):
+                    work.probe_run(probe, sha, master, self.root / "probe-arm", probe_descriptor(), "baseline",
+                                   "classic", sha)
+                self.assertFalse((self.root / "probe-arm").exists())
+        finally:
+            os.WNOWAIT = saved
 
     @unittest.skipUnless(sys.platform == "darwin", "process-tree samples need libproc")
     def test_supervised_scopes_samples_to_the_commands_own_windows(self):
