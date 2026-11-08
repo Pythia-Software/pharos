@@ -113,8 +113,6 @@ var backgroundItems = []backgroundItem{
 		Kinds: []string{"index.changes.automatic"}, Why: "It reads only what changed since the last check."},
 	{ID: "search", Label: "Search", Verb: "Updating search", Feeds: "Search and the Library", Cadence: cadenceFrequent, Fixed: true, continuous: true,
 		Why: "It updates the conversations that changed, as soon as they are added."},
-	{ID: "fingerprints", Label: "Conversation fingerprints", Verb: "Rendering conversation fingerprints", Feeds: "Fingerprint columns and conversation cards", Cadence: cadenceFrequent, continuous: true,
-		Kinds: []string{"maintenance.fingerprints"}, Why: "Prepares compact images in the background and refreshes them when their messages, labels, events or tools change."},
 	{ID: "other-sources", Label: "Other sources", Verb: "Reading other sources", Feeds: "Their pages, such as TL1", Cadence: cadenceHourly, readsWholeSources: true,
 		Kinds: []string{"background.capture/sources"}, Why: "These sources can’t be checked for small changes, so each update reads them in full."},
 	{ID: "preserve", Label: "Preserve originals", Verb: "Preserving originals", Feeds: "Recovery, and history from your other Macs", Cadence: cadenceDaily,
@@ -143,6 +141,8 @@ var backgroundItems = []backgroundItem{
 		Kinds: []string{"analysis.authorship.refine"}, Why: "Applies the complete analysis to retained history, reconciling templates, copied text and conversation relationships."},
 	{ID: "suggestions", Label: "Ask Pharos suggestions", Verb: "Choosing Ask Pharos suggestions", Feeds: "Ask Pharos suggestions", Cadence: cadenceHourly, Adaptive: true, requiresAsk: true, afterChain: true,
 		Kinds: []string{"ask.suggestions"}, Why: "Looks over the last few weeks' summaries for questions worth suggesting, after the analyses they read change."},
+	{ID: "fingerprints", Label: "Conversation fingerprints", Verb: "Rendering conversation fingerprints", Feeds: "Fingerprint columns and conversation cards", Cadence: cadenceFrequent, continuous: true, afterChain: true,
+		Kinds: []string{"maintenance.fingerprints"}, Why: "Prepares compact images in the background and refreshes them when their messages, labels, events or tools change."},
 }
 
 // stageOrder is the analysis chain's order (finishDeferredStages).
@@ -834,8 +834,11 @@ type backgroundState struct {
 	mu        sync.Mutex
 	requested map[string]bool
 	wake      chan struct{}
-	costs     map[string]itemCost
-	costsAt   time.Time
+	// fingerprintRetry retains an accepted pass waiting for analysis, with
+	// its original cadence so a scheduled retry stays scheduled demand.
+	fingerprintRetry string
+	costs            map[string]itemCost
+	costsAt          time.Time
 	// power is the last power reading (cachedPower).
 	power   powerState
 	powerAt time.Time
@@ -988,6 +991,22 @@ func (s *Server) backgroundPass(ctx context.Context, at time.Time) bool {
 		return false
 	}
 	requested := s.peekRequested()
+	s.background.mu.Lock()
+	fingerprintRetry := s.background.fingerprintRetry
+	s.background.mu.Unlock()
+	fingerprintReady := false
+	if requested["fingerprints"] || fingerprintRetry != "" {
+		fingerprintReady, err = s.fingerprintPassReady(s.fingerprintContext(ctx))
+		if err != nil || !fingerprintReady {
+			// Keep the original request, but let due analysis run first.
+			delete(requested, "fingerprints")
+		} else if fingerprintRetry == "requested" {
+			if requested == nil {
+				requested = map[string]bool{}
+			}
+			requested["fingerprints"] = true
+		}
+	}
 	if settings.Mode == "on" {
 		s.updatePlacements(ctx, settings)
 	} else if len(requested) == 0 {
@@ -996,6 +1015,11 @@ func (s *Server) backgroundPass(ctx context.Context, at time.Time) bool {
 	plans := backgroundPlan(settings, s.backgroundInputsFor(ctx, requested), at)
 	group, cadence := []itemPlan{}, ""
 	for _, plan := range plans {
+		if plan.ID == "fingerprints" && fingerprintRetry != "" && fingerprintReady && settings.Mode == "on" && !plan.WaitsForPower {
+			// This pass was already accepted: finish it after analysis even
+			// when the next Hourly/Daily/Ad hoc pass is not due yet.
+			plan.Due = true
+		}
 		if !plan.Due {
 			continue
 		}
@@ -1165,6 +1189,17 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			started := time.Now()
 			s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
 			err := s.runBackgroundItem(ctx, op, id)
+			if id == "fingerprints" {
+				s.background.mu.Lock()
+				if errors.Is(err, errFingerprintWaiting) {
+					if s.background.fingerprintRetry != "requested" {
+						s.background.fingerprintRetry = cadence
+					}
+				} else if err == nil || backgroundWithdrawn(err) {
+					s.background.fingerprintRetry = ""
+				}
+				s.background.mu.Unlock()
+			}
 			if ctx.Err() != nil && err == nil {
 				err = ctx.Err()
 			}

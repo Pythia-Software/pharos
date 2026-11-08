@@ -16,14 +16,7 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 	case "search":
 		return s.Catalog.backgroundSearch(ctx)
 	case "fingerprints":
-		if s.work.declares(kindFingerprints) {
-			// The same task the coordinator feeds, asked for a pass.
-			return s.work.runLibraryMode(ctx, []string{kindFingerprints}, backgroundExplicit(ctx), triggerChained, workModePass)
-		}
-		return s.Catalog.runSearchBatches(ctx, []searchBatch{
-			{"maintenance.fingerprints", s.Catalog.pruneFingerprintBlobs},
-			{"maintenance.fingerprints", s.Catalog.refreshFingerprintImages},
-		})
+		return s.runFingerprintPass(ctx)
 	case "other-sources":
 		names := s.backgroundInputsFor(ctx, nil).otherSources
 		return s.backgroundCapture(ctx, op, "sources", names)
