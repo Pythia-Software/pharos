@@ -55,11 +55,7 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 				t.Fatal("capabilities", w.Code, w.Body.String())
 			}
 			limits := handshake.QueryCapabilities
-			groups := 10_000
-			if dataset == "usage" || dataset == "message_labels" || dataset == "session_shape" {
-				groups = 100_000
-			}
-			if limits.MaxRows != 10_000 || limits.MaxGroups != groups || limits.MaxPopulation != 10_000_000 {
+			if limits.MaxRows != 10_000 || limits.MaxGroups != 100_000 || limits.MaxPopulation != 10_000_000 {
 				t.Fatalf("incorrect advertised V3 budgets: %+v", limits)
 			}
 
