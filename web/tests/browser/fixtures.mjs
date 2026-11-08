@@ -776,6 +776,21 @@ export const defaultApi = {
   "POST /api/query/:dataset": ({ params, body }) => schemas[params.dataset] && answerQuery("rows", body, datasets[params.dataset], schemas[params.dataset], { now }),
 
   // The header, menus and status polling on every page.
+  "GET /api/library/recent-conversations": { items: [
+    ["Trace the incremental indexer", "pharos", "codex", "gpt-5", 2, "Review the recovery path after sleep and preserve the existing index.", "The index resumes after sleep without replaying retained captures."],
+    ["Make search feel faster", "atlas", "claude", "claude-opus-4-1", 1, "Find what slows down the first search in a large library.", "The search now reuses the stored catalog summaries."],
+    ["A simpler release checklist", "pharos", "codex", "gpt-5", 0, "Walk through the release process and flag any duplicate steps.", "The checklist follows signing, verification, and publication in order."],
+    ["Review the conversation reader", "atlas", "claude", "claude-sonnet-4", 3, "Keep each review inside the turn that requested it.", "The outline shows every helper beneath its parent turn."],
+    ["Explore the activity timeline", "observatory", "codex", "gpt-5", 0, "Compare activity across the last week of conversations.", "The timeline makes the quiet gaps and long sessions easier to inspect."],
+    ["Follow nested agent work", "pharos", "claude", "claude-opus-4-1", 2, "Show which sub-agent handled each part of the migration.", "The delegated work is grouped by assignment and depth."],
+    ["Clean up a small parser", "atlas", "codex", "gpt-5", 0, "Handle quoted phrases without changing ordinary word searches.", "Quoted phrases and individual words now keep their intended meanings."],
+    ["Check background recovery", "observatory", "claude", "claude-sonnet-4", 1, "Test what happens when indexing stops halfway through a batch.", "The next pass picks up the remaining records safely."],
+    ["Understand token patterns", "pharos", "codex", "gpt-5", 0, "Compare shorter conversations with the deeper delegated work.", "The comparison separates main-agent and helper activity."],
+    ["Plan the next iteration", "observatory", "claude", "claude-opus-4-1", 1, "Review the open questions and choose the next small improvement.", "The next iteration starts with clearer navigation and a smaller scope."],
+  ].map(([title, repository, provider, model, subagent_depth, first_input, last_response], index) => ({
+    id: index ? `recent-${index}` : rootConversation, workspace_id: workID, title, repository, provider, model, subagent_depth, first_input, last_response,
+    activity_at: new Date(now - index * day).toISOString(), labels_ready: index < 7, events_ready: index < 4,
+  })) },
   "GET /api/activity": { active: 0, runs: [] },
   "GET /api/library/status": { idle: true, portable: true, library_dir: "/Volumes/Pharos SSD/Pharos", drive: { name: "Pharos SSD", mounted: true, ejectable: true }, activities: [] },
   "GET /api/probe/status": { library: true, needs_onboarding: false, host_file_exists: true, host: { id: "test-mac", label: "This Mac" } },

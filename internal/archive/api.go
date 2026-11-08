@@ -444,6 +444,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/search/text":
 		writeError(w, fmt.Errorf("POST required"), http.StatusMethodNotAllowed)
+	case path == "/api/library/recent-conversations":
+		value, err := s.Catalog.recentConversations(r.Context(), s.Config().Labels.Enabled, s.agentEventsEnabled(r.Context()))
+		writeResult(w, map[string]any{"items": value}, err)
 	case path == "/api/library/find":
 		q := r.URL.Query()
 		options, err := textOptionsFromValues(q, "")

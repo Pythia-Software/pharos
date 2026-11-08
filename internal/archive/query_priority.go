@@ -105,7 +105,7 @@ func interactiveRead(r *http.Request) bool {
 	if r.Method != http.MethodGet {
 		return false
 	}
-	return path == "/api/search" || path == "/api/library/find" ||
+	return path == "/api/search" || path == "/api/library/find" || path == "/api/library/recent-conversations" ||
 		strings.HasPrefix(path, "/api/work/") || strings.HasPrefix(path, "/api/messages/") ||
 		strings.HasPrefix(path, "/api/conversation/") || strings.HasPrefix(path, "/api/usage/")
 }

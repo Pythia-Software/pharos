@@ -19,6 +19,7 @@ import { collectCardTemplate, DASHBOARD_CARD_ACTION, dashboardCardGroups, dashbo
 import { cardGroupsFor, withCardGroups, type CardGroups } from "./card-cover";
 import { CardGroupsField } from "./card-groups-field";
 import { EMPTY_QUERY } from "@pythia-software/query-table-core";
+import { RecentConversations } from "./recent-conversations";
 
 function collectionSpec(item: Bookmark) {
   if (!item.dashboard) return queryFromURL(item.url, item.query);
@@ -197,6 +198,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     <QueryConveyor items={eligible} previews={previews} loading={loading} hasErrors={Object.keys(errors).length > 0} active={active} suspended={hidden || !active || Boolean(drag) || Boolean(editing)}
       onRefresh={() => { clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag}
       onAllCards={() => navigate("/cards")} />
+    <RecentConversations active={active && !hidden} generation={generation} />
     <dialog ref={editor} className="home-editor card-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {
       event.preventDefault(); if (!editing) return;
       try {

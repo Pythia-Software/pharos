@@ -174,6 +174,10 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE INDEX IF NOT EXISTS conversations_workspace_idx ON conversations(workspace_id);
 CREATE INDEX IF NOT EXISTS conversations_parent_idx ON conversations(parent_id);
 CREATE INDEX IF NOT EXISTS conversations_native_alias_idx ON conversations(account,native_id);
+-- Home discovery bounds its pool through this index before consulting stored
+-- previews or optional enrichment ledgers.
+CREATE INDEX IF NOT EXISTS conversations_recent_idx ON conversations(COALESCE(ended_at,started_at) DESC,id)
+  WHERE parent_id IS NULL AND agent_depth=0;
 
 CREATE TABLE IF NOT EXISTS mcp_calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
