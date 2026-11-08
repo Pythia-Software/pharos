@@ -649,6 +649,15 @@ const ROUTES = [
   { name: "Mac menu with all items", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, api: tokenEvidenceAPI, ready: ".delegation-table tbody tr" },
   { name: "Workspace Timeline", url: `${work}?explorer=timeline`, ready: ".lt-session-root" },
+  { name: "Workspace Timeline compact key", url: `${work}?explorer=timeline&disclosures=${encodeURIComponent(JSON.stringify({'timeline-key':false}))}`, ready: ".lt-session-root", api: {
+    "GET /api/work/:id/parallel": request => {
+      const data=defaultApi["GET /api/work/:id/parallel"](request);
+      if(request.query.get('labels')!=='1')return data;
+      // A dense mode family must wrap individual icons at narrow widths.
+      const ids=Array.from({length:40},(_,index)=>`C.report.fixture${index}`);
+      return {...data,taxonomy:[...data.taxonomy,...ids.map((id,index)=>({id,name:`Fixture mode ${index}`,definition:'Synthetic layout fixture.'}))],lanes:data.lanes.map(lane=>({...lane,messages:lane.messages.map(message=>message.role==='assistant'?{...message,labels:{...message.labels,ids:[...message.labels.ids,...ids]}}:message)}))};
+    },
+  } },
   { name: "Workspace with related work", url: work, api: relatedWorkAPI, ready: ".peer-strip .peer-chip.uncertain", open: page => page.locator(".peer-reasons summary").click(), shown: ".peer-reasons[open] li",
     check: async page => {
       await page.locator('[data-session-id="s-peer"]').first().waitFor();

@@ -30,7 +30,7 @@ const map = {...buildSiteMap(inputs),query_types:publishedQueryTypes()};
 const sectionOwners = {
  "card-library.tsx":["cards"],
  "thinking-dashboard.tsx":["analyze/thinking-overview","analyze/thinking-detail"],
- "findings.tsx":["findings","findings/*"], "delegation.tsx":["work"],
+ "findings.tsx":["findings","findings/*"], "delegation.tsx":["work"], "timeline-legend.tsx":["work"],
  "concurrency.tsx":["analyze/parallelism"],
 };
 const sections={};

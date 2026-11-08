@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EMPTY_QUERY, applyQuery, loadSchema } from '@pythia-software/query-table-core';
 import usageSchema from '../../../../schemas/usage.schema.json';
 import writingSchema from '../../../../schemas/writing.schema.json';
-import { isSliceTerm, readSlice, updateSlice, updateSliceValues, sliceGroupState, withSlice } from '../../../src/chart-selection';
+import { isSliceTerm, readSlice, updateSlice, updateSliceValues, sliceGroupState, sliceValueVisible, sliceGroupCounts, legendMenuItems, withSlice } from '../../../src/chart-selection';
 import { chartGesture, chartInspectionRange } from '../../../src/chart-inspection';
 const all = { values: [], excluded: false };
 const field = 'model_family';
@@ -91,6 +91,49 @@ test('category state distinguishes neutral, full, mixed and hidden in either sel
   assert.deepEqual(sliceGroupState({values,excluded},group),{active:false,mixed:false,dimmed:true,soleSelection:false});
  }
  assert.deepEqual(sliceGroupState({values:['outside'],excluded:true},group),{active:true,mixed:false,dimmed:false,soleSelection:false});
+});
+
+test('Hide and Show preserve other hidden values and support an explicitly empty drawing',()=>{
+ let selection=updateSlice(all,'a','hide');
+ selection=updateSlice(selection,'b','hide');
+ assert.deepEqual(selection,{values:['a','b'],excluded:true});
+ selection=updateSlice(selection,'a','show');
+ assert.deepEqual(selection,{values:['b'],excluded:true});
+ assert.equal(sliceValueVisible(selection,'future'),true);
+ const only=updateSlice(all,'a','only'),none=updateSlice(only,'a','hide');
+ assert.deepEqual(none,{values:[],excluded:false,allHidden:true});
+ for(const value of ['a','b','future'])assert.equal(sliceValueVisible(none,value),false);
+ assert.deepEqual(updateSlice(none,'b','show'),{values:['b'],excluded:false});
+ assert.deepEqual(updateSlice(none,'a','clear'),all);
+ const rows=[{model_family:'a'},{model_family:'b'},{model_family:null}];
+ const where=withSlice([],field,none);
+ assert.deepEqual(applyQuery(rows,{...EMPTY_QUERY,where},loadSchema(usageSchema)).rows,[]);
+ assert.deepEqual(readSlice(where,field),none);
+});
+
+test('mixed category Show and Hide act on all children while retaining outside choices',()=>{
+ const values=['a','b','c'],included={values:['outside','a'],excluded:false},excluded={values:['other','b','c'],excluded:true};
+ for(const selection of [included,excluded]){
+  assert.deepEqual(sliceGroupCounts(selection,values),{visibleCount:1,hiddenCount:2});
+  const shown=updateSliceValues(selection,values,'show'),hidden=updateSliceValues(selection,values,'hide');
+  for(const value of values){assert.equal(sliceValueVisible(shown,value),true);assert.equal(sliceValueVisible(hidden,value),false);}
+  for(const value of ['outside','other','future']){
+   assert.equal(sliceValueVisible(shown,value),sliceValueVisible(selection,value));
+   assert.equal(sliceValueVisible(hidden,value),sliceValueVisible(selection,value));
+  }
+ }
+ assert.deepEqual(sliceGroupCounts({values:[],excluded:false,allHidden:true},values),{visibleCount:0,hiddenCount:3});
+});
+
+test('legend menus use the requested visible, hidden and mixed one-line actions',()=>{
+ const labels=(visible,hidden,others)=>legendMenuItems(visible,hidden,others).map(item=>item.label);
+ assert.deepEqual(labels(1,0,false),['Hide','Hide others']);
+ assert.deepEqual(labels(1,0,true),['Hide','Hide others','Show All']);
+ assert.deepEqual(labels(0,1,true),['Show','Show and Hide Others','Show All']);
+ assert.deepEqual(labels(3,2,true),['Show 2 values','Hide 3 values','Show All']);
+ assert.deepEqual(labels(1,1,true),['Show 1 value','Hide 1 value','Show All']);
+ assert.equal(legendMenuItems(3,2,true).at(-1).separator,true);
+ for(const item of legendMenuItems(3,2,true))assert.ok(!item.label.includes('\n'));
 });
 
 test('selection writes preserve date, repository, and unrelated model predicates', () => {

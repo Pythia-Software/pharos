@@ -68,7 +68,7 @@ import {timelinePreviewText} from '../../../src/timeline-preview.ts';
 import {nativeTimelineLabels} from '../../../src/label-timeline-overlay.tsx';
 
 import {timelineModeGroups,timelineLegendWindow} from '../../../src/timeline-legend.tsx';
-import {timelineValueVisible,updateTimelineVisibility,visibleTimelineTree} from '../../../src/timeline-visibility';
+import {timelineValueVisible,timelineSectionVisible,timelineEventVisible,updateTimelineVisibility,visibleTimelineTree} from '../../../src/timeline-visibility';
 
 import {workflowSessions} from '../../../src/conversation-labels.ts';
 
@@ -139,26 +139,72 @@ test('timeline legend keeps specific labels with their parent modes without dupl
  assert.equal(byID('P.request').direct,true);assert.equal(byID('C.report').direct,false);
 });
 
-test('timeline key selections support categories, mixed additions, exclusions and section resets',()=>{
- const group=['C.report.finding','C.report.progress'];
- let state=updateTimelineVisibility({},'modes',group,'only');
- assert.equal(timelineValueVisible(state,'modes',group[0]),true);
- assert.equal(timelineValueVisible(state,'modes','?'),false);
- assert.equal(timelineValueVisible(state,'tools','read'),true,'sections remain independent');
- state=updateTimelineVisibility(state,'modes',[group[0]],'toggle');
- assert.deepEqual(state.modes.values,[group[1]]);
- state=updateTimelineVisibility(state,'modes',group,'toggle');
- assert.deepEqual(new Set(state.modes.values),new Set(group),'adding a mixed category fills it');
- state=updateTimelineVisibility(state,'tools',['error'],'exclude');
+test('timeline Show and Hide preserve independent hidden values and Show All restores the Key',()=>{
+ let state=updateTimelineVisibility({},'events',['choices'],'hide');
+ state=updateTimelineVisibility(state,'tools',['error'],'hide');
+ assert.equal(timelineValueVisible(state,'events','choices'),false);
  assert.equal(timelineValueVisible(state,'tools','error'),false);
- assert.equal(timelineValueVisible(state,'tools','future-tool'),true,'exclusions include future values');
- state=updateTimelineVisibility(state,'modes',group,'exclude');
- assert.equal(timelineValueVisible(state,'modes','C.report.finding'),false);
- assert.equal(timelineValueVisible(state,'modes','P.request'),true);
- state=updateTimelineVisibility(state,'modes',group,'toggle');
- assert.equal(timelineValueVisible(state,'modes','C.report.finding'),true);
- state=updateTimelineVisibility(state,'tools',[],'clear');
- assert.deepEqual(state,{});
+ state=updateTimelineVisibility(state,'events',['choices'],'show');
+ assert.equal(timelineValueVisible(state,'events','choices'),true);
+ assert.equal(timelineValueVisible(state,'tools','error'),false);
+ state=updateTimelineVisibility(state,'events',['learning'],'only');
+ assert.equal(timelineSectionVisible(state,'tools'),false);
+ assert.equal(timelineValueVisible(state,'events','learning'),true);
+ state=updateTimelineVisibility(state,'events',['learning'],'hide');
+ assert.equal(timelineValueVisible(state,'events','learning'),false);
+ assert.equal(timelineValueVisible(state,'events','future'),false);
+ state=updateTimelineVisibility(state,'tools',['read'],'show');
+ assert.equal(timelineSectionVisible(state,'tools'),true);
+ assert.equal(timelineValueVisible(state,'tools','read'),true);
+ assert.equal(timelineValueVisible(state,'tools','error'),false,'showing one value in a hidden section leaves its siblings hidden');
+ assert.deepEqual(updateTimelineVisibility(state,'tools',[],'clear'),{});
+});
+
+test('timeline section headings isolate whole layers, fill partial selections and restore hidden values',()=>{
+ let state={tools:{values:['error'],excluded:true},origins:{values:['typed'],excluded:false}};
+ state=updateTimelineVisibility(state,'sections',['tools'],'only');
+ assert.deepEqual(state.sections,{values:['tools'],excluded:false});
+ assert.equal(state.tools,undefined,'showing a whole section clears its value filter');
+ assert.equal(timelineSectionVisible(state,'modes'),false);
+ assert.equal(timelineValueVisible(state,'tools','future-tool'),true);
+ state=updateTimelineVisibility(state,'sections',['events'],'toggle');
+ assert.equal(timelineSectionVisible(state,'tools'),true);
+ assert.equal(timelineSectionVisible(state,'events'),true);
+ state=updateTimelineVisibility(state,'sections',['events'],'toggle');
+ assert.equal(timelineSectionVisible(state,'events'),false);
+ state=updateTimelineVisibility(state,'events',['learning'],'show');
+ assert.equal(timelineSectionVisible(state,'events'),true,'a hidden label can be selected directly');
+ state=updateTimelineVisibility(state,'sections',['events'],'toggle');
+ assert.equal(state.events,undefined,'adding a mixed section fills all values');
+ assert.equal(timelineSectionVisible(state,'tools'),true,'filling a section retains other selected layers');
+ state=updateTimelineVisibility(state,'sections',['events'],'exclude');
+ assert.equal(timelineSectionVisible(state,'events'),false);
+ assert.equal(timelineSectionVisible(state,'modes'),true);
+ state=updateTimelineVisibility(state,'tools',['error'],'only');
+ assert.equal(timelineValueVisible(state,'tools','read'),false);
+ assert.deepEqual(updateTimelineVisibility(state,'sections',['events'],'clear'),{});
+});
+
+test('whole timeline layers filter counts, inspection items and descendants while preserving their clock',()=>{
+ const at=n=>new Date(n).toISOString(),messages=[message('caller','P.request',{role:'user',at:at(100),authorship:[{category:'typed',bytes:5,text:'typed'},{category:'pasted',bytes:3,text:'123'}]})];
+ const marks=[{start:300,end:450,end_known:true,category:'read',tool_id:'ok',name:'Read',error:false}];
+ const events=[{id:'event',message_id:'caller',group:'Friction',label:'Obstacle',source:'reply',target:null}];
+ const tree=sessionRibbonTree(messages,marks,[{start:600,end:700}],[],[0,1000],true,true,messages,marks,events),original=structuredClone(tree),walk=node=>[node,...node.children.flatMap(walk)];
+ for(const section of ['modes','origins','events','tools']){
+  const only=updateTimelineVisibility({},'sections',[section],'only'),shown=visibleTimelineTree(tree,only,true);
+  assert.ok(shown.items.length,section);
+  const belongs=item=>section==='events'?!!item.event:section==='tools'?!!(item.mark||item.inferred):section==='origins'?!!item.authorship:!!item.label&&!item.authorship;
+  for(const node of walk(shown))for(const item of node.items){
+   assert.ok(belongs(item),`${section}: ${item.id}`);
+   const original=tree.items.find(before=>before.id===item.id);
+   assert.equal(item.start,original.start);assert.equal(item.end,original.end);
+  }
+  const excluded=visibleTimelineTree(tree,updateTimelineVisibility({},'sections',[section],'exclude'),true);
+  assert.ok(excluded.items.length);
+  for(const node of walk(excluded))assert.ok(node.items.every(item=>!belongs(item)));
+  assert.equal(timelineEventVisible(only,events[0]),section==='events','overlay and tree use the same layer selection');
+ }
+ assert.deepEqual(tree,original,'original observations remain intact');
 });
 
 test('timeline visibility filters every ribbon level and event type without reallocating time',()=>{
