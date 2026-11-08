@@ -414,3 +414,21 @@ main>#ask.active{box-sizing:border-box;max-width:none;height:100%;padding:0}
 #pharos-ask .pharos-feedback { margin-top:12px; }
 #pharos-ask .pharos-product .uifeedback-inline textarea { min-height:100px; margin:0; padding:8px; border:1px solid var(--pharos-line); border-radius:4px; background:var(--pharos-bg); font:inherit; resize:vertical; overflow:auto; }
 #pharos-ask .pharos-product .uifeedback-inline .primary { color:var(--panel); }
+
+/* Fullscreen Ask keeps the inbox beside the conversation. Narrow windows use
+   the same history as an accessible drawer, leaving room for the editor. */
+#pharos-ask .pharos-new-chat{margin:4px 18px;padding:8px 12px;border:1px solid var(--pharos-line);border-radius:8px;background:var(--pharos-bg);text-align:left;cursor:pointer}
+#pharos-ask .pharos-history-help{margin:4px 18px 14px;color:var(--pharos-muted);font-size:12px}
+#pharos-ask .pharos-history-state{font-size:11px;color:var(--pharos-muted)}
+#pharos-ask .pharos-history-entry[data-unread="true"] .pharos-history-title{font-weight:600}
+#pharos-ask .pharos-history-entry[data-unread="true"] .pharos-history-state{color:var(--pharos-sea);font-weight:600}
+#pharos-ask .pharos-history-entry[data-unread="true"] .pharos-history-state::before{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:currentColor}
+#pharos-ask .pharos-history-entry[data-running="true"] .pharos-history-state{color:var(--pharos-violet)}
+#pharos-ask .pharos-receipt{display:block;margin-top:12px;font-size:11px;color:var(--pharos-muted)}
+#askPage>#pharos-ask.pharos-inbox{position:relative}
+#askPage #pharos-ask.pharos-inbox .pharos-product{padding-left:290px;min-width:0}
+#askPage #pharos-ask.pharos-inbox .pharos-chat-history{position:absolute;inset:0 auto 0 0;width:290px;height:100%;max-height:100%;border:0;border-right:1px solid var(--pharos-line);box-shadow:none;transition:none;transform:none;background:var(--pharos-bg)}
+#askPage #pharos-ask.pharos-inbox .pharos-history-close{display:none}
+#askPage #pharos-ask.pharos-inbox .pharos-ai{min-width:0}
+#askPage #pharos-ask.pharos-inbox .pharos-history-meta{gap:7px}
+#askPage #pharos-ask.pharos-inbox .pharos-history-turns{display:none}

@@ -763,6 +763,7 @@ export const defaultApi = {
   "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
   // Suggestions the library chose; Refresh asks for the next seed.
   "GET /api/ask/suggestions": ({ query }) => ({ suggestions: askSuggestionFixture(Number(query.get("seed") || 0)) }),
+  "POST /api/ask/read": {ok:true},
   "POST /api/ask/clear-visits": {ok:true},
   "POST /api/ask/visits": {ok:true},
   "POST /api/ask/remove-visit": {ok:true},
