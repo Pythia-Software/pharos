@@ -276,28 +276,34 @@ func (c *Catalog) messageLabelFactsPendingFor(ctx context.Context, ids []string)
 // refreshMessageLabelFactsFor publishes one bounded batch of the selected
 // dirty conversations' query facts within a message budget
 // (messageLabelFactsMessages when 0), with the same query-generation guard
-// as the daemon. It never marks the facts ready.
-func (c *Catalog) refreshMessageLabelFactsFor(ctx context.Context, ids []string, messages int) (workDomainStep, error) {
+// as the daemon, and returns the next budget from this batch's writer hold.
+// It never marks the facts ready.
+func (c *Catalog) refreshMessageLabelFactsFor(ctx context.Context, ids []string, messages int) (workDomainStep, int, error) {
 	var step workDomainStep
-	ids = workDomainIDs(ids)
-	if len(ids) == 0 {
-		return step, nil
-	}
 	if messages <= 0 {
 		messages = messageLabelFactsMessages
 	}
+	ids = workDomainIDs(ids)
+	if len(ids) == 0 {
+		return step, messages, nil
+	}
 	before, err := workDomainPending(ctx, c.reader(), messageLabelFactsPendingSQL, ids)
 	if err != nil {
-		return step, err
+		return step, messages, err
 	}
+	next := messages
 	if len(before) > 0 {
-		if _, _, err := c.refreshMessageLabelFactsOf(ctx, messages, sortedKeys(before)); err != nil {
-			return step, err
+		count, timing, err := c.refreshMessageLabelFactsOf(ctx, messages, sortedKeys(before))
+		if err != nil {
+			return step, messages, err
+		}
+		if count > 0 {
+			next = messageLabelFactsNextBudget(messages, timing.hold)
 		}
 	}
 	// A conversation the batch published and labels dirtied again since is
 	// superseded; the budget may leave others for the next step.
 	pending, err := workDomainPending(ctx, c.reader(), messageLabelFactsPendingSQL, ids)
 	step.classify(ids, nil, pending)
-	return step, err
+	return step, next, err
 }

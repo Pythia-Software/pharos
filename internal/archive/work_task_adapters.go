@@ -38,10 +38,15 @@ func (s *Server) workDefinitions(authority *workAuthority) ([]workDefinition, er
 		selectSQL: `SELECT conversation_id id,revision FROM parallelism_dirty WHERE conversation_id NOT IN (SELECT value FROM json_each(?)) ORDER BY conversation_id LIMIT ?`, step: func(ctx context.Context, ids []string, _ workAllocation) (workDomainStep, error) {
 			return c.refreshParallelismFor(ctx, ids)
 		}}
+	// Match the classic projector's adaptive publication budget. A kind runs
+	// one batch at a time, so its budget belongs to the adapter instance.
+	factsBudget := messageLabelFactsMessages
 	facts := &conversationWorkTask{server: s, kind: "maintenance.labels.query", cpus: 1, pending: c.messageLabelFactsPendingFor, filterFailures: true,
 		prepare:   func(ctx context.Context, _ string) error { return c.ensureMessageLabelFacts(ctx) },
 		selectSQL: `SELECT conversation_id id FROM message_label_facts_dirty WHERE conversation_id NOT IN (SELECT value FROM json_each(?)) ORDER BY conversation_id LIMIT ?`, step: func(ctx context.Context, ids []string, _ workAllocation) (workDomainStep, error) {
-			return c.refreshMessageLabelFactsFor(ctx, ids, 0)
+			step, next, err := c.refreshMessageLabelFactsFor(ctx, ids, factsBudget)
+			factsBudget = next
+			return step, err
 		}}
 	labels := &modelWorkTask{server: s, authority: authority, kind: "analysis.labels", limit: labelsChainLimit,
 		config: func(ctx context.Context, power powerState) modelWorkConfig {
