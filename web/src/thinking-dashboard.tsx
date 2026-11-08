@@ -19,6 +19,7 @@ import { SearchHelp } from "./search-help";
 import { usageWorkspaceURL } from "./usage-workspace-model";
 import { DashboardResultActions, DashboardCardSourceContext } from "./create-dashboard-card";
 import { thinkingCardTitle } from "./thinking-card";
+import { DashboardLoading } from "./card-loading";
 
 import {
   thinkingBreakdowns,
@@ -650,9 +651,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
           </button>
         </p>
       ) : loading ? (
-        <p role="status" className="usage-dashboard-note">
-          Computing request timing…
-        </p>
+        <DashboardLoading spec={{ kind: !detail ? "line" : state.view === "histogram" ? "columns" : box ? "box" : "heatmap", count: 16 }} />
       ) : null}
       {data && !error ? (
         <div className={loading ? "thinking-loading" : ""}>

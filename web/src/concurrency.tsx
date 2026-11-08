@@ -9,6 +9,7 @@ import { pushMachineLocation } from "./machine-location";
 import { useDrilldownHistory, ZoomNavigation } from "./machine-navigation";
 import { Icon } from "./icons";
 import "./concurrency.css";
+import { DashboardLoading } from "./card-loading";
 
 export const concurrencyPrototypeEnabled = document.documentElement.hasAttribute("data-concurrency-prototype");
 const percent = (value: number) => `${Math.round(value * 100)}%`;
@@ -250,7 +251,7 @@ export function ConcurrencyPanel({ routeParameter, onSelection }: { routeParamet
   const activeAt = (at: number) => Array.from(mode === "user" ? userRange : modelRange).filter(([, spans]) => spans.some(([a, b]) => a <= at && at < b)).length;
   const chooseUnit = (unit: string) => update(counting === "agent" ? { agent: selected === unit ? "" : unit, showConversations: true } : { workspace: selected === unit ? "" : unit, showConversations: true });
   if (error) return <p role="alert">{error}</p>;
-  if (!data) return <p className="muted" aria-busy="true">Reading captured timing…</p>;
+  if (!data) return <DashboardLoading spec={{ kind: "columns", count: 24 }} />;
   const chooseRange = (value: string) => update(/^\d{4}-\d{2}-\d{2}$/.test(value) ? { range: "day", day: value, workspace: "", agent: "", zoom: null } : { range: value as ConcurrencyRange, startDay: range.startDay, endDay: range.endDay, workspace: "", agent: "", zoom: null });
   const incompleteToday = settings.range === "today" && (rangeBounds[0] < zonedDayBounds(data.period_start, data.timezone)[0] || rangeBounds[1] > zonedDayBounds(data.period_end, data.timezone)[1]);
   const clock = new Intl.DateTimeFormat(undefined, { timeZone: data.timezone, ...(!singleDay ? { month: "short", day: "numeric" } as const : {}), hour: "numeric", minute: "2-digit" });

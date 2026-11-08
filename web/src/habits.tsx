@@ -20,6 +20,7 @@ import {
   type HabitsDay, type HabitsMode, type HabitsSettings, type HabitsSummary, type PunchcardView, type StreakActor,
 } from "./habits-model";
 import "./habits.css";
+import { DashboardLoading } from "./card-loading";
 
 // Habits: streaks, calendars, a punchcard, the shape of your days and the
 // automations that run without you, from the service's summary
@@ -88,7 +89,7 @@ export function HabitsDashboard() {
           <ChartSelect label="Range" ariaLabel="Punchcard range" value={punchcardDays} onChange={setPunchcardDays} options={punchcardRanges} />
         </> : <ChartSelect label="Range" ariaLabel="Your days range" value={shapeDays} onChange={setShapeDays} options={shapeRanges} />}
       </div>
-      {!data ? error ? <p className="query-table-error" role="alert">{error}</p> : <p className="muted" role="status">Loading your habits…</p> : <>
+      {!data ? error ? <p className="query-table-error" role="alert">{error}</p> : <DashboardLoading spec={{ kind: chart === "days" ? "columns" : "heatmap", count: 24 }} /> : <>
         <div><Heading target="habits-streaks" /><Streaks data={data} settings={settings} /></div>
         {chart === "calendar" ? <div className="habits-card" data-pharos-target="section:habits-calendar">
           <Heading target="habits-calendar" primary />
