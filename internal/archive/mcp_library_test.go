@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"github.com/gbdubs/pharos/internal/platform/filelock"
+	"github.com/gbdubs/pharos/internal/platform/localidentity"
 )
 
 const testVolume = "uuid:TEST-VOLUME"
@@ -1382,4 +1384,74 @@ func TestDirectMCPCallHoldsAnOperationLease(t *testing.T) {
 	if count := mcpCalls(t, reopenCatalog(t, config.CatalogPath)); count != 2 {
 		t.Fatalf("a call without its lease stored history: %d calls", count)
 	}
+}
+
+// The volume check is reused only while the library directory's identity,
+// the configuration path and the volume pin all match the last check that
+// passed. Without a directory identity there is nothing to reuse, so every
+// attempt runs the full check, which still opens a valid library.
+func TestMCPLibraryGuardReuseNeedsDirectoryIdentity(t *testing.T) {
+	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
+	checks, volume := 0, testVolume
+	server := &mcpServer{identity: func(string) string { checks++; return volume }}
+	check := func(config Config, want int) {
+		t.Helper()
+		before := checks
+		if err := server.checkLibrary(config); err != nil {
+			t.Fatal(err)
+		}
+		if checks-before != want {
+			t.Fatalf("checked the volume %d times, want %d", checks-before, want)
+		}
+	}
+	refused := func(config Config) {
+		t.Helper()
+		before := checks
+		if err := server.checkLibrary(config); err == nil || !strings.Contains(err.Error(), "refusing to open") || server.verified != "" || checks != before+1 {
+			t.Fatalf("a failed check was accepted, skipped or cached: %v, %q", err, server.verified)
+		}
+	}
+	check(config, 1)
+	check(config, 0)
+
+	override(t, &localIdentity, func(fs.FileInfo) (localidentity.Key, error) {
+		return localidentity.Key{}, localidentity.ErrUnsupported
+	})
+	for range 3 {
+		check(config, 1)
+		if server.verified != "" {
+			t.Fatalf("cached a check without an identity: %q", server.verified)
+		}
+	}
+	volume = "uuid:A-CLONE"
+	refused(config)
+	volume = testVolume
+
+	localIdentity = localidentity.Of
+	check(config, 1)
+	check(config, 0)
+	// Another directory's identity at the same path is a different library.
+	other := t.TempDir()
+	localIdentity = func(fs.FileInfo) (localidentity.Key, error) { return localidentity.Stat(other) }
+	check(config, 1)
+	check(config, 0)
+	localIdentity = localidentity.Of
+	check(config, 1)
+
+	repinned := config
+	repinned.VolumeID, volume = "uuid:TEST-VOLUME-2", "uuid:TEST-VOLUME-2"
+	check(repinned, 1)
+	check(repinned, 0)
+	volume = testVolume
+	renamed := config
+	renamed.Path = filepath.Join(filepath.Dir(config.Path), "renamed.toml")
+	check(renamed, 1)
+	check(config, 1)
+	check(config, 0)
+	// A pin the volume does not match is refused on every attempt.
+	mismatched := config
+	mismatched.VolumeID = "uuid:TEST-VOLUME-3"
+	refused(mismatched)
+	refused(mismatched)
+	check(config, 1)
 }

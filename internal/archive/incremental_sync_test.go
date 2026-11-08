@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/localidentity"
 )
 
 func TestScheduledSyncDefersAnalysesAndManualSyncRefreshesGitHub(t *testing.T) {
@@ -1168,5 +1171,82 @@ func TestUnchangedIngestDoesNotCertifyLegacyEvidence(t *testing.T) {
 	}
 	if status := catalog.inputPreservationStatus(t.Context(), "host-a", source.Name); status["status"] != "indexed" || status["pending_newer_inputs"] != false {
 		t.Fatalf("missing indexed acquisition: %#v", status)
+	}
+}
+
+// A Conductor preflight hashes the adapter fingerprint, the directory's
+// legacy "device:inode" text and the index version. Without that identity the
+// preflight is an error: the source is checked, never skipped as unchanged,
+// and the last good preflight is kept for when the identity returns.
+func TestConductorPreflightRequiresDirectoryIdentity(t *testing.T) {
+	useHost(t, "host-a")
+	dir := t.TempDir()
+	exec := conductorFixture(t, dir)
+	exec(addConductorSession("session", 2)...)
+	source := SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true}
+	server := automaticTestServer(t, source)
+	settings := syncSettings{Enabled: true, Interval: 60}
+	server.runAutomatic(server.life.ctx, settings)
+	stored := func() (preflight, failure string) {
+		t.Helper()
+		if err := server.Catalog.DB.QueryRow("SELECT COALESCE(preflight,''),COALESCE(error,'') FROM automatic_source_states WHERE host_id='host-a' AND source_name=?", source.Name).Scan(&preflight, &failure); err != nil {
+			t.Fatal(err)
+		}
+		return preflight, failure
+	}
+	prepare := func() preparedSyncSource {
+		t.Helper()
+		adapter, err := MakeAdapter(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared := preparedSyncSource{adapter: adapter}
+		server.prepareSyncSource(t.Context(), source, &prepared)
+		if prepared.close != nil {
+			prepared.close()
+		}
+		return prepared
+	}
+	good, failure := stored()
+	if good == "" || failure != "" {
+		t.Fatalf("first run: preflight %q, error %q", good, failure)
+	}
+	adapter, _ := MakeAdapter(source)
+	fingerprint, err := adapter.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := localidentity.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := key.DeviceInode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflight, err := conductorPreflight(adapter); err != nil || preflight != hashBytes([]byte(fingerprint+":"+identity+":"+sourceIndexVersion(adapter))) {
+		t.Fatalf("preflight hash changed: %q, %v", preflight, err)
+	}
+	if prepared := prepare(); prepared.err != nil || !prepared.skipped || prepared.preflight != good {
+		t.Fatalf("unchanged source was not skipped: %+v", prepared)
+	}
+
+	override(t, &localIdentity, func(fs.FileInfo) (localidentity.Key, error) {
+		return localidentity.Key{}, localidentity.ErrUnavailable
+	})
+	for range 2 {
+		prepared := prepare()
+		if !errors.Is(prepared.err, localidentity.ErrUnavailable) || prepared.skipped || prepared.preflight != "" {
+			t.Fatalf("unidentified source: %+v", prepared)
+		}
+		server.runAutomatic(server.life.ctx, settings)
+		if preflight, failure := stored(); preflight != good || failure == "" {
+			t.Fatalf("unidentified run: preflight %q, error %q", preflight, failure)
+		}
+	}
+
+	localIdentity = localidentity.Of
+	if prepared := prepare(); prepared.err != nil || !prepared.skipped {
+		t.Fatalf("restored identity lost the last good preflight: %+v", prepared)
 	}
 }

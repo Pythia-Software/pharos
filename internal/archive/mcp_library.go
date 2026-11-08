@@ -397,13 +397,14 @@ func releasedRecently(catalogPath string) bool {
 
 // checkLibrary runs the library guards before a direct open. Checking the
 // volume shells out to diskutil (~0.1 s), so it is skipped while the library
-// directory is the same one on the same device as when it last passed.
+// directory is the same one on the same device as when it last passed. Without
+// the directory's identity there is no reuse key, so every check runs in full.
 func (m *mcpServer) checkLibrary(config Config) error {
 	identity := m.identity
 	key := ""
 	if info, err := os.Stat(filepath.Dir(config.Path)); err == nil {
-		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-			key = fmt.Sprint(config.Path, "|", config.VolumeID, "|", stat.Dev, "|", stat.Ino)
+		if directory, err := localIdentityText(info); err == nil {
+			key = fmt.Sprint(config.Path, "|", config.VolumeID, "|", directory)
 		}
 	}
 	if key != "" && key == m.verified {
