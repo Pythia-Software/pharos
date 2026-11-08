@@ -1244,7 +1244,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   function syncTheme(){appearance=document.documentElement.dataset.theme==='dark'?'dark':'light';drawEdge();drawIdeas();}
   const themeObserver=new MutationObserver(syncTheme);themeObserver.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme','style']});
   const configChanged=event=>{if(event.detail!==root)void refreshStatus().then(visitChanged).catch(report);};listen(window,'pharos:ask-config',configChanged);
-  const saveVisit=askVisitRecovery(input=>api('visits',input),()=>askVisitInput({stored:JSON.parse(localStorage.getItem('pharos-history-v1')||'[]'),titleFor:(url,page)=>window.historyTitle?.(url,page)}),()=>clearNotice('visits'));
+  const saveVisit=askBufferVisits(input=>api('visits',input),()=>askVisitInput({stored:JSON.parse(localStorage.getItem('pharos-history-v1')||'[]'),titleFor:(url,page)=>window.historyTitle?.(url,page)}));
   const visitChanged=event=>{
     if(!accessEnabled)return;
     const entry=event?.detail?.entry;
@@ -1252,7 +1252,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     try{
       input=askVisitInput({entry,replaced:event?.detail?.replaced,stored:entry?[]:JSON.parse(localStorage.getItem('pharos-history-v1')||'[]'),titleFor:(url,page)=>window.historyTitle?.(url,page)});
     }catch{return;}
-    void askWriteVisit(()=>saveVisit(input)).catch(error=>report(error,{source:'visits',lead:'Page history wasn\u2019t saved for Ask Pharos.'}));
+    saveVisit.add(input);
   };
   listen(window,'pharos:visit',visitChanged);
   const routeChanged=()=>{surfaceRestorePending=false;sessionLoads.invalidate();openingSession=null;flushDraft();if(presentation==='modal')closeOverlay();syncFullscreen();restoreHome();if(!['home','page'].includes(presentation))return;if(!askChatPage(location.pathname)){if(pending)browse();}else if(accessEnabled){const id=new URL(location.href).searchParams.get('ask_chat');if(id&&id!==activeSessionId)void openSession(id);else if(!id&&activeSessionId)clearChat(false);else{if(id)regularOverride=false;render();}}};
@@ -1265,5 +1265,5 @@ window.initPharosAsk = function(root, {previews} = {}) {
     if(draftPending){const payload=draftPending;draftPending=null;void fetch('/api/ask/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),keepalive:true});}
   });
   syncFullscreen();render();syncTheme();void refreshStatus().then(visitChanged).catch(report);
-  return ()=>{disposePreviews();popOutMotion?.cancel();if(overlay.open)overlay.close();mount(mountHost);overlay.remove();floating.remove();announcement.remove();if(headerButton)headerButton.disabled=true;disposed=true;ideaController.abort();clearTimeout(ideaRetry);sessionLoads.invalidate();requests.forEach(run=>{run.controller.abort();releaseRequest(run);});seenObserver.disconnect();stop();glows.forEach(glow=>glow.destroy());pageTrace.destroy();clearTimeout(draftTimer);cancelAnimationFrame(threadLayoutFrame);cancelAnimationFrame(overlayLayoutFrame);cancelAnimationFrame(edgeLayoutFrame);overlayObserver.disconnect();threadObserver.disconnect();historyHeaderObserver.disconnect();clearInterval(ideaTimer);clearTimeout(ideaScrollEnd);ideaMotion?.cancel();edgeObserver.disconnect();ideaObserver.disconnect();clearTimeout(historyTimer);themeObserver.disconnect();cleanup.forEach(fn=>fn());window.removeEventListener('pharos:ask-config',configChanged);window.removeEventListener('pharos:visit',visitChanged);window.removeEventListener('pharos:route',routeChanged);};
+  return ()=>{saveVisit.stop();disposePreviews();popOutMotion?.cancel();if(overlay.open)overlay.close();mount(mountHost);overlay.remove();floating.remove();announcement.remove();if(headerButton)headerButton.disabled=true;disposed=true;ideaController.abort();clearTimeout(ideaRetry);sessionLoads.invalidate();requests.forEach(run=>{run.controller.abort();releaseRequest(run);});seenObserver.disconnect();stop();glows.forEach(glow=>glow.destroy());pageTrace.destroy();clearTimeout(draftTimer);cancelAnimationFrame(threadLayoutFrame);cancelAnimationFrame(overlayLayoutFrame);cancelAnimationFrame(edgeLayoutFrame);overlayObserver.disconnect();threadObserver.disconnect();historyHeaderObserver.disconnect();clearInterval(ideaTimer);clearTimeout(ideaScrollEnd);ideaMotion?.cancel();edgeObserver.disconnect();ideaObserver.disconnect();clearTimeout(historyTimer);themeObserver.disconnect();cleanup.forEach(fn=>fn());window.removeEventListener('pharos:ask-config',configChanged);window.removeEventListener('pharos:visit',visitChanged);window.removeEventListener('pharos:route',routeChanged);};
 };

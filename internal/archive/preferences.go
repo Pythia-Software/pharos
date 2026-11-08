@@ -28,6 +28,10 @@ const maxPreferenceBytes = 512 << 10
 
 // UIPreferences returns every stored preference, keyed by name.
 func (c *Catalog) UIPreferences(ctx context.Context) (map[string]json.RawMessage, error) {
+	// Keep a pending value visible until this read has taken its SQLite
+	// snapshot, even if a background flush commits at the same time.
+	c.sessionPreferences.mu.Lock()
+	defer c.sessionPreferences.mu.Unlock()
 	values := map[string]json.RawMessage{}
 	rows, err := c.reader().QueryContext(ctx, "SELECT key,value FROM ui_preferences")
 	if err != nil {
@@ -43,7 +47,17 @@ func (c *Catalog) UIPreferences(ctx context.Context) (map[string]json.RawMessage
 			values[key] = json.RawMessage(value)
 		}
 	}
-	return values, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for key, change := range c.sessionPreferences.pending {
+		if change.deleted {
+			delete(values, key)
+		} else {
+			values[key] = json.RawMessage(change.value)
+		}
+	}
+	return values, nil
 }
 
 // SetUIPreferences stores the values in body["set"] and removes the names in
@@ -76,6 +90,32 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 	if len(updates) == 0 && len(deletes) == 0 {
 		return nil
 	}
+	// An explicit durable update of disposable state (such as clearing
+	// history) must supersede any older buffered copy, even if a background
+	// round already took its snapshot. Newer buffered edits remain queued.
+	versions := map[string]uint64{}
+	for key := range updates {
+		if sessionPreferenceKey.MatchString(key) {
+			versions[key] = 0
+		}
+	}
+	for _, key := range deletes {
+		if sessionPreferenceKey.MatchString(key) {
+			versions[key] = 0
+		}
+	}
+	if len(versions) > 0 {
+		b := &c.sessionPreferences
+		b.flushMu.Lock()
+		defer b.flushMu.Unlock()
+		b.mu.Lock()
+		for key := range versions {
+			if change, ok := b.pending[key]; ok {
+				versions[key] = change.version
+			}
+		}
+		b.mu.Unlock()
+	}
 	_, setsEvents := updates[agentEventsFlag]
 	checkEvents := c.work != nil && (setsEvents || slices.Contains(deletes, agentEventsFlag))
 	wasEventsEnabled := checkEvents && c.work.server.agentEventsEnabled(ctx)
@@ -94,6 +134,16 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 	})
 	c.flags.invalidate()
 	if err == nil {
+		if len(versions) > 0 {
+			b := &c.sessionPreferences
+			b.mu.Lock()
+			for key, version := range versions {
+				if change, ok := b.pending[key]; ok && change.version == version {
+					delete(b.pending, key)
+				}
+			}
+			b.mu.Unlock()
+		}
 		c.rememberSavedFlags(updates, deletes)
 		if checkEvents && wasEventsEnabled != c.work.server.agentEventsEnabled(ctx) {
 			c.work.runner.InterruptKinds([]string{"analysis.agent_events"}, "agent analysis policy changed; reissue the request with the current analyses")

@@ -12,6 +12,25 @@ import messageLabelsDocument from '../../../schemas/message_labels.schema.json' 
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
+test('a pending background history save does not hold up navigation',{skip},async t=>{
+ let release, observed, block=false;const blocked=new Promise(resolve=>{release=resolve});const requested=new Promise(resolve=>{observed=resolve});
+ t.after(()=>release());
+ const managedSession={preferences:'pharos-session:0123456789abcdef0123456789abcdef:',storage:'library:instance:',legacy:'library:'};
+ const app=await open(t,{url:'/library?view=table',ready:'#queryTableLibrary .qt-row',managedSession,preferences:{'pharos-header-tools-v1':['navigator','settings']},api:{'POST /api/session-preferences':()=>{if(!block)return {buffered:true};observed();return blocked}}}),{page}=app;
+ await page.evaluate(()=>localStorage.setItem('pharos-history-v1',JSON.stringify([{url:'/library',title:'Search',at:Date.now()}])));
+ await activateHeaderTool(page,'navigatorToggle');
+ await page.locator('#historyToggle').click();
+ const cleared=page.waitForResponse(response=>response.url().endsWith('/api/preferences')&&response.request().postDataJSON()?.set?.[managedSession.preferences+'pharos-history-v1']==='[]');
+ await page.locator('#historyClear').click();await cleared;await page.locator('#historyClose').click();
+ block=true;
+ await page.evaluate(()=>localStorage.setItem('pharos-history-v1','[]'));
+ await requested;
+ await page.evaluate(()=>{const link=document.createElement('a');link.href='/app';link.textContent='Open library';document.body.append(link)});
+ await page.getByRole('link',{name:'Open library',exact:true}).click();
+ await page.waitForURL('**/app');
+ release({buffered:true});
+});
+
 test('workspace fingerprints restore across views and respect the global event display setting',{skip},async t=>{
  const requests=[];
  const api={'POST /api/fingerprints':request=>{

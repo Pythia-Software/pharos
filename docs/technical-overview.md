@@ -29,6 +29,14 @@ Catalog opens reuse a completed initialization for the same executable, schema,
 and Library projection, while still registering the current Mac. A new build or
 an older catalog runs the full migration and backfill pass before serving pages.
 
+Managed sessions buffer disposable navigation and derived view state in memory
+when catalog writes are busy. Pending values are visible to subsequent page
+loads and are coalesced before a low-priority writer persists them; the bounded
+buffer can be lost when the service stops. Explicit history removals, feedback
+annotations, drafts, saved queries and settings still use durable writes. Ask's automatic page visits
+also coalesce and retry from the current history; explicit history removals
+retain their ordering.
+
 Channel and Machine attribute work to its initiating conversation and device,
 including delegated usage. Execution machine records each session's placement
 separately. These dimensions are available across query tables, charts, cards,
