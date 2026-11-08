@@ -180,9 +180,13 @@ captures/.history-backfill/objects/ENVELOPE_SHA256.json
 ```
 
 The plan/job identity is deterministic. It binds original source identities,
-manifest hashes, selected retained versions, catalog observation state and
-scope. Jobs persist their cursor, budget, rollback hash, protected input paths,
-phase and errors on the capture drive. They can be rediscovered without the
+manifest hashes, selected retained versions, catalog observation state,
+scope and the capture root's device and inode (`capture_root_identity`, the
+unsigned `device:inode` plans have always stored). A capture root whose identity
+cannot be read is not planned, and protection refuses before writing any job
+state unless the root still has the plan's identity; platforms that report no
+identity cannot plan a backfill yet. Jobs persist their cursor, budget,
+rollback hash, protected input paths, phase and errors on the capture drive. They can be rediscovered without the
 live catalog. No receipt depends solely on a temporary file or an index marker.
 Immutable envelopes deduplicate across identical observations; their receipt
 carries the particular rollback snapshot's provenance.

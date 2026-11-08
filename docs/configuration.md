@@ -289,7 +289,8 @@ What it does, in order:
    matching index entries to rows, is something a page-for-page copy cannot
    break.
 4. **Copies `archive_root`** into `preserved/`, from where it points if it is
-   a symlink, keeping hard links (packages link their blobs) and verifying
+   a symlink, keeping hard links (packages link their blobs; where the
+   platform reports no link identity each file is copied) and verifying
    each file's size. Files already there with the same size are kept and
    linked like the rest. If `archive_root` is missing (its drive not mounted),
    nothing is copied and the summary says so; if it already is the library's
@@ -1242,7 +1243,11 @@ were).
   just copied or checked (matched by device and inode, not by name, because
   HFS+ and exFAT store accented and Korean names decomposed) or if the library
   still has a file at the name DEST lists it under; macOS's `._` files beside
-  kept files on exFAT are kept too. A part that could not be read completely,
+  kept files on exFAT are kept too. An entry in DEST whose identity cannot be
+  read is kept, a folder with everything in it, and a part with a file the run
+  accounts for but could not identify is not pruned at all (with a warning).
+  Where the platform reports no file identities, hard-linked files are copied
+  separately and nothing is pruned. A part that could not be read completely,
   whose source is missing, or that lists no files at all is never pruned (the
   last is reported as a warning); nor is anything where the library now has a
   symbolic link.
