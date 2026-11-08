@@ -1910,7 +1910,8 @@ window.pharosOpenDetail=detail;
 // React pages navigate through the shell so history, bookmarks, and the navigator stay in step.
 window.pharosNavigate=openHistoryEntry;
 // The Mac app's context menu (PharosApp.swift) runs these.
-window.pharosPageAction=action=>{if(action==='logs')openHistoryEntry('/settings/logs');else if(action==='feedback')window.pharosSendFeedback?.();else if(action==='annotate')window.pharosFeedback?.annotate()};
+window.pharosLighthouseLoadingIndicator=()=>brandOption('#lighthouseLoadingIndicator');
+window.pharosPageAction=action=>{if(action==='logs')openHistoryEntry('/settings/logs');else if(action==='feedback')window.pharosSendFeedback?.();else if(action==='annotate')window.pharosFeedback?.annotate();else if(action==='lighthouse-loading'){const option=BRAND_OPTIONS.find(option=>option.toggle==='#lighthouseLoadingIndicator');setBrandOption(option,!option.on)}};
 window.addEventListener('pharos:bookmarks',()=>{syncBookmarkState();if($('#bookmarksDrawer').classList.contains('open'))renderBookmarks()});
 document.querySelector('button[data-view=tools]')?.remove();window.pharosNameVisit=page=>recordVisit(true,page);
 // Query Table renders its own SVG controls. Keep its React-owned nodes intact:
