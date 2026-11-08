@@ -398,8 +398,8 @@ func TestWorkReplica(t *testing.T) {
 			}, func(ctx context.Context) (bool, error) {
 				ready, err := checksEmpty(ctx, checks, replay.ReadyChecks)
 				return !ready, err
-			}, func(ctx context.Context) (int, error) {
-				return replay.identityPresent(ctx, checks)
+			}, func(ctx context.Context) (replicaCensus, error) {
+				return replay.identityCensus(ctx, checks)
 			})
 		})
 		background.Go(func() {
@@ -1247,17 +1247,33 @@ func (r *replicaReplay) check() error {
 	return nil
 }
 
-// identityPresent is how many of the identity's conversations the catalog
-// holds under the replay source's account.
-func (r *replicaReplay) identityPresent(ctx context.Context, db *sql.DB) (int, error) {
+// replicaCensus is what the catalog holds under the replay's provider and
+// account: how many declared conversations exist, their messages, and how
+// many conversations there are that the identity does not declare.
+type replicaCensus struct {
+	Present    int
+	Messages   int64
+	Undeclared int64
+}
+
+// identityCensus counts the identity's conversations by the exact
+// (provider, account, native_id) key, independently of count_query. Both
+// queries seek the UNIQUE(provider, account, native_id) index; the declared
+// messages then come from messages_conversation_idx, so the cost is the
+// declared conversations' messages plus one index range of the account.
+func (r *replicaReplay) identityCensus(ctx context.Context, db *sql.DB) (replicaCensus, error) {
 	args := []any{r.Identity.Provider, r.Source.Account}
 	for _, id := range r.Identity.NativeIDs {
 		args = append(args, id)
 	}
-	var n int
-	err := db.QueryRowContext(ctx, `SELECT count(DISTINCT native_id) FROM conversations WHERE provider=? AND account=? AND native_id IN (?`+
-		strings.Repeat(",?", len(r.Identity.NativeIDs)-1)+`)`, args...).Scan(&n)
-	return n, err
+	ids := `(?` + strings.Repeat(",?", len(r.Identity.NativeIDs)-1) + `)`
+	var census replicaCensus
+	if err := db.QueryRowContext(ctx, `SELECT count(*), coalesce(sum((SELECT count(*) FROM messages m WHERE m.conversation_id=c.id)),0)
+		FROM conversations c WHERE c.provider=? AND c.account=? AND c.native_id IN `+ids, args...).Scan(&census.Present, &census.Messages); err != nil {
+		return census, err
+	}
+	err := db.QueryRowContext(ctx, `SELECT count(*) FROM conversations WHERE provider=? AND account=? AND native_id NOT IN `+ids, args...).Scan(&census.Undeclared)
+	return census, err
 }
 
 // replicaLinePrefix is data's first n newline-terminated lines.
@@ -1337,6 +1353,10 @@ type replicaArrivalReport struct {
 	AppliedSeconds      *float64 `json:"applied_seconds"`
 	CountBefore         *int64   `json:"count_before"`
 	CountAfter          *int64   `json:"count_after"`
+	// IdentityMessagesBefore and After are the declared conversations'
+	// messages around the arrival, which must strictly increase.
+	IdentityMessagesBefore *int64 `json:"identity_message_count_before"`
+	IdentityMessagesAfter  *int64 `json:"identity_message_count_after"`
 	// PendingAtApply says the ready checks saw this arrival's work: false
 	// means they were already empty, so its ready time proves nothing.
 	PendingAtApply *bool    `json:"ready_pending_at_apply"`
@@ -1363,7 +1383,7 @@ func newReplicaArrivals(plan *replicaReplay, started time.Time, stop context.Can
 	ids := slices.Sorted(slices.Values(plan.Identity.NativeIDs))
 	arrivals := &replicaArrivals{plan: plan, started: started, stop: stop, identity: map[string]any{"provider": plan.Identity.Provider,
 		"account": plan.Source.Account, "expect": plan.Identity.Expect, "native_ids": len(ids), "native_ids_sha256": replicaIDsDigest(ids),
-		"present_before": nil, "present_after": nil}}
+		"present_before": nil, "present_after": nil, "other_conversations_before": nil, "other_conversations_after": nil}}
 	for _, arrival := range plan.Arrivals {
 		arrivals.entries = append(arrivals.entries, replicaArrivalReport{Name: arrival.Name, AtSeconds: arrival.AtSeconds})
 	}
@@ -1393,26 +1413,29 @@ func replicaFailure(ctx context.Context, message string) (failure, interrupted s
 // the work, on the first error. One that starts after its time because the
 // previous arrival was still running records how late. Before the first
 // arrival none (new) or all (extend) of the identity's conversations are
-// in the catalog, and after the last all of them are.
-func (a *replicaArrivals) run(ctx context.Context, apply func(int) (string, error), count func(context.Context) (int64, error), pending func(context.Context) (bool, error), present func(context.Context) (int, error)) error {
-	err := a.arrive(ctx, apply, count, pending, present)
+// in the catalog, and after the last all of them are. Every arrival must
+// add messages to the declared conversations, whatever count_query says,
+// and the replay must leave the account's undeclared conversations as it
+// found them: unrelated sessions cannot satisfy the identity.
+func (a *replicaArrivals) run(ctx context.Context, apply func(int) (string, error), count func(context.Context) (int64, error), pending func(context.Context) (bool, error), census func(context.Context) (replicaCensus, error)) error {
+	err := a.arrive(ctx, apply, count, pending, census)
 	if err != nil && a.stop != nil {
 		a.stop(replicaArrivalFailure{err})
 	}
 	return err
 }
 
-func (a *replicaArrivals) arrive(ctx context.Context, apply func(int) (string, error), count func(context.Context) (int64, error), pending func(context.Context) (bool, error), present func(context.Context) (int, error)) error {
+func (a *replicaArrivals) arrive(ctx context.Context, apply func(int) (string, error), count func(context.Context) (int64, error), pending func(context.Context) (bool, error), census func(context.Context) (replicaCensus, error)) error {
 	identity := a.plan.Identity
-	before, err := present(ctx)
+	initial, err := census(ctx)
 	if err != nil {
 		return fmt.Errorf("identity: %w", err)
 	}
 	a.mu.Lock()
-	a.identity["present_before"] = before
+	a.identity["present_before"], a.identity["other_conversations_before"] = initial.Present, initial.Undeclared
 	a.mu.Unlock()
-	if want := map[string]int{"new": 0, "extend": len(identity.NativeIDs)}[identity.Expect]; before != want {
-		return fmt.Errorf("identity: expected %s conversations, but %d of %d are already in the catalog", identity.Expect, before, len(identity.NativeIDs))
+	if want := map[string]int{"new": 0, "extend": len(identity.NativeIDs)}[identity.Expect]; initial.Present != want {
+		return fmt.Errorf("identity: expected %s conversations, but %d of %d are already in the catalog", identity.Expect, initial.Present, len(identity.NativeIDs))
 	}
 	for index, arrival := range a.plan.Arrivals {
 		due := a.started.Add(time.Duration(arrival.AtSeconds * float64(time.Second)))
@@ -1426,9 +1449,14 @@ func (a *replicaArrivals) arrive(ctx context.Context, apply func(int) (string, e
 		if err != nil {
 			return fmt.Errorf("arrival %s: count_query: %w", arrival.Name, err)
 		}
+		declared, err := census(ctx)
+		if err != nil {
+			return fmt.Errorf("arrival %s: identity: %w", arrival.Name, err)
+		}
 		a.mu.Lock()
 		entry := &a.entries[index]
 		entry.began, entry.StartedSeconds, entry.LateSeconds, entry.CountBefore = began, replicaSeconds(began.Sub(a.started)), replicaSeconds(max(0, began.Sub(due))), &before
+		entry.IdentityMessagesBefore = &declared.Messages
 		a.mu.Unlock()
 		applying := time.Now()
 		digest, err := apply(index)
@@ -1440,8 +1468,18 @@ func (a *replicaArrivals) arrive(ctx context.Context, apply func(int) (string, e
 		if err != nil {
 			return fmt.Errorf("arrival %s: count_query: %w", arrival.Name, err)
 		}
+		grown, err := census(ctx)
+		if err != nil {
+			return fmt.Errorf("arrival %s: identity: %w", arrival.Name, err)
+		}
+		a.mu.Lock()
+		entry.CountAfter, entry.IdentityMessagesAfter = &after, &grown.Messages
+		a.mu.Unlock()
 		if after <= before {
 			return fmt.Errorf("arrival %s is not a real arrival: count_query went from %d to %d", arrival.Name, before, after)
+		}
+		if grown.Messages <= declared.Messages {
+			return fmt.Errorf("arrival %s did not add to the declared conversations: their messages went from %d to %d", arrival.Name, declared.Messages, grown.Messages)
 		}
 		observed, err := pending(ctx)
 		if err != nil {
@@ -1449,19 +1487,23 @@ func (a *replicaArrivals) arrive(ctx context.Context, apply func(int) (string, e
 		}
 		applied := time.Now()
 		a.mu.Lock()
-		entry.FilesSHA256, entry.CaptureIndexSeconds, entry.CountAfter, entry.PendingAtApply = digest, replicaSeconds(took), &after, &observed
+		entry.FilesSHA256, entry.CaptureIndexSeconds, entry.PendingAtApply = digest, replicaSeconds(took), &observed
 		entry.applied, entry.AppliedSeconds = applied, replicaSeconds(applied.Sub(a.started))
 		a.mu.Unlock()
 	}
-	after, err := present(ctx)
+	final, err := census(ctx)
 	if err != nil {
 		return fmt.Errorf("identity: %w", err)
 	}
 	a.mu.Lock()
-	a.identity["present_after"] = after
+	a.identity["present_after"], a.identity["other_conversations_after"] = final.Present, final.Undeclared
 	a.mu.Unlock()
-	if after != len(identity.NativeIDs) {
-		return fmt.Errorf("identity: after the arrivals %d of %d conversations are in the catalog", after, len(identity.NativeIDs))
+	if final.Present != len(identity.NativeIDs) {
+		return fmt.Errorf("identity: after the arrivals %d of %d conversations are in the catalog", final.Present, len(identity.NativeIDs))
+	}
+	if final.Undeclared != initial.Undeclared {
+		return fmt.Errorf("identity: the arrivals changed the undeclared conversations under provider %s, account %s from %d to %d; declare every session they carry, subagents included",
+			identity.Provider, a.plan.Source.Account, initial.Undeclared, final.Undeclared)
 	}
 	return nil
 }
@@ -1497,7 +1539,7 @@ func (a *replicaArrivals) report(host string) map[string]any {
 	defer a.mu.Unlock()
 	return map[string]any{"input": a.plan.Input, "source": a.plan.Source.Name, "kind": a.plan.Source.Kind, "host": host,
 		"identity": maps.Clone(a.identity), "arrivals": slices.Clone(a.entries), "followup_rounds": a.rounds, "followups": a.followups, "settled_seconds": a.settledAt,
-		"basis": "Each arrival writes its frozen input bytes into an arm-private source folder and runs the service's background Capture & index item for that source; count_query must increase. Settlement needs every arrival applied, ready_checks and every kind's pending_checks empty; classic follow-ups re-drain the demanded kinds and scheduled follow-ups submit recent demand."}
+		"basis": "Each arrival writes its frozen input bytes into an arm-private source folder and runs the service's background Capture & index item for that source; count_query and the declared conversations' messages (by provider, account and native ID) must increase, and the account's undeclared conversations must not change. Settlement needs every arrival applied, ready_checks and every kind's pending_checks empty; classic follow-ups re-drain the demanded kinds and scheduled follow-ups submit recent demand."}
 }
 
 func checksEmpty(ctx context.Context, db *sql.DB, queries []string) (bool, error) {
@@ -1739,7 +1781,9 @@ func TestWorkReplicaArrivalStaging(t *testing.T) {
 // Arrivals go through the service's own Capture & index item: each adds the
 // session's new lines to one conversation, and one that adds nothing fails.
 // The declared identity is checked before the first arrival and after the
-// last, and a failed arrival cancels the work with its own error.
+// last, every arrival must add to the declared conversations themselves,
+// undeclared ones must not appear, and a failed arrival cancels the work
+// with its own error.
 func TestWorkReplicaArrivals(t *testing.T) {
 	useHost(t, "replay-host")
 	catalog, config := testCatalog(t)
@@ -1751,6 +1795,9 @@ func TestWorkReplicaArrivals(t *testing.T) {
 	writeSourceFile(t, filepath.Join(input, "-proj", "s1.jsonl"),
 		claudeLine("s1", "u1", "first", "/proj", 1)+claudeLine("s1", "u2", "second", "/proj", 2)+claudeLine("s1", "u3", "third", "/proj", 3))
 	writeSourceFile(t, filepath.Join(input, "-proj", "s2.jsonl"), claudeLine("s2", "v1", "first", "/proj", 4)+claudeLine("s2", "v2", "second", "/proj", 5))
+	for _, session := range []string{"s5", "s6", "s8", "s9"} {
+		writeSourceFile(t, filepath.Join(input, "-proj", session+".jsonl"), claudeLine(session, session+"-1", "first", "/proj", 6))
+	}
 	replay := replicaTestReplay(
 		replicaArrival{Name: "a1", AtSeconds: 0, Files: []replicaArrivalFile{{Path: "-proj/s1.jsonl", Lines: replicaLines(1)}}},
 		replicaArrival{Name: "a2", AtSeconds: 0.2, Files: []replicaArrivalFile{{Path: "-proj/s1.jsonl"}}})
@@ -1773,7 +1820,7 @@ func TestWorkReplicaArrivals(t *testing.T) {
 		arrivals := newReplicaArrivals(plan, time.Now(), cancel)
 		err := arrivals.run(t.Context(), func(index int) (string, error) {
 			return replicaApplyArrival(t.Context(), server, plan, input, dir, index, clock)
-		}, count, pending, func(ctx context.Context) (int, error) { return plan.identityPresent(ctx, catalog.DB) })
+		}, count, pending, func(ctx context.Context) (replicaCensus, error) { return plan.identityCensus(ctx, catalog.DB) })
 		return arrivals, work, err
 	}
 	arrivals, work, err := play(replay)
@@ -1785,7 +1832,11 @@ func TestWorkReplicaArrivals(t *testing.T) {
 	if *report[0].CountBefore != 0 || *report[0].CountAfter != 1 || *report[1].CountAfter != 3 || report[1].LateSeconds == nil {
 		t.Fatalf("each arrival adds only its new lines: %+v", report)
 	}
+	if *report[0].IdentityMessagesBefore != 0 || *report[0].IdentityMessagesAfter != 1 || *report[1].IdentityMessagesBefore != 1 || *report[1].IdentityMessagesAfter != 3 {
+		t.Fatalf("the declared conversation's own messages are counted around each arrival: %+v", report)
+	}
 	if identity := result["identity"].(map[string]any); identity["expect"] != "new" || identity["present_before"] != 0 || identity["present_after"] != 1 ||
+		identity["other_conversations_before"] != int64(0) || identity["other_conversations_after"] != int64(0) ||
 		identity["account"] != "local" || identity["native_ids_sha256"] != replicaIDsDigest([]string{"s1"}) {
 		t.Fatalf("a new conversation is absent before and present after, by hash: %v", identity)
 	}
@@ -1807,10 +1858,11 @@ func TestWorkReplicaArrivals(t *testing.T) {
 	}
 	// failed checks that a schedule fails with want, applies nothing when
 	// refused up front, and cancels the work with its own error.
-	failed := func(name string, plan *replicaReplay, want string, applied bool) {
+	failed := func(name string, plan *replicaReplay, want string, applied, changed bool) *replicaArrivals {
 		t.Helper()
 		var before int64
 		_ = catalog.DB.QueryRow(replay.CountQuery).Scan(&before)
+		clock = clock.Add(time.Minute)
 		arrivals, work, err := play(plan)
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s: want %q, got %v", name, want, err)
@@ -1827,22 +1879,42 @@ func TestWorkReplicaArrivals(t *testing.T) {
 			t.Fatalf("%s: applied=%v expected", name, applied)
 		}
 		var after int64
-		if _ = catalog.DB.QueryRow(replay.CountQuery).Scan(&after); !applied && after != before {
-			t.Fatalf("%s: a refused identity staged an arrival: %d -> %d", name, before, after)
+		if _ = catalog.DB.QueryRow(replay.CountQuery).Scan(&after); changed != (after != before) {
+			t.Fatalf("%s: changed=%v expected, count %d -> %d", name, changed, before, after)
 		}
+		return arrivals
 	}
 	// The same bytes again extend s1 by nothing: no arrival.
-	failed("stale", schedule("extend", []string{"s1"}, "-proj/s1.jsonl", nil), "not a real arrival", false)
+	failed("stale", schedule("extend", []string{"s1"}, "-proj/s1.jsonl", nil), "not a real arrival", false, false)
 	// s1 is in the catalog, so it cannot be new; s2 is not, so it cannot extend.
-	failed("not new", schedule("new", []string{"s1"}, "-proj/s1.jsonl", nil), "already in the catalog", false)
-	failed("not extended", schedule("extend", []string{"s2"}, "-proj/s2.jsonl", nil), "already in the catalog", false)
+	failed("not new", schedule("new", []string{"s1"}, "-proj/s1.jsonl", nil), "already in the catalog", false, false)
+	failed("not extended", schedule("extend", []string{"s2"}, "-proj/s2.jsonl", nil), "already in the catalog", false, false)
 	// An arrival that never brings a declared conversation fails after it.
-	failed("missing", schedule("new", []string{"s2", "s9"}, "-proj/s2.jsonl", replicaLines(1)), "1 of 2 conversations", true)
+	failed("missing", schedule("new", []string{"s2", "s7"}, "-proj/s2.jsonl", replicaLines(1)), "1 of 2 conversations", true, true)
 	// s2 now exists with one line; the rest of it extends that conversation.
 	// A later run stages with a later clock, as a later file write would.
 	clock = clock.Add(time.Minute)
-	if _, work, err := play(schedule("extend", []string{"s2"}, "-proj/s2.jsonl", nil)); err != nil || work.Err() != nil {
+	extended, work, err := play(schedule("extend", []string{"s2"}, "-proj/s2.jsonl", nil))
+	if err != nil || work.Err() != nil {
 		t.Fatalf("an existing conversation extends: %v", err)
+	}
+	extendedReport := extended.report("replay-host")
+	if entry, identity := extendedReport["arrivals"].([]replicaArrivalReport)[0], extendedReport["identity"].(map[string]any); *entry.IdentityMessagesBefore != 1 || *entry.IdentityMessagesAfter != 2 ||
+		identity["present_before"] != 1 || identity["other_conversations_before"] != int64(1) || identity["other_conversations_after"] != int64(1) {
+		t.Fatalf("an extension grows the declared conversation and leaves s1 alone: %+v %v", entry, identity)
+	}
+	// Unrelated sessions raise count_query but cannot stand in for the
+	// declared ones: s5 is not the new s7, and s6 does not extend s1.
+	wrong := failed("wrong new session", schedule("new", []string{"s7"}, "-proj/s5.jsonl", nil), "did not add to the declared conversations", false, true)
+	if entry := wrong.report("replay-host")["arrivals"].([]replicaArrivalReport)[0]; *entry.CountAfter <= *entry.CountBefore || *entry.IdentityMessagesAfter != 0 {
+		t.Fatalf("the refused arrival reports both counts: %+v", entry)
+	}
+	failed("wrong extended session", schedule("extend", []string{"s1"}, "-proj/s6.jsonl", nil), "did not add to the declared conversations", false, true)
+	// A declared session that arrives beside an undeclared one is refused.
+	beside := schedule("new", []string{"s8"}, "-proj/s8.jsonl", nil)
+	beside.Arrivals[0].Files = append(beside.Arrivals[0].Files, replicaArrivalFile{Path: "-proj/s9.jsonl"})
+	if identity := failed("undeclared beside", beside, "changed the undeclared conversations", true, true).report("replay-host")["identity"].(map[string]any); identity["other_conversations_before"] != int64(4) || identity["other_conversations_after"] != int64(5) {
+		t.Fatalf("undeclared growth is reported: %v", identity)
 	}
 	if failure, interrupted := replicaFailure(t.Context(), "labels: boom"); failure != "labels: boom" || interrupted != "" {
 		t.Fatal("without a failed arrival the work's own failure stands")
