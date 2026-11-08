@@ -8,7 +8,9 @@ import { analysisQuery, distributionBins, heatmapAxis, heatmapBins, heatmapSourc
 import { levelOf, trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
 import { heatmapBinLabel, heatmapCellText, heatmapColumnText, heatmapGrid, heatmapShade, trendHeatmap } from "../../../src/dashboard-heatmap-model";
 import { binOf, binsSpanning, nextEdge } from "../../../src/value-bins";
+import { periodKey } from "../../../src/chart-period";
 import { sessionShapeAnalysisCatalog } from "../../../src/session-shape-analysis-catalog";
+import { humanAnalysisCatalog as human } from "../../../src/human-analysis-catalog";
 import { histogramBarText, histogramOf } from "../../../src/dashboard-histogram";
 import fixture from "../../../../testdata/value-bins.json";
 
@@ -126,6 +128,64 @@ test("over session rows, every bin is a series and each period's sessions add up
   assert.equal(heatmap.columns.reduce((sum, column) => sum + column.total, 0), 60);
   assert.equal(heatmap.rows[0].low, 1);
   assert.ok(heatmap.rows.every((row, index) => index === 0 || row.y0 >= heatmap.rows[index - 1].y1 - 1e-9), "rows ascend without overlap");
+});
+
+test("Human Words heatmaps bin each conversation's period total, including zero, and preserve the message filters", () => {
+  const now = Date.parse("2026-11-04T18:00:00Z"), zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const rows = [
+    { id: "a1", conversation_id: "a", sent_at: "2026-11-01T10:00:00Z", typed_words: 4, words: 5, provider: "codex" },
+    { id: "a2", conversation_id: "a", sent_at: "2026-11-01T11:00:00Z", typed_words: 6, words: 7, provider: "codex" },
+    { id: "a3", conversation_id: "a", sent_at: "2026-11-02T10:00:00Z", typed_words: 3, words: 4, provider: "codex" },
+    { id: "b", conversation_id: "b", sent_at: "2026-11-01T12:00:00Z", typed_words: 10, words: 11, provider: "codex" },
+    { id: "c", conversation_id: "c", sent_at: "2026-11-01T13:00:00Z", typed_words: 0, words: 6, provider: "codex" },
+    { id: "d", conversation_id: "d", sent_at: "2026-11-01T14:00:00Z", typed_words: 100, words: 100, provider: "claude" },
+    { id: "missing", conversation_id: "", sent_at: "2026-11-01T14:00:00Z", typed_words: 100, words: 100, provider: "codex" },
+  ];
+  const where = [{ field: "sent_at", op: ">=", value: new Date(2026, 10, 1).toISOString() }, { field: "sent_at", op: "<", value: new Date(2026, 10, 4).toISOString() }, { field: "provider", op: "=", value: "codex" }];
+  const state = normalizeAnalysis(human, { view: "trend", metric: "typed", split: "none", display: "heatmap", period: "day" });
+  assert.equal(state.display, "heatmap");
+  assert.equal(trendTitle(human, state), "Conversations per day by typed words per conversation");
+  const axis = heatmapAxis(human, state), source = heatmapSource(human, state);
+  const query = trendQuery(source.catalog, source.state, where, { now, zone });
+  assert.equal(query.query.aggregations[0].groupLimit, 10000);
+  assert.deepEqual(query.query.aggregations[0].dateGrouping, { field: "sent_at", interval: "day", timeZone: zone, includeEmpty: false, range: "query" });
+  const results = core.evaluateMetrics(rows, query.query, schemas.writing_messages, { now }).metrics;
+  assert.equal(results[0].error, undefined);
+  const built = trendSeries(source.catalog, source.state, query, results, { now });
+  assert.equal(built.error, undefined);
+  const grid = trendHeatmap(built.buckets, built.series, axis.bins.scheme);
+  const column = key => grid.columns.find(item => item.key === key);
+  const countAt = (key, bin) => column(key).cells[grid.rows.findIndex(row => row.low === bin)];
+  assert.equal(countAt("2026-11-01", 10), 2, "two conversations each wrote ten words, even though one wrote two messages");
+  assert.equal(countAt("2026-11-01", 0), 1, "a conversation with only supplied text still has zero typed words");
+  assert.equal(countAt("2026-11-02", 3), 1, "the same conversation counts again on another day");
+  assert.equal(column("2026-11-03").total, 0);
+  assert.match(heatmapCellText(grid, grid.rows.findIndex(row => row.low === 10), grid.columns.findIndex(item => item.key === "2026-11-01"), { period: "day", noun: "conversations", label: axis.bins.label }), /2 conversations/);
+  for (const partial of [{ ...results[0], coverage: "partial" }, { ...results[0], groupCount: results[0].buckets.length + 1 }]) {
+    assert.match(trendSeries(source.catalog, source.state, query, [partial], { now }).error, /complete totals/i);
+  }
+  const missingValue = { ...results[0], buckets: results[0].buckets.map((bucket, index) => index ? bucket : { ...bucket, value: null }) };
+  assert.match(trendSeries(source.catalog, source.state, query, [missingValue], { now }).error, /needs a word total/i);
+  const all = normalizeAnalysis(human, { ...state, metric: "words" });
+  assert.equal(heatmapAxis(human, all).bins.label, "User words per conversation");
+});
+
+test("multi-day Human Words heatmaps combine a conversation before binning and average rolling windows", () => {
+  const first = new Date(2026, 10, 1, 12), second = new Date(2026, 10, 2, 12);
+  if (periodKey(first, "days", 2) !== periodKey(second, "days", 2)) { first.setDate(first.getDate() + 1); second.setDate(second.getDate() + 1); }
+  const now = new Date(2026, 10, 6, 12).getTime();
+  const state = normalizeAnalysis(human, { view: "trend", metric: "typed", split: "none", display: "heatmap", period: "days", days: 2, rollingPeriods: 2, rollingOp: "sum" });
+  const source = heatmapSource(human, state), where = [{ field: "sent_at", op: ">=", value: first.toISOString() }];
+  assert.equal(source.state.rollingOp, "mean");
+  const trend = trendQuery(source.catalog, source.state, where, { now });
+  const results = [{ id: "trend", coverage: "exact", buckets: [
+    { keys: [first.toISOString(), "a"], count: 1, value: 4 },
+    { keys: [second.toISOString(), "a"], count: 1, value: 6 },
+  ] }];
+  const built = trendSeries(source.catalog, source.state, trend, results, { now });
+  const grid = trendHeatmap(built.buckets, built.series, heatmapAxis(human, state).bins.scheme);
+  const column = grid.columns.find(item => item.key === periodKey(first, "days", 2));
+  assert.equal(column.cells[grid.rows.findIndex(row => row.low === 10)], 0.5, "one conversation at ten words, averaged over two periods");
 });
 
 test("the %ile control's levels: a line's reference over earlier points, a heatmap's traces per period", () => {

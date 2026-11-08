@@ -683,6 +683,14 @@ no sum, cumulative or share.
     measure among the records in its population with a value;
   - by such a band, an additive measure draws its total over the band's
     value: sessions by length band is sessions by messages per session.
+  - Human Words' typed and all user words, without a breakdown, first sum
+    matching messages for each conversation in each local calendar period.
+    The heatmap bins those totals and counts conversations, including a
+    conversation with zero typed words. A conversation active on several
+    days appears once on each day. Filters apply to the messages before
+    summing; partial boundary days contain only messages inside the range.
+    It requires all period-and-conversation groups (up to 10,000); an
+    incomplete result reports an error instead of an incomplete heatmap.
 
   The bins are fine and fixed (`value-bins.ts`): ten log bins a decade, or
   whole numbers to 9 and then log bins, or linear steps. The service stores

@@ -28,9 +28,10 @@ const typed: WhereTerm[] = [{ field: "typed_words", op: ">", value: "0" }];
 // Every message: COUNT of its id.
 const messages = { op: "count" as const, field: "id", label: "messages" };
 const cue = (field: string, label: string) => ({ op: "sum" as const, expression: `IF([${field}],1,0)`, label });
+const conversationWords = (label: string) => ({ unit: "conversation", bins: { field: "conversation_id", scheme: { scale: "count" as const }, label, format: count } });
 const measures: Record<string, AnalysisMeasure> = {
-  typed: { label: "Typed words", unit: "words", format: count, op: "sum", field: "typed_words", value: "typed_words", additive: true, note: "Typed words are text you typed or dictated; pastes, copied agent output, templates, attachments, app instructions and automated prompts are counted separately." },
-  words: { label: "All user words", unit: "words", format: count, op: "sum", field: "words", value: "words", additive: true, note: "All user words count every word of each classified user message, whatever its source; Text source splits them." },
+  typed: { label: "Typed words", unit: "words", format: count, op: "sum", field: "typed_words", value: "typed_words", additive: true, heatmapUnit: conversationWords("Typed words per conversation"), note: "Typed words are text you typed or dictated; pastes, copied agent output, templates, attachments, app instructions and automated prompts are counted separately." },
+  words: { label: "All user words", unit: "words", format: count, op: "sum", field: "words", value: "words", additive: true, heatmapUnit: conversationWords("User words per conversation"), note: "All user words count every word of each classified user message, whatever its source; Text source splits them." },
   typed_messages: { label: "Messages with typed text", unit: "messages", format: count, op: "count", additive: true, where: typed, note: "Messages holding at least one typed or dictated word." },
   messages: { label: "User messages", unit: "messages", format: count, op: "count", additive: true, note: "Every classified user message, including those holding only supplied text." },
   conversations: { label: "Conversations", unit: "conversations", format: count, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct conversations with a matching message. A conversation in several groups counts once in each, so groups do not add up to the total." },
