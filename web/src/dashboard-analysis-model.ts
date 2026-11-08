@@ -2,7 +2,7 @@ import { EMPTY_QUERY, MAX_WHERE_CLAUSES, coerceValue, groupKeyFields, predicates
 import { defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
 import { chartPeriods, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { chartDisplays, validRollingPeriods } from "./chart-series";
-import { isSliceTerm, readSlice, validChartPresentation, withSlice, type SliceSelection } from "./chart-selection";
+import { isSliceTerm, readSlice, sliceSelectionActive, validChartPresentation, withSlice, type SliceSelection } from "./chart-selection";
 import { timeBounds, withEnd } from "./chart-range";
 import type { BinScheme } from "./value-bins";
 import { cycleBoxes, cycleFrame, cycleGroups, cycleRangeError, cycleSamples, hoursOfDay, idleIsZero, maxCycleSlots, weekdays, type CalendarCycle, type CycleKey } from "./weekday-cover";
@@ -412,7 +412,7 @@ export function readAnalysisLink<T extends AnalysisState>(catalog: AnalysisCatal
   const fields = catalog.breakdowns[canonicalState(catalog, state).split]?.fields ?? [], field = fields[0];
   if (!catalog.legacySlices || fields.length !== 1 || !where.some(term => isSliceTerm(term, field))) return { state: { ...state, v: analysisVersion }, where };
   const slice = readSlice(where, field);
-  return { state: { ...state, v: analysisVersion, selection: { values: slice.values.map(value => value ?? ""), excluded: slice.excluded } }, where: where.filter(term => !isSliceTerm(term, field)) };
+  return { state: { ...state, v: analysisVersion, selection: { ...slice, values: slice.values.map(value => value ?? "") } }, where: where.filter(term => !isSliceTerm(term, field)) };
 }
 
 // A control's change, applied to the state as asked for rather than as drawn.
@@ -689,7 +689,7 @@ export type AnalysisQuery = {
   // breakdown's keys.
   // late: a selection outside shares too large for the query's predicate
   // budget, so it is drawn from the groups the query returned.
-  selection?: { values: string[]; excluded: boolean; mapped?: string; fields: number; share: boolean; late?: boolean };
+  selection?: SliceSelection<string> & { mapped?: string; fields: number; share: boolean; late?: boolean };
 };
 
 // The executed query for a non-trend view. Records compare and distribute
@@ -734,14 +734,14 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
         : { kind: "bar-horizontal", maxGroups: components.parts.length, legendPosition: "none", xLabel: measure.label, xScale: log(state.scale), format: measure.format } };
     return { query: { ...EMPTY_QUERY, where: terms, aggregations }, clause, components, grouped: false,
       supporting: { ...EMPTY_QUERY, where: terms },
-      selection: state.selection?.values.length ? { ...state.selection, fields: 1, share: shares } : undefined };
+      selection: state.selection && sliceSelectionActive(state.selection) ? { ...state.selection, fields: 1, share: shares } : undefined };
   }
   // The selection is of the breakdown's groups, drawn on the group fields of
   // the current unit.
   const recordFields = state.split === noSplit || state.view === "cycle" ? [] : catalog.breakdowns[state.split].fields;
   const groupFields = state.unit === records ? recordFields : catalog.units[state.unit]?.breakdowns[state.split] ?? [];
   const chosen = recordFields.length ? state.selection : undefined;
-  const selection: AnalysisQuery["selection"] = chosen?.values.length ? { values: chosen.values, excluded: chosen.excluded, fields: recordFields.length, share: shares, ...groupFields[0] !== recordFields[0] ? { mapped: groupFields[0] } : {} } : undefined;
+  const selection: AnalysisQuery["selection"] = chosen && sliceSelectionActive(chosen) ? { ...chosen, fields: recordFields.length, share: shares, ...groupFields[0] !== recordFields[0] ? { mapped: groupFields[0] } : {} } : undefined;
   const cycleKey = state.view === "cycle" ? cycleKeys(catalog, state)![state.cycle]! : undefined;
   const where = cycleKey?.kind === "recorded-date" ? completeStart(inputWhere, catalog.time, zone, now) : inputWhere;
   const run = (terms: WhereTerm[]) => catalog.executable ? catalog.executable(terms, now) : terms;
@@ -911,12 +911,13 @@ export const predicateCount = (terms: WhereTerm[]) => terms.reduce((count, term)
 // missing). Every predicate counts toward the query's budget: where the
 // selection would take a where list already holding `used` predicates past
 // it, the selection has no filter (undefined) and is drawn after the query.
-export function selectionWhere(fields: string[], selection: { values: string[]; excluded: boolean }, used = 0): WhereTerm[] | undefined {
-  if (!selection.values.length) return [];
+export function selectionWhere(fields: string[], selection: SliceSelection<string>, used = 0): WhereTerm[] | undefined {
+  if (!sliceSelectionActive(selection)) return [];
   const terms = selectionTerms(fields, selection);
   return used + predicateCount(terms) > MAX_WHERE_CLAUSES ? undefined : terms;
 }
-function selectionTerms(fields: string[], selection: { values: string[]; excluded: boolean }): WhereTerm[] {
+function selectionTerms(fields: string[], selection: SliceSelection<string>): WhereTerm[] {
+  if(selection.allHidden)return fields.length?withSlice([],fields[0],{values:[],excluded:false,allHidden:true}):[];
   if (fields.length === 1) return withSlice([], fields[0], { values: selection.values.map(value => value || null), excluded: selection.excluded });
   const groups = selection.values.map(value => (JSON.parse(value) as unknown[]).map((key, index) => ({ field: fields[index], key: key === null || key === undefined || key === "" ? null : String(key) })));
   const equal = ({ field, key }: { field: string; key: string | null }): WhereClause => key === null ? { field, op: "is_null", value: "" } : { field, op: "=", value: key };
@@ -935,6 +936,7 @@ function selectionTerms(fields: string[], selection: { values: string[]; exclude
 // selected one among them is counted there, or not drawn (missing says how
 // many).
 export function selectGroups(entry: AggregationResultEntry, selection?: AnalysisQuery["selection"]): AggregationResultEntry & { missing?: number } {
+  if(selection?.allHidden)return {...entry,buckets:[],groupCount:0,other:undefined};
   if (!selection?.values.length) return entry;
   const key = (bucket: AggregationBucket) => selection.fields === 1 ? String(bucket.keys[0] ?? "") : JSON.stringify(bucket.keys.slice(0, selection.fields).map(value => value ?? null));
   const truncated = Boolean(entry.other) || (entry.groupCount ?? 0) > entry.buckets.length;

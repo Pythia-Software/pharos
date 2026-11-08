@@ -21,7 +21,7 @@ import {splitTimelineCallers} from "./timeline-caller-model";
 import {cutAxisLabels,fromVirtual,idleGaps,laneBusy,timeScale,toVirtual,type IdleGap,type TimeScale} from "./timeline-idle-model";
 import {useTimelineColumns} from "./timeline-columns";
 import {timelineSessionBranches} from "./timeline-label-model";
-import {activeLaneRows,launchAttemptNote,laneCoverage,segmentPosition,type ExecutionSegment,type LaunchAttempt,type SessionAncestry} from "./delegation-ancestry";
+import {sessionOutsideWindow,launchAttemptNote,laneCoverage,segmentPosition,type ExecutionSegment,type LaunchAttempt,type SessionAncestry} from "./delegation-ancestry";
 import {delegationAliasRequests,normalizeDelegationView,readerSelection,unresolvedAliases,type DelegationAliases} from "./delegation-aliases";
 import {coverageSummary,eventsPendingNote,occurrenceNote,omittedSegmentsNote,parentNote,qualityMark,sessionCountText,timelineEventsPending,timelineEventsPendingNote,type ExecutionCoverage,type ParentCertainty} from "./delegation-coverage";
 import {TimelineLegend,timelineLegendWindow} from "./timeline-legend";
@@ -1096,6 +1096,7 @@ export function DelegationExplorer({
                   rows={rows}
                   data={data}
                   shown={currentSessionID || ""}
+                  range={range}
                   collapsed={collapsed}
                   toggle={toggle}
                   openNode={openNode}
@@ -1126,6 +1127,7 @@ export function DelegationExplorer({
                         </thead>
                         <tbody>
                           {rows.map((n) => {
+                            const outside = sessionOutsideWindow(n, range, scope === "all");
                             const ancestor =
                               n.context_only ||
                               !data.rows.some((row) => row.id === n.id) ||
@@ -1178,7 +1180,7 @@ export function DelegationExplorer({
                                         mode === "rank" &&
                                         sort === m.id &&
                                         scope === family);
-                                    const strength = on
+                                    const strength = on && !outside
                                       ? tintStrength(
                                           metric.value || 0,
                                           data.maxima[family][m.id],
@@ -1192,9 +1194,9 @@ export function DelegationExplorer({
                                             ? `color-mix(in srgb, var(--delegation-tint) ${strength * 34}%, var(--panel))`
                                             : undefined,
                                         }}
-                                        title={`${cellTitle(metric, m)}${family === "self" && tokenAttributionText(n) ? "\n" + tokenAttributionText(n) : ""}`}
+                                        title={outside ? "Outside the selected timeline window" : `${cellTitle(metric, m)}${family === "self" && tokenAttributionText(n) ? "\n" + tokenAttributionText(n) : ""}`}
                                       >
-                                        {tableMetricText(metric, m.unit)}
+                                        {outside ? "" : tableMetricText(metric, m.unit)}
                                       </td>
                                     );
                                   })}
@@ -1233,6 +1235,7 @@ export function DelegationExplorer({
               ) : (
                 <p>No retained timestamps are available for a timeline.</p>
               )}
+              {!single && tab === "table" && range && data.start != null && data.end != null && (range[0] > data.start || range[1] < data.end) && <p className="delegation-evidence-note">Usage covers whole sessions; rows outside the selected timeline window are blank.</p>}
               {!single && tab === "table" && reportedMinimumShown && (compact || specs.some(m => m.id === "tokens")) && <p className="delegation-token-evidence">
                 * Reported token minimum; may cover only the last request. Full session usage is unknown.
               </p>}
@@ -1310,10 +1313,11 @@ function RelativesButton({ node, show }: { node: Session; show: (node: Session) 
 // Related work's sessions name their role first.
 const peerPrefix = (n: Session) => n.peer ? `${peerRoleLabel(n.peer.role)} · ` : "";
 
-function InboxSessions({ rows, data, shown, collapsed, toggle, openNode, showRelatives }: {
+function InboxSessions({ rows, data, shown, range, collapsed, toggle, openNode, showRelatives }: {
   rows: Session[];
   data: Analysis;
   shown: string;
+  range: Range | null;
   collapsed: Set<string>;
   toggle: (node: Session) => void;
   openNode: (node: Session) => void;
@@ -1326,13 +1330,14 @@ function InboxSessions({ rows, data, shown, collapsed, toggle, openNode, showRel
     <div className="delegation-inbox-heading" role="row"><span role="columnheader" title={sessionCountText(data.session_count, data.session_count_uncertain)}>Agent session{data.session_count_uncertain ? " ≈" : ""}</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Run time" : spec.label}</span>)}</div>
     {rows.map(n => <div key={n.id} role="row" data-session-id={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }}>
       <div role="cell" className="delegation-inbox-session">
-        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens)} tokens unallocated in branch` : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
+        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{!sessionOutsideWindow(n, range) && (n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens)} tokens unallocated in branch` : "")}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
         {!!n.child_count && <button className="delegation-chevron session-fold" style={{left: sessionBranchX(n.depth) - 8}} aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} title={collapsed.has(n.id) ? "Expand sessions" : "Collapse sessions"} aria-expanded={!collapsed.has(n.id)} onClick={() => toggle(n)}><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
         <RelativesButton node={n} show={showRelatives} />
       </div>
       {metrics.map(spec => {
         const value = n.self[spec.id];
-        return <span key={spec.id} role="cell" className="delegation-inbox-metric" title={`${value ? cellTitle(value, spec) : "No retained evidence"}${tokenAttributionText(n) ? "\n" + tokenAttributionText(n) : ""}`}>{metricText(value, spec.unit)}</span>;
+        const outside = sessionOutsideWindow(n, range);
+        return <span key={spec.id} role="cell" className="delegation-inbox-metric" title={outside ? "Outside the selected timeline window" : `${value ? cellTitle(value, spec) : "No retained evidence"}${tokenAttributionText(n) ? "\n" + tokenAttributionText(n) : ""}`}>{outside ? "" : metricText(value, spec.unit)}</span>;
       })}
     </div>)}
     {!rows.length && <p>No saved agent sessions.</p>}
@@ -1705,9 +1710,8 @@ export function ParallelActivity({
   const shownGaps = skipIdle ? gaps : [];
   const fullScale = useMemo(() => timeScale(full, shownGaps), [full[0], full[1], shownGaps]);
   const windowScale = useMemo(() => timeScale(range, shownGaps), [range[0], range[1], shownGaps]);
-  const shownLaneRows=useMemo(()=>{
-    return activeLaneRows(rows,laneRows,range);
-  },[rows,laneRows,range[0],range[1]]);
+  // Zoom changes observations, not the sessions listed on this page.
+  const shownLaneRows = laneRows;
   const sessionBranches=useMemo(()=>timelineSessionBranches(shownLaneRows),[shownLaneRows]);
   const coverage=useMemo(()=>laneCoverage(rows,shownLaneRows),[rows,shownLaneRows]);
   const legend=useMemo(()=>timelineLegendWindow([
@@ -1817,7 +1821,7 @@ export function ParallelActivity({
         scale={fullScale}
         idle={timeline&&!previewOnly?{skip:skipIdle,set:setSkipIdle,gaps:gaps.length}:undefined}
       />
-      {timeline?<TimelineLegend data-view-field="timeline_visibility" visibility={timelineVisibility} onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))} messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error} events={[...nativeLabels.events.values()].flat()}/>:<div className="delegation-legend">
+      {timeline?<TimelineLegend previewOnly={previewOnly} onOpenTimeline={openOverview} data-view-field="timeline_visibility" visibility={timelineVisibility} onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))} messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error} events={[...nativeLabels.events.values()].flat()}/>:<div className="delegation-legend">
         {!timeline?<span>
           <i className="model" />
           Model / orchestration · inferred

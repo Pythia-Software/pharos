@@ -37,27 +37,14 @@ export function sessionAncestors(row: AncestryRow, byID: ReadonlyMap<string, Anc
   return chain;
 }
 export const unresolvedAncestry = (row: AncestryRow) => !!row.ancestry && !["root", "resolved"].includes(row.ancestry.state);
-const overlaps = (start: number | null | undefined, end: number | null | undefined, range: readonly [number, number]) =>
-  start != null && end != null && start <= range[1] && end >= range[0];
-
-/**
- * Lanes active in the window, plus every ancestor of an active lane, in lane
- * order. An inactive parent stays when a loaded descendant is active, or when
- * children it did not load (folded or on another page) are active in its
- * subtree span.
- */
-export function activeLaneRows<T extends AncestryRow>(rows: readonly AncestryRow[], laneRows: readonly T[], range: readonly [number, number]): T[] {
-  const byID = new Map(rows.map(row => [row.id, row]));
-  const loadedChildren = new Map<string, number>();
-  for (const row of rows) if (row.parent_id && byID.has(row.parent_id)) loadedChildren.set(row.parent_id, (loadedChildren.get(row.parent_id) ?? 0) + 1);
-  const kept = new Set<string>();
-  for (const row of rows) {
-    const unloaded = (row.child_count ?? 0) > (loadedChildren.get(row.id) ?? 0);
-    if (!overlaps(row.start, row.end, range) && !(unloaded && overlaps(row.subtree_start, row.subtree_end, range))) continue;
-    kept.add(row.id);
-    for (const id of sessionAncestors(row, byID)) kept.add(id);
-  }
-  return laneRows.filter(row => kept.has(row.id));
+/** Only hide usage when retained bounds prove the session (or branch) is outside the window. */
+export function sessionOutsideWindow(row: AncestryRow, range: readonly [number, number] | null, inclusive = false): boolean {
+  if (!range) return false;
+  // A branch with unknown bounds may contain activity outside the parent's span.
+  if (inclusive && row.child_count && (row.subtree_start == null || row.subtree_end == null)) return false;
+  const start = inclusive ? row.subtree_start ?? row.start : row.start;
+  const end = inclusive ? row.subtree_end ?? row.end : row.end;
+  return start != null && start > range[1] || end != null && end < range[0];
 }
 
 /** Ancestors the shown lanes name but the page did not load, and lanes with unresolved ancestry. */

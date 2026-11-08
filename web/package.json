@@ -37,9 +37,9 @@
     "check-view-controls": "node view-controls.mjs"
   },
   "dependencies": {
-    "@pythia-software/query-table-core": "1.0.1",
-    "@pythia-software/query-table-react": "1.0.1",
-    "@pythia-software/query-table-ui": "1.0.1",
+    "@pythia-software/query-table-core": "1.0.3",
+    "@pythia-software/query-table-react": "1.0.3",
+    "@pythia-software/query-table-ui": "1.0.3",
     "@types/markdown-it": "14.1.2",
     "html-to-image": "1.11.13",
     "markdown-it": "15.0.2",
@@ -47,7 +47,7 @@
     "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@pythia-software/query-table-codegen": "1.0.1",
+    "@pythia-software/query-table-codegen": "1.0.3",
     "@types/react": "18.3.28",
     "@types/react-dom": "18.3.7",
     "esbuild": "0.27.2",

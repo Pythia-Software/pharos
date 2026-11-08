@@ -2,24 +2,24 @@
   "version": 1,
   "dependencies": {
     "@pythia-software/query-table-core": {
-      "version": "1.0.1",
+      "version": "1.0.3",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.1: the published npm files are identical to 1.0.0 apart from package.json versions; the release only changes the Go SQLite executor. 1.0.0 review: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.3 against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes. Query Table 1.0.3 also adds an optional Go population counter, which Pharos does not use. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-react": {
-      "version": "1.0.1",
+      "version": "1.0.3",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.1: the published npm files are identical to 1.0.0 apart from package.json versions; the release only changes the Go SQLite executor. 1.0.0 review: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.3 against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes. Query Table 1.0.3 also adds an optional Go population counter, which Pharos does not use. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-ui": {
-      "version": "1.0.1",
+      "version": "1.0.3",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.1: the published npm files are identical to 1.0.0 apart from package.json versions; the release only changes the Go SQLite executor. 1.0.0 review: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.3 against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes. Query Table 1.0.3 also adds an optional Go population counter, which Pharos does not use. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-codegen": {
-      "version": "1.0.1",
+      "version": "1.0.3",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.1: the published npm files are identical to 1.0.0 apart from package.json versions; the release only changes the Go SQLite executor. 1.0.0 review: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.3 against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes. Query Table 1.0.3 also adds an optional Go population counter, which Pharos does not use. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     }
   },
   "bindings": [
@@ -117,6 +117,10 @@
     },
     {
       "file": "web/src/thinking-dashboard.tsx",
+      "field": "disclosures"
+    },
+    {
+      "file": "web/src/timeline-legend.tsx",
       "field": "disclosures"
     },
     {
@@ -4269,16 +4273,6 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
-      "key": "0557a80e0404a490:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "button",
-      "control": "aria-label={name} onClick={() => { firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => { if (event.key !== \"ArrowDown\" && event.key !== \"ArrowUp\") return; event.preventDefault(); firstFocus.current = event.key === \"ArrowUp\" ? -1 : 0; setOpen(true); }}",
-      "disclosure": true,
-      "contract": "transient",
-      "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard or timeline owner and persist as analyze_chart.selection or timeline_visibility; opening or navigating the menu is not a durable disclosure."
-    },
-    {
       "key": "072b3e8bd51c0252:0",
       "file": "web/src/chart-legend-chip.tsx",
       "owner": "ChartLegendChip",
@@ -4288,67 +4282,32 @@
       "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard or timeline owner and persist as analyze_chart.selection or timeline_visibility; opening or navigating the menu is not a durable disclosure."
     },
     {
-      "key": "0f737b763b98a950:0",
+      "key": "1a4ecd4deabc1ba0:0",
       "file": "web/src/chart-legend-chip.tsx",
       "owner": "ChartLegendChip",
       "tag": "button",
-      "control": "onClick={() => choose(\"toggle\")}",
+      "control": "onClick={()=>choose(option.action)}",
       "contract": "dashboard",
-      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
+      "reason": "Shared one-line Show, Hide, Hide others and Show All legend actions update presentation selections through the dashboard or Timeline Key owner. Mixed categories use their current visible/hidden value counts; menu openness is transient."
     },
     {
-      "key": "1d7ed15ec5b22f13:0",
+      "key": "c098be32207684ba:0",
       "file": "web/src/chart-legend-chip.tsx",
       "owner": "ChartLegendChip",
       "tag": "button",
-      "control": "onClick={() => choose(\"only\")}",
-      "contract": "dashboard",
-      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
+      "control": "aria-label={name} onClick={() => { if(readOnly){onActivate?.();return;} firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => { if(readOnly)return; if (event.key !== \"ArrowDown\" && event.key !== \"ArrowUp\") return; event.preventDefault(); firstFocus.current = event.key === \"ArrowUp\" ? -1 : 0; setOpen(true); }}",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Legend triggers open a transient visibility menu in editable charts. In the read-only conversation sidebar, the same icons expose hover names and navigate to the full Timeline; they cannot open or apply a visibility menu."
     },
     {
-      "key": "32cadca8241ea727:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "button",
-      "control": "onClick={() => filter(\"keep\")}",
-      "contract": "dashboard",
-      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
-    },
-    {
-      "key": "dd11cf44075d571a:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "button",
-      "control": "onClick={() => choose(\"exclude\")}",
-      "contract": "dashboard",
-      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
-    },
-    {
-      "key": "ef1a8d29a62b9643:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "button",
-      "control": "onClick={() => filter(\"drop\")}",
-      "contract": "dashboard",
-      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
-    },
-    {
-      "key": "f1cb74ebedc04532:0",
-      "file": "web/src/chart-legend-chip.tsx",
-      "owner": "ChartLegendChip",
-      "tag": "button",
-      "control": "onClick={() => choose(\"clear\")}",
-      "contract": "dashboard",
-      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
-    },
-    {
-      "key": "f416fb38a053b52a:0",
+      "key": "e260ca71089def06:0",
       "file": "web/src/chart-tooltip.tsx",
       "owner": "ChartTooltip",
       "tag": "span",
-      "control": "onPointerMove={move} onPointerLeave={() => setTip(null)} onPointerDown={() => setTip(null)}",
-      "contract": "host-search",
-      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
+      "control": "onPointerMove={move} onPointerLeave={() => setTip(null)} onPointerDown={() => setTip(null)} onKeyDownCapture={() => setTip(null)}",
+      "contract": "transient",
+      "reason": "Immediate hover names are transient. Pointer, keyboard, scroll and Escape dismissal keep chart and compact Timeline Key tooltips separate from durable selections and disclosures."
     },
     {
       "key": "acb2c88ae5fd36c5:0",
@@ -4942,13 +4901,13 @@
       "reason": "Native select delegates value and changes to its dashboard caller; the hidden selected label only determines width."
     },
     {
-      "key": "2407248069379e3c:0",
+      "key": "20587237f8206bd5:0",
       "file": "web/src/dashboard-trend.tsx",
       "owner": "AnalysisTrend",
       "tag": "StackedColumns",
-      "control": "onSelect={select} onSelectGroup={selectGroup} onPopulation={populate} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })} onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))}",
+      "control": "onSelect={select} onSelectGroup={selectGroup} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })} onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))}",
       "contract": "dashboard",
-      "reason": "Leaf and category actions write analyze_chart.selection once via the shared dashboard owner. Group actions expand to stable descendant values. Range and optional series expansion retain their existing analyze_filters/analyze_chart bindings. analyze_filters carries the population: the legend's population actions write its terms."
+      "reason": "Shared one-line Show, Hide, Hide others and Show All legend actions update presentation selections through the dashboard or Timeline Key owner. Mixed categories use their current visible/hidden value counts; menu openness is transient."
     },
     {
       "key": "bc20970451912500:0",
@@ -5381,6 +5340,16 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
+      "key": "46ad0a24f3ebacd4:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "ParallelActivity",
+      "tag": "TimelineLegend",
+      "control": "onOpenTimeline={openOverview} data-view-field=\"timeline_visibility\" onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))}",
+      "binding": "timeline_visibility",
+      "contract": "view.timeline_visibility",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "52ca64201b490bd9:0",
       "file": "web/src/delegation.tsx",
       "owner": "ParallelActivity",
@@ -5388,16 +5357,6 @@
       "control": "aria-label={`${collapsed.has(n.id) ? \"Expand\" : \"Collapse\"} ${n.label}`} onClick={() => toggle(n)}",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "7b1a9d77b035e6c8:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "ParallelActivity",
-      "tag": "TimelineLegend",
-      "control": "data-view-field=\"timeline_visibility\" onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))}",
-      "binding": "timeline_visibility",
-      "contract": "view.timeline_visibility",
-      "reason": "Timeline Key actions update timeline_visibility with useViewState; filtering changes presentation after time attribution and keeps hidden entries available in the Key."
     },
     {
       "key": "7f941cc59b40ccf4:0",
@@ -8512,6 +8471,26 @@
       "binding": "timeline_columns",
       "contract": "view.timeline_columns",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "037584261be74387:0",
+      "file": "web/src/timeline-legend.tsx",
+      "owner": "TimelineLegend",
+      "tag": "button",
+      "control": "aria-label=\"Edit key in full Timeline\" onClick={onOpenTimeline}",
+      "contract": "action",
+      "reason": "The sidebar Key button opens the full Timeline for editing. The preview always renders compact without a disclosure toggle or a write to the full Timeline’s timeline-key disclosure."
+    },
+    {
+      "key": "a569b2d17333c670:0",
+      "file": "web/src/timeline-legend.tsx",
+      "owner": "TimelineLegend",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"timeline-key\" defaultOpen",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "The shared disclosure keeps the Key control visible in both presentations. disclosures[\"timeline-key\"] stores the expanded labeled Key (default true) or the compact icon-only Key; icons retain their existing visibility menus."
     },
     {
       "key": "c2ef28fbea4ddd0a:0",

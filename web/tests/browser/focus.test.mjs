@@ -2943,6 +2943,18 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  const dialog=page.locator('#dataReadinessDialog');
  const check=async (selector)=>{
   const button=page.locator(selector).first();await button.waitFor();
+  if(selector.includes('query:')){
+   // The readiness action precedes request timing in the rendered run bar,
+   // including the narrow layout where the controls may wrap onto a new row.
+   const placement=await button.evaluate(element=>{
+    const activity=element.closest('.data-source-query')?.querySelector('button[aria-label="Request activity"]');
+    if(!activity)return null;
+    const a=element.getBoundingClientRect(),b=activity.getBoundingClientRect();
+    return {before:a.top<b.top || (a.top===b.top && a.left<b.left), sameRow:a.top===b.top};
+   });
+   assert(placement?.before,'readiness appears before request timing');
+   if(width===1440)assert(placement.sameRow,'desktop run actions share a row');
+  }
   await button.focus();assert(await button.evaluate(element=>element===document.activeElement));
   await button.click();await dialog.waitFor();assert(await dialog.evaluate(element=>element.contains(document.activeElement)));
   await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
@@ -2952,7 +2964,7 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  await check('[data-readiness-result="query:library"]');
  for(const [url,identity] of [
   ['/findings?view=table','query:findings'],
-  ['/findings?optimize_area=safety&view=table','query:safety'],
+  ['/findings?optimize_area=safety&view=table&query_layout='+encodeURIComponent(JSON.stringify({safety:true})),'query:safety'],
   ['/findings?optimize_area=fixes&view=table','query:fixes'],
   ['/analyze?analyze_topic=habits','chart:habits-calendar'],
   ['/analyze?analyze_topic=thinking-overview','chart:thinking-waits'],
@@ -2963,6 +2975,15 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  ]){
   await page.evaluate(url=>window.pharosNavigate(url),url);
   await check(`[data-readiness-result="${identity}"]`);
+  if(identity==='query:safety'){
+   const table=page.locator('.safety-table .data-source-query');
+   await table.getByTitle('Configure auto-update').click();
+   await page.locator('.qt-auto-refresh-popover').getByRole('button',{name:'Start',exact:true}).click();
+   await table.getByTitle('View or clear auto-update').waitFor();
+   await check(`[data-readiness-result="${identity}"]`);
+   await table.getByTitle('View or clear auto-update').click();
+   await page.locator('.qt-auto-refresh-popover').getByRole('button',{name:'Clear',exact:true}).click();
+  }
  }
  // Follow a bespoke chart's prerequisite through the real Settings disclosure.
  // The domain/task reduction itself is covered by the readiness unit tests.

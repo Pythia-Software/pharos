@@ -47,10 +47,10 @@ export function SourceQueryBuilder<Row>({ dataset, whereRow, ...props }: QueryBu
   const sourceFilters = useMemo(() => new Proxy({} as QueryFilterApi<Row>, {
     get: (_, property) => Reflect.get(currentApi.current.query.grouping ? currentApi.current.grouping!.source : currentApi.current, property),
   }), []);
-  return <div className="data-source-query" data-pharos-target={`control:q_${dataset}`}><QueryBuilder {...props} collapsed={props.collapsed??collapsed} onCollapsedChange={props.onCollapsedChange??setCollapsed} whereRow={<>
+  return <div className="data-source-query" data-pharos-target={`control:q_${dataset}`}><QueryBuilder {...props} collapsed={props.collapsed??collapsed} onCollapsedChange={props.onCollapsedChange??setCollapsed} runActionsBeforeActivity={<DataReadinessIndicator id={`query:${dataset}`} title={dataSources[dataset].label} dataset={dataset} query={props.api.query} empty={props.api.execution?.rows==="succeeded"&&!props.api.loading&&!props.api.error&&props.api.rows.length===0} className="qt-btn query-table-readiness" />} whereRow={<>
     {dataset !== "findings" && dataset !== "safety" && dataset !== "fixes" ? <SourceStatement dataset={dataset} /> : null}
     {whereRow ?? <QueryFilterRow api={sourceFilters} fields={props.api.query.grouping ? props.api.grouping!.source.schema.fields : props.fields} />}
-  </>} /><DataReadinessIndicator id={`query:${dataset}`} title={dataSources[dataset].label} dataset={dataset} query={props.api.query} empty={props.api.execution?.rows==="succeeded"&&!props.api.loading&&!props.api.error&&props.api.rows.length===0} /></div>;
+  </>} /></div>;
 }
 
 export function DataTaxonomyModal() {
