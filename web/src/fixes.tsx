@@ -106,7 +106,10 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
     {notice ? <p className="safety-notice" role="status">{notice}</p> : null}
     {view === "settings" ? <FixesSettings overview={overview} refreshDiscovery={refreshDiscovery} />
       : !overview ? <p className="findings-muted">Loading fixes…</p>
-        : selected ? <FixDetailView id={selected} overview={overview} back={() => select("")} backLabel={view === "table" ? "← Fixes table" : "← Fixes"} act={act} onReview={setReview} />
+        : selected ? <div className="findings-layout with-cart findings-detail-layout">
+            <FixDetailView id={selected} overview={overview} back={() => select("")} backLabel={view === "table" ? "← Fixes table" : "← Fixes"} act={act} onReview={setReview} />
+            <FixesCart detail cart={overview.cart} items={items} onReview={next => setReview(next.target)} />
+          </div>
           : view === "table" ? null : <>
             {!overview.built_at ? <div className="findings-empty"><strong>No fixes yet.</strong><p>Fixes are grouped from agent events in the background, after the agent events pass has read your conversations. Turn it on in Settings → Background Processing; grouping follows on its own.</p></div> : null}
             <div className="findings-toolbar">
@@ -142,7 +145,7 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
           </>}
     {table ? <div className="safety-table" hidden={view !== "table" || Boolean(selected)}>
       <div className="safety-table-main">{table}</div>
-      {view === "table" && overview ? <FixesCart table cart={overview.cart} items={items} onReview={next => setReview(next.target)} /> : null}
+      {view === "table" && !selected && overview ? <FixesCart table cart={overview.cart} items={items} onReview={next => setReview(next.target)} /> : null}
     </div> : null}
     {group ? <ReviewDialog key={group.target} area="fixes" group={group} copy={copy} onClose={() => setReview("")} onCopied={() => { setReview(""); notify(); setNotice("Copied. These fixes moved to Handed off."); }} /> : null}
   </div>;
@@ -197,13 +200,13 @@ function FixCardView({ item, selection, bounds }: { item: FixCard; selection: Se
   </OptimizeCard>;
 }
 
-function FixesCart({ cart, items, onReview, table = false }: { cart: CartGroup[]; items: readonly FixCard[]; onReview: (group: CartGroup) => void; table?: boolean }) {
+function FixesCart({ cart, items, onReview, table = false, detail = false }: { cart: CartGroup[]; items: readonly FixCard[]; onReview: (group: CartGroup) => void; table?: boolean; detail?: boolean }) {
   const byID = new Map(items.map(item => [item.id, item]));
   const groups = cart.map(group => ({ target: group.target, label: group.label, group,
     entries: group.items.map(entry => ({ key: entry.id, title: entry.title, ids: [entry.id], ticked: entry.ticked ? 1 : 0,
       detail: [byID.get(entry.id)?.category_label, byID.get(entry.id) ? plural(byID.get(entry.id)!.work_items, "work item") : ""].filter(Boolean).join(" · ") })) }));
   return <OptimizeCart className="fixes-cart" title="Fix prompts to copy" groups={groups} api={api} changed={changed} noun={noun} onReview={onReview}
-    empty={`Tick ${table ? "rows" : "a card"} to copy a prompt, or add ${table ? "them" : "it"} to a prompt for ${table ? "their place" : "its place"}. The shared setup and each repository get their own prompt.`}
+    empty={detail ? "Add fixes to a prompt for their place. The shared setup and each repository get their own prompt." : `Tick ${table ? "rows" : "a card"} to copy a prompt, or add ${table ? "them" : "it"} to a prompt for ${table ? "their place" : "its place"}. The shared setup and each repository get their own prompt.`}
     note="Fixes, risky actions and efficiency use separate prompts. After copying, these fixes leave Open and remain in Handed off; one that recurs opens again." />;
 }
 

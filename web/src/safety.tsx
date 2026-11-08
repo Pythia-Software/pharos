@@ -88,6 +88,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
     {view === "settings" ? <SafetySettings refreshDiscovery={refreshDiscovery} /> : !overview ? <p>Loading risky action notices…</p> : <>
       {selected ? <>
         <button className="findings-button" data-view-field="safety_case" onClick={() => select("")}>{view === "table" ? "← Risky actions table" : "← Risky action notices"}</button>
+        <div className="findings-layout with-cart findings-detail-layout">
         {detail ? <article className="findings-panel safety-detail" data-pharos-target={`safety:${detail.id}`}>
           <p className="findings-muted"><DangerChip danger={detail.danger} /> {detail.target_label} · {stateLabel[detail.state]}</p>
           <h2>{detail.title}</h2><p>{detail.explanation}</p>
@@ -103,6 +104,8 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
             <a href={entry.path}>Open archived conversation ↗</a>
           </ViewDisclosure>)}
         </article> : !error ? <p>Loading case…</p> : null}
+        <CartPanel safety cart={overview.cart} targets={overview.targets} act={act} onReview={next => setReview(next.target)} />
+        </div>
       </> : view === "table" ? null : <>
         <div className="findings-toolbar">
           <div className="findings-tabs" role="tablist" aria-label="Risky action notices by state">
@@ -124,7 +127,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
     </>}
     {table ? <div className="safety-table" hidden={view !== "table" || Boolean(selected)}>
       <div className="safety-table-main">{table}</div>
-      {view === "table" && overview ? <CartPanel safety cart={overview.cart} targets={overview.targets} act={act} onReview={next => setReview(next.target)} /> : null}
+      {view === "table" && !selected && overview ? <CartPanel safety cart={overview.cart} targets={overview.targets} act={act} onReview={next => setReview(next.target)} /> : null}
     </div> : null}
     {group ? <ReviewDialog key={group.target} safety group={group} copy={copy} onClose={() => setReview("")} onCopied={() => { setReview(""); window.dispatchEvent(new Event("pharos:safety-changed")); setNotice("Copied. Notices moved to Handed off."); }} /> : null}
   </div>;
