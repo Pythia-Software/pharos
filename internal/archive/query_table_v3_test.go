@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -761,5 +763,199 @@ func TestQueryV3DistinctAndIdentityHTTP(t *testing.T) {
 	response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
 	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &out) != nil || out.Total != 1 || len(out.Rows) != 1 || out.Rows[0]["id"] != "call-0" {
 		t.Fatal(response.Code, response.Body.String())
+	}
+}
+
+func ungroupedRowsRequest(now time.Time, where ...qt.WhereTerm) qt.QueryRequestV3 {
+	return qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: now.UnixMilli(), Rows: true,
+		Source: qt.WireQuery{Limit: 1}, Result: qt.WireQuery{Select: []string{"id"}, Where: where, Limit: 3}}
+}
+
+// rememberedCounts returns the cached counts, and with set replaces each
+// with set(count), as a stale or wrong count would look.
+func rememberedCounts(c *Catalog, set func(int64) int64) map[queryCountKey]int64 {
+	c.queryCounts.mu.Lock()
+	defer c.queryCounts.mu.Unlock()
+	if set != nil {
+		for key, n := range c.queryCounts.counts {
+			c.queryCounts.counts[key] = set(n)
+		}
+	}
+	return maps.Clone(c.queryCounts.counts)
+}
+
+func TestQueryV3ReusesPopulationCountsWithinAGeneration(t *testing.T) {
+	c, config := testCatalog(t)
+	seedToolCalls(t, c, 80)
+	c.maintainQueryTextIndexes(t.Context())
+	if err := c.ensureToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, c)
+	noon := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	run := func(dataset string, q qt.QueryRequestV3) int64 {
+		t.Helper()
+		schema, _ := sqliteQuerySchema(dataset)
+		result, _, err := server.executeQueryV3(t.Context(), dataset, nil, schema, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.SourceTotal != result.Total {
+			t.Fatal("ungrouped totals differ", result.Total, result.SourceTotal)
+		}
+		return result.Total
+	}
+	// The cube cannot answer a duration filter: it is counted, then reused.
+	slow := ungroupedRowsRequest(noon, qt.WhereTerm{Field: "duration_ms", Op: ">", Value: "100"})
+	total := run("tool_calls", slow)
+	if total == 0 || total == 80 || len(rememberedCounts(c, nil)) != 1 {
+		t.Fatalf("total %d, remembered %v", total, rememberedCounts(c, nil))
+	}
+	// A reused count is answered, not recounted, while the generation holds.
+	// Other pages of the population share its count.
+	rememberedCounts(c, func(n int64) int64 { return n + 1000 })
+	reshaped := slow
+	reshaped.Result.Limit, reshaped.Result.Offset = 10, 5
+	if got := run("tool_calls", reshaped); got != total+1000 || len(rememberedCounts(c, nil)) != 1 {
+		t.Fatalf("reshaped page counted %d, want the remembered %d", got, total+1000)
+	}
+	if stats := c.queryCounts.snapshot(); stats.Counted != 1 || stats.Reused != 1 || stats.Fast != 0 || stats.Remembered != 1 {
+		t.Fatalf("tallies after one count and one reuse: %+v", stats)
+	}
+	// Datasets, filters and relative clocks keep their own counts.
+	before := len(rememberedCounts(c, nil))
+	run("skill_usages", ungroupedRowsRequest(noon))
+	run("tool_calls", ungroupedRowsRequest(noon, qt.WhereTerm{Field: "duration_ms", Op: ">", Value: "200"}))
+	recent := ungroupedRowsRequest(noon, qt.WhereTerm{Field: "started_at", Op: ">=", Value: "-20d"})
+	run("tool_calls", recent)
+	run("tool_calls", recent)
+	if got := len(rememberedCounts(c, nil)); got != before+3 {
+		t.Fatalf("remembered %d counts, want %d", got, before+3)
+	}
+	later := recent
+	later.Now = noon.Add(time.Hour).UnixMilli()
+	run("tool_calls", later)
+	if got := len(rememberedCounts(c, nil)); got != before+4 {
+		t.Fatalf("a later clock reused a relative count: %d counts", got)
+	}
+	// A write advances the generation inside the next request's transaction.
+	if _, err := c.DB.Exec("DELETE FROM tool_calls WHERE id=(SELECT id FROM tool_calls WHERE duration_ms>100 LIMIT 1)"); err != nil {
+		t.Fatal(err)
+	}
+	if got := run("tool_calls", slow); got != total-1 {
+		t.Fatalf("after a write counted %d, want %d", got, total-1)
+	}
+	if c.queryCounts.snapshot().Generations == 0 {
+		t.Fatal("a newer generation did not clear the remembered counts")
+	}
+	total--
+	// Local days are not in the statement's text: a timezone change counts again.
+	rememberedCounts(c, func(n int64) int64 { return n + 1000 })
+	override(t, &time.Local, time.FixedZone("ahead", 14*3600))
+	if got := run("tool_calls", slow); got != total {
+		t.Fatalf("another timezone reused %d, want %d", got, total)
+	}
+	// Parity with uncached execution, after a write and with a cold cache.
+	for _, q := range []qt.QueryRequestV3{slow, recent, later, ungroupedRowsRequest(noon)} {
+		cached := run("tool_calls", q)
+		c.queryCounts = queryCountCache{}
+		if cold := run("tool_calls", q); cold != cached {
+			t.Fatalf("%v: cached %d, cold %d", q.Result.Where, cached, cold)
+		}
+	}
+	override(t, &queryCountLimit, 2)
+	for _, value := range []string{"10", "20", "30"} {
+		run("tool_calls", ungroupedRowsRequest(noon, qt.WhereTerm{Field: "duration_ms", Op: ">", Value: value}))
+	}
+	if got := len(rememberedCounts(c, nil)); got > 2 {
+		t.Fatalf("remembered %d counts over a limit of 2", got)
+	}
+	w := apiCall(t, server, config.APIToken, http.MethodGet, "/api/diagnostics/query-counts", nil)
+	var stats queryCountStats
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &stats) != nil || stats != c.queryCounts.snapshot() || stats.Counted == 0 || stats.Generation == 0 {
+		t.Fatalf("query count diagnostics: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestQueryV3ToolCubeCountsMatchTheCalls(t *testing.T) {
+	slowTest(t)
+	c, config := testCatalog(t)
+	seedToolCalls(t, c, 200)
+	c.maintainQueryTextIndexes(t.Context())
+	if err := c.ensureToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, c)
+	schema, _ := sqliteQuerySchema("tool_calls")
+	cube := toolCubeCount(schema)
+	answer := func(where []qt.WhereTerm) (int64, bool) {
+		t.Helper()
+		tx, err := c.reader().BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		n, ok, err := cube(t.Context(), tx, qt.PopulationCount{Where: where})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n, ok
+	}
+	count := func(where []qt.WhereTerm) int64 {
+		t.Helper()
+		result, _, err := server.executeQueryV3(t.Context(), "tool_calls", nil, schema, ungroupedRowsRequest(time.Now(), where...))
+		if err != nil {
+			t.Fatal(where, err)
+		}
+		return result.Total
+	}
+	// Every identity is present, so this term keeps the population while
+	// declining the cube: the executor counts the calls themselves.
+	counted := qt.WhereTerm{Field: "id", Op: "is_not_null"}
+	answered := [][]qt.WhereTerm{
+		nil,
+		{{Field: "tool_name", Op: "=", Value: "Bash"}},
+		{{Field: "model", Op: "=", Value: "claude-opus-5-5"}, {Field: "effort", Op: "=", Value: "high"}},
+		{{Field: "model_effort", Op: "=", Value: "claude-opus-5-5 · low"}},
+		{{Field: "status", Op: "=", Value: "error"}, {Field: "repository_name", Op: "is_not_null"}},
+		{{Field: "host", Op: "is_not_null"}},
+		{{Field: "search_query", Op: "is_not_null"}},
+		{{Field: "hosts", Op: "is_null"}},
+		{{Field: "model", Op: "is_null"}},
+		{{Field: "day", Op: "=", Value: "2026-09-01"}, {Field: "provider", Op: "=", Value: "codex"}},
+		{{Field: "week", Op: "=", Value: "2026-08-31"}, {Field: "session_kind", Op: "=", Value: "subagent"}},
+		{{Field: "command_name", Op: "=", Value: "git status"}},
+	}
+	for _, where := range answered {
+		n, ok := answer(where)
+		want := count(append(slices.Clone(where), counted))
+		if !ok || n != want {
+			t.Fatalf("cube answered %d (%v) where %v; the calls count %d", n, ok, where, want)
+		}
+		if got := count(where); got != want {
+			t.Fatalf("query counted %d where %v, want %d", got, where, want)
+		}
+	}
+	for _, where := range [][]qt.WhereTerm{
+		{{Field: "command", Op: "contains", Value: "test"}},
+		{{Field: "duration_ms", Op: ">", Value: "100"}},
+		{{Field: "program", Op: "=", Value: "git", Negated: true}},
+		{{Field: "tool_name", Op: "=", Value: ""}},
+		{{Any: []qt.WhereClause{{Field: "tool_name", Op: "=", Value: "Bash"}, {Field: "tool_name", Op: "=", Value: "Read"}}}},
+		{counted},
+	} {
+		if _, ok := answer(where); ok {
+			t.Fatalf("cube answered a filter it does not keep: %v", where)
+		}
+	}
+	// A ledger write leaves the cube stale until the rollup catches up.
+	if _, err := c.DB.Exec("DELETE FROM tool_calls WHERE id='call-5'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := answer(nil); ok {
+		t.Fatal("a stale cube answered")
+	}
+	if got := count(nil); got != 199 {
+		t.Fatalf("stale cube: counted %d calls, want 199", got)
 	}
 }

@@ -85,6 +85,22 @@ datasets stage only the base fields required by the native source plan. Leases
 roll back host staging and restore connection settings, including cancellation;
 changing this lifecycle remains separate work.
 
+Every ungrouped request needs its population's exact count. SQL datasets set
+the executor's `PopulationCounter` (`query_count_cache.go`): counts are
+remembered in memory under Query Table's count key, the process timezone and
+the `query_cache_generation` read inside the request's own transaction, so a
+reused total always belongs to the snapshot of the page it is returned with.
+Generation triggers cover every table these sources read, or tables kept in
+step with ones that do (see `queryCacheTables`). Map-backed and Usage-hour
+sources are staged per request, and keyword record search gives each request
+its own plan, so neither uses the cache. A relative filter's count is reused
+only by requests with the same `now`. Tool Calls also answers unfiltered,
+grouped-field equality and present/absent counts from `tool_call_cube`, but
+only while the cube's ledger generation, dirty partitions, rebuild revision and
+timezone all match in that transaction. `GET /api/diagnostics/query-counts`
+reports, since the service started, how many counts were reused, answered from
+the cube or counted, and how often a new generation cleared the cache.
+
 Usage's daily table and hourly ledger are different populations. Source filters
 first choose eligible days and hours. Metrics that depend on `hour`, including
 computed expressions and metric-local filters, run against hourly facts;
@@ -101,8 +117,9 @@ upgrade/reload error; current consumers no longer negotiate or fall back to them
 
 Removed in this migration:
 
-- V2 execution, its generic native count/sum reducers, count caches, source-proof
-  cache and indexed row-window execution overrides.
+- V2 execution, its generic native count/sum reducers, source-proof cache and
+  indexed row-window execution overrides. Count reuse came back through the
+  published `PopulationCounter` hook, not an override (see above).
 - Machine Time's custom Query Table metric reductions and text-complement reducer.
   Domain projections and their normal catalog APIs remain separate.
 - The frontend V2/V3 keyword transport switch and identical-request budget retry.

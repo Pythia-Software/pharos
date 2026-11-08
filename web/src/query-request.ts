@@ -1,3 +1,4 @@
+import { dashboardQuerySettings } from "./dashboard-query-settings";
 import { QueryError, errorCodeForStatus, queryErrorFromBody, type QueryErrorOptions } from "@pythia-software/query-table-core";
 import { reportQueryCoverage } from "./agent-events-freshness";
 import { normalizeConcurrencySettings } from "./concurrency-settings";
@@ -8,6 +9,8 @@ export function viewRequestURL(path: string, view = typeof location === "undefin
   if (!view) return path;
   const url=new URL(path,view.origin);
   if(url.origin!==view.origin)return path;
+  const dataset = /^\/api\/query\/([^/]+)(?:\/|$)/.exec(url.pathname)?.[1];
+  if (dataset) for (const [name, value] of Object.entries(dashboardQuerySettings(dataset, view.searchParams))) if (!url.searchParams.has(name)) url.searchParams.set(name, value);
   if(url.pathname.startsWith("/api/query/usage")&&!url.searchParams.has("carbon_settings")&&view.searchParams.has("analyze_carbon"))url.searchParams.set("carbon_settings",view.searchParams.get("analyze_carbon")!);
   if(url.pathname.startsWith("/api/query/parallelism")&&!url.searchParams.has("parallelism_settings")&&view.searchParams.has("analyze_parallelism")) {
     let linked: unknown;try{linked=JSON.parse(view.searchParams.get("analyze_parallelism")!);}catch{linked=null;}

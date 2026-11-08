@@ -65,8 +65,10 @@ export function groupedDashboardQuery(query: QueryState): QueryState {
   if (query.grouping) return query;
   const clauses = query.aggregations ?? [];
   if (!clauses.length) return query;
-  const fields = clauses[0].groupBy, dateGrouping = clauses[0].dateGrouping;
-  if (clauses.some(clause => JSON.stringify(clause.groupBy) !== JSON.stringify(fields) || JSON.stringify(clause.dateGrouping) !== JSON.stringify(dateGrouping))) throw new Error("Choose measures with the same grouping before opening grouped results.");
+  // A time breakdown may name the same field as the trend's period. It is
+  // still one native table key, not two keys with a colliding result name.
+  const fields = [...new Set(clauses[0].groupBy)], dateGrouping = clauses[0].dateGrouping;
+  if (clauses.some(clause => JSON.stringify([...new Set(clause.groupBy)]) !== JSON.stringify(fields) || JSON.stringify(clause.dateGrouping) !== JSON.stringify(dateGrouping))) throw new Error("Choose measures with the same grouping before opening grouped results.");
   const calendar = dateGrouping && !isMetricCycle(dateGrouping.interval) && !dateGrouping.occurrence && !dateGrouping.partialIntervals && !dateGrouping.includeEmpty && fields[0] === dateGrouping.field;
   if (dateGrouping && !calendar || clauses.some(clause => clause.where?.length || clause.expressionY || clause.distribution || clause.minCount || clause.window || clause.share || clause.scope && clause.scope !== "allMatching")) throw new Error("This graph needs its own grouped-query conversion.");
   const keys: GroupKey[] = fields.map((field, index) => index === 0 && calendar ? { field, interval: dateGrouping.interval as CalendarGroupKey["interval"], ...dateGrouping.timeZone ? { timeZone: dateGrouping.timeZone } : {} } : field);
