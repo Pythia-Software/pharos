@@ -2738,10 +2738,10 @@ test('Live data updates keep real backlog, existing results and first-build prog
  const iso=minutes=>new Date(Date.now()-minutes*60000).toISOString();
  const currentSource={domain:'conv:claude',label:'Conversations (claude)',task_id:'conversations',as_of:iso(2),behind:{state:'current'}};
  const view={domain:'view',label:'Search view',behind:{state:'current'}};
- const status={...idleStatus,freshness:[{...currentSource,pending_since:iso(540),behind:{state:'behind'},reason:{code:'needs-capture',text:'New conversations are waiting'}},view,{domain:'conv:new',label:'Conversations (new)',as_of:null,output_missing:true,behind:{state:'behind'},reason:{code:'never-indexed',text:'Not indexed yet'}}]};
+ const status={...idleStatus,freshness:[{...currentSource,pending_since:iso(540),behind:{state:'behind',count:128,unit:'conversation'},reason:{code:'needs-capture',text:'New conversations are waiting'}},view,{domain:'conv:new',label:'Conversations (new)',as_of:null,output_missing:true,behind:{state:'behind'},reason:{code:'never-indexed',text:'Not indexed yet'}}]};
  const excluded={...EMPTY_QUERY,where:[{field:'source_kind',op:'=',value:'new',negated:true}]};
  const bookmark={id:'durable-readiness',title:'Saved conversations',url:'/library?q_library=@aaaaaaaaaaaaaaaaaaaaaa',query:excluded};
- const {page,push,settled}=await open(t,{url:'/library?view=conversation&q_library='+encodeURIComponent(encodeQuery(excluded)),ready:'.conversation-result-card',preferences:{'pharos-bookmarks-v1':[bookmark]},api:{
+ const {page,push,settled,shot}=await open(t,{url:'/library?view=conversation&q_library='+encodeURIComponent(encodeQuery(excluded)),ready:'.conversation-result-card',preferences:{'pharos-bookmarks-v1':[bookmark]},api:{
   'GET /api/status':status,'GET /api/status/stream':eventStream(status),
   '* /api/query/:dataset/:operation':call=>{
    const reply=defaultApi['* /api/query/:dataset/:operation'](call);
@@ -2790,11 +2790,34 @@ test('Live data updates keep real backlog, existing results and first-build prog
  await page.evaluate(()=>window.pharosNavigate('/home'));
  const saved=page.locator('[data-card-id="durable-readiness"]');
  await saved.locator('.query-cover:not([aria-busy="true"])').waitFor();
- await saved.locator('[data-readiness-result="card:durable-readiness"]').click();
+ const readiness=saved.locator('[data-readiness-result="card:durable-readiness"]');
+ await saved.hover();
+ const refresh=await saved.getByRole('button',{name:'Refresh Saved conversations'}).boundingBox();
+ const updates=await readiness.boundingBox();
+ const edit=await saved.getByRole('button',{name:'Edit Saved conversations'}).boundingBox();
+ assert(refresh.x+refresh.width<=updates.x && updates.x+updates.width<=edit.x,'update details sit between Refresh and Edit');
+ await shot('card-readiness-hover');
+ await readiness.click();
  const details=page.locator('#dataReadinessDialog');await details.waitFor();
  await details.getByRole('progressbar').first().waitFor();
+ await page.keyboard.press('Escape');
+ await details.waitFor({state:'hidden'});
+ await page.waitForFunction(()=>document.activeElement?.dataset.readinessResult==='card:durable-readiness');
+ await page.keyboard.press('Enter');
+ await details.waitFor();
  await details.getByRole('link',{name:'Update settings',exact:true}).click();
  await page.locator('#background-detail-conversations').waitFor();
+ // Suggested cards also expose their update details on hover.
+ await page.evaluate(()=>window.pharosNavigate('/cards'));
+ const suggestion=page.locator('.card-library-entry .query-card').first();
+ await suggestion.waitFor();
+ await suggestion.hover();
+ const suggestedReadiness=suggestion.locator('[data-readiness-result]');
+ await suggestedReadiness.click();
+ await details.waitFor();
+ await page.keyboard.press('Escape');
+ await details.waitFor({state:'hidden'});
+ await page.waitForFunction(()=>document.activeElement?.matches('.card-library-entry [data-readiness-result]'));
 });
 
 for (const startup of [false, true]) test(`Host clipboard fallback restores focus and selection in the ${startup ? 'startup' : 'library'} shell`, {skip}, async t => {
