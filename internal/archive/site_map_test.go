@@ -847,10 +847,10 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 	}
 }
 
-// Every Analyze dashboard takes site_link's days and each of its options, and
-// reads them back as the same arguments. A dashboard that agents can reach
-// only through raw view state, or without its range, fails here.
-func TestSiteLinkEveryDashboardTakesItsOptionsAndDays(t *testing.T) {
+// Catalog dashboards accept options and days. Bespoke dashboards with
+// per-view ranges expose their registered view controls instead. Each control
+// must be discoverable and round-trip through site_link.
+func TestSiteLinkEveryDashboardTakesItsControls(t *testing.T) {
 	site := testSiteMap(t)
 	dashboards := 0
 	for _, path := range site.nodeOrder {
@@ -884,7 +884,20 @@ func TestSiteLinkEveryDashboardTakesItsOptionsAndDays(t *testing.T) {
 				}
 			}
 		}
-		if len(links) == 2 {
+		if len(node.Options) == 0 {
+			links = nil
+			for key, field := range site.viewFields(path) {
+				if field.Kind != "enum" || !slices.Contains(field.Pages, path) {
+					continue
+				}
+				for _, value := range field.Values {
+					links = append(links, map[string]any{"page": path, "view": map[string]any{key: value}})
+				}
+			}
+			if len(links) == 0 {
+				t.Errorf("%s has no registered dashboard controls", path)
+			}
+		} else if len(links) == 2 {
 			t.Errorf("%s takes no options: give it a catalog or options keyed into its state (dashboardLinks in site-map.ts)", path)
 		}
 		for _, args := range links {
@@ -896,6 +909,13 @@ func TestSiteLinkEveryDashboardTakesItsOptionsAndDays(t *testing.T) {
 			}
 			roundTrip(t, site, name, result["url"].(string))
 			read := result["arguments"].(map[string]any)
+			if view, given := args["view"].(map[string]any); given {
+				for key, value := range view {
+					if got, _ := read["view"].(map[string]any); got == nil || siteString(got[key]) != siteString(value) {
+						t.Errorf("%s: reads back view %s", name, compactJSON(read["view"]))
+					}
+				}
+			}
 			if days, given := args["days"]; given && siteString(read["days"]) != siteString(days) {
 				t.Errorf("%s: reads back days %v", name, read["days"])
 			}

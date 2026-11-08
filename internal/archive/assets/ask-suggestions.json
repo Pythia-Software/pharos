@@ -79,7 +79,7 @@
   {
    "id": "rhythm",
    "label": "Working patterns",
-   "pages": ["analyze/activity","analyze/query/conversation_activity","analyze/habits","analyze/query/rhythm"],
+   "pages": ["analyze/activity","analyze/query/conversation_activity","analyze/work_hours","analyze/habits","analyze/query/rhythm"],
    "signals": ["activity.days"]
   },
   {

@@ -819,7 +819,8 @@ function FindingDetail({ id, tab, overview, act, rank, onReview, newIds }: { id:
   const group = detail.cart ? overview?.cart.find(item => item.target === detail.cart?.target) : undefined;
   const tabs: Array<[Route["tab"], string]> = [["overview", "Overview"], ["evidence", `Evidence · ${evidence.length}`], ["prompt", "Prompt"]];
   const onTab = (next: Route["tab"]) => replaceParams({ tab: next === "overview" ? "" : next });
-  return <div className="findings-page findings-detail">
+  return <div className="findings-page findings-layout with-cart findings-detail-layout">
+    <div className="findings-detail">
     <button type="button" className="findings-button findings-back" onClick={back}><Icon name="arrow-left" />Back to Optimize</button>
     <nav className="findings-breadcrumb" aria-label="Breadcrumb"><button type="button" className="findings-crumb" onClick={() => navigate("/findings")}>Findings</button><span aria-hidden="true">›</span><button type="button" className="findings-crumb" onClick={back}>{stateName}</button></nav>
     <h1><Text text={detail.title} /></h1>
@@ -850,6 +851,8 @@ function FindingDetail({ id, tab, overview, act, rank, onReview, newIds }: { id:
         {detail.state === "open" ? <div className="findings-actions"><AddToPrompt card={detail} targets={overview?.targets ?? []} act={act} />{group ? <button type="button" className="findings-button" onClick={() => onReview(group)} disabled={!group.ticked}>Review that prompt</button> : null}</div> : null}
       </div> : null}
     </div>
+    </div>
+    <CartPanel cart={overview?.cart ?? []} targets={overview?.targets ?? []} act={act} onReview={onReview} />
   </div>;
 }
 

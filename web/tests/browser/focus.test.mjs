@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
-import { defaultApi, workID, eventStream, busyStatus } from "./fixtures.mjs";
+import { defaultApi, workID, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 test('Settings switches keep keyboard focus and their saved state across Settings and Analyze', {skip}, async t => {
@@ -69,6 +69,112 @@ test('Settings switches keep keyboard focus and their saved state across Setting
   await mcp.waitFor();
   await settled();
   assert.equal(await mcp.getAttribute('aria-checked'), 'false');
+});
+
+test('Background CPU allowance and task Stop/Resume keep keyboard focus across their redraws', {skip}, async t => {
+  const background = structuredClone(workBackgroundDocument), posts = [];
+  let held = true, cpuUsed = 2, covered = 12, historyLive = false, finishHistory, delayInspection = false, finishPoll;
+  const pollStarted = Promise.withResolvers();
+  const {page, settled} = await open(t, {url:'/settings/sync', ready:'#backgroundSchedule [data-card=work] .bg-work-row', api: {
+    'GET /api/background': () => background,
+    'POST /api/work/settings': ({body}) => { background.work.cpu_slots = body.cpu_slots; return background; },
+    'GET /api/work': () => {
+      const value = workInspection();
+      value.state.authority.cpu_cap = background.work.cpu_slots;
+      value.state.authority.cpu_allocated = cpuUsed;
+      value.state.requests[0].sealed = covered;
+      if (historyLive) value.state.requests.push({id: 9, scope: 'backfill', explicit: true, state: 'running', kinds: ['analysis.labels'], members: 50, sealed: 0});
+      if (!held) Object.assign(value.state.tasks.find(task => task.kind === 'analysis.labels'), {state: 'queued', blocker: null});
+      if (delayInspection) {
+        delayInspection = false;
+        pollStarted.resolve();
+        return new Promise(resolve => { finishPoll = () => resolve(value); });
+      }
+      return value;
+    },
+    'POST /api/work': ({body}) => {
+      posts.push(body);
+      if (body.action === 'backfill') {
+        historyLive = true;
+        return new Promise(resolve => { finishHistory = () => resolve({request_id: 9}); });
+      }
+      if (['stop', 'resume'].includes(body.action)) held = body.action === 'stop';
+      return {changed: true};
+    },
+  }});
+  const allowance = page.locator('[data-focus-key="work:cpu"]');
+  await allowance.focus();
+  const saved = page.waitForRequest(request => request.url().endsWith('/api/work/settings') && request.method() === 'POST');
+  await allowance.selectOption('2');
+  assert.deepEqual((await saved).postDataJSON(), {cpu_slots: 2});
+  await page.waitForFunction(() => document.activeElement?.dataset.focusKey === 'work:cpu' && document.activeElement.value === '2');
+  await page.waitForFunction(() => document.querySelector('[data-card="work"] .bg-state')?.textContent.includes('2 of 2'));
+  cpuUsed = 1; covered = 18;
+  // Polling must keep updating work and other cards while the select keeps
+  // keyboard focus; it must not require the user to tab away first.
+  background.cost.text = 'about 6 h';
+  await page.evaluate(() => window.pharosBackground.refresh(true));
+  await page.waitForFunction(() => document.querySelector('[data-card="work"] .bg-state')?.textContent.includes('1 of 2') &&
+    document.querySelector('[data-request="7"]')?.textContent.includes('18 of 40'));
+  assert.equal(await allowance.evaluate(element => element === document.activeElement), true);
+
+  // Polling keeps an in-flight action disabled even while the CPU select
+  // is focused; completion must retain the server model's disabled state.
+  const history = page.locator('[data-focus-key="work:backfill"]');
+  delayInspection = true;
+  await page.evaluate(() => { window.backgroundPoll = window.pharosBackground.refresh(true); });
+  await pollStarted.promise;
+  const posting = page.waitForRequest(request => request.url().endsWith('/api/work') && request.method() === 'POST');
+  await history.click();
+  await posting;
+  await allowance.focus();
+  assert.equal(await history.isDisabled(), true);
+  const posted = page.waitForResponse(response => response.url().endsWith('/api/work') && response.request().method() === 'POST');
+  finishHistory();
+  await posted;
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await history.isDisabled(), true, 'an action stays pending while an earlier poll delays its reconciliation');
+  finishPoll();
+  await page.evaluate(() => window.backgroundPoll);
+  await page.locator('[data-request="9"]').waitFor();
+  assert.equal(await history.isDisabled(), true);
+  assert.equal(await allowance.evaluate(element => element === document.activeElement), true);
+
+  // A refused save restores the saved choice without moving keyboard focus.
+  // Return the fetch refusal locally so no deliberate HTTP error pollutes
+  // the browser harness's unexpected-network-error assertions.
+  await page.evaluate(() => {
+    const fetch = window.fetch;
+    window.fetch = (url, options) => String(url).endsWith('/api/work/settings')
+      ? Promise.resolve({ok: false, status: 409, json: async () => ({error: 'The CPU allowance is fixed by the environment.'})})
+      : fetch(url, options);
+  });
+  await allowance.selectOption('3');
+  await page.waitForFunction(() => document.activeElement?.dataset.focusKey === 'work:cpu' && document.activeElement.value === '2');
+  // Resume and Stop replace each other on the same task row; focus follows.
+  const hold = page.locator('[data-focus-key="work:hold:analysis.labels"]');
+  for (const [action, next] of [['resume', 'stop'], ['stop', 'resume']]) {
+    await hold.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(next => {
+      const element = window.document.activeElement;
+      return element?.isConnected && element.dataset.focusKey === 'work:hold:analysis.labels' && element.dataset.action === next && !element.disabled;
+    }, next);
+    assert.deepEqual(posts.at(-1), {action, kind: 'analysis.labels'});
+  }
+  await page.evaluate(() => {
+    const fetch = window.fetch;
+    window.fetch = (url, options) => String(url) === '/api/work' && options?.method === 'POST'
+      ? Promise.resolve({ok: false, status: 409, json: async () => ({error: 'The task is no longer running.'})})
+      : fetch(url, options);
+  });
+  await hold.focus();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => !document.querySelector('[data-focus-key="work:hold:analysis.labels"]')?.disabled && document.activeElement?.dataset.focusKey === 'work:hold:analysis.labels');
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.evaluate(() => window.pharosBackground.refresh(true));
+  assert.equal(await page.evaluate(() => document.activeElement === document.body), true, 'a rejected action cannot restore focus on a later poll');
+  await settled();
 });
 
 test('Library setup keeps focus in its modal and returns to the choice after cancelling a flow', {skip}, async t => {
@@ -289,9 +395,8 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   assert.ok(libraryScopes.length>0&&libraryScopes.every(scope=>scope==='source-review-library'),'source setup requests lost their library binding');
 });
 
-// Habits surrounds the shared chart with its own panels; exercise that page
-// at both widths so panel styles cannot break chart hit targets or gestures.
-for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 'cumulative', 1440], ['habits', 'interval', 1440], ['habits', 'interval', 390]]) test(`Dashboard ${topic} ${display} inspection at ${width}px focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
+// Work Hours uses the shared chart; exercise inspection at both widths.
+for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 'cumulative', 1440], ['work_hours', 'interval', 1440], ['work_hours', 'interval', 390]]) test(`Dashboard ${topic} ${display} inspection at ${width}px focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
   const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }) })}`, viewport: { width, height: 900 }, ready: '.usage-chart-bars:not(.loading) > button' });
   const chart = page.locator('.usage-dashboard .usage-chart').first();
   const bar = display === 'cumulative' ? chart.locator('.usage-chart-bars > button').last() : chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first();
@@ -550,6 +655,30 @@ test("Unified activity panel holds focus and its disclosure across refreshes", {
     assert.ok(await stop.evaluate(element => document.activeElement === element), 'an ancestor wait moved focus');
   }
   await app.shot("refreshed");
+  // The resource history: keys inspect and pin a time, and only keyboard
+  // inspection is announced; Escape first clears the inspection, keeping
+  // focus and the panel, and only then closes the panel.
+  const strip = panel.locator('[data-history]');
+  const announced = () => strip.getByRole('status').textContent();
+  await strip.focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForFunction(() => document.querySelector('#pharosStatusPanel [data-history] [role=status]')?.textContent);
+  const reading = await announced();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(text => document.querySelector('#pharosStatusPanel [data-history] [role=status]')?.textContent !== text, reading);
+  const pinned = await announced();
+  const box = await strip.locator('svg').first().boundingBox();
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height / 2);
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2);
+  assert.equal(await announced(), pinned, 'moving the pointer announced a reading');
+  await strip.focus();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(text => document.querySelector('#pharosStatusPanel [data-history] [role=status]')?.textContent !== text, pinned);
+  assert.ok(await panel.isVisible(), 'Escape on an inspected strip closed the panel');
+  assert.ok(await strip.evaluate(element => document.activeElement === element), 'clearing the inspection moved focus');
+  await page.keyboard.press('Escape');
+  await panel.waitFor({ state: 'detached' });
+  assert.ok(await chip.evaluate(element => document.activeElement === element), 'closing did not return focus to the chip');
 });
 
 // Eject when safe keeps checking while the window is hidden: a hidden page
@@ -1092,6 +1221,47 @@ test("the findings prompt review takes focus, keeps it and returns it on Escape"
   await settled();
   await holdsFocus(page, dialog, review);
 });
+
+for (const scenario of [
+  { name: "Risky action", url: "/findings?optimize_area=safety&view=table&safety_case=safety_sample", api: "/api/findings/safety", id: "safety_sample", collection: "cases", detail: ".safety-detail", remove: "In prompt · Remove", add: "Add to prompt" },
+  { name: "Fix", url: "/findings?optimize_area=fixes&view=table&fixes_item=fix_sample", api: "/api/findings/fixes", id: "fix_sample", collection: "items", detail: ".fixes-detail", remove: "In prompt · Remove", add: "Add to prompt" },
+  { name: "Efficiency finding", url: "/findings?finding=failure%3Arepo%3Arepo_explo%3Adef", api: "/api/findings", id: "failure:repo:repo_explo:def", collection: "findings", detail: ".findings-detail", remove: "Remove from prompt", add: "Add to Prompt Cart" },
+]) {
+  test(`${scenario.name} detail keeps its prompt cart usable`, { skip }, async t => {
+    const overview = structuredClone(defaultApi[`GET ${scenario.api}`]);
+    const card = overview[scenario.collection].find(item => item.id === scenario.id);
+    const membership = structuredClone(card.cart);
+    const cart = structuredClone(overview.cart);
+    const initialDetail = defaultApi[`GET ${scenario.api}/:id`]({ params: { id: scenario.id } });
+    const api = {
+      [`GET ${scenario.api}`]: () => overview,
+      [`GET ${scenario.api}/:id`]: () => ({ ...initialDetail, cart: card.cart }),
+      [`POST ${scenario.api}/:id/action`]: ({ body }) => {
+        if (body.action === "cart_remove") { card.cart = null; overview.cart = []; }
+        if (body.action === "cart_add") { card.cart = membership; overview.cart = structuredClone(cart); }
+        return { ok: true };
+      },
+    };
+    const { page, shot } = await open(t, { url: scenario.url, viewport: { width: 1920, height: 1050 }, api, ready: scenario.detail });
+    const cartPanel = page.locator(".findings-cart:visible");
+    await cartPanel.locator("li").waitFor();
+    assert.equal(await cartPanel.count(), 1, "the detail has one visible prompt cart");
+    assert.equal(await page.locator("#findingsCart").count(), 1, "the hidden table does not duplicate the cart");
+    await shot("cart");
+    await cartPanel.locator("button.primary").click();
+    const dialog = page.locator('.findings-dialog[role="dialog"]');
+    await dialog.waitFor();
+    await dialog.getByRole("button", { name: "Keep in cart" }).click();
+    await page.locator(scenario.detail).getByRole("button", { name: scenario.remove, exact: true }).click();
+    await cartPanel.locator(".findings-cart-empty").waitFor();
+    await page.locator(scenario.detail).getByRole("button", { name: scenario.add, exact: true }).click();
+    await cartPanel.locator("li").waitFor();
+    await page.setViewportSize({ width: 320, height: 800 });
+    await cartPanel.scrollIntoViewIfNeeded();
+    assert.equal(await cartPanel.isVisible(), true, "the cart remains accessible on a narrow screen");
+    await shot("phone-cart");
+  });
+}
 
 test("page Find inside an ARIA modal searches only the modal and Escape closes Find before the modal", { skip }, async t => {
   const { page, settled } = await open(t, { url: "/findings", ready: ".findings-card" });
@@ -2048,6 +2218,7 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   });
   await finishMotion();
   const empty=await modal.boundingBox();
+  const emptyFrame=await modal.locator('.pharos-ai-frame').boundingBox();
   assert.ok(empty.y>0&&empty.y+empty.height<=height,'the empty overlay floats inside the viewport');
   await shot('empty-position');
   await modal.getByRole('button',{name:'History',exact:true}).click();await finishMotion();
@@ -2085,6 +2256,9 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
   await checkWindowControls();
+  const activeFrame=await modal.locator('.pharos-ai-frame').boundingBox();
+  if(width>1000)assert.ok(activeFrame.width>emptyFrame.width,'the active conversation uses the available width');
+  else assert.ok(activeFrame.x>=0&&activeFrame.x+activeFrame.width<=width,'the conversation fits a narrow viewport');
   finish();await page.getByRole('status').filter({hasText:'Your activity overview.'}).waitFor();await settled();await finishMotion();
   const expanded=await modal.boundingBox();
   assert.ok(expanded.height>empty.height&&expanded.y<empty.y,'the overlay expands into the space above the starting position');
@@ -2100,6 +2274,7 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   await checkWindowControls();
   await clear.click();await settled();await finishMotion();
   assert.ok((await modal.boundingBox()).y>expanded.y,'Clear returns the empty composer to its starting region');
+  assert.ok(Math.abs((await modal.locator('.pharos-ai-frame').boundingBox()).width-emptyFrame.width)<1,'Clear restores the empty composer width');
   await page.setViewportSize({width:320,height:350});await settled();await finishMotion();
   assert.ok(await editor.evaluate(fits),'the empty composer fits after shrinking the window');
   assert.ok(await page.getByRole('button',{name:'Close Ask Pharos',exact:true}).evaluate(fits),'Close stays reachable after shrinking the window');
@@ -2129,10 +2304,29 @@ async function openAskOverlay(t, width) {
 
 test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip}, async t => {
   const {page,shot,modal,editor}=await openAskOverlay(t,1440);
+  await page.evaluate(()=>{
+    const original=window.fetch;window.askDraftAttempts=0;
+    window.fetch=(input,options)=>{
+      if(String(input)==='/api/ask/session'&&options?.method==='POST'&&++window.askDraftAttempts===1)
+        return Promise.resolve(new Response(JSON.stringify({error:'Pharos is busy'}),{status:503,headers:{'Content-Type':'application/json'}}));
+      return original(input,options);
+    };
+  });
   assert.ok(await editor.evaluate(element=>element===document.activeElement));
+  const fullscreen = modal.getByRole('button',{name:'Full screen',exact:true});
+  await fullscreen.hover();
+  await page.waitForFunction(() => {
+    const button = document.querySelector('.pharos-fullscreen');
+    const tooltip = getComputedStyle(button, '::after');
+    return tooltip.content === '"Full screen"' && tooltip.visibility === 'visible';
+  }, null, {timeout: 3000});
   await page.locator('body>header .brand').evaluate(element=>element.focus());
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'the overlay must keep focus');
   await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
+  await page.waitForFunction(()=>window.askDraftAttempts>=1);
+  assert.ok(await modal.locator('.pharos-notice').isHidden(),'a retrying draft save does not show an error');
+  await page.waitForFunction(()=>window.askDraftAttempts>=2);
+  assert.ok(await modal.locator('.pharos-notice').isHidden(),'the recovered save leaves no error');
   const reachable=element=>{const box=element.getBoundingClientRect(),target=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return box.left>=0&&box.right<=innerWidth&&(element===target||element.contains(target));};
   const removeContext=modal.getByRole('button',{name:'Remove page context',exact:true});
   for(const name of ['Clear','Close Ask Pharos','Remove page context'])assert.ok(await modal.getByRole('button',{name,exact:true}).evaluate(reachable),name+' must stay reachable');
@@ -2335,6 +2529,8 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
     'POST /api/ask/send':async({body})=>{await response;return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:'clarification',message:'',elapsedMs:1000,reply:'',cards:[],clarification:{question:'Which metric?',options:['Tokens','Cost']}}]};},
   }});
   await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  const homeFrame=page.locator('#homeAskSearch .pharos-ai-frame');
+  const emptyHomeWidth=(await homeFrame.boundingBox()).width;
   await page.getByRole('textbox',{name:'Ask a question',exact:true}).fill('Break it down');
   await page.getByRole('button',{name:'Clear',exact:true}).click();
   assert.equal(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(element=>element.value),'');
@@ -2374,6 +2570,9 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   await page.keyboard.press('Escape');
   await page.locator('body>header .brand').click();
   await page.locator('#homeAskSearch').getByRole('button',{name:'A. Tokens',exact:true}).waitFor();
+  assert.ok((await homeFrame.boundingBox()).width>emptyHomeWidth,'a restored conversation uses more of the available Home width');
+  await page.locator('#homeAskSearch').getByRole('button',{name:'Clear',exact:true}).click();
+  assert.ok(Math.abs((await homeFrame.boundingBox()).width-emptyHomeWidth)<1,'clearing the conversation restores the Home composer width');
 });
 
 test('Ask Pharos blocking and reopened browsing overlays handle a ready destination', {skip}, async t => {

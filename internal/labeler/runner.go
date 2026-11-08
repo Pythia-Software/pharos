@@ -201,6 +201,7 @@ type managed struct {
 	gpu             int
 	lastUsed        time.Time
 	timer           *time.Timer
+	retired         bool
 }
 
 // NewManager makes a manager; idle is how long an unused runner keeps its
@@ -224,6 +225,8 @@ func runnerKey(model *Model, cfg RunnerConfig) string {
 // with ErrBudget. Call release when done; the runner then stays warm for
 // the idle period.
 func (m *Manager) Runner(ctx context.Context, model *Model, cfg RunnerConfig) (*Runner, func(), error) {
+	var dead *Runner
+	defer func() { reapRunner(dead) }() // after the unlock below
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
@@ -231,6 +234,9 @@ func (m *Manager) Runner(ctx context.Context, model *Model, cfg RunnerConfig) (*
 	}
 	key := runnerKey(model, cfg)
 	if entry := m.runners[key]; entry != nil && entry.runner.pool.alive() {
+		if entry.retired {
+			return nil, nil, fmt.Errorf("%w: the previous runner is draining after a deliberate settings change", ErrBudget)
+		}
 		entry.users++
 		if entry.timer != nil {
 			entry.timer.Stop()
@@ -238,7 +244,7 @@ func (m *Manager) Runner(ctx context.Context, model *Model, cfg RunnerConfig) (*
 		}
 		return entry.runner, m.releaser(key, entry), nil
 	} else if entry != nil {
-		m.dropLocked(key, entry, true)
+		dead = m.dropLocked(key, entry, true)
 	}
 	cfg.Workers, cfg.Threads = max(1, cfg.Workers), max(1, cfg.Threads)
 	memoryMB := model.MemoryMB
@@ -292,7 +298,7 @@ func (m *Manager) releaser(key string, entry *managed) func() {
 			if entry.users > 0 || m.runners[key] != entry {
 				return
 			}
-			if m.idle <= 0 {
+			if m.idle <= 0 || entry.retired {
 				m.dropLocked(key, entry, false)
 				return
 			}
@@ -304,6 +310,21 @@ func (m *Manager) releaser(key string, entry *managed) func() {
 				}
 			})
 		})
+	}
+}
+
+// Retire ends cached configurations after a deliberate allowance/settings
+// change. In-use workers drain before their last release; ordinary transient
+// capacity changes never call this, so batching keeps models warm.
+func (m *Manager) Retire() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, entry := range m.runners {
+		if entry.users == 0 {
+			m.dropLocked(key, entry, false)
+		} else {
+			entry.retired = true
+		}
 	}
 }
 
@@ -322,7 +343,38 @@ func (m *Manager) evictIdleLocked() bool {
 	return true
 }
 
-func (m *Manager) dropLocked(key string, entry *managed, kill bool) {
+// dropLocked removes a runner. A GPU runner is killed and reaped before the
+// manager is released, so the GPU it held is free when the budget says so.
+// A killed CPU runner is only signalled here and returned: the caller reaps
+// it (reapRunner) after releasing the manager and before it returns, so a
+// worker slow to exit holds up no other model's Runner or release, and a
+// caller's CPU grant still outlives the workers. Otherwise the workers
+// finish in the background.
+func (m *Manager) dropLocked(key string, entry *managed, kill bool) (reap *Runner) {
+	m.forgetLocked(key, entry)
+	switch {
+	case entry.gpu > 0:
+		entry.runner.pool.Kill()
+		entry.runner.pool.Close()
+	case kill:
+		entry.runner.pool.Kill()
+		return entry.runner
+	default:
+		go entry.runner.pool.Close()
+	}
+	return nil
+}
+
+// reapRunner waits for a killed runner's workers to exit (nil: none). Tests
+// replace it to check that the manager is free meanwhile.
+var reapRunner = func(r *Runner) {
+	if r != nil {
+		r.pool.Close()
+	}
+}
+
+// forgetLocked removes a runner from the manager and its budget.
+func (m *Manager) forgetLocked(key string, entry *managed) {
 	delete(m.runners, key)
 	m.threads -= entry.threads
 	m.memory -= entry.memory
@@ -330,25 +382,24 @@ func (m *Manager) dropLocked(key string, entry *managed, kill bool) {
 	if entry.timer != nil {
 		entry.timer.Stop()
 	}
-	if kill || entry.gpu > 0 {
-		entry.runner.pool.Kill()
-		if entry.gpu > 0 {
-			entry.runner.pool.Close()
-		}
-	} else {
-		go entry.runner.pool.Close()
-	}
 }
 
 // Kill stops a runner's workers at once (a stop, where results in flight
-// are not wanted); its users' calls fail.
+// are not wanted); its users' calls fail. It returns once the workers are
+// reaped, so a caller's CPU grant outlives them, but reaps them after
+// releasing the manager: other models' Runner calls do not wait for it. A
+// GPU runner is reaped before the lock is released, as on any drop.
 func (m *Manager) Kill(runner *Runner) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	reap := []*Runner{}
 	for key, entry := range m.runners {
 		if entry.runner == runner {
-			m.dropLocked(key, entry, true)
+			reap = append(reap, m.dropLocked(key, entry, true))
 		}
+	}
+	m.mu.Unlock()
+	for _, killed := range reap {
+		reapRunner(killed)
 	}
 }
 

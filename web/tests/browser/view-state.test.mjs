@@ -38,7 +38,7 @@ test('workspace fingerprints restore across views and respect the global event d
  assert.ok(requests.length&&requests.every(body=>body.events===false));
  // The persisted preference also selects the conversation image variant.
  requests.length=0;
- await page.goto(new URL('/analyze?analyze_mode=query&analyze_data=message_labels',page.url()).href);
+ await page.goto(new URL('/analyze?analyze_mode=query&analyze_data=message_labels&label_results=cards',page.url()).href);
  await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
  assert.ok(requests.some(body=>body.events===false&&body.items.some(item=>item.entity==='conversation')));
  await settings();assert.equal(await toggle().getAttribute('aria-checked'),'false');await toggle().click();
@@ -1148,33 +1148,37 @@ test('Message Labels category menus apply to descendants and restore mixed selec
  await page.keyboard.press('Escape');assert.equal(await category.evaluate(node=>node===document.activeElement),true);
 });
 
-test('Habits panels and the standard dashboard restore their independent controls',{skip},async t=>{
- const app=await open(t,{url:'/analyze?analyze_topic=habits',ready:'.usage-chart-bars:not(.loading) > button'}),{page}=app;
+test('Habits switches views and restores the selected chart and its controls', {skip}, async t => {
+ const app=await open(t,{url:'/analyze?analyze_topic=habits',ready:'.habits-calendar'}),{page}=app;
+ const view=page.getByRole('combobox',{name:'View',exact:true});
  await page.getByRole('combobox',{name:'Whose days',exact:true}).selectOption('agents');
  await page.getByRole('combobox',{name:'Calendar range',exact:true}).selectOption('13');
+ await page.getByRole('combobox',{name:'Streaks count',exact:true}).selectOption('weekdays');
+ await view.selectOption('punchcard');
+ await page.locator('[data-pharos-target="section:habits-punchcard"]').waitFor();
+ await page.getByRole('combobox',{name:'Punchcard time',exact:true}).selectOption('unattended');
  await page.getByRole('combobox',{name:'Punchcard range',exact:true}).selectOption('30');
- await page.locator('.habits-settings > summary').click();await app.settled();
- const population=new URL(page.url()).searchParams.get('analyze_filters');
- await page.locator('.usage-chart').scrollIntoViewIfNeeded();
- const actor=page.locator('.usage-chart-legend').getByRole('button').first(),actorName=await actor.getAttribute('aria-label');
- await actor.click();await page.getByRole('menuitem',{name:/Show only this value/}).click();await app.settled();
- assert.equal(await actor.getAttribute('aria-pressed'),'true');
- const view=page.getByRole('combobox',{name:'View',exact:true});
- await view.selectOption('compare');await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await app.settled();
- await view.selectOption('trend');await page.locator('.usage-chart-bars:not(.loading) > button').first().waitFor();await app.settled();
- assert.equal(new URL(page.url()).searchParams.get('analyze_filters'),population,'legend and view changes preserve the population');
- const fresh=await open(t,{url:path(page),ready:'.usage-chart-bars:not(.loading) > button'});
- assert.equal(await fresh.page.getByRole('combobox',{name:'View',exact:true}).inputValue(),'trend');
- assert.equal(await fresh.page.locator('.usage-chart-legend').getByRole('button',{name:actorName,exact:true}).getAttribute('aria-pressed'),'true');
+ await view.selectOption('days');await page.locator('.habits-days-chart').waitFor();
+ await page.getByRole('combobox',{name:'Your days range',exact:true}).selectOption('14');
+ await page.locator('.habits-settings > summary').click();
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('disclosures')??'{}')['habits-settings']===true);await app.settled();
+ const fresh=await open(t,{url:path(page),ready:'.habits-days-chart'});
+ assert.equal(await fresh.page.getByRole('combobox',{name:'View',exact:true}).inputValue(),'days');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Your days range',exact:true}).inputValue(),'14');
+ assert.equal(await fresh.page.locator('.habits-settings').evaluate(element=>element.open),true);
+ const restored=fresh.page.getByRole('combobox',{name:'View',exact:true});
+ await restored.selectOption('punchcard');await fresh.page.locator('[data-pharos-target="section:habits-punchcard"]').waitFor();
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Punchcard time',exact:true}).inputValue(),'unattended');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Punchcard range',exact:true}).inputValue(),'30');
+ await restored.selectOption('calendar');await fresh.page.locator('.habits-calendar').waitFor();
  assert.equal(await fresh.page.getByRole('combobox',{name:'Whose days',exact:true}).inputValue(),'agents');
  assert.equal(await fresh.page.getByRole('combobox',{name:'Calendar range',exact:true}).inputValue(),'13');
- assert.equal(await fresh.page.getByRole('combobox',{name:'Punchcard range',exact:true}).inputValue(),'30');
- assert.equal(await fresh.page.locator('.habits-settings').evaluate(element=>element.open),true);
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Streaks count',exact:true}).inputValue(),'weekdays');
  await fresh.shot('habits-restored');
 });
 
 test('Habits standalone charts preview, pin, restore and open their records',{skip},async t=>{
- const app=await open(t,{url:'/analyze?analyze_topic=habits',ready:'.habits-days-chart [role="button"]'}),{page}=app;
+ const app=await open(t,{url:'/analyze?analyze_topic=habits&habits_view=days',ready:'.habits-days-chart [role="button"]'}),{page}=app;
  const tip=page.locator('.habits-chart-popover');
  const focus=()=>page.evaluate(()=>document.activeElement?.getAttribute('aria-label')??document.activeElement?.tagName);
  const charts=[
@@ -1184,6 +1188,7 @@ test('Habits standalone charts preview, pin, restore and open their records',{sk
   '.habits-automations',
  ];
  for(const selector of charts){
+  await page.getByRole('combobox',{name:'View',exact:true}).selectOption(selector.includes('days-chart')?'days':selector.includes('calendar')?'calendar':'punchcard');
   const mark=page.locator(selector).getByRole('button').first();
   await mark.scrollIntoViewIfNeeded();
   const before=path(page),focused=await focus();
@@ -1204,6 +1209,7 @@ test('Habits standalone charts preview, pin, restore and open their records',{sk
   await page.keyboard.press('Escape');await tip.waitFor({state:'hidden'});
  }
  await page.setViewportSize({width:320,height:800});
+ await page.getByRole('combobox',{name:'View',exact:true}).selectOption('days');
  const mark=page.locator('.habits-days-chart').getByRole('button').first();
  await mark.scrollIntoViewIfNeeded();await mark.focus();await mark.press('Enter');
  await tip.getByRole('link').first().waitFor();
@@ -1216,6 +1222,8 @@ test('Habits standalone charts preview, pin, restore and open their records',{sk
  await tip.getByRole('link').first().click();await page.locator('.usage-workspace-table').waitFor();await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('analyze_data'),'rhythm');
  assert.equal(new URL(page.url()).searchParams.get('analyze_mode'),'query');
+ await page.getByRole('link',{name:/^Back to dashboard/}).click();await page.locator('.habits-days-chart').waitFor();
+ assert.equal(await page.getByRole('combobox',{name:'View',exact:true}).inputValue(),'days');
 });
 
 test('native Message Labels dashboards and conversation cards share standard navigation and saved query presentation',{skip},async t=>{
@@ -1411,19 +1419,19 @@ test('People message-label breakdowns keep their dashboard and saved URL',{skip}
  const dashboard=topic=>'/analyze?'+new URLSearchParams({analyze_topic:topic,analyze_window:'30d',analyze_filters:encodeQuery({...EMPTY_QUERY,where:[{field:'repository_name',op:'is_not_null',value:''}]}),analyze_chart:JSON.stringify({metric:'messages',split:'message_family',period:'day',share:true})});
  const app=await open(t,{url:dashboard('human'),ready:'.usage-human-dashboard .usage-chart'}),{page}=app;
  await app.shot('people-message-label-breakdown');
- for(const topic of ['human','activity','habits']){
+ for(const topic of ['human','activity','work_hours']){
   if(topic!=='human')await page.goto(new URL(dashboard(topic),page.url()).href);
-  await page.locator('.usage-'+topic+'-dashboard .usage-chart').waitFor();await app.settled();
+  await page.locator('.usage-'+topic.replaceAll('_','-')+'-dashboard .usage-chart').waitFor();await app.settled();
   await page.getByRole('combobox',{name:'Breakdown',exact:true}).selectOption('message_label');await app.settled();
   assert.equal(JSON.parse(new URL(page.url()).searchParams.get('analyze_chart')).split,'message_label');
   assert.ok(app.calls.some(call=>call.path.includes('/api/query/people_message_labels/')));
   await page.locator('.usage-query-destination').first().click();
   const back=page.getByRole('link',{name:'Back to dashboard',exact:true});await back.waitFor();await back.click();
-  await page.locator('.usage-'+topic+'-dashboard .usage-chart').waitFor();await app.settled();
+  await page.locator('.usage-'+topic.replaceAll('_','-')+'-dashboard .usage-chart').waitFor();await app.settled();
   assert.equal(new URL(page.url()).searchParams.get('analyze_window'),'30d');
   assert.equal(await page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'message_label');
  }
- await page.reload();await page.locator('.usage-habits-dashboard .usage-chart').waitFor();await app.settled();
+ await page.reload();await page.locator('.usage-work-hours-dashboard .usage-chart').waitFor();await app.settled();
  assert.equal(await page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'message_label');
 });
 

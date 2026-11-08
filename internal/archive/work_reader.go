@@ -64,6 +64,15 @@ func (c *Catalog) WorkOverview(id string) (map[string]any, error) {
 	if result["files"], err = c.workFileTargets(id); err != nil {
 		return nil, err
 	}
+	// Related top-level work (peer_reader.go).
+	peers, err := c.workPeers(context.Background(), id)
+	if err != nil {
+		return nil, err
+	}
+	result["peers"] = peers
+	if result["peer_conversations"], err = c.peerConversations(context.Background(), peers); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -147,6 +156,11 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 	if err != nil {
 		return nil, err
 	}
+	// Hand-offs to and from related work (peer_reader.go).
+	attachPeers, err := c.messagePeerAttacher(conversationID)
+	if err != nil {
+		return nil, err
+	}
 	// With ledger usage, whole bodies are only needed while attaching authorship
 	// and clipping a row. Do that before retaining it, rather than keeping every
 	// original output alive until the entire conversation has been read.
@@ -162,6 +176,7 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 		attach(message)
 		attachLabels(message)
 		attachEvents(message)
+		attachPeers(message)
 		if previewRows {
 			clipReaderMessage(message)
 		}

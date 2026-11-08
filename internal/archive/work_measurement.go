@@ -52,6 +52,7 @@ func reportWork(ctx context.Context, phase, unit string, done, total int, detail
 	// without a SyncRun meter. An inherited callback still records run history
 	// and forecasts. Explicit mirrors on older entry points are idempotent.
 	opFrom(ctx).mirrorWork(work)
+	taskResourcesFrom(ctx).progress(phase, unit, float64(done), float64(total))
 	if report, ok := ctx.Value(workProgressKey{}).(func(activityWork)); ok {
 		report(work)
 	}

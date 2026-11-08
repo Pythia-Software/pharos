@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -111,5 +112,53 @@ func TestTerminalCommandsTouchTheCatalogOnlyUnderTheirLease(t *testing.T) {
 		if probes := probeLeases(leaseDirs(config)); len(probes) != 0 {
 			t.Errorf("%v left leases: %+v", args, probes)
 		}
+	}
+}
+
+// A scheduled Terminal command has one CPU authority for everything it
+// runs: background work its catalog starts (from context.Background()) and
+// a leased catalog command's operations, which also record resource
+// telemetry. Classic commands get none.
+func TestScheduledCommandAuthorityReachesBackgroundWork(t *testing.T) {
+	override(t, &cliAuthority, nil)
+	catalog, config := testCatalog(t)
+	backgroundAuthority := func(engine string) *workAuthority {
+		t.Helper()
+		config.WorkEngine, config.BackgroundCPUs = engine, 2
+		ops, err := beginCLIOperations(config, catalog, "test", "analysis.labels")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ops.close()
+		if workAuthorityFor(context.Background(), catalog) != ops.authority {
+			t.Fatal("detached catalog work lost the command's authority")
+		}
+		got := make(chan *workAuthority, 1)
+		catalog.startBackground(OperationSpec{Kind: "analysis.labels"}, func(ctx context.Context, op *Op) error {
+			got <- workAuthorityFor(ctx, catalog)
+			return nil
+		})
+		catalog.unowned.Wait()
+		return <-got
+	}
+	if got := backgroundAuthority("classic"); got != nil {
+		t.Fatal("classic background work got an authority")
+	}
+	if got := backgroundAuthority("scheduled"); got == nil || got != cliWorkAuthority(config) {
+		t.Fatalf("scheduled background work ran outside the process's authority: %p", got)
+	}
+
+	open := func(path string) (*Catalog, error) { return openTestCatalog(t, path), nil }
+	err := runLeasedCatalog(config, "test", OperationSpec{Kind: "analysis.labels"}, open, func(ctx context.Context, op *Op, leased *Catalog) error {
+		if op.reg.resourceLedger == nil || !op.reg.telemetry {
+			t.Error("a scheduled leased command records no resource telemetry")
+		}
+		if leased.commandCPUs.Load() == nil || workAuthorityFor(ctx, leased) != leased.commandCPUs.Load() {
+			t.Error("a leased command's catalog lacks its authority")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

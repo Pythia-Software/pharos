@@ -21,7 +21,7 @@ import (
 var runningItem = map[string]string{
 	"index.changes.automatic": "conversations", "index.changes.manual": "conversations", "index.sources.legacy": "conversations",
 	"maintenance.library-view": "search", "analysis.github": "repositories", "analysis.identities": "repositories", "analysis.git": "repositories",
-	"analysis.authorship.refine": "writing-refine", "analysis.tools": "tools", "analysis.authorship": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events",
+	"analysis.authorship.refine": "writing-refine", "analysis.tools": "tools", "analysis.authorship": "writing", "analysis.peers": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events",
 	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
 	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup",
 }
@@ -668,6 +668,7 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 	_, views := s.operationsDocumentViews(r.Context(), false)
 	freshness := s.freshness(r.Context(), views, false)
 	writeJSON(w, map[string]any{
+		"work":         s.workSettings(),
 		"labels":       s.labelsSettings(),
 		"agent_events": s.agentEventsSettings(r.Context()),
 		"settings": map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "interval_seconds": settings.Interval,
@@ -847,6 +848,9 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		writeError(w, err, 500)
 		return
+	}
+	if s.work != nil {
+		s.work.runner.readPause(context.WithoutCancel(r.Context()))
 	}
 	s.wakeBackground()
 	s.getBackground(w, r)

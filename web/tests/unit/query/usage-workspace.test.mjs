@@ -596,7 +596,7 @@ test("dashboard returns retain edited source filters and disclose incompatible r
 
 test('People label query returns retain the dashboard population and its own date fields',()=>{
  const now=Date.parse('2026-10-20T12:00:00Z');
- for(const topic of ['human','activity','habits'])for(const split of ['message_family','message_label'])for(const view of ['trend','compare'])for(const window of ['today','30d','custom']){
+ for(const topic of ['human','activity','work_hours'])for(const split of ['message_family','message_label'])for(const view of ['trend','compare'])for(const window of ['today','30d','custom']){
   const source=analysisCatalogs[topic],state={...dashboardDefaults[topic],metric:'messages',split,view};
   const catalog=analysisCatalogFor(topic,{},state),field=source.time.first;
   assert.equal(catalog.dataset,'people_message_labels');

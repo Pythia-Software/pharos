@@ -690,6 +690,31 @@ func newLabelingPass(tx labelingReader, reasoningStore bool) *labelingPass {
 // conversation's main session, the children delegations started) and which
 // conversations' reasoning extraction is current. Prepare and the labels
 // ledger both start here, so they decide units alike.
+// The labeling context's per-conversation rows, read for the whole library
+// (loadLabelingPass) or for a labels session step's selection
+// (refreshLabelingContext). One definition, so an input added here reaches
+// both a discovery and a warm step.
+const (
+	labelingConversationsSQL = `SELECT id,workspace_id,provider,COALESCE(started_at,''),COALESCE(parent_id,''),agent_depth FROM conversations`
+	labelingSessionsSQL      = `SELECT id,conversation_id,native_id,kind,COALESCE(child_conversation_id,'') child,COALESCE(delegation_message_id,'') delegation FROM agent_sessions`
+	labelingReasoningSQL     = `SELECT conversation_id,unavailable_count FROM reasoning_extraction_state WHERE version=?`
+)
+
+func scanLabelingConversation(rows *sql.Rows) (*labelingConversation, error) {
+	info := &labelingConversation{}
+	err := rows.Scan(&info.id, &info.workspace, &info.provider, &info.started, &info.parent, &info.depth)
+	return info, err
+}
+
+// addSession records one labelingSessionsSQL row's kind and main session.
+func (p *labelingPass) addSession(row map[string]any) {
+	id := firstString(row["id"])
+	p.sessionKind[id] = firstString(row["kind"])
+	if row["native_id"] == "main" {
+		p.mainSession[firstString(row["conversation_id"])] = id
+	}
+}
+
 func loadLabelingPass(ctx context.Context, q labelingReader, p *labelingPass) (ids []string, kept, sessions []map[string]any, unavailable map[string]int64, err error) {
 	workspaces, err := queryMapsContext(ctx, q, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w`)
 	if err != nil {
@@ -705,13 +730,13 @@ func loadLabelingPass(ctx context.Context, q labelingReader, p *labelingPass) (i
 			kept = append(kept, map[string]any{"workspace_id": row["id"]})
 		}
 	}
-	rows, err := q.QueryContext(ctx, `SELECT id,workspace_id,provider,COALESCE(started_at,''),COALESCE(parent_id,''),agent_depth FROM conversations ORDER BY id`)
+	rows, err := q.QueryContext(ctx, labelingConversationsSQL+` ORDER BY id`)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 	for rows.Next() {
-		info := &labelingConversation{}
-		if err := rows.Scan(&info.id, &info.workspace, &info.provider, &info.started, &info.parent, &info.depth); err != nil {
+		info, err := scanLabelingConversation(rows)
+		if err != nil {
 			rows.Close()
 			return nil, nil, nil, nil, err
 		}
@@ -722,16 +747,13 @@ func loadLabelingPass(ctx context.Context, q labelingReader, p *labelingPass) (i
 	if err := rows.Err(); err != nil {
 		return nil, nil, nil, nil, err
 	}
-	sessions, err = queryMapsContext(ctx, q, `SELECT id,conversation_id,native_id,kind,COALESCE(child_conversation_id,'') child,COALESCE(delegation_message_id,'') delegation FROM agent_sessions`)
+	sessions, err = queryMapsContext(ctx, q, labelingSessionsSQL)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 	for _, row := range sessions {
 		id := firstString(row["id"])
-		p.sessionKind[id] = firstString(row["kind"])
-		if row["native_id"] == "main" {
-			p.mainSession[firstString(row["conversation_id"])] = id
-		}
+		p.addSession(row)
 		if message := firstString(row["delegation"]); message != "" {
 			owner := "s:" + id
 			if child := firstString(row["child"]); child != "" {
@@ -742,7 +764,7 @@ func loadLabelingPass(ctx context.Context, q labelingReader, p *labelingPass) (i
 	}
 	unavailable = map[string]int64{}
 	if p.reasoningStore {
-		reasoning, err := queryMapsContext(ctx, q, `SELECT conversation_id,unavailable_count FROM reasoning_extraction_state WHERE version=?`, reasoningExtractionVersion)
+		reasoning, err := queryMapsContext(ctx, q, labelingReasoningSQL, reasoningExtractionVersion)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}

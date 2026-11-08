@@ -136,7 +136,8 @@ func runLabelsCLI(ctx context.Context, config Config, catalog *Catalog, op *Op, 
 		if err := flags.Parse(args[2:]); err != nil || flags.NArg() != 0 {
 			return errors.New(labelsUsage)
 		}
-		explanation, err := catalog.LabelsExplain(ctx, settings, args[1], *infer)
+		// --infer admits from this command's authority (nil: classic).
+		explanation, err := catalog.LabelsExplain(withWorkAuthority(ctx, cliWorkAuthority(config)), settings, args[1], *infer)
 		if err != nil {
 			return err
 		}
@@ -156,7 +157,7 @@ func (c *Catalog) ensureAuthorshipForLabels(ctx context.Context, stderr io.Write
 	}
 	fmt.Fprintln(stderr, "labels: updating writing estimates first (historical refinement runs overnight)")
 	started := time.Now()
-	if err := c.UpdateAuthorship(ctx, want); err != nil {
+	if err := admitWorkCPU(ctx, c, 1, 1, func(ctx context.Context, _ workAllocation) error { return c.UpdateAuthorship(ctx, want) }); err != nil {
 		return fmt.Errorf("authorship: %w", err)
 	}
 	fmt.Fprintf(stderr, "labels: authorship took %s\n", time.Since(started).Round(time.Second))
@@ -311,14 +312,24 @@ func (c *Catalog) LabelsExplain(ctx context.Context, settings LabelerSettings, m
 		}
 	}
 	if infer {
-		runner, release, err := c.labelerRunner(ctx, settings, model, labelrt.RunnerConfig{GPU: model.MayUseGPU(settings.Backend), Worker: settings.Worker, Args: runtimeArgs(settings),
-			Workers: 1, Threads: settings.Threads, MaxBatch: max(1, settings.MaxBatch)})
-		if err != nil {
-			return nil, err
-		}
-		defer release()
-		result, err := runner.Run(ctx, rows, []string{"probs"}, settings.BatchTokens)
-		if err != nil {
+		// A diagnostic, still admitted like every inference (§7.2): the
+		// worker's threads fit the grant, which waits for the allowance.
+		var result []labelrt.RowOutputs
+		var worker labelrt.WorkerInfo
+		if err := admitWorkCPU(ctx, c, 1, max(1, settings.Threads), func(ctx context.Context, allocation workAllocation) error {
+			admitted := admittedLabeler(ctx, settings)
+			runner, release, err := c.labelerRunner(ctx, admitted, model, labelrt.RunnerConfig{GPU: model.MayUseGPU(settings.Backend), Worker: settings.Worker, Args: runtimeArgs(settings),
+				Workers: 1, Threads: min(max(1, settings.Threads), allocation.CPUs), MaxBatch: max(1, settings.MaxBatch)})
+			if err != nil {
+				return err
+			}
+			defer release()
+			if result, err = runner.Run(ctx, rows, []string{"probs"}, settings.BatchTokens); err != nil {
+				return err
+			}
+			worker = runner.Pool().Ready().Worker
+			return nil
+		}); err != nil {
 			return nil, err
 		}
 		var mask uint64
@@ -332,7 +343,7 @@ func (c *Catalog) LabelsExplain(ctx context.Context, settings LabelerSettings, m
 			mask |= chunk
 			chunks = append(chunks, map[string]any{"labels": model.LabelNames(chunk), "probs": labelProbMap(model, p)})
 		}
-		out["inferred"] = map[string]any{"labels": model.LabelNames(mask), "chunks": chunks, "worker": runner.Pool().Ready().Worker}
+		out["inferred"] = map[string]any{"labels": model.LabelNames(mask), "chunks": chunks, "worker": worker}
 	}
 	return out, nil
 }

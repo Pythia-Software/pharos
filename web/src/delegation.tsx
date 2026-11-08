@@ -27,6 +27,8 @@ import {ribbonSourceURL,type RibbonObservation} from "./label-session-ribbon-mod
 
 // reader-model.js loads before the bundle and also supplies turn ages.
 declare function relativeAge(value: number | null | undefined): string;
+// reader-model.js names the role of related work (peer_reader.go).
+declare function peerRoleLabel(role: string): string;
 
 type Metric = {
   value: number | null;
@@ -53,6 +55,8 @@ export type Session = {
   external_child?: Reference;
   navigation?: Reference;
   context_only?: boolean;
+  // Certain related work shown beside the workspace's own sessions.
+  peer?: { workspace_id: string; title: string; role: string };
   label: string;
   provider: string;
   model: string;
@@ -92,6 +96,8 @@ export type Analysis = {
   metrics: Spec[];
   maxima: Record<string, Record<string, number>>;
   totals: Record<string, Metric>;
+  // With related work's sessions; absent when there is none.
+  group_totals?: Record<string, Metric> | null;
   start: number | null;
   end: number | null;
   density: number[];
@@ -891,6 +897,14 @@ export function DelegationExplorer({
           </span>
         );
       })}
+      {data.group_totals && (() => {
+        const spec = data.metrics.find((m) => m.id === "cost")!;
+        const group = data.group_totals.cost;
+        return group && <span className="delegation-group-total" title={`This workspace and the related work shown among its agent sessions.\n${cellTitle(group, spec)}`}>
+          <small>With related work</small>
+          <strong>{formatted(group.value, spec.unit)}{group.quality === "partial" ? "+" : ""}</strong>
+        </span>;
+      })()}
     </div>
   );
   return (
@@ -1045,7 +1059,7 @@ export function DelegationExplorer({
                                   <div className="delegation-node">
                                     <SessionIdentity
                                       name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`}
-                                      metadata={<>{n.provider} · {n.model || "model unknown"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}<SessionAge start={n.start} prefix=" · " /></>}
+                                      metadata={<>{peerPrefix(n)}{n.provider} · {n.model || "model unknown"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}<SessionAge start={n.start} prefix=" · " /></>}
                                       title={`${n.id} · ${n.coverage} coverage · ${n.parent_evidence || "root"}`}
                                       depth={mode === "hierarchy" ? n.depth : 0}
                                       branch={mode === "hierarchy" ? sessionBranches.get(n.id) : undefined}
@@ -1056,7 +1070,7 @@ export function DelegationExplorer({
                                     {mode === "hierarchy" && !!n.child_count && <button
                                       className="delegation-chevron session-fold"
                                       style={{left: sessionBranchX(n.depth) - 10}}
-                                      aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`}
+                                      aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} title={collapsed.has(n.id) ? "Expand sessions" : "Collapse sessions"}
                                       aria-expanded={!collapsed.has(n.id)}
                                       onClick={() => toggle(n)}
                                     ><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
@@ -1192,6 +1206,9 @@ export function DelegationExplorer({
   );
 }
 
+// Related work's sessions name their role first.
+const peerPrefix = (n: Session) => n.peer ? `${peerRoleLabel(n.peer.role)} · ` : "";
+
 function InboxSessions({ rows, data, shown, collapsed, toggle, openNode }: {
   rows: Session[];
   data: Analysis;
@@ -1207,8 +1224,8 @@ function InboxSessions({ rows, data, shown, collapsed, toggle, openNode }: {
     <div className="delegation-inbox-heading" role="row"><span role="columnheader">Agent session</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Run time" : spec.label}</span>)}</div>
     {rows.map(n => <div key={n.id} role="row" data-session-id={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }}>
       <div role="cell" className="delegation-inbox-session">
-        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}{n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens)} tokens unallocated in branch` : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
-        {!!n.child_count && <button className="delegation-chevron session-fold" style={{left: sessionBranchX(n.depth) - 10}} aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} aria-expanded={!collapsed.has(n.id)} onClick={() => toggle(n)}><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
+        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{peerPrefix(n)}{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}{n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens)} tokens unallocated in branch` : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
+        {!!n.child_count && <button className="delegation-chevron session-fold" style={{left: sessionBranchX(n.depth) - 10}} aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} title={collapsed.has(n.id) ? "Expand sessions" : "Collapse sessions"} aria-expanded={!collapsed.has(n.id)} onClick={() => toggle(n)}><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
       </div>
       {metrics.map(spec => {
         const value = n.self[spec.id];
@@ -1771,11 +1788,11 @@ export function ParallelActivity({
             n.start <= range[1] &&
             n.end >= range[0];
           if(recursive&&labelData)return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
-            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
+            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${peerPrefix(n)}${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
               openSession={timeline?()=>openNode(n):undefined}
               sourceHref={timeline?item=>sourceHref(n,item):undefined}
               events={timeline?nativeLabels.events.get(n.id):undefined} eventCounts={eventCounts} eventHref={timeline?e=>eventHref(n,e):undefined}
-              foldControl={!n.child_count?null:previewOnly?<span className="lt-preview-fold"><Icon name="tree"/></span>:<button type="button" className="delegation-chevron" aria-label={`${collapsed.has(n.id)?"Expand":"Collapse"} child sessions of ${n.label}`} onClick={()=>toggle(n)}><Icon name={collapsed.has(n.id)?"chevron-right":"chevron-down"}/></button>}
+              foldControl={!n.child_count?null:previewOnly?<span className="lt-preview-fold"><Icon name="tree"/></span>:<button type="button" className="delegation-chevron" aria-label={`${collapsed.has(n.id)?"Expand":"Collapse"} child sessions of ${n.label}`} title={collapsed.has(n.id) ? "Expand sessions" : "Collapse sessions"} onClick={()=>toggle(n)}><Icon name={collapsed.has(n.id)?"chevron-right":"chevron-down"}/></button>}
               restore={(item,anchor)=>{if(item.mark&&!mark&&eventID===JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category])){anchor.scrollIntoView({block:"nearest",inline:"nearest"});setMark({node:n,mark:item.mark,anchor});}}}
               select={(item,anchor)=>{if(item.message){setEventID("label:"+item.message.id);openNode(n,item.message.id,item.message.conversation_id);}else if(item.mark){setEventID(JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category]));setMark({node:n,mark:item.mark,anchor});}}}/>
             {lane?.truncated?<small className="delegation-truncation">Showing first 2,400 marks; zoom in for remaining events.</small>:null}
@@ -1797,7 +1814,7 @@ export function ParallelActivity({
               >
                 <button
                   className="delegation-chevron"
-                  aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`}
+                  aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} title={collapsed.has(n.id) ? "Expand sessions" : "Collapse sessions"}
                   disabled={!n.child_count}
                   onClick={() => toggle(n)}
                 >

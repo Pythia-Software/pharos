@@ -246,7 +246,7 @@ index.changes.manual                          run, plan: discover, 3 sources, au
 ├─ step "Verify a sample"
 └─ analysis.chain                             stage
    ├─ analysis.github  analysis.identities  analysis.git
-   └─ analysis.tools   analysis.authorship  analysis.findings
+   └─ analysis.tools   analysis.authorship  analysis.peers  analysis.findings
 ```
 
 The same `analysis.findings` kind started by "Refresh findings now" is a
@@ -334,6 +334,7 @@ Scheduled indexing never runs it; it marks `sync_deferred` instead (§5).
 | `analysis.git` | Look up merges in Git · Looking up merges in Git | chained, startup (one-time backfill), after a legacy sync | svc (+`git`) | D:w W:w | an.git | — | Stops; it runs again after the next index. Each `git` call has a 5 s limit (Conductor's git has none). | batch | >5 s when not a stage | bg |
 | `analysis.tools` | Update tool summaries · Updating tool summaries | chained, read (a Query Table request, or a Thinking read with request timings pending), version | svc | D:w W:w | an.tools | — | Stops; it runs again on the next index or Tools request. | batch | >5 s when not a stage | bg; fg when read-started |
 | `analysis.authorship` | Update writing estimates · Updating writing estimates | chained, read (`/api/authorship`, usage summary, native menu usage poll) | svc | D:w W:w | an.authorship | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
+| `analysis.peers` | Link related conversations · Linking related conversations | chained | svc | D:w W:w | an.peers | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
 | `analysis.authorship.refine` | Refine writing history · Refining writing history | daily, requested | svc | D:w W:w | an.authorship.refined | work | Stops; historical refinement runs again on its daily schedule. | batch | always | bg |
 | `analysis.labels` (variant `backlog`) | Label messages · Labeling messages | chained (the last stage, when `labels_enabled` is on; background item Message labels), cli (`pharos labels run`); `backlog` is chained after a stage that left more than its share, plugged in only, and stops if this Mac goes onto battery | svc, cli (+ worker process) | D:w W:w | an.labels | work | Stops between batches; the next run resumes it. | batch | >5 s when not a stage | bg |
 | `analysis.agent_events` (variant `backlog`) | Find agent events · Finding agent events | chained (after labels, when the Agent Experience switch or `agent_events_enabled` is on; background item Agent events; the first run downloads the verifier if the broker has not), user (turning the switch on runs the item), cli (`pharos agent-events run`); `backlog` as for `analysis.labels` | svc, cli (+ worker process) | D:w W:w | an.agent_events | work | Stops between chunks of conversations; the next run resumes it. | batch | >5 s when not a stage | bg |

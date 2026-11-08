@@ -67,6 +67,18 @@ export function queryCases(dataset: keyof typeof usageDatasets, document: any, s
 }
 export function dashboardCases(topic: keyof typeof usageTopics, documents: Record<string, any>, samples: Record<string, any[]>, concurrency: any): AuditCase[] {
   const dataset = usageTopicDatasets[topic];
+  if (topic === "habits") return Array.from({ length: 25 }, (_, i) => {
+    const view = ["calendar", "punchcard", "days"][i % 3];
+    const params = new URLSearchParams({ habits_view: view, habits_streak: i % 2 ? "weekdays" : "all" });
+    if (view === "calendar") {
+      params.set("habits_calendar", ["you", "agents", "automated"][Math.floor(i / 3) % 3]);
+      params.set("habits_weeks", ["13", "26", "53"][Math.floor(i / 9)]);
+    } else if (view === "punchcard") {
+      params.set("habits_punchcard", ["you", "agents", "unattended", "automated", "difference"][Math.floor(i / 3) % 5]);
+      params.set("habits_punchcard_days", ["7", "30", "90"][Math.floor(i / 15)]);
+    } else params.set("habits_shape_days", ["7", "14", "28", "56", "90"][Math.floor(i / 3) % 5]);
+    return { id: `dashboard-${topic}-${String(i + 1).padStart(2, "0")}`, page: `dashboard:${topic}`, label: `Habits ${view} combination ${i + 1}`, dataset, url: usageWorkspaceURL({ mode: "dashboards", topic, dataset }, params) };
+  });
   if(isThinkingTopic(topic))return Array.from({length:25},(_,i)=>({id:`dashboard-${topic}-${String(i+1).padStart(2,"0")}`,page:`dashboard:${topic}`,label:`Thinking combination ${i+1}`,dataset,url:usageWorkspaceURL({mode:"dashboards",topic,dataset},new URLSearchParams({thinking:JSON.stringify({...defaultThinking,view:thinkingViews[i%thinkingViews.length][0],groupBy:thinkingBreakdowns[Math.floor(i/thinkingViews.length)][0],range:i%2?"30d":"all"})}))}));
   const f = fieldsFor(documents[dataset]), sample = samples[dataset] ?? [], category = f.group!, value = String(sample.find(row => row[category] != null)?.[category] ?? "codex");
   const date = new Date(); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - 29);
@@ -103,7 +115,7 @@ export function dashboardCases(topic: keyof typeof usageTopics, documents: Recor
     if (topic === "agent_experience") view = { rollingPeriods: 0, metric: ["events", "conversations", "messages", "thinking_share", "explained_share"][i % 5], split: ["family_group", "family", "source", "repository_name", "provider"][i % 5], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "agent_event_rates") view = { rollingPeriods: 0, metric: ["per_thousand", "message_share", "turn_share", "conversation_share", "events", "messages"][i % 6], split: ["family_group", "family", "source", "prompted_by", "prompt_length", "model_effort", "agent_role", "repository_name"][i % 8], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][Math.floor(i / 9)] };
     if (topic === "session_shape") view = { rollingPeriods: 0, metric: ["sessions", "active_time", "autonomy", "one_shot_rate", "steering_load", "failure_rate"][i % 6], split: ["length_band", "active_band", "tool_band", "autonomy_band", "archetype"][i % 5], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
-    if (topic === "habits") view = { rollingPeriods: 0, metric: ["wall_hours", "active_hours", "messages", "turns", "at_once"][i % 5], split: ["actor", "initiator", "automation", "repository_name", "provider"][i % 5], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
+    if (topic === "work_hours") view = { rollingPeriods: 0, metric: ["wall_hours", "active_hours", "messages", "turns", "at_once"][i % 5], split: ["actor", "initiator", "automation", "repository_name", "provider"][i % 5], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "carbon") view = { metric: i % 2 ? "energy" : "co2", split: ["type", "provider", "repository_name", "tier"][i % 4], period: periods[i % 5], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3] };
     if (view) params.set("analyze_chart", JSON.stringify({ ...view, display: i % 4 >= 2 ? "cumulative" : "interval" }));
     if (topic === "parallelism") {
