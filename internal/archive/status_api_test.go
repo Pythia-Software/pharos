@@ -877,12 +877,17 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 	gpuSampler, gpuReads := readyGPU(commandPID, 62)
 	override(t, &processGPU, gpuSampler)
 	var delegated atomic.Bool
+	var serviceVerdict atomic.Pointer[ejectVerdict]
 	answering := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var resources any = map[string]any{"processes": []map[string]any{{"pid": servicePID, "role": "service"}, {"pid": commandPID, "role": "cli:ingest"}}}
 		if delegated.Load() {
 			resources = nil
 		}
-		writeJSON(w, map[string]any{"version": 1, "operations": []any{}, "eject": computeEjectVerdict(verdictInput{}), "attention": []any{},
+		verdict := computeEjectVerdict(verdictInput{})
+		if own := serviceVerdict.Load(); own != nil {
+			verdict = *own
+		}
+		writeJSON(w, map[string]any{"version": 1, "operations": []any{}, "eject": verdict, "attention": []any{},
 			"resources": resources}, http.StatusOK)
 	}))
 	defer answering.Close()
@@ -950,12 +955,17 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "leases")
 	broker.leases.probe([]string{appLeaseDir()}, at)
 	broker.leases.probe([]string{dir}, at)
-	lease, err := acquireProcessLease(dir, leaseInfo{Instance: "new-command", PID: commandPID, HostID: currentHost().ID, Process: "cli:ingest", Kinds: []string{"ingest.cli"}, StartedAt: now()})
+	lease, err := acquireProcessLease(dir, leaseInfo{Instance: "new-command", PID: commandPID, HostID: currentHost().ID, Process: "cli:ingest", Holds: parseHolds("D:w"), Kinds: []string{"ingest.cli"}, StartedAt: now()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(lease.release)
 	broker.libraries[0].LeaseDirs = []string{dir}
+	native := computeEjectVerdict(verdictInput{leases: probeLeases([]string{dir})})
+	if len(native.Blockers) != 1 {
+		t.Fatalf("expected one CLI blocker: %+v", native)
+	}
+	serviceVerdict.Store(&native)
 	delegated.Store(true)
 	broker.history = newResourceHistory(broker.resources, processGPU, nil)
 	broker.history.running = true // a cached collector frame, without a loop
@@ -963,6 +973,9 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 		{PID: os.Getpid(), Role: "broker"}, {PID: servicePID, Role: "service"}, {PID: stuckPID, Role: "service"},
 	}}}}})
 	fresh := broker.statusDocument(context.Background())
+	if verdict := fresh["libraries"].([]map[string]any)[0]["eject"].(ejectVerdict); len(verdict.Blockers) != 1 {
+		t.Fatalf("resource ownership duplicated the service verdict: %+v", verdict)
+	}
 	if !slices.Contains(pids(fresh["resources"]), commandPID) || !broker.leases.stale.Load() {
 		t.Fatalf("a cached collector hid fresh CLI ownership: %+v", fresh["resources"])
 	}

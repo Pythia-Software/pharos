@@ -494,15 +494,19 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 		// Without a service to ask, the broker reads the leases of Terminal
 		// commands writing this library itself (lease files, never a capture
 		// or index lock), and those of app-level commands naming it.
-		leases := []leaseProbe{}
-		if own == nil || withResources {
+		leases, owned := []leaseProbe{}, []leaseProbe{}
+		if own == nil || withResources && b.history != nil {
 			// A managed service delegates sampling, so its snapshot has no
 			// process readings. Status still needs fresh CLI ownership.
-			leases = probeLeases(library.LeaseDirs)
+			owned = probeLeases(library.LeaseDirs)
+		}
+		if own == nil {
+			leases = append(leases, owned...)
 		}
 		for _, probe := range appLeases {
 			if probe.Info != nil && slices.ContainsFunc(probe.Info.Libraries, func(path string) bool { return sameConfig(path, library) }) {
 				leases = append(leases, probe)
+				owned = append(owned, probe)
 			}
 		}
 		verdict := brokerLibraryVerdict(own, records, library.ID, unreachable, leases)
@@ -524,7 +528,7 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 			if snapshots[index] != nil {
 				processes = append(processes, snapshotProcesses(snapshots[index], library.ID, library.Name)...)
 			}
-			processes = append(processes, leaseProcesses(leases, library.ID, library.Name)...)
+			processes = append(processes, leaseProcesses(owned, library.ID, library.Name)...)
 			entry["resources"] = processes
 			sampled = append(sampled, processes...)
 		}
