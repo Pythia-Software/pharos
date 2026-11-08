@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -66,6 +67,11 @@ type replicaPhase struct {
 //	  archive.test -test.run '^TestWorkReplica$' -test.timeout 24h -test.v
 //
 // tools/work-experiment.py probe-run prepares the arm and runs this.
+//
+// An optional replay schedules recent arrivals from a frozen arm input during
+// the work, through the service's background Capture & index item; settlement
+// then includes them. Physical memory is sampled through the work and an
+// optional idle period after it, so retained memory can be measured.
 func TestWorkReplica(t *testing.T) {
 	root := os.Getenv("PHAROS_WORK_REPLICA")
 	if root == "" {
@@ -110,6 +116,10 @@ func TestWorkReplica(t *testing.T) {
 		// Read-only queries per kind or stage whose result must be empty once
 		// its required work has settled.
 		Pending map[string][]string `json:"pending_checks"`
+		// Recent arrivals replayed during the work window (optional).
+		Replay *replicaReplay `json:"replay"`
+		// Physical-memory sampling and the post-settlement idle (optional).
+		Memory *replicaMemoryPlan `json:"memory"`
 	}
 	raw, err = os.ReadFile(os.Getenv("PHAROS_WORK_DESCRIPTOR"))
 	if err != nil {
@@ -176,6 +186,26 @@ func TestWorkReplica(t *testing.T) {
 	if requested == "scheduled" && len(descriptor.Stages) > 0 {
 		t.Fatal("legacy classic stages cannot run on the scheduled engine")
 	}
+	replay := descriptor.Replay
+	if replay != nil {
+		if len(descriptor.Stages) > 0 {
+			t.Fatal("replay needs phases: legacy stages have no follow-up demand")
+		}
+		if err := replay.check(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	memoryPlan := replicaMemoryPlan{IntervalSeconds: 5}
+	if descriptor.Memory != nil {
+		memoryPlan = *descriptor.Memory
+		if memoryPlan.IntervalSeconds == 0 {
+			memoryPlan.IntervalSeconds = 5
+		}
+		if memoryPlan.IntervalSeconds < 1 || memoryPlan.IdleSeconds < 0 {
+			t.Fatal("memory: interval_seconds is at least 1 and idle_seconds is not negative")
+		}
+	}
+	memory := &replicaMemory{}
 	// Restore production durability before the catalog opens.
 	savedDurability, savedLedgerSync, savedSyncToDrive := catalogDurability, labelingLedgerSynchronous, syncToDrive
 	catalogDurability, labelingLedgerSynchronous, syncToDrive = replicaDurability, replicaLedgerSync, replicaSyncToDrive
@@ -192,6 +222,28 @@ func TestWorkReplica(t *testing.T) {
 	if slices.Contains(units, "analysis.labels") && !config.Labels.Enabled {
 		t.Fatal("a labels workload pins labels_enabled and its frozen model inputs")
 	}
+	// The replay source exists only in this process's server configuration,
+	// over an arm-private folder the probe writes from the frozen input; the
+	// arm's own configuration still declares no source.
+	serverConfig := config
+	var replayInput, replayDir string
+	if replay != nil {
+		replayInput = filepath.Join(root, "inputs", replay.Input)
+		if info, err := os.Lstat(replayInput); err != nil || !info.IsDir() {
+			t.Fatalf("replay input %q is not staged in this arm: %v", replay.Input, err)
+		}
+		replayDir = filepath.Join(root, "replay", replay.Source.Name)
+		if err := os.MkdirAll(replayDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		source := SourceConfig{Name: replay.Source.Name, Kind: replay.Source.Kind, Path: replayDir, Account: replay.Source.Account,
+			Enabled: true, Options: replay.Source.Options, File: config.Path}
+		if _, err := MakeAdapter(source); err != nil {
+			t.Fatalf("replay source: %v", err)
+		}
+		serverConfig.Sources = []SourceConfig{source}
+	}
+	memory.sample("process")
 	// Opening initializes/migrates the catalog: startup is measured apart
 	// from the work it precedes, so a fixed cost cannot dilute a stage.
 	opening := replicaCPUNow()
@@ -202,13 +254,21 @@ func TestWorkReplica(t *testing.T) {
 	defer c.Close()
 	c.evidenceOnly = true
 	c.now = func() time.Time { return clock }
-	server := testServer(t, config, c)
+	server := testServer(t, serverConfig, c)
+	replayHost := currentHost().ID
+	if replay != nil {
+		// A fresh source: every replayed record is an arrival in this run.
+		if _, err := os.Lstat(filepath.Join(config.CaptureRoot, replayHost, replay.Source.Name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the arm already has a %s capture of replay source %q", replayHost, replay.Source.Name)
+		}
+	}
 	checks, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: config.CatalogPath}).String()+"?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(10000)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer checks.Close()
 	startup := opening.until(replicaCPUNow())
+	memory.sample("startup")
 
 	// The executed engine is what this process's work API reports, never the
 	// request. A build without the API answers 404 and runs classic.
@@ -252,6 +312,8 @@ func TestWorkReplica(t *testing.T) {
 	population["phases"], population["kinds"] = phases, kinds
 	work := replicaCPUNow()
 	started := work.at
+	memory.begin(started)
+	memory.sample("work-start")
 
 	type observation struct {
 		Seconds   float64 `json:"seconds"`
@@ -300,12 +362,64 @@ func TestWorkReplica(t *testing.T) {
 			}
 		}
 	}()
+	// Memory samples, arrivals and their readiness run beside the work until
+	// it settles, on the work window's clock.
+	background := sync.WaitGroup{}
+	background.Go(func() {
+		ticker := time.NewTicker(time.Duration(memoryPlan.IntervalSeconds * float64(time.Second)))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pollCtx.Done():
+				return
+			case <-ticker.C:
+				memory.sample("interval")
+			}
+		}
+	})
+	var arrivals *replicaArrivals
+	arrivalsDone := make(chan error, 1)
+	if replay != nil {
+		arrivals = newReplicaArrivals(replay, started)
+		background.Go(func() {
+			arrivalsDone <- arrivals.run(pollCtx, func(index int) (string, error) {
+				memory.sample("arrival:" + replay.Arrivals[index].Name)
+				return replicaApplyArrival(pollCtx, server, replay, replayInput, replayDir, index, clock)
+			}, func(ctx context.Context) (int64, error) {
+				var count int64
+				err := checks.QueryRowContext(ctx, replay.CountQuery).Scan(&count)
+				return count, err
+			}, func(ctx context.Context) (bool, error) {
+				ready, err := checksEmpty(ctx, checks, replay.ReadyChecks)
+				return !ready, err
+			})
+		})
+		background.Go(func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-pollCtx.Done():
+					return
+				case <-ticker.C:
+					if !arrivals.waiting() {
+						continue
+					}
+					checked := time.Now()
+					if ready, err := checksEmpty(pollCtx, checks, replay.ReadyChecks); err == nil && ready {
+						arrivals.ready(checked, time.Now())
+					}
+				}
+			}
+		})
+	}
 	stopped := false
 	stop := func() {
 		if !stopped {
 			stopped = true
 			stopPoll()
 			<-pollDone
+			background.Wait()
 		}
 	}
 	defer stop()
@@ -328,6 +442,11 @@ func TestWorkReplica(t *testing.T) {
 		mu.Lock()
 		report["observations"] = append([]observation(nil), observations...)
 		mu.Unlock()
+		if arrivals != nil {
+			report["replay"] = arrivals.report(replayHost)
+		}
+		samples := memory.snapshot()
+		report["memory"] = map[string]any{"samples": samples, "retention": replicaRetention(samples, memoryPlan)}
 		data, err := json.MarshalIndent(report, "", "  ")
 		if err == nil {
 			err = os.WriteFile(filepath.Join(root, "probe-report.json"), append(data, '\n'), 0o600)
@@ -358,49 +477,35 @@ func TestWorkReplica(t *testing.T) {
 		}
 		step := at.until(replicaCPUNow())
 		step["name"], step["started_seconds"] = name, at.at.Sub(started).Seconds()
+		memory.sample("step:" + name)
 		return step
 	}
 	steps := []map[string]any{}
 	report["steps"] = &steps
 	ctx := t.Context()
-	switch {
-	case len(descriptor.Stages) > 0:
-		for _, stage := range descriptor.Stages {
-			steps = append(steps, measured(stage, func() error { return replicaStage(ctx, c, config, clock, stage) }))
-			settle(ctx, stage)
+	// submit posts one phase's demand to the work API and returns its id.
+	submit := func(phase replicaPhase) uint64 {
+		body := map[string]any{"action": phase.Action, "kinds": phase.Kinds}
+		if phase.From != "" {
+			body["from"], body["until"] = phase.From, phase.Until
 		}
-	case executed == "classic":
-		for _, kind := range replicaKinds {
-			if !slices.Contains(units, kind) {
-				continue
-			}
-			steps = append(steps, measured(kind, func() error { return replicaClassicKind(ctx, c, config, clock, kind, kindPopulation[kind]) }))
-			settle(ctx, kind)
+		status, value, err := probeJSON(server, config.APIToken, http.MethodPost, "/api/work", body)
+		if err != nil || status != http.StatusAccepted {
+			fail("phase %s: work request refused (%d %v)", phase.Name, status, err)
 		}
-	default:
-		// Submit every phase as the product would, then wait for all of
-		// them: recent demand and the historical remainder share the engine.
-		ids := make([]uint64, len(descriptor.Phases))
-		for i, phase := range descriptor.Phases {
-			body := map[string]any{"action": phase.Action, "kinds": phase.Kinds}
-			if phase.From != "" {
-				body["from"], body["until"] = phase.From, phase.Until
-			}
-			status, value, err := probeJSON(server, config.APIToken, http.MethodPost, "/api/work", body)
-			if err != nil || status != http.StatusAccepted {
-				fail("phase %s: work request refused (%d %v)", phase.Name, status, err)
-			}
-			// A build that ignored the window would silently demand everything.
-			if phase.From != "" && (value["from"] != phase.From || value["until"] != phase.Until) {
-				fail("phase %s: this build does not scope backfill windows", phase.Name)
-			}
-			id, ok := value["request_id"].(json.Number)
-			parsed, err := id.Int64()
-			if !ok || err != nil || parsed <= 0 {
-				fail("phase %s: no request id", phase.Name)
-			}
-			ids[i] = uint64(parsed)
+		// A build that ignored the window would silently demand everything.
+		if phase.From != "" && (value["from"] != phase.From || value["until"] != phase.Until) {
+			fail("phase %s: this build does not scope backfill windows", phase.Name)
 		}
+		id, ok := value["request_id"].(json.Number)
+		parsed, err := id.Int64()
+		if !ok || err != nil || parsed <= 0 {
+			fail("phase %s: no request id", phase.Name)
+		}
+		return uint64(parsed)
+	}
+	// await polls the work API until every request in ids has ended.
+	await := func(ids []uint64, phase func(int) string) map[uint64]map[string]any {
 		ended := map[uint64]map[string]any{}
 		for len(ended) < len(ids) {
 			status, value, err := probeJSON(server, config.APIToken, http.MethodGet, "/api/work", nil)
@@ -417,7 +522,7 @@ func TestWorkReplica(t *testing.T) {
 					terminal := facts["state"] == "succeeded" || facts["state"] == "failed" || facts["state"] == "cancelled" || facts["state"] == "interrupted"
 					if i := slices.Index(ids, uint64(id)); i >= 0 && terminal && ended[uint64(id)] == nil {
 						facts["ended_seconds"] = time.Since(started).Seconds()
-						facts["phase"] = descriptor.Phases[i].Name
+						facts["phase"] = phase(i)
 						ended[uint64(id)] = facts
 					}
 				}
@@ -430,6 +535,34 @@ func TestWorkReplica(t *testing.T) {
 				}
 			}
 		}
+		return ended
+	}
+	switch {
+	case len(descriptor.Stages) > 0:
+		for _, stage := range descriptor.Stages {
+			steps = append(steps, measured(stage, func() error { return replicaStage(ctx, c, config, clock, stage) }))
+			settle(ctx, stage)
+		}
+	case executed == "classic":
+		for _, kind := range replicaKinds {
+			if !slices.Contains(units, kind) {
+				continue
+			}
+			steps = append(steps, measured(kind, func() error { return replicaClassicKind(ctx, c, config, clock, kind, kindPopulation[kind]) }))
+			// An arrival can dirty a kind that already ran; with a replay,
+			// every kind is checked once the arrivals have settled.
+			if replay == nil {
+				settle(ctx, kind)
+			}
+		}
+	default:
+		// Submit every phase as the product would, then wait for all of
+		// them: recent demand and the historical remainder share the engine.
+		ids := make([]uint64, len(descriptor.Phases))
+		for i, phase := range descriptor.Phases {
+			ids[i] = submit(phase)
+		}
+		ended := await(ids, func(i int) string { return descriptor.Phases[i].Name })
 		requests := []any{}
 		for _, id := range ids {
 			requests = append(requests, ended[id])
@@ -448,13 +581,84 @@ func TestWorkReplica(t *testing.T) {
 			}
 		}
 		steps = append(steps, map[string]any{"name": "scheduled", "wall_seconds": time.Since(started).Seconds()})
-		for _, kind := range replicaKinds {
-			if slices.Contains(units, kind) {
-				settle(ctx, kind)
+		if replay == nil {
+			for _, kind := range replicaKinds {
+				if slices.Contains(units, kind) {
+					settle(ctx, kind)
+				}
 			}
 		}
 	}
+	if replay != nil {
+		// Settlement includes every arrival: all applied, their ready checks
+		// and every kind's pending checks empty. Work the engine has not
+		// picked up gets its next pass: classic re-drains the demanded kinds,
+		// scheduled receives recent demand, as the service would send.
+		select {
+		case err := <-arrivalsDone:
+			if err != nil {
+				fail("replay: %v", err)
+			}
+		case <-ctx.Done():
+			fail("replay arrivals did not finish: %v", ctx.Err())
+		}
+		demanded := []string{}
+		for _, kind := range replicaKinds {
+			if slices.Contains(units, kind) {
+				demanded = append(demanded, kind)
+			}
+		}
+		deadline := time.Now().Add(replay.settleTimeout())
+		rounds, followups := 0, []any{}
+		for {
+			checked := time.Now()
+			ready, err := checksEmpty(ctx, checks, replay.ReadyChecks)
+			for _, kind := range demanded {
+				if err == nil && ready {
+					ready, err = checksEmpty(ctx, checks, descriptor.Pending[kind])
+				}
+			}
+			if err != nil {
+				fail("replay: settlement check: %v", err)
+			}
+			if ready {
+				arrivals.ready(checked, time.Now())
+				break
+			}
+			switch {
+			case rounds < replicaFollowupRounds:
+				rounds++
+				if executed == "classic" {
+					for _, kind := range demanded {
+						steps = append(steps, measured("followup:"+kind, func() error { return replicaClassicKind(ctx, c, config, clock, kind, kindPopulation[kind]) }))
+					}
+					continue
+				}
+				at := time.Now()
+				id := submit(replicaPhase{Name: fmt.Sprintf("followup-%d", rounds), Action: "recent", Kinds: demanded})
+				facts := await([]uint64{id}, func(int) string { return fmt.Sprintf("followup-%d", rounds) })[id]
+				if facts["state"] != "succeeded" {
+					fail("follow-up request %v ended %v: %v", facts["id"], facts["state"], facts["reason"])
+				}
+				followups = append(followups, facts)
+				steps = append(steps, map[string]any{"name": "followup:scheduled", "started_seconds": at.Sub(started).Seconds(), "wall_seconds": time.Since(at).Seconds()})
+			case time.Now().After(deadline):
+				fail("replay: arrivals did not settle within %s of the work ending, after %d follow-up rounds", replay.settleTimeout(), rounds)
+			default:
+				select {
+				case <-ctx.Done():
+					fail("replay did not settle: %v", ctx.Err())
+				case <-time.After(time.Second):
+				}
+			}
+		}
+		arrivals.settled(rounds, followups, time.Since(started).Seconds())
+		for _, kind := range demanded {
+			settle(ctx, kind)
+		}
+	}
 	execution := work.until(replicaCPUNow())
+	memory.sample("settled")
 	settled := execution["wall_seconds"].(float64)
 	stop()
 	// Ensure a short run still has the pinned number of product observations.
@@ -501,6 +705,34 @@ func TestWorkReplica(t *testing.T) {
 			spans["readiness"] = []float64{replicaUnix(started), replicaUnix(started) + *ready}
 		}
 	}
+	// Idle after settlement: what the process keeps (model workers,
+	// preparation contexts, caches) once nothing is demanded. The last
+	// sample follows a collection that returns free memory to the system,
+	// so live retained memory is told apart from collectable garbage.
+	idleFrom := time.Now()
+	if memoryPlan.IdleSeconds > 0 {
+		idleEnd := idleFrom.Add(time.Duration(memoryPlan.IdleSeconds * float64(time.Second)))
+		for next := idleFrom; ; {
+			next = next.Add(time.Duration(memoryPlan.IntervalSeconds * float64(time.Second)))
+			if next.After(idleEnd) {
+				next = idleEnd
+			}
+			select {
+			case <-ctx.Done():
+				fail("idle period: %v", ctx.Err())
+			case <-time.After(time.Until(next)):
+			}
+			if next.Equal(idleEnd) {
+				break
+			}
+			memory.sample("idle-interval")
+		}
+		spans["idle"] = []float64{replicaUnix(idleFrom), replicaUnix(time.Now())}
+	}
+	memory.sample("idle")
+	runtime.GC()
+	debug.FreeOSMemory()
+	memory.sample("idle-released")
 	results := map[string]any{"t_correct": correct, "t_usable": usable, "t_settled": settled, "settled": true,
 		"work": execution, "windows": spans, "final_product_sha256": last.Digest, "final_product_rows": last.Rows}
 	for key, value := range results {
@@ -885,5 +1117,600 @@ func TestWorkReplicaCPUWindow(t *testing.T) {
 	child := (running.ProcessState.UserTime() + running.ProcessState.SystemTime()).Seconds()
 	if cpu := window["cpu_seconds"].(float64); cpu > child-0.3 || cpu < 0 {
 		t.Fatalf("window CPU %.2fs should exclude the %.2fs child's CPU before the window opened", cpu, child)
+	}
+}
+
+// replicaFollowupRounds bounds the next passes settlement gives arrivals
+// that the engine has not picked up by the time its demanded work ends.
+const replicaFollowupRounds = 3
+
+// replicaReplay is a deterministic schedule of recent arrivals. Each one
+// writes production-derived provider files from a frozen arm input into an
+// arm-private source folder, then runs the service's background Capture &
+// index item for that one source. Conversation identity is provider,
+// account and native ID, so a session already in the snapshot gains only
+// the lines it did not have.
+type replicaReplay struct {
+	Input  string `json:"input"`
+	Source struct {
+		Name    string         `json:"name"`
+		Kind    string         `json:"kind"`
+		Account string         `json:"account"`
+		Options map[string]any `json:"options"`
+	} `json:"source"`
+	// CountQuery returns one integer that every arrival must increase.
+	CountQuery string `json:"count_query"`
+	// ReadyChecks must all be empty once every applied arrival is settled.
+	ReadyChecks   []string         `json:"ready_checks"`
+	SettleSeconds float64          `json:"settle_timeout_seconds"`
+	Arrivals      []replicaArrival `json:"arrivals"`
+}
+
+type replicaArrival struct {
+	Name      string               `json:"name"`
+	AtSeconds float64              `json:"at_seconds"`
+	Files     []replicaArrivalFile `json:"files"`
+}
+
+// replicaArrivalFile is one input file as of an arrival: its first Lines
+// newline-terminated lines, or all of it.
+type replicaArrivalFile struct {
+	Path  string `json:"path"`
+	Lines *int   `json:"lines"`
+}
+
+func (r *replicaReplay) settleTimeout() time.Duration {
+	if r.SettleSeconds == 0 {
+		return 30 * time.Minute
+	}
+	return time.Duration(r.SettleSeconds * float64(time.Second))
+}
+
+// check refuses a schedule that could read outside its input, replay
+// nothing, or shrink a file an earlier arrival wrote.
+func (r *replicaReplay) check() error {
+	if r.Input == "" || r.Input == "." || r.Input == ".." || strings.ContainsAny(r.Input, `/\`) {
+		return errors.New("replay.input names one frozen input")
+	}
+	if !validCaptureName(r.Source.Name) || r.Source.Kind == "" {
+		return errors.New("replay.source needs a capture-safe name and a kind")
+	}
+	if !readOnlyCheck(r.CountQuery) {
+		return errors.New("replay.count_query is one SELECT or WITH statement")
+	}
+	if len(r.ReadyChecks) == 0 || slices.ContainsFunc(r.ReadyChecks, func(query string) bool { return !readOnlyCheck(query) }) {
+		return errors.New("replay.ready_checks are read-only statements: arrivals need a settlement proof")
+	}
+	if r.SettleSeconds < 0 || len(r.Arrivals) == 0 {
+		return errors.New("replay needs arrivals and a non-negative settle_timeout_seconds")
+	}
+	names, written := map[string]bool{}, map[string]*int{}
+	previous := 0.0
+	for _, arrival := range r.Arrivals {
+		if arrival.Name == "" || names[arrival.Name] || arrival.AtSeconds < previous || len(arrival.Files) == 0 {
+			return fmt.Errorf("arrival %q: unique names, files, and at_seconds in order from 0", arrival.Name)
+		}
+		names[arrival.Name], previous = true, arrival.AtSeconds
+		paths := map[string]bool{}
+		for _, file := range arrival.Files {
+			if !filepath.IsLocal(file.Path) || filepath.Clean(file.Path) != file.Path || paths[file.Path] || (file.Lines != nil && *file.Lines < 0) {
+				return fmt.Errorf("arrival %q: %q is not a clean relative input path listed once", arrival.Name, file.Path)
+			}
+			paths[file.Path] = true
+			if earlier, ok := written[file.Path]; ok && file.Lines != nil && (earlier == nil || *file.Lines < *earlier) {
+				return fmt.Errorf("arrival %q shrinks %q: a source only grows", arrival.Name, file.Path)
+			}
+			written[file.Path] = file.Lines
+		}
+	}
+	return nil
+}
+
+// replicaLinePrefix is data's first n newline-terminated lines.
+func replicaLinePrefix(data []byte, n int) ([]byte, bool) {
+	end := 0
+	for range n {
+		next := bytes.IndexByte(data[end:], '\n')
+		if next < 0 {
+			return nil, false
+		}
+		end += next + 1
+	}
+	return data[:end], true
+}
+
+// replicaStageArrival writes an arrival's files from input into replay,
+// all with modification time at, and returns a digest of the bytes written.
+// Inputs are read only through their exact paths: a symlink is refused.
+func replicaStageArrival(input, replay string, files []replicaArrivalFile, at time.Time) (string, error) {
+	digest := sha256.New()
+	for _, file := range files {
+		source := filepath.Join(input, file.Path)
+		if resolved, err := filepath.EvalSymlinks(source); err != nil || resolved != source {
+			return "", fmt.Errorf("input %s is unreadable or a symlink: %v", file.Path, err)
+		}
+		data, err := os.ReadFile(source)
+		if err != nil {
+			return "", err
+		}
+		if file.Lines != nil {
+			prefix, ok := replicaLinePrefix(data, *file.Lines)
+			if !ok {
+				return "", fmt.Errorf("input %s has fewer than %d lines", file.Path, *file.Lines)
+			}
+			data = prefix
+		}
+		target := filepath.Join(replay, file.Path)
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(target, data, 0o600); err != nil {
+			return "", err
+		}
+		if err := os.Chtimes(target, at, at); err != nil {
+			return "", err
+		}
+		fmt.Fprintf(digest, "%s\x00%d\x00", file.Path, len(data))
+		digest.Write(data)
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+// replicaApplyArrival is one arrival in the product's own way: the staged
+// bytes, then the background Capture & index item for the replay source,
+// which runs each build's own capture, ingest admission and deferred marks.
+func replicaApplyArrival(ctx context.Context, server *Server, replay *replicaReplay, input, dir string, index int, clock time.Time) (string, error) {
+	// Monotonic, at most the pinned clock, the same in every arm.
+	at := clock.Add(time.Duration(index+1-len(replay.Arrivals)) * time.Second)
+	digest, err := replicaStageArrival(input, dir, replay.Arrivals[index].Files, at)
+	if err != nil {
+		return "", err
+	}
+	opCtx, op := server.begin(ctx, OperationSpec{Kind: "background.update", Variant: "requested", Trigger: triggerUser})
+	err = server.backgroundCapture(opCtx, op, "sources", []string{replay.Source.Name})
+	op.Finish(err)
+	return digest, err
+}
+
+// replicaArrivalReport is one arrival's evidence. Times are seconds from the
+// start of the work window; ready is measured from the arrival's start.
+type replicaArrivalReport struct {
+	Name                string   `json:"name"`
+	AtSeconds           float64  `json:"at_seconds"`
+	StartedSeconds      *float64 `json:"started_seconds"`
+	LateSeconds         *float64 `json:"late_seconds"`
+	CaptureIndexSeconds *float64 `json:"capture_index_seconds"`
+	AppliedSeconds      *float64 `json:"applied_seconds"`
+	CountBefore         *int64   `json:"count_before"`
+	CountAfter          *int64   `json:"count_after"`
+	// PendingAtApply says the ready checks saw this arrival's work: false
+	// means they were already empty, so its ready time proves nothing.
+	PendingAtApply *bool    `json:"ready_pending_at_apply"`
+	ReadySeconds   *float64 `json:"ready_seconds"`
+	FilesSHA256    string   `json:"files_sha256,omitempty"`
+	began, applied time.Time
+}
+
+type replicaArrivals struct {
+	mu        sync.Mutex
+	plan      *replicaReplay
+	started   time.Time
+	entries   []replicaArrivalReport
+	rounds    int
+	followups []any
+	settledAt *float64
+}
+
+func newReplicaArrivals(plan *replicaReplay, started time.Time) *replicaArrivals {
+	arrivals := &replicaArrivals{plan: plan, started: started}
+	for _, arrival := range plan.Arrivals {
+		arrivals.entries = append(arrivals.entries, replicaArrivalReport{Name: arrival.Name, AtSeconds: arrival.AtSeconds})
+	}
+	return arrivals
+}
+
+func replicaSeconds(d time.Duration) *float64 { value := d.Seconds(); return &value }
+
+// run applies every arrival at its time, in order. One that starts after
+// its time because the previous arrival was still running records how late.
+func (a *replicaArrivals) run(ctx context.Context, apply func(int) (string, error), count func(context.Context) (int64, error), pending func(context.Context) (bool, error)) error {
+	for index, arrival := range a.plan.Arrivals {
+		due := a.started.Add(time.Duration(arrival.AtSeconds * float64(time.Second)))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Until(due)):
+		}
+		began := time.Now()
+		before, err := count(ctx)
+		if err != nil {
+			return fmt.Errorf("arrival %s: count_query: %w", arrival.Name, err)
+		}
+		a.mu.Lock()
+		entry := &a.entries[index]
+		entry.began, entry.StartedSeconds, entry.LateSeconds, entry.CountBefore = began, replicaSeconds(began.Sub(a.started)), replicaSeconds(max(0, began.Sub(due))), &before
+		a.mu.Unlock()
+		applying := time.Now()
+		digest, err := apply(index)
+		took := time.Since(applying)
+		if err != nil {
+			return fmt.Errorf("arrival %s: %w", arrival.Name, err)
+		}
+		after, err := count(ctx)
+		if err != nil {
+			return fmt.Errorf("arrival %s: count_query: %w", arrival.Name, err)
+		}
+		if after <= before {
+			return fmt.Errorf("arrival %s is not a real arrival: count_query went from %d to %d", arrival.Name, before, after)
+		}
+		observed, err := pending(ctx)
+		if err != nil {
+			return fmt.Errorf("arrival %s: ready check: %w", arrival.Name, err)
+		}
+		applied := time.Now()
+		a.mu.Lock()
+		entry.FilesSHA256, entry.CaptureIndexSeconds, entry.CountAfter, entry.PendingAtApply = digest, replicaSeconds(took), &after, &observed
+		entry.applied, entry.AppliedSeconds = applied, replicaSeconds(applied.Sub(a.started))
+		a.mu.Unlock()
+	}
+	return nil
+}
+
+// waiting is whether an applied arrival has no ready time yet.
+func (a *replicaArrivals) waiting() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.ContainsFunc(a.entries, func(entry replicaArrivalReport) bool { return !entry.applied.IsZero() && entry.ReadySeconds == nil })
+}
+
+// ready records at as the ready time of every arrival applied before the
+// checks that found nothing pending began.
+func (a *replicaArrivals) ready(checked, at time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for i := range a.entries {
+		entry := &a.entries[i]
+		if !entry.applied.IsZero() && !entry.applied.After(checked) && entry.ReadySeconds == nil {
+			entry.ReadySeconds = replicaSeconds(at.Sub(entry.began))
+		}
+	}
+}
+
+func (a *replicaArrivals) settled(rounds int, followups []any, seconds float64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.rounds, a.followups, a.settledAt = rounds, followups, &seconds
+}
+
+func (a *replicaArrivals) report(host string) map[string]any {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return map[string]any{"input": a.plan.Input, "source": a.plan.Source.Name, "kind": a.plan.Source.Kind, "host": host,
+		"arrivals": slices.Clone(a.entries), "followup_rounds": a.rounds, "followups": a.followups, "settled_seconds": a.settledAt,
+		"basis": "Each arrival writes its frozen input bytes into an arm-private source folder and runs the service's background Capture & index item for that source; count_query must increase. Settlement needs every arrival applied, ready_checks and every kind's pending_checks empty; classic follow-ups re-drain the demanded kinds and scheduled follow-ups submit recent demand."}
+}
+
+func checksEmpty(ctx context.Context, db *sql.DB, queries []string) (bool, error) {
+	for _, query := range queries {
+		if pending, err := checkPending(ctx, db, query); err != nil || pending {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// replicaMemoryPlan sets the sampling interval and the idle period after
+// settlement over which retained memory is observed.
+type replicaMemoryPlan struct {
+	IntervalSeconds float64 `json:"interval_seconds"`
+	IdleSeconds     float64 `json:"idle_seconds"`
+}
+
+const replicaMemoryBasis = "Physical footprint (proc_pid_rusage phys_footprint) of this probe process and each live descendant, read at labeled moments and every interval_seconds during work and idle; descendants are counted by process name. A spike between samples can be missed and footprints are not lifetime peaks: the harness's process-tree samples remain the gated figures. idle-released follows runtime.GC and debug.FreeOSMemory, so retained_bytes (idle-released less work-start, whole tree) counts live retained memory, not collectable Go garbage. go holds runtime.MemStats of this process."
+
+type replicaMemorySample struct {
+	Label                string            `json:"label"`
+	Unix                 float64           `json:"unix"`
+	Seconds              *float64          `json:"seconds"`
+	SelfFootprint        uint64            `json:"self_footprint"`
+	SelfResident         uint64            `json:"self_resident"`
+	DescendantsFootprint uint64            `json:"descendants_footprint"`
+	Descendants          map[string]int    `json:"descendants"`
+	TreeFootprint        uint64            `json:"tree_footprint"`
+	Complete             bool              `json:"complete"`
+	Go                   map[string]uint64 `json:"go"`
+}
+
+// replicaMemoryNow reads this process tree's physical memory. A process
+// that cannot be read leaves the sample incomplete, never smaller.
+func replicaMemoryNow(label string) replicaMemorySample {
+	sample := replicaMemorySample{Label: label, Unix: replicaUnix(time.Now()), Descendants: map[string]int{}, Complete: true}
+	self := os.Getpid()
+	if usage, err := processUsageOf(self); err == nil {
+		sample.SelfFootprint, sample.SelfResident = usage.Footprint, usage.Resident
+	} else {
+		sample.Complete = false
+	}
+	if nodes := resourceProcessTable(); nodes == nil {
+		sample.Complete = false
+	} else {
+		children, names := map[int][]int{}, map[int]string{}
+		for _, node := range nodes {
+			children[node.Parent], names[node.PID] = append(children[node.Parent], node.PID), node.Name
+		}
+		for frontier := []int{self}; len(frontier) > 0; frontier = frontier[1:] {
+			for _, child := range children[frontier[0]] {
+				frontier = append(frontier, child)
+				usage, err := processUsageOf(child)
+				if err != nil {
+					sample.Complete = false
+					continue
+				}
+				sample.DescendantsFootprint += usage.Footprint
+				sample.Descendants[names[child]]++
+			}
+		}
+	}
+	sample.TreeFootprint = sample.SelfFootprint + sample.DescendantsFootprint
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	sample.Go = map[string]uint64{"heap_alloc": stats.HeapAlloc, "heap_inuse": stats.HeapInuse, "heap_idle": stats.HeapIdle,
+		"heap_released": stats.HeapReleased, "sys": stats.Sys, "stack_inuse": stats.StackInuse, "num_gc": uint64(stats.NumGC)}
+	return sample
+}
+
+type replicaMemory struct {
+	mu      sync.Mutex
+	started time.Time
+	samples []replicaMemorySample
+}
+
+// begin sets the work window's start; earlier samples get negative seconds.
+func (m *replicaMemory) begin(at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.started = at
+	for i := range m.samples {
+		seconds := m.samples[i].Unix - replicaUnix(at)
+		m.samples[i].Seconds = &seconds
+	}
+}
+
+func (m *replicaMemory) sample(label string) {
+	sample := replicaMemoryNow(label)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.started.IsZero() {
+		seconds := sample.Unix - replicaUnix(m.started)
+		sample.Seconds = &seconds
+	}
+	m.samples = append(m.samples, sample)
+}
+
+func (m *replicaMemory) snapshot() []replicaMemorySample {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.samples)
+}
+
+// replicaRetention summarizes what the tree held before work, at
+// settlement, at the end of idle and after releasing free memory. Retained
+// figures are unavailable, never zero, without complete samples at both ends.
+func replicaRetention(samples []replicaMemorySample, plan replicaMemoryPlan) map[string]any {
+	last := func(label string) *replicaMemorySample {
+		for i := len(samples) - 1; i >= 0; i-- {
+			if samples[i].Label == label {
+				return &samples[i]
+			}
+		}
+		return nil
+	}
+	complete := !slices.ContainsFunc(samples, func(sample replicaMemorySample) bool { return !sample.Complete })
+	retention := map[string]any{"basis": replicaMemoryBasis, "retained_bytes": nil, "retained_self_bytes": nil, "retained_descendants_bytes": nil,
+		"coverage": map[string]any{"samples": len(samples), "interval_seconds": plan.IntervalSeconds, "idle_seconds": plan.IdleSeconds, "complete": complete}}
+	for key, label := range map[string]string{"work_start": "work-start", "settled": "settled", "idle_end": "idle", "idle_released": "idle-released"} {
+		retention[key] = nil
+		if sample := last(label); sample != nil {
+			retention[key] = sample.TreeFootprint
+		}
+	}
+	if idle := last("idle"); idle != nil {
+		retention["descendants_at_idle_end"] = idle.Descendants
+	}
+	start, released := last("work-start"), last("idle-released")
+	if start != nil && released != nil && start.Complete && released.Complete {
+		retention["retained_bytes"] = int64(released.TreeFootprint) - int64(start.TreeFootprint)
+		retention["retained_self_bytes"] = int64(released.SelfFootprint) - int64(start.SelfFootprint)
+		retention["retained_descendants_bytes"] = int64(released.DescendantsFootprint) - int64(start.DescendantsFootprint)
+		retention["retained_go_heap_inuse_bytes"] = int64(released.Go["heap_inuse"]) - int64(start.Go["heap_inuse"])
+	}
+	return retention
+}
+
+func replicaTestReplay(arrivals ...replicaArrival) *replicaReplay {
+	replay := &replicaReplay{Input: "arrivals", CountQuery: "SELECT count(*) FROM messages", ReadyChecks: []string{"SELECT 1 WHERE 0"}, Arrivals: arrivals}
+	replay.Source.Name, replay.Source.Kind, replay.Source.Account = "replay-claude", "claude", "local"
+	return replay
+}
+
+func replicaLines(n int) *int { return &n }
+
+// A schedule may only grow its sources from inside its frozen input.
+func TestWorkReplicaReplayPlan(t *testing.T) {
+	file := func(path string, lines *int) []replicaArrivalFile {
+		return []replicaArrivalFile{{Path: path, Lines: lines}}
+	}
+	valid := replicaTestReplay(replicaArrival{Name: "a1", AtSeconds: 0, Files: file("p/s.jsonl", replicaLines(1))},
+		replicaArrival{Name: "a2", AtSeconds: 5, Files: file("p/s.jsonl", replicaLines(3))},
+		replicaArrival{Name: "a3", AtSeconds: 5, Files: file("p/s.jsonl", nil)})
+	if err := valid.check(); err != nil {
+		t.Fatal(err)
+	}
+	refused := map[string]func(*replicaReplay){
+		"absolute path": func(r *replicaReplay) { r.Arrivals[0].Files = file("/etc/hosts", nil) },
+		"parent path":   func(r *replicaReplay) { r.Arrivals[0].Files = file("../x.jsonl", nil) },
+		"unclean path":  func(r *replicaReplay) { r.Arrivals[0].Files = file("p/./s.jsonl", replicaLines(1)) },
+		"fewer lines":   func(r *replicaReplay) { r.Arrivals[1].Files = file("p/s.jsonl", replicaLines(0)) },
+		"prefix after all": func(r *replicaReplay) {
+			r.Arrivals = append(r.Arrivals, replicaArrival{Name: "a4", AtSeconds: 9, Files: file("p/s.jsonl", replicaLines(5))})
+		},
+		"out of order":   func(r *replicaReplay) { r.Arrivals[1].AtSeconds = -1 },
+		"duplicate name": func(r *replicaReplay) { r.Arrivals[1].Name = "a1" },
+		"input path":     func(r *replicaReplay) { r.Input = "../inputs" },
+		"source name":    func(r *replicaReplay) { r.Source.Name = "a/b" },
+		"writing count":  func(r *replicaReplay) { r.CountQuery = "DELETE FROM messages" },
+		"no settlement":  func(r *replicaReplay) { r.ReadyChecks = nil },
+		"no arrivals":    func(r *replicaReplay) { r.Arrivals = nil },
+		"negative lines": func(r *replicaReplay) { r.Arrivals[0].Files = file("p/s.jsonl", replicaLines(-1)) },
+		"listed twice": func(r *replicaReplay) {
+			r.Arrivals[0].Files = append(file("p/s.jsonl", nil), file("p/s.jsonl", nil)...)
+		},
+		"negative deadline": func(r *replicaReplay) { r.SettleSeconds = -1 },
+	}
+	for name, change := range refused {
+		replay := replicaTestReplay(slices.Clone(valid.Arrivals)...)
+		change(replay)
+		if err := replay.check(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// Staging writes the pinned prefix with a pinned time and reads no symlink.
+func TestWorkReplicaArrivalStaging(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, replay := filepath.Join(root, "input"), filepath.Join(root, "replay")
+	writeSourceFile(t, filepath.Join(input, "p", "s.jsonl"), "one\ntwo\nthree\npartial")
+	at := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	first, err := replicaStageArrival(input, replay, []replicaArrivalFile{{Path: "p/s.jsonl", Lines: replicaLines(2)}}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readText(t, filepath.Join(replay, "p", "s.jsonl")); got != "one\ntwo\n" {
+		t.Fatalf("a two-line arrival wrote %q", got)
+	}
+	if info, err := os.Stat(filepath.Join(replay, "p", "s.jsonl")); err != nil || !info.ModTime().Equal(at) {
+		t.Fatalf("staged files carry the pinned time: %v %v", info, err)
+	}
+	again, _ := replicaStageArrival(input, replay, []replicaArrivalFile{{Path: "p/s.jsonl", Lines: replicaLines(2)}}, at)
+	whole, err := replicaStageArrival(input, replay, []replicaArrivalFile{{Path: "p/s.jsonl"}}, at)
+	if err != nil || again != first || whole == first || readText(t, filepath.Join(replay, "p", "s.jsonl")) != "one\ntwo\nthree\npartial" {
+		t.Fatalf("digests follow the staged bytes: %s %s %s %v", first, again, whole, err)
+	}
+	if _, err := replicaStageArrival(input, replay, []replicaArrivalFile{{Path: "p/s.jsonl", Lines: replicaLines(4)}}, at); err == nil {
+		t.Fatal("an unterminated line is not a whole line")
+	}
+	outside := filepath.Join(root, "outside.jsonl")
+	writeSourceFile(t, outside, "secret\n")
+	if err := os.Symlink(outside, filepath.Join(input, "p", "link.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := replicaStageArrival(input, replay, []replicaArrivalFile{{Path: "p/link.jsonl"}}, at); err == nil {
+		t.Fatal("a symlinked input must be refused")
+	}
+}
+
+// Arrivals go through the service's own Capture & index item: each adds the
+// session's new lines to one conversation, and one that adds nothing fails.
+func TestWorkReplicaArrivals(t *testing.T) {
+	useHost(t, "replay-host")
+	catalog, config := testCatalog(t)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, dir := filepath.Join(root, "inputs", "arrivals"), filepath.Join(root, "replay", "replay-claude")
+	writeSourceFile(t, filepath.Join(input, "-proj", "s1.jsonl"),
+		claudeLine("s1", "u1", "first", "/proj", 1)+claudeLine("s1", "u2", "second", "/proj", 2)+claudeLine("s1", "u3", "third", "/proj", 3))
+	replay := replicaTestReplay(
+		replicaArrival{Name: "a1", AtSeconds: 0, Files: []replicaArrivalFile{{Path: "-proj/s1.jsonl", Lines: replicaLines(1)}}},
+		replicaArrival{Name: "a2", AtSeconds: 0.2, Files: []replicaArrivalFile{{Path: "-proj/s1.jsonl"}}})
+	if err := replay.check(); err != nil {
+		t.Fatal(err)
+	}
+	config.Sources = []SourceConfig{{Name: replay.Source.Name, Kind: replay.Source.Kind, Path: dir, Account: replay.Source.Account, Enabled: true}}
+	server := testServer(t, config, catalog)
+	clock := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	count := func(ctx context.Context) (int64, error) {
+		var n int64
+		err := catalog.DB.QueryRowContext(ctx, replay.CountQuery).Scan(&n)
+		return n, err
+	}
+	pending := func(context.Context) (bool, error) { return false, nil }
+	arrivals := newReplicaArrivals(replay, time.Now())
+	if err := arrivals.run(t.Context(), func(index int) (string, error) {
+		return replicaApplyArrival(t.Context(), server, replay, input, dir, index, clock)
+	}, count, pending); err != nil {
+		t.Fatal(err)
+	}
+	report := arrivals.report("replay-host")["arrivals"].([]replicaArrivalReport)
+	if *report[0].CountBefore != 0 || *report[0].CountAfter != 1 || *report[1].CountAfter != 3 || report[1].LateSeconds == nil {
+		t.Fatalf("each arrival adds only its new lines: %+v", report)
+	}
+	var conversations int
+	if err := catalog.DB.QueryRow(`SELECT count(DISTINCT conversation_id) FROM messages`).Scan(&conversations); err != nil || conversations != 1 {
+		t.Fatalf("the growing session is one conversation: %d %v", conversations, err)
+	}
+	if _, err := os.Stat(filepath.Join(config.CaptureRoot, "replay-host", replay.Source.Name)); err != nil {
+		t.Fatalf("the arrival was captured like a source: %v", err)
+	}
+	arrivals.ready(time.Now(), time.Now())
+	if arrivals.waiting() || report[0].ReadySeconds != nil {
+		t.Fatal("ready marks the live entries, not a returned copy")
+	}
+	// Replaying the same bytes again is no arrival.
+	stale := replicaTestReplay(replicaArrival{Name: "again", Files: []replicaArrivalFile{{Path: "-proj/s1.jsonl"}}})
+	err = newReplicaArrivals(stale, time.Now()).run(t.Context(), func(index int) (string, error) {
+		return replicaApplyArrival(t.Context(), server, stale, input, dir, index, clock)
+	}, count, pending)
+	if err == nil || !strings.Contains(err.Error(), "not a real arrival") {
+		t.Fatalf("an arrival that adds nothing must fail: %v", err)
+	}
+}
+
+// Samples cover live descendants by name; retention is unavailable, never
+// zero, without both complete ends.
+func TestWorkReplicaMemory(t *testing.T) {
+	child := exec.Command("/bin/sleep", "30")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = child.Process.Kill(); _ = child.Wait() }()
+	sample := replicaMemoryNow("work-start")
+	if sample.SelfFootprint == 0 || sample.Go["sys"] == 0 {
+		t.Fatalf("this process's footprint and runtime: %+v", sample)
+	}
+	if !sample.Complete {
+		t.Skip("descendants cannot be read on this platform; samples report complete=false")
+	}
+	if sample.Descendants["sleep"] != 1 || sample.DescendantsFootprint == 0 || sample.TreeFootprint != sample.SelfFootprint+sample.DescendantsFootprint {
+		t.Fatalf("a live child is in the tree: %+v", sample)
+	}
+	memory := &replicaMemory{}
+	memory.sample("startup")
+	memory.begin(time.Now())
+	memory.sample("work-start")
+	if samples := memory.snapshot(); *samples[0].Seconds > 0 || samples[1].Seconds == nil {
+		t.Fatalf("samples before work have negative seconds: %+v", samples)
+	}
+	at := func(label string, self, descendants uint64, complete bool) replicaMemorySample {
+		return replicaMemorySample{Label: label, SelfFootprint: self, DescendantsFootprint: descendants, TreeFootprint: self + descendants, Complete: complete,
+			Descendants: map[string]int{"pharos-labeler-ort": 1}, Go: map[string]uint64{"heap_inuse": self / 2}}
+	}
+	plan := replicaMemoryPlan{IntervalSeconds: 5, IdleSeconds: 60}
+	samples := []replicaMemorySample{at("work-start", 100, 0, true), at("settled", 400, 300, true), at("idle", 300, 300, true), at("idle-released", 250, 300, true)}
+	retention := replicaRetention(samples, plan)
+	if retention["retained_bytes"] != int64(450) || retention["retained_descendants_bytes"] != int64(300) || retention["retained_self_bytes"] != int64(150) || retention["settled"] != uint64(700) {
+		t.Fatalf("retention is the released tree less the tree before work: %v", retention)
+	}
+	samples[0].Complete = false
+	if retention := replicaRetention(samples, plan); retention["retained_bytes"] != nil || retention["coverage"].(map[string]any)["complete"] != false {
+		t.Fatalf("an incomplete end leaves retention unavailable: %v", retention)
+	}
+	if retention := replicaRetention(samples[1:], plan); retention["retained_bytes"] != nil || retention["work_start"] != nil {
+		t.Fatalf("a missing end leaves retention unavailable: %v", retention)
 	}
 }
