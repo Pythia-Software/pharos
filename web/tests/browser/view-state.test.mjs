@@ -12,7 +12,7 @@ import messageLabelsDocument from '../../../schemas/message_labels.schema.json' 
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
-test('workspace fingerprints restore across views and respect the global event display setting',{skip},async t=>{
+test('workspace fingerprints restore across views and show agent events despite an old preference',{skip},async t=>{
  const requests=[];
  const api={'POST /api/fingerprints':request=>{
   requests.push(request.body);
@@ -25,7 +25,7 @@ test('workspace fingerprints restore across views and respect the global event d
   }
   return result;
  }};
- const app=await open(t,{api,url:'/library?view=table',ready:'.message-label-fingerprint img'}),{page}=app;
+ const app=await open(t,{api,preferences:{'pharos-fingerprint-events':false},url:'/library?view=table',ready:'.message-label-fingerprint img'}),{page}=app;
  assert.ok(await page.getByRole('img',{name:'Workspace fingerprint',exact:true}).count());
  await page.getByRole('group',{name:'Display results as'}).getByRole('button',{name:'Conversations',exact:true}).click();
  await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
@@ -42,29 +42,11 @@ test('workspace fingerprints restore across views and respect the global event d
  await app.settled();await page.reload();
  await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
  assert.equal(await page.getByRole('button',{name:'Conversations',exact:true}).getAttribute('aria-pressed'),'true');
- const settings=async()=>{await activateHeaderTool(page,'settingsToggle');await page.getByRole('link',{name:'App preferences',exact:true}).click();await page.getByRole('switch',{name:'Agent events in fingerprints',exact:true}).waitFor();await app.settled();};
- await settings();
- const toggle=()=>page.getByRole('switch',{name:'Agent events in fingerprints',exact:true});
- assert.equal(await toggle().getAttribute('aria-checked'),'true');
- const settingsURL=path(page),saved=page.waitForResponse(response=>response.url().endsWith('/api/preferences')&&response.request().method()==='POST'&&response.request().postDataJSON()?.set?.['pharos-fingerprint-events']===false);
- await toggle().click();await saved;
- assert.equal(await toggle().getAttribute('aria-checked'),'false');assert.equal(path(page),settingsURL);
- requests.length=0;
- await page.goBack();await page.goBack();
- await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
- assert.ok(requests.some(body=>body.events===false&&body.items.some(item=>item.entity==='workspace')));
- requests.length=0;await page.reload();
- await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
- assert.ok(requests.length&&requests.every(body=>body.events===false));
- // The persisted preference also selects the conversation image variant.
+ assert.ok(requests.length&&requests.every(body=>body.events===true),'workspace images include events despite the saved off preference');
  requests.length=0;
  await page.goto(new URL('/analyze?analyze_mode=query&analyze_data=message_labels&label_results=cards',page.url()).href);
  await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
- assert.ok(requests.some(body=>body.events===false&&body.items.some(item=>item.entity==='conversation')));
- await settings();assert.equal(await toggle().getAttribute('aria-checked'),'false');await toggle().click();
- requests.length=0;await page.goBack();await page.goBack();
- await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
- assert.ok(requests.some(body=>body.events===true));
+ assert.ok(requests.some(body=>body.events===true&&body.items.some(item=>item.entity==='conversation')));
 });
 
 test('uncertain related work setting includes sessions and opens their conversations',{skip},async t=>{

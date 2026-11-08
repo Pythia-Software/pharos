@@ -1,6 +1,5 @@
 import React, {useMemo, useSyncExternalStore} from 'react';
 import {fingerprintImageCache, type FingerprintRequest} from './fingerprint-image-model';
-import {preferences} from './preferences';
 import {PageLink} from './nested-pages';
 import {messageLabelRibbonNotes} from './message-label-results-model';
 
@@ -20,12 +19,10 @@ function observe() {
 }
 const subscribeTheme = (fn: () => void) => {observe(); themeListeners.add(fn); return () => {themeListeners.delete(fn);};};
 const resolvedTheme = (): 'light' | 'dark' => document.documentElement.dataset.theme === 'dark' ? 'dark' : document.documentElement.dataset.theme === 'light' ? 'light' : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-const subscribeEvents = (fn: () => void) => {window.addEventListener('pharos:fingerprint-events-changed', fn); return () => window.removeEventListener('pharos:fingerprint-events-changed', fn);};
-const showEvents = () => preferences().get<boolean>('pharos-fingerprint-events', true) !== false;
 
 export function FingerprintImage({id, workspace = false, profile = 'wide'}: {id: string; workspace?: boolean; profile?: 'wide' | 'card'}) {
- const events = useSyncExternalStore(subscribeEvents, showEvents, () => true), theme = useSyncExternalStore<'light' | 'dark'>(subscribeTheme, resolvedTheme, () => 'light');
- const request = useMemo<FingerprintRequest>(() => ({id, entity: workspace ? 'workspace' : 'conversation', profile, events}), [id, workspace, profile, events]);
+ const theme = useSyncExternalStore<'light' | 'dark'>(subscribeTheme, resolvedTheme, () => 'light');
+ const request = useMemo<FingerprintRequest>(() => ({id, entity: workspace ? 'workspace' : 'conversation', profile, events: true}), [id, workspace, profile]);
  const subscribe = useMemo(() => (fn: () => void) => id ? cache.subscribe(request, fn) : () => {}, [request, id]);
  const snapshot = useSyncExternalStore(subscribe, () => cache.snapshot(request));
  if (!id) return <span className="muted">—</span>;

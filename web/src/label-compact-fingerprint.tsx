@@ -1,4 +1,4 @@
-import React,{useEffect,useId,useMemo,useRef,useSyncExternalStore} from 'react';
+import React,{useId,useMemo,useRef} from 'react';
 import {conversationRibbon,fingerprintMessageAt,fingerprintMessagePositions,parallelEnvelopes,ribbonMessageTitle,ribbonSegment,ribbonWeights,type RibbonToken} from './conversation-fingerprint-model';
 import {EventLinkCard,EventLinkOverlay,eventHitTargets,eventLayout,eventTargetFocus,placeEvents,setEventLinkFocus,useBoxSize,type EventLinkFocus} from './event-link-overlay';
 import {linkedTarget,type AgentEventLink} from './event-link-layout';
@@ -6,7 +6,6 @@ import {markIds,mergeAgentEvents} from './event-merge';
 import {nearestMark} from './ribbon-marks';
 import {stateColor,shortLabel,mainSession,workflowSessions,type LabelConversation,type Taxonomy} from './conversation-labels';
 import {useRibbonInspector,useRibbonPointer,type RibbonHit} from './label-ribbon-inspector';
-import {preferences} from './preferences';
 import {PageLink} from './nested-pages';
 import {ribbonSourceURL} from './label-session-ribbon-model';
 import './conversation-fingerprint.css';
@@ -23,16 +22,12 @@ function SegmentCard({token,breakdown,taxonomy,first,last,total,href,close}:{tot
 // shows a card, a click pins it, and the events take one tab stop whose arrow
 // keys browse them.
 const noEvents:AgentEventLink[]=[];
-const subscribeEvents=(changed:()=>void)=>{window.addEventListener('pharos:fingerprint-events-changed',changed);return()=>window.removeEventListener('pharos:fingerprint-events-changed',changed);};
-const fingerprintEventsEnabled=()=>preferences().get<boolean>('pharos-fingerprint-events',true)!==false;
 export function CompactFingerprint({conversation,taxonomy=emptyTaxonomy,stretch=false,entity='conversation',events=noEvents,eventHref}:{conversation:LabelConversation;taxonomy?:Taxonomy;stretch?:boolean;entity?:'workspace'|'conversation';events?:AgentEventLink[];eventHref?:(e:AgentEventLink)=>string|null}){
- const showEvents=useSyncExternalStore(subscribeEvents,fingerprintEventsEnabled,()=>true);
  const tokens=useMemo(()=>conversationRibbon(conversation),[conversation]),breakdowns=useMemo(()=>tokens.map(token=>ribbonSegment(token.messages,taxonomy)),[tokens,taxonomy]),weights=ribbonWeights(tokens),positions=useMemo(()=>fingerprintMessagePositions(tokens),[tokens]),total=weights.reduce((a,b)=>a+b,0)||1,inspector=useRibbonInspector({interactive:true}),clip='ribbon'+useId().replace(/:/g,''),hatch=clip+'hatch';let cursor=0,seen=0;
  const box=useRef<HTMLDivElement>(null),size=useBoxSize(box);
  const segments=tokens.map((token,i)=>{const width=weights[i]/total*320,x=cursor,first=seen+1;cursor+=width;seen+=token.count;return {token,i,width,x,first,last:seen};}),envelopes=parallelEnvelopes(segments);
  // Events on near-identical text are one mark (event-merge.ts), its kind the conversation's rarest among them.
- const marks=useMemo(()=>mergeAgentEvents(showEvents?events:noEvents),[events,showEvents]);
- useEffect(()=>{if(!showEvents){inspector.close();setEventLinkFocus(null);}},[showEvents]);
+ const marks=useMemo(()=>mergeAgentEvents(events),[events]);
  const placed=useMemo(()=>placeEvents(marks,e=>positions.get(e.message_id)??null),[marks,positions]),layout=useMemo(()=>eventLayout(placed,size.width,size.height,3),[placed,size.width,size.height]);
  const targets=useMemo(()=>eventHitTargets(layout),[layout]),byID=useMemo(()=>new Map(placed.map(p=>[p.event.id,p.event])),[placed]);
  const segmentCard=(i:number,pinned=false,share=.5)=>{const s=segments[i],message=fingerprintMessageAt(s.token,share),href=pinned&&message?ribbonSourceURL({message,start:0},{workspace:conversation.work_id,conversation:conversation.id,session:mainSession(conversation)},location.href):null;return <SegmentCard token={s.token} breakdown={breakdowns[i]} taxonomy={taxonomy} first={s.first} last={s.last} total={conversation.messages.length} href={href} close={inspector.close}/>;};

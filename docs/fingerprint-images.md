@@ -9,11 +9,11 @@ stripes and representative tool dots/tails.
 ## Rendering and storage
 
 Two profiles are generated at 1024 pixels wide: `wide` is 1024×128 (8:1) and
-`card` is 1024×256 (4:1). Each has light and dark appearances. The default event
-appearance is precomputed; turning off Agent events in fingerprints requests an
-additional set lazily. The event-hidden set remains subscribed to source updates
-once requested. Identical PNG bytes share one SHA-256-addressed blob, including
-identical appearances or conversation/workspace images.
+`card` is 1024×256 (4:1). Each has light and dark appearances with agent
+events. The API also supports an event-hidden appearance, generated lazily and
+kept up to date once requested. Identical PNG bytes share one
+SHA-256-addressed blob, including identical appearances or conversation/workspace
+images.
 
 The service computes the compact layout, emits the small fingerprint SVG
 vocabulary, and rasterizes it entirely in Go. Its domain is deliberately limited
