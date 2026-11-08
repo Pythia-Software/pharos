@@ -89,7 +89,10 @@ def live_roots():
             if isinstance(relative, str) and relative:
                 relative = Path(relative)
                 if relative.is_absolute() or ".." in relative.parts:
-                    raise ValueError("a registered library has an unsafe relative config path")
+                    # Match registeredLibrary.resolve: stale non-local metadata
+                    # never participates in remount resolution. Its explicit
+                    # config and data paths are still guarded below.
+                    continue
                 # Conservatively cover every mount with that relative path.
                 # No diskutil/UUID probe or catalog open is needed to cover
                 # remounts such as /Volumes/euclid 1.
@@ -278,8 +281,13 @@ def backup_evidence(backup, attestation):
         value = json.loads(raw)
         catalog = value.get("catalog") or {}
         relative = PurePosixPath(str(catalog.get("path", "")))
-        if value.get("version") != 1 or value.get("complete") is not True or not value.get("finished_at"):
+        if value.get("version") != 1 or value.get("complete") is not True or not value.get("finished_at") or value.get("missing"):
             raise ValueError("the backup manifest does not record a completed backup")
+        snapshot_proof = backup / "work-snapshot.json"
+        if snapshot_proof.exists():
+            proof = json.loads(snapshot_proof.read_text())
+            if proof.get("complete") is not True or proof.get("source_backup_history_unchanged") is not True:
+                raise ValueError("the work snapshot's completion and source checks did not pass")
         if relative.is_absolute() or ".." in relative.parts or not relative.parts:
             raise ValueError("the backup manifest's catalog path is not inside the backup")
         snapshot = backup / relative
@@ -376,6 +384,64 @@ def checked_master(master):
     if digest_of(stamp(master_paths(master))) != marker["master_stamp_sha256"]:
         raise ValueError("the experiment master changed after preparation; prepare a new one")
     return marker
+
+
+def invalidate(master, destination, profile, clock, recent_conversations=20):
+    """Create a workload master with missing labels and dirty derived caches.
+
+    Only the new clone is changed. Canonical records and writing classifications
+    stay intact; this exercises label reconstruction rather than changing the
+    quality of its upstream writing inputs to manufacture a backlog.
+    """
+    if profile not in ("recent", "full") or not isinstance(recent_conversations, int) or recent_conversations < 1:
+        raise ValueError("invalidation is recent or full, with a positive conversation limit")
+    until = rfc3339(clock)
+    if until.tzinfo is None:
+        raise ValueError("pin an offset-aware invalidation clock")
+    master, destination = separate(master, destination)
+    marker = checked_master(master)
+    if destination.exists():
+        raise ValueError("invalidation needs a fresh destination")
+    destination.mkdir(mode=0o700)
+    try:
+        for name, source in master_paths(master).items():
+            clone(source, destination / name)
+        with contextlib.closing(sqlite3.connect(destination / "catalog/catalog.sqlite3")) as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("CREATE TEMP TABLE selected_conversations(id TEXT PRIMARY KEY)")
+            if profile == "full":
+                db.execute("INSERT INTO selected_conversations SELECT id FROM conversations")
+            else:
+                since = until - datetime.timedelta(hours=48)
+                stamp_time = lambda t: t.astimezone(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                db.execute("""INSERT INTO selected_conversations
+                    SELECT conversation_id FROM messages WHERE created_at>=? AND created_at<?
+                    GROUP BY conversation_id ORDER BY max(created_at) DESC,conversation_id LIMIT ?""",
+                           (stamp_time(since), stamp_time(until), recent_conversations))
+            ids = [row[0] for row in db.execute("SELECT id FROM selected_conversations ORDER BY id")]
+            if not ids:
+                raise ValueError("invalidation selected no conversations")
+            removed = {}
+            for table in ("message_labels", "message_labels_conversations"):
+                removed[table] = db.execute(f"DELETE FROM {table} WHERE conversation_id IN (SELECT id FROM selected_conversations)").rowcount
+            db.execute("INSERT OR REPLACE INTO message_labels_dirty SELECT id,hex(randomblob(8)) FROM selected_conversations")
+            db.execute("INSERT OR REPLACE INTO parallelism_dirty SELECT id,hex(randomblob(8)) FROM selected_conversations")
+            db.execute("INSERT OR IGNORE INTO message_label_facts_dirty SELECT id FROM selected_conversations")
+            db.commit()
+            db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        if checked_master(master) != marker:
+            raise ValueError("input master changed during invalidation")
+        event = {"event": "derived-invalidation", "profile": profile, "clock": clock,
+                 "conversations": len(ids), "population_sha256": digest_of(ids), "removed_rows": removed,
+                 "canonical_records": "unchanged", "writing_classifications": "unchanged"}
+        derived = {**marker, "derived_from": str(master),
+                   "lineage": [*marker.get("lineage", []), event], "prepared_at": time.time()}
+        derived["master_stamp_sha256"] = digest_of(stamp(master_paths(destination)))
+        write_json(destination / MARKER, derived)
+        return derived
+    except BaseException:
+        shutil.rmtree(destination)
+        raise
 
 
 def freeze(master, name, path):
@@ -1639,6 +1705,12 @@ def main():
     prep.add_argument("--completed-backup", required=True, type=Path)
     prep.add_argument("--master", required=True, type=Path)
     prep.add_argument("--attestation", type=Path, help=f"completed-backup record when the backup has no {BACKUP_MANIFEST}")
+    inv = sub.add_parser("invalidate", help="make a new workload master with missing labels and dirty caches")
+    inv.add_argument("--master", required=True, type=Path)
+    inv.add_argument("--destination", required=True, type=Path)
+    inv.add_argument("--profile", required=True, choices=["recent", "full"])
+    inv.add_argument("--clock", required=True)
+    inv.add_argument("--recent-conversations", type=int, default=20)
     fr = sub.add_parser("freeze")
     fr.add_argument("--master", required=True, type=Path)
     fr.add_argument("--name", required=True)
@@ -1697,6 +1769,8 @@ def main():
     args = p.parse_args()
     if args.action == "prepare":
         value = prepare(args.completed_backup, args.master, args.attestation)
+    elif args.action == "invalidate":
+        value = invalidate(args.master, args.destination, args.profile, args.clock, args.recent_conversations)
     elif args.action == "freeze":
         value = freeze(args.master, args.name, args.path)
     elif args.action == "run":

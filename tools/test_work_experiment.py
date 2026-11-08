@@ -62,6 +62,41 @@ class Fixture(unittest.TestCase):
 
 
 class WorkExperimentTests(Fixture):
+    def test_invalidation_changes_only_derived_state_in_a_new_clone(self):
+        backup, db = self.backup()
+        db.executescript("""
+            ALTER TABLE messages ADD COLUMN conversation_id TEXT;
+            ALTER TABLE messages ADD COLUMN created_at TEXT;
+            INSERT INTO conversations VALUES('old'),('recent');
+            UPDATE messages SET conversation_id='old',created_at='2026-11-01T00:00:00.000Z';
+            INSERT INTO messages VALUES('new','retained source text','recent','2026-11-07T00:00:00.000Z');
+            CREATE TABLE message_labels(message_id TEXT,conversation_id TEXT);
+            INSERT INTO message_labels VALUES('kept','old'),('new','recent');
+            CREATE TABLE message_labels_conversations(conversation_id TEXT PRIMARY KEY);
+            INSERT INTO message_labels_conversations VALUES('old'),('recent');
+            CREATE TABLE message_labels_dirty(conversation_id TEXT PRIMARY KEY,token TEXT);
+            CREATE TABLE parallelism_dirty(conversation_id TEXT PRIMARY KEY,revision TEXT);
+            CREATE TABLE message_label_facts_dirty(conversation_id TEXT PRIMARY KEY);
+            CREATE TABLE message_authorship(message_id TEXT,spans_json TEXT);
+            INSERT INTO message_authorship VALUES('new','writing stays intact');
+        """)
+        master = self.root / "master"
+        before = work.prepare(backup, master)
+        for profile, expected in (("recent", 1), ("full", 0)):
+            output = self.root / profile
+            result = work.invalidate(master, output, profile, "2026-11-08T00:00:00Z", 1)
+            self.assertEqual(result["counts"], before["counts"])
+            with sqlite3.connect(output / "catalog/catalog.sqlite3") as copied:
+                self.assertEqual(copied.execute("SELECT count(*) FROM message_labels").fetchone()[0], expected)
+                self.assertEqual(copied.execute("SELECT count(*) FROM messages").fetchone()[0], 2)
+                self.assertEqual(copied.execute("SELECT spans_json FROM message_authorship").fetchone()[0], "writing stays intact")
+                self.assertEqual(copied.execute("SELECT count(*) FROM parallelism_dirty").fetchone()[0], 2 - expected)
+        self.assertEqual(work.checked_master(master), before)
+        with sqlite3.connect(master / "catalog/catalog.sqlite3") as original:
+            self.assertEqual(original.execute("SELECT count(*) FROM message_labels").fetchone()[0], 2)
+        with self.assertRaises(ValueError):
+            work.invalidate(master, self.root / "no-timezone", "full", "2026-11-08T00:00:00")
+
     def test_completed_backup_wal_is_cloned_before_sqlite_is_opened(self):
         backup, source = self.backup()
         master = self.root / "master"
@@ -103,7 +138,22 @@ class WorkExperimentTests(Fixture):
             "catalog": {"path": "catalog/catalog.sqlite3", "size": s.st_size, "mtime_ns": s.st_mtime_ns + 1}}))
         with self.assertRaises(ValueError):
             work.prepare(backup, self.root / "replaced")
-        for name in ("unproven", "incomplete", "replaced"):
+        manifest = backup / work.BACKUP_MANIFEST
+        value = json.loads(manifest.read_text())
+        value["catalog"]["mtime_ns"] = s.st_mtime_ns
+        value["missing"] = ["preserved"]
+        manifest.write_text(json.dumps(value))
+        with self.assertRaises(ValueError):
+            work.prepare(backup, self.root / "partial")
+        value["missing"] = []
+        manifest.write_text(json.dumps(value))
+        proof = backup / "work-snapshot.json"
+        proof.write_text(json.dumps({"version": 1, "complete": False}))
+        with self.assertRaisesRegex(ValueError, "source checks"):
+            work.prepare(backup, self.root / "unverified-snapshot")
+        proof.write_text(json.dumps({"version": 1, "complete": True, "source_backup_history_unchanged": True}))
+        work.prepare(backup, self.root / "verified-snapshot")
+        for name in ("unproven", "incomplete", "replaced", "partial", "unverified-snapshot"):
             self.assertFalse((self.root / name).exists())
 
     def test_rejects_overlap_existing_artifacts_links_and_changed_backups(self):
@@ -159,6 +209,12 @@ class WorkExperimentTests(Fixture):
         with mock.patch.object(work, "Path", side_effect=lambda value: mounts if value == "/Volumes" else original_path(value)):
             with self.assertRaisesRegex(ValueError, "library Pharos uses"):
                 work.prepare(backup, remounted / "experiment")
+        # Go ignores a stale non-local remount path while retaining the
+        # explicit config. Such an entry must not block an unrelated copy.
+        registry.write_text(json.dumps({"libraries": [{"config": str(library / "archive.toml"), "relative": "../../../old-mount/archive.toml"}]}))
+        work.prepare(backup, self.root / "stale-relative-master")
+        with self.assertRaisesRegex(ValueError, "library Pharos uses"):
+            work.prepare(backup, library / "still-live")
         # An unreadable registry refuses rather than guessing.
         registry.write_text("{")
         with self.assertRaisesRegex(ValueError, "registry"):
