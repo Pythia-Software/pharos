@@ -68,7 +68,7 @@ export function migrateSavedQueries() {
     const old = preferences().get<unknown>(`query-table:saved:${key}`, []);
     if (Array.isArray(old)) for (const saved of old.slice(0, 100)) {
       if (!saved || typeof saved.id !== "string" || typeof saved.name !== "string" || !saved.query || typeof saved.savedAt !== "number") continue;
-      const url = queryURL(dataset, normalizeQueryState(saved.query));
+      const url = queryURL(dataset, normalizeQueryState(saved.query), undefined, { preserveSource: true });
       const found = items.find(item => item.url === url && (!item.dataset || item.dataset === dataset) && (!item.savedQueryId || item.savedQueryId === saved.id));
       if (found) { found.dataset = dataset; found.savedQueryId = saved.id; found.savedAt ??= saved.savedAt; }
       else items.push({ id: `query:${dataset}:${saved.id}`, title: saved.name, url, dataset, savedQueryId: saved.id, savedAt: saved.savedAt });
@@ -96,7 +96,7 @@ export function savedRollingWindow(dataset: QueryDataset, query: QueryState): Ro
 }
 
 export function collectQuery(dataset: QueryDataset, query: QueryState, title: string, options: { description?: string; templateId?: string; window?: RollingWindow; savedAt?: number; dedupe?: boolean; url?: string; cover?: CardCover } = {}): Bookmark {
-  const items = readBookmarks(), url = options.url ?? queryURL(dataset, query, options.window);
+  const items = readBookmarks(), url = options.url ?? queryURL(dataset, query, options.window, { preserveSource: true });
   const dashboardContext = (address: string) => {
     const params = new URL(address, location.origin).searchParams;
     return params.get("card_query") && params.get("analyze_mode") === "dashboards" ? JSON.stringify([params.get("analyze_topic"), normalizedDashboardChart(params.get("analyze_topic"), params.get("analyze_chart")), params.get("analyze_filters")]) : "";
@@ -203,7 +203,7 @@ export function moveBookmark(id: string, before?: string) {
 // collection. Keep its query alongside the link for synchronous cover editing.
 export async function collectDurableQuery(dataset: QueryDataset, query: QueryState, title: string, options: Parameters<typeof collectQuery>[3] = {}): Promise<Bookmark> {
   const service = createQueryLinkService(`pharos_${dataset}`, httpQuerySnapshotStore("/api/query-snapshots"));
-  const link = await service.durable(query, new URL(options.url ?? queryURL(dataset, query, options.window), location.origin).href, `q_${dataset}`);
+  const link = await service.durable(query, new URL(options.url ?? queryURL(dataset, query, options.window, { preserveSource: true }), location.origin).href, `q_${dataset}`);
   const url = new URL(link.url);
   return collectQuery(dataset, query, title, { ...options, url: `${url.pathname}${url.search}${url.hash}` });
 }

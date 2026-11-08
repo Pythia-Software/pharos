@@ -271,6 +271,8 @@ WHEN (old.role,old.kind,old.text,old.raw_text,old.reasoning_format,old.conversat
   DELETE FROM reasoning_extraction_state WHERE conversation_id IN (old.conversation_id,new.conversation_id);
 END;
 CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at);
+-- Browse the complete Messages dataset newest first without sorting message bodies.
+CREATE INDEX IF NOT EXISTS messages_page_idx ON messages(created_at DESC, id);
 -- Serves the human-authorship rebuild, which reads prose turns by role in send order.
 -- A query about one conversation or workspace that also filters on role would
 -- take it too and read every prose message in the catalog; write +role there.

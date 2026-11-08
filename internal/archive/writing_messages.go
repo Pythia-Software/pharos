@@ -119,7 +119,7 @@ func (c *Catalog) attachAuthoredText(ctx context.Context, rows []map[string]any)
 		}
 	}
 	for _, row := range rows {
-		text := firstString(row["text"])
+		text, _ := row["text"].(string)
 		limit := len(text)
 		if limit > authoredTextLimit {
 			limit = authoredTextLimit

@@ -237,7 +237,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   // distribution medians or paired axes to manufacture a grand total.
   const additive = !clause.expression && !clause.expressionY && !clause.distribution && ["sum", "count"].includes(clause.op);
   const total = additive ? numeric.reduce((sum, bucket) => sum + Number(bucket.value), 0) : result.processedRows ?? values.reduce((sum, bucket) => sum + bucket.count, 0);
-  const countUnit = ({ tool_calls: "calls", writing_messages: "messages", skill_usages: "records", tl1_attempts: "attempts", findings: "findings" } as Partial<Record<QueryDataset, string>>)[job.dataset] ?? "rows";
+  const countUnit = ({ tool_calls: "calls", messages: "messages", writing_messages: "messages", skill_usages: "records", tl1_attempts: "attempts", findings: "findings" } as Partial<Record<QueryDataset, string>>)[job.dataset] ?? "rows";
   const unit = clause.display?.format ? "" : clause.op === "count" ? countUnit : clause.field?.includes("cost") ? "USD" : clause.field?.includes("tokens") ? "tokens" : clause.field?.includes("words") ? "words" : clause.field === "duration_ms" ? "ms" : clause.field?.endsWith("_count") ? countUnit : recipe?.unit ?? "";
   const scalar = !clause.groupBy.length && values.length === 1 && !clause.distribution;
   // Groups hidden by minCount are outside groupCount and Other, so the shown buckets are not the whole population.

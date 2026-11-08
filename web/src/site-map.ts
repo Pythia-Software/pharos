@@ -1,5 +1,5 @@
 import {peopleMessageLabelCatalog} from "./people-message-labels";
-import {messageLabelConversationQuery,messageLabelResultParameters} from "./message-label-results-model";
+import {messageLabelResultParameters} from "./message-label-results-model";
 import { cardNavigationURL } from "./card-exploration";
 import controlAudit from "../../docs/view-controls.json";
 import { usageDetailsSchema } from "./usage-row-model";
@@ -19,7 +19,7 @@ import { chartScales } from "./chart-scale";
 import { chartRanges, rangeDays, withTimeRange } from "./chart-range";
 import { queryRecipes, instantiateRecipe, describeRecipeText, type QueryRecipe } from "./curiosity-data";
 import { queryURL, resolveRollingQuery, rollingWindowDays, rollingWindowField, type QueryDataset } from "./query-links";
-import { readUsageWorkspace, usageDatasets, usageDatasetTopics, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { readUsageWorkspace, analyzeQueryDatasets, usageDatasets, usageDatasetTopics, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { parallelismRibbon } from "./card-destinations";
 import { concurrencyWindowRange } from "./concurrency-settings";
 import { cardDatasets, cardLibraryParams, cardSorts, cardTopicAll } from "./card-library-model";
@@ -558,7 +558,7 @@ type SiteCard = {
   url: { path: string; params: Array<[string, ParamSpec]> };
 };
 export const recipeTextWindows = Object.fromEntries(rollingWindowDays.map(days => [String(days), Object.fromEntries(["{days}", "{period}", "{lastDays}"].map(token => [token, describeRecipeText(token, days)]))]));
-const cardPage = (recipe: QueryRecipe) => recipe.habits ? "analyze/habits" : recipe.thinking ? `analyze/${recipe.thinking.overview?"thinking-overview":"thinking-detail"}` : recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : recipe.dataset === "safety" || recipe.dataset === "fixes" ? `findings/${recipe.dataset}/table` : `analyze/query/${recipe.dataset}`;
+const cardPage = (recipe: QueryRecipe, queryDataset = recipe.dataset) => recipe.habits ? "analyze/habits" : recipe.thinking ? `analyze/${recipe.thinking.overview?"thinking-overview":"thinking-detail"}` : recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : recipe.dataset === "safety" || recipe.dataset === "fixes" ? `findings/${recipe.dataset}/table` : `analyze/query/${queryDataset}`;
 
 export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const windows = recipe.period ? [] : [...rollingWindowDays];
@@ -566,7 +566,7 @@ export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const at = (days: number | null) => new URL(cardNavigationURL(instantiateRecipe(recipe, days, clock).url), origin);
   const sample = at(probe), plain = recipe.period ? sample : at(null);
   if ([recipe.title, recipe.description, sample.search].some(text => decodeURIComponent(text).includes(placeholder))) fail(`${recipe.id} already holds ${placeholder}`);
-  const card: SiteCard = { id: recipe.id, title: recipe.title, description: recipe.description, category: recipe.category, dataset: recipe.dataset, kind: cardKind(recipe), page: cardPage(recipe), url: { path: sample.pathname, params: [] } };
+  const card: SiteCard = { id: recipe.id, title: recipe.title, description: recipe.description, category: recipe.category, dataset: recipe.dataset, kind: cardKind(recipe), page: cardPage(recipe, (sample.searchParams.get("analyze_data") ?? recipe.dataset) as QueryDataset), url: { path: sample.pathname, params: [] } };
   if(recipe.thinking) card.filters=decode(plain.searchParams.get("analyze_filters")!).where;
   if (recipe.destination) {
     const chart = JSON.parse(plain.searchParams.get("analyze_chart")!), topic = recipe.destination.topic;
@@ -793,8 +793,8 @@ export function buildSiteMap(inputs: SiteInputs) {
           whereOption("analyze_filters", usageTopicDatasets[topic], undefined, populationLead(topic)),
           windowOption("analyze_filters", dashboardWindows, "The dashboard's range: window_terms appended to the filters, or no terms for all time. analyze_days repeats the selected elapsed-day window."),
         ] });
-      const query = child({ path: "analyze/query", title: "Query", description: pageDescriptions["analyze/query"], route: "/analyze", fixed: { analyze_mode: "query" }, children: [] });
-      for (const dataset of Object.keys(usageDatasets) as UsageDataset[]) {
+      const query = child({ path: "analyze/query", title: "Query tables", description: pageDescriptions["analyze/query"], route: "/analyze", fixed: { analyze_mode: "query" }, children: [] });
+      for (const dataset of analyzeQueryDatasets) {
         const page = add({ path: `analyze/query/${dataset}`, title: usageDatasets[dataset].label, description: usageDatasets[dataset].description, route: "/analyze",
           fixed: { analyze_mode: "query", analyze_data: dataset }, dataset, builder: "queryURL",
           options: [{ name: "return_topic", param: "analyze_topic", kind: "enum", default: usageDatasetTopics[dataset], values: Object.entries(usageTopics).map(([value, item]) => ({ value, label: item.label })), description: "Dashboard topic retained for return navigation, independent of the source dataset." }, whereOption(`q_${dataset}`, dataset, [recordKeywordParameter(dataset),...(dataset==="message_labels"?messageLabelResultParameters:[])]), ...rollingWindowField(dataset) ? [windowOption("window_days", rollingWindowDays, `A rolling window on ${dataset}.window_field: its terms appended to the where terms, and window_mode=relative, window_days, window_field and window_dataset.`)] : []] });
@@ -857,7 +857,7 @@ export function buildSiteMap(inputs: SiteInputs) {
   for(const node of Object.values(nodes))if(node.dataset&&node.options?.some(option=>option.kind==="where"&&option.param.startsWith("q_"))){
     const schema=siteSchemas[node.dataset as QueryDataset];
     const initial=fittedDefaultQuery(schema);
-    Object.assign(node,{query_default:node.path==="library"?freshSearch(schema).query:Object.hasOwn(usageDatasets,node.dataset)?usageActionQuery(node.dataset==="message_labels"?messageLabelConversationQuery(initial):initial,usageQuerySchema(schema,node.dataset as UsageDataset),node.dataset as UsageDataset):initial});
+    Object.assign(node,{query_default:node.path==="library"?freshSearch(schema).query:Object.hasOwn(usageDatasets,node.dataset)?usageActionQuery(initial,usageQuerySchema(schema,node.dataset as UsageDataset),node.dataset as UsageDataset):initial});
   }
   return {
     version: siteMapVersion,

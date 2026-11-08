@@ -1,3 +1,4 @@
+import messagesSchema from "../../../../schemas/messages.schema.json";
 import { queryCapabilities } from '../../support/query-server.mjs';
 import messageLabels from "../../../../schemas/message_labels.schema.json";
 import peopleMessageLabels from "../../../../schemas/people_message_labels.schema.json";
@@ -38,6 +39,225 @@ const trendClause = (catalog, state) => trendQuery(catalog, state, [], { now: Da
 import { timeBounds, usageTime, withTimeRange, smoothingWhere } from "../../../src/usage-chart.tsx";
 import { dashboardQueryDetails, dashboardQueryLinks, dashboardQuerySentence } from "../../../src/dashboard-query-links.ts";
 import { dashboardChartURL } from "../../../src/dashboard-chart-links.ts";
+
+test("generated classified-message links use the complete user authorship population on Messages", t => {
+  const originalLocation = globalThis.location;
+  globalThis.location = new URL("http://localhost/");
+  t.after(() => { globalThis.location = originalLocation; });
+  const source = { ...EMPTY_QUERY, where: [{ any: [
+    { field: "provider", op: "=", value: "codex" },
+    { field: "provider", op: "=", value: "claude" },
+  ] }, { field: "typed_words", op: ">", value: "0" }] };
+  const href = queryURL("writing_messages", source, { days: 30, field: "sent_at", mode: "relative" });
+  const url = new URL(href, "http://localhost");
+  const query = decodeQueryStrict(url.searchParams.get("q_messages"));
+  assert.equal(readUsageWorkspace(url.searchParams).dataset, "messages");
+  assert.equal(url.searchParams.has("q_writing_messages"), false);
+  assert.equal(url.searchParams.get("window_dataset"), "messages");
+  assert.equal(url.searchParams.get("window_field"), "authorship_sent_at");
+  assert.deepEqual(query.where.slice(0, 2), [
+    { field: "role", op: "=", value: "user" },
+    { field: "has_authorship", op: "=", value: "true" },
+  ]);
+  assert.deepEqual(query.where[2], source.where[0], "the full OR remains in source WHERE");
+  const rows = [
+    { id: "included", role: "user", has_authorship: true, provider: "codex", typed_words: 2, sent_at: "2026-10-31T00:00:00Z" },
+    { id: "unclassified", role: "user", has_authorship: false, provider: "codex", typed_words: 2, sent_at: "2026-10-31T00:00:00Z" },
+    { id: "agent", role: "assistant", has_authorship: true, provider: "codex", typed_words: 2, sent_at: "2026-10-31T00:00:00Z" },
+    { id: "other provider", role: "user", has_authorship: true, provider: "other", typed_words: 2, sent_at: "2026-10-31T00:00:00Z" },
+  ];
+  const fixed = { ...query, where: query.where.filter(term => !('field' in term && term.field === 'authorship_sent_at')) };
+  assert.deepEqual(applyQuery(rows, fixed, loadSchema(messagesSchema)).rows.map(row => row.id), ["included"]);
+  const stored = new URL(queryURL("writing_messages", source, undefined, { preserveSource: true }), "http://localhost");
+  assert.equal(stored.searchParams.get("analyze_data"), "writing_messages");
+  assert.deepEqual(decodeQueryStrict(stored.searchParams.get("q_writing_messages")), source);
+  assert.deepEqual(queryFromURL(stored.href)?.query, source, "existing source URLs remain readable");
+});
+
+test("grouped classified-message links keep HAVING and put authorship in source WHERE", () => {
+  const source = { ...EMPTY_QUERY, where: [{ field: "work_id", op: "=", value: "work-1" }] };
+  const grouped = { ...EMPTY_QUERY, grouping: { source, keys: ["work_id"], summaries: [{ id: "sum_words", op: "sum", field: "typed_words", label: "Typed words" }], representative: null }, where: [{ field: "sum_words", op: ">", value: "50" }] };
+  const url = new URL(usageWorkspaceURL({ mode: "query", dataset: "writing_messages", query: grouped }), "http://localhost");
+  const query = decodeQueryStrict(url.searchParams.get("q_messages"));
+  assert.equal(readUsageWorkspace(url.searchParams).dataset, "messages");
+  assert.deepEqual(query.where, grouped.where);
+  assert.deepEqual(query.grouping.source.where, [
+    { field: "role", op: "=", value: "user" },
+    { field: "has_authorship", op: "=", value: "true" },
+    ...source.where,
+  ]);
+  assert.doesNotThrow(() => toQueryRequestV3(query, loadSchema(messagesSchema), queryCapabilities));
+});
+
+test("classified-message links keep credited-work dimensions and stored writing dates", () => {
+  const source = { ...EMPTY_QUERY, where: [
+    { field: "repository_name", op: "=", value: "pharos" },
+    { field: "day", op: ">=", value: "2026-10-01" },
+  ], orderBy: [{ field: "sent_at", dir: "desc" }] };
+  const grouped = { ...EMPTY_QUERY, grouping: { source, keys: ["day", "repository_name"], summaries: [
+    { id: "sum_typed", op: "sum", field: "typed_words", label: "Typed words" },
+    { id: "work_title", op: "row", field: "title", label: "Workspace" },
+  ], representative: { orderBy: [{ field: "sent_at", dir: "desc", nulls: "last" }] } },
+  select: [{ field: "day" }, { field: "repository_name" }, { field: "sum_typed" }, { field: "work_title" }], where: [{ field: "sum_typed", op: ">", value: "0" }] };
+  const href = queryURL("writing_messages", grouped, { days: 30, field: "sent_at", mode: "relative" });
+  const url = new URL(href, "http://localhost"), query = decodeQueryStrict(url.searchParams.get("q_messages"));
+  assert.equal(url.searchParams.get("window_field"), "authorship_sent_at");
+  assert.deepEqual(query.grouping.keys, ["authorship_day", "authorship_repository_name"]);
+  assert.deepEqual(query.grouping.source.where.slice(2, 4), [
+    { field: "authorship_repository_name", op: "=", value: "pharos" },
+    { field: "authorship_day", op: ">=", value: "2026-10-01" },
+  ]);
+  assert.equal(query.grouping.summaries[1].field, "authorship_title");
+  assert.equal(query.grouping.representative.orderBy[0].field, "authorship_sent_at");
+  assert.deepEqual(query.select.map(item => item.field), ["authorship_day", "authorship_repository_name", "sum_typed", "work_title"]);
+  assert.doesNotThrow(() => toQueryRequestV3(query, loadSchema(messagesSchema), queryCapabilities));
+  const current = new URLSearchParams({ analyze_mode: "dashboards", analyze_data: "writing_messages", window_dataset: "writing_messages", window_field: "sent_at", window_until_field: "sent_at", window_days: "30", window_mode: "relative" });
+  const linked = new URL(usageWorkspaceURL({ mode: "query", dataset: "writing_messages", query: grouped }, current), "http://localhost");
+  assert.equal(linked.searchParams.get("window_dataset"), "messages");
+  assert.equal(linked.searchParams.get("window_field"), "authorship_sent_at");
+  assert.equal(linked.searchParams.get("window_until_field"), "authorship_sent_at");
+  const metric = { ...EMPTY_QUERY, aggregations: [{ id: "work_share", op: "count", groupBy: ["repository_name"], expression: "SUM([typed_words])/NULLIF(COUNT([title]),0)", minCount: { min: 2, distinct: "source_kind" } }] };
+  const metricQuery = decodeQueryStrict(new URL(queryURL("writing_messages", metric), "http://localhost").searchParams.get("q_messages"));
+  assert.deepEqual(metricQuery.aggregations[0].groupBy, ["authorship_repository_name"]);
+  assert.equal(metricQuery.aggregations[0].expression, "SUM([typed_words])/NULLIF(COUNT([authorship_title]),0)");
+  assert.equal(metricQuery.aggregations[0].minCount.distinct, "authorship_source_kind");
+});
+
+test("classified-message migration retains dataset-specific computed columns", () => {
+  const query = { ...EMPTY_QUERY, select: [{ field: "@computed/my_title" }], where: [{ field: "title", op: "=", value: "A" }] };
+  const url = new URL(queryURL("writing_messages", query), "http://localhost");
+  assert.equal(url.searchParams.get("analyze_data"), "writing_messages");
+  assert.deepEqual(decodeQueryStrict(url.searchParams.get("q_writing_messages")), query);
+  assert.equal(url.searchParams.has("q_messages"), false);
+});
+
+test("classified-message group summaries keep colliding result IDs in SELECT and HAVING", () => {
+  const query = { ...EMPTY_QUERY,
+    grouping: { source: EMPTY_QUERY, keys: ["day"], summaries: [{ id: "title", op: "sum", field: "typed_words", label: "Words" }], representative: null },
+    select: [{ field: "day" }, { field: "title" }], where: [{ field: "title", op: ">", value: "5" }], orderBy: [{ field: "title", dir: "desc" }],
+  };
+  const url = new URL(queryURL("writing_messages", query), "http://localhost");
+  const mapped = decodeQueryStrict(url.searchParams.get("q_messages"));
+  assert.deepEqual(mapped.select.map(column => column.field), ["authorship_day", "title"]);
+  assert.deepEqual(mapped.where, query.where);
+  assert.deepEqual(mapped.orderBy, query.orderBy);
+  assert.equal(mapped.grouping.summaries[0].id, "title");
+});
+
+test("classified-message formulas preserve quoted brackets and map source measures", () => {
+  const expression = 'IF([title]="[title]", SUM([typed_words]), 0)';
+  const query = { ...EMPTY_QUERY, aggregations: [{ id: "quoted", op: "sum", groupBy: ["day"], expression,
+    minCount: { min: 2, sum: "typed_words" }, distribution: { kind: "histogram", input: "[title]", bins: 8 } }] };
+  const mapped = decodeQueryStrict(new URL(queryURL("writing_messages", query), "http://localhost").searchParams.get("q_messages"));
+  assert.equal(mapped.aggregations[0].expression, 'IF([authorship_title]="[title]", SUM([typed_words]), 0)');
+  assert.equal(mapped.aggregations[0].distribution.input, "[authorship_title]");
+  assert.equal(mapped.aggregations[0].minCount.sum, "typed_words");
+  assert.deepEqual(mapped.aggregations[0].groupBy, ["authorship_day"]);
+});
+
+test("classified-message group links map source-key labels and template placeholders", () => {
+  const query = { ...EMPTY_QUERY, grouping: { source: EMPTY_QUERY, keys: ["day", "title"], summaries: [
+    { id: "source_link", op: "link", label: "Open", link: { label: { column: "title" }, to: { kind: "template", template: "/work/{field:title}?day={field:day}" } } },
+  ], representative: null } };
+  const mapped = decodeQueryStrict(new URL(queryURL("writing_messages", query), "http://localhost").searchParams.get("q_messages"));
+  assert.deepEqual(mapped.grouping.keys, ["authorship_day", "authorship_title"]);
+  assert.deepEqual(mapped.grouping.summaries[0].link, {
+    label: { column: "authorship_title" }, to: { kind: "template", template: "/work/{field:authorship_title}?day={field:authorship_day}" },
+  });
+  const custom = { ...query, grouping: { ...query.grouping, summaries: [
+    { id: "custom_link", op: "link", link: { label: "Open", to: { kind: "query", target: "custom" } } },
+  ] } };
+  const retained = new URL(queryURL("writing_messages", custom), "http://localhost");
+  assert.equal(retained.searchParams.get("analyze_data"), "writing_messages");
+  assert.deepEqual(decodeQueryStrict(retained.searchParams.get("q_writing_messages")), custom);
+});
+
+test("tool-summary drilldowns use calls when every predicate describes the same calls", () => {
+  const where = [{ any: [{ field: "provider", op: "=", value: "codex" }, { field: "provider", op: "=", value: "claude" }] }];
+  const chart = { ...EMPTY_QUERY, where, aggregations: [{ id: "calls", op: "sum", field: "call_count", groupBy: ["tool_name"], label: "Calls" }] };
+  const links = dashboardQueryLinks("tools", chart, loadSchema(tools), new URLSearchParams({ analyze_topic: "tools" }));
+  assert.equal(links.length, 4);
+  for (const link of links) {
+    const url = new URL(link.href, "http://localhost"), query = decodeQueryStrict(url.searchParams.get("q_tool_calls"));
+    assert.equal(readUsageWorkspace(url.searchParams).dataset, "tool_calls");
+    assert.deepEqual((query.grouping?.source ?? query).where.slice(0, where.length), where);
+    assert.doesNotThrow(() => toQueryRequestV3(query, loadSchema(toolCalls), queryCapabilities));
+  }
+  const summaryFilter = { ...chart, where: [...where, { field: "call_count", op: ">", value: "5" }] };
+  const retained = dashboardQueryLinks("tools", summaryFilter, loadSchema(tools), new URLSearchParams());
+  assert.ok(retained.every(link => new URL(link.href, "http://localhost").searchParams.get("analyze_data") === "tools"), "an aggregate row predicate cannot be reinterpreted as a call predicate");
+});
+
+test("daily tool chart links keep day and cohort filters on the call population", () => {
+  const time = { first: "day", last: "day" };
+  const range = { from: new Date("2026-10-02T00:00:00Z"), to: new Date("2026-10-04T00:00:00Z"), rolling: false };
+  const where = [{ field: "repository_name", op: "=", value: "pharos" }, { any: [
+    { field: "provider", op: "=", value: "codex" }, { field: "provider", op: "=", value: "claude" },
+  ] }];
+  const translate = terms => toolDashboardWhere(terms, timeBounds(terms, time), new Date("2026-10-05T00:00:00Z"));
+  const href = dashboardChartURL({ dataset: "tools", where, time, range, series: { key: "shell", label: "Shell", color: "blue", value: "shell" }, split: "tool_name", fields: ["call_count"], translate });
+  const url = new URL(href, "http://localhost"), query = decodeQueryStrict(url.searchParams.get("q_tool_calls"));
+  assert.equal(readUsageWorkspace(url.searchParams).dataset, "tool_calls");
+  assert.deepEqual(query.where.slice(0, where.length), where);
+  assert.ok(query.where.some(term => 'field' in term && term.field === 'tool_name' && term.value === 'shell'));
+  assert.ok(query.where.some(term => 'field' in term && term.field === 'day' || 'any' in term && term.any.some(clause => 'field' in clause && clause.field === 'day')));
+  assert.doesNotThrow(() => toQueryRequestV3(query, loadSchema(toolCalls), queryCapabilities));
+  const current = new URLSearchParams({ analyze_mode: "dashboards", analyze_data: "tools", analyze_topic: "tools", analyze_window: "30d", analyze_filters: encodeQuery({ ...EMPTY_QUERY, where }) });
+  for (const fields of [["call_count"], ["call_count", "error_count"], ["total_duration_ms"], ["timed_count"], ["truncated_count"]]) {
+    const opened = new URL(dashboardChartURL({ dataset: "tools", where, time, range, series: { key: "shell", label: "Shell", color: "blue", value: "shell" }, split: "tool_name", fields, translate, current }), "http://localhost");
+    const returned = usageDashboardReturn(opened.searchParams), back = new URL(returned.href, "http://localhost");
+    assert.equal(returned.resetsFilters, false, fields.join(" + "));
+    assert.deepEqual(decodeQueryStrict(back.searchParams.get("analyze_filters")).where, where, "unchanged chart contributions do not replace the dashboard population");
+    assert.equal(back.searchParams.get("analyze_window"), "30d");
+    const source = decodeQueryStrict(opened.searchParams.get("q_tool_calls"));
+    const added = { field: "channel", op: "=", value: "cli" };
+    opened.searchParams.set("q_tool_calls", encodeQuery({ ...source, where: [...source.where.filter(term => term.field !== "repository_name"), added] }));
+    const edited = usageDashboardReturn(opened.searchParams);
+    assert.equal(edited.resetsFilters, false);
+    assert.deepEqual(decodeQueryStrict(new URL(edited.href, "http://localhost").searchParams.get("analyze_filters")).where, [where[1], added], "shared filter additions and removals return to the dashboard");
+    opened.searchParams.set("q_tool_calls", encodeQuery({ ...source, where: [...source.where, { field: "duration_ms", op: ">", value: "1000" }] }));
+    assert.equal(usageDashboardReturn(opened.searchParams).resetsFilters, true, "a user-added call measure cannot filter daily rollups");
+  }
+  const blocked = dashboardChartURL({ dataset: "tools", where: [...where, { field: "call_count", op: ">", value: "5" }], time, range, series: { key: "all", label: "All", color: "blue" }, fields: ["call_count"], translate });
+  assert.equal(new URL(blocked, "http://localhost").searchParams.get("analyze_data"), "tools");
+});
+
+test("Human Words destination details describe the exact Messages query", () => {
+  const source = { ...EMPTY_QUERY, where: [{ field: "provider", op: "=", value: "codex" }] };
+  const links = dashboardQueryLinks("writing_messages", source, loadSchema(writingMessages), new URLSearchParams({ analyze_topic: "human" }));
+  assert.ok(links.length);
+  for (const link of links) {
+    const url = new URL(link.href, "http://localhost"), encoded = decodeQueryStrict(url.searchParams.get("q_messages"));
+    assert.equal(readUsageWorkspace(url.searchParams).dataset, "messages");
+    assert.deepEqual(encoded, normalizeQueryState(link.query));
+    assert.deepEqual(link.details, dashboardQueryDetails(loadSchema(messagesSchema), encoded));
+    assert.deepEqual((encoded.grouping?.source ?? encoded).where.slice(0, 3), [
+      { field: "role", op: "=", value: "user" }, { field: "has_authorship", op: "=", value: "true" }, ...source.where,
+    ]);
+  }
+  const creditedWork = dashboardQueryLinks("writing_messages", { ...EMPTY_QUERY, where: [{ field: "repository_name", op: "=", value: "pharos" }] }, loadSchema(writingMessages), new URLSearchParams({ analyze_topic: "human" }));
+  assert.ok(creditedWork.every(link => new URL(link.href, "http://localhost").searchParams.get("analyze_data") === "messages"), "credited-work filters open the canonical source");
+  assert.ok(creditedWork.every(link => (link.query.grouping?.source ?? link.query).where.some(term => 'field' in term && term.field === "authorship_repository_name" && term.value === "pharos")));
+});
+
+test("returning from classified Messages keeps Human Words filters", () => {
+  const where = [{ field: "repository_name", op: "=", value: "pharos" }];
+  const current = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "human", analyze_data: "writing_messages", analyze_filters: encodeQuery({ ...EMPTY_QUERY, where }) });
+  const [link] = dashboardQueryLinks("writing_messages", { ...EMPTY_QUERY, where }, loadSchema(writingMessages), current);
+  const opened = new URL(link.href, "http://localhost");
+  assert.equal(opened.searchParams.get("analyze_data"), "messages");
+  const returned = usageDashboardReturn(opened.searchParams);
+  assert.equal(returned.resetsFilters, false);
+  const back = new URL(returned.href, "http://localhost");
+  assert.equal(back.searchParams.get("analyze_data"), "writing_messages");
+  assert.deepEqual(decodeQueryStrict(back.searchParams.get("analyze_filters")).where, where);
+  const malformed = new URL(opened.href);
+  malformed.searchParams.set("analyze_opened", "unreadable");
+  assert.doesNotThrow(() => usageDashboardReturn(malformed.searchParams));
+  const edited = decodeQueryStrict(opened.searchParams.get("q_messages"));
+  opened.searchParams.set("q_messages", encodeQuery({ ...edited, where: edited.where.filter(term => !('field' in term && term.field === 'has_authorship')) }));
+  assert.equal(usageDashboardReturn(opened.searchParams).resetsFilters, true, "removing the classification boundary cannot carry a Messages population into Human Words");
+});
 
 test('leaving the label lab opens the chosen analysis without its experiment route switch',()=>{
   const current=new URLSearchParams({label_lab:'path',label_conversation:'conversation-fixture',label_message:'message-fixture',nav_collapsed:'1'});
@@ -212,10 +432,11 @@ test("all eight dashboards offer four distinct native queries that retain source
     assert.equal(new Set(links.map(link => link.title)).size, 4, topic);
     assert.equal(new Set(links.map(link => encodeQuery(link.query))).size, 4, topic);
     for (const link of links) {
-      const url = new URL(link.href, "http://localhost"), restored = decodeQueryStrict(url.searchParams.get(`q_${dataset}`));
+      const url = new URL(link.href, "http://localhost"), target = readUsageWorkspace(url.searchParams).dataset;
+      const restored = decodeQueryStrict(url.searchParams.get(`q_${target}`));
       assert.deepEqual(restored, normalizeQueryState(link.query));
       assert.equal(restored.fit, "screen", `${topic}: ${link.title} fits its columns to the screen`);
-      assert.doesNotThrow(() => toQueryRequestV3(restored, schema, { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true }), `${topic}: ${link.title}`);
+      assert.doesNotThrow(() => toQueryRequestV3(restored, loadSchema(documents[target]), { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true }), `${topic}: ${link.title}`);
       assert.deepEqual((restored.grouping?.source ?? restored).where.slice(0, where.length), where);
       assert.equal(readUsageWorkspace(url.searchParams).topic, topic);
       if (topic === "carbon") assert.equal(url.searchParams.get("analyze_carbon"), '{"scenario":"high"}');
@@ -242,9 +463,10 @@ test("focused dashboard queries execute group thresholds and weighted measures",
   assert.equal(rows[0].explore_name, "Latest");
 
   const toolLinks = dashboardQueryLinks("tools", analysisQuery(toolsAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_category" }, []).query, loadSchema(tools), new URLSearchParams());
-  const failures = toolLinks.find(link => link.query.grouping?.summaries.some(column => column.id === "explore_error_rate"));
-  const rates = applyQuery([{ id: "1", tool_name: "shell", provider: "codex", call_count: 10, error_count: 1 }, { id: "2", tool_name: "shell", provider: "codex", call_count: 90, error_count: 0 }], failures.query, loadSchema(tools)).rows;
-  assert.equal(rates[0].explore_error_rate, 0.01);
+  const failures = toolLinks.find(link => link.query.grouping?.summaries.some(column => column.id === "explore_errors"));
+  const rates = applyQuery([{ id: "1", tool_name: "shell", provider: "codex", call_count: 1, error_count: 1 }, { id: "2", tool_name: "shell", provider: "codex", call_count: 1, error_count: 0 }], failures.query, loadSchema(toolCalls)).rows;
+  assert.equal(rates[0].explore_errors, 1);
+  assert.equal(rates[0].explore_calls, 2);
 });
 
 test("the live audit provides 25 valid, distinct queries per dataset and dashboard", () => {
@@ -278,7 +500,7 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
   const originalLocation = globalThis.location;
   globalThis.location = new URL("http://localhost/");
   t.after(() => { globalThis.location = originalLocation; });
-  const schemas = {people_message_labels:peopleMessageLabels, compactions, message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, agent_event_rates: agentEventRates, session_shape: sessionShape };
+  const schemas = {messages: messagesSchema, people_message_labels:peopleMessageLabels, compactions, message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, agent_event_rates: agentEventRates, session_shape: sessionShape };
   for (const [dataset, target] of Object.entries(usageDatasets)) assert.ok(schemas[dataset].fields.some(field => field.name === target.field), `${dataset}'s search entry point belongs to its own schema`);
   for (const dataset of Object.keys(usageDatasets)) for (const mode of ["query", "search"]) {
     const url = new URL(usageWorkspaceURL({ mode, dataset }), "http://localhost");
@@ -288,12 +510,14 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
     assert.equal(readUsageWorkspace(url.searchParams).search, mode === "search");
     const query = { ...EMPTY_QUERY, select: [{ field: "id", width: 175 }], where: [{ field: "id", op: "=", value: "example" }], orderBy: [{ field: "id", dir: "asc" }], limit: 25 };
     const linked = new URL(usageWorkspaceURL({ mode, dataset, query }), "http://localhost");
-    assert.deepEqual(decodeQueryStrict(linked.searchParams.get(`q_${dataset}`)), { ...query, select: [{ field: "id" }], fit: "screen" }, `${dataset} fits to screen without pinning its source widths`);
+    const target = dataset === "writing_messages" ? "messages" : dataset;
+    const population = dataset === "writing_messages" ? [{ field: "role", op: "=", value: "user" }, { field: "has_authorship", op: "=", value: "true" }] : [];
+    assert.deepEqual(decodeQueryStrict(linked.searchParams.get(`q_${target}`)), { ...query, select: [{ field: "id" }], where: [...population, ...query.where], fit: "screen" }, `${dataset} fits to screen without pinning its source widths`);
     assert.deepEqual(query.select, [{ field: "id", width: 175 }], "Link generation preserves the input query");
     const tableURL = new URL(queryURL(dataset, query), "http://localhost");
     assert.equal(tableURL.pathname, "/analyze");
-    assert.equal(readUsageWorkspace(tableURL.searchParams).dataset, dataset);
-    assert.deepEqual(queryFromURL(tableURL.href), { dataset, query, window: undefined });
+    assert.equal(readUsageWorkspace(tableURL.searchParams).dataset, target);
+    assert.deepEqual(queryFromURL(tableURL.href), { dataset: target, query: { ...query, where: [...population, ...query.where] }, window: undefined });
   }
   for (const topic of Object.keys(usageTopics)) assert.equal(readUsageWorkspace(new URL(usageWorkspaceURL({ topic }), "http://localhost").searchParams).topic, topic);
 });
@@ -620,17 +844,17 @@ test("a new Analyze table fits the screen while an explicit sizing choice surviv
 });
 
 test("Drilldown ordering reads a conversation forward and browses populations newest first", () => {
-  const schema = loadSchema(writingMessages), where = [{ field: "work_id", op: "=", value: "work" }];
+  const schema = loadSchema(writingMessages), messages = loadSchema(messagesSchema), where = [{ field: "work_id", op: "=", value: "work" }];
   const rows = [
-    { id: "late", work_id: "work", sent_at: "2026-10-21T12:00:00Z" },
-    { id: "early", work_id: "work", sent_at: "2026-10-20T12:00:00Z" },
-    { id: "other", work_id: "elsewhere", sent_at: "2026-10-22T12:00:00Z" },
+    { id: "late", work_id: "work", role: "user", has_authorship: true, sent_at: "2026-10-21T12:00:00Z" },
+    { id: "early", work_id: "work", role: "user", has_authorship: true, sent_at: "2026-10-20T12:00:00Z" },
+    { id: "other", work_id: "elsewhere", role: "user", has_authorship: true, sent_at: "2026-10-22T12:00:00Z" },
   ];
   const human = usageRowLinks("writing", { id: "work" }).find(link => link.kind === "messages");
-  const scoped = decodeQueryStrict(new URL(human.href, "http://localhost").searchParams.get("q_writing_messages"));
-  assert.deepEqual(applyQuery(rows, scoped, schema).rows.map(row => row.id), ["early", "late"]);
+  const scoped = decodeQueryStrict(new URL(human.href, "http://localhost").searchParams.get("q_messages"));
+  assert.deepEqual(applyQuery(rows, scoped, messages).rows.map(row => row.id), ["early", "late"]);
   const [dashboard] = dashboardQueryLinks("writing_messages", { ...EMPTY_QUERY, where }, schema, new URLSearchParams());
-  assert.deepEqual(applyQuery(rows, dashboard.query, schema).rows.map(row => row.id), ["early", "late"]);
+  assert.deepEqual(applyQuery(rows, dashboard.query, messages).rows.map(row => row.id), ["early", "late"]);
   assert.equal(dashboard.query.fit, "screen");
   const across = orderedUsageQuery("writing_messages", EMPTY_QUERY);
   assert.deepEqual(applyQuery(rows, across, schema).rows.map(row => row.id), ["other", "late", "early"]);
@@ -692,7 +916,9 @@ test("Aggregate time and cross-query links express their source scope", () => {
   assert.deepEqual(decodeQueryStrict(calls.searchParams.get("q_tool_calls")).where, [{ field: "conversation_id", op: "=", value: "child" }]);
   assert.equal(links.find(link => link.kind === "root").href, "/conversation/root");
   const human = usageRowLinks("writing", row, current).find(link => link.label.startsWith("Messages"));
-  assert.deepEqual(decodeQueryStrict(new URL(human.href, "http://localhost").searchParams.get("q_writing_messages")).where, [{ field: "work_id", op: "=", value: "work" }]);
+  assert.deepEqual(decodeQueryStrict(new URL(human.href, "http://localhost").searchParams.get("q_messages")).where, [
+    { field: "role", op: "=", value: "user" }, { field: "has_authorship", op: "=", value: "true" }, { field: "work_id", op: "=", value: "work" },
+  ]);
 });
 
 test("Authored Details retains classified text beyond the cell preview and reports retention limits", () => {

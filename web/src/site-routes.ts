@@ -23,7 +23,7 @@ export const siteSections = [
 
 // Descriptions of pages below a section, where the page's own module has none.
 export const pageDescriptions: Record<string, string> = {
-  "analyze/query": "Query tables over each Analyze dataset, filtered by where terms.",
+  "analyze/query": "One query table page per dataset. Browse all records or choose an editable query idea with its own filters, columns and grouping.",
   "findings/safety/table": "Every risky action notice, filterable and groupable by resource, check, danger, location, handoff state, or recorded activity.",
   "findings/safety/settings": "Enable or disable safety discovery checks, review coverage and handoff behavior, and refresh reviews.",
   "findings/fixes/table": "Every fix in every state, hidden ones included, filterable and groupable by kind, place, recurrence, whether the settings hide it, work items or priority.",

@@ -20,7 +20,7 @@ export function messageLabelFingerprintCache<Value>(load:(id:string)=>Promise<Va
  };
 }
 export function messageLabelConversationQuery(source:QueryState):QueryState {
- return {...EMPTY_QUERY,limit:40,fit:"screen" as const,grouping:{source:{...(source.grouping?.source??source),offset:0,aggregations:[]},keys:['fingerprint'],summaries:[
+ return {...EMPTY_QUERY,limit:40,fit:"screen" as const,hostState:{version:1,params:{...source.hostState?.params,label_results:['cards']}},grouping:{source:{...(source.grouping?.source??source),offset:0,aggregations:[]},keys:['fingerprint'],summaries:[
  {id:'conversation_title',op:'row',field:'title',label:'Conversation'},{id:'conversation_workspace',op:'row',field:'workspace_id',label:'Workspace'},
  {id:'conversation_repository',op:'row',field:'repository_name',label:'Repository'},
  {id:'matching_messages',op:'count_distinct',field:'message_id',label:'Matching messages'},
@@ -29,11 +29,11 @@ export function messageLabelConversationQuery(source:QueryState):QueryState {
  {id:'open_conversation',op:'link',label:'Conversation',link:{label:{column:'conversation_title'},to:{kind:'template',template:'/work/{field:conversation_workspace}/conversation/{field:fingerprint}?message={field:source_message}'}}},
  ],representative:{orderBy:[{field:'occurred_at',dir:'desc',nulls:'last'}]}},select:[{field:'fingerprint',width:160},{field:'open_conversation',width:230},{field:'conversation_repository',width:130},{field:'matching_messages',width:90},{field:'last_match',width:140}],orderBy:[{field:'last_match',dir:'desc',nulls:'last'}]};
 }
-export const labelResultsMode=(query:QueryState)=>query.hostState?.params.label_results?.[0]==='table'?'table':'cards';
+export const labelResultsMode=(query:QueryState)=>query.hostState?.params.label_results?.[0]==='cards'?'cards':'table';
 export function messageLabelHostQuery(fields:FieldDef[]):HostQueryOptions {
  const keyword=recordKeywordHostQuery('message_labels',fields);
- return {...keyword,ownedParameters:[...keyword.ownedParameters,...messageLabelResultParameters],defaults:{version:1,params:{label_results:['cards']}},normalize(state){
-  const mode=state.params.label_results?.[0]??'cards';if(!['cards','table'].includes(mode)||state.params.label_results?.length>1)throw new Error('Invalid label result display');
+ return {...keyword,ownedParameters:[...keyword.ownedParameters,...messageLabelResultParameters],defaults:{version:1,params:{label_results:['table']}},normalize(state){
+  const mode=state.params.label_results?.[0]??'table';if(!['cards','table'].includes(mode)||state.params.label_results?.length>1)throw new Error('Invalid label result display');
   const params={...state.params};delete params.label_results;
   const value=keyword.normalize!({version:state.version,params});return {...value,params:{...value.params,label_results:[mode]}};
  }};

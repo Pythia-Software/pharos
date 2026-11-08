@@ -301,6 +301,7 @@ const ROUTES = [
   {name:"Ask Pharos settings",url:"/settings/ask",ready:"#askSettingsPage .ask-settings select",api:askAPI},
 
   ].map(route=>({...route,preferences:{"pharos-theme":"dark"}})),
+  { name: "Messages dataset query", url: "/analyze?analyze_mode=query&analyze_data=messages", ready: ".usage-workspace-table .qt-row" },
   { name: "TL1 attempts query", url: "/analyze?analyze_mode=query&analyze_data=tl1_attempts", ready: ".usage-workspace-table .qt-row" },
   { name: "Data guide", url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", ready: ".usage-workspace-table .qt-row", open: page => page.locator(".usage-workspace-table .data-source-link").click(), shown: ".data-guide[open]",
     check: async (page, app) => {
@@ -320,7 +321,7 @@ const ROUTES = [
     url: `/analyze?analyze_mode=query&analyze_data=${dataset}`,
     ready: ".usage-workspace-table .qt-row",
     open: async page => {
-      const chip = explore ? page.getByRole("group", { name: "Explore query ideas", exact: true }).getByRole("button").last() : page.locator(".usage-query-ideas .query-chip").first();
+      const chip = explore ? page.getByRole("button", { name: /^Command families/ }) : page.locator(".usage-query-ideas .usage-idea").first();
       await chip.click();
       await page.getByRole("link", { name: "Matching records", exact: true }).first().waitFor();
     },
@@ -443,7 +444,7 @@ const ROUTES = [
   {name:'Message Labels specific hierarchy',url:'/analyze?'+new URLSearchParams({analyze_topic:'labels',analyze_chart:JSON.stringify({view:'trend',metric:'messages',split:'label'})}),ready:'.usage-labels-dashboard .usage-chart'},
   {name:'Message Labels bars',url:'/analyze?'+new URLSearchParams({analyze_topic:'labels',analyze_chart:JSON.stringify({view:'trend_bar',metric:'messages',split:'family'})}),ready:'.usage-labels-dashboard .usage-chart'},
   {name:'Message Labels comparison',url:'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'labels',analyze_data:'message_labels',analyze_chart:JSON.stringify({view:'compare',metric:'messages',split:'family'})}),ready:'.usage-labels-dashboard'},
-  {name:'Message label conversation cards',url:'/analyze?analyze_mode=query&analyze_data=message_labels&analyze_topic=labels',ready:'.message-label-result-card'},
+  {name:'Message label conversation cards',url:'/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'message_labels',analyze_topic:'labels',label_results:'cards',q_message_labels:encodeQuery({...EMPTY_QUERY,limit:40,grouping:{source:EMPTY_QUERY,keys:['fingerprint'],summaries:[{id:'conversation_title',op:'row',field:'title'},{id:'conversation_workspace',op:'row',field:'workspace_id'},{id:'conversation_repository',op:'row',field:'repository_name'},{id:'matching_messages',op:'count_distinct',field:'message_id'},{id:'last_match',op:'max',field:'occurred_at'},{id:'source_message',op:'row',field:'message_id'}],representative:{orderBy:[{field:'occurred_at',dir:'desc'}]}}})}),ready:'.message-label-result-card'},
   {name:'Message label conversation rows',url:'/analyze?analyze_mode=query&analyze_data=message_labels&analyze_topic=labels&label_results=table',ready:'.qt-row'},
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
   { name: "Human Words component shares", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "compare", metric: "words", split: "category", compareAs: "share" }))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations' },

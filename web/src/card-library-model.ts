@@ -1,7 +1,7 @@
 import { queryRecipes, type QueryRecipe } from "./curiosity-data";
 import { agentEventDatasets, agentEventsEnabled } from "./agent-events-flag";
 
-export const cardDatasets: Record<string, string> = { model_requests: "Model request timing", conversation_activity: "Conversation input/output", usage: "Token usage", library: "Workspaces", tool_calls: "Tool calls", skill_usages: "Skills", writing_messages: "User messages", tl1_attempts: "TL1 attempts", mcp_calls: "Pharos MCP requests", parallelism: "Parallel activity", rhythm: "Habits", findings: "Findings", safety: "Risky action notices", fixes: "Fixes", agent_event_rates: "Agent event rates" };
+export const cardDatasets: Record<string, string> = { messages: "Messages", model_requests: "Model request timing", conversation_activity: "Conversation input/output", usage: "Token usage", library: "Workspaces", tool_calls: "Tool calls", skill_usages: "Skills", writing_messages: "User messages", tl1_attempts: "TL1 attempts", mcp_calls: "Pharos MCP requests", parallelism: "Parallel activity", rhythm: "Habits", findings: "Findings", safety: "Risky action notices", fixes: "Fixes", agent_event_rates: "Agent event rates" };
 // The Card Library's address: its search, data source, topic tab
 // (card_topic=all is the All tab), card kind and sort.
 export const cardLibraryParams = ["card_search", "card_data", "card_topic", "card_kind", "card_sort"];

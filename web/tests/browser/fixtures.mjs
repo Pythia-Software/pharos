@@ -64,6 +64,16 @@ const longTitle = "Investigate why the incremental indexer re-reads every captur
 export const queryFixtureDatasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
 const datasets = queryFixtureDatasets;
+for (const [index, row] of datasets.messages.entries()) {
+  const role = ["user", "assistant", "assistant", "tool"][index % 4];
+  Object.assign(row, { role, kind: ["message", "message", "thinking", "tool_result"][index % 4], has_authorship: role === "user", selected: true,
+    text: ["Review the query table pages and show every retained message.", "The dataset now includes prompts, replies, thinking and tool messages.", "I should compare recorded timing with coverage before drawing a conclusion.", "Read completed: 24 matching records."][index % 4],
+    model: role === "assistant" ? "gpt-6-sol" : null, effort: role === "assistant" ? "high" : null,
+    typed_words: role === "user" ? 12 + index : null, words: role === "user" ? 18 + index : null,
+    pasted_words: role === "user" ? 6 : null, typed_message: role === "user" ? true : null,
+    main_category: role === "user" ? "typed" : null, work_id: role === "user" ? row.workspace_id : null });
+}
+
 for (const [index, row] of datasets.compactions.entries()) Object.assign(row, { trigger: ["human", "machine", "unknown"][index % 3], trigger_evidence: ["recorded", "inferred", "unknown"][index % 3] });
 for(const [i,row] of datasets.message_labels.entries())Object.assign(row,{fingerprint:row.conversation_id,message_id:"label-message-"+i,label:i%3?"C.report.finding":"P.request.work.implement",family:i%3?"C.report":"P.request",function_role:i%3?"Receiver":"Sender",label_status:"matched",source:["human","output","thinking"][i%3]});
 // Parallelism records are built with the saved counting and gap settings.
@@ -708,7 +718,7 @@ export const defaultApi = {
   // Synthetic 1-pixel PNG tests image loading; geometry is covered by the
   // shared model/native renderer tests, with no user library in this fixture.
   "POST /api/fingerprints": ({body}) => ({items: body.items.map(item => ({...item, state:'ready', href: item.entity==='workspace' ? `/work/${item.id}` : `/work/${workID}/conversation/${rootConversation}`,
-    images:{light:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9S8AAAAASUVORK5CYII=',dark:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9S8AAAAASUVORK5CYII='}}))}),
+    images:{light:'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="'+(item.profile==='card'?256:128)+'"><rect width="100%" height="100%" fill="#cad6cd"/></svg>'),dark:'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="'+(item.profile==='card'?256:128)+'"><rect width="100%" height="100%" fill="#cad6cd"/></svg>')}}))}),
   "GET /api/labels/conversations/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id,messages:conversationLabelsFixture.conversations[0].messages.map(message=>({...message,conversation_id:params.id}))},taxonomy:conversationLabelsFixture.taxonomy,truncated:false,agent_events:fingerprintEvents}),
   "GET /api/labels/workspaces/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id,work_id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false,agent_events:fingerprintEvents}),
   // Query Table, on the production transport.

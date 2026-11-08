@@ -118,15 +118,16 @@ test('page parameters choose the dataset, and every card URL opens its own datas
  assert.equal(m.queryFromURL('/tools?tools_view=skills&q_library=&q_skill_usages=').dataset,'skill_usages');
  for(const dataset of Object.keys(usageDatasets)) for(const mode of ['query','search']) {
   const url=usageWorkspaceURL({mode,dataset,query:EMPTY_QUERY});
-  assert.equal(m.queryFromURL(url)?.dataset,dataset,`${mode} bookmarks keep their record type`);
+  assert.equal(m.queryFromURL(url)?.dataset,dataset==='writing_messages'?'messages':dataset,`${mode} generated links keep their intended population`);
  }
  for(const dataset of Object.keys(usageDatasets)) {
   const url=new URL(m.queryURL(dataset,query),location.origin);
+  const target=dataset==='writing_messages'?'messages':dataset;
   assert.equal(url.pathname,'/analyze');
   assert.equal(url.searchParams.get('analyze_mode'),'query');
-  assert.equal(url.searchParams.get('analyze_data'),dataset);
+  assert.equal(url.searchParams.get('analyze_data'),target);
   assert.ok(![...url.searchParams.keys()].some(key=>key.startsWith('usage_')));
-  assert.deepEqual(m.queryFromURL(url.href),{dataset,query,window:undefined});
+  assert.deepEqual(m.queryFromURL(url.href),{dataset:target,query:dataset==='writing_messages'?{...query,where:[{field:'role',op:'=',value:'user'},{field:'has_authorship',op:'=',value:'true'},...query.where]}:query,window:undefined});
  }
  assert.equal(m.queryFromURL('/analyze?analyze_workspace=1&q_usage='),undefined,'A dashboard is not a token-table bookmark');
  const clock=new Date(2026,9,8,15);
@@ -322,9 +323,9 @@ test('computed query links enable automatic fitting for every target without cha
   const source = { ...EMPTY_QUERY, fitToScreen: false, select: [{ field: 'id', width: 900 }], where: [{ field: 'id', op: '=', value: 'one' }] };
   for (const [dataset, target] of Object.entries(linkTargets)) {
     const url = new URL(target(source, {}), 'http://localhost');
-    const restored = core.decodeQueryStrict(url.searchParams.get(`q_${dataset}`));
+    const restored = core.decodeQueryStrict(url.searchParams.get(`q_${dataset==='writing_messages'?'messages':dataset}`));
     assert.equal(restored.fit, "screen", dataset);
-    assert.deepEqual(restored.where, source.where, dataset);
+    assert.deepEqual(restored.where, dataset==='writing_messages'?[{field:'role',op:'=',value:'user'},{field:'has_authorship',op:'=',value:'true'},...source.where]:source.where, dataset);
     assert.deepEqual(restored.select, [{ field: "id" }], `${dataset} releases pinned widths for the fitted destination`);
   }
   assert.equal(source.fitToScreen, false);

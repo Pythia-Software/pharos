@@ -4,10 +4,14 @@ import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, predicatesOf, type QuerySt
 import { analysisVersion } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
 import { peopleMessageLabelScope } from "./people-message-labels";
+import { generatedMessageField, generatedQueryTarget, toolWhereCanUseCalls, writingMessageSourceField } from "./generated-query-target";
+import { schemaDocuments } from "./schema-documents";
+import { mapTermPredicates } from "./where-terms";
 
 // Analyze owns guided dashboards and the full query surfaces. Explicit older
 // analysis URLs remain available while their specialized controls migrate.
 export const usageDatasets = {
+  messages: { label: "Messages", description: "Every retained prompt, reply, thinking block and tool message, with authorship evidence where available.", field: "text", searchLabel: "Message text" },
   people_message_labels:{label:"People message labels",description:"Message classifications within People dashboard populations.",field:"label",searchLabel:"Message label"},
   message_labels:{label:"Message labels",description:"What messages do, labeling coverage and matching conversations.",field:"text",searchLabel:"Labeled message text"},
   compactions: { label: "Compactions", description: "Recorded context compactions and what triggered them.", field: "model", searchLabel: "Compaction Model Names" },
@@ -21,14 +25,23 @@ export const usageDatasets = {
   mcp_calls: { label: "Pharos MCP requests", description: "Calls to Pharos's MCP server, sanitized arguments, output estimates, and timing.", field: "arguments_json", searchLabel: "MCP Call Arguments" },
   skill_usages: { label: "Skill evidence", description: "Recorded skill invocations, file loads and saved instruction text.", field: "skill_name", searchLabel: "Skill Names" },
   tl1_attempts: { label: "TL1 attempts", description: "Recorded task attempts, configurations, outcomes, and costs.", field: "title", searchLabel: "TL1 Task Titles" },
-  parallelism: { label: "Parallel activity", description: "Hourly activity counted by workspace or top-level conversation, using your Parallelism settings.", field: "model", searchLabel: "Parallel Activity Model Names" },
-  rhythm: { label: "Rhythm", description: "Hourly activity for you and agents working with you, unattended or automatically.", field: "unit_label", searchLabel: "Rhythm Conversation Titles" },
+  parallelism: { label: "Concurrent activity hours", description: "Hourly activity counted by workspace or top-level conversation, using your Parallelism settings.", field: "model", searchLabel: "Parallel Activity Model Names" },
+  rhythm: { label: "Activity hours", description: "Hourly activity for you and agents working with you, unattended or automatically.", field: "unit_label", searchLabel: "Rhythm Conversation Titles" },
   agent_events: { label: "Agent events", description: "Sentences where agents hit obstacles, were surprised, discovered something, worked around a problem, and more.", field: "sentence", searchLabel: "Agent Event Sentences" },
-  agent_event_rates: { label: "Agent event rates", description: "Every agent message checked for events, once per kind of event, with who prompted its turn, its model and effort: the rows the Agent Events rates divide.", field: "title", searchLabel: "Agent Event Rate Conversation Titles" },
+  agent_event_rates: { label: "Agent event observations", description: "Every agent message checked for events, once per kind of event, with who prompted its turn, its model and effort: the rows the Agent Events rates divide.", field: "title", searchLabel: "Agent Event Rate Conversation Titles" },
   agent_event_messages: { label: "Messages checked for agent events", description: "Agent replies and thinking blocks checked for events, with matching keywords and classifications.", field: "title", searchLabel: "Agent Event Conversation Titles" },
-  session_shape: { label: "Session shape", description: "One row per agent session: its length, active time, tool calls and autonomy, and the forensic signals that fired.", field: "title", searchLabel: "Session Titles" },
+  session_shape: { label: "Agent sessions", description: "One row per agent session: its length, active time, tool calls and autonomy, and the forensic signals that fired.", field: "title", searchLabel: "Session Titles" },
 } as const;
 export type UsageDataset = keyof typeof usageDatasets;
+
+// Dataset pages describe the source row. Specialized dashboard populations and
+// older rollups remain internal sources; their analyses live in query ideas.
+export const analyzeQueryDatasets = [
+  "messages", "tool_calls", "model_requests", "usage", "compactions",
+  "skill_usages", "message_labels", "session_shape", "tl1_attempts",
+  "conversation_activity", "rhythm", "parallelism", "mcp_calls",
+  "agent_events", "agent_event_messages", "agent_event_rates",
+] as const satisfies readonly UsageDataset[];
 export type UsageMode = "dashboards" | "query";
 export const engineUsageTopics = {
   compaction: { label: "Compaction", description: "Count context compactions and compare human and agent-app triggers across providers, models and repositories." },
@@ -54,6 +67,7 @@ export const usageTopics = { ...engineUsageTopics,
 } as const;
 export type UsageTopic = keyof typeof usageTopics;
 export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
+  messages: "human",
   people_message_labels:"labels", message_labels:"labels",
   compactions: "compaction", model_requests: "thinking-detail", usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
   tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", rhythm: "habits", tl1_attempts: "tokens", agent_events: "agent_experience", agent_event_messages: "agent_experience", agent_event_rates: "agent_event_rates", session_shape: "session_shape",
@@ -67,6 +81,7 @@ export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
 // Fields that hold a dashboard's dates, by dataset: its range, and the day
 // predicates a link may translate it into (the tools rollup's text day).
 const timeFields: Record<UsageDataset, string[]> = {
+  messages: ["sent_at", "day", "week", "month"],
   people_message_labels:["sent_at"], message_labels:["occurred_at"],
   compactions: ["occurred_at"], model_requests: ["requested_at"],
   tl1_attempts: ["started_at"],
@@ -108,9 +123,33 @@ export function usageDashboardReturn(current: URLSearchParams) {
   const keywords = current.has(`record_${state.dataset}`);
   let query: QueryState | undefined;
   try { query = decodeQueryStrict(current.get(`q_${state.dataset}`) ?? "") ?? undefined; } catch { /* Explicitly reset an unavailable query. */ }
-  const compatible = dataset === state.dataset && Boolean(query);
+  const sourceWhere = (query?.grouping?.source ?? query)?.where ?? [];
+  const authored = (field: string, value: string) => sourceWhere.some(term => "field" in term && !term.negated && term.field === field && term.op === "=" && term.value === value);
+  const oldFields = new Set(schemaDocuments.writing_messages.fields.map(field => field.name));
+  const sourceField = (field: string) => writingMessageSourceField(field);
+  const oldWhere = (terms: WhereTerm[]) => terms.map(term => mapTermPredicates(term, clause => ({ ...clause, field: sourceField(clause.field) }))!);
+  const population = (term: WhereTerm) => "field" in term && !term.negated && term.op === "=" && (term.field === "role" && term.value === "user" || term.field === "has_authorship" && term.value === "true");
+  const humanMessages = dataset === "writing_messages" && state.dataset === "messages" && authored("role", "user") && authored("has_authorship", "true")
+    && sourceWhere.every(term => population(term) || predicatesOf(term).every(clause => oldFields.has(sourceField(clause.field)) && generatedMessageField(sourceField(clause.field)) === clause.field));
+  // Chart drilldowns add contribution predicates that only describe the
+  // opened calls. Check the filters returning to the dashboard after those
+  // unchanged predicates have been removed; user-added call filters still
+  // need an explicit reset when the daily Tools source cannot represent them.
+  const callReturn = dataset === "tools" && state.dataset === "tool_calls"
+    ? returnedWhere(current, sourceWhere, originalDataset) : undefined;
+  const callRecords = Boolean(callReturn && toolWhereCanUseCalls(callReturn.where));
+  const compatible = Boolean(query) && (dataset === state.dataset || humanMessages || callRecords);
   const params = new URLSearchParams(current);
-  const returned = compatible ? returnedWhere(current, (query!.grouping?.source ?? query!).where, originalDataset) : { where: [], dates: false };
+  const compared = humanMessages ? new URLSearchParams(current) : current;
+  if (humanMessages) {
+    try {
+      const opened = decodeQueryStrict(current.get("analyze_opened") ?? "");
+      if (opened) compared.set("analyze_opened", encodeQuery({ ...opened, where: oldWhere(opened.where) }));
+    } catch { /* An unreadable opened query falls back to the edited filters. */ }
+  }
+  const edited = humanMessages ? oldWhere(sourceWhere) : sourceWhere;
+  const returned = compatible ? callReturn ?? returnedWhere(compared, edited, originalDataset) : { where: [], dates: false };
+  if (humanMessages) returned.where = returned.where.filter(term => !population(term));
   // Settings a dataset's records are built with are not the dashboard's
   // filters: Parallelism's counting and gap follow the saved settings.
   const settings = builtWith[state.dataset] ?? [];
@@ -190,7 +229,15 @@ export function readUsageWorkspace(params: URLSearchParams) {
 }
 
 export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?: boolean; dataset?: UsageDataset; topic?: UsageTopic; report?: string; days?: number; query?: QueryState }, current = new URLSearchParams()) {
-  const previous = readUsageWorkspace(current), next = { ...previous, ...change };
+  const previous = readUsageWorkspace(current);
+  // Only newly built queries change source. A saved source token or a link
+  // without an explicit query continues to open its existing dataset.
+  const requested = change.dataset ?? previous.dataset;
+  const target = change.query && !current.has(`record_${requested}`)
+    ? generatedQueryTarget(requested, change.query) : undefined;
+  const effective = target && target.dataset !== requested
+    ? { ...change, dataset: target.dataset as UsageDataset, query: target.query } : change;
+  const next = { ...previous, ...effective };
   const mode = next.mode === "search" ? "query" : next.mode;
   const params = new URLSearchParams(current);
   // Leaving the opted-in label lab must actually open the requested dashboard
@@ -210,12 +257,15 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   // edits from what the link added (usageDashboardReturn).
   if (mode === "dashboards" || next.dataset !== previous.dataset) params.delete("analyze_opened");
   if (mode !== "dashboards") {
-    const query = change.query;
+    const query = effective.query;
     if (query) {
       params.set(`q_${next.dataset}`, encodeQuery(fitQueryToScreen(query)));
       if (current.has("analyze_filters")) params.set("analyze_opened", encodeQuery({ ...EMPTY_QUERY, where: (query.grouping?.source ?? query).where }));
     } else if (next.dataset === previous.dataset && current.has(`q_${next.dataset}`)) params.set(`q_${next.dataset}`, current.get(`q_${next.dataset}`)!);
-    if (current.get("window_dataset") === next.dataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
+    if (current.get("window_dataset") === next.dataset || target && target.dataset !== requested && current.get("window_dataset") === requested) {
+      for (const [key, value] of current) if (key.startsWith("window_")) params.set(key,
+        key === "window_dataset" ? next.dataset : target?.dataset === "messages" && ["window_field", "window_until_field"].includes(key) ? generatedMessageField(value) : value);
+    }
   }
   // A full dashboard owns its chart and filters. Source queries and covers
   // remain in saved cards only, never in dashboard or drilldown navigation.
@@ -227,8 +277,8 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
     params.set("analyze_window", "today");
     if (current.has("window_timezone")) params.set("analyze_timezone", current.get("window_timezone")!);
   }
-  if (mode === "query" && change.query && current.get("analyze_window") === "today") {
-    const where = (change.query.grouping?.source ?? change.query).where;
+  if (mode === "query" && effective.query && current.get("analyze_window") === "today") {
+    const where = (effective.query.grouping?.source ?? effective.query).where;
     const lower = where.filter(term => "field" in term && term.op === ">=" && /T/.test(term.value));
     const upper = where.filter(term => "field" in term && term.op === "<");
     if (lower.length === 1 && upper.length === 1 && "field" in lower[0] && "field" in upper[0] && upper[0].value === "+0s") {
@@ -263,4 +313,3 @@ export function usageSearchQuery(query: QueryState): QueryState {
   const source = query.grouping?.source ?? query;
   return { ...source, aggregations: [], offset: 0 };
 }
-

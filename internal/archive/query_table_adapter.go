@@ -70,6 +70,8 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 		return PharosWritingSchema(), nil
 	case "writing_messages":
 		return PharosWritingMessagesSchema(), nil
+	case "messages":
+		return PharosMessagesSchema(), nil
 	case "mcp_calls":
 		return PharosMcpCallsSchema(), nil
 	case "tools":
@@ -618,6 +620,8 @@ func queryRowActionFields(dataset string, selected []string) []string {
 		required = []string{"workspace_id", "conversation_id", "message_id", "event_at"}
 	case "writing_messages":
 		required = []string{"workspace_id", "conversation_id"}
+	case "messages":
+		required = []string{"workspace_id", "conversation_id", "has_authorship"}
 	case "tool_calls":
 		required = []string{"workspace_id", "conversation_id", "call_message_id", "result_message_id", "call_id"}
 	case "parallelism":

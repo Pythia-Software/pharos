@@ -41,7 +41,7 @@ const flatOperations = (items: ProcessingOperation[]): ProcessingOperation[] => 
 // requiring capture history in libraries that only read live sources.
 const sources=['conv:*','capt:*'];
 const domainScopes: Record<string,string[]> = {
-  library:[...sources,'view'], usage:sources, model_requests:[...sources,'an.ledger'], compactions:sources,
+  messages:sources, library:[...sources,'view'], usage:sources, model_requests:[...sources,'an.ledger'], compactions:sources,
   conversation_activity:[...sources,'an.authorship'],writing:[...sources,'an.authorship'],writing_messages:[...sources,'an.authorship'],
   tools:[...sources,'an.ledger','an.tools'],tool_calls:[...sources,'an.ledger'],skill_usages:[...sources,'an.ledger'],
   parallelism:sources,rhythm:[...sources,'an.authorship'],tl1_attempts:sources,
@@ -57,10 +57,15 @@ function usesLabels(value: unknown): boolean {
   if(value&&typeof value==='object')return Object.values(value).some(usesLabels);
   return false;
 }
+function usesAuthorship(value: unknown): boolean {
+  if (typeof value === 'string') return /(?:^|\[)(?:authorship_[a-z_]+|has_authorship|(?:typed|pasted|copied|prompt|machine|other|quoted|resent|template|attachment|harness|automated)_words|typed_message|typed_share|main_category|categories|rules|has_source|correction_cue|positive_cue|work_id|words|chars)(?:$|\])/.test(value);
+  if (Array.isArray(value)) return value.some(usesAuthorship);
+  return Boolean(value && typeof value === 'object' && Object.values(value).some(usesAuthorship));
+}
 export function readinessDomains(scope: Pick<ReadinessScope,'dataset'|'query'>): string[] {
   const base=domainScopes[scope.dataset];
   if(!base)return ['@unknown:'+scope.dataset];
-  return [...new Set([...base,...usesLabels(scope.query)?['an.authorship','@labels']:[]])];
+  return [...new Set([...base, ...(scope.dataset === 'messages' && usesAuthorship(scope.query) ? ['an.authorship'] : []), ...(usesLabels(scope.query) ? ['an.authorship', '@labels'] : [])])];
 }
 const matches=(pattern: string,domain: string)=>pattern.endsWith('*')?domain.startsWith(pattern.slice(0,-1)):pattern===domain;
 // Source names don't identify their importer. Only the service knows whether
