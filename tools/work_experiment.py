@@ -89,7 +89,10 @@ def live_roots():
             if isinstance(relative, str) and relative:
                 relative = Path(relative)
                 if relative.is_absolute() or ".." in relative.parts:
-                    raise ValueError("a registered library has an unsafe relative config path")
+                    # Match registeredLibrary.resolve: stale non-local metadata
+                    # never participates in remount resolution. Its explicit
+                    # config and data paths are still guarded below.
+                    continue
                 # Conservatively cover every mount with that relative path.
                 # No diskutil/UUID probe or catalog open is needed to cover
                 # remounts such as /Volumes/euclid 1.
@@ -278,8 +281,13 @@ def backup_evidence(backup, attestation):
         value = json.loads(raw)
         catalog = value.get("catalog") or {}
         relative = PurePosixPath(str(catalog.get("path", "")))
-        if value.get("version") != 1 or value.get("complete") is not True or not value.get("finished_at"):
+        if value.get("version") != 1 or value.get("complete") is not True or not value.get("finished_at") or value.get("missing"):
             raise ValueError("the backup manifest does not record a completed backup")
+        snapshot_proof = backup / "work-snapshot.json"
+        if snapshot_proof.exists():
+            proof = json.loads(snapshot_proof.read_text())
+            if proof.get("complete") is not True or proof.get("source_backup_history_unchanged") is not True:
+                raise ValueError("the work snapshot's completion and source checks did not pass")
         if relative.is_absolute() or ".." in relative.parts or not relative.parts:
             raise ValueError("the backup manifest's catalog path is not inside the backup")
         snapshot = backup / relative
@@ -378,6 +386,65 @@ def checked_master(master):
     return marker
 
 
+def invalidate(master, destination, profile, clock, recent_conversations=20):
+    """Create a workload master with missing labels and dirty derived caches.
+
+    Only the new clone is changed. Canonical records and writing classifications
+    stay intact; this exercises label reconstruction rather than changing the
+    quality of its upstream writing inputs to manufacture a backlog.
+    """
+    if profile not in ("recent", "full") or not isinstance(recent_conversations, int) or recent_conversations < 1:
+        raise ValueError("invalidation is recent or full, with a positive conversation limit")
+    until = rfc3339(clock)
+    if until.tzinfo is None:
+        raise ValueError("pin an offset-aware invalidation clock")
+    master, destination = separate(master, destination)
+    marker = checked_master(master)
+    if destination.exists():
+        raise ValueError("invalidation needs a fresh destination")
+    destination.mkdir(mode=0o700)
+    try:
+        for name, source in master_paths(master).items():
+            clone(source, destination / name)
+        with contextlib.closing(sqlite3.connect(destination / "catalog/catalog.sqlite3")) as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("CREATE TEMP TABLE selected_conversations(id TEXT PRIMARY KEY)")
+            if profile == "full":
+                db.execute("INSERT INTO selected_conversations SELECT id FROM conversations")
+            else:
+                since = until - datetime.timedelta(hours=48)
+                stamp_time = lambda t: t.astimezone(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                db.execute("""INSERT INTO selected_conversations
+                    SELECT m.conversation_id FROM messages m WHERE m.created_at>=? AND m.created_at<?
+                      AND EXISTS (SELECT 1 FROM message_labels l WHERE l.conversation_id=m.conversation_id)
+                    GROUP BY m.conversation_id ORDER BY max(m.created_at) DESC,m.conversation_id LIMIT ?""",
+                           (stamp_time(since), stamp_time(until), recent_conversations))
+            ids = [row[0] for row in db.execute("SELECT id FROM selected_conversations ORDER BY id")]
+            if not ids:
+                raise ValueError("invalidation selected no conversations")
+            removed = {}
+            for table in ("message_labels", "message_labels_conversations"):
+                removed[table] = db.execute(f"DELETE FROM {table} WHERE conversation_id IN (SELECT id FROM selected_conversations)").rowcount
+            db.execute("INSERT OR REPLACE INTO message_labels_dirty SELECT id,hex(randomblob(8)) FROM selected_conversations")
+            db.execute("INSERT OR REPLACE INTO parallelism_dirty SELECT id,hex(randomblob(8)) FROM selected_conversations")
+            db.execute("INSERT OR IGNORE INTO message_label_facts_dirty SELECT id FROM selected_conversations")
+            db.commit()
+            db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        if checked_master(master) != marker:
+            raise ValueError("input master changed during invalidation")
+        event = {"event": "derived-invalidation", "profile": profile, "clock": clock,
+                 "conversations": len(ids), "population_sha256": digest_of(ids), "removed_rows": removed,
+                 "canonical_records": "unchanged", "writing_classifications": "unchanged"}
+        derived = {**marker, "derived_from": str(master),
+                   "lineage": [*marker.get("lineage", []), event], "prepared_at": time.time()}
+        derived["master_stamp_sha256"] = digest_of(stamp(master_paths(destination)))
+        write_json(destination / MARKER, derived)
+        return derived
+    except BaseException:
+        shutil.rmtree(destination)
+        raise
+
+
 def freeze(master, name, path):
     """Copy a source folder or model input into the master once, before any arm."""
     if not NAME.match(name):
@@ -451,6 +518,8 @@ def validate_descriptor(descriptor):
             input_name(value)
         elif key not in MODEL_KEYS or not isinstance(value, (str, int, bool)):
             raise ValueError("unsupported experiment model setting")
+    if "labels_model_dir" in descriptor.get("model_settings", {}) and descriptor["model_settings"].get("labels_variant") not in ("fp32", "int8"):
+        raise ValueError("a frozen labels_model_dir needs an explicit labels_variant: custom paths change the default")
     for source in descriptor.get("sources", []):
         if set(source) != {"name", "kind", "input"} or not all(isinstance(source[k], str) for k in ("name", "kind")):
             raise ValueError("sources name a frozen input, never a live folder")
@@ -489,6 +558,9 @@ def arm(master, destination, descriptor):
               "capture_compress_after_days = 0"]
     for key, value in descriptor.get("model_settings", {}).items():
         config.append(f"{key} = {json.dumps(frozen(value) if key in INPUT_KEYS else value)}")
+    if "replay" in descriptor:
+        # The probe stages arrivals only from ARM/inputs/<input>.
+        frozen({"input": descriptor["replay"]["input"]})
     for source in descriptor.get("sources", []):
         config += ["[[sources]]", f'name = {json.dumps(source["name"])}',
                    f'kind = {json.dumps(source["kind"])}', f'path = {json.dumps(frozen({"input": source["input"]}))}',
@@ -540,15 +612,35 @@ def process_table():
     return table
 
 
+def _not_confirmed_gone(pid):
+    """Only no-such-process proves absence; refused or failed observations are unknown."""
+    if pid <= 0:
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+# Windows from samples without per-sample coverage (earlier reports) prove nothing.
+COVERAGE_BASIS = "tree-coverage-v1"
+
+
 class TreeSampler(threading.Thread):
     """Samples a process tree about once a second.
 
     Simultaneous memory is the largest observed sum of the tree's physical
     footprints, so a spike between samples can be missed. Disk bytes are each
     process's counters at its last sample: a process's final second before it
-    exits is missed, so they are lower bounds. CPU is never taken from here;
-    the command's wait4 rusage is the CPU total. Other processes' CPU is recorded
-    as host noise, never subtracted.
+    exits is missed, so they are lower bounds. A process that vanished before
+    its read is that same lower bound; one still present whose counters or
+    identity cannot be read, or a counter that went backwards, makes the
+    affected figures incomplete, never a smaller number. CPU is
+    never taken from here; the command's wait4 rusage is the CPU total. Other
+    processes' CPU is recorded as host noise, never subtracted.
     """
 
     def __init__(self, root_pid, interval=1.0):
@@ -558,9 +650,13 @@ class TreeSampler(threading.Thread):
         self.processes, self.samples, self.errors = {}, 0, []
         self.peak = {"footprint_bytes": 0, "resident_bytes": 0, "processes": 0, "at_seconds": None}
         self.noise = {"load1": [], "other_cpu_percent": []}
-        # (Unix time, {process: (footprint, read, written)}, other-process CPU) per sample,
-        # so a run's own phase boundaries can scope memory, disk and noise afterwards.
+        # (Unix time, {process: (footprint, read, written)}, other-process CPU, unreadable
+        # present processes) per sample, so a run's own phase boundaries can scope memory,
+        # disk and noise afterwards.
         self.series = []
+        self.gaps = []  # Unix times of failed whole-sample observations.
+        # Present processes that could not be read (up to five named), and counters that went backwards.
+        self.unreadable, self.counter_resets = {"samples": 0, "readings": 0, "examples": []}, 0
 
     def tree(self, table):
         members, frontier = {self.root}, [self.root]
@@ -581,13 +677,22 @@ class TreeSampler(threading.Thread):
         members = self.tree(table)
         now = time.monotonic() - self.started
         footprint = resident = 0
-        at, readings = time.time(), {}
+        at, readings, unreadable = time.time(), {}, 0
         for pid in members:
             info = _RusageInfoV4()
-            if self.libc is None or self.libc.proc_pid_rusage(pid, 4, ctypes.byref(info)) != 0:
+            if self.libc is None or self.libc.proc_pid_rusage(pid, 4, ctypes.byref(info)) != 0 \
+                    or not info.proc_start_abstime:
+                # A vanished child is the normal sampling lower bound; a present one is a gap.
+                if self.libc is not None and _not_confirmed_gone(pid):
+                    unreadable += 1
+                    if len(self.unreadable["examples"]) < 5:
+                        self.unreadable["examples"].append({"name": table[pid][3], "at_seconds": now})
                 continue
             key = f"{pid}:{info.proc_start_abstime}"
             entry = self.processes.setdefault(key, {"name": table[pid][3], "first_seconds": now})
+            if info.diskio_bytesread < entry.get("disk_read_bytes", 0) \
+                    or info.diskio_byteswritten < entry.get("disk_written_bytes", 0):
+                self.counter_resets += 1
             entry.update(last_seconds=now, disk_read_bytes=info.diskio_bytesread,
                          disk_written_bytes=info.diskio_byteswritten,
                          lifetime_max_footprint_bytes=info.lifetime_max_phys_footprint)
@@ -595,19 +700,23 @@ class TreeSampler(threading.Thread):
             footprint += info.phys_footprint
             resident += info.resident_size
         self.samples += 1
+        if unreadable:
+            self.unreadable["samples"] += 1
+            self.unreadable["readings"] += unreadable
         if footprint > self.peak["footprint_bytes"]:
             self.peak = {"footprint_bytes": footprint, "resident_bytes": resident, "processes": len(members),
                          "at_seconds": now}
         self.noise["load1"].append(os.getloadavg()[0])
         other = sum(row[2] for pid, row in table.items() if pid not in members)
         self.noise["other_cpu_percent"].append(other)
-        self.series.append((at, readings, other))
+        self.series.append((at, readings, other, unreadable))
 
     def run(self):
         while not self.stop_event.is_set():
             try:
                 self.sample()
             except Exception as error:  # a sampling gap is reported, never fatal
+                self.gaps.append(time.time())
                 if len(self.errors) < 5:
                     self.errors.append(f"{type(error).__name__}: {error}")
             self.stop_event.wait(self.interval)
@@ -622,25 +731,46 @@ class TreeSampler(threading.Thread):
         Each figure is as exact as its 1 s samples: a process's disk bytes are
         its last reading inside the window less its last reading at or before
         the start (0 if first seen inside), so each edge is within about one
-        sample interval, and I/O after a process's final sample is missed."""
+        sample interval, and I/O after a process's final sample is missed.
+
+        A sample inside the window that could not read a present process makes
+        memory and disk unavailable; one at the start edge, or a counter that
+        went backwards, makes disk unavailable. Coverage records why."""
         if self.libc is None:
             return {"basis": "unavailable", "reason": "no libproc process sampling on this host"}
         inside = [sample for sample in self.series if start <= sample[0] <= end]
         if not inside:
             return {"basis": "unavailable", "reason": "no process-tree sample fell inside this window"}
-        before, last = {}, {}
-        for at, readings, _other in self.series:
+        before, edge_unreadable, edge_at = {}, 0, float("-inf")
+        for at, readings, _other, unreadable in self.series:
             if at > start:
                 break
             before.update(readings)
-        for _at, readings, _other in inside:
-            last.update(readings)
-        disk = lambda index: sum(reading[index] - before.get(key, (0, 0, 0))[index] for key, reading in last.items())
-        noise = [other for *_rest, other in inside]
+            edge_unreadable, edge_at = unreadable, at
+        edge_gaps = sum(edge_at < gap <= start for gap in self.gaps)
+        inside_gaps = sum(start <= gap <= end for gap in self.gaps)
+        previous, last, resets = dict(before), {}, 0
+        for _at, readings, _other, _unreadable in inside:
+            for key, reading in readings.items():
+                old = previous.get(key)
+                if old is not None and (reading[1] < old[1] or reading[2] < old[2]):
+                    resets += 1
+                previous[key] = last[key] = reading
+        unreadable = sum(sample[3] for sample in inside)
+        memory_complete = unreadable == 0 and inside_gaps == 0
+        disk_complete = memory_complete and edge_unreadable == 0 and edge_gaps == 0 and resets == 0
+        disk = lambda index: sum(reading[index] - before.get(key, (0, 0, 0))[index]
+                                 for key, reading in last.items()) if disk_complete else None
+        noise = [sample[2] for sample in inside]
+        peak = max(sum(r[0] for r in sample[1].values()) for sample in inside)
         return {"basis": "1s process-tree samples inside the window; footprint peak can miss spikes; disk bytes "
                          "are within one sample interval at each edge",
                 "samples": len(inside),
-                "peak_footprint_bytes": max(sum(r[0] for r in readings.values()) for _at, readings, _o in inside),
+                "coverage": {"basis": COVERAGE_BASIS, "memory": "complete" if memory_complete else "incomplete",
+                             "disk": "complete" if disk_complete else "incomplete",
+                             "unreadable_readings": unreadable, "unreadable_at_start": edge_unreadable,
+                             "counter_resets": resets, "sampling_gaps": inside_gaps, "start_edge_gaps": edge_gaps},
+                "peak_footprint_bytes": peak if memory_complete else None,
                 "disk_read_bytes": disk(1), "disk_written_bytes": disk(2),
                 "host_noise": {"other_cpu_percent_mean": sum(noise) / len(noise), "other_cpu_percent_max": max(noise),
                                "basis": "ps %cpu of every process outside the measured tree (100 = one core)"}}
@@ -655,6 +785,11 @@ class TreeSampler(threading.Thread):
                      "simultaneous sum and can miss spikes; disk bytes are lower bounds (final second of each "
                      "process missed); CPU comes from the command's wait4 rusage, not samples",
             "samples": self.samples, "errors": self.errors,
+            # Recorded, never gated: whole-process figures beside an incomplete coverage are lower bounds.
+            "coverage": {"basis": COVERAGE_BASIS,
+                         "memory": "incomplete" if self.unreadable["readings"] or self.gaps else "complete",
+                         "disk": "incomplete" if self.unreadable["readings"] or self.counter_resets or self.gaps else "complete",
+                         "unreadable": self.unreadable, "counter_resets": self.counter_resets, "sampling_gaps": len(self.gaps)},
             "peak_simultaneous": self.peak,
             "max_process_lifetime_footprint_bytes": max(
                 (p["lifetime_max_footprint_bytes"] for p in self.processes.values()), default=0),
@@ -709,6 +844,18 @@ def _wait_command(process, timeout):
     return process.returncode, usage, state["timed_out"]
 
 
+# Exact per-command accounting needs these; there is no weaker substitute.
+SUPERVISION_PRIMITIVES = ("waitid", "P_PID", "WEXITED", "WNOWAIT", "wait4", "waitstatus_to_exitcode",
+                          "killpg", "setsid")
+
+
+def require_supervision():
+    """Refuse a host lacking the POSIX process-supervision primitives."""
+    missing = [name for name in SUPERVISION_PRIMITIVES if not hasattr(os, name)]
+    if missing:
+        raise RuntimeError(f"this host cannot supervise measured commands: os lacks {', '.join(missing)}")
+
+
 def supervised(argv, env, log_path, timeout, cwd=None, windows=None):
     """Run one measured command in its own process group with tree sampling.
 
@@ -718,7 +865,12 @@ def supervised(argv, env, log_path, timeout, cwd=None, windows=None):
     when it exits are killed and reported, because their CPU would otherwise
     be missing. windows, called once the command has exited, names the
     command's own phases as Unix-time spans; each gets the samples inside it.
+
+    A host without waitid(WNOWAIT), wait4 and process groups is refused before
+    any file is created or command launched. A descendant that leaves for its
+    own process group and is reparented is neither sampled nor stopped.
     """
+    require_supervision()
     at = time.monotonic()
     entry = {"command": argv[1] if len(argv) > 1 else argv[0], "exit_code": None, "cpu_basis": CPU_BASIS,
              "cpu_seconds": None}
@@ -811,6 +963,7 @@ def schema_version(database):
 def run(binary, master, destination, descriptor, role, retained_sha256=None):
     """One arm. A failed, erroring or timed-out arm still leaves a report, unsettled."""
     validate_descriptor(descriptor)
+    require_supervision()
     if role not in ("baseline", "candidate"):
         raise ValueError("role is baseline or candidate")
     if retained_sha256 is not None and not SHA256.match(retained_sha256):
@@ -895,6 +1048,16 @@ def gate(baseline, candidate, floor):
             "regression": gated and (value is None or value >= REJECT_RATIO)}
 
 
+def spread_exceeds_gate(entries):
+    """A/A has no preferred arm: large speedups are noise, too."""
+    for entry in entries:
+        if entry["gated"]:
+            low, high = sorted((entry["baseline"], entry["candidate"]))
+            if low == 0 or high / low >= REJECT_RATIO:
+                return True
+    return False
+
+
 def compare(baseline, candidate, mode="ab", retained_sha256=None):
     """Paired verdict. A/B needs the retained baseline and a proven candidate engine."""
     for report in (baseline, candidate):
@@ -940,8 +1103,9 @@ def compare(baseline, candidate, mode="ab", retained_sha256=None):
                      [*totals.values(), *startup.values(), *(step[key] for step in steps for key in ("wall", "cpu"))])
     result = {"mode": mode, "semantic_parity": parity, "totals": totals, "steps": steps, "startup": startup}
     if mode == "aa":
-        return {**result, "noise": "exceeds-gate" if regression or not parity else "within-gate",
-                "release_gate": "not-applicable"}
+        spread = spread_exceeds_gate([*totals.values(), *startup.values(), *(step[key] for step in steps for key in ("wall", "cpu"))])
+        return {**result, "spread_exceeds_gate": spread,
+                "noise": "exceeds-gate" if spread or not parity else "within-gate", "release_gate": "not-applicable"}
     rejected = not parity or regression
     verdict = "rejected" if rejected else "refused" if blockers else "incomplete"
     return {**result, "rejected": rejected, "release_gate": verdict, "blockers": blockers,
@@ -1213,8 +1377,72 @@ def validate_probe_descriptor(descriptor):
             input_name(value)
         elif key not in MODEL_KEYS or not isinstance(value, (str, int, bool)):
             raise ValueError("unsupported experiment model setting")
+    if "labels_model_dir" in descriptor.get("model_settings", {}) and descriptor["model_settings"].get("labels_variant") not in ("fp32", "int8"):
+        raise ValueError("a frozen labels_model_dir needs an explicit labels_variant: custom paths change the default")
     if descriptor.get("sources"):
         raise ValueError("probe workloads replay no sources yet; capture needs the source-replay probe")
+    if "replay" in descriptor:
+        validate_replay(descriptor["replay"])
+    memory = descriptor.get("memory", {})
+    if not isinstance(memory, dict) or not set(memory) <= {"interval_seconds", "idle_seconds"} \
+            or not all(isinstance(v, int) and not isinstance(v, bool) for v in memory.values()) \
+            or memory.get("interval_seconds", 5) < 1 or memory.get("idle_seconds", 0) < 0:
+        raise ValueError("memory has integer interval_seconds (at least 1) and idle_seconds (0 or more)")
+
+
+def validate_replay(replay):
+    """The probe's replay shape: arrivals staged from one frozen input, in order."""
+    if not isinstance(replay, dict) or not set(replay) <= {"input", "source", "identity", "count_query", "ready_checks",
+                                                           "settle_timeout_seconds", "arrivals"}:
+        raise ValueError("replay has input, source, count_query, arrivals and optional ready_checks/settle_timeout_seconds")
+    if not NAME.match(input_name({"input": replay.get("input")})):
+        raise ValueError("replay.input names a frozen input")
+    source = replay.get("source")
+    if not isinstance(source, dict) or set(source) != {"name", "kind", "account"} \
+            or not all(isinstance(v, str) and v for v in source.values()) or not NAME.match(source["name"]):
+        raise ValueError("replay.source names a fresh source with explicit name, kind and account")
+    identity = replay.get("identity")
+    if not isinstance(identity, dict) or set(identity) != {"provider", "native_ids", "expect"} \
+            or not isinstance(identity["provider"], str) or not identity["provider"] \
+            or identity["expect"] not in ("new", "extend") \
+            or not isinstance(identity["native_ids"], list) or not identity["native_ids"] \
+            or not all(isinstance(v, str) and v for v in identity["native_ids"]) \
+            or len(identity["native_ids"]) != len(set(identity["native_ids"])):
+        raise ValueError("replay.identity pins provider, distinct native_ids and new or extend")
+    if not isinstance(replay.get("count_query"), str) or not read_only_statement(replay["count_query"]):
+        raise ValueError("replay.count_query is one read-only SELECT pinned to the replayed messages")
+    ready = replay.get("ready_checks", [])
+    if not isinstance(ready, list) or not ready or not all(isinstance(q, str) and read_only_statement(q) for q in ready):
+        raise ValueError("replay.ready_checks are read-only statements")
+    timeout = replay.get("settle_timeout_seconds", 1800)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+        raise ValueError("replay.settle_timeout_seconds is a positive integer")
+    arrivals = replay.get("arrivals")
+    if not isinstance(arrivals, list) or not arrivals:
+        raise ValueError("replay.arrivals is a non-empty list")
+    names, previous, written = set(), 0, {}
+    for arrival in arrivals:
+        if not isinstance(arrival, dict) or set(arrival) != {"name", "at_seconds", "files"} \
+                or not isinstance(arrival["name"], str) or not NAME.match(arrival["name"]) or arrival["name"] in names:
+            raise ValueError("each arrival has a unique name, at_seconds and files")
+        names.add(arrival["name"])
+        at = arrival["at_seconds"]
+        if not isinstance(at, (int, float)) or isinstance(at, bool) or at < previous:
+            raise ValueError("arrivals run in order: at_seconds is non-negative and never decreases")
+        previous = at
+        if not isinstance(arrival["files"], list) or not arrival["files"]:
+            raise ValueError("an arrival writes at least one file")
+        for file in arrival["files"]:
+            if not isinstance(file, dict) or not {"path"} <= set(file) <= {"path", "lines"}:
+                raise ValueError("an arrival file has path and optional lines")
+            input_name({"input": replay["input"], "path": file["path"]})
+            # A whole file is every line; growth never shrinks what an earlier arrival wrote.
+            lines = file.get("lines", float("inf"))
+            if lines != float("inf") and (not isinstance(lines, int) or isinstance(lines, bool) or lines < 1):
+                raise ValueError("an arrival file's lines is a positive integer")
+            if lines < written.get(file["path"], 0):
+                raise ValueError(f"{file['path']} would shrink: arrivals only extend a file")
+            written[file["path"]] = lines
 
 
 def scheduled_evidence(engine, descriptor):
@@ -1236,6 +1464,31 @@ def scheduled_evidence(engine, descriptor):
     return problems
 
 
+def replay_identity_evidence(plan, replay):
+    """Require the probe's identity proof, including when an older probe ignores it."""
+    identity = plan["identity"]
+    ids = sorted(identity["native_ids"])
+    # Match Go encoding/json for a UTF-8 string slice, including HTML escaping.
+    encoded = json.dumps(ids, ensure_ascii=False, separators=(",", ":"))
+    for char, escaped in (("&", "\\u0026"), ("<", "\\u003c"), (">", "\\u003e"),
+                          ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
+        encoded = encoded.replace(char, escaped)
+    expected = {"provider": identity["provider"], "account": plan["source"]["account"],
+                "expect": identity["expect"], "native_ids": len(ids),
+                "native_ids_sha256": hashlib.sha256(encoded.encode()).hexdigest(),
+                "present_before": 0 if identity["expect"] == "new" else len(ids), "present_after": len(ids)}
+    actual = replay.get("identity") or {}
+    if any(actual.get(key) != value for key, value in expected.items()):
+        raise RuntimeError("the probe did not prove the declared replay identity")
+    before, after = actual.get("other_conversations_before"), actual.get("other_conversations_after")
+    if not isinstance(before, int) or before != after:
+        raise RuntimeError("the replay changed undeclared conversations or did not report their census")
+    for arrival in replay.get("arrivals") or []:
+        before, after = arrival.get("identity_message_count_before"), arrival.get("identity_message_count_after")
+        if not isinstance(before, int) or not isinstance(after, int) or after <= before:
+            raise RuntimeError("the replay did not grow the declared conversations in every arrival")
+
+
 def probe_run(probe, probe_sha256, master, destination, descriptor, role, engine, baseline_probe_sha256):
     """One probe arm: the compiled probe test binary on a fresh clone.
 
@@ -1243,6 +1496,7 @@ def probe_run(probe, probe_sha256, master, destination, descriptor, role, engine
     probe observed executing. A baseline is the probe compiled from the
     retained source, identified by its hash."""
     validate_probe_descriptor(descriptor)
+    require_supervision()
     master, destination = master.resolve(), destination.resolve()
     if role not in ("baseline", "candidate") or engine not in ("classic", "scheduled"):
         raise ValueError("role is baseline or candidate; engine is classic or scheduled")
@@ -1269,12 +1523,24 @@ def probe_run(probe, probe_sha256, master, destination, descriptor, role, engine
            "PHAROS_WORK_ENGINE": engine}
     if descriptor.get("cpu_slots"):
         env["PHAROS_BACKGROUND_CPUS"] = str(descriptor["cpu_slots"])
+    if descriptor.get("replay"):
+        # Provider records retain their original cwd. The parser may ask Git
+        # about it even though the finishing Git analysis is deferred. Those
+        # checkouts are not frozen inputs, so suppress that optional enrichment
+        # symmetrically rather than consulting the user's changing worktrees.
+        tools = destination / "bin"
+        tools.mkdir(mode=0o700)
+        write_private(tools / "git", b"#!/bin/sh\nexit 1\n")
+        (tools / "git").chmod(0o700)
+        env["PATH"] = str(tools) + ":/usr/bin:/bin"
     timeout = descriptor.get("timeout_seconds", 14400)
     report = {"version": VERSION, "kind": "probe", "role": role, "engine_requested": engine,
               "engine_actual": {"value": None, "basis": "unavailable"}, "name": descriptor["name"],
               "probe_sha256": actual, "baseline_probe_sha256": baseline_probe_sha256,
               "descriptor_sha256": digest_of(descriptor), "corpus": load_marker(master, "master"),
               "cpu_basis": CPU_BASIS, "settled": False, "failure": None}
+    if descriptor.get("replay"):
+        report["unfrozen_git_lookup"] = "disabled; replay measures no Git enrichment"
     try:
         probe_report = destination / "probe-report.json"
         spans = lambda: _probe_spans(json.loads(probe_report.read_text())) if probe_report.is_file() else {}
@@ -1299,6 +1565,32 @@ def probe_run(probe, probe_sha256, master, destination, descriptor, role, engine
                 raise RuntimeError("; ".join(problems))
         elif report["engine_actual"].get("value") != "classic":
             raise RuntimeError("a classic request did not execute the classic path")
+        if "replay" in descriptor:
+            replay = inner.get("replay") or {}
+            replay_identity_evidence(descriptor["replay"], replay)
+            applied = [a.get("name") for a in replay.get("arrivals") or [] if isinstance(a, dict)
+                       and isinstance(a.get("count_before"), int) and isinstance(a.get("count_after"), int)
+                       and a["count_after"] > a["count_before"]]
+            if applied != [a["name"] for a in descriptor["replay"]["arrivals"]]:
+                raise RuntimeError("the probe did not report every replayed arrival as a real arrival")
+            if engine == "scheduled":
+                requests = replay.get("requests") or []
+                if [r.get("arrival") for r in requests] != applied:
+                    raise RuntimeError("the scheduled probe did not submit recent demand for every arrival")
+                demanded = {kind for phase in descriptor["phases"] for kind in phase["kinds"]}
+                for request in requests:
+                    facts = request.get("facts") or {}
+                    submitted, applied_at = request.get("submitted_seconds"), next(
+                        a.get("applied_seconds") for a in replay["arrivals"] if a["name"] == request["arrival"])
+                    if request.get("scope") != "recent" or set(request.get("kinds") or []) != demanded \
+                            or facts.get("scope") != "recent" or not str(facts.get("key", "")).startswith("recent:") \
+                            or facts.get("state") != "succeeded" or facts.get("unfinished") \
+                            or request.get("request_id") != facts.get("id") or not isinstance(request.get("joined_phases"), list) \
+                            or not isinstance(submitted, (int, float)) or not isinstance(applied_at, (int, float)) or submitted < applied_at:
+                        raise RuntimeError("the scheduled arrival request did not prove successful recent demand")
+            report["replay"] = replay
+        # Recorded, never gated: the harness's process-tree sampler is the gated source.
+        report["memory_retention"] = (inner.get("memory") or {}).get("retention")
         # Outside every timing: semantic oracle and an independent pending recheck.
         report["semantic"] = digests(database, descriptor["semantic_checks"])
         report["pending"] = digests(database, flat_pending(descriptor["pending_checks"]))
@@ -1376,8 +1668,25 @@ def _window_cpu(report, path):
     return _metric(section, ("cpu_seconds",))
 
 
+def _window_resource(report, path):
+    """A sampled window figure, or None unless its coverage proves it complete.
+
+    Windows recorded before coverage was reported prove nothing; a complete
+    zero stays zero."""
+    section = report
+    for key in path[:-1]:
+        section = section.get(key) if isinstance(section, dict) else None
+    coverage = section.get("coverage") if isinstance(section, dict) else None
+    kind = "memory" if path[-1] == "peak_footprint_bytes" else "disk"
+    if not isinstance(coverage, dict) or coverage.get("basis") != COVERAGE_BASIS or coverage.get(kind) != "complete":
+        return None
+    return _metric(section, path[-1:])
+
+
 def _probe_metric(report, path):
-    return _window_cpu(report, path) if path[-1] in ("work", "startup") else _metric(report, path)
+    if path[-1] in ("work", "startup"):
+        return _window_cpu(report, path)
+    return _window_resource(report, path) if "windows" in path else _metric(report, path)
 
 
 def noise_problems(role, report):
@@ -1409,6 +1718,68 @@ def _probe_spans(inner):
                 and span[0] <= span[1]:
             spans[name] = span
     return spans
+
+
+def replay_overlap(report):
+    """Prove each arrival became pending while primary history was unfinished.
+
+    A scheduled poll's last known-live time is a lower bound, unlike its
+    observed end, which could be a full poll late. Missing bounds prove nothing.
+    """
+    arrivals = (report.get("replay") or {}).get("arrivals") or []
+    inner, engine = report.get("probe") or {}, report.get("engine_actual") or {}
+    spans = []
+    if engine.get("value") == "classic":
+        primary = [step for step in inner.get("steps") or []
+                   if not str(step.get("name", "")).startswith("followup:")]
+        for step in primary:
+            start, wall = step.get("started_seconds"), step.get("wall_seconds")
+            if isinstance(start, (int, float)) and isinstance(wall, (int, float)) and start >= 0 and wall >= 0:
+                spans.append((start, start + wall))
+        # Between primary stages the original history demand is still unfinished.
+        if spans:
+            spans = [(min(s[0] for s in spans), max(s[1] for s in spans))]
+    elif engine.get("value") == "scheduled":
+        work = (inner.get("windows") or {}).get("work") or []
+        for request in engine.get("requests") or []:
+            until = request.get("history_active_until_seconds")
+            try:
+                start = rfc3339(request.get("requested_at")).timestamp() - work[0]
+            except (ValueError, TypeError, IndexError):
+                continue
+            if request.get("scope") == "backfill" and isinstance(until, (int, float)) and until >= start:
+                spans.append((max(0, start), until))
+    applied = [a.get("applied_seconds") for a in arrivals]
+    pending = [a.get("ready_pending_at_apply") for a in arrivals]
+    proven = bool(applied) and all(v is True for v in pending) and all(
+        isinstance(at, (int, float)) and any(start <= at <= until for start, until in spans) for at in applied)
+    ready = []
+    for arrival in arrivals:
+        start, took = arrival.get("started_seconds"), arrival.get("ready_seconds")
+        at = start + took if isinstance(start, (int, float)) and isinstance(took, (int, float)) else None
+        ready.append(at)
+    ready_during = proven and all(isinstance(at, (int, float)) and any(
+        start <= at <= until for start, until in spans) for at in ready)
+    requests = (report.get("replay") or {}).get("requests") or []
+    ids = [r.get("request_id") for r in requests]
+    primary_ids = {q.get("id") for q in engine.get("requests") or []}
+    followup_ids = {q.get("id") for q in (report.get("replay") or {}).get("followups") or []}
+    fresh = all(not r.get("joined_arrival") and r.get("joined_phases") == [] for r in requests) and \
+        len(set(ids)) == len(ids) and not set(ids).intersection(primary_ids | followup_ids)
+    frozen_before = engine.get("value") == "classic"
+    if engine.get("value") == "scheduled" and arrivals:
+        try:
+            started = min(a["started_seconds"] for a in arrivals)
+            work = inner["windows"]["work"][0]
+            frozen = [rfc3339(q.get("membership_frozen_at")).timestamp() - work for q in engine["requests"]]
+            frozen_before = bool(frozen) and all(at <= started for at in frozen)
+        except (KeyError, TypeError, ValueError):
+            frozen_before = False
+    return {"proven": proven, "ready_during_history": ready_during, "fresh_arrival_requests": fresh,
+            "primary_membership_predates_arrivals": frozen_before,
+            "arrival_ready_seconds": ready, "primary_history_intervals_seconds": spans,
+            "arrival_applied_seconds": applied, "arrival_pending_at_apply": pending,
+            "basis": "primary classic steps, or scheduled requests last observed live; follow-ups excluded"}
 
 
 def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
@@ -1471,21 +1842,50 @@ def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
     regression = any(entry["regression"] for entry in [*metrics.values(), *startup.values()])
     noise = noise_problems("baseline", baseline) + noise_problems("candidate", candidate)
     blockers += noise + (["rerun quiet or in reverse order"] if noise else [])
+    overlap = {name: replay_overlap(report) for name, report in (("baseline", baseline), ("candidate", candidate))}
+    if baseline.get("replay") or candidate.get("replay"):
+        blockers += [f"{name}: replay did not prove arrival while history remained active"
+                     for name, evidence in overlap.items() if not evidence["proven"]]
+    if mode == "ab" and candidate.get("replay"):
+        if not overlap["candidate"]["fresh_arrival_requests"]:
+            blockers.append("candidate: arrival demand joined an older frozen population")
+        if not overlap["candidate"]["primary_membership_predates_arrivals"]:
+            blockers.append("candidate: primary membership was not frozen before arrivals; priority attribution is unproven")
+    arrival_readiness = {}
+    baseline_arrivals = (baseline.get("replay") or {}).get("arrivals") or []
+    candidate_arrivals = (candidate.get("replay") or {}).get("arrivals") or []
+    if [a["name"] for a in baseline_arrivals] != [a["name"] for a in candidate_arrivals]:
+        raise ValueError("arms reported different arrival sequences")
+    for a, b in zip(baseline_arrivals, candidate_arrivals):
+        arrival_readiness[a["name"]] = gate(a.get("ready_seconds"), b.get("ready_seconds"), MIN_GATED_SECONDS)
+        if a.get("ready_seconds") is None or b.get("ready_seconds") is None:
+            missing.append("arrival readiness: " + a["name"])
+    regression = regression or any(v["regression"] for v in arrival_readiness.values())
     result = {"mode": mode, "semantic_parity": parity, "metrics": metrics, "startup": startup,
               "missing_metrics": missing, "blockers": blockers,
               "whole_process": {name: {"baseline": _metric(baseline, path), "candidate": _metric(candidate, path)}
-                                for name, path in WHOLE_PROCESS.items()}}
+                                for name, path in WHOLE_PROCESS.items()},
+              # Recorded, never gated.
+              "memory_retention": {role: report.get("memory_retention") for role, report in
+                                   (("baseline", baseline), ("candidate", candidate))},
+              "replay_followup_rounds": {role: (report.get("replay") or {}).get("followup_rounds") for role, report in
+                                         (("baseline", baseline), ("candidate", candidate))},
+              "replay_overlap": overlap, "arrival_readiness": arrival_readiness}
     if mode == "aa":
         # A/A measures the noise every later pair is judged against, so it is
         # refused on the same host-noise rule before any verdict.
-        verdict = "refused" if blockers else "exceeds-gate" if regression or not parity \
+        spread = spread_exceeds_gate([*metrics.values(), *startup.values(), *arrival_readiness.values()])
+        verdict = "refused" if blockers else "exceeds-gate" if spread or not parity \
             else "incomplete" if missing else "within-gate"
-        return {**result, "noise": verdict, "release_gate": "not-applicable"}
+        return {**result, "spread_exceeds_gate": spread, "noise": verdict, "release_gate": "not-applicable"}
     rejected = not parity or regression
     return {**result, "rejected": rejected,
             "release_gate": "rejected" if rejected else "refused" if blockers else "incomplete",
             "remaining_evidence": ["the full-corpus settlement workload (all labels, coarse history)",
-                                   "actual recent arrival during coarse history (source replay)",
+                                   *([] if all(v["proven"] for v in overlap.values()) else
+                                     ["actual recent arrival during coarse history (source replay)"]),
+                                   *([] if not candidate.get("replay") or overlap["candidate"]["ready_during_history"] else
+                                     ["recent arrivals ready before candidate history settles"]),
                                    "reverse-order pair", "old-binary recovery after candidate publication",
                                    *(f"missing metric: {name}" for name in missing)]}
 
@@ -1566,6 +1966,12 @@ def main():
     prep.add_argument("--completed-backup", required=True, type=Path)
     prep.add_argument("--master", required=True, type=Path)
     prep.add_argument("--attestation", type=Path, help=f"completed-backup record when the backup has no {BACKUP_MANIFEST}")
+    inv = sub.add_parser("invalidate", help="make a new workload master with missing labels and dirty caches")
+    inv.add_argument("--master", required=True, type=Path)
+    inv.add_argument("--destination", required=True, type=Path)
+    inv.add_argument("--profile", required=True, choices=["recent", "full"])
+    inv.add_argument("--clock", required=True)
+    inv.add_argument("--recent-conversations", type=int, default=20)
     fr = sub.add_parser("freeze")
     fr.add_argument("--master", required=True, type=Path)
     fr.add_argument("--name", required=True)
@@ -1624,6 +2030,8 @@ def main():
     args = p.parse_args()
     if args.action == "prepare":
         value = prepare(args.completed_backup, args.master, args.attestation)
+    elif args.action == "invalidate":
+        value = invalidate(args.master, args.destination, args.profile, args.clock, args.recent_conversations)
     elif args.action == "freeze":
         value = freeze(args.master, args.name, args.path)
     elif args.action == "run":

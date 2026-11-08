@@ -1503,16 +1503,22 @@ func TestMessageLabelFacts(t *testing.T) {
 	// A selected batch publishes only its conversations and claims no
 	// readiness; an empty selection publishes nothing.
 	execTx(t, c.DB, `DELETE FROM meta WHERE key='message_label_facts_ready'`)
-	if step, err := c.refreshMessageLabelFactsFor(ctx, nil, 0); err != nil || len(step.Done)+len(step.Remaining) != 0 {
-		t.Fatalf("an empty selection: %+v %v", step, err)
+	if step, next, err := c.refreshMessageLabelFactsFor(ctx, nil, 0); err != nil || len(step.Done)+len(step.Remaining) != 0 || next != messageLabelFactsMessages {
+		t.Fatalf("an empty selection: %+v %d %v", step, next, err)
 	}
 	if pending, err := c.messageLabelFactsPendingFor(ctx, []string{"facts-a", "facts-b"}); err != nil || !slices.Equal(pending, []string{"facts-a", "facts-b"}) {
 		t.Fatalf("pending facts: %v %v", pending, err)
 	}
-	step, err := c.refreshMessageLabelFactsFor(ctx, []string{"facts-b"}, 0)
+	// A batch that publishes under the target hold grows the next budget as
+	// the daemon's does; one that stores nothing keeps it.
+	override(t, &messageLabelFactsTarget, time.Hour)
+	step, next, err := c.refreshMessageLabelFactsFor(ctx, []string{"facts-b"}, 100)
 	if err != nil || !slices.Equal(step.Done, []string{"facts-b"}) || scalar(`SELECT COUNT(*) FROM message_label_facts_dirty WHERE conversation_id='facts-a'`) != 1 ||
-		scalar(`SELECT COUNT(*) FROM meta WHERE key='message_label_facts_ready'`) != 0 {
-		t.Fatalf("a selected batch: %+v %v", step, err)
+		scalar(`SELECT COUNT(*) FROM meta WHERE key='message_label_facts_ready'`) != 0 || next != 200 {
+		t.Fatalf("a selected batch: %+v %d %v", step, next, err)
+	}
+	if step, next, err = c.refreshMessageLabelFactsFor(ctx, []string{"facts-b"}, 200); err != nil || !slices.Equal(step.Done, []string{"facts-b"}) || next != 200 {
+		t.Fatalf("a published selection: %+v %d %v", step, next, err)
 	}
 	flush()
 	parity()

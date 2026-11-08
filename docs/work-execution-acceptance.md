@@ -1,5 +1,7 @@
 # Work execution implementation and acceptance
 
+The current production-copy verification record is [Execution verification](work-execution-validation.md). Older evidence-status entries below describe their dated runs.
+
 The design is [work-execution-plan.md](work-execution-plan.md). This record
 separates implemented contracts and observed evidence from release acceptance.
 No production catalog is used by the experiments. The catalog floor is 24
@@ -322,8 +324,13 @@ against the same gates, startup included. It makes no release claim.
   hours. It is the release gate for derived settlement and stays explicitly
   unmet until both arms run it.
 
-Actual recent arrival during coarse history needs a source replay into the
-arm, which the probe does not do yet; that gate is unmet as well.
+Actual recent arrival requires deterministic provider-file replay into the
+private arm. The probe now supports this, with declared conversation identity,
+per-wave message growth and readiness evidence. Replay only counts as overlap
+when both arms prove the arrivals became pending before primary history ended;
+follow-up drains do not count. This does not establish that an indivisible
+relational pass was already computing. Both realistic evidence gates remain
+unmet until their runs are recorded.
 
 ## Required integrated evidence
 

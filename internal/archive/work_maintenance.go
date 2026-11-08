@@ -875,6 +875,10 @@ func (s *Server) submitPendingFacts(ctx context.Context) {
 	}
 	pending, err := catalogExists(ctx, c, "SELECT 1 FROM message_label_facts_dirty")
 	if err == nil && !pending {
+		// A drained queue may still owe its readiness to a library pass.
+		pending, err = c.messageLabelFactsReadyPending(ctx)
+	}
+	if err == nil && !pending {
 		return
 	}
 	if _, _, err := w.submitContinuing(ctx, kindLabelFacts, workPriorityBackfill); err != nil && ctx.Err() == nil && !errors.Is(err, errWorkQueueFull) {

@@ -38,10 +38,26 @@ func (s *Server) workDefinitions(authority *workAuthority) ([]workDefinition, er
 		selectSQL: `SELECT conversation_id id,revision FROM parallelism_dirty WHERE conversation_id NOT IN (SELECT value FROM json_each(?)) ORDER BY conversation_id LIMIT ?`, step: func(ctx context.Context, ids []string, _ workAllocation) (workDomainStep, error) {
 			return c.refreshParallelismFor(ctx, ids)
 		}}
+	// Match the classic projector's adaptive publication budget. A kind runs
+	// one batch at a time, so its budget belongs to the adapter instance.
+	factsBudget := messageLabelFactsMessages
 	facts := &conversationWorkTask{server: s, kind: "maintenance.labels.query", cpus: 1, pending: c.messageLabelFactsPendingFor, filterFailures: true,
 		prepare:   func(ctx context.Context, _ string) error { return c.ensureMessageLabelFacts(ctx) },
 		selectSQL: `SELECT conversation_id id FROM message_label_facts_dirty WHERE conversation_id NOT IN (SELECT value FROM json_each(?)) ORDER BY conversation_id LIMIT ?`, step: func(ctx context.Context, ids []string, _ workAllocation) (workDomainStep, error) {
-			return c.refreshMessageLabelFactsFor(ctx, ids, 0)
+			step, next, err := c.refreshMessageLabelFactsFor(ctx, ids, factsBudget)
+			factsBudget = next
+			return step, err
+		},
+		// Selections never claim readiness. Once a library page finds the
+		// whole queue empty, the global refresh publishes it under its own
+		// generation guard, or stores a batch that arrived meanwhile.
+		tailPending: c.messageLabelFactsReadyPending,
+		tail: func(ctx context.Context) (int, error) {
+			count, timing, err := c.refreshMessageLabelFactsBudget(ctx, factsBudget)
+			if err == nil && count > 0 {
+				factsBudget = messageLabelFactsNextBudget(factsBudget, timing.hold)
+			}
+			return count, err
 		}}
 	labels := &modelWorkTask{server: s, authority: authority, kind: "analysis.labels", limit: labelsChainLimit,
 		config: func(ctx context.Context, power powerState) modelWorkConfig {
@@ -246,7 +262,11 @@ func runConversationWork(ctx context.Context, c *Catalog, selection workSelectio
 		// Charged at the canonical revisions, as finite targets are.
 		return workRetargetedFailures(selection.Units, before), workUnitFailed(err, canonicalMembers(selection.Units, before)...)
 	}
-	after, err := workRevisions(ctx, c, ids)
+	// Only finished or superseded units publish coverage. Pending and failed
+	// units use their before revision below; rereading the whole selection
+	// for a domain-limited step repeatedly scans units it has not reached.
+	afterIDs := workDomainIDs(append(slices.Clone(result.Done), result.Superseded...))
+	after, err := workRevisions(ctx, c, afterIDs)
 	if err != nil {
 		return workBatchResult{}, err
 	}

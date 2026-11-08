@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 import sqlite3
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -62,6 +63,44 @@ class Fixture(unittest.TestCase):
 
 
 class WorkExperimentTests(Fixture):
+    def test_invalidation_changes_only_derived_state_in_a_new_clone(self):
+        backup, db = self.backup()
+        db.executescript("""
+            ALTER TABLE messages ADD COLUMN conversation_id TEXT;
+            ALTER TABLE messages ADD COLUMN created_at TEXT;
+            INSERT INTO conversations VALUES('old'),('recent'),('empty');
+            UPDATE messages SET conversation_id='old',created_at='2026-11-01T00:00:00.000Z';
+            INSERT INTO messages VALUES('new','retained source text','recent','2026-11-07T00:00:00.000Z');
+            INSERT INTO messages VALUES('empty-msg','no label work','empty','2026-11-07T01:00:00.000Z');
+            CREATE TABLE message_labels(message_id TEXT,conversation_id TEXT);
+            INSERT INTO message_labels VALUES('kept','old'),('new','recent');
+            CREATE TABLE message_labels_conversations(conversation_id TEXT PRIMARY KEY);
+            INSERT INTO message_labels_conversations VALUES('old'),('recent');
+            CREATE TABLE message_labels_dirty(conversation_id TEXT PRIMARY KEY,token TEXT);
+            CREATE TABLE parallelism_dirty(conversation_id TEXT PRIMARY KEY,revision TEXT);
+            CREATE TABLE message_label_facts_dirty(conversation_id TEXT PRIMARY KEY);
+            CREATE TABLE message_authorship(message_id TEXT,spans_json TEXT);
+            INSERT INTO message_authorship VALUES('new','writing stays intact');
+        """)
+        master = self.root / "master"
+        before = work.prepare(backup, master)
+        for profile, expected in (("recent", 1), ("full", 0)):
+            output = self.root / profile
+            result = work.invalidate(master, output, profile, "2026-11-08T00:00:00Z", 1)
+            self.assertEqual(result["counts"], before["counts"])
+            with sqlite3.connect(output / "catalog/catalog.sqlite3") as copied:
+                self.assertEqual(copied.execute("SELECT count(*) FROM message_labels").fetchone()[0], expected)
+                self.assertEqual(copied.execute("SELECT count(*) FROM messages").fetchone()[0], 3)
+                self.assertEqual(copied.execute("SELECT spans_json FROM message_authorship").fetchone()[0], "writing stays intact")
+                self.assertEqual(copied.execute("SELECT count(*) FROM parallelism_dirty").fetchone()[0], (1 if profile == "recent" else 3))
+                if profile == "recent":
+                    self.assertEqual(copied.execute("SELECT conversation_id FROM parallelism_dirty").fetchall(), [("recent",)])
+        self.assertEqual(work.checked_master(master), before)
+        with sqlite3.connect(master / "catalog/catalog.sqlite3") as original:
+            self.assertEqual(original.execute("SELECT count(*) FROM message_labels").fetchone()[0], 2)
+        with self.assertRaises(ValueError):
+            work.invalidate(master, self.root / "no-timezone", "full", "2026-11-08T00:00:00")
+
     def test_completed_backup_wal_is_cloned_before_sqlite_is_opened(self):
         backup, source = self.backup()
         master = self.root / "master"
@@ -103,7 +142,22 @@ class WorkExperimentTests(Fixture):
             "catalog": {"path": "catalog/catalog.sqlite3", "size": s.st_size, "mtime_ns": s.st_mtime_ns + 1}}))
         with self.assertRaises(ValueError):
             work.prepare(backup, self.root / "replaced")
-        for name in ("unproven", "incomplete", "replaced"):
+        manifest = backup / work.BACKUP_MANIFEST
+        value = json.loads(manifest.read_text())
+        value["catalog"]["mtime_ns"] = s.st_mtime_ns
+        value["missing"] = ["preserved"]
+        manifest.write_text(json.dumps(value))
+        with self.assertRaises(ValueError):
+            work.prepare(backup, self.root / "partial")
+        value["missing"] = []
+        manifest.write_text(json.dumps(value))
+        proof = backup / "work-snapshot.json"
+        proof.write_text(json.dumps({"version": 1, "complete": False}))
+        with self.assertRaisesRegex(ValueError, "source checks"):
+            work.prepare(backup, self.root / "unverified-snapshot")
+        proof.write_text(json.dumps({"version": 1, "complete": True, "source_backup_history_unchanged": True}))
+        work.prepare(backup, self.root / "verified-snapshot")
+        for name in ("unproven", "incomplete", "replaced", "partial", "unverified-snapshot"):
             self.assertFalse((self.root / name).exists())
 
     def test_rejects_overlap_existing_artifacts_links_and_changed_backups(self):
@@ -159,6 +213,12 @@ class WorkExperimentTests(Fixture):
         with mock.patch.object(work, "Path", side_effect=lambda value: mounts if value == "/Volumes" else original_path(value)):
             with self.assertRaisesRegex(ValueError, "library Pharos uses"):
                 work.prepare(backup, remounted / "experiment")
+        # Go ignores a stale non-local remount path while retaining the
+        # explicit config. Such an entry must not block an unrelated copy.
+        registry.write_text(json.dumps({"libraries": [{"config": str(library / "archive.toml"), "relative": "../../../old-mount/archive.toml"}]}))
+        work.prepare(backup, self.root / "stale-relative-master")
+        with self.assertRaisesRegex(ValueError, "library Pharos uses"):
+            work.prepare(backup, library / "still-live")
         # An unreadable registry refuses rather than guessing.
         registry.write_text("{")
         with self.assertRaisesRegex(ValueError, "registry"):
@@ -343,6 +403,26 @@ PRODUCT = {"route": work.PRODUCT_ROUTE, "query": {"version": 3}, "latency_ms": 2
 KINDS = ["analysis.authorship", "analysis.labels", "maintenance.labels.query", "maintenance.parallelism"]
 
 
+REPLAY = {"input": "arrivals", "source": {"name": "replay-claude", "kind": "claude", "account": "local"},
+          "identity": {"provider": "claude", "native_ids": ["s1", "s2"], "expect": "new"},
+          "count_query": "SELECT count(*) FROM messages", "ready_checks": ["SELECT 1 WHERE 0"],
+          "arrivals": [{"name": "a1", "at_seconds": 60, "files": [{"path": "proj/s1.jsonl", "lines": 1}]},
+                       {"name": "a2", "at_seconds": 240, "files": [{"path": "proj/s1.jsonl"},
+                                                                   {"path": "proj/s2.jsonl", "lines": 1}]}]}
+
+
+def replay_arrivals(*names):
+    ids = REPLAY["identity"]["native_ids"]
+    return {"identity": {"provider": "claude", "account": "local", "expect": "new", "native_ids": len(ids),
+                         "native_ids_sha256": hashlib.sha256(json.dumps(sorted(ids), separators=(",", ":")).encode()).hexdigest(),
+                         "present_before": 0, "present_after": len(ids),
+                         "other_conversations_before": 5, "other_conversations_after": 5},
+            "arrivals": [{"name": name, "count_before": index, "count_after": index + 1,
+                          "identity_message_count_before": index, "identity_message_count_after": index + 1,
+                          "applied_seconds": index * 20 + 10}
+                         for index, name in enumerate(names)], "followup_rounds": 1}
+
+
 def probe_descriptor(**extra):
     value = {"name": "probe", "clock": "2026-11-01T22:00:00Z",
              "phases": [{"name": "recent", "action": "recent", "kinds": ["analysis.labels"]},
@@ -458,6 +538,25 @@ class ProbeArmTests(Fixture):
                        {"sources": [{"name": "claude", "kind": "claude", "input": "claude"}]}):
             with self.assertRaises(ValueError):
                 work.validate_probe_descriptor(probe_descriptor(**broken))
+        work.validate_probe_descriptor(probe_descriptor(replay=REPLAY, memory={"interval_seconds": 1, "idle_seconds": 120}))
+        first, second = REPLAY["arrivals"]
+        for broken in ({**REPLAY, "input": "../arrivals"},
+                       {**REPLAY, "source": {"name": "Replay", "kind": "claude"}},
+                       {**REPLAY, "count_query": "DELETE FROM messages"},
+                       {**REPLAY, "ready_checks": ["UPDATE messages SET id = 1"]},
+                       {**REPLAY, "arrivals": []},
+                       {**REPLAY, "arrivals": [second, first]},
+                       {**REPLAY, "arrivals": [first, {**second, "name": "a1"}]},
+                       {**REPLAY, "arrivals": [{**first, "files": [{"path": "/etc/passwd"}]}]},
+                       {**REPLAY, "arrivals": [{**first, "files": [{"path": "proj/../../x"}]}]},
+                       # A whole file, then a prefix of it, would shrink what was written.
+                       {**REPLAY, "arrivals": [second, {**first, "at_seconds": 300}]},
+                       {**REPLAY, "arrivals": [{**first, "files": [{"path": "proj/s1.jsonl", "lines": 0}]}]}):
+            with self.assertRaises(ValueError):
+                work.validate_probe_descriptor(probe_descriptor(replay=broken))
+        for memory in ({"interval_seconds": 0}, {"idle_seconds": -1}, {"interval_seconds": 1.5}, {"peak": 1}):
+            with self.assertRaises(ValueError):
+                work.validate_probe_descriptor(probe_descriptor(memory=memory))
         legacy = probe_descriptor(stages=["timing"], pending_checks={"timing": ["SELECT 1 WHERE 0"]})
         del legacy["phases"]
         work.validate_probe_descriptor(legacy)
@@ -486,6 +585,139 @@ class ProbeArmTests(Fixture):
         with self.assertRaises(RuntimeError):
             work.probe_run(failing, failing_sha, master, self.root / "e", probe_descriptor(), "candidate", "classic", baseline_sha)
         self.assertIn("boom", json.loads((self.root / "e/report.json").read_text())["failure"]["message"])
+
+    def test_frozen_model_directory_requires_explicit_variant(self):
+        settings = {"labels_model_dir": {"input": "model"}}
+        with self.assertRaisesRegex(ValueError, "explicit labels_variant"):
+            work.validate_probe_descriptor(probe_descriptor(model_settings=settings))
+        with self.assertRaisesRegex(ValueError, "explicit labels_variant"):
+            work.validate_descriptor(descriptor(model_settings=settings))
+        for variant in ("fp32", "int8"):
+            pinned = {**settings, "labels_variant": variant}
+            work.validate_probe_descriptor(probe_descriptor(model_settings=pinned))
+            work.validate_descriptor(descriptor(model_settings=pinned))
+
+    def test_replay_must_overlap_primary_history_in_each_arm(self):
+        report = {"engine_actual": {"value": "classic"},
+                  "probe": {"steps": [{"name": "analysis.labels", "started_seconds": 1, "wall_seconds": 29}],
+                            "windows": {"work": [1000, 1100]}},
+                  "replay": {"arrivals": [{"applied_seconds": 10, "ready_pending_at_apply": True},
+                                           {"applied_seconds": 20, "ready_pending_at_apply": True}]}}
+        self.assertTrue(work.replay_overlap(report)["proven"])
+        report["replay"]["arrivals"][-1]["applied_seconds"] = 31
+        self.assertFalse(work.replay_overlap(report)["proven"])
+        report["probe"]["steps"].append({"name": "followup:analysis.labels", "started_seconds": 31, "wall_seconds": 90})
+        self.assertFalse(work.replay_overlap(report)["proven"])
+        report["replay"]["arrivals"][-1]["applied_seconds"] = 0.5
+        self.assertFalse(work.replay_overlap(report)["proven"])
+        report["replay"]["arrivals"][-1]["applied_seconds"] = 31
+        report["engine_actual"] = {"value": "scheduled", "requests": [
+            {"scope": "recent", "history_active_until_seconds": 100},
+            {"scope": "backfill", "requested_at": "1970-01-01T00:16:41Z", "ended_seconds": 32, "history_active_until_seconds": 30}]}
+        # The observed end and an unrelated recent request cannot extend proof.
+        self.assertFalse(work.replay_overlap(report)["proven"])
+        report["replay"]["arrivals"][-1]["applied_seconds"] = 29
+        self.assertTrue(work.replay_overlap(report)["proven"])
+        report["replay"]["arrivals"][-1]["ready_pending_at_apply"] = False
+        self.assertFalse(work.replay_overlap(report)["proven"])
+        report["replay"]["arrivals"][-1]["ready_pending_at_apply"] = True
+        for arrival in report["replay"]["arrivals"]:
+            arrival["started_seconds"], arrival["ready_seconds"] = arrival["applied_seconds"], 0.5
+        self.assertTrue(work.replay_overlap(report)["ready_during_history"])
+        report["replay"]["arrivals"][-1]["ready_seconds"] = 10
+        self.assertTrue(work.replay_overlap(report)["proven"])
+        self.assertFalse(work.replay_overlap(report)["ready_during_history"])
+        report["engine_actual"]["requests"][-1].update(id=1, membership_frozen_at="1970-01-01T00:16:45Z")
+        report["engine_actual"]["requests"][0].update(id=2, membership_frozen_at="1970-01-01T00:16:44Z")
+        self.assertTrue(work.replay_overlap(report)["primary_membership_predates_arrivals"])
+        report["engine_actual"]["requests"][-1]["membership_frozen_at"] = "1970-01-01T00:17:00Z"
+        self.assertFalse(work.replay_overlap(report)["primary_membership_predates_arrivals"])
+        report["replay"]["requests"] = [{"request_id": 7, "joined_phases": [], "joined_arrival": None}]
+        self.assertTrue(work.replay_overlap(report)["fresh_arrival_requests"])
+        report["replay"]["requests"].append(dict(report["replay"]["requests"][0]))
+        self.assertFalse(work.replay_overlap(report)["fresh_arrival_requests"])
+        report["replay"]["requests"].pop()
+        report["replay"]["requests"][0]["request_id"] = 1
+        self.assertFalse(work.replay_overlap(report)["fresh_arrival_requests"])
+        report["replay"]["requests"][0]["request_id"] = 7
+        report["replay"]["followups"] = [{"id": 7}]
+        self.assertFalse(work.replay_overlap(report)["fresh_arrival_requests"])
+        del report["engine_actual"]["requests"][-1]["history_active_until_seconds"]
+        self.assertFalse(work.replay_overlap(report)["proven"])
+
+    def test_missing_arrival_readiness_is_not_a_pass(self):
+        baseline = self.probe_report(role="baseline", sha="b" * 64)
+        candidate = self.probe_report()
+        for report in (baseline, candidate):
+            report["replay"] = {"arrivals": [{"name": "wave", "ready_seconds": None}]}
+        result = work.compare_probe(baseline, candidate, "ab", "b" * 64)
+        self.assertIn("arrival readiness: wave", result["missing_metrics"])
+        candidate["replay"]["arrivals"][0]["name"] = "other"
+        with self.assertRaisesRegex(ValueError, "different arrival sequences"):
+            work.compare_probe(baseline, candidate, "ab", "b" * 64)
+
+    def test_replay_input_is_cloned_and_every_arrival_must_be_real(self):
+        master = self.master()
+        inputs = self.root / "frozen-arrivals/proj"
+        inputs.mkdir(parents=True)
+        for name in ("s1.jsonl", "s2.jsonl"):
+            (inputs / name).write_text("{}\n")
+        work.freeze(master, "arrivals", inputs.parent)
+        descriptor = probe_descriptor(replay=REPLAY, memory={"idle_seconds": 120})
+        retention = {"retained_bytes": 1 << 20, "basis": "samples"}
+        probe, sha = self.fake_probe("replayed", self.inner(replay=replay_arrivals("a1", "a2"),
+                                                            memory={"retention": retention}))
+        report = work.probe_run(probe, sha, master, self.root / "r", descriptor, "baseline", "classic", sha)
+        self.assertTrue((self.root / "r/inputs/arrivals/proj/s2.jsonl").is_file())
+        git = subprocess.run([str(self.root / "r/bin/git"), "config", "--get", "remote.origin.url"], capture_output=True)
+        self.assertNotEqual(git.returncode, 0)
+        self.assertEqual(git.stdout, b"")
+        self.assertIn("disabled", report["unfrozen_git_lookup"])
+        self.assertEqual(report["memory_retention"], retention)
+        self.assertEqual(report["replay"]["followup_rounds"], 1)
+        replay = replay_arrivals("a1", "a2")
+        replay["requests"] = [{"arrival": name, "scope": "recent", "kinds": KINDS, "request_id": i,
+                               "joined_phases": [], "submitted_seconds": (i - 7) * 20 + 11,
+                               "facts": {"id": i, "scope": "recent", "key": "recent:" + str(i), "state": "succeeded", "unfinished": 0}}
+                              for i, name in enumerate(("a1", "a2"), 7)]
+        engine = {"value": "scheduled", "basis": "work-api", "tasks": [{"kind": k} for k in KINDS],
+                  "requests": [{"state": "succeeded", "unfinished": 0} for _ in descriptor["phases"]]}
+        candidate, candidate_sha = self.fake_probe("scheduled-arrivals", self.inner(engine_actual=engine, replay=replay))
+        work.probe_run(candidate, candidate_sha, master, self.root / "scheduled-r", descriptor, "candidate", "scheduled", sha)
+        for index, change in enumerate((lambda r: r.pop("requests"),
+                                        lambda r: r["requests"][0]["facts"].update(state="cancelled"),
+                                        lambda r: r["requests"][0]["facts"].update(id=100))):
+            bad = json.loads(json.dumps(replay))
+            change(bad)
+            candidate, candidate_sha = self.fake_probe(f"bad-request-{index}", self.inner(engine_actual=engine, replay=bad))
+            with self.assertRaisesRegex(RuntimeError, "recent demand"):
+                work.probe_run(candidate, candidate_sha, master, self.root / f"bad-request-arm-{index}", descriptor,
+                               "candidate", "scheduled", sha)
+        for field in ("identity", "account", "present_before", "native_ids_sha256"):
+            bad = replay_arrivals("a1", "a2")
+            if field == "identity":
+                del bad[field]
+            else:
+                del bad["identity"][field]
+            with self.assertRaisesRegex(RuntimeError, "declared replay identity"):
+                work.replay_identity_evidence(REPLAY, bad)
+        bad = replay_arrivals("a1", "a2")
+        bad["identity"]["other_conversations_after"] = 6
+        with self.assertRaisesRegex(RuntimeError, "undeclared conversations"):
+            work.replay_identity_evidence(REPLAY, bad)
+        bad = replay_arrivals("a1", "a2")
+        bad["arrivals"][0]["identity_message_count_after"] = 0
+        with self.assertRaisesRegex(RuntimeError, "grow the declared conversations"):
+            work.replay_identity_evidence(REPLAY, bad)
+        # A missing arrival, or one that added nothing, is not a replayed arrival.
+        for replay in (replay_arrivals("a1"), {"arrivals": [{"name": "a1", "count_before": 1, "count_after": 2},
+                                                            {"name": "a2", "count_before": 2, "count_after": 2}]}):
+            probe, sha = self.fake_probe("no-arrival", self.inner(replay=replay))
+            with self.assertRaises(RuntimeError):
+                work.probe_run(probe, sha, master, self.root / f"n{len(replay['arrivals'])}", descriptor, "baseline", "classic", sha)
+        with self.assertRaisesRegex(ValueError, "not frozen"):
+            work.probe_run(probe, sha, master, self.root / "unfrozen",
+                           probe_descriptor(replay={**REPLAY, "input": "other"}), "baseline", "classic", sha)
 
     def test_only_a_settled_retained_classic_arm_becomes_a_master(self):
         master = self.master()
@@ -516,6 +748,8 @@ class ProbeArmTests(Fixture):
                             "host_noise": {"other_cpu_percent_mean": 10.0}},
                             "windows": {"work": {"peak_footprint_bytes": 1 << 30, "disk_read_bytes": 1 << 30,
                                                  "disk_written_bytes": 1 << 30,
+                                                 "coverage": {"basis": work.COVERAGE_BASIS, "memory": "complete",
+                                                              "disk": "complete"},
                                                  "host_noise": {"other_cpu_percent_mean": 10.0}},
                                         "readiness": {"host_noise": {"other_cpu_percent_mean": 10.0}}}},
                 "probe": probe}
@@ -552,6 +786,9 @@ class ProbeArmTests(Fixture):
             work.compare_probe(unpinned, self.probe_report(), "ab", old)
         quiet = compare(self.probe_report("baseline", old), "aa")
         self.assertEqual((quiet["release_gate"], quiet["noise"]), ("not-applicable", "within-gate"))
+        faster = compare(self.probe_report("baseline", old, t_settled=70.0), "aa")
+        self.assertEqual(faster["noise"], "exceeds-gate")
+        self.assertTrue(faster["spread_exceeds_gate"])
 
     def test_probe_cpu_allowances_are_reported_and_mismatches_refused(self):
         old = "b" * 64
@@ -627,6 +864,30 @@ class ProbeArmTests(Fixture):
         no_window = self.probe_report()
         del no_window["process"]["windows"]["work"]
         self.assertEqual(compare(no_window)["release_gate"], "refused")
+        # A window that could not read a present process is unavailable, not its smaller sum,
+        # even when the lower bound already looks like a regression.
+        unread = self.probe_report()
+        unread["process"]["windows"]["work"]["coverage"]["memory"] = "incomplete"
+        unread["process"]["windows"]["work"]["peak_footprint_bytes"] = 4 << 30
+        result = compare(unread)
+        self.assertIn("peak_footprint_bytes", result["missing_metrics"])
+        self.assertNotIn("disk_read_bytes", result["missing_metrics"])
+        self.assertEqual((result["rejected"], result["release_gate"]), (False, "incomplete"))
+        reset = self.probe_report()
+        reset["process"]["windows"]["work"]["coverage"]["disk"] = "incomplete"
+        self.assertLessEqual({"disk_read_bytes", "disk_written_bytes"}, set(compare(reset)["missing_metrics"]))
+        # Earlier windows without coverage stay readable but cannot pass, even A/A.
+        legacy = self.probe_report("baseline", old)
+        del legacy["process"]["windows"]["work"]["coverage"]
+        result = work.compare_probe(baseline, legacy, "aa", old)
+        self.assertEqual(result["noise"], "incomplete")
+        self.assertEqual(result["metrics"]["disk_read_bytes"]["candidate"], None)
+        # A complete zero is a known zero, so growth from it is gated.
+        quiet = self.probe_report("baseline", old)
+        quiet["process"]["windows"]["work"]["disk_written_bytes"] = 0
+        result = work.compare_probe(quiet, self.probe_report(), "ab", old)
+        self.assertEqual(result["metrics"]["disk_written_bytes"]["baseline"], 0)
+        self.assertTrue(result["rejected"])
 
     def test_unavailable_or_bursty_noise_refuses_pairs_and_aa(self):
         old = "b" * 64
@@ -689,15 +950,114 @@ class ProbeArmTests(Fixture):
     def test_window_scopes_memory_disk_and_noise_to_its_span(self):
         sampler = work.TreeSampler(os.getpid())
         sampler.libc = object()  # the samples below stand in for proc_pid_rusage readings
-        sampler.series = [(10.0, {"probe": (900, 100, 1000)}, 5.0),        # startup: before the window
-                          (11.0, {"probe": (100, 150, 1100)}, 20.0),
-                          (12.0, {"probe": (200, 170, 1200), "worker": (300, 40, 7)}, 40.0),
-                          (13.0, {"probe": (900, 400, 9000)}, 500.0)]      # post-settlement checks
+        sampler.series = [(10.0, {"probe": (900, 100, 1000)}, 5.0, 0),        # startup: before the window
+                          (11.0, {"probe": (100, 150, 1100)}, 20.0, 0),
+                          (12.0, {"probe": (200, 170, 1200), "worker": (300, 40, 7)}, 40.0, 0),
+                          (13.0, {"probe": (900, 400, 9000)}, 500.0, 0)]      # post-settlement checks
         window = sampler.window(10.5, 12.5)
         self.assertEqual((window["samples"], window["peak_footprint_bytes"]), (2, 500))
         self.assertEqual((window["disk_read_bytes"], window["disk_written_bytes"]), (70 + 40, 200 + 7))
+        self.assertEqual((window["coverage"]["memory"], window["coverage"]["disk"]), ("complete", "complete"))
         self.assertEqual(window["host_noise"]["other_cpu_percent_mean"], 30.0)
         self.assertEqual(sampler.window(12.6, 12.9)["basis"], "unavailable")
+        # A present process unread inside the window leaves memory and disk unavailable;
+        # one unread at the start edge leaves only disk unavailable.
+        sampler.series[2] = (12.0, {"probe": (200, 170, 1200)}, 40.0, 1)
+        window = sampler.window(10.5, 12.5)
+        self.assertEqual((window["peak_footprint_bytes"], window["disk_read_bytes"]), (None, None))
+        self.assertEqual(window["coverage"]["unreadable_readings"], 1)
+        self.assertIn("other_cpu_percent_mean", window["host_noise"])
+        window = sampler.window(12.5, 13.5)
+        self.assertEqual((window["peak_footprint_bytes"], window["disk_written_bytes"]), (900, None))
+        self.assertEqual(window["coverage"]["unreadable_at_start"], 1)
+        # A counter that went backwards invalidates disk across the reset, not memory.
+        sampler.series[2] = (12.0, {"probe": (200, 170, 5)}, 40.0, 0)
+        window = sampler.window(10.5, 12.5)
+        self.assertEqual((window["peak_footprint_bytes"], window["disk_written_bytes"]), (200, None))
+        self.assertEqual((window["coverage"]["disk"], window["coverage"]["counter_resets"]), ("incomplete", 1))
+        # A complete window with no I/O reports a known zero.
+        sampler.series = [(10.0, {"probe": (100, 5, 5)}, 0.0, 0), (11.0, {"probe": (100, 5, 5)}, 0.0, 0)]
+        self.assertEqual(sampler.window(10.5, 11.5)["disk_read_bytes"], 0)
+
+    def test_sampler_separates_vanished_children_from_unreadable_present_ones(self):
+        root, child, gone, other = 100, 101, 102, 200
+        table = {root: (1, root, 0.0, "probe"), child: (root, root, 0.0, "pharos-labeler-ort"),
+                 gone: (root, root, 0.0, "git"), other: (1, other, 25.0, "Finder")}
+        readings = {root: (7, 1000, 10, 20)}
+
+        def proc_pid_rusage(pid, _flavor, ref):
+            if pid not in readings:
+                return -1
+            info = ref._obj
+            info.proc_start_abstime, info.phys_footprint, info.diskio_bytesread, info.diskio_byteswritten = readings[pid]
+            return 0
+
+        sampler = work.TreeSampler(root)
+        sampler.libc = types.SimpleNamespace(proc_pid_rusage=proc_pid_rusage)
+        with mock.patch.object(work, "process_table", return_value=table), \
+                mock.patch.object(work, "_not_confirmed_gone", side_effect=lambda pid: pid != gone):
+            sampler.sample()  # the child is present but unreadable; git exited before its read
+            readings[child] = (0, 500, 0, 0)  # identity unreadable
+            sampler.sample()
+            readings.update({child: (9, 500, 1, 1), root: (7, 1000, 5, 20)})  # root's read counter reset
+            sampler.sample()
+        self.assertEqual([sample[3] for sample in sampler.series], [1, 1, 0])
+        self.assertEqual(sampler.series[0][2], 25.0)
+        summary = sampler.summary()
+        self.assertEqual((summary["coverage"]["memory"], summary["coverage"]["disk"]), ("incomplete", "incomplete"))
+        self.assertEqual((summary["coverage"]["unreadable"]["readings"], summary["coverage"]["counter_resets"]), (2, 1))
+        self.assertEqual([e["name"] for e in summary["coverage"]["unreadable"]["examples"]], ["pharos-labeler-ort"] * 2)
+        # Only vanished children: the usual lower bound, still complete.
+        sampler = work.TreeSampler(root)
+        sampler.libc = types.SimpleNamespace(proc_pid_rusage=proc_pid_rusage)
+        with mock.patch.object(work, "process_table", return_value=table), \
+                mock.patch.object(work, "_not_confirmed_gone", return_value=False):
+            sampler.sample()
+        self.assertEqual(sampler.summary()["coverage"]["disk"], "complete")
+        self.assertEqual(sampler.window(0, sampler.series[0][0] + 1)["coverage"]["memory"], "complete")
+
+    def test_whole_sample_failures_invalidate_their_windows(self):
+        sampler = work.TreeSampler(100)
+        sampler.libc = object()
+        sampler.series = [(10.0, {"probe": (100, 5, 5)}, 0.0, 0),
+                          (13.0, {"probe": (200, 10, 10)}, 0.0, 0)]
+        sampler.samples = 2
+        with mock.patch.object(sampler, "sample", side_effect=OSError("process table unavailable")), \
+                mock.patch.object(work.time, "time", return_value=12.0), \
+                mock.patch.object(sampler.stop_event, "wait", side_effect=lambda _timeout: sampler.stop_event.set()):
+            sampler.run()
+        window = sampler.window(10.5, 13.5)
+        self.assertIsNone(window["peak_footprint_bytes"])
+        self.assertIsNone(window["disk_read_bytes"])
+        self.assertEqual(window["coverage"]["sampling_gaps"], 1)
+        edge = sampler.window(12.5, 13.5)
+        self.assertEqual(edge["peak_footprint_bytes"], 200)
+        self.assertIsNone(edge["disk_written_bytes"])
+        self.assertEqual(edge["coverage"]["start_edge_gaps"], 1)
+        self.assertEqual(sampler.summary()["coverage"]["memory"], "incomplete")
+        for error, unknown in ((ProcessLookupError(), False), (PermissionError(), True), (OSError("failed"), True)):
+            with mock.patch.object(work.os, "kill", side_effect=error):
+                self.assertEqual(work._not_confirmed_gone(100), unknown)
+        with mock.patch.object(work.os, "kill", side_effect=AssertionError("not a process ID")):
+            self.assertTrue(work._not_confirmed_gone(0))
+
+    def test_hosts_without_posix_supervision_are_refused_before_any_launch(self):
+        master = self.master()
+        probe, sha = self.binary("unsupervised-probe")
+        saved = os.WNOWAIT
+        del os.WNOWAIT
+        try:
+            with mock.patch.object(work.subprocess, "Popen", side_effect=AssertionError("launched")), \
+                    mock.patch.object(work, "TreeSampler", side_effect=AssertionError("sampled")):
+                with self.assertRaisesRegex(RuntimeError, "WNOWAIT"):
+                    work.supervised(["/bin/true"], {"PATH": "/usr/bin:/bin"}, self.root / "log", 20)
+                self.assertFalse((self.root / "log").exists())
+                with self.assertRaisesRegex(RuntimeError, "WNOWAIT"):
+                    work.probe_run(probe, sha, master, self.root / "probe-arm", probe_descriptor(), "baseline",
+                                   "classic", sha)
+                self.assertFalse((self.root / "probe-arm").exists())
+        finally:
+            os.WNOWAIT = saved
 
     @unittest.skipUnless(sys.platform == "darwin", "process-tree samples need libproc")
     def test_supervised_scopes_samples_to_the_commands_own_windows(self):

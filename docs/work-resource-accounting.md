@@ -151,7 +151,7 @@ complete set (`markers_complete`).
     "disk":   {"unit": "bytes_per_second", "basis": "proc_pid_rusage", "available": true},
     "gpu":    {"unit": "percent_driver_time", "basis": "IOAccelerator.AppUsage.accumulatedGPUTime", "available": true}
   },
-  "samples": {"t": [], "cpu": [], "memory": [], "disk": [], "cpu_partial": [], "disk_partial": [], "processes": []},
+  "samples": {"t": [], "cpu": [], "memory": [], "disk": [], "cpu_partial": [], "disk_partial": [], "memory_partial": [], "processes": []},
   "gpu": {"t": [], "value": [], "partial": []},
   "segments": [{"t": 0, "reason": "started|gap|restart", "detail": ""}],
   "coverage": [{"t": 0, "covered": [{"pid": 1, "role": "service"}], "omitted": []}],
