@@ -531,6 +531,18 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Errorf("open Pharos to connect to this application"), http.StatusUnauthorized)
 		return
 	}
+	// Liveness alone cannot tell the native window whether to retry a page:
+	// the initial authenticated navigation opens the selected library under
+	// mu, and a catalog upgrade can hold it for minutes. Before /app/state
+	// answers, the window does not even know which library to scope its probe
+	// to. Report that routing is busy without waiting on, or starting, a child.
+	if r.URL.Path == "/api/ready" && r.URL.Query().Get("routing") == "1" {
+		if !m.mu.TryLock() {
+			writeJSON(w, map[string]any{"ready": false}, http.StatusServiceUnavailable)
+			return
+		}
+		m.mu.Unlock()
+	}
 	// The broker answers for itself; a request scoped to a library (the
 	// app's window asking whether its page can load) goes on to that
 	// library's service, below.

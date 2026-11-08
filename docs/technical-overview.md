@@ -21,6 +21,10 @@ Startup keeps the native lighthouse visible until the first web page finishes
 loading or its navigation is cancelled or diverted to a download. Later reloads
 and navigations keep the current page visible without the startup overlay.
 The broker answering `/api/ready` alone does not mean its library is open.
+The native window's page-recovery probe adds `?routing=1`, which reports busy
+while catalog initialization holds the broker's routing lock, even before the
+window learns the selected library. It waits and reloads automatically once
+routing is available, instead of exhausting retries against broker liveness.
 Catalog opens reuse a completed initialization for the same executable, schema,
 and Library projection, while still registering the current Mac. A new build or
 an older catalog runs the full migration and backfill pass before serving pages.
