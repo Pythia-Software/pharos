@@ -126,7 +126,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
     const percent = drawn.share || catalog.measures[drawn.metric].format.kind === "percent";
     // The engine has already applied smoothing, cumulative totals and shares.
     // Retain only the selected series and never smooth these amounts twice.
-    const series = built.series.filter(item => !built.selected.length || built.selected.includes(item.key) !== built.excluded);
+    const series = built.allHidden?[]:built.series.filter(item => !built.selected.length || built.selected.includes(item.key) !== built.excluded);
     const ready = built.buckets.some(bucket => series.some(item => bucket.values[item.key] !== undefined));
     return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, drawn), action: DASHBOARD_CARD_ACTION,
       buckets: built.buckets, series, note: analysisNote(catalog, drawn),

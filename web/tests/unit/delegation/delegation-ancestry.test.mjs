@@ -1,45 +1,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { activeLaneRows, laneCoverage, launchAttemptNote, segmentPosition, sessionAncestors } = await import("../../../src/delegation-ancestry");
+const { sessionOutsideWindow, laneCoverage, launchAttemptNote, segmentPosition, sessionAncestors } = await import("../../../src/delegation-ancestry");
 const { timelineSessionBranches } = await import("../../../src/timeline-label-model");
 const { delegationAliasRequests, normalizeDelegationView, normalizeDisclosureAliases, resolveSessionAlias } = await import("../../../src/delegation-aliases");
 
 // Rows carry no numbering: parentage is parent_id and the explicit chain.
 const row = (id, parent_id, start, end, extra = {}) => ({ id, parent_id, start, end, depth: 0, child_count: 0, ancestry: { state: parent_id ? "resolved" : "root" }, ...extra });
 
-test("an inactive parent stays while a descendant is active, by ID rather than position", () => {
-  const rows = [row("root", undefined, 0, 10, { child_count: 1 }), row("mid", "root", 0, 10, { child_count: 1 }), row("leaf", "mid", 50, 60), row("other", undefined, 0, 10)];
-  assert.deepEqual(activeLaneRows(rows, rows, [40, 70]).map(n => n.id), ["root", "mid", "leaf"]);
-  assert.deepEqual(activeLaneRows(rows, rows, [0, 5]).map(n => n.id), ["root", "mid", "other"]);
-  // Siblings whose display labels would share a prefix ("1" and "1.1" vs "11") cannot leak into each other.
-  const lookalike = [row("a", undefined, 0, 1, { child_count: 1 }), row("a-child", "a", 50, 60), row("aa", undefined, 0, 1)];
-  assert.deepEqual(activeLaneRows(lookalike, lookalike, [40, 70]).map(n => n.id), ["a", "a-child"]);
+test("the selected window blanks only sessions or branches known to be outside it", () => {
+  const parent = row("parent", undefined, 0, 10, {child_count: 1, subtree_start: 0, subtree_end: 60});
+  assert.equal(sessionOutsideWindow(parent, [40, 70]), true);
+  assert.equal(sessionOutsideWindow(parent, [40, 70], true), false, "a child can overlap an inclusive branch");
+  assert.equal(sessionOutsideWindow(parent, [70, 80], true), true);
+  assert.equal(sessionOutsideWindow({...parent, subtree_end: null}, [70, 80], true), false, "unknown branch bounds remain visible");
+  assert.equal(sessionOutsideWindow(row("unknown", undefined, null, null), [40, 70]), false);
+  assert.equal(sessionOutsideWindow(row("edge", undefined, 10, 40), [40, 70]), false, "window boundaries are inclusive");
+  assert.equal(sessionOutsideWindow(parent, null), false);
 });
 
-test("an explicit ancestor chain covers parents beyond the page, and lane order is kept", () => {
-  const rows = [row("grand", undefined, 0, 1), row("leaf", "parent", 50, 60, { ancestor_ids: ["parent", "grand"] })];
+test("coverage reports missing and unresolved ancestors for retained lanes", () => {
+  const rows = [row("grand", undefined, 0, 1), row("leaf", "parent", 50, 60, { ancestor_ids: ["parent", "grand"] }), row("orphan", undefined, null, null, { ancestry: { state: "missing" } })];
   assert.deepEqual(sessionAncestors(rows[1], new Map()), ["parent", "grand"]);
-  const shown = activeLaneRows(rows, rows, [40, 70]);
-  assert.deepEqual(shown.map(n => n.id), ["grand", "leaf"]);
-  assert.deepEqual(laneCoverage(rows, shown), { omitted: ["parent"], unresolved: [] });
-  // Lanes are capped separately from the rows that decide activity.
-  assert.deepEqual(activeLaneRows(rows, [rows[0]], [40, 70]).map(n => n.id), ["grand"]);
-});
-
-test("a folded or paginated subtree keeps its parent through the subtree span", () => {
-  const folded = row("parent", undefined, 0, 1, { child_count: 2, subtree_start: 0, subtree_end: 60 });
-  assert.deepEqual(activeLaneRows([folded], [folded], [40, 70]).map(n => n.id), ["parent"]);
-  // With every child loaded, the children decide.
-  const children = [row("c1", "parent", 0, 1), row("c2", "parent", 2, 3)];
-  assert.deepEqual(activeLaneRows([folded, ...children], [folded, ...children], [40, 70]), []);
-});
-
-test("unresolved ancestry is reported and never borrows a parent", () => {
-  const rows = [row("root", undefined, 0, 1, { child_count: 1 }), row("orphan", undefined, 50, 60, { ancestry: { state: "missing" } }), row("tied", "root", 50, 60, { ancestry: { state: "ambiguous" } }), row("loop", "loop-b", 50, 60, { ancestry: { state: "cycle" } }), row("loop-b", "loop", 50, 60, { ancestry: { state: "cycle" } })];
-  const shown = activeLaneRows(rows, rows, [40, 70]);
-  assert.deepEqual(shown.map(n => n.id), ["root", "orphan", "tied", "loop", "loop-b"], "a cycle terminates");
-  assert.deepEqual(laneCoverage(rows, shown).unresolved, ["orphan", "tied", "loop", "loop-b"]);
+  assert.deepEqual(laneCoverage(rows, rows), { omitted: ["parent"], unresolved: ["orphan"] });
   assert.equal(timelineSessionBranches(rows).get("orphan").parentDepth, undefined);
 });
 

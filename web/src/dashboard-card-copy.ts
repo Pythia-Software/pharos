@@ -34,7 +34,9 @@ export function analysisCardSelection(catalog: AnalysisCatalog, input: AnalysisS
   // A selection survives visits to views without a selectable breakdown.
   // Component trends and comparisons select parts; other breakdowns select groups.
   const components = (isTrendView(state.view) || state.view === "compare") && catalog.components?.[state.split];
-  if (state.view === "cycle" || !split?.fields.length && !components || !state.selection?.values.length) return "";
+  if (state.view === "cycle" || !split?.fields.length && !components) return "";
+  if(state.selection?.allHidden)return "No series shown";
+  if(!state.selection?.values.length)return "";
   return `${state.selection.excluded ? "Exclude" : "Only"} ${split?.label.toLowerCase() ?? "series"}: ${state.selection.values.map(value => {
     if (split?.values?.[value]) return split.values[value];
     if (split && split.fields.length > 1) {

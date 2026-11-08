@@ -1,3 +1,4 @@
+import {validHiddenSelection,type SliceSelection} from "./chart-selection";
 import {peopleMessageLabelCatalog} from "./people-message-labels";
 import {messageLabelResultParameters} from "./message-label-results-model";
 import { cardNavigationURL } from "./card-exploration";
@@ -260,7 +261,7 @@ export function judgeChart(facts: ChartFacts, version: number, chart: Record<str
     const range = view.numeric[name];
     if (name === "selection") {
       const selection = value as { values?: unknown; excluded?: unknown };
-      if (!selection || typeof selection.excluded !== "boolean" || !Array.isArray(selection.values) || selection.values.length > (range as { max_values: number }).max_values || selection.values.some(item => typeof item !== "string")) return "invalid";
+      if (!selection || typeof selection.excluded !== "boolean" || !Array.isArray(selection.values) || selection.values.length > (range as { max_values: number }).max_values || selection.values.some(item => typeof item !== "string") || !validHiddenSelection(selection as SliceSelection<unknown>)) return "invalid";
     } else if (view.rules.some(rule => rule.list && rule.option === name)) {
       if (!Array.isArray(value) || value.some(item => !view.domains[name].includes(item)) || new Set(value).size !== value.length) return "invalid";
     } else if (range && "min" in range) {

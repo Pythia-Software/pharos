@@ -1,13 +1,10 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ChartSeries } from "./chart-series";
-import type { LegendAction } from "./chart-selection";
-import type { PopulationAction } from "./dashboard-population";
+import {legendMenuItems,type LegendAction} from "./chart-selection";
 import { Icon } from "./icons";
 
-// A legend value's menu. The selection only chooses what is drawn; where the
-// dashboard has a population (onPopulation), the last two items filter every
-// view and breakdown instead.
-export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSelection, onAction, groupSize, mixed = false, swatch, onPopulation }: { item: ChartSeries; active: boolean; dimmed: boolean; selectionActive: boolean; soleSelection: boolean; onAction: (action: LegendAction) => void; groupSize?: number; mixed?: boolean; swatch?: React.ReactNode; onPopulation?: (action: PopulationAction) => void }) {
+// Shared visibility menu for individual legend values and groups.
+export function ChartLegendChip({ item, active, dimmed, selectionActive, onAction, groupSize, mixed = false, swatch, visibleCount, hiddenCount, iconOnly = false, description, readOnly = false, onActivate }: { item: ChartSeries; active: boolean; dimmed: boolean; selectionActive: boolean; onAction: (action: LegendAction) => void; groupSize?: number; mixed?: boolean; swatch?: React.ReactNode; visibleCount?: number; hiddenCount?: number; iconOnly?: boolean; description?: string; readOnly?: boolean; onActivate?: () => void; }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLDivElement>(null);
   const firstFocus = useRef(0);
@@ -60,24 +57,21 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
     close(true);
     onAction(action);
   }
-  function filter(action: PopulationAction) {
-    close(true);
-    onPopulation!(action);
-  }
-  const remove = selectionActive && active;
+  const options=legendMenuItems(visibleCount??(dimmed?0:1),hiddenCount??(dimmed?1:0),selectionActive);
   const category = groupSize !== undefined, name = category ? `${item.label} category` : item.label;
   const marker = swatch === undefined ? !category ? <span className="usage-swatch" style={{ background: item.color }} /> : null : swatch;
-  return <span className={`usage-legend-chip${category ? " is-category" : ""}`}>
-    <button ref={trigger} type="button" className={`usage-legend-item${category ? " usage-legend-category" : ""}${dimmed ? " dimmed" : ""}`} aria-label={name} aria-pressed={mixed ? "mixed" : active} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined}
-      title="Filter this series" onClick={() => { firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => {
+  return <span className={`usage-legend-chip${category ? " is-category" : ""}${iconOnly ? " is-icon-only" : ""}`}>
+    <button ref={trigger} type="button" className={`usage-legend-item${category ? " usage-legend-category" : ""}${dimmed ? " dimmed" : ""}`} aria-label={name} aria-pressed={mixed ? "mixed" : active} aria-haspopup={readOnly ? undefined : "menu"} aria-expanded={readOnly ? undefined : open} aria-controls={!readOnly && open ? menuId : undefined}
+      title={iconOnly ? undefined : "Filter this series"} aria-description={description} data-chart-tooltip={iconOnly && !open ? [item.label,description].filter(Boolean).join("\n") : undefined} onClick={() => { if(readOnly){onActivate?.();return;} firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => {
+        if(readOnly)return;
         if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
         event.preventDefault();
         firstFocus.current = event.key === "ArrowUp" ? -1 : 0;
         setOpen(true);
       }}>
-      {marker}{item.label}<Icon name="chevron-down" className="usage-legend-caret" />
+      {marker}{iconOnly ? null : <>{item.label}<Icon name="chevron-down" className="usage-legend-caret" /></>}
     </button>
-    {open ? <div ref={menu} id={menuId} className="usage-legend-menu" role="menu" aria-label={`Filter ${name}`} onKeyDown={event => {
+    {!readOnly && open ? <div ref={menu} id={menuId} className="usage-legend-menu" role="menu" aria-label={`Filter ${name}`} onKeyDown={event => {
       const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
       const index = entries.indexOf(document.activeElement as HTMLButtonElement);
       if (event.key === "Tab") { close(true); return; }
@@ -87,15 +81,10 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
       entries[next]?.focus();
     }}>
       <div className="usage-legend-menu-heading" data-overflow-title="">{marker}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</div>
-      {/* With nothing selected, adding to the selection is the same as showing only this value. */}
-      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("only")}><span>{category ? "Show only this category" : "Show only this value"}</span><small>{selectionActive ? "Replace the current selection" : "Then add others from their menus"}</small></button>
-      {selectionActive ? <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("toggle")}><span>{category ? remove ? "Remove all from selection" : "Add all to selection" : remove ? "Remove from selection" : "Add to selection"}</span><small>{soleSelection ? "Show all values again" : "Keep the rest of your selection"}</small></button> : null}
-      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("exclude")}><span>{category ? "Show all except this category" : "Show all except this value"}</span><small>{category ? "Include every label outside this category" : "Include every other value, even in Other"}</small></button>
-      <button type="button" role="menuitem" tabIndex={-1} className="usage-legend-menu-reset" disabled={!selectionActive} onClick={() => choose("clear")}>Show all values</button>
-      {onPopulation ? <>
-        <button type="button" role="menuitem" tabIndex={-1} className="usage-legend-menu-population" onClick={() => filter("keep")}><span>Count only this value</span><small>Population filter: every view and breakdown</small></button>
-        <button type="button" role="menuitem" tabIndex={-1} onClick={() => filter("drop")}><span>Leave this value out</span><small>Population filter: every view and breakdown</small></button>
-      </> : null}
+      {options.map(option=><React.Fragment key={option.action}>
+        {option.separator?<hr className="usage-legend-menu-separator" role="separator"/>:null}
+        <button type="button" role="menuitem" tabIndex={-1} onClick={()=>choose(option.action)}>{option.label}</button>
+      </React.Fragment>)}
     </div> : null}
   </span>;
 }

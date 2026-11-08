@@ -7,8 +7,7 @@ import { defaultChartScale, type ChartScale } from "./chart-scale";
 import { cumulativeBuckets, legendGroups, legendGroupSeries, rollingAverageBuckets, timelineGeometry, timelinePath, validRollingPeriods, type ChartBucket, type ChartDisplay, type ChartSeries, type LegendGroup } from "./chart-series";
 import { ColumnMarks } from "./column-marks";
 import { ChartLegendChip } from "./chart-legend-chip";
-import { sliceGroupState, type LegendAction } from "./chart-selection";
-import type { PopulationAction } from "./dashboard-population";
+import { sliceGroupState, sliceGroupCounts, type LegendAction } from "./chart-selection";
 import { Icon } from "./icons";
 import { loadUsageHistory } from "./usage-history";
 import { chartGesture, chartInspectionRange, type ChartInspectionRange } from "./chart-inspection";
@@ -252,10 +251,10 @@ export function RollingControl({ value, period, count = 1, onChange, disabled, n
 // lines with no total, and a reference value draws a labelled level line.
 // Without zeroes (nonzero), prepared buckets hold no zero values, and lines
 // pass over a series' missing points.
-export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, bars: forceBars = false, additive = true, nonzero = false, rolling = "average", references = [], action, titleSlot, onSelect, onSelectGroup, onPopulation, onExpand, onRange, seriesHref }: {
+export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, allHidden = false, percent = false, prepared = false, lines = false, bars: forceBars = false, additive = true, nonzero = false, rolling = "average", references = [], action, titleSlot, onSelect, onSelectGroup, onExpand, onRange, seriesHref }: {
   title: string; controls: React.ReactNode; action?: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
   format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
-  selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onSelectGroup?: (keys: string[], action: LegendAction) => void; onPopulation?: (key: string, action: PopulationAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
+  selected?: string[]; excluded?: boolean; allHidden?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onSelectGroup?: (keys: string[], action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
   prepared?: boolean; lines?: boolean; bars?: boolean; additive?: boolean; nonzero?: boolean; rolling?: "average" | "sum" | "pooled"; references?: Array<{ value: number; label: string; level?: string }>;
   seriesHref?: (range: ChartInspectionRange, series: ChartSeries) => string | undefined;
   /** Draws the title and action there instead, such as in a page's heading. */
@@ -269,12 +268,12 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   // Pointer events can outrun rendering, so the handlers read the drag from a ref.
   const dragRef = useRef(drag);
   const moveDrag = (next: typeof drag) => { dragRef.current = next; setDrag(next); };
-  const drawn = selected.length ? series.filter(item => excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
+  const drawn = allHidden?[]:selected.length ? series.filter(item => excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
   const cumulative = display === "cumulative";
   // A cumulative line always shows exact totals. Retain the interval smoothing
   // setting in view state, but don't average away the accumulated amounts.
   const averagedBuckets = useMemo(() => (prepared ? sourceBuckets : cumulative ? cumulativeBuckets(sourceBuckets) : rollingAverageBuckets(sourceBuckets, rollingPeriods, { period, count: periodCount })).filter(bucket => !bucket.history), [sourceBuckets, rollingPeriods, cumulative, period, periodCount, prepared]);
-  useEffect(() => { setTip(null); moveDrag(null); }, [rollingPeriods, display, sourceBuckets, selected.join("\u0000"), excluded, percent, period, periodCount, loading, error]);
+  useEffect(() => { setTip(null); moveDrag(null); }, [rollingPeriods, display, sourceBuckets, selected.join("\u0000"), excluded, allHidden, percent, period, periodCount, loading, error]);
   const buckets = percent && prepared ? averagedBuckets.map(bucket => ({ ...bucket,
     values: Object.fromEntries(Object.entries(bucket.values).map(([key, value]) => [key, 100 * value])),
     parts: bucket.parts && Object.fromEntries(Object.entries(bucket.parts).map(([key, entries]) => [key, entries.map(([name, value]) => [name, 100 * value] as [string, number])])) }))
@@ -383,18 +382,20 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const selectable = (item: ChartSeries) => Boolean(onSelect) && item.value !== undefined;
   const titleText = <>{title}{averageLabel ? <span className="usage-chart-average-label"> {averageLabel}</span> : null}</>;
   const hierarchical = series.some(item => item.groupPath);
+  const legendSelection={values:selected,excluded,...(allHidden?{allHidden:true}:{})};
+  const hidden=allHidden||series.some(item=>selected.length>0&&(selected.includes(item.key)===excluded));
   const legendGroup = (group: LegendGroup): React.ReactNode => {
     const items = group.items.map(item => {
-      const on = selected.length > 0 && (excluded ? !selected.includes(item.key) : selected.includes(item.key)), dimmed = selected.length > 0 && !on;
+      const on = !allHidden&&selected.length > 0 && (excluded ? !selected.includes(item.key) : selected.includes(item.key)), dimmed = allHidden||selected.length > 0 && !on;
       const content = <><span className="usage-swatch" style={{ background: item.color }} />{item.label}</>;
       return item.hiddenCount && onExpand ? <button key={item.key} type="button" className="usage-legend-item" title={`Show next ${Math.min(5, item.hiddenCount)} values`} onClick={onExpand}>{content}</button>
-        : selectable(item) ? <ChartLegendChip key={item.key} item={item} active={on} dimmed={dimmed} selectionActive={selected.length > 0} soleSelection={on && !excluded && selected.length === 1} onAction={action => onSelect!(item.key, action)} onPopulation={onPopulation && (action => onPopulation(item.key, action))} />
+        : selectable(item) ? <ChartLegendChip key={item.key} item={item} active={on} dimmed={dimmed} selectionActive={hidden} onAction={action => onSelect!(item.key, action)} />
         : <span key={item.key} className={`usage-legend-item${dimmed ? " dimmed" : ""}`}>{content}</span>;
     });
     const children = group.groups.map(child => <React.Fragment key={JSON.stringify(child.path)}>{legendGroup(child)}</React.Fragment>);
     const members = legendGroupSeries(group).filter(item => item.value !== undefined), keys = members.map(item => item.key);
     const category = onSelectGroup && keys.length ? <ChartLegendChip item={{key:JSON.stringify(group.path),label:group.label,color:members[0].color}} groupSize={keys.length}
-      {...sliceGroupState({values:selected,excluded},keys)} selectionActive={selected.length > 0} onAction={action => onSelectGroup(keys,action)} /> : <span className="usage-legend-provider">{group.label}</span>;
+      {...sliceGroupState(legendSelection,keys)} {...sliceGroupCounts(legendSelection,keys)} selectionActive={hidden} onAction={action => onSelectGroup(keys,action)} /> : <span className="usage-legend-provider">{group.label}</span>;
     return group.label ? <div className={`usage-legend-group${hierarchical ? ' is-hierarchy' : ''}`} role="group" aria-label={group.label}>{category}{items}{children}</div> : <>{children}{items}</>;
   };
   return <div className="usage-chart" ref={root} data-view-field="chart_pins" data-pharos-target={`section:chart:${title}`}>
@@ -402,7 +403,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
     {series.length > 1 || legend || references.length ? <div className="usage-chart-legend">
       {series.length > 1 || legend ? legendGroup(legendGroups(series)) : null}
       {references.map(item => <span key={item.label} className="usage-legend-item usage-legend-reference"><span className="usage-swatch usage-reference-swatch" data-level={item.level} aria-hidden="true" />{item.label} · {format(item.value)}</span>)}
-      {selected.length > 0 ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, "clear")}>Show all</button> : null}
+      {hidden ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, "clear")}>Show all</button> : null}
     </div> : null}
     {error ? <p className="query-table-error">{error}</p> : null}
     <div className={`usage-chart-plot${split ? " broken" : ""}`}>
