@@ -22,6 +22,10 @@ type fingerprintMetadata struct {
 	Images map[string]string `json:"images"`
 	Href   string            `json:"href,omitempty"`
 	Stale  bool              `json:"stale,omitempty"`
+	// EventsPending counts, for the events appearance, the entity's
+	// conversations whose events are withheld (agentEventsWithheldSQLFor):
+	// the image leaves them out until the events pass publishes them again.
+	EventsPending int `json:"events_pending,omitempty"`
 }
 
 // Batch metadata is the only read demand that writes: it promotes visible
@@ -124,12 +128,17 @@ func (c *Catalog) fingerprintMetadata(ctx context.Context, item fingerprintReque
 			fresh = fresh && integer(row["current"]) != 0 && firstString(row["renderer"]) == fingerprintRendererVersion()
 		}
 	}
-	if len(result.Images) == len(fingerprintThemes) && fresh {
-		// Execution evidence superseded since the image was drawn, including
-		// before any mark, makes it stale; none is drawn meanwhile.
-		if superseded, err := fingerprintExecutionPending(ctx, c.reader(), item.Entity, item.ID, events); err != nil {
+	// Execution evidence superseded since the image was drawn, including
+	// before any mark, makes it stale; none is drawn meanwhile. The same
+	// lookup counts the withheld events, whatever the image's state.
+	check := len(result.Images) == len(fingerprintThemes) && fresh
+	if check || events {
+		superseded, withheld, err := fingerprintExecutionState(ctx, c.reader(), item.Entity, item.ID, events, check)
+		if err != nil {
 			return result, err
-		} else if superseded {
+		}
+		result.EventsPending = withheld
+		if check && superseded {
 			fresh = false
 		}
 	}
@@ -150,30 +159,45 @@ func (c *Catalog) fingerprintMetadata(ctx context.Context, item fingerprintReque
 // (withheldAgentEvents, marked or not). Ordinary labeling backlog is not
 // included: it is in message_labels_dirty, which requeues images as it moves.
 func fingerprintExecutionPending(ctx context.Context, q queryer, entity, id string, events bool) (bool, error) {
+	superseded, _, err := fingerprintExecutionState(ctx, q, entity, id, events, true)
+	return superseded, err
+}
+
+// fingerprintExecutionState is fingerprintExecutionPending's lookup, with
+// the labels' part only when labels is set, which also counts withheld: for
+// the events appearance, the entity's conversations whose events are left
+// out (0 or 1 for a conversation).
+func fingerprintExecutionState(ctx context.Context, q queryer, entity, id string, events, labels bool) (superseded bool, withheld int, err error) {
 	ledgers, err := queryMapsContext(ctx, q, `SELECT name FROM sqlite_master WHERE type='table' AND name IN ('message_labels_conversations','agent_events_conversations')`)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
-	var sets []string
+	labelled, left := "0", "0"
 	for _, row := range ledgers {
 		switch firstString(row["name"]) {
 		case "message_labels_conversations":
-			sets = append(sets, `SELECT id FROM (`+executionUnmarkedSQL(ctx, q, "message_labels_conversations")+`)`)
+			if labels {
+				labelled = `id IN (SELECT id FROM (` + executionUnmarkedSQL(ctx, q, "message_labels_conversations") + `))`
+			}
 		case "agent_events_conversations":
 			if events {
-				sets = append(sets, `SELECT conversation_id FROM (`+agentEventsWithheldSQLFor(ctx, q)+`)`)
+				left = `id IN (SELECT conversation_id FROM (` + agentEventsWithheldSQLFor(ctx, q) + `))`
 			}
 		}
 	}
-	if len(sets) == 0 {
-		return false, nil
+	if labelled == "0" && left == "0" {
+		return false, 0, nil
 	}
 	scope := "id=?"
 	if entity == "workspace" {
 		scope = "workspace_id=?"
 	}
-	rows, err := queryMapsContext(ctx, q, `SELECT 1 FROM conversations WHERE `+scope+` AND id IN (`+strings.Join(sets, " UNION ")+`) LIMIT 1`, id)
-	return len(rows) > 0, err
+	rows, err := queryMapsContext(ctx, q, `SELECT COALESCE(MAX(`+labelled+`),0) labelled,COALESCE(SUM(`+left+`),0) withheld FROM conversations WHERE `+scope, id)
+	if err != nil || len(rows) == 0 {
+		return false, 0, err
+	}
+	withheld = int(integer(rows[0]["withheld"]))
+	return integer(rows[0]["labelled"]) != 0 || withheld > 0, withheld, nil
 }
 
 func (s *Server) getFingerprintPNG(w http.ResponseWriter, r *http.Request) {
