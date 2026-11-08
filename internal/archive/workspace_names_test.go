@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"path/filepath"
 	"strings"
@@ -365,6 +366,60 @@ func TestConversationNamesBackfillInvalidateAndResume(t *testing.T) {
 	if got := cachedWorkTitle(t, c, workspace); strings.Contains(got, "ownership") {
 		t.Fatal("deleted assignment survived in the workspace fallback")
 	}
+	t.Run("audit includes mirrored evidence", func(t *testing.T) {
+		c, _ := testCatalog(t)
+		native := namingRecord("codex", "audit-native", "Untitled", "Inspect URL restoration")
+		nativeID := stableID("conversation", "codex", "local", native.Conversations[0].NativeID)
+		mirror := namingRecord("conductor", "audit-mirror", "Untitled", "Inspect URL restoration", "codex:audit-native")
+		// Put the suppressed mirror first so --limit also excludes the native
+		// representative. Only these two conversation records are inserted.
+		var mirrorID string
+		for i := 0; ; i++ {
+			mirror.Conversations[0].NativeID = fmt.Sprintf("conductor:audit-mirror-%d", i)
+			mirrorID = stableID("conversation", "codex", "local", mirror.Conversations[0].NativeID)
+			if mirrorID < nativeID {
+				break
+			}
+		}
+		ingestNamingRecord(t, c, native)
+		ingestNamingRecord(t, c, mirror)
+		generation, _, err := c.authorshipGenerations()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.RebuildAuthorship(t.Context(), generation); err != nil {
+			t.Fatal(err)
+		}
+		if countRows(t, c, `SELECT COALESCE(SUM(typed_words),0) FROM message_authorship WHERE conversation_id=?`, mirrorID) != 0 {
+			t.Fatal("fixture mirror was not suppressed")
+		}
+		if countRows(t, c, `SELECT COALESCE(SUM(typed_words),0) FROM message_authorship WHERE conversation_id=?`, nativeID) == 0 {
+			t.Fatal("fixture native representative has no human words")
+		}
+		before := sourceGeneration(t, c)
+		for _, scope := range []struct {
+			limit int
+			id    string
+		}{{100, mirrorID}, {1, ""}} {
+			audit, err := c.auditConversationNames(t.Context(), scope.limit, scope.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			items := audit["conversations"].([]map[string]any)
+			if len(items) != 1 || items[0]["conversation_id"] != mirrorID || items[0]["proposed_name"] != "Inspect URL restoration" || items[0]["name_source"] != "typed" {
+				t.Fatalf("scoped audit missed native evidence: %+v", audit)
+			}
+		}
+		if sourceGeneration(t, c) != before || countRows(t, c, `SELECT COUNT(*) FROM conversation_name_candidates`) != 0 {
+			t.Fatal("scoped audit published candidates")
+		}
+		drainConversationNames(t, c)
+		for _, id := range []string{nativeID, mirrorID} {
+			if got := conversationDisplayName(t, c, id); got.Text != "Inspect URL restoration" || got.Source != "typed" {
+				t.Fatalf("audit and backfill disagree: %+v", got)
+			}
+		}
+	})
 }
 
 func TestConversationNamesRejectIdentifiersAndHarness(t *testing.T) {
@@ -419,18 +474,25 @@ func TestConversationNamesScopeChangesInvalidateWarmNames(t *testing.T) {
 	record := namingRecord("codex", "original", "Named original conversation", "")
 	workspace := ingestNamingRecord(t, c, record)
 	cid := stableID("conversation", "codex", "local", record.Conversations[0].NativeID)
-	if got := conversationDisplayName(t, c, cid); got.Text != record.Title {
-		t.Fatal(got)
+	mirror := namingRecord("conductor", "mirror", "Untitled", "", "codex:original")
+	ingestNamingRecord(t, c, mirror)
+	mirrorID := stableID("conversation", "codex", "local", mirror.Conversations[0].NativeID)
+	for _, id := range []string{cid, mirrorID} {
+		if got := conversationDisplayName(t, c, id); got.Text != record.Title {
+			t.Fatal(got)
+		}
 	}
 	fixtureExec(t, c, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('another',?,'codex','local','another')`, workspace)
-	for _, id := range []string{cid, "another"} {
+	for _, id := range []string{cid, "another", mirrorID} {
 		if got := conversationDisplayName(t, c, id); got.Text == record.Title {
 			t.Fatalf("shared workspace title named a different conversation: %+v", got)
 		}
 	}
 	fixtureExec(t, c, `DELETE FROM conversations WHERE id='another'`)
-	if got := conversationDisplayName(t, c, cid); got.Text != record.Title {
-		t.Fatalf("restored source scope was not reflected in a warm reader: %+v", got)
+	for _, id := range []string{cid, mirrorID} {
+		if got := conversationDisplayName(t, c, id); got.Text != record.Title {
+			t.Fatalf("restored source scope was not reflected in a warm reader: %+v", got)
+		}
 	}
 }
 

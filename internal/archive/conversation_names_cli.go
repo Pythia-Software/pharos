@@ -63,13 +63,22 @@ func (c *Catalog) auditConversationNames(ctx context.Context, limit int, convers
 		return nil, err
 	}
 	before := resolveExecutions(evidence)
+	// The requested scope limits the report, not the evidence for its names.
+	// A mirror's human words may belong to another retained representative.
+	executions := map[executionID]bool{}
 	for _, row := range selected {
-		id := asString(row["id"])
+		if id := before.BindConversation(asString(row["id"])).ExecutionID; id != "" {
+			executions[id] = true
+		}
+	}
+	for id, cv := range rows.conversations {
+		if !executions[before.BindConversation(id).ExecutionID] {
+			continue
+		}
 		candidates, err := conversationNameCandidates(ctx, tx, id)
 		if err != nil {
 			return nil, err
 		}
-		cv := rows.conversations[id]
 		cv.humanName, cv.requestName = "", ""
 		for _, n := range candidates {
 			if n.Kind == "typed" {

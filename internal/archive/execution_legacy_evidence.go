@@ -175,7 +175,7 @@ func fetchExecutionSourceRows(ctx context.Context, q queryer, scope, copyScope [
 	sessions, err := queryMapsContext(ctx, q, `SELECT a.id,a.conversation_id,a.workspace_id,a.provider,c.account,a.native_id,a.parent_id,
  a.child_conversation_id,a.delegation_message_id,a.kind,a.started_at,a.total_tokens,m.created_at launch_at,m.source_order launch_order,
  m.call_id launch_call,m.role launch_role,m.kind launch_kind,m.text launch_text,
- `+delegationAssignmentSQL+` assignment,
+ `+delegationAssignmentCandidatesSQL+` assignment_candidates,
  EXISTS(SELECT 1 FROM agent_session_messages am WHERE am.agent_session_id=a.id) observed
  FROM agent_sessions a JOIN conversations c ON c.id=a.conversation_id
  LEFT JOIN messages m ON m.id=a.delegation_message_id
@@ -191,7 +191,7 @@ func fetchExecutionSourceRows(ctx context.Context, q queryer, scope, copyScope [
 		s := executionSessionRow{id: firstString(row["id"]), conversation: firstString(row["conversation_id"]), workspace: firstString(row["workspace_id"]),
 			provider: firstString(row["provider"]), account: firstString(row["account"]), native: firstString(row["native_id"]), parent: firstString(row["parent_id"]),
 			child: firstString(row["child_conversation_id"]), delegation: firstString(row["delegation_message_id"]), kind: firstString(row["kind"]),
-			assignment: firstString(row["assignment"]), at: firstString(row["launch_at"], row["started_at"]), position: position,
+			assignment: delegationAssignment(firstString(row["assignment_candidates"])), at: firstString(row["launch_at"], row["started_at"]), position: position,
 			observed: integer(row["observed"]) != 0, tokens: integer(row["total_tokens"])}
 		if s.delegation != "" {
 			s.launch = hashBytes([]byte(strings.Join([]string{firstString(row["launch_call"]), firstString(row["launch_role"]),

@@ -286,13 +286,28 @@ func (c *Catalog) delegationSnapshotWith(ctx context.Context, workspace string, 
 
 // Use the retained launch's assignment in both outgoing rows and incoming
 // ancestor context, so opening a separate child workspace keeps its label.
-const delegationAssignmentSQL = `substr(CASE WHEN json_valid(m.text) THEN
- (SELECT value FROM json_each(m.text,'$.input')
+const delegationAssignmentCandidatesSQL = `CASE WHEN json_valid(m.text) THEN
+ (SELECT json_group_array(substr(value,1,180)) FROM (SELECT value FROM json_each(m.text,'$.input')
   WHERE type='text' AND key IN ('task_name','description','prompt','Prompt','task','message')
    AND trim(value,char(9)||char(10)||char(13)||' ')<>'' AND value NOT GLOB 'gAAAA*'
   ORDER BY CASE key WHEN 'task_name' THEN 0 WHEN 'description' THEN 1 WHEN 'prompt' THEN 2 WHEN 'Prompt' THEN 3 WHEN 'task' THEN 4 ELSE 5 END
-  LIMIT 1)
- ELSE m.text END,1,180)`
+ ))
+ ELSE json_array(substr(m.text,1,180)) END`
+
+// Validate each field before choosing one: an internal task path or UUID
+// must not hide readable prose in the launch's other retained fields.
+func delegationAssignment(candidates string) string {
+	var texts []string
+	if json.Unmarshal([]byte(candidates), &texts) != nil {
+		return ""
+	}
+	for _, text := range texts {
+		if meaningfulWorkspaceTitle(text, "") {
+			return text
+		}
+	}
+	return ""
+}
 
 // Copy only the small accounting fields before joining session membership.
 // Looking up every message by its hashed ID makes long transcripts perform
@@ -333,11 +348,14 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	// fields. Codex can retain a readable task_name beside an encrypted message.
 	// Extract before clipping: the name may follow a very large message. Unknown
 	// structured payloads and opaque messages must not become display labels.
-	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,`+delegationAssignmentSQL+` assignment
+	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,`+delegationAssignmentCandidatesSQL+` assignment_candidates
  FROM agent_sessions a LEFT JOIN messages m ON m.id=a.delegation_message_id
  WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT 10001`, workspace)
 	if err != nil {
 		return nil, err
+	}
+	for _, session := range sessions {
+		session["assignment"] = delegationAssignment(firstString(session["assignment_candidates"]))
 	}
 	if len(sessions) > 10000 || len(conversations) > 10000 {
 		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")

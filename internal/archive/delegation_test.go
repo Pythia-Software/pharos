@@ -204,6 +204,9 @@ func TestDelegationAssignmentLabels(t *testing.T) {
 	for _, tc := range []struct{ name, text, want string }{
 		{"codex task name after opaque message", `{"tool":"spawn_agent","input":{"fork_turns":"all","message":"gAAAA` + strings.Repeat("x", 12000) + `","task_name":"tooling_independent_review"}}`, "tooling_independent_review"},
 		{"task name before longer description", `{"input":{"task_name":"review","description":"Review all of the implementation"}}`, "review"},
+		{"task path uses retained message", `{"input":{"task_name":"/root/explore","message":"Inspect URL restoration"}}`, "Inspect URL restoration"},
+		{"task identifier uses retained prompt", `{"input":{"task_name":"01a128b8-395c-7121-bf40-9a1903a6f306","prompt":"Inspect URL restoration"}}`, "Inspect URL restoration"},
+		{"weak description uses retained prompt", `{"input":{"task_name":"Untitled","description":"/root/explore","prompt":"Inspect URL restoration"}}`, "Inspect URL restoration"},
 		{"claude description", `{"tool":"Task","input":{"description":"Check network","prompt":"Longer instructions"}}`, "Check network"},
 		{"prompt", `{"input":{"prompt":"Review the implementation"}}`, "Review the implementation"},
 		{"antigravity prompt", `{"tool":"invoke_subagent","input":{"Prompt":"check tests"}}`, "check tests"},

@@ -39,6 +39,9 @@ var executionSourceTables = []executionSourceTable{
 	// names too. Nickname/usage changes keep their existing narrower owner.
 	{table: "conversations", tag: "name_scope", owners: []string{`SELECT id owner FROM conversations WHERE workspace_id=%[1]s.workspace_id
  AND agent_depth=0 AND instr(native_id,':subagent:')=0
+ AND %[1]s.agent_depth=0 AND instr(%[1]s.native_id,':subagent:')=0`,
+		`SELECT c.id owner FROM conversations c JOIN workspace_names n ON n.workspace_id=c.workspace_id
+ WHERE n.display_workspace_id=%[1]s.workspace_id AND c.agent_depth=0 AND instr(c.native_id,':subagent:')=0
  AND %[1]s.agent_depth=0 AND instr(%[1]s.native_id,':subagent:')=0`},
 		columns: []string{"id", "workspace_id", "native_id", "agent_depth", "parent_id", "provider"}},
 	{table: "conversations", owners: []string{"%[1]s.id"},

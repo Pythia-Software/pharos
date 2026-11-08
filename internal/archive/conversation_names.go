@@ -280,7 +280,9 @@ func loadExecutionNames(ctx context.Context, q queryer, scope []string, out *exe
 	rows, err := queryMapsContext(ctx, q, `SELECT c.id,w.title,w.source_id,w.source_kind,n.display_source,n.override_title,n.source_scope,
  f.source_kind from_kind,fn.source_scope from_scope,
  (SELECT COUNT(*) FROM conversations r WHERE r.workspace_id=w.id AND r.agent_depth=0 AND instr(r.native_id,':subagent:')=0
- AND (r.parent_id IS NULL OR r.provider='codex')) root_count
+ AND (r.parent_id IS NULL OR r.provider='codex')) root_count,
+ (SELECT COUNT(*) FROM conversations r WHERE r.workspace_id=f.id AND r.agent_depth=0 AND instr(r.native_id,':subagent:')=0
+ AND (r.parent_id IS NULL OR r.provider='codex')) from_root_count
  FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
  LEFT JOIN workspace_names n ON n.workspace_id=w.id
  LEFT JOIN workspaces f ON f.id=n.display_workspace_id LEFT JOIN workspace_names fn ON fn.workspace_id=f.id
@@ -311,7 +313,7 @@ func loadExecutionNames(ctx context.Context, q queryer, scope []string, out *exe
 		}
 		if origin == "override" || meaningfulWorkspaceTitle(asString(row["override_title"]), sourceID) {
 			cv.name, cv.nameSource = title, "override"
-		} else if !broad && (origin == "source" || origin == "" || origin == "linked" && asString(row["from_kind"]) != "tl1" && asString(row["from_kind"]) != "tl1-export" && asString(row["from_scope"]) != "workspace" && asString(row["from_scope"]) != "task") {
+		} else if !broad && (origin == "source" || origin == "" || origin == "linked" && integer(row["from_root_count"]) == 1 && asString(row["from_kind"]) != "tl1" && asString(row["from_kind"]) != "tl1-export" && asString(row["from_scope"]) != "workspace" && asString(row["from_scope"]) != "task") {
 			cv.name, cv.nameSource = title, "source"
 			nameKind := kind
 			if origin == "linked" {

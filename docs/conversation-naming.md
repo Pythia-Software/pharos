@@ -37,6 +37,10 @@ Readable nicknames remain available; task context is used only for the task's
 own attempts. A TL1 attempt can use `task title · attempt N` when its recorded
 native conversation reference identifies that attempt unambiguously.
 
+A linked source title names a conversation only while both the source and
+receiving workspaces have one root conversation. Changes to that scope refresh
+the name across its mirrors.
+
 Primary names never fall back to a native ID, path or a fabricated provider/date
 title. A conversation with no usable retained request, name, nickname or task
 context shows **Conversation without retained request**. Native IDs remain in
@@ -134,6 +138,8 @@ The audit reports current/proposed primary names, provenance, changed/preserved
 counts and conversations without a usable retained request. The default scope is
 100 conversations; `--limit 0` examines all retained conversations. It reuses the
 production candidate extractor and shared resolver in one read-only snapshot.
+The report limit does not exclude evidence from other recordings of the selected
+agent sessions, so a scoped preview agrees with the eventual backfill.
 The automatic backfill resumes through normal Search maintenance after deployment.
 
 Independent unit audits verify the stored source title and scope separately from
