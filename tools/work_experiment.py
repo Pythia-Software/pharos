@@ -518,6 +518,8 @@ def validate_descriptor(descriptor):
             input_name(value)
         elif key not in MODEL_KEYS or not isinstance(value, (str, int, bool)):
             raise ValueError("unsupported experiment model setting")
+    if "labels_model_dir" in descriptor.get("model_settings", {}) and descriptor["model_settings"].get("labels_variant") not in ("fp32", "int8"):
+        raise ValueError("a frozen labels_model_dir needs an explicit labels_variant: custom paths change the default")
     for source in descriptor.get("sources", []):
         if set(source) != {"name", "kind", "input"} or not all(isinstance(source[k], str) for k in ("name", "kind")):
             raise ValueError("sources name a frozen input, never a live folder")
@@ -1283,6 +1285,8 @@ def validate_probe_descriptor(descriptor):
             input_name(value)
         elif key not in MODEL_KEYS or not isinstance(value, (str, int, bool)):
             raise ValueError("unsupported experiment model setting")
+    if "labels_model_dir" in descriptor.get("model_settings", {}) and descriptor["model_settings"].get("labels_variant") not in ("fp32", "int8"):
+        raise ValueError("a frozen labels_model_dir needs an explicit labels_variant: custom paths change the default")
     if descriptor.get("sources"):
         raise ValueError("probe workloads replay no sources yet; capture needs the source-replay probe")
     if "replay" in descriptor:
@@ -1476,6 +1480,21 @@ def probe_run(probe, probe_sha256, master, destination, descriptor, role, engine
                        and a["count_after"] > a["count_before"]]
             if applied != [a["name"] for a in descriptor["replay"]["arrivals"]]:
                 raise RuntimeError("the probe did not report every replayed arrival as a real arrival")
+            if engine == "scheduled":
+                requests = replay.get("requests") or []
+                if [r.get("arrival") for r in requests] != applied:
+                    raise RuntimeError("the scheduled probe did not submit recent demand for every arrival")
+                demanded = {kind for phase in descriptor["phases"] for kind in phase["kinds"]}
+                for request in requests:
+                    facts = request.get("facts") or {}
+                    submitted, applied_at = request.get("submitted_seconds"), next(
+                        a.get("applied_seconds") for a in replay["arrivals"] if a["name"] == request["arrival"])
+                    if request.get("scope") != "recent" or set(request.get("kinds") or []) != demanded \
+                            or facts.get("scope") != "recent" or not str(facts.get("key", "")).startswith("recent:") \
+                            or facts.get("state") != "succeeded" or facts.get("unfinished") \
+                            or request.get("request_id") != facts.get("id") or not isinstance(request.get("joined_phases"), list) \
+                            or not isinstance(submitted, (int, float)) or not isinstance(applied_at, (int, float)) or submitted < applied_at:
+                        raise RuntimeError("the scheduled arrival request did not prove successful recent demand")
             report["replay"] = replay
         # Recorded, never gated: the harness's process-tree sampler is the gated source.
         report["memory_retention"] = (inner.get("memory") or {}).get("retention")
@@ -1624,7 +1643,31 @@ def replay_overlap(report):
     pending = [a.get("ready_pending_at_apply") for a in arrivals]
     proven = bool(applied) and all(v is True for v in pending) and all(
         isinstance(at, (int, float)) and any(start <= at <= until for start, until in spans) for at in applied)
-    return {"proven": proven, "primary_history_intervals_seconds": spans,
+    ready = []
+    for arrival in arrivals:
+        start, took = arrival.get("started_seconds"), arrival.get("ready_seconds")
+        at = start + took if isinstance(start, (int, float)) and isinstance(took, (int, float)) else None
+        ready.append(at)
+    ready_during = proven and all(isinstance(at, (int, float)) and any(
+        start <= at <= until for start, until in spans) for at in ready)
+    requests = (report.get("replay") or {}).get("requests") or []
+    ids = [r.get("request_id") for r in requests]
+    primary_ids = {q.get("id") for q in engine.get("requests") or []}
+    followup_ids = {q.get("id") for q in (report.get("replay") or {}).get("followups") or []}
+    fresh = all(not r.get("joined_arrival") and r.get("joined_phases") == [] for r in requests) and \
+        len(set(ids)) == len(ids) and not set(ids).intersection(primary_ids | followup_ids)
+    frozen_before = engine.get("value") == "classic"
+    if engine.get("value") == "scheduled" and arrivals:
+        try:
+            started = min(a["started_seconds"] for a in arrivals)
+            work = inner["windows"]["work"][0]
+            frozen = [rfc3339(q.get("membership_frozen_at")).timestamp() - work for q in engine["requests"]]
+            frozen_before = bool(frozen) and all(at <= started for at in frozen)
+        except (KeyError, TypeError, ValueError):
+            frozen_before = False
+    return {"proven": proven, "ready_during_history": ready_during, "fresh_arrival_requests": fresh,
+            "primary_membership_predates_arrivals": frozen_before,
+            "arrival_ready_seconds": ready, "primary_history_intervals_seconds": spans,
             "arrival_applied_seconds": applied, "arrival_pending_at_apply": pending,
             "basis": "primary classic steps, or scheduled requests last observed live; follow-ups excluded"}
 
@@ -1693,6 +1736,21 @@ def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
     if baseline.get("replay") or candidate.get("replay"):
         blockers += [f"{name}: replay did not prove arrival while history remained active"
                      for name, evidence in overlap.items() if not evidence["proven"]]
+    if mode == "ab" and candidate.get("replay"):
+        if not overlap["candidate"]["fresh_arrival_requests"]:
+            blockers.append("candidate: arrival demand joined an older frozen population")
+        if not overlap["candidate"]["primary_membership_predates_arrivals"]:
+            blockers.append("candidate: primary membership was not frozen before arrivals; priority attribution is unproven")
+    arrival_readiness = {}
+    baseline_arrivals = (baseline.get("replay") or {}).get("arrivals") or []
+    candidate_arrivals = (candidate.get("replay") or {}).get("arrivals") or []
+    if [a["name"] for a in baseline_arrivals] != [a["name"] for a in candidate_arrivals]:
+        raise ValueError("arms reported different arrival sequences")
+    for a, b in zip(baseline_arrivals, candidate_arrivals):
+        arrival_readiness[a["name"]] = gate(a.get("ready_seconds"), b.get("ready_seconds"), MIN_GATED_SECONDS)
+        if a.get("ready_seconds") is None or b.get("ready_seconds") is None:
+            missing.append("arrival readiness: " + a["name"])
+    regression = regression or any(v["regression"] for v in arrival_readiness.values())
     result = {"mode": mode, "semantic_parity": parity, "metrics": metrics, "startup": startup,
               "missing_metrics": missing, "blockers": blockers,
               "whole_process": {name: {"baseline": _metric(baseline, path), "candidate": _metric(candidate, path)}
@@ -1702,7 +1760,7 @@ def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
                                    (("baseline", baseline), ("candidate", candidate))},
               "replay_followup_rounds": {role: (report.get("replay") or {}).get("followup_rounds") for role, report in
                                          (("baseline", baseline), ("candidate", candidate))},
-              "replay_overlap": overlap}
+              "replay_overlap": overlap, "arrival_readiness": arrival_readiness}
     if mode == "aa":
         # A/A measures the noise every later pair is judged against, so it is
         # refused on the same host-noise rule before any verdict.
@@ -1715,6 +1773,8 @@ def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
             "remaining_evidence": ["the full-corpus settlement workload (all labels, coarse history)",
                                    *([] if all(v["proven"] for v in overlap.values()) else
                                      ["actual recent arrival during coarse history (source replay)"]),
+                                   *([] if not candidate.get("replay") or overlap["candidate"]["ready_during_history"] else
+                                     ["recent arrivals ready before candidate history settles"]),
                                    "reverse-order pair", "old-binary recovery after candidate publication",
                                    *(f"missing metric: {name}" for name in missing)]}
 

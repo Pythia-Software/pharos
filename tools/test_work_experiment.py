@@ -417,7 +417,8 @@ def replay_arrivals(*names):
                          "present_before": 0, "present_after": len(ids),
                          "other_conversations_before": 5, "other_conversations_after": 5},
             "arrivals": [{"name": name, "count_before": index, "count_after": index + 1,
-                          "identity_message_count_before": index, "identity_message_count_after": index + 1}
+                          "identity_message_count_before": index, "identity_message_count_after": index + 1,
+                          "applied_seconds": index * 20 + 10}
                          for index, name in enumerate(names)], "followup_rounds": 1}
 
 
@@ -584,6 +585,17 @@ class ProbeArmTests(Fixture):
             work.probe_run(failing, failing_sha, master, self.root / "e", probe_descriptor(), "candidate", "classic", baseline_sha)
         self.assertIn("boom", json.loads((self.root / "e/report.json").read_text())["failure"]["message"])
 
+    def test_frozen_model_directory_requires_explicit_variant(self):
+        settings = {"labels_model_dir": {"input": "model"}}
+        with self.assertRaisesRegex(ValueError, "explicit labels_variant"):
+            work.validate_probe_descriptor(probe_descriptor(model_settings=settings))
+        with self.assertRaisesRegex(ValueError, "explicit labels_variant"):
+            work.validate_descriptor(descriptor(model_settings=settings))
+        for variant in ("fp32", "int8"):
+            pinned = {**settings, "labels_variant": variant}
+            work.validate_probe_descriptor(probe_descriptor(model_settings=pinned))
+            work.validate_descriptor(descriptor(model_settings=pinned))
+
     def test_replay_must_overlap_primary_history_in_each_arm(self):
         report = {"engine_actual": {"value": "classic"},
                   "probe": {"steps": [{"name": "analysis.labels", "started_seconds": 1, "wall_seconds": 29}],
@@ -608,8 +620,40 @@ class ProbeArmTests(Fixture):
         report["replay"]["arrivals"][-1]["ready_pending_at_apply"] = False
         self.assertFalse(work.replay_overlap(report)["proven"])
         report["replay"]["arrivals"][-1]["ready_pending_at_apply"] = True
+        for arrival in report["replay"]["arrivals"]:
+            arrival["started_seconds"], arrival["ready_seconds"] = arrival["applied_seconds"], 0.5
+        self.assertTrue(work.replay_overlap(report)["ready_during_history"])
+        report["replay"]["arrivals"][-1]["ready_seconds"] = 10
+        self.assertTrue(work.replay_overlap(report)["proven"])
+        self.assertFalse(work.replay_overlap(report)["ready_during_history"])
+        report["engine_actual"]["requests"][-1].update(id=1, membership_frozen_at="1970-01-01T00:16:45Z")
+        report["engine_actual"]["requests"][0].update(id=2, membership_frozen_at="1970-01-01T00:16:44Z")
+        self.assertTrue(work.replay_overlap(report)["primary_membership_predates_arrivals"])
+        report["engine_actual"]["requests"][-1]["membership_frozen_at"] = "1970-01-01T00:17:00Z"
+        self.assertFalse(work.replay_overlap(report)["primary_membership_predates_arrivals"])
+        report["replay"]["requests"] = [{"request_id": 7, "joined_phases": [], "joined_arrival": None}]
+        self.assertTrue(work.replay_overlap(report)["fresh_arrival_requests"])
+        report["replay"]["requests"].append(dict(report["replay"]["requests"][0]))
+        self.assertFalse(work.replay_overlap(report)["fresh_arrival_requests"])
+        report["replay"]["requests"].pop()
+        report["replay"]["requests"][0]["request_id"] = 1
+        self.assertFalse(work.replay_overlap(report)["fresh_arrival_requests"])
+        report["replay"]["requests"][0]["request_id"] = 7
+        report["replay"]["followups"] = [{"id": 7}]
+        self.assertFalse(work.replay_overlap(report)["fresh_arrival_requests"])
         del report["engine_actual"]["requests"][-1]["history_active_until_seconds"]
         self.assertFalse(work.replay_overlap(report)["proven"])
+
+    def test_missing_arrival_readiness_is_not_a_pass(self):
+        baseline = self.probe_report(role="baseline", sha="b" * 64)
+        candidate = self.probe_report()
+        for report in (baseline, candidate):
+            report["replay"] = {"arrivals": [{"name": "wave", "ready_seconds": None}]}
+        result = work.compare_probe(baseline, candidate, "ab", "b" * 64)
+        self.assertIn("arrival readiness: wave", result["missing_metrics"])
+        candidate["replay"]["arrivals"][0]["name"] = "other"
+        with self.assertRaisesRegex(ValueError, "different arrival sequences"):
+            work.compare_probe(baseline, candidate, "ab", "b" * 64)
 
     def test_replay_input_is_cloned_and_every_arrival_must_be_real(self):
         master = self.master()
@@ -630,6 +674,24 @@ class ProbeArmTests(Fixture):
         self.assertIn("disabled", report["unfrozen_git_lookup"])
         self.assertEqual(report["memory_retention"], retention)
         self.assertEqual(report["replay"]["followup_rounds"], 1)
+        replay = replay_arrivals("a1", "a2")
+        replay["requests"] = [{"arrival": name, "scope": "recent", "kinds": KINDS, "request_id": i,
+                               "joined_phases": [], "submitted_seconds": (i - 7) * 20 + 11,
+                               "facts": {"id": i, "scope": "recent", "key": "recent:" + str(i), "state": "succeeded", "unfinished": 0}}
+                              for i, name in enumerate(("a1", "a2"), 7)]
+        engine = {"value": "scheduled", "basis": "work-api", "tasks": [{"kind": k} for k in KINDS],
+                  "requests": [{"state": "succeeded", "unfinished": 0} for _ in descriptor["phases"]]}
+        candidate, candidate_sha = self.fake_probe("scheduled-arrivals", self.inner(engine_actual=engine, replay=replay))
+        work.probe_run(candidate, candidate_sha, master, self.root / "scheduled-r", descriptor, "candidate", "scheduled", sha)
+        for index, change in enumerate((lambda r: r.pop("requests"),
+                                        lambda r: r["requests"][0]["facts"].update(state="cancelled"),
+                                        lambda r: r["requests"][0]["facts"].update(id=100))):
+            bad = json.loads(json.dumps(replay))
+            change(bad)
+            candidate, candidate_sha = self.fake_probe(f"bad-request-{index}", self.inner(engine_actual=engine, replay=bad))
+            with self.assertRaisesRegex(RuntimeError, "recent demand"):
+                work.probe_run(candidate, candidate_sha, master, self.root / f"bad-request-arm-{index}", descriptor,
+                               "candidate", "scheduled", sha)
         for field in ("identity", "account", "present_before", "native_ids_sha256"):
             bad = replay_arrivals("a1", "a2")
             if field == "identity":

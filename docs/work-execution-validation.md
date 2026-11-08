@@ -24,6 +24,16 @@ and integrity checks are outside measured execution. Model weights, worker
 executables and native runtimes are copied and frozen before creating arms.
 Arms have private catalogs, configuration, HOME, temporary files and logs, with
 no live source declarations, cloud settings or inherited application tokens.
+FP32 is explicitly pinned: configuring a frozen model directory changes the
+application's implicit variant default to INT8. The first reference with that
+mismatch was interrupted and discarded; it is not comparison evidence.
+
+Normalization under the experiment's UTC timezone invalidated query facts for
+all 48,581 conversations and left one label conversation dirty. The initial
+representative master therefore includes that full query-fact catch-up, as well
+as the explicit 20-conversation invalidation below. It must not be described as
+only 20 conversations of total work. A fully settled retained-source preparation
+is needed for a separate small incremental workload.
 
 Two derived workloads preserve canonical records and existing writing
 classifications:
@@ -77,20 +87,46 @@ same kind/batch, and per-kind failure counts must not grow.
 | Retained binary recovers interrupted dependency work | Passed, deterministic model fixture |
 | Retained binary recovers scheduled publication, then candidate handles another edit | Passed, deterministic model fixture |
 | Probe fixtures and independent evidence-integrity reviews | Passed; review findings corrected |
-| Harness unit tests | 34 passed |
+| Harness unit tests | 35 passed |
 | Go fast tier and full Go suite | Passed |
 | Web checks and full JavaScript matrix | Passed |
-| Real-model lifecycle trial on the full invalidation copy | Running |
-| Representative classic A/A and classic/scheduled pairs in both orders | Queued after lifecycle trial |
+| Real-model lifecycle trial on the full invalidation copy | 15 checks passed; sharing untested; INT8 model |
+| Representative classic A/A and classic/scheduled pairs in both orders | FP32 reference running; measured pairs queued |
 | Full label-pipeline paired settlement | Pending |
 | Actual arrivals prioritized during unfinished history | Pending |
 | Arrival readiness behind an already-running indivisible relational pass | Pending |
 | Abrupt process death followed by real-catalog recovery | Pending; graceful restart is a separate check |
 | Sustained resource retention and realistic throughput acceptance | Pending |
 
-The lifecycle trial's resource figures are diagnostic: preparation initially
-ran concurrently. Measured comparison arms run sequentially after that trial.
-Host activity is recorded; noisy pairs keep the existing refusal rules.
+The lifecycle trial completed in 727.58 seconds. Its concrete observations:
+
+- A stopped labels batch drained in 0.25 seconds. Its 47,908 pending
+  conversations stayed pending for the 10-second hold, and Resume used a new
+  execution with no failure-count growth.
+- Reducing the allowance from 28 to one slot began with three slots allocated;
+  the next reading was within the cap. No new over-budget admission was seen,
+  and restoring 28 updated both the authority and the private configuration.
+- Graceful release took 0.077 seconds against a seven-second limit. Pending
+  label, query-fact and timing counts were identical after close and reopen.
+  A held task was held before release and unheld after reopening.
+- The post-restart recent request sealed all 673 members in about 8.8 seconds,
+  while 47,907 label conversations remained pending. Cancelling its remaining
+  historical request drained without failure growth or further queue changes.
+- Across 142 inspection samples, the maximum resource ledger had 82 tasks and
+  the maximum inspection payload was 15,078 bytes, within the declared bounds.
+
+Sharing cancellation was not exercised: the recent request finished before a
+shared batch was observed. The authorship hold had no pending domain work and
+was also recorded as untested. Abrupt death, real authorship/refinement work and
+an already-running relational pass remain separate evidence gaps.
+
+This first lifecycle trial used real INT8 inference, not production's FP32
+variant. Its control evidence remains useful; it is not a production-model
+performance result. Its sampled peak simultaneous footprint was 2.71 GiB and
+whole-process CPU was 4,054 seconds. Those figures are diagnostic: preparation
+initially ran concurrently, and measured host activity exceeded the comparison
+noise threshold. Measured comparison arms run sequentially after that trial;
+noisy pairs keep the existing refusal rules.
 
 ## Decision rule
 
