@@ -103,9 +103,6 @@ the clicked point, including within a compressed column or workspace ribbon.
 Conversation and workspace fingerprints also show the timeline's agent event
 markers and arcs to earlier text. Hover or focus a marker to inspect it; pin
 its details to open the event and its target in the source conversation.
-**Settings → App preferences → Agent events in fingerprints** controls this
-overlay everywhere and is on by default. The setting is saved with the library
-and takes effect immediately; it does not change event detection or the timeline.
 
 ## Conversation timelines
 
