@@ -201,6 +201,29 @@ func TestThinkingProjection(t *testing.T) {
 	if total != 12 {
 		t.Fatalf("native speed grouping lost requests: %+v", buckets)
 	}
+	// Recommended time-of-day queries open the actual hourly request inputs.
+	// The timestamp must be groupable in both the authored and Go schemas.
+	var calendar qt.QueryRequestV3
+	if err := json.Unmarshal([]byte(`{"version":3,"profile":"qt-sqlite-v1","rows":true,"source":{},"grouping":{"keys":[{"field":"requested_at","interval":"hour","timeZone":"UTC"}],"summaries":[{"id":"requests","op":"count"},{"id":"wait","op":"formula","expression":"MEDIAN([gap_seconds])"}],"representative":null},"result":{"select":["requested_at","requests","wait"],"limit":50}}`), &calendar); err != nil {
+		t.Fatal(err)
+	}
+	calendar.Now = time.Now().UnixMilli()
+	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/model_requests/query-v3", calendar)
+	var hourly qt.QueryResultV3
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &hourly) != nil {
+		t.Fatal("hourly request evidence", w.Code, w.Body.String())
+	}
+	hours := map[time.Time]bool{}
+	for _, record := range records {
+		hours[record.At.Truncate(time.Hour)] = true
+	}
+	total = 0
+	for _, row := range hourly.Rows {
+		total += integer(row["requests"])
+	}
+	if len(hourly.Rows) != len(hours) || total != int64(len(records)) {
+		t.Fatalf("hourly evidence lost request population: %+v", hourly.Rows)
+	}
 	validation, err := c.thinkingValidation(context.Background(), thinkingOptions{}, records)
 	if err != nil {
 		t.Fatal(err)

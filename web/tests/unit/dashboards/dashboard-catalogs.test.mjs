@@ -1,3 +1,6 @@
+import { dashboardExplorations, dashboardQueryMeaning, dashboardQueryPurposes } from "../../../src/dashboard-query-explorations";
+import { schemaDocuments } from "../../../src/schema-documents";
+import { dashboardDefaults } from "../../../src/dashboard-defaults";
 import { compactionAnalysisCatalog as compaction } from "../../../src/compaction-analysis-catalog";
 import { conversationAnalysisCatalog as activity } from "../../../src/conversation-analysis-catalog";
 import { population } from "../../support/query-server.mjs";
@@ -591,4 +594,102 @@ test("every trend draws each %ile level it offers: reference lines over earlier 
     }
   }
   assert.ok(drawnLines > 50 && drawnTraces > 10 && picked > 10, `${drawnLines} reference charts, ${drawnTraces} traced columns, ${picked} single groups`);
+});
+
+
+test("every dashboard view recommends four distinct native explorations of its selected measure", () => {
+  for (const [topic, catalog] of Object.entries(analysisCatalogs)) {
+    const schema = core.loadSchema(schemaDocuments[catalog.dataset]);
+    const splits = fullMatrix ? Object.keys(catalog.breakdowns) : [...new Set([catalog.trend.split, ...Object.keys(catalog.breakdowns).slice(-1)])];
+    for (const metric of Object.keys(catalog.measures)) for (const split of splits) for (const [view, , reason] of viewOptions(catalog, { metric, split })) for (const unit of ["records", ...Object.keys(catalog.units).slice(0, fullMatrix ? undefined : 1)]) {
+      if (reason) continue;
+      const requested = { ...dashboardDefaults[topic], view, metric, split, unit, period: "week", minSamples: 3 };
+      const resolved = peopleMessageLabelCatalog(catalog, requested);
+      const context = { catalog: resolved, state: requested, where: month(resolved), now, zone: "America/Denver" };
+      const label = `${topic}: ${metric}/${split}/${view}/${unit}`;
+      let suggestions;
+      assert.doesNotThrow(() => { suggestions = dashboardExplorations(context, core.loadSchema(schemaDocuments[resolved.dataset])); }, label);
+      assert.ok(suggestions.every(item => !item.blocked), label);
+      assert.equal(suggestions[0].purpose, "contributors", "source evidence leads the recommendations");
+      assert.deepEqual(suggestions.map(item => item.purpose), dashboardQueryPurposes.map(item => item.id), label);
+      assert.equal(new Set(suggestions.map(item => dashboardQueryMeaning(item.query))).size, 4, label);
+      for (const item of suggestions) {
+        const target = core.loadSchema(schemaDocuments[item.dataset]);
+        assert.doesNotThrow(() => core.toQueryRequestV3(item.query, target, { ...capabilities, regexSourceFilters: true }), `${label}: ${item.purpose}`);
+        assert.deepEqual(core.decodeQueryStrict(core.encodeQuery(item.query)), core.normalizeQueryState(item.query), `${label}: URL round trip`);
+      }
+    }
+  }
+});
+
+
+test("recommendations follow metric changes and avoid dimensions fixed by filters", () => {
+  const base = { catalog: time, state: { view: "compare", metric: "time", split: "operation" }, where: [{ field: "repository_name", op: "=", value: "pharos" }], now };
+  const duration = dashboardExplorations(base, schemas.tool_calls);
+  const calls = dashboardExplorations({ ...base, state: { ...base.state, metric: "calls" } }, schemas.tool_calls);
+  assert.notDeepEqual(duration.map(item => dashboardQueryMeaning(item.query)), calls.map(item => dashboardQueryMeaning(item.query)));
+  assert.ok(duration.every(item => item.purpose === "contributors" || item.title.includes(time.measures.time.label)));
+  assert.ok(!duration[2].query.grouping.keys.includes("repository_name"), "a fixed repository is not another useful breakdown");
+  assert.equal(new Set(duration.map(item => item.title)).size, 4);
+
+  // A rate legend selection is retained in the controls when Sessions turns
+  // the same band into a heatmap. The heatmap deliberately queries every bin.
+  const selected = { values: [sessionShape.breakdowns.length_band.order[0]], excluded: false };
+  const rate = normalizeAnalysis(sessionShape, { view: "trend", metric: "failure_rate", split: "length_band", selection: selected });
+  assert.notEqual(rate.display, "heatmap");
+  const heatmap = normalizeAnalysis(sessionShape, { ...rate, metric: "sessions" });
+  assert.equal(heatmap.display, "heatmap");
+  const effective = heatmapSource(sessionShape, heatmap), where = month(sessionShape);
+  const supporting = trendQuery(effective.catalog, effective.state, where, { now }).supporting;
+  assert.equal(effective.state.selection, undefined);
+  for (const supplied of [undefined, supporting]) {
+    const context = { catalog: sessionShape, state: heatmap, where, now, supporting: supplied };
+    const links = dashboardQueryLinks("session_shape", supporting, schemas.session_shape, new URLSearchParams({ analyze_topic: "session_shape" }), context);
+    assert.equal(links.length, 4);
+    assert.ok(links.every(link => !link.blocked && link.href), "an unused saved legend selection cannot disable heatmap queries");
+    for (const link of links) {
+      const params = new URL(link.href, "http://localhost").searchParams;
+      const query = core.decodeQueryStrict(params.get("q_session_shape"));
+      assert.doesNotThrow(() => core.toQueryRequestV3(query, schemas.session_shape, capabilities));
+      assert.ok(!(query.grouping?.source ?? query).where.some(term => core.predicatesOf(term).some(clause => clause.field === "length_band")), "the retained band selection is not a population filter");
+    }
+  }
+  assert.deepEqual(heatmap.selection, selected, "the saved selection remains available when switching back to the rate");
+  for (const restored of [{ ...heatmap, metric: "failure_rate" }, { ...heatmap, view: "compare" }]) {
+    const context = { catalog: sessionShape, state: restored, where, now };
+    const links = dashboardQueryLinks("session_shape", core.EMPTY_QUERY, schemas.session_shape, new URLSearchParams({ analyze_topic: "session_shape" }), context);
+    assert.ok(links.every(link => !link.blocked && link.href));
+    for (const link of links) assert.ok((link.query.grouping?.source ?? link.query).where.some(term => core.predicatesOf(term).some(clause => clause.field === "length_band" && clause.value === selected.values[0])), "regular charts still carry the selected band into their queries");
+  }
+});
+
+test("unit selections keep top-level identity and value predicates when exploring another breakdown", () => {
+  const context = { catalog: tokenAnalysisCatalog, state: { view: "distribution", metric: "cost", split: "provider", unit: "conversation", scale: "logarithmic", selection: { values: ["codex"], excluded: false } }, where: [], now };
+  const suggestions = dashboardExplorations(context, schemas.usage);
+  const source = suggestions[2].query.grouping.source.where;
+  assert.ok(source.some(term => term.field === "root_provider" && term.value === "codex"));
+  assert.ok(!source.some(term => term.field === "provider" && term.value === "codex"), "delegated usage stays inside its top-level conversation");
+  assert.ok(suggestions[2].query.where.some(term => term.field === "analysis_value" && term.op === ">"), "positive unit values remain HAVING");
+  assert.deepEqual(suggestions[1].query.where, suggestions[0].query.where);
+});
+
+
+test("unrepresentable legend selections cannot open broader queries", () => {
+  for (const view of ["trend", "compare"]) {
+    const state = { view, metric: "tokens", split: "provider", compareAs: "share", selection: { values: Array.from({ length: core.MAX_WHERE_CLAUSES + 1 }, (_, index) => `provider-${index}`), excluded: false } };
+    const context = { catalog: tokenAnalysisCatalog, state, where: [], now };
+    const links = dashboardQueryLinks("usage", core.EMPTY_QUERY, schemas.usage, new URLSearchParams({ analyze_topic: "tokens" }), context);
+    assert.equal(links.length, 4);
+    assert.ok(links.every(link => link.blocked && !link.href), view);
+  }
+});
+
+test("component selections change the recorded inputs and explain comparisons of the whole measure", () => {
+  const context = { catalog: tokenAnalysisCatalog, state: { view: "trend", metric: "tokens", split: "type", selection: { values: ["output_tokens"], excluded: false } }, where: [], now };
+  const suggestions = dashboardExplorations(context, schemas.usage);
+  assert.deepEqual(suggestions.find(item => item.purpose === "inspect").query.grouping.summaries.map(column => column.field), ["output_tokens"]);
+  assert.match(suggestions.find(item => item.purpose === "inspect").title, /Output/);
+  assert.match(suggestions[2].note, /full measure across all components/);
+  const hidden = dashboardExplorations({ ...context, state: { ...context.state, selection: { values: [], excluded: false, allHidden: true } } }, schemas.usage);
+  assert.ok(hidden.every(item => item.blocked));
 });

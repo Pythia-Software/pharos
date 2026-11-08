@@ -346,6 +346,13 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	if err = record.restrictSource(ctx, tx, &d, q); err != nil {
 		return qt.QueryResultV3{}, nil, err
 	}
+	if sqlBacked && record == nil {
+		// A SQL-backed source reads only catalog tables that advance the
+		// query generation (or stay in step with ones that do), so its
+		// counts are reusable within one. Staged rows are read outside the
+		// transaction, and record search gives each request its own plan.
+		d.PopulationCounter = s.Catalog.populationCounter(queryPopulationFastCounts(dataset, schema)...)
+	}
 	var result qt.QueryResultV3
 	if dataset == "usage" && q.Grouping == nil && len(q.Metrics) > 0 {
 		result, err = s.executeUsageQueryV3(ctx, tx, d, q, hours, required)
@@ -447,6 +454,7 @@ func (s *Server) executeUsageQueryV3(ctx context.Context, tx *sql.Tx, d qt.Query
 			}
 		}
 		part := d
+		part.PopulationCounter = nil // staged per request; never reused
 		part.SourceSQL, err = stageQueryRowsWithBudget(ctx, tx, fmt.Sprintf("pharos_usage_hours_%d", i), source, d.Schema, d.MaxPopulation, required)
 		if err != nil {
 			return qt.QueryResultV3{}, err

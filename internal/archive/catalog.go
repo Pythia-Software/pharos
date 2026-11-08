@@ -70,7 +70,10 @@ type Catalog struct {
 	wal            walBound
 	writers        catalogWriteTracker
 	queries        queryActivity
-	now            func() time.Time
+	// queryCounts reuses Query Table population counts within a data
+	// generation (see query_count_cache.go).
+	queryCounts queryCountCache
+	now         func() time.Time
 	// background runs the catalog's own background work (the authorship
 	// rebuild) as an operation. The service sets it to its start, so a
 	// release cancels the work and waits for it before closing the catalog;
