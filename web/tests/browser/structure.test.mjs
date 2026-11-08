@@ -197,6 +197,7 @@ const backgroundTaskStatus = { ...busyStatus,
   attention: [],
 };
 const ROUTES = [
+  {name:"Scatter Plots",url:"/analyze?analyze_topic=scatter&analyze_data=scatter",ready:".usage-scatter-dashboard"},
   {name:"Compaction comparison",url:"/analyze?"+new URLSearchParams({analyze_topic:"compaction",analyze_data:"compactions",analyze_chart:JSON.stringify({view:"compare",metric:"compactions",split:"trigger_provider"})}),ready:analysisReady},
   {name:"Compaction",url:"/analyze?analyze_topic=compaction&analyze_data=compactions",ready: `.usage-compaction-dashboard ${overTimeReady}`},
   {name:"Waiting",url:"/analyze?analyze_topic=thinking-overview&analyze_data=model_requests",ready:'.thinking-dashboard[aria-busy="false"] .thinking-overview-stats'},
@@ -480,7 +481,6 @@ const ROUTES = [
   ...Object.entries({
     compare: { view: "compare", metric: "cost", split: "provider_model", compareAs: "share" },
     distribution: { view: "distribution", unit: "conversation", metric: "cost", split: "model_family", minSamples: 2 },
-    scatter: { view: "scatter", unit: "conversation", metric: "tokens", metricY: "cost", split: "provider", scale: "logarithmic", scaleY: "logarithmic" },
     cycle: { view: "cycle", cycle: "hour", metric: "tokens", split: "none" },
   }).map(([view, chart]) => ({ name: `Tokens and Cost ${view} view`, url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify(chart))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations',
     check: async page => assert.equal(await page.locator(".usage-analysis-dashboard [role=alert]").count(), 0, "the analysis reports an error") })),
@@ -1516,15 +1516,15 @@ test("Card dashboard opens from the Card Library, fits, and supports changing vi
 
 
 const oldActivitySource = { ...EMPTY_QUERY, where: [
-  { field: "root_effort", op: "=", value: "high" },
-  { field: "event_at", op: ">=", value: "2026-10-01T15:00:00.000Z" },
-  { field: "event_at", op: "<", value: "+0s" },
+  { field: "provider", op: "=", value: "codex" },
+  { field: "last_at", op: ">=", value: "2026-10-01T15:00:00.000Z" },
+  { field: "last_at", op: "<", value: "+0s" },
 ] };
 function oldActivityCard(token) {
   return `/analyze?${new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "human", analyze_data: "writing_messages",
     analyze_chart: JSON.stringify({ view: "trend", metric: "words" }), analyze_filters: encodeQuery(EMPTY_QUERY),
-    card_id: "session-human-output", card_query: "conversation_activity", q_conversation_activity: token,
-    window_mode: "today", window_days: "1", window_dataset: "conversation_activity", window_field: "event_at", window_timezone: "Asia/Tokyo",
+    card_id: "session-human-output", card_query: "scatter", q_scatter: token,
+    window_mode: "today", window_days: "1", window_dataset: "scatter", window_field: "last_at", window_timezone: "Asia/Tokyo",
   })}`;
 }
 // The durable source is the harder path; the inline mapping is covered by
@@ -1535,10 +1535,10 @@ test("Older card dashboard restores durable sources before rendering", { skip },
     api: { "GET /api/query-snapshots": { version: 1, code, token: encodeQuery(oldActivitySource), createdAt: 0 } },
   });
   const { page } = app;
-  await page.getByRole('heading', { name: 'Conversations', exact: true }).waitFor();
-  assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'scatter');
+  await page.getByRole('heading', { name: 'Scatter Plots', exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: 'X axis', exact: true }).inputValue(), 'Human messages');
   const params = new URL(page.url()).searchParams;
-  assert.equal(params.get('analyze_topic'), 'activity');
+  assert.equal(params.get('analyze_topic'), 'scatter');
   assert.equal(params.get('analyze_window'), 'today');
   assert.equal(params.get('analyze_timezone'), 'Asia/Tokyo');
   assert.ok(app.calls.filter(call => call.method === 'POST' && call.path.startsWith('/api/query/')).every(call => !call.path.startsWith('/api/query/writing_messages/')), 'the old dashboard never executes');
@@ -1548,8 +1548,8 @@ test("Older card dashboard restores durable sources before rendering", { skip },
   await page.getByRole('link', { name: /^Back to dashboard/ }).click();
   await page.locator('.usage-query-destinations a').first().waitFor();
   await page.reload();
-  await page.getByRole('combobox', { name: 'View', exact: true }).waitFor();
-  assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'scatter');
+  await page.getByRole('combobox', { name: 'X axis', exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: 'X axis', exact: true }).inputValue(), 'Human messages');
   await app.settled();
 });
 
@@ -1639,4 +1639,19 @@ test("Markdown local destinations become navigable only after availability is co
   await page.getByRole("link",{name:"Library view",exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/library');
   await page.locator('.conversation-result-card').first().waitFor();
+});
+
+test('Scatter card opens the standalone dashboard with its selected axes and source query',{skip},async t=>{
+ const app=await open(t,{url:'/cards?card_search=human-words-api-cost&card_topic=all&card_window=7',ready:'.query-card-open'}),{page}=app;
+ await page.locator('.query-card-open').first().click();
+ await page.getByRole('combobox',{name:'X axis',exact:true}).waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('analyze_topic'),'scatter');
+ assert.equal(await page.getByRole('combobox',{name:'X axis',exact:true}).inputValue(),'Typed words');
+ assert.equal(await page.getByRole('combobox',{name:'Y axis',exact:true}).inputValue(),'API cost (USD)');
+ await page.locator('.usage-query-destinations a').first().click();
+ await page.locator('.usage-workspace-table').waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('analyze_data'),'scatter');
+ await page.getByRole('link',{name:/^Back to dashboard/}).click();
+ await page.getByRole('combobox',{name:'X axis',exact:true}).waitFor();
+ await app.settled();
 });

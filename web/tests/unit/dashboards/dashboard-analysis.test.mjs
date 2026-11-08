@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { core, schemas, recipeById, instantiateRecipe, cardCoverQuery } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { analysisResult, analysisLabels, analysisFields, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, availableViews, catalogProblems, cycleResult, normalizeAnalysis, switchView, trendUnavailable, validAnalysisState, viewOptions } from "../../../src/dashboard-analysis-model";
+import { aggregate, analysisResult, analysisLabels, analysisFields, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, availableViews, catalogProblems, cycleResult, normalizeAnalysis, switchView, trendUnavailable, validAnalysisState, viewOptions } from "../../../src/dashboard-analysis-model";
 import { humanAnalysisCatalog as human } from "../../../src/human-analysis-catalog";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { runAnalysisQuery } from "../../../src/analysis-request";
@@ -388,5 +388,53 @@ test("component comparisons partition every matching word or input token, with f
     assert.equal(normalizeAnalysis(source, { ...state, metric: metric === "words" ? "typed" : "cost" }).split, "none", "incompatible measures leave the component split");
     assert.equal(switchView(source, state, "distribution").split, "none");
     assert.equal(switchView(source, state, "trend").split, split);
+  }
+});
+
+test('standalone scatter plots pair dashboard metrics and keep point-type changes meaningful', async () => {
+  const { scatterAnalysisCatalog: scatter } = await import('../../../src/scatter-analysis-catalog');
+  const { scatterMetrics, scatterMetricOptions } = await import('../../../src/scatter-metrics');
+  assert.deepEqual(catalogProblems(scatter), []);
+  assert.equal(scatterMetricOptions(scatter,"conversation","tokens_cost","cache write")[0][0],"usage_cache_creation_input_tokens");
+  assert.ok(scatterMetricOptions(scatter,"message","human_typed","session shape").length === 0);
+  assert.deepEqual(viewOptions(scatter, {view:'scatter',metric:'human_typed',split:'none'}).map(([view])=>view), ['scatter']);
+  for (const source of [catalog, human]) assert.ok(!viewOptions(source, source.trend).some(([view]) => view === 'scatter'));
+  const state = normalizeAnalysis(scatter, {v:2,view:'scatter',unit:'conversation',metric:'human_typed',metricY:'tokens_cost',split:'provider'});
+  assert.equal(state.metricY,'tokens_cost');
+  const query = analysisQuery(scatter, state, []);
+  assert.ok(query.query.grouping.source.where.some(term=>term.field==='point_kind' && term.value==='conversation'));
+  const message = normalizeAnalysis(scatter, {...state,unit:'message'});
+  assert.equal(message.metric,'human_typed');
+  assert.notEqual(message.metricY,message.metric);
+  assert.ok(scatter.measures[message.metricY].units.includes('message'));
+  assert.equal(normalizeAnalysis(scatter,{...state,unit:'work'}).split,'none','a workspace may span providers');
+  const session = normalizeAnalysis(scatter,{...state,unit:'agent_session',metricY:'session_shape_autonomy'});
+  assert.equal(session.metric,'human_typed');
+  assert.equal(session.metricY,'session_shape_autonomy');
+  assert.ok(analysisQuery(scatter,session,[]).query.grouping.source.where.some(term=>term.field==='point_kind'&&term.value==='agent_session'));
+  for (const metric of ['tokens_cost','session_shape_wall_seconds','session_shape_context_peak_tokens','calls_calls']) assert.ok(scatter.measures[metric].units.includes('agent_session'),metric);
+  assert.equal(scatterMetricOptions(scatter,'agent_session','tokens_cost','work hours').length,0,'conversation activity is not assigned to a session');
+  assert.equal(scatterMetrics.length,new Set(scatterMetrics.map(item=>item.id)).size,'source and extra metrics never duplicate');
+  for (const item of scatterMetrics) assert.ok(item.group && item.measure.note && Object.keys(item.keys).length, item.id);
+  const rows = [
+    {id:'conversation:a',entity_id:'a',point_kind:'conversation',human_typed:8,tokens_cost:2},
+    {id:'conversation:b',entity_id:'b',point_kind:'conversation',human_typed:0,tokens_cost:0},
+    {id:'conversation:c',entity_id:'c',point_kind:'conversation',human_typed:5,tokens_cost:null},
+  ];
+  const chart = analysisQuery(scatter,{...state,split:'none'},[]);
+  const result = core.evaluateMetrics(rows,chart.query,schemas.scatter,{now}).metrics[0];
+  assert.deepEqual(result.buckets.filter(bucket=>bucket.value!==null&&bucket.y!==null).map(bucket=>[bucket.value,bucket.y]),[[8,2],[0,0]]);
+
+  // Human and agent wall time overlap. Pairing either with another metric
+  // must keep the two populations separate, including the concurrency ratio.
+  const hours = [
+    {id:'you',actor:'you',elapsed_hours:2,active_ms:2,elapsed_ms:2},
+    {id:'agent-a',actor:'with_you',elapsed_hours:1,active_ms:2,elapsed_ms:1},
+    {id:'agent-b',actor:'unattended',elapsed_hours:1,active_ms:4,elapsed_ms:1},
+  ];
+  for (const [id,expected] of [['work_hours_wall_hours',2],['work_hours_engaged_hours',2],['work_hours_at_once',3]]) {
+    const {measure} = scatterMetrics.find(item=>item.id===id);
+    const query = {...core.EMPTY_QUERY,where:measure.where,aggregations:[{id:'hours',...aggregate(measure),groupBy:[]}]};
+    assert.equal(core.evaluateMetrics(hours,query,schemas.rhythm,{now}).metrics[0].buckets[0].value,expected,id);
   }
 });

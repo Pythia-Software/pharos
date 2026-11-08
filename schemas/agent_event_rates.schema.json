@@ -48,6 +48,7 @@
     }
   ],
   "fields": [
+    {"name":"agent_session_id","label":"Agent session ID","type":"text","group":"Context","select":{"default":false},"aggregate":{"groupable":true},"bindings":{"sqlite":{"expr":"r.\"agent_session_id\""}},"description":"Recorded owner of this message or ledger record; ambiguous ownership is missing."},
     {
       "name": "id",
       "label": "Message and kind (row)",

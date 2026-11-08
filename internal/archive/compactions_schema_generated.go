@@ -8,6 +8,7 @@ func PharosCompactionsSchema() querytable.Schema {
 		Name:    "pharos_compactions",
 		IDField: "id",
 		Fields: map[string]querytable.FieldSpec{
+			"agent_session_id":     {Name: "agent_session_id", Kind: querytable.FieldText, Expr: "r.\"agent_session_id\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"agent_session_id\""},
 			"id":                   {Name: "id", Kind: querytable.FieldText, Expr: "r.\"id\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"id\""},
 			"message_id":           {Name: "message_id", Kind: querytable.FieldText, Expr: "r.\"message_id\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"message_id\""},
 			"conversation_id":      {Name: "conversation_id", Kind: querytable.FieldText, Expr: "r.\"conversation_id\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"conversation_id\""},

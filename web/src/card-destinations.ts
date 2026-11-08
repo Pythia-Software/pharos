@@ -1,3 +1,5 @@
+import { analysisCardTitle } from "./dashboard-card-copy";
+import { scatterAnalysisCatalog } from "./scatter-analysis-catalog";
 import { EMPTY_QUERY, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
 import type { QueryRecipe } from "./curiosity-data";
 import { queryURL, type RollingWindow } from "./query-links";
@@ -24,7 +26,7 @@ const engine = (topic: UsageTopic, view: AnalysisState["view"]) => (metric: stri
   // a trend without a scale draws the linear + log split.
   topic, chart: { v: analysisVersion, view, metric, split, period: "day", scale: "linear", nonzero: false, ...extra },
 });
-const activity = engine("activity", "scatter");
+const scatter = (metric: string, metricY: string, unit = "conversation", split = "none"): CardDashboard => ({ topic: "scatter", chart: { v: analysisVersion, view: "scatter", metric, metricY, unit, split, scale: "logarithmic", scaleY: "logarithmic" } });
 const sessions = engine("session_shape", "compare");
 const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = engine("skills", "trend"), human = engine("human", "trend"), carbon = engine("carbon", "compare"), parallel = engine("parallelism", "trend");
 // A card's trailing window with whole days and a mean reference level (buildCardTrend).
@@ -33,6 +35,7 @@ const calls = (metric: string, split = "tool_name", extra: Partial<AnalysisState
 // Agent Events compare at the dashboard's minimum of messages read.
 const events = (metric: string, split: string, extra: Partial<AnalysisState> = {}) => engine("agent_event_rates", "compare")(metric, split, { minSamples: 200, ...extra });
 const dashboards: Record<string, CardDashboard> = {
+  "human-words-api-cost": scatter("human_typed", "tokens_cost"),
   "compactions-by-trigger": engine("compaction", "trend")("compactions", "trigger"),
  "message-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
  "human-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
@@ -54,14 +57,14 @@ const dashboards: Record<string, CardDashboard> = {
   "largest-subagent-weight": tokens("delegated_runs", "provider_model_effort", { view: "compare", unit: "conversation", reduce: "max" }),
   "session-delegation-count": tokens("delegated_runs", "provider_model_effort", { view: "distribution", unit: "conversation", scale: "logarithmic" }),
   "model-agent-roles": tokens("agent_sessions", "provider_model_role", { view: "compare", compareAs: "bars" }),
-  "session-token-cost": tokens("tokens", "provider_model", { view: "scatter", unit: "conversation", metricY: "cost", scale: "logarithmic", scaleY: "logarithmic" }),
-  "session-input-output": tokens("input", "provider_model", { view: "scatter", unit: "conversation", metricY: "output", scale: "logarithmic", scaleY: "logarithmic" }),
+  "session-token-cost": scatter("tokens_tokens", "tokens_cost", "conversation", "provider"),
+  "session-input-output": scatter("tokens_input", "tokens_output", "conversation", "provider"),
   "model-conversation-reach": tokens("conversations", "provider_model", { view: "compare" }),
   "repository-model-use": tokens("tokens", "repository_provider_model", { view: "compare" }),
   "api-cost-total": tokens("cost", "repository_name", { view: "compare" }),
   "window-work-cost": tokens("cost", "repository_name", { view: "compare", unit: "conversation", reduce: "median" }),
   "work-cost-distribution": tokens("cost", "repository_name", { view: "distribution", unit: "conversation", scale: "logarithmic" }),
-  "work-volume-cost": tokens("root_conversations", "root_repository_name", { view: "scatter", unit: "repository", metricY: "cost", scale: "logarithmic", scaleY: "logarithmic" }),
+  "work-volume-cost": scatter("tokens_conversations", "tokens_cost", "work", "repository_name"),
   "task-token-ranges": tokens("tokens", "repository_name", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
   "task-output-ranges": tokens("output", "repository_name", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
   "task-model-token-ranges": tokens("tokens", "provider_model", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
@@ -143,7 +146,7 @@ const dashboards: Record<string, CardDashboard> = {
   "human-words-per-work": human("typed", "none", { view: "compare", unit: "work", reduce: "mean" }),
   "human-example-phrases": human("words", "kind"),
   "human-specific-feedback": human("typed_messages", "none", { rollingPeriods: 7 }),
-  "session-human-output": activity("messages", "provider_model", { unit: "conversation", metricY: "output", scale: "logarithmic", scaleY: "logarithmic" }),
+  "session-human-output": scatter("activity_messages", "tokens_output", "conversation", "provider"),
   // Carbon: usage, under the user's assumptions.
   "carbon-trend": carbon("co2", "none", { view: "trend", rollingPeriods: 7, rollingOp: "sum", percentiles: ["mean"] }),
   "carbon-tiers": carbon("co2", "carbon_tier", { compareAs: "share" }),
@@ -201,6 +204,25 @@ export function refineCardDestination(recipe: QueryRecipe): QueryRecipe {
   if (recipe.retired || recipe.dataset === "tl1_attempts" || !Object.hasOwn(usageDatasetTopics, recipe.dataset)) return recipe;
   const mapped = dashboardFor(recipe);
   const dashboard = mapped.chart.view === "distribution" && recipe.cover?.minSamples !== undefined ? { ...mapped, chart: { ...mapped.chart, minSamples: recipe.cover.minSamples } } : mapped;
+  if (dashboard.topic === "scatter") {
+    const { metric, metricY = "tokens_cost", unit = "conversation", split } = dashboard.chart;
+    const x = scatterAnalysisCatalog.measures[metric], y = scatterAnalysisCatalog.measures[metricY];
+    const metricId = `${recipe.id}_scatter`;
+    const title = analysisCardTitle(scatterAnalysisCatalog, dashboard.chart);
+    return { ...recipe, exploration: undefined, eligibility: undefined, title, description: `${title} over the last {days} days.`, dataset: "scatter", field: "last_at", unit: unit === "work" ? "workspaces" : "conversations",
+      where: [{ field: "point_kind", op: "=", value: unit }],
+      measures: [{ id: metricId, op: "max", field: metric, expression: `MAX([${metric}])`, expressionY: `MAX([${metricY}])`,
+        // These logarithmic previews need positive coordinates on both axes.
+        // Filter point rows before grouping so undrawable points cannot use
+        // the group budget; keep this out of the dashboard's source filters.
+        where: [{ field: metric, op: ">", value: "0" }, { field: metricY, op: ">", value: "0" }],
+        groupBy: [...split !== "none" ? scatterAnalysisCatalog.breakdowns[split].fields : [], "entity_id"], groupLimit: 2000, label: title,
+        display: { kind: "scatter", xLabel: x.label, yLabel: y.label, xScale: { mode: "log" }, yScale: { mode: "log" }, xFormat: x.format, yFormat: y.format } }],
+      cover: { mode: "source", metricId, kind: "scatter", maxGroups: 2000, showLegend: split !== "none" },
+      destination: { ...dashboard, dataset: "scatter", detailAction: "Inspect scatter plot points" }, action: "Explore Scatter Plots",
+      note: `${x.note} ${y.note} Values are computed independently and matched by entity identity. Points need both values.`,
+    };
+  }
   return { ...recipe, destination: { ...dashboard, dataset: usageTopicDatasets[dashboard.topic], detailAction: recipe.action }, action: `Explore ${usageTopics[dashboard.topic].label}` };
 }
 

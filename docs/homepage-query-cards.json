@@ -10985,44 +10985,49 @@
     },
     {
       "id": "session-human-output",
-      "title": "Messages and output",
-      "description": "Your messages versus recorded output per whole conversation over the last {days} days; log–log axes.",
-      "dataset": "conversation_activity",
-      "field": "event_at",
+      "title": "Human messages vs output tokens per conversation by provider",
+      "description": "Human messages vs output tokens per conversation by provider over the last {days} days.",
+      "dataset": "scatter",
+      "field": "last_at",
       "category": "models",
       "idea": "models-01",
-      "unit": "tokens",
+      "unit": "conversations",
       "where": [
         {
-          "field": "root_conversation_id",
-          "op": "is_not_null",
-          "value": ""
+          "field": "point_kind",
+          "op": "=",
+          "value": "conversation"
         }
       ],
       "measures": [
         {
-          "id": "session-human-output",
-          "op": "sum",
-          "expression": "SUM([human_messages])",
-          "expressionY": "SUM([output_tokens])",
-          "groupBy": [
-            "root_provider",
-            "root_model_family",
-            "root_conversation_id"
-          ],
-          "groupLimit": 2000,
-          "sort": [
+          "id": "session-human-output_scatter",
+          "op": "max",
+          "field": "activity_messages",
+          "expression": "MAX([activity_messages])",
+          "expressionY": "MAX([tokens_output])",
+          "where": [
             {
-              "key": "value",
-              "dir": "desc"
+              "field": "activity_messages",
+              "op": ">",
+              "value": "0"
+            },
+            {
+              "field": "tokens_output",
+              "op": ">",
+              "value": "0"
             }
           ],
-          "label": "Whole conversations",
+          "groupBy": [
+            "provider",
+            "entity_id"
+          ],
+          "groupLimit": 2000,
+          "label": "Human messages vs output tokens per conversation by provider",
           "display": {
             "kind": "scatter",
-            "maxGroups": 2000,
-            "xLabel": "Human messages (log)",
-            "yLabel": "Recorded output tokens (log)",
+            "xLabel": "Human messages",
+            "yLabel": "Output tokens",
             "xScale": {
               "mode": "log"
             },
@@ -11036,78 +11041,36 @@
             "yFormat": {
               "kind": "number",
               "decimals": 0
-            },
-            "legendPosition": "none"
+            }
           }
         }
       ],
       "days": [
         7
       ],
-      "exploration": {
-        "keys": [
-          "root_provider",
-          "root_model_family",
-          "root_conversation_id"
-        ],
-        "summaries": [
-          {
-            "id": "mc_human_messages",
-            "op": "sum",
-            "field": "human_messages",
-            "label": "Human messages"
-          },
-          {
-            "id": "mc_output",
-            "op": "sum",
-            "field": "output_tokens",
-            "label": "Recorded output tokens"
-          },
-          {
-            "id": "lineage_qualified",
-            "op": "formula",
-            "label": "Conversations under an inferred or unverified top-level conversation",
-            "expression": "COUNT_DISTINCT(IF([root_quality]=\"unverified\",[conversation_id],IF([root_quality]=\"inferred\",[conversation_id],NULL)))"
-          }
-        ],
-        "valueField": "mc_human_messages",
-        "unit": "tokens",
-        "subjects": "whole conversations",
-        "action": "Explore messages and output",
-        "labelFields": [
-          "root_provider",
-          "root_model_family",
-          "root_conversation_id"
-        ],
-        "qualifier": {
-          "field": "lineage_qualified",
-          "label": "conversations placed under a top-level conversation through an inferred or unverified link"
-        }
-      },
       "cover": {
         "mode": "source",
-        "metricId": "session-human-output",
+        "metricId": "session-human-output_scatter",
         "kind": "scatter",
-        "height": 300
+        "maxGroups": 2000,
+        "showLegend": true
       },
-      "action": "Explore Conversations",
-      "note": "One point is a whole top-level conversation including delegated output, colored by its top-level recorded model. X counts classified user messages holding any text besides app instructions and automated prompts, at their own sent timestamps; output uses the usage records's recorded fact placement. Both are filtered by the same rolling window before aggregation. Output includes recorded reasoning where providers include it, regardless of price status. Both axes are logarithmic; nonpositive points are omitted with a visible count and remain in the table. Show up to 2,000 conversations ranked by messages. Missing classification/parent links is not evidence of absent human effort.",
+      "action": "Explore Scatter Plots",
+      "note": "Classified user messages holding any text besides app instructions and automated prompts. Output includes reported reasoning output. Values are computed independently and matched by entity identity. Points need both values.",
       "destination": {
-        "topic": "activity",
+        "topic": "scatter",
         "chart": {
           "v": 2,
           "view": "scatter",
-          "metric": "messages",
-          "split": "provider_model",
-          "period": "day",
-          "scale": "logarithmic",
-          "nonzero": false,
+          "metric": "activity_messages",
+          "metricY": "tokens_output",
           "unit": "conversation",
-          "metricY": "output",
+          "split": "provider",
+          "scale": "logarithmic",
           "scaleY": "logarithmic"
         },
-        "dataset": "conversation_activity",
-        "detailAction": "Explore messages and output"
+        "dataset": "scatter",
+        "detailAction": "Inspect scatter plot points"
       }
     },
     {
@@ -11592,54 +11555,49 @@
     },
     {
       "id": "session-token-cost",
-      "title": "Conversation tokens and cost",
-      "description": "Whole-conversation tokens versus priced cost over the last {days} days, including delegated work; log–log axes.",
-      "dataset": "usage",
-      "field": "first_usage_at",
+      "title": "Tokens vs API cost (USD) per conversation by provider",
+      "description": "Tokens vs API cost (USD) per conversation by provider over the last {days} days.",
+      "dataset": "scatter",
+      "field": "last_at",
       "category": "models",
       "idea": "models-01",
-      "unit": "USD",
+      "unit": "conversations",
       "where": [
         {
-          "field": "total_tokens",
-          "op": ">",
-          "value": "0"
-        },
-        {
-          "field": "price_status",
+          "field": "point_kind",
           "op": "=",
-          "value": "priced"
-        },
-        {
-          "field": "root_conversation_id",
-          "op": "is_not_null",
-          "value": ""
+          "value": "conversation"
         }
       ],
       "measures": [
         {
-          "id": "session-token-cost",
-          "op": "sum",
-          "expression": "SUM([total_tokens])",
-          "expressionY": "SUM([cost_usd])",
-          "groupBy": [
-            "root_provider",
-            "root_model_family",
-            "root_conversation_id"
-          ],
-          "groupLimit": 2000,
-          "sort": [
+          "id": "session-token-cost_scatter",
+          "op": "max",
+          "field": "tokens_tokens",
+          "expression": "MAX([tokens_tokens])",
+          "expressionY": "MAX([tokens_cost])",
+          "where": [
             {
-              "key": "value",
-              "dir": "desc"
+              "field": "tokens_tokens",
+              "op": ">",
+              "value": "0"
+            },
+            {
+              "field": "tokens_cost",
+              "op": ">",
+              "value": "0"
             }
           ],
-          "label": "Whole conversations",
+          "groupBy": [
+            "provider",
+            "entity_id"
+          ],
+          "groupLimit": 2000,
+          "label": "Tokens vs API cost (USD) per conversation by provider",
           "display": {
             "kind": "scatter",
-            "maxGroups": 2000,
-            "xLabel": "Recorded tokens (log)",
-            "yLabel": "API equivalent (USD) (log)",
+            "xLabel": "Tokens",
+            "yLabel": "API cost (USD)",
             "xScale": {
               "mode": "log"
             },
@@ -11653,140 +11611,83 @@
             "yFormat": {
               "kind": "number",
               "decimals": 2
-            },
-            "legendPosition": "none"
+            }
           }
         }
       ],
       "days": [
         7
       ],
-      "exploration": {
-        "keys": [
-          "root_provider",
-          "root_model_family",
-          "root_conversation_id"
-        ],
-        "summaries": [
-          {
-            "id": "mc_tokens",
-            "op": "sum",
-            "field": "total_tokens",
-            "label": "Recorded tokens"
-          },
-          {
-            "id": "mc_cost",
-            "op": "sum",
-            "field": "cost_usd",
-            "label": "API equivalent (USD)"
-          },
-          {
-            "id": "mc_sessions",
-            "op": "count_distinct",
-            "field": "root_conversation_id",
-            "label": "Whole conversations"
-          },
-          {
-            "id": "lineage_qualified",
-            "op": "formula",
-            "label": "Sessions with unverified ancestry or identity",
-            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
-          }
-        ],
-        "valueField": "mc_tokens",
-        "unit": "tokens",
-        "subjects": "whole conversations",
-        "action": "Explore conversation cost outliers",
-        "labelFields": [
-          "root_provider",
-          "root_model_family",
-          "root_conversation_id"
-        ],
-        "qualifier": {
-          "field": "lineage_qualified",
-          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
-        }
-      },
       "cover": {
         "mode": "source",
-        "metricId": "session-token-cost",
+        "metricId": "session-token-cost_scatter",
         "kind": "scatter",
-        "height": 300
+        "maxGroups": 2000,
+        "showLegend": true
       },
-      "action": "Explore Tokens and Cost",
-      "note": "Uses recorded usage records, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares. Both axes use logarithmic scales. Points with a zero or negative coordinate cannot be plotted; their omission count is shown and their raw values remain in the table. Only fully priced positive-token usage records contribute; assumed, partial and unpriced facts are excluded. API equivalent is not subscription spend. These comparisons count one top-level conversation including all recorded delegated runs, linked command launches, and continuations. Totals cover the priced usage inside the selected window, not lifetime cost. Each conversation belongs to its top-level recorded provider/model/effort group, including delegated usage on other models. Missing or cyclic parent chains are excluded from conversation comparisons; unrecorded delegation cannot be included. Each point is one whole conversation including delegated usage, colored by its top-level recorded model. Show up to 2,000 highest-input or highest-token groups; this is a ranked subset if more exist, not a random sample. Open the table for all groups.",
+      "action": "Explore Scatter Plots",
+      "note": "Tokens include cached input and reported reasoning output. API cost is the list-price equivalent, including assumed and partial prices; unpriced usage has no cost and adds nothing. Values are computed independently and matched by entity identity. Points need both values.",
       "destination": {
-        "topic": "tokens",
+        "topic": "scatter",
         "chart": {
-          "period": "day",
-          "rollingPeriods": 0,
-          "display": "interval",
-          "scale": "logarithmic",
-          "seriesLimit": 15,
-          "nonzero": false,
           "v": 2,
-          "metric": "tokens",
-          "split": "provider_model",
-          "hours": 6,
-          "days": 3,
-          "selection": {
-            "values": [],
-            "excluded": false
-          },
           "view": "scatter",
+          "metric": "tokens_tokens",
+          "metricY": "tokens_cost",
           "unit": "conversation",
-          "metricY": "cost",
+          "split": "provider",
+          "scale": "logarithmic",
           "scaleY": "logarithmic"
         },
-        "dataset": "usage",
-        "detailAction": "Explore conversation cost outliers"
+        "dataset": "scatter",
+        "detailAction": "Inspect scatter plot points"
       }
     },
     {
       "id": "session-input-output",
-      "title": "Conversation input and output",
-      "description": "Whole-conversation input versus output over the last {days} days, including delegated work; log–log axes.",
-      "dataset": "usage",
-      "field": "first_usage_at",
+      "title": "Input tokens vs output tokens per conversation by provider",
+      "description": "Input tokens vs output tokens per conversation by provider over the last {days} days.",
+      "dataset": "scatter",
+      "field": "last_at",
       "category": "models",
       "idea": "models-01",
-      "unit": "tokens",
+      "unit": "conversations",
       "where": [
         {
-          "field": "total_tokens",
-          "op": ">",
-          "value": "0"
-        },
-        {
-          "field": "root_conversation_id",
-          "op": "is_not_null",
-          "value": ""
+          "field": "point_kind",
+          "op": "=",
+          "value": "conversation"
         }
       ],
       "measures": [
         {
-          "id": "session-input-output",
-          "op": "sum",
-          "expression": "SUM([input_tokens])",
-          "expressionY": "SUM([output_tokens])",
-          "groupBy": [
-            "root_provider",
-            "root_model_family",
-            "root_conversation_id"
-          ],
-          "groupLimit": 2000,
-          "sort": [
+          "id": "session-input-output_scatter",
+          "op": "max",
+          "field": "tokens_input",
+          "expression": "MAX([tokens_input])",
+          "expressionY": "MAX([tokens_output])",
+          "where": [
             {
-              "key": "value",
-              "dir": "desc"
+              "field": "tokens_input",
+              "op": ">",
+              "value": "0"
+            },
+            {
+              "field": "tokens_output",
+              "op": ">",
+              "value": "0"
             }
           ],
-          "label": "Whole conversations",
+          "groupBy": [
+            "provider",
+            "entity_id"
+          ],
+          "groupLimit": 2000,
+          "label": "Input tokens vs output tokens per conversation by provider",
           "display": {
             "kind": "scatter",
-            "maxGroups": 2000,
-            "xLabel": "Input tokens (including cache) (log)",
-            "yLabel": "Output tokens (log)",
+            "xLabel": "Input tokens",
+            "yLabel": "Output tokens",
             "xScale": {
               "mode": "log"
             },
@@ -11800,99 +11701,36 @@
             "yFormat": {
               "kind": "number",
               "decimals": 0
-            },
-            "legendPosition": "none"
+            }
           }
         }
       ],
       "days": [
         7
       ],
-      "exploration": {
-        "keys": [
-          "root_provider",
-          "root_model_family",
-          "root_conversation_id"
-        ],
-        "summaries": [
-          {
-            "id": "mc_input",
-            "op": "sum",
-            "field": "input_tokens",
-            "label": "Recorded input tokens"
-          },
-          {
-            "id": "mc_output",
-            "op": "sum",
-            "field": "output_tokens",
-            "label": "Recorded output tokens"
-          },
-          {
-            "id": "mc_tokens",
-            "op": "sum",
-            "field": "total_tokens",
-            "label": "Recorded tokens"
-          },
-          {
-            "id": "mc_sessions",
-            "op": "count_distinct",
-            "field": "root_conversation_id",
-            "label": "Whole conversations"
-          },
-          {
-            "id": "lineage_qualified",
-            "op": "formula",
-            "label": "Sessions with unverified ancestry or identity",
-            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
-          }
-        ],
-        "valueField": "mc_input",
-        "unit": "tokens",
-        "subjects": "whole conversations",
-        "action": "Explore conversation token balance",
-        "labelFields": [
-          "root_provider",
-          "root_model_family",
-          "root_conversation_id"
-        ],
-        "qualifier": {
-          "field": "lineage_qualified",
-          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
-        }
-      },
       "cover": {
         "mode": "source",
-        "metricId": "session-input-output",
+        "metricId": "session-input-output_scatter",
         "kind": "scatter",
-        "height": 300
+        "maxGroups": 2000,
+        "showLegend": true
       },
-      "action": "Explore Tokens and Cost",
-      "note": "Uses recorded usage records, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares. Both axes use logarithmic scales. Points with a zero or negative coordinate cannot be plotted; their omission count is shown and their raw values remain in the table. Input includes cached input; output includes recorded reasoning where the provider includes it. Neither axis measures quality. Conversation totals include delegated runs and linked launches, grouped by the top-level recorded model. Unresolved parent chains are excluded. Each point is one whole conversation including delegated usage, colored by its top-level recorded model. Show up to 2,000 highest-input or highest-token groups; this is a ranked subset if more exist, not a random sample. Open the table for all groups.",
+      "action": "Explore Scatter Plots",
+      "note": "Input includes cache reads and cache writes. Output includes reported reasoning output. Values are computed independently and matched by entity identity. Points need both values.",
       "destination": {
-        "topic": "tokens",
+        "topic": "scatter",
         "chart": {
-          "period": "day",
-          "rollingPeriods": 0,
-          "display": "interval",
-          "scale": "logarithmic",
-          "seriesLimit": 15,
-          "nonzero": false,
           "v": 2,
-          "metric": "input",
-          "split": "provider_model",
-          "hours": 6,
-          "days": 3,
-          "selection": {
-            "values": [],
-            "excluded": false
-          },
           "view": "scatter",
+          "metric": "tokens_input",
+          "metricY": "tokens_output",
           "unit": "conversation",
-          "metricY": "output",
+          "split": "provider",
+          "scale": "logarithmic",
           "scaleY": "logarithmic"
         },
-        "dataset": "usage",
-        "detailAction": "Explore conversation token balance"
+        "dataset": "scatter",
+        "detailAction": "Inspect scatter plot points"
       }
     },
     {
@@ -15417,99 +15255,53 @@
     },
     {
       "id": "work-volume-cost",
-      "title": "Conversation count and cost",
-      "description": "Top-level conversation counts versus period cost including delegation over the last {days} days, attributed to top-level repositories.",
+      "title": "Conversations with usage vs API cost (USD) per workspace by repository",
+      "description": "Conversations with usage vs API cost (USD) per workspace by repository over the last {days} days.",
       "category": "cost",
       "idea": "cost-02",
-      "dataset": "usage",
-      "field": "first_usage_at",
+      "dataset": "scatter",
+      "field": "last_at",
       "days": [
         7,
         30
       ],
-      "unit": "USD",
+      "unit": "workspaces",
       "where": [
         {
-          "field": "total_tokens",
-          "op": ">",
-          "value": "0"
-        },
-        {
-          "field": "price_status",
+          "field": "point_kind",
           "op": "=",
-          "value": "priced"
-        },
-        {
-          "field": "cost_usd",
-          "op": ">=",
-          "value": "0"
-        },
-        {
-          "field": "root_conversation_id",
-          "op": "is_not_null",
-          "value": ""
-        },
-        {
-          "field": "root_conversation_id",
-          "op": "!=",
-          "value": ""
+          "value": "work"
         }
       ],
-      "measures": [],
-      "action": "Explore Tokens and Cost",
-      "note": "API equivalent uses retained price schedules, not subscription charges, invoices, human effort, or measured value. Period cost cards include positive-token facts with price_status=priced and nonnegative known cost; assumed, partial, and unpriced facts are excluded. Costs follow usage-record time placement, which can be request time or session-start placement. Zero-priced facts remain valid observations. Missing cost is unknown, not zero. Repository attribution follows each fact’s recorded repository, including delegated facts where they were recorded. One conversation observation is a resolved top-level conversation including all recorded delegated work, linked launches, and continuations. Child facts stay in their top-level conversation even across workspaces or repositories, attributed to the top-level repository. Multiple independent top-level conversations in one workspace remain separate. Sum fully priced usage within the selected period, including children of roots with no activity of their own in the period; older usage is excluded. Missing or cyclic parent links is excluded from these conversation comparisons. Missing top-level repositories remain Unspecified. One point per repository compares distinct active root_conversation_id count with summed priced cost for those same facts. This is an observed workload relationship, not controlled unit pricing or task complexity. Both axes are logarithmic; zero-cost points are omitted with a count and stay in the destination. Show up to 200 repositories.",
-      "exploration": {
-        "keys": [
-          "root_repository_name"
-        ],
-        "summaries": [
-          {
-            "id": "ac_work",
-            "op": "count_distinct",
-            "field": "root_conversation_id",
-            "label": "Top-level conversations"
-          },
-          {
-            "id": "ac_cost",
-            "op": "sum",
-            "field": "cost_usd",
-            "label": "API equivalent (USD)"
-          },
-          {
-            "id": "ac_tokens",
-            "op": "sum",
-            "field": "total_tokens",
-            "label": "Recorded tokens"
-          },
-          {
-            "id": "lineage_qualified",
-            "op": "formula",
-            "label": "Sessions with unverified ancestry or identity",
-            "expression": "COUNT_DISTINCT(IF([run_identity]=\"uncertain\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([root_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"unverified\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),IF([delegated_run_depth_quality]=\"inferred\",IF([agent_session_id]<>\"\",[agent_session_id],[conversation_id]),NULL))))))"
-          }
-        ],
-        "valueField": "ac_work",
-        "unit": "top-level conversations",
-        "subjects": "repositories",
-        "action": "Compare conversation count with cost",
-        "labelFields": [
-          "root_repository_name"
-        ],
-        "coverMetric": {
-          "id": "ac_work",
+      "measures": [
+        {
+          "id": "work-volume-cost_scatter",
           "op": "max",
-          "field": "ac_work",
-          "expression": "MAX([ac_work])",
-          "expressionY": "MAX([ac_cost])",
-          "groupBy": [
-            "root_repository_name"
+          "field": "tokens_conversations",
+          "expression": "MAX([tokens_conversations])",
+          "expressionY": "MAX([tokens_cost])",
+          "where": [
+            {
+              "field": "tokens_conversations",
+              "op": ">",
+              "value": "0"
+            },
+            {
+              "field": "tokens_cost",
+              "op": ">",
+              "value": "0"
+            }
           ],
-          "groupLimit": 200,
-          "label": "Repository conversation counts and API equivalent",
+          "groupBy": [
+            "repository_name",
+            "entity_id"
+          ],
+          "groupLimit": 2000,
+          "label": "Conversations with usage vs API cost (USD) per workspace by repository",
           "display": {
             "kind": "scatter",
-            "xLabel": "Top-level conversations",
-            "yLabel": "API equivalent (USD)",
+            "xLabel": "Conversations with usage",
+            "yLabel": "API cost (USD)",
             "xScale": {
               "mode": "log"
             },
@@ -15523,46 +15315,33 @@
             "yFormat": {
               "kind": "number",
               "decimals": 2
-            },
-            "legendPosition": "none"
+            }
           }
-        },
-        "qualifier": {
-          "field": "lineage_qualified",
-          "label": "sessions counted through an inferred or unverified link, or with unresolved identity"
         }
-      },
+      ],
+      "action": "Explore Scatter Plots",
+      "note": "Distinct conversations with usage. A conversation using several groups counts once in each, so groups do not add up to the total. API cost is the list-price equivalent, including assumed and partial prices; unpriced usage has no cost and adds nothing. Values are computed independently and matched by entity identity. Points need both values.",
       "cover": {
-        "mode": "result",
-        "metricId": "ac_work",
+        "mode": "source",
+        "metricId": "work-volume-cost_scatter",
         "kind": "scatter",
-        "maxGroups": 200
+        "maxGroups": 2000,
+        "showLegend": true
       },
       "destination": {
-        "topic": "tokens",
+        "topic": "scatter",
         "chart": {
-          "period": "day",
-          "rollingPeriods": 0,
-          "display": "interval",
-          "scale": "logarithmic",
-          "seriesLimit": 15,
-          "nonzero": false,
           "v": 2,
-          "metric": "root_conversations",
-          "split": "root_repository_name",
-          "hours": 6,
-          "days": 3,
-          "selection": {
-            "values": [],
-            "excluded": false
-          },
           "view": "scatter",
-          "unit": "repository",
-          "metricY": "cost",
+          "metric": "tokens_conversations",
+          "metricY": "tokens_cost",
+          "unit": "work",
+          "split": "repository_name",
+          "scale": "logarithmic",
           "scaleY": "logarithmic"
         },
-        "dataset": "usage",
-        "detailAction": "Compare conversation count with cost"
+        "dataset": "scatter",
+        "detailAction": "Inspect scatter plot points"
       }
     },
     {
@@ -23005,6 +22784,97 @@
         "dataset": "session_shape",
         "detailAction": "Explore when sessions end"
       }
+    },
+    {
+      "id": "human-words-api-cost",
+      "title": "Typed words vs API cost (USD) per conversation",
+      "description": "Typed words vs API cost (USD) per conversation over the last {days} days.",
+      "dataset": "scatter",
+      "field": "last_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "conversations",
+      "days": [
+        7,
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "human-words-api-cost_scatter",
+          "op": "max",
+          "field": "human_typed",
+          "expression": "MAX([human_typed])",
+          "expressionY": "MAX([tokens_cost])",
+          "where": [
+            {
+              "field": "human_typed",
+              "op": ">",
+              "value": "0"
+            },
+            {
+              "field": "tokens_cost",
+              "op": ">",
+              "value": "0"
+            }
+          ],
+          "groupBy": [
+            "entity_id"
+          ],
+          "groupLimit": 2000,
+          "label": "Typed words vs API cost (USD) per conversation",
+          "display": {
+            "kind": "scatter",
+            "xLabel": "Typed words",
+            "yLabel": "API cost (USD)",
+            "xScale": {
+              "mode": "log"
+            },
+            "yScale": {
+              "mode": "log"
+            },
+            "xFormat": {
+              "kind": "number",
+              "decimals": 0
+            },
+            "yFormat": {
+              "kind": "number",
+              "decimals": 2
+            }
+          }
+        }
+      ],
+      "where": [
+        {
+          "field": "point_kind",
+          "op": "=",
+          "value": "conversation"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "human-words-api-cost_scatter",
+        "kind": "scatter",
+        "maxGroups": 2000,
+        "showLegend": false
+      },
+      "destination": {
+        "topic": "scatter",
+        "chart": {
+          "v": 2,
+          "view": "scatter",
+          "metric": "human_typed",
+          "metricY": "tokens_cost",
+          "unit": "conversation",
+          "split": "none",
+          "scale": "logarithmic",
+          "scaleY": "logarithmic"
+        },
+        "dataset": "scatter",
+        "detailAction": "Inspect scatter plot points"
+      },
+      "action": "Explore Scatter Plots",
+      "note": "Typed words are text you typed or dictated; pastes, copied agent output, templates, attachments, app instructions and automated prompts are counted separately. API cost is the list-price equivalent, including assumed and partial prices; unpriced usage has no cost and adds nothing. Values are computed independently and matched by entity identity. Points need both values."
     },
     {
       "id": "compactions-by-trigger",

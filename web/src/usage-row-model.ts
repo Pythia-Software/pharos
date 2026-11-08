@@ -71,6 +71,7 @@ export function usageRowLinks(dataset: UsageDataset, row: Row, current = new URL
 // Order is intentional: content/evidence first, then measures and provenance.
 // All other fields remain available in the native property picker.
 export const usageDetailFields: Record<UsageDataset, string[]> = {
+  scatter: ["title", "point_kind", "entity_id", "first_at", "last_at"],
   messages: ["source_links", "text", "role", "kind", "sent_at", "model", "effort", "provider", "title", "repository_name", "has_authorship", "work_id", "authorship_title", "authorship_sent_at", "main_category", "typed_words", "pasted_words", "words", "segments", "text_truncated", "selected", "native_id", "source_account"],
   people_message_labels:["source_links","title","sent_at","label","family","label_status","people_scope","message_id","repository_name"],
   message_labels:["source_links","title","occurred_at","label","label_status","source","text","label_model","model","provider","kind","segment","subagent","labeled_at"],

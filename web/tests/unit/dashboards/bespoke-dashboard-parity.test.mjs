@@ -1,3 +1,4 @@
+import { scatterAnalysisCatalog as scatter } from "../../../src/scatter-analysis-catalog";
 import { conversationAnalysisCatalog as activity } from "../../../src/conversation-analysis-catalog";
 // Cards of the Human Words, Carbon and Parallelism dashboards (and Pharos
 // MCP's empty-search rate, in record-dashboard-parity.test.mjs), each opened
@@ -38,7 +39,7 @@ const carbon = carbonAnalysisCatalog(assumptions), usage = carbonUsage(calculato
 // The service serves only records built with the saved settings.
 const saved = { counting: "workspace", gap: 60 }, parallelism = parallelismAnalysisCatalog(saved.counting);
 const records = parallelismRecords();
-const catalogs = { activity, human, carbon, parallelism };
+const catalogs = { activity, human, carbon, parallelism, scatter };
 const cardRows = { writing_messages: writingMessages(), usage: usage.rows, parallelism: records };
 const dashboardRows = cardRows;
 const round = value => typeof value === "number" ? Number(value.toPrecision(12)) : value;

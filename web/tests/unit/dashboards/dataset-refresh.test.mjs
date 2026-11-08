@@ -36,3 +36,12 @@ test("discovery completion and review changes invalidate risk views and their qu
   target.dispatchEvent(new Event("pharos:safety-changed"));
   assert.equal(calls.length, 2, "inactive/unmounted views release their subscriptions");
 });
+
+test('scatter plots refresh when an underlying metric source changes',()=>{
+ const target=new EventTarget();let calls=0;
+ const stop=onDatasetRefresh('scatter',()=>calls++,target);
+ for(const dataset of ['usage','parallelism','writing_messages']){const event=new Event('pharos:data-refresh');event.detail=dataset;target.dispatchEvent(event);}
+ assert.equal(calls,3);
+ const unrelated=new Event('pharos:data-refresh');unrelated.detail='mcp_calls';target.dispatchEvent(unrelated);assert.equal(calls,3);
+ stop();target.dispatchEvent(new Event('pharos:usage-refresh'));assert.equal(calls,3);
+});
