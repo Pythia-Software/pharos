@@ -343,6 +343,18 @@ PRODUCT = {"route": work.PRODUCT_ROUTE, "query": {"version": 3}, "latency_ms": 2
 KINDS = ["analysis.authorship", "analysis.labels", "maintenance.labels.query", "maintenance.parallelism"]
 
 
+REPLAY = {"input": "arrivals", "source": {"name": "replay-claude", "kind": "claude", "account": ""},
+          "count_query": "SELECT count(*) FROM messages", "ready_checks": ["SELECT 1 WHERE 0"],
+          "arrivals": [{"name": "a1", "at_seconds": 60, "files": [{"path": "proj/s1.jsonl", "lines": 1}]},
+                       {"name": "a2", "at_seconds": 240, "files": [{"path": "proj/s1.jsonl"},
+                                                                   {"path": "proj/s2.jsonl", "lines": 1}]}]}
+
+
+def replay_arrivals(*names):
+    return {"arrivals": [{"name": name, "count_before": index, "count_after": index + 1}
+                         for index, name in enumerate(names)], "followup_rounds": 1}
+
+
 def probe_descriptor(**extra):
     value = {"name": "probe", "clock": "2026-11-01T22:00:00Z",
              "phases": [{"name": "recent", "action": "recent", "kinds": ["analysis.labels"]},
@@ -458,6 +470,25 @@ class ProbeArmTests(Fixture):
                        {"sources": [{"name": "claude", "kind": "claude", "input": "claude"}]}):
             with self.assertRaises(ValueError):
                 work.validate_probe_descriptor(probe_descriptor(**broken))
+        work.validate_probe_descriptor(probe_descriptor(replay=REPLAY, memory={"interval_seconds": 1, "idle_seconds": 120}))
+        first, second = REPLAY["arrivals"]
+        for broken in ({**REPLAY, "input": "../arrivals"},
+                       {**REPLAY, "source": {"name": "Replay", "kind": "claude"}},
+                       {**REPLAY, "count_query": "DELETE FROM messages"},
+                       {**REPLAY, "ready_checks": ["UPDATE messages SET id = 1"]},
+                       {**REPLAY, "arrivals": []},
+                       {**REPLAY, "arrivals": [second, first]},
+                       {**REPLAY, "arrivals": [first, {**second, "name": "a1"}]},
+                       {**REPLAY, "arrivals": [{**first, "files": [{"path": "/etc/passwd"}]}]},
+                       {**REPLAY, "arrivals": [{**first, "files": [{"path": "proj/../../x"}]}]},
+                       # A whole file, then a prefix of it, would shrink what was written.
+                       {**REPLAY, "arrivals": [second, {**first, "at_seconds": 300}]},
+                       {**REPLAY, "arrivals": [{**first, "files": [{"path": "proj/s1.jsonl", "lines": 0}]}]}):
+            with self.assertRaises(ValueError):
+                work.validate_probe_descriptor(probe_descriptor(replay=broken))
+        for memory in ({"interval_seconds": 0}, {"idle_seconds": -1}, {"interval_seconds": 1.5}, {"peak": 1}):
+            with self.assertRaises(ValueError):
+                work.validate_probe_descriptor(probe_descriptor(memory=memory))
         legacy = probe_descriptor(stages=["timing"], pending_checks={"timing": ["SELECT 1 WHERE 0"]})
         del legacy["phases"]
         work.validate_probe_descriptor(legacy)
@@ -486,6 +517,31 @@ class ProbeArmTests(Fixture):
         with self.assertRaises(RuntimeError):
             work.probe_run(failing, failing_sha, master, self.root / "e", probe_descriptor(), "candidate", "classic", baseline_sha)
         self.assertIn("boom", json.loads((self.root / "e/report.json").read_text())["failure"]["message"])
+
+    def test_replay_input_is_cloned_and_every_arrival_must_be_real(self):
+        master = self.master()
+        inputs = self.root / "frozen-arrivals/proj"
+        inputs.mkdir(parents=True)
+        for name in ("s1.jsonl", "s2.jsonl"):
+            (inputs / name).write_text("{}\n")
+        work.freeze(master, "arrivals", inputs.parent)
+        descriptor = probe_descriptor(replay=REPLAY, memory={"idle_seconds": 120})
+        retention = {"retained_bytes": 1 << 20, "basis": "samples"}
+        probe, sha = self.fake_probe("replayed", self.inner(replay=replay_arrivals("a1", "a2"),
+                                                            memory={"retention": retention}))
+        report = work.probe_run(probe, sha, master, self.root / "r", descriptor, "baseline", "classic", sha)
+        self.assertTrue((self.root / "r/inputs/arrivals/proj/s2.jsonl").is_file())
+        self.assertEqual(report["memory_retention"], retention)
+        self.assertEqual(report["replay"]["followup_rounds"], 1)
+        # A missing arrival, or one that added nothing, is not a replayed arrival.
+        for replay in (replay_arrivals("a1"), {"arrivals": [{"name": "a1", "count_before": 1, "count_after": 2},
+                                                            {"name": "a2", "count_before": 2, "count_after": 2}]}):
+            probe, sha = self.fake_probe("no-arrival", self.inner(replay=replay))
+            with self.assertRaises(RuntimeError):
+                work.probe_run(probe, sha, master, self.root / f"n{len(replay['arrivals'])}", descriptor, "baseline", "classic", sha)
+        with self.assertRaisesRegex(ValueError, "not frozen"):
+            work.probe_run(probe, sha, master, self.root / "unfrozen",
+                           probe_descriptor(replay={**REPLAY, "input": "other"}), "baseline", "classic", sha)
 
     def test_only_a_settled_retained_classic_arm_becomes_a_master(self):
         master = self.master()

@@ -489,6 +489,9 @@ def arm(master, destination, descriptor):
               "capture_compress_after_days = 0"]
     for key, value in descriptor.get("model_settings", {}).items():
         config.append(f"{key} = {json.dumps(frozen(value) if key in INPUT_KEYS else value)}")
+    if "replay" in descriptor:
+        # The probe stages arrivals only from ARM/inputs/<input>.
+        frozen({"input": descriptor["replay"]["input"]})
     for source in descriptor.get("sources", []):
         config += ["[[sources]]", f'name = {json.dumps(source["name"])}',
                    f'kind = {json.dumps(source["kind"])}', f'path = {json.dumps(frozen({"input": source["input"]}))}',
@@ -1215,6 +1218,60 @@ def validate_probe_descriptor(descriptor):
             raise ValueError("unsupported experiment model setting")
     if descriptor.get("sources"):
         raise ValueError("probe workloads replay no sources yet; capture needs the source-replay probe")
+    if "replay" in descriptor:
+        validate_replay(descriptor["replay"])
+    memory = descriptor.get("memory", {})
+    if not isinstance(memory, dict) or not set(memory) <= {"interval_seconds", "idle_seconds"} \
+            or not all(isinstance(v, int) and not isinstance(v, bool) for v in memory.values()) \
+            or memory.get("interval_seconds", 5) < 1 or memory.get("idle_seconds", 0) < 0:
+        raise ValueError("memory has integer interval_seconds (at least 1) and idle_seconds (0 or more)")
+
+
+def validate_replay(replay):
+    """The probe's replay shape: arrivals staged from one frozen input, in order."""
+    if not isinstance(replay, dict) or not set(replay) <= {"input", "source", "count_query", "ready_checks",
+                                                           "settle_timeout_seconds", "arrivals"}:
+        raise ValueError("replay has input, source, count_query, arrivals and optional ready_checks/settle_timeout_seconds")
+    if not NAME.match(input_name({"input": replay.get("input")})):
+        raise ValueError("replay.input names a frozen input")
+    source = replay.get("source")
+    if not isinstance(source, dict) or not {"name", "kind"} <= set(source) <= {"name", "kind", "account"} \
+            or not all(isinstance(v, str) for v in source.values()) or not NAME.match(source["name"]) or not source["kind"]:
+        raise ValueError("replay.source names a fresh source: name, kind and optional account")
+    if not isinstance(replay.get("count_query"), str) or not read_only_statement(replay["count_query"]):
+        raise ValueError("replay.count_query is one read-only SELECT pinned to the replayed messages")
+    ready = replay.get("ready_checks", [])
+    if not isinstance(ready, list) or not all(isinstance(q, str) and read_only_statement(q) for q in ready):
+        raise ValueError("replay.ready_checks are read-only statements")
+    timeout = replay.get("settle_timeout_seconds", 1800)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+        raise ValueError("replay.settle_timeout_seconds is a positive integer")
+    arrivals = replay.get("arrivals")
+    if not isinstance(arrivals, list) or not arrivals:
+        raise ValueError("replay.arrivals is a non-empty list")
+    names, previous, written = set(), 0, {}
+    for arrival in arrivals:
+        if not isinstance(arrival, dict) or set(arrival) != {"name", "at_seconds", "files"} \
+                or not isinstance(arrival["name"], str) or not NAME.match(arrival["name"]) or arrival["name"] in names:
+            raise ValueError("each arrival has a unique name, at_seconds and files")
+        names.add(arrival["name"])
+        at = arrival["at_seconds"]
+        if not isinstance(at, (int, float)) or isinstance(at, bool) or at < previous:
+            raise ValueError("arrivals run in order: at_seconds is non-negative and never decreases")
+        previous = at
+        if not isinstance(arrival["files"], list) or not arrival["files"]:
+            raise ValueError("an arrival writes at least one file")
+        for file in arrival["files"]:
+            if not isinstance(file, dict) or not {"path"} <= set(file) <= {"path", "lines"}:
+                raise ValueError("an arrival file has path and optional lines")
+            input_name({"input": replay["input"], "path": file["path"]})
+            # A whole file is every line; growth never shrinks what an earlier arrival wrote.
+            lines = file.get("lines", float("inf"))
+            if lines != float("inf") and (not isinstance(lines, int) or isinstance(lines, bool) or lines < 1):
+                raise ValueError("an arrival file's lines is a positive integer")
+            if lines < written.get(file["path"], 0):
+                raise ValueError(f"{file['path']} would shrink: arrivals only extend a file")
+            written[file["path"]] = lines
 
 
 def scheduled_evidence(engine, descriptor):
@@ -1299,6 +1356,16 @@ def probe_run(probe, probe_sha256, master, destination, descriptor, role, engine
                 raise RuntimeError("; ".join(problems))
         elif report["engine_actual"].get("value") != "classic":
             raise RuntimeError("a classic request did not execute the classic path")
+        if "replay" in descriptor:
+            replay = inner.get("replay") or {}
+            applied = [a.get("name") for a in replay.get("arrivals") or [] if isinstance(a, dict)
+                       and isinstance(a.get("count_before"), int) and isinstance(a.get("count_after"), int)
+                       and a["count_after"] > a["count_before"]]
+            if applied != [a["name"] for a in descriptor["replay"]["arrivals"]]:
+                raise RuntimeError("the probe did not report every replayed arrival as a real arrival")
+            report["replay"] = replay
+        # Recorded, never gated: the harness's process-tree sampler is the gated source.
+        report["memory_retention"] = (inner.get("memory") or {}).get("retention")
         # Outside every timing: semantic oracle and an independent pending recheck.
         report["semantic"] = digests(database, descriptor["semantic_checks"])
         report["pending"] = digests(database, flat_pending(descriptor["pending_checks"]))
@@ -1474,7 +1541,12 @@ def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
     result = {"mode": mode, "semantic_parity": parity, "metrics": metrics, "startup": startup,
               "missing_metrics": missing, "blockers": blockers,
               "whole_process": {name: {"baseline": _metric(baseline, path), "candidate": _metric(candidate, path)}
-                                for name, path in WHOLE_PROCESS.items()}}
+                                for name, path in WHOLE_PROCESS.items()},
+              # Recorded, never gated.
+              "memory_retention": {role: report.get("memory_retention") for role, report in
+                                   (("baseline", baseline), ("candidate", candidate))},
+              "replay_followup_rounds": {role: (report.get("replay") or {}).get("followup_rounds") for role, report in
+                                         (("baseline", baseline), ("candidate", candidate))}}
     if mode == "aa":
         # A/A measures the noise every later pair is judged against, so it is
         # refused on the same host-noise rule before any verdict.
@@ -1485,7 +1557,8 @@ def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
     return {**result, "rejected": rejected,
             "release_gate": "rejected" if rejected else "refused" if blockers else "incomplete",
             "remaining_evidence": ["the full-corpus settlement workload (all labels, coarse history)",
-                                   "actual recent arrival during coarse history (source replay)",
+                                   *([] if baseline.get("replay") else
+                                     ["actual recent arrival during coarse history (source replay)"]),
                                    "reverse-order pair", "old-binary recovery after candidate publication",
                                    *(f"missing metric: {name}" for name in missing)]}
 
