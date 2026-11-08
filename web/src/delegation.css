@@ -507,7 +507,7 @@
   gap: 7px;
   font-size: var(--fs-xs);
   color: var(--muted);
-  padding: 10px 0 0;
+  padding: 0;
 }
 .delegation-session-heading {
   order: -1;
@@ -526,7 +526,6 @@
   display: none;
 }
 .delegation-context > button,
-.delegation-context summary,
 .delegation-transcript-link {
   color: var(--accent);
   font: inherit;
@@ -540,43 +539,10 @@
   white-space: nowrap;
   cursor: pointer;
 }
-.delegation-context > details {
-  position: relative;
-}
-.delegation-child-menu {
-  position: absolute;
-  z-index: 5;
-  top: 100%;
-  left: 0;
-  width: 400px;
-  max-width: 70vw;
-  max-height: 350px;
-  overflow: auto;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  box-shadow: 0 6px 20px #0002;
-  padding: 6px;
-  border-radius: 4px;
-}
-.delegation-child-menu button {
-  display: block;
-  text-align: left;
-  width: 100%;
-  padding: 7px;
-  background: none;
-  border: 0;
-  font-size: var(--fs-xs);
-}
-.delegation-child-menu :is(strong, small) {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.delegation-child-menu small {
-  color: var(--muted);
-  margin-top: 3px;
-}
+.delegation-context > .delegation-sidebar-link { display: none; }
+.workspace-inbox.sidebar-collapsed .delegation-context > .delegation-sidebar-link { display: block; }
+.delegation-context:has(.delegation-segments),
+.workspace-inbox.sidebar-collapsed .delegation-context:has(.delegation-sidebar-link) { padding-top: 10px; }
 .delegation-transcript-link {
   display: block;
   margin-top: 4px;

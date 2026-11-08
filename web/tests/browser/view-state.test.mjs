@@ -141,7 +141,12 @@ test('Timeline pending events stay announced for a collapsed session, after rest
 });
 
 test('workspace sidebar visibility and width restore without leaving the selected conversation',{skip},async t=>{
- const app=await open(t,{url:`/work/${workID}/conversation/${rootConversation}?sidebar_width=460`,ready:'.conversation-panel .turn'}),{page}=app;
+ const api={'GET /api/work/:id/conversations/:conversation':request=>{
+  const conversation=defaultApi['GET /api/work/:id/conversations/:conversation'](request);
+  if(request.params.conversation!=='conv-child')return {...conversation,machine:'Unknown',execution_machine:'Unknown'};
+  return {...conversation,machine:'Laptop',execution_machine:'Worker',effort:'medium',messages:conversation.messages.filter(message=>message.role!=='user')};
+ }};
+ const app=await open(t,{api,url:`/work/${workID}/conversation/${rootConversation}?sidebar_width=460`,ready:'.conversation-panel .turn'}),{page}=app;
  const show=page.getByRole('button',{name:'Show agent sessions',exact:true}),hide=page.getByRole('button',{name:'Hide agent sessions',exact:true});
  const divider=page.getByRole('separator',{name:'Resize agent sessions sidebar',exact:true});
  assert.equal(await divider.getAttribute('aria-valuenow'),'460');
@@ -154,6 +159,33 @@ test('workspace sidebar visibility and width restore without leaving the selecte
  await page.goForward();await show.waitFor();await show.click();await app.settled();
  assert.equal(await divider.getAttribute('aria-valuenow'),'340');
  assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
+ const context=()=>page.locator('.conversation-panel .delegation-context');
+ const children=()=>context().getByRole('button',{name:'1 child session',exact:true});
+ await page.locator('.delegation-session-heading').waitFor();
+ assert.equal(await children().isVisible(),false);
+ const chips=()=>page.locator('.conversation-panel .conversation-title-content > .chips');
+ assert.equal(await chips().getByText(/^(Machine|Execution machine):/).count(),0);
+ assert.equal(await chips().getByText(/^Effort:/).count(),0);
+ assert.equal(await chips().getByText('claude-opus-5-5',{exact:true}).count(),0);
+ assert.equal(await context().getByText(/This agent session/).count(),0);
+ await hide.click();await children().waitFor();await app.shot('collapsed-root');
+ const rootURL=new URL(page.url());await children().click();await hide.waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootURL.searchParams.get('conversation'));
+ await page.getByRole('table',{name:'Agent session hierarchy and usage'}).getByRole('button',{name:'Open session Review implementation',exact:true}).click();
+ await page.locator('.conversation-panel [data-message-id="conv-child-reply"]').first().waitFor();
+ assert.ok(await chips().getByText('Machine: Laptop',{exact:true}).isVisible());
+ assert.ok(await chips().getByText('Execution machine: Worker',{exact:true}).isVisible());
+ assert.ok(await chips().getByText('1 turn',{exact:true}).isVisible());
+ assert.equal(await page.locator('.turn-list > .turn').count(),1);
+ await hide.click();const parent=()=>context().getByRole('button',{name:'Parent session',exact:true});
+ await parent().waitFor();await children().waitFor();await app.shot('collapsed-child');
+ const childURL=new URL(page.url());await parent().click();await hide.waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),childURL.searchParams.get('conversation'));
+ assert.equal(new URL(page.url()).searchParams.get('delegation_session'),childURL.searchParams.get('delegation_session'));
+ assert.equal(await parent().isVisible(),false);assert.equal(await children().isVisible(),false);
+ await page.setViewportSize({width:390,height:900});await children().waitFor();
+ await children().click();await page.getByRole('dialog',{name:'Agent sessions'}).waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),childURL.searchParams.get('conversation'));
 });
 
 for(const width of [1440,390])test(`workspace Timeline beside a reader expands before editing at ${width}px`,{skip},async t=>{

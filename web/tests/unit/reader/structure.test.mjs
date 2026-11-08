@@ -132,6 +132,11 @@ test("result outlines keep turns, setup and nested inline agents under their own
  assert.equal(typeof reader.window.pharosConversationOutline, "function");
  const outline = reader.window.pharosConversationOutline(conversation);
  assert.equal(outline.length, 3); assert.equal(outline[0].label, "Agent setup");
+ const graph = reader.conversationGraph(reader.conversationMessages(conversation));
+ assert.equal(graph.turns.length, 3, "the reader count includes the displayed setup and excludes nested agent messages");
+ const agentOnly = reader.conversationGraph(reader.conversationMessages({messages:[event("reply", "message", "Working without a retained prompt.")]}));
+ assert.equal(agentOnly.turns.length, 1, "an agent-only transcript still has one displayed turn");
+ assert.equal(reader.conversationGraph([]).turns.length, 0);
  assert.equal(outline[1].label, "Turn 1"); assert.equal(outline[2].label, "Turn 2");
  assert.equal(outline[1].human.text, "Inspect the rules."); assert.equal(outline[1].response.text, "Done.");
  const agent = outline[1].children[0];

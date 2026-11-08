@@ -136,7 +136,7 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 946
+   "controls": 944
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],
@@ -151,7 +151,7 @@
    "findings/fixes": ["section:findings","section:findings:overview","section:findings:weekly","section:findings:weeks","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
    "findings/fixes/table": ["section:findings","section:findings:overview","section:findings:weekly","section:findings:weeks","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
    "findings/fixes/settings": ["section:findings","section:findings:overview","section:findings:weekly","section:findings:weeks","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
-   "work": ["section:back","section:delegation:columns","section:delegation:definitions","section:delegation:scope","section:detail","section:detailBody"],
+   "work": ["section:back","section:delegation:columns","section:delegation:definitions","section:detail","section:detailBody"],
    "analyze/parallelism": ["section:analyze","section:parallelism-calculation","section:parallelism-calculation-title","section:parallelism-title","section:parallelism-view","section:queryTableUsage"],
    "home": ["section:home","section:homePage"],
    "library": ["section:library","section:queryTableLibrary"],
