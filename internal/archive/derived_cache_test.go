@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,6 +74,34 @@ func TestDerivedValuesAreComputedOncePerCommit(t *testing.T) {
 	}
 	if value, _ := cachedValue(context.Background(), catalog, "answer", compute); value != 42 || calls.Load() != 2 {
 		t.Fatalf("a commit did not recompute: %d computations", calls.Load())
+	}
+}
+
+func TestDerivedAdmissionReleasesAfterFailure(t *testing.T) {
+	for _, panics := range []bool{false, true} {
+		t.Run(fmt.Sprint("panic=", panics), func(t *testing.T) {
+			gate := &queryAdmission{limit: 1}
+			override(t, &heavyQueries, gate)
+			catalog, _ := testCatalog(t)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			_, err := cachedValue(ctx, catalog, "failed", func(ctx context.Context) (int, error) {
+				_, err := cachedValue(ctx, catalog, "failed-dependency", func(context.Context) (int, error) {
+					if panics {
+						panic("cannot compute")
+					}
+					return 0, errors.New("cannot compute")
+				})
+				return 0, err
+			})
+			if err == nil || !strings.Contains(err.Error(), "cannot compute") {
+				t.Fatalf("lost cache build error: %v", err)
+			}
+			value, err := cachedValue(ctx, catalog, "failed", func(context.Context) (int, error) { return 42, nil })
+			if err != nil || value != 42 {
+				t.Fatalf("failed cache build retained admission: %d %v", value, err)
+			}
+		})
 	}
 }
 
