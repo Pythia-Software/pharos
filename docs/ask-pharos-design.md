@@ -520,3 +520,19 @@ activity; routing details arriving later can refine a generic tool label.
 Running activity is held in memory and included when reopening a chat; it is saved with the finished
 turn, outside the conversation search index. A broken stream uses the existing
 session reconciliation path and never automatically repeats inference.
+
+
+Fullscreen Ask shows chat history as a persistent left inbox on wide windows;
+narrow windows retain the History drawer. New chat starts an independent question
+without canceling the previous chat. Up to two chats can answer concurrently,
+with one question running per chat. Switching chats preserves each stream and
+its Stop action targets only that chat. Answers completed in another chat do
+not navigate the current page.
+
+Inbox rows distinguish answering, unseen answers, and seen answers. Each answer
+attempt stores a `seenAt` receipt in the library through `/api/ask/read`; receipts
+survive reload and library moves and do not change the chat's activity order or
+search index. A receipt is sent only while Ask is visible in the foreground and
+the end of that answer is visible in its conversation viewport. Background,
+floating, hidden, loading, and canceled answers are not marked seen. A retry
+starts unseen, and a delayed receipt from an earlier attempt cannot read it.

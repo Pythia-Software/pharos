@@ -276,8 +276,8 @@ provisional; existing ideas are reused where they fit.
 ## 9. Where this sits in the app
 
 - **Analyze → Dashboards → Habits** (`topic: "habits"`, dataset `rhythm`), a
-  `CatalogDashboard` whose default view is Calendar with the streak panel above
-  and the automations table below, as Parallelism keeps its ribbon.
+  dashboard whose default view is the daily work schedule, with the streak panel
+  above and a link to automatic activity in a Query Table below.
 - **Home**: the streak card in the conveyor; the menu bar can optionally show
   "🔥 12 days" beside words typed.
 - **MCP / Ask Pharos**: `browse_site`/`site_link` know the new views via the
@@ -285,7 +285,7 @@ provisional; existing ideas are reused where they fit.
   actor) answers "how consistent have I been?" without a chart.
 - **URL state**: `view: "calendar"`, `cycle: "week_hour"`, `actor`, `threshold`,
   `day_start`, `engaged_gap` are view inputs in `web/src/view-contract.ts`; the
-  automations table rows use stable automation ids. Run
+  automatic activity link groups by initiator and automation. Run
   `generate-view-controls` and `generate-site-map`.
 
 ## 10. Dependencies and decisions
@@ -350,15 +350,17 @@ provisional; existing ideas are reused where they fit.
   (`analyze_topic=habits`, `web/src/habits.tsx`) has one control row: View
   selects the activity calendar (`habits_view=calendar`), weekday × hour
   punchcard (`punchcard`), or daily schedule (`days`), and exposes that view's
-  selectors. Streak cards sit above the chart; work/rest cards and automations
-  sit below. All summary views share `/api/habits` and `habits-model.ts`.
+  selectors, with the daily schedule as the default. Streak cards sit above the
+  chart and work/rest cards sit below. A Query Table link groups automatic
+  activity by initiator and automation over the punchcard range. All summary
+  views share `/api/habits` and `habits-model.ts`.
 - Settings: `pharos-habits-v1` (vacations, thresholds, engaged gap, day start), shared by the page, the menu bar and the `rhythm` records.
-- Cards: each section (streaks, calendar, punchcard, your days, pace,
-  automatic runs) is a dashboard card target (`web/src/habits-card.ts`),
-  added from its heading's "Add to Home". The Card Library offers nine of them
+- Cards: each visible section (streaks, calendar, punchcard, your days, pace)
+  is a dashboard card target (`web/src/habits-card.ts`), added from its
+  heading's "Add to Home". The Card Library offers eight of them
   (`web/src/habits-card-recipes.ts`): your streak, weekday streak, your active
   days, days with agents you started, when you work, when agents work while
-  you're away, your days, your pace and automatic runs. Each template is the
+  you're away, your days and your pace. Each template is the
   Habits page at its explicit `habits_view` and selectors plus `reveal=section:<target>`, so it opens on
   its section; it draws, and is collected, as that dashboard card. The landing
   also tells apart templates that share the page's default address, which is

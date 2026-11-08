@@ -9,7 +9,7 @@
           <div class="pharos-ai-inner">
             <div class="pharos-composer-header" hidden>
               <div class="pharos-window-controls">
-                <button type="button" class="pharos-clear-chat cursor-interaction" aria-label="Clear" title="Clear chat and start fresh" hidden>Clear</button>
+                <button type="button" class="pharos-clear-chat cursor-interaction" aria-label="Clear" title="Clear draft" hidden>Clear</button>
                 <button type="button" class="pharos-window-close cursor-interaction" aria-label="Close Ask Pharos" title="Close Ask Pharos (Escape)" hidden>Close</button>
               </div>
             </div>
@@ -45,6 +45,8 @@
                   <button type="button" class="pharos-icon-control pharos-history-trigger cursor-interaction" aria-label="History" data-tooltip="Chat history" aria-expanded="false" aria-haspopup="dialog" aria-controls="pharos-chat-history"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.4 10a8.7 8.7 0 1 1 .2 4.7M3.4 4.8V10h5.2M12 7v5l3.2 2"/></svg></button>
                   <dialog id="pharos-chat-history" class="pharos-chat-history" aria-labelledby="pharos-chat-history-title">
                     <div class="pharos-history-heading"><h3 id="pharos-chat-history-title">Chat history</h3><button type="button" class="pharos-history-close cursor-interaction" aria-label="Close chat history" title="Close (Escape)">&#215;</button></div>
+                    <button type="button" class="pharos-new-chat cursor-interaction">New chat</button>
+                    <p class="pharos-history-help">Up to two chats can answer at once.</p>
                     <input class="pharos-history-filter" type="search" aria-label="Find a prior chat" placeholder="Find a prior chat…" />
                     <div class="pharos-history-scroll"><p class="pharos-history-empty">Your conversations will appear here.</p>
                     <div class="pharos-history-list"></div><button type="button" class="pharos-history-more pharos-plain" hidden>More chats</button></div>
@@ -110,7 +112,7 @@
           <div class="pharos-other-editor"><textarea rows="1" placeholder="other" aria-label="Other answer" maxlength="12000"></textarea><button type="button" class="pharos-other-send cursor-interaction" aria-label="Send other answer" title="Send answer" disabled></button></div>
         </div>
       </fieldset>
-      <div class="pharos-recovery" hidden><button type="button" class="pharos-plain pharos-retry cursor-interaction">Try again</button><button type="button" class="pharos-plain pharos-retry-model cursor-interaction">Try Again with a different model</button><button type="button" class="pharos-plain pharos-recovery-search cursor-interaction">Use regular search</button><button type="button" class="pharos-plain pharos-recovery-clear cursor-interaction">Clear</button></div>
+      <div class="pharos-recovery" hidden><button type="button" class="pharos-plain pharos-retry cursor-interaction">Try again</button><button type="button" class="pharos-plain pharos-retry-model cursor-interaction">Try Again with a different model</button><button type="button" class="pharos-plain pharos-recovery-search cursor-interaction">Use regular search</button><button type="button" class="pharos-plain pharos-recovery-clear cursor-interaction">New Chat</button></div>
       </div></div>
     </article>
   </template>

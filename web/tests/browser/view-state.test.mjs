@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture,pendingEvidenceApi} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture,pendingEvidenceApi,relatedWork} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import writingMessagesDocument from '../../../schemas/writing_messages.schema.json' with {type:'json'};
 import usageDocument from '../../../schemas/usage.schema.json' with {type:'json'};
@@ -12,7 +12,7 @@ import messageLabelsDocument from '../../../schemas/message_labels.schema.json' 
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
-test('workspace fingerprints restore across views and respect the global event display setting',{skip},async t=>{
+test('workspace fingerprints restore across views and show agent events despite an old preference',{skip},async t=>{
  const requests=[];
  const api={'POST /api/fingerprints':request=>{
   requests.push(request.body);
@@ -25,7 +25,7 @@ test('workspace fingerprints restore across views and respect the global event d
   }
   return result;
  }};
- const app=await open(t,{api,url:'/library?view=table',ready:'.message-label-fingerprint img'}),{page}=app;
+ const app=await open(t,{api,preferences:{'pharos-fingerprint-events':false},url:'/library?view=table',ready:'.message-label-fingerprint img'}),{page}=app;
  assert.ok(await page.getByRole('img',{name:'Workspace fingerprint',exact:true}).count());
  await page.getByRole('group',{name:'Display results as'}).getByRole('button',{name:'Conversations',exact:true}).click();
  await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
@@ -42,29 +42,42 @@ test('workspace fingerprints restore across views and respect the global event d
  await app.settled();await page.reload();
  await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
  assert.equal(await page.getByRole('button',{name:'Conversations',exact:true}).getAttribute('aria-pressed'),'true');
- const settings=async()=>{await activateHeaderTool(page,'settingsToggle');await page.getByRole('link',{name:'App preferences',exact:true}).click();await page.getByRole('switch',{name:'Agent events in fingerprints',exact:true}).waitFor();await app.settled();};
- await settings();
- const toggle=()=>page.getByRole('switch',{name:'Agent events in fingerprints',exact:true});
- assert.equal(await toggle().getAttribute('aria-checked'),'true');
- const settingsURL=path(page),saved=page.waitForResponse(response=>response.url().endsWith('/api/preferences')&&response.request().method()==='POST'&&response.request().postDataJSON()?.set?.['pharos-fingerprint-events']===false);
- await toggle().click();await saved;
- assert.equal(await toggle().getAttribute('aria-checked'),'false');assert.equal(path(page),settingsURL);
- requests.length=0;
- await page.goBack();await page.goBack();
- await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
- assert.ok(requests.some(body=>body.events===false&&body.items.some(item=>item.entity==='workspace')));
- requests.length=0;await page.reload();
- await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
- assert.ok(requests.length&&requests.every(body=>body.events===false));
- // The persisted preference also selects the conversation image variant.
+ assert.ok(requests.length&&requests.every(body=>body.events===true),'workspace images include events despite the saved off preference');
  requests.length=0;
  await page.goto(new URL('/analyze?analyze_mode=query&analyze_data=message_labels&label_results=cards',page.url()).href);
  await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
- assert.ok(requests.some(body=>body.events===false&&body.items.some(item=>item.entity==='conversation')));
- await settings();assert.equal(await toggle().getAttribute('aria-checked'),'false');await toggle().click();
- requests.length=0;await page.goBack();await page.goBack();
- await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
- assert.ok(requests.some(body=>body.events===true));
+ assert.ok(requests.some(body=>body.events===true&&body.items.some(item=>item.entity==='conversation')));
+});
+
+test('uncertain related work setting includes sessions and opens their conversations',{skip},async t=>{
+ const other=relatedWork.peers[1],conversation={id:'conv-maybe',workspace_id:other.workspace_id,provider:other.provider,title:other.title,peer:true,peer_role:other.role,peer_confidence:'low'};
+ const api={
+  'GET /api/work/:id':request=>({...defaultApi['GET /api/work/:id'](request),...relatedWork,peer_conversations:request.query.get('include_uncertain')==='1'?[...relatedWork.peer_conversations,conversation]:relatedWork.peer_conversations}),
+  'GET /api/work/:id/delegation':request=>{
+   const data=defaultApi['GET /api/work/:id/delegation'](request);
+   if(request.query.get('include_uncertain')!=='1')return data;
+   const peer={...data.rows[0],id:'s-maybe',workspace_id:other.workspace_id,conversation_id:conversation.id,label:other.title,order:data.rows.length,child_count:0,peer:{workspace_id:other.workspace_id,title:other.title,role:other.role,confidence:'low'}};
+   return {...data,rows:[...data.rows,peer],focus:[...data.focus,peer],matched:{...data.matched,[peer.id]:true},total:data.total+1,session_count:data.session_count+1};
+  },
+  'GET /api/work/:id/conversations/:conversation':request=>request.params.id===other.workspace_id?{...conversation,messages:[{id:'maybe-ask',role:'user',kind:'message',text:'Inspect the changes'}]}:undefined,
+  'GET /api/work/:id/conversations/:conversation/signals':request=>request.params.id===other.workspace_id?{conversation_id:conversation.id,signals:[],coverage:{}}:undefined,
+ };
+ const app=await open(t,{api,url:'/settings/preferences',ready:'#uncertainRelatedWork'}),{page}=app;
+ const toggle=page.getByRole('switch',{name:'Show uncertain related work',exact:true});
+ assert.equal(await toggle.getAttribute('aria-checked'),'false');
+ await toggle.click();await page.evaluate(()=>window.pharosPrefs.flush());
+ await page.goto(new URL(`/work/${workID}?explorer=timeline`,page.url()).href);
+ const lane=page.locator('[data-session-id="s-maybe"]').first();await lane.waitFor();
+ await page.waitForFunction(()=>document.querySelector('[data-session-id="s-maybe"]')?.textContent.includes('uncertain'));
+ await page.waitForFunction(()=>document.querySelector('.lt-recursive-lane[data-session-id="s-maybe"]'));
+ assert.ok(app.calls.some(call=>call.path.endsWith('/parallel')&&call.query.get('include_uncertain')==='1'&&(call.query.get('sessions')||'').includes('s-maybe')));
+ await lane.getByRole('button',{name:`Open session ${other.title}`,exact:true}).click();
+ await page.locator('.peer-reader-note').waitFor();
+ assert.match(await page.locator('.peer-reader-note').textContent(),/uncertain/);
+ await page.goto(new URL('/settings/preferences',page.url()).href);await toggle.waitFor();
+ assert.equal(await toggle.getAttribute('aria-checked'),'true');await toggle.click();await page.evaluate(()=>window.pharosPrefs.flush());
+ await page.goto(new URL(`/work/${workID}?explorer=timeline`,page.url()).href);await page.locator('.lt-recursive-lane').first().waitFor();
+ assert.equal(await page.locator('[data-session-id="s-maybe"]').count(),0);
 });
 
 test('Background Processing table queries and editor layout restore independently in a fresh browser',{skip},async t=>{
@@ -833,7 +846,7 @@ test('automatic oversized query references resolve in a fresh browser with no lo
 });
 
 test('conversation result links restore their session, matched message and inline agent without taking focus',{skip},async t=>{
- const message=(id,role,text)=>({id,native_id:id,role,kind:'message',text});
+ const message=(id,role,text)=>({id,native_id:id,role,kind:'message',text,...(role==='user'?{authorship:{spans:[{category:'typed',start:0,end:text.length}]}}:{})});
  const api={
   'POST /api/query/library/:operation':request=>{
    const result=defaultApi['* /api/query/:dataset/:operation']({...request,params:{dataset:'library',operation:request.params.operation}});
@@ -862,6 +875,8 @@ test('conversation result links restore their session, matched message and inlin
  await preview.getByText('Final reply',{exact:true}).waitFor();
  await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).waitFor();
  assert.equal(await preview.evaluate(element=>element.contains(document.activeElement)),false);
+ await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).click();
+ await preview.getByText('First session prompt',{exact:true}).waitFor();
  await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/Sub-agent · Timing auditor/}).click();
  await preview.getByText('Timing checked.',{exact:true}).waitFor();
  const fresh=await open(t,{url:path(app.page),api,ready:'.conversation-result-card'});
@@ -889,7 +904,8 @@ test('copied Cards view overrides preferences in a fresh context and follows Bac
 
 test('reader category and disclosure state survive a fresh browser', {skip},async t=>{
  const first=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,ready:'.transcript-filter'});
- await first.page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).click();
+ await first.page.getByRole('button',{name:'Key',exact:true}).click();
+ await first.page.getByRole('menuitemradio',{name:/^Read replies/}).click();
  await first.page.waitForFunction(()=>new URLSearchParams(location.search).get('reader_filter_level')==='primary');
  const turn=first.page.locator('.turn').first();
  await turn.locator(':scope > summary').click();
@@ -899,7 +915,8 @@ test('reader category and disclosure state survive a fresh browser', {skip},asyn
  await summary.click();
  await first.page.waitForFunction(()=>Object.keys(JSON.parse(new URLSearchParams(location.search).get('reader_content')||'{}')).some(key=>key.endsWith(':turn-summary-prompt')));
  const fresh=await open(t,{url:path(first.page),ready:'.transcript-filter'});
- assert.equal(await fresh.page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
+ await fresh.page.getByRole('button',{name:'Key',exact:true}).click();
+ assert.equal(await fresh.page.getByRole('menuitemradio',{name:/^Read replies/}).getAttribute('aria-checked'),'true');await fresh.page.keyboard.press('Escape');
  assert.equal(await fresh.page.locator('.turn').first().evaluate(element=>element.open),wasOpen);
  assert.equal(await fresh.page.locator('.turn').first().getByRole('button',{name:'Collapse turn ask',exact:true}).getAttribute('aria-expanded'),'true');
  await fresh.page.getByRole('button',{name:'Close All Turns',exact:true}).click();
@@ -996,18 +1013,42 @@ test('agent event links restore both ends from the URL, opening folded prose wit
  const messages=[
   {id:'link-prompt',native_id:'link-prompt',role:'user',kind:'message',text:prompt,created_at:new Date(1760000000000).toISOString()},
   {id:'link-reply',native_id:'link-reply',role:'assistant',kind:'message',text:reply,created_at:new Date(1760000001000).toISOString(),
-   agent_events:[{id:'e-link',kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:0.9,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
-    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start,end:start+quote.length,text:quote,strong:true}}]},
+   agent_events:[{id:'e-hidden',kind:'obstacle',label:'Obstacle',group:'Friction',probability:0.95,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
+    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start:prompt.indexOf('phones'),end:prompt.indexOf('phones')+6,text:'phones',strong:true}},
+    ...['e-link','e-alias'].map((id,index)=>({id,kind:'assumption',label:'Assumption',group:index?'Reactions and learning':'Choices you may not see',probability:0.9,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
+    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start,end:start+quote.length,text:quote,strong:true}}))]},
  ];
  const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages,agent_events:{messages_read:2}})};
- const opened=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_events=1&reader_event_link=e-link`,ready:'.conversation-panel.show-events mark.event-target.link-selected'}),{page}=opened;
+ const hidden=['events:event-friction','events:event-choices','events:event-learning','events:event-target-legend','labels:C.report'];
+ const opened=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_events=1&reader_event_link=e-alias`,preferences:{'pharos-reader-highlight-hidden':hidden},ready:'.conversation-panel.show-events mark.event-target.link-selected'}),{page}=opened;
  await opened.settled();
  // The target sits past the fold of a long prompt; restoring the link opens it.
  assert.equal(await page.locator('mark.event-target.link-selected').first().evaluate(mark=>mark.closest('.message-prose').classList.contains('prose-truncated')),false);
  assert.ok(await page.locator('mark.agent-event.link-selected').count());
- for(const selector of ['mark.agent-event','mark.event-target'])assert.deepEqual(await page.locator(selector).evaluateAll(marks=>marks.map(mark=>mark.querySelectorAll('code').length)),[1],`${selector} is one element around the inline code`);
+ for(const selector of ['mark.agent-event.link-selected','mark.event-target.link-selected'])assert.deepEqual(await page.locator(selector).evaluateAll(marks=>marks.map(mark=>mark.querySelectorAll('code').length)),[1],`${selector} is one element around the inline code`);
  assert.equal(await page.evaluate(()=>document.activeElement===document.body||!document.activeElement),true);
  assert.ok(await page.locator('.event-link-gutter path.is-selected').count(),'the gutter connects the two ends');
+ assert.equal(await page.locator('mark.link-selected.reader-event-hidden').count(),0,'explicit links override the relevant saved hue and target exclusions');
+ assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')),['events:event-friction','labels:C.report'],'unrelated exclusions survive link restoration');
+ assert.deepEqual(await page.evaluate(()=>pharosPrefs.get('pharos-reader-highlight-hidden',[])),hidden,'opening a link leaves saved preferences intact');
+ await opened.shot('linked-highlights-restored');
+ // The first event on this sentence is hidden and points somewhere else.
+ await page.evaluate(()=>window.pharosView.write('reader_highlight_hidden',[
+  ...window.pharosView.read('reader_highlight_hidden',[]),'events:event-choices',
+ ]));await opened.settled();
+ await page.evaluate(()=>window.pharosView.write('reader_event_link',null));
+ const observation=page.locator('mark.agent-event');await observation.hover();
+ await page.locator('.event-link-n.is-observation.link-focus:not(.reader-event-hidden)').waitFor();
+ assert.deepEqual(await page.locator('.event-link-n.is-observation.link-focus').evaluateAll(nodes=>nodes.map(node=>node.dataset.eventLink)),['e-link']);
+ await observation.click();await opened.settled();
+ assert.equal(new URL(page.url()).searchParams.get('reader_event_link'),'e-link','click selects the remaining visible pair, including its merged alias');
+ assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')).includes('events:event-choices'),'clicking a visible pair preserves its hidden sibling group');
+ // Follow the canonical visibility binding while the linked reveal may still be scrolling.
+ await page.evaluate(()=>window.pharosView.write('reader_events',false));await opened.settled();
+ assert.equal(await page.locator('.event-link-gutter path.is-selected').count(),0,'a later visibility change is respected');
+ assert.equal(new URL(page.url()).searchParams.get('reader_events'),'0');
+ const copied=await open(t,{api,url:path(page),ready:'.event-link-gutter path.is-selected'});
+ assert.equal(await copied.page.locator('mark.link-selected.reader-event-hidden').count(),0,'an explicit copied URL also restores excluded highlights');
 });
 
 test('literal text reveal opens page Find on the reader and reveals a match without focusing its input', {skip},async t=>{
@@ -1124,9 +1165,10 @@ test('reader disclosure history restores empty overrides to native defaults, and
  const turn=page.locator('.turn').first(),id=await turn.getAttribute('data-pharos-disclosure');
  assert.ok(id);
  await page.evaluate(id=>{const url=new URL(location.href);url.searchParams.delete('reader_filter');url.searchParams.delete('reader_expanded');url.searchParams.set('reader_filter_level','primary');url.searchParams.set('reader_collapsed',JSON.stringify([id]));window.pharosNavigate(url.pathname+url.search);},id);
- await page.waitForFunction(()=>document.querySelector('.transcript-levels button[aria-pressed="true"]')?.textContent==='Primary only'&&!document.querySelector('.turn').open);
+ await page.waitForFunction(()=>document.querySelector('.reader-key-current')?.textContent==='Read replies'&&!document.querySelector('.turn').open);
  await app.settled();
- assert.equal(await page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
+ await page.getByRole('button',{name:'Key',exact:true}).click();
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Read replies/}).getAttribute('aria-checked'),'true');await page.keyboard.press('Escape');
  assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')),[id]);
  assert.equal(await page.evaluate(()=>window.__sameDocument),true,'the reader did not reload the document');
 });
@@ -1434,8 +1476,29 @@ test('Message Labels category menus apply to descendants and restore mixed selec
 });
 
 test('Habits switches views and restores the selected chart and its controls', {skip}, async t => {
- const app=await open(t,{url:'/analyze?analyze_topic=habits',ready:'.habits-calendar'}),{page}=app;
+ const api={'GET /api/habits':()=>{const data=defaultApi['GET /api/habits']();data.streaks.you.today='done';return data;}};
+ const app=await open(t,{url:'/analyze?analyze_topic=habits',viewport:{width:1920,height:1050},api,ready:'.habits-days-chart'}),{page}=app;
  const view=page.getByRole('combobox',{name:'View',exact:true});
+ assert.equal(await view.inputValue(),'days');
+ await app.shot('default');
+ const automation=page.getByRole('navigation',{name:'Explore this dashboard'}).getByRole('link',{name:/Automatic agent runs/});
+ await automation.scrollIntoViewIfNeeded();
+ await app.shot('automatic-link');
+ const automationURL=await automation.getAttribute('href');
+ const automationQuery=decodeQueryStrict(new URL(automationURL,page.url()).searchParams.get('q_rhythm'));
+ assert.deepEqual(automationQuery.grouping.keys,['initiator','automation']);
+ assert.ok(automationQuery.grouping.source.where.some(term=>term.field==='actor'&&term.value==='automated'));
+ await automation.click();
+ await page.locator('.usage-workspace-table').waitFor();await app.settled();
+ await page.getByRole('link',{name:/^Back to dashboard/}).waitFor();
+ const run=page.waitForResponse(response=>response.url().includes('/api/query/rhythm')&&response.request().method()==='POST');
+ await page.getByRole('button',{name:'Run Now',exact:true}).click();
+ assert.equal((await run).ok(),true);await app.settled();
+ await app.shot('automatic-table');
+ await page.goBack();
+ await page.locator('.habits-days-chart').waitFor();
+ await view.selectOption('calendar');
+ await page.locator('.habits-calendar').waitFor();
  await page.getByRole('combobox',{name:'Whose days',exact:true}).selectOption('agents');
  await page.getByRole('combobox',{name:'Calendar range',exact:true}).selectOption('13');
  await page.getByRole('combobox',{name:'Streaks count',exact:true}).selectOption('weekdays');
@@ -1470,7 +1533,6 @@ test('Habits standalone charts preview, pin, restore and open their records',{sk
   '.habits-days-chart',
   '.habits-calendar',
   '[data-pharos-target="section:habits-punchcard"] .habits-chart-inspection',
-  '.habits-automations',
  ];
  for(const selector of charts){
   await page.getByRole('combobox',{name:'View',exact:true}).selectOption(selector.includes('days-chart')?'days':selector.includes('calendar')?'calendar':'punchcard');
@@ -1678,7 +1740,8 @@ test('message card labels and sentence events restore independently in the reade
   const named=row=>row.conversation_id===rootConversation?{...row,label:'Review the CSV importer'}:row;
   return {...data,rows:data.rows.map(named),focus:data.focus.map(named)};
  };
- const url=`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all&reader_labels=1&reader_events=1&reader_writing=0`;
+ const elsewhere=['events:event-learning','labels:P.frame'];
+ const url=`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all&reader_labels=1&reader_events=1&reader_writing=0&reader_highlight_hidden=${encodeURIComponent(JSON.stringify(elsewhere))}`;
  const app=await open(t,{api,url,ready:'.conversation-panel.show-labels.show-events'}),{page}=app;
  const reasoning=page.locator('.action-row details').filter({has:page.locator('summary .activity-title',{hasText:'Reasoning'})}).first();
  await reasoning.locator('summary').click();
@@ -1700,17 +1763,70 @@ test('message card labels and sentence events restore independently in the reade
  await human.locator('.message-prose').hover();assert.equal(await tip.isVisible(),false);
  await page.mouse.move(0,0);
  await app.shot('message-card-tints-dark');
- await page.getByRole('checkbox',{name:'Message labels',exact:true}).uncheck();await app.settled();
+ const choose=async(name,action)=>{await page.locator('.transcript-highlights').getByRole('button',{name,exact:true}).click();await page.getByRole('menuitem',{name:action}).click();await app.settled();};
+ await choose('Message labels category',/^Hide$/);
  assert.equal(new URL(page.url()).searchParams.get('reader_labels'),'0');
- await page.getByRole('checkbox',{name:'Message labels',exact:true}).check();
- await page.getByRole('checkbox',{name:'Agent events',exact:true}).uncheck();await app.settled();
+ await choose('Message labels category',/^Show$/);
+ assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')),elsewhere,'editing this conversation preserves exclusions available elsewhere');
+ await choose('Agent events category',/^Hide$/);
  const copied=await open(t,{api,url:path(page),ready:'.conversation-panel.show-labels'});
- assert.equal(await copied.page.getByRole('checkbox',{name:'Agent events',exact:true}).isChecked(),false);
+ assert.equal(await copied.page.locator('.transcript-highlights').getByRole('button',{name:'Agent events category',exact:true}).getAttribute('aria-pressed'),'false');
  assert.match(await copied.page.locator('.thinking-card').textContent(),/quoted cell/);
- await page.getByRole('checkbox',{name:'Agent events',exact:true}).check();
+ await choose('Agent events category',/^Show$/);
+ // The shared menu owns keyboard navigation and restores focus after a choice.
+ const report=page.locator('.transcript-highlights').getByRole('button',{name:'Report',exact:true});
+ await report.focus();await page.keyboard.press('ArrowDown');
+ assert.equal(await page.getByRole('menuitem',{name:/^Hide$/}).evaluate(el=>el===document.activeElement),true);
+ await page.keyboard.press('Escape');assert.equal(await report.evaluate(el=>el===document.activeElement),true);
+ await choose('Receiver category',/^Hide others$/);
+ const familyURL=path(page);
+ await choose('Deliberation',/^Hide$/);
+ const familyCopy=await open(t,{api,url:path(page),ready:'.conversation-panel.show-labels'});
+ assert.equal(await familyCopy.page.locator('.transcript-highlights').getByRole('button',{name:'Deliberation',exact:true}).getAttribute('aria-pressed'),'false');
+ await page.locator('.thinking-card').hover();assert.equal(await page.getByRole('tooltip').isVisible(),false);
+ await app.shot('reader-key-filters-hidden');
+ // In-document history restoration updates the mounted keys as well.
+ await page.evaluate(url=>window.pharosNavigate(url),familyURL);await app.settled();
+ assert.equal(await page.locator('.transcript-highlights').getByRole('button',{name:'Deliberation',exact:true}).getAttribute('aria-pressed'),'true');
+ await choose('Agent events category',/^Show$/);
+ await choose('Friction',/^(?:Hide others|Show and Hide Others)$/);
+ await choose('Friction',/^Hide$/);
+ assert.equal(new URL(page.url()).searchParams.get('reader_events'),'0');
+ await choose('Friction',/^Show All$/);
+ const key=page.getByRole('region',{name:'Conversation key',exact:true}).getByRole('button',{name:'Key',exact:true});
+ const defaults=async name=>{await key.click();await page.getByRole('menuitemradio',{name}).click();await app.settled();};
+ await key.focus();await page.keyboard.press('ArrowDown');
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Default/}).evaluate(el=>el===document.activeElement),true);
+ await page.keyboard.press('End');
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Plain transcript/}).evaluate(el=>el===document.activeElement),true);
+ await page.keyboard.press('Enter');await app.settled();
+ assert.equal(await key.evaluate(el=>el===document.activeElement),true);
+ assert.equal(await page.locator('.conversation-panel').evaluate(el=>el.classList.contains('show-labels')||el.classList.contains('show-events')),false);
+ await defaults(/^Follow reasoning/);
+ const presetCopy=await open(t,{api,url:path(page),preferences:{'pharos-reader-writing':true,'pharos-reader-events':false,'pharos-reader-labels':false,'pharos-reader-highlight-hidden':['events:event-friction','labels:C.deliberation']},ready:'.conversation-panel.show-labels.show-events'});
+ await presetCopy.page.getByRole('button',{name:'Key',exact:true}).click();
+ assert.equal(await presetCopy.page.getByRole('menuitemradio',{name:/^Follow reasoning/}).getAttribute('aria-checked'),'true');
+ await choose('Report',/^(?:Hide others|Show and Hide Others)$/);
+ assert.match(await key.textContent(),/Custom/);
+ await defaults(/^Review/);
+ await app.shot('reader-key-filters-desktop');
+ await key.click();await page.getByRole('menu',{name:'Key defaults',exact:true}).waitFor();
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Review/}).getAttribute('aria-checked'),'true');
+ await app.shot('reader-key-defaults-menu');await page.keyboard.press('Escape');
  await page.evaluate(()=>document.documentElement.dataset.theme='light');
  await app.shot('message-card-tints-light');
  await page.setViewportSize({width:390,height:844});
+ await key.scrollIntoViewIfNeeded();
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await report.click();
+ const menu=page.getByRole('menu',{name:'Filter Report',exact:true});
+ await menu.waitFor();
+ assert.equal(await menu.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight}),true);
+ await app.shot('reader-key-filters-phone');
+ await page.keyboard.press('Escape');await key.click();
+ await page.getByRole('menu',{name:'Key defaults',exact:true}).waitFor();
+ await app.shot('reader-key-defaults-phone');
+ await page.keyboard.press('Escape');
  await page.locator('.thinking-card').scrollIntoViewIfNeeded();
  await app.shot('message-card-tints-phone');
 });
