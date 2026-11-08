@@ -856,9 +856,16 @@ func ensureFree(dir string, bytes int64) error {
 	if bytes == 0 {
 		return nil
 	}
-	_, free := diskUsage(dir)
-	if int64(free)-bytes < captureFreeMargin {
-		return backupDestinationError{fmt.Errorf("needs %s but only %s is free", humanBytes(bytes+captureFreeMargin), humanBytes(int64(free)))}
+	space, err := diskCapacity(dir)
+	if err != nil {
+		return backupDestinationError{fmt.Errorf("cannot tell how much space is free: %w", err)}
+	}
+	need, err := spaceNeeded(bytes, captureFreeMargin)
+	if err != nil {
+		return backupDestinationError{err}
+	}
+	if space.AvailableBytes < need {
+		return backupDestinationError{fmt.Errorf("needs %s but only %s is free", humanBytes(displayBytes(need)), humanBytes(displayBytes(space.AvailableBytes)))}
 	}
 	return nil
 }

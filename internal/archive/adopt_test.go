@@ -7,16 +7,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 
 	"github.com/gbdubs/pharos/internal/platform/filesync"
+	"github.com/gbdubs/pharos/internal/platform/fsinfo"
 )
 
 const adoptVolume = "uuid:ADOPT-TEST"
@@ -1031,5 +1036,60 @@ func TestAdoptRefusesAFallbackHostID(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); err == nil {
 		t.Fatal("a refused adoption created the library directory")
+	}
+}
+
+// fakeCapacity replaces diskCapacity with answers by path, recording the
+// paths asked. A path without an answer fails with ENOENT.
+func fakeCapacity(t *testing.T, answers map[string]fsinfo.Space, failures map[string]error) *[]string {
+	t.Helper()
+	asked := []string{}
+	override(t, &diskCapacity, func(path string) (fsinfo.Space, error) {
+		asked = append(asked, path)
+		if err := failures[path]; err != nil {
+			return fsinfo.Space{}, err
+		}
+		if space, ok := answers[path]; ok {
+			return space, nil
+		}
+		return fsinfo.Space{}, &fs.PathError{Op: "statfs", Path: path, Err: syscall.ENOENT}
+	})
+	return &asked
+}
+
+func TestCheckAdoptSpace(t *testing.T) {
+	override(t, &adoptMinMargin, int64(100))
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "Pharos")
+	// The directory does not exist yet, so its parent answers, at exactly
+	// the catalog, preserved packages and margin, and one byte short.
+	asked := fakeCapacity(t, map[string]fsinfo.Space{parent: {TotalBytes: 1 << 20, AvailableBytes: 1000 + 50 + 100}}, nil)
+	if err := checkAdoptSpace(dir, 1000, 50); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{dir, parent}; !slices.Equal(*asked, want) {
+		t.Fatalf("asked %q, want %q", *asked, want)
+	}
+	if err := checkAdoptSpace(dir, 1001, 50); err == nil || !strings.Contains(err.Error(), "adopting needs 1.2 kB") {
+		t.Fatal(err)
+	}
+	// When neither answers, the failure carries both causes, and nothing
+	// further up is asked.
+	asked = fakeCapacity(t, nil, map[string]error{dir: syscall.ENOENT, parent: syscall.EACCES})
+	if err := checkAdoptSpace(dir, 1, 0); !errors.Is(err, syscall.ENOENT) || !errors.Is(err, syscall.EACCES) {
+		t.Fatal(err)
+	}
+	if len(*asked) != 2 {
+		t.Fatalf("asked %q", *asked)
+	}
+	// The directory's own reading wins when there is one.
+	fakeCapacity(t, map[string]fsinfo.Space{dir: {AvailableBytes: 0}, parent: {AvailableBytes: 1 << 40}}, nil)
+	if err := checkAdoptSpace(dir, 1, 0); err == nil {
+		t.Fatal("a full directory was admitted on its parent's reading")
+	}
+	// Requirements past 64 bits are refused, not wrapped into small ones.
+	fakeCapacity(t, map[string]fsinfo.Space{dir: {AvailableBytes: math.MaxUint64}}, nil)
+	if err := checkAdoptSpace(dir, math.MaxInt64, math.MaxInt64); !errors.Is(err, fsinfo.ErrRange) {
+		t.Fatal(err)
 	}
 }

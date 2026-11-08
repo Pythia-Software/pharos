@@ -367,12 +367,13 @@ func (c *Catalog) automaticIndexCost(ctx context.Context) (itemCost, bool) {
 // automaticSample is the part of a scheduled index's run history the
 // schedule reads.
 type automaticSample struct {
-	FinishedAt string  `json:"finished_at"`
-	Seconds    float64 `json:"seconds"`
-	CPUSeconds float64 `json:"cpu_seconds"`
-	Workspaces int     `json:"workspaces"`
-	Peak       int64   `json:"rss_observed_peak_bytes"`
-	Trigger    string  `json:"trigger"`
+	FinishedAt string   `json:"finished_at"`
+	Seconds    float64  `json:"seconds"`
+	CPUSeconds *float64 `json:"cpu_seconds"`
+	Workspaces int      `json:"workspaces"`
+	// Peak is null for a run whose RSS was never read.
+	Peak    *int64 `json:"rss_observed_peak_bytes"`
+	Trigger string `json:"trigger"`
 }
 
 func (c *Catalog) automaticSamples(ctx context.Context, limit int) []automaticSample {

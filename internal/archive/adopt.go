@@ -454,18 +454,23 @@ func migrateAdoptedCatalog(ctx context.Context, path, legacyHost string, full bo
 }
 
 func checkAdoptSpace(dir string, catalog, preserved int64) error {
-	var stat syscall.Statfs_t
-	// Before anything is created dir may not exist; its parent does.
-	if err := syscall.Statfs(dir, &stat); err != nil {
-		if err := syscall.Statfs(filepath.Dir(dir), &stat); err != nil {
-			return err
+	// Before anything is created dir may not exist; its parent does. No
+	// further ancestor is tried.
+	space, err := diskCapacity(dir)
+	if err != nil {
+		var parentErr error
+		if space, parentErr = diskCapacity(filepath.Dir(dir)); parentErr != nil {
+			return fmt.Errorf("cannot tell how much space is free for adopting into %s: %w; %w", dir, err, parentErr)
 		}
 	}
-	free := int64(stat.Bavail) * int64(stat.Bsize)
 	margin := max(adoptMinMargin, catalog/20)
-	if need := catalog + preserved + margin; free < need {
+	need, err := spaceNeeded(catalog, preserved, margin)
+	if err != nil {
+		return err
+	}
+	if space.AvailableBytes < need {
 		return fmt.Errorf("%s has %s free, but adopting needs %s: %s for the catalog, %s for preserved packages, and %s for migrations",
-			dir, byteSize(free), byteSize(need), byteSize(catalog), byteSize(preserved), byteSize(margin))
+			dir, byteSize(displayBytes(space.AvailableBytes)), byteSize(displayBytes(need)), byteSize(catalog), byteSize(preserved), byteSize(margin))
 	}
 	return nil
 }

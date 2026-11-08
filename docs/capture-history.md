@@ -55,7 +55,9 @@ use host/source scopes. Catalog reads use keyset batches.
 
 Review every page and the catalog preservation boundary. The report gives
 native bytes, existing pin costs (including other owners), catalog/WAL bytes,
-the existing free-space reserve and free capture-drive bytes. Logical output,
+the existing free-space reserve and free capture-drive bytes (informational,
+outside the plan's ID, and 0 when the drive's capacity cannot be read; the
+budget and job checks read it again and refuse to write without it). Logical output,
 compression ratios, full-library rollback-copy size, temporary/WAL growth and
 scratch/catalog growth are explicitly unknown, not zero. Budget the **whole
 library** rollback copy, including already pinned evidence, on its destination.

@@ -1,23 +1,24 @@
 package archive
 
 import (
-	"os"
-	"os/exec"
 	"runtime"
 	"slices"
-	"strconv"
-	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
-const syncMeasurementLimits = "CPU is process-wide plus completed child processes and includes concurrent Pharos work. CPU percent is relative to one core. RSS is sampled whole-process resident memory, not sync allocations; peaks between samples can be missed. Go allocation counters are process-wide. OS block counts are not byte counts. Telemetry overhead is included."
+// syncMeasurementLimits is what the run history's resource figures can and
+// cannot say, ending with where this platform reads them.
+const syncMeasurementLimits = "CPU is process-wide plus completed child processes and includes concurrent Pharos work. CPU percent is relative to one core. RSS is sampled whole-process resident memory, not sync allocations; peaks between samples can be missed. Go allocation counters are process-wide. OS block counts are not byte counts. Telemetry overhead is included. A figure that could not be read, or whose counter reset during the run, is unavailable rather than zero. " + platformMeasurementLimits
 
+// Resource figures that can be unavailable are pointers: null in the JSON
+// (and in the stored history) when not measured, the same numeric field
+// when it was. History recorded before this kept its numbers; a field it
+// lacks stays missing.
 type syncPhase struct {
 	Name       string                 `json:"name"`
 	Seconds    float64                `json:"seconds"`
-	CPUSeconds float64                `json:"cpu_seconds"`
+	CPUSeconds *float64               `json:"cpu_seconds"`
 	Work       []workStageMeasurement `json:"work,omitempty"`
 }
 
@@ -32,15 +33,15 @@ type syncMeasurement struct {
 	Class         string             `json:"class"`
 	ColdStart     bool               `json:"cold_start"`
 	Seconds       float64            `json:"seconds"`
-	CPUSeconds    float64            `json:"cpu_seconds"`
-	CPUPercent    float64            `json:"cpu_percent_one_core"`
-	RSSBaseline   int64              `json:"rss_baseline_bytes"`
-	RSSPeak       int64              `json:"rss_observed_peak_bytes"`
+	CPUSeconds    *float64           `json:"cpu_seconds"`
+	CPUPercent    *float64           `json:"cpu_percent_one_core"`
+	RSSBaseline   *int64             `json:"rss_baseline_bytes"`
+	RSSPeak       *int64             `json:"rss_observed_peak_bytes"`
 	HeapBaseline  uint64             `json:"heap_baseline_bytes"`
 	HeapPeak      uint64             `json:"heap_observed_peak_bytes"`
 	Allocated     uint64             `json:"allocated_bytes"`
-	ReadBlocks    int64              `json:"read_blocks"`
-	WrittenBlocks int64              `json:"written_blocks"`
+	ReadBlocks    *int64             `json:"read_blocks"`
+	WrittenBlocks *int64             `json:"written_blocks"`
 	Workspaces    int                `json:"changed_groups"`
 	Conversations int                `json:"conversations"`
 	Messages      int                `json:"messages_in_changed_groups"`
@@ -48,70 +49,83 @@ type syncMeasurement struct {
 	Phases        []syncPhase        `json:"phases"`
 }
 
+// processResources is one cumulative observation of this process's OS
+// counters (processResourceUsage): own CPU, completed children's CPU, and
+// Unix block counts (ru_inblock, ru_oublock of both), each available only
+// when known names it. A platform with byte counters instead must not put
+// them here.
+type processResources struct {
+	cpu, childCPU float64
+	read, written int64
+	known         resourceCounters
+}
+
+// totalCPU is own plus completed children's CPU, available only when both are.
+func (r processResources) totalCPU() (float64, bool) {
+	return r.cpu + r.childCPU, r.known.has(counterOwnCPU | counterChildCPU)
+}
+
+// counterDelta is a cumulative counter's change between two observations:
+// unavailable when either end lacks it, and when it went backwards (a reset
+// or a different counter), which is not a negative cost. A zero change is a
+// real zero.
+func counterDelta[T int64 | float64](start, end T, startKnown, endKnown bool) *T {
+	if !startKnown || !endKnown || end < start {
+		return nil
+	}
+	return new(end - start)
+}
+
+func cpuDelta(start, end processResources) *float64 {
+	from, fromKnown := start.totalCPU()
+	to, toKnown := end.totalCPU()
+	return counterDelta(from, to, fromKnown, toKnown)
+}
+
+// syncMeterSources are where a meter reads: processResourceUsage,
+// processRSS and the clock, scripted by tests.
+type syncMeterSources struct {
+	observe func() processResources
+	rss     func() (int64, bool)
+	now     func() time.Time
+}
+
 type syncMeter struct {
+	sources     syncMeterSources
 	started     time.Time
 	initial     processResources
 	allocated   uint64
 	measurement syncMeasurement
 	mu          sync.Mutex
-	done        chan struct{}
-	stopped     chan struct{}
-}
-
-type processResources struct {
-	cpu           float64
-	read, written int64
+	// done and stopped run the once-a-second memory sampler; a meter
+	// without them is sampled by its caller.
+	done    chan struct{}
+	stopped chan struct{}
 }
 
 type phaseStart struct {
 	name    string
 	started time.Time
-	cpu     float64
+	start   processResources
 }
 
-func processResourceUsage() processResources {
-	result := processResources{}
-	for _, who := range []int{syscall.RUSAGE_SELF, syscall.RUSAGE_CHILDREN} {
-		var usage syscall.Rusage
-		if syscall.Getrusage(who, &usage) == nil {
-			result.cpu += float64(usage.Utime.Nano()+usage.Stime.Nano()) / 1e9
-			result.read += usage.Inblock
-			result.written += usage.Oublock
-		}
-	}
-	return result
-}
-
-// processRSS is this process's resident set size. On macOS it is read from
-// the kernel (proc_pid_rusage's resident size, resources_darwin.go), which is
-// the figure ps -o rss reports, so samples stay comparable with those taken
-// by forking ps once a second, as this did before. ps is the fallback.
-func processRSS() int64 {
-	if resourceBasis == resourceBasisKernel {
-		if usage, err := processUsageOf(os.Getpid()); err == nil && usage.Resident > 0 {
-			return int64(usage.Resident)
-		}
-	}
-	return processRSSFromPS()
-}
-
-func processRSSFromPS() int64 {
-	output, err := exec.Command("ps", "-o", "rss=", "-p", strconv.Itoa(os.Getpid())).Output()
-	if err != nil {
-		return 0
-	}
-	kilobytes, _ := strconv.ParseInt(strings.TrimSpace(string(output)), 10, 64)
-	return kilobytes * 1024
-}
-
-func beginSyncMeasurement() *syncMeter {
-	meter := &syncMeter{started: time.Now(), initial: processResourceUsage(), done: make(chan struct{}), stopped: make(chan struct{})}
+// newSyncMeter takes the run's baselines. A baseline that could not be read
+// stays unavailable: a later reading never becomes a delta from zero.
+func newSyncMeter(sources syncMeterSources) *syncMeter {
+	meter := &syncMeter{sources: sources, started: sources.now(), initial: sources.observe()}
 	var heap runtime.MemStats
 	runtime.ReadMemStats(&heap)
 	meter.allocated = heap.TotalAlloc
 	meter.measurement.HeapBaseline, meter.measurement.HeapPeak = heap.HeapAlloc, heap.HeapAlloc
-	rss := processRSS()
-	meter.measurement.RSSBaseline, meter.measurement.RSSPeak = rss, rss
+	if rss, ok := sources.rss(); ok {
+		meter.measurement.RSSBaseline, meter.measurement.RSSPeak = new(rss), new(rss)
+	}
+	return meter
+}
+
+func beginSyncMeasurement() *syncMeter {
+	meter := newSyncMeter(syncMeterSources{observe: processResourceUsage, rss: processRSS, now: time.Now})
+	meter.done, meter.stopped = make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(meter.stopped)
 		ticker := time.NewTicker(time.Second)
@@ -121,25 +135,36 @@ func beginSyncMeasurement() *syncMeter {
 			case <-meter.done:
 				return
 			case <-ticker.C:
-				var heap runtime.MemStats
-				runtime.ReadMemStats(&heap)
-				rss := processRSS()
-				meter.mu.Lock()
-				meter.measurement.RSSPeak = max(meter.measurement.RSSPeak, rss)
-				meter.measurement.HeapPeak = max(meter.measurement.HeapPeak, heap.HeapAlloc)
-				meter.mu.Unlock()
+				meter.sampleMemory()
 			}
 		}
 	}()
 	return meter
 }
 
-func (meter *syncMeter) beginPhase(name string) phaseStart {
-	return phaseStart{name: name, started: time.Now(), cpu: processResourceUsage().cpu}
+// sampleMemory raises the observed peaks. An RSS reading that fails leaves
+// a known peak as it was; a run with no RSS reading has no peak.
+func (meter *syncMeter) sampleMemory() {
+	var heap runtime.MemStats
+	runtime.ReadMemStats(&heap)
+	rss, ok := meter.sources.rss()
+	meter.mu.Lock()
+	defer meter.mu.Unlock()
+	meter.measurement.HeapPeak = max(meter.measurement.HeapPeak, heap.HeapAlloc)
+	if ok && (meter.measurement.RSSPeak == nil || rss > *meter.measurement.RSSPeak) {
+		meter.measurement.RSSPeak = new(rss)
+	}
 }
 
+func (meter *syncMeter) beginPhase(name string) phaseStart {
+	return phaseStart{name: name, started: meter.sources.now(), start: meter.sources.observe()}
+}
+
+// endPhase records a phase's elapsed time and its CPU, which follows the
+// same rules as the run's: unavailable unless both ends were read and the
+// counter did not go backwards.
 func (meter *syncMeter) endPhase(phase phaseStart) {
-	meter.measurement.Phases = append(meter.measurement.Phases, syncPhase{Name: phase.name, Seconds: time.Since(phase.started).Seconds(), CPUSeconds: processResourceUsage().cpu - phase.cpu})
+	meter.measurement.Phases = append(meter.measurement.Phases, syncPhase{Name: phase.name, Seconds: meter.sources.now().Sub(phase.started).Seconds(), CPUSeconds: cpuDelta(phase.start, meter.sources.observe())})
 }
 
 func (meter *syncMeter) endPhaseWork(phase phaseStart, work []workStageMeasurement) {
@@ -148,22 +173,32 @@ func (meter *syncMeter) endPhaseWork(phase phaseStart, work []workStageMeasureme
 }
 
 func (meter *syncMeter) finish() syncMeasurement {
-	close(meter.done)
-	<-meter.stopped
+	if meter.stopped != nil {
+		close(meter.done)
+		<-meter.stopped
+	}
+	meter.sampleMemory()
 	var heap runtime.MemStats
 	runtime.ReadMemStats(&heap)
-	meter.measurement.HeapPeak = max(meter.measurement.HeapPeak, heap.HeapAlloc)
-	meter.measurement.RSSPeak = max(meter.measurement.RSSPeak, processRSS())
-	resources := processResourceUsage()
-	meter.measurement.Seconds = time.Since(meter.started).Seconds()
-	meter.measurement.CPUSeconds = resources.cpu - meter.initial.cpu
-	meter.measurement.CPUPercent = 100 * meter.measurement.CPUSeconds / meter.measurement.Seconds
-	meter.measurement.Allocated = heap.TotalAlloc - meter.allocated
-	meter.measurement.ReadBlocks = resources.read - meter.initial.read
-	meter.measurement.WrittenBlocks = resources.written - meter.initial.written
+	resources := meter.sources.observe()
+	measurement := &meter.measurement
+	measurement.Seconds = meter.sources.now().Sub(meter.started).Seconds()
+	measurement.CPUSeconds = cpuDelta(meter.initial, resources)
+	if measurement.CPUSeconds != nil && measurement.Seconds > 0 {
+		measurement.CPUPercent = new(100 * *measurement.CPUSeconds / measurement.Seconds)
+	}
+	measurement.Allocated = heap.TotalAlloc - meter.allocated
+	blocks := meter.initial.known.has(counterBlocks) && resources.known.has(counterBlocks)
+	measurement.ReadBlocks = counterDelta(meter.initial.read, resources.read, blocks, blocks)
+	measurement.WrittenBlocks = counterDelta(meter.initial.written, resources.written, blocks, blocks)
 	return meter.measurement
 }
 
+// syncStatistics is each workload class's distribution of elapsed time, CPU
+// and observed RSS peak. A sample whose CPU or RSS was not measured is left
+// out of that metric (and of the CPU-duty estimate) while still counting for
+// elapsed time; a metric no sample measured is null. Real zeros count.
+// Samples arrive newest first, so last is the newest measured value.
 func syncStatistics(samples []syncMeasurement, interval int) map[string]any {
 	groups := map[string][]syncMeasurement{}
 	for _, sample := range samples {
@@ -174,16 +209,27 @@ func syncStatistics(samples []syncMeasurement, interval int) map[string]any {
 		elapsed, cpu, ram := []float64{}, []float64{}, []float64{}
 		for _, item := range items {
 			elapsed = append(elapsed, item.Seconds)
-			cpu = append(cpu, item.CPUSeconds)
-			ram = append(ram, float64(item.RSSPeak))
+			if item.CPUSeconds != nil {
+				cpu = append(cpu, *item.CPUSeconds)
+			}
+			if item.RSSPeak != nil {
+				ram = append(ram, float64(*item.RSSPeak))
+			}
 		}
 		stats := func(values []float64) map[string]float64 {
+			if len(values) == 0 {
+				return nil
+			}
 			last := values[0]
 			slices.Sort(values)
-			return map[string]float64{"last": last, "median": values[(len(values)-1)/2], "p95": values[min(len(values)-1, (95*len(values)+99)/100-1)]}
+			return map[string]float64{"last": last, "median": values[(len(values)-1)/2], "p95": values[min(len(values)-1, (95*len(values)+99)/100-1)], "samples": float64(len(values))}
 		}
 		cpuStats := stats(cpu)
-		result[class] = map[string]any{"samples": len(items), "elapsed_seconds": stats(elapsed), "cpu_seconds": cpuStats, "rss_observed_peak_bytes": stats(ram), "estimated_cpu_duty_percent_one_core": 100 * cpuStats["median"] / float64(max(interval, 1)), "estimate": true}
+		var duty *float64
+		if cpuStats != nil {
+			duty = new(100 * cpuStats["median"] / float64(max(interval, 1)))
+		}
+		result[class] = map[string]any{"samples": len(items), "elapsed_seconds": stats(elapsed), "cpu_seconds": cpuStats, "rss_observed_peak_bytes": stats(ram), "estimated_cpu_duty_percent_one_core": duty, "estimate": true}
 	}
 	return result
 }

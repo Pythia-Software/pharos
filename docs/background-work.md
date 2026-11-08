@@ -1538,9 +1538,20 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   rate is measured once against this process's own `getrusage` (snapped
   to 1 GHz or 24 MHz within 5 %), not taken from `hw.tbfrequency`, which a
   process under Rosetta may be told differently; until the process has
-  used 20 ms of CPU, `hw.tbfrequency` stands in. No `ps` fork. Off macOS a process reads
-  only itself (getrusage and the Go runtime's memory), with `basis`
-  `self-reported` and `approximate: true`.
+  used 20 ms of CPU, `hw.tbfrequency` stands in. No `ps` fork. On Linux a
+  process reads only itself (getrusage CPU and the Go runtime's memory, which
+  is not a resident size), with `basis` `self-reported` and `approximate:
+  true`. No other platform has OS process counters implemented: a process
+  reads only the Go runtime's memory, with `basis` `go-runtime`, and its CPU
+  and disk are unavailable.
+- **Unavailable counters.** Each reading names the counters it has. One it
+  lacks (unsupported, or its read failed) is unavailable, not zero: a rate
+  needs the counter at both ends, a counter that goes backwards starts a new
+  baseline, and counters are independent (disk keeps its rate when CPU is
+  unavailable). A reading's `memory_bytes` is `null` when not read. A total
+  sums what was measured: `cpu_partial` also covers a process whose CPU
+  cannot be read (the label says so), `memory_partial` a process whose memory
+  cannot be read, and a total no process measured is `null`.
 - **When.** Only when a snapshot is computed, and at most once per process
   per 1.5 s (`resourceSampleInterval`): Pharos measures only while someone
   is looking. Nothing is sampled while no page is open, and with any
@@ -1592,7 +1603,9 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   per-machine and per-library answers.
 - **Index runs' telemetry** (`incremental_metrics.go`) reads its RSS from
   the same call's `ri_resident_size`, the figure `ps -o rss` reports, so
-  RSS history stays comparable; `ps` remains the fallback. Recorded CPU
+  RSS history stays comparable; `ps` remains the fallback (on Linux, the
+  source). A figure that could not be read is `null`, not zero
+  ([incremental-sync.md](incremental-sync.md)). Recorded CPU
   shifts a little lower: it includes `RUSAGE_CHILDREN`, which counted the
   once-a-second `ps` forks. This changes no behaviour and drops one fork
   per second of a run.
