@@ -92,6 +92,7 @@ export const viewFields: Record<string, ViewField> = {
   sidebar_visible: field("sidebar_visible", ["work"], "boolean", "Show the workspace navigation sidebar."),
   sidebar_width: field("sidebar_width", ["work"], "text", "Workspace navigation sidebar width, 300–5000 pixels (site_link accepts a number or decimal string)."),
   search_state: field("text_builder", ["library"], "json", "Complete applied TextSearchDraft, including nested groups, syntax/literal/regex, match options and scope. Browse library/view/search_state for the template. Missing search fields are filled from that template by site_link."),
+  query_settings: field("analyze_query_settings", ["analyze/query/*"], "json", "Calculation settings captured by a dashboard query: carbon_settings, habits_settings or parallelism_settings, each a JSON string. The query source uses only its own settings."),
   carbon: field("analyze_carbon", ["analyze/carbon","analyze/query/*"], "json", "View-scoped Carbon assumptions; same shape as the Carbon controls."),
   parallelism: field("analyze_parallelism", ["analyze/parallelism","analyze/query/parallelism"], "json", "Ribbon mode, counting, gap, repository, range/custom bounds, selected workspace/agent, zoom and smoothingMinutes."),
   habits_view: field("habits_view", ["analyze/habits", "analyze/query/rhythm"], "enum", "The Habits chart to show. Its controls change with the view: activity calendar (calendar), weekday × hour punchcard (punchcard), or daily work schedule (days).", ["calendar", "punchcard", "days"], "calendar"),
@@ -212,6 +213,7 @@ export function encodeViewValue(field: ViewField, value: unknown): string {
 export const delegatedViewFields: Record<string,{file:string; symbol:string}> = {
   label_results:{file:"web/src/message-label-results-model.ts",symbol:"messageLabelHostQuery"},
   dashboard_timezone:{file:"web/src/usage-dashboard-model.ts",symbol:"readDashboardLink"},
+  query_settings:{file:"web/src/dashboard-query-settings.ts",symbol:"dashboardQuerySettings"},
   carbon:{file:"internal/archive/assets/carbon.js",symbol:"syncSettingsURL"},
   parallelism:{file:"web/src/concurrency.tsx",symbol:"routeParameter"},
   record_keyword:{file:"web/src/host-query-state.ts",symbol:"recordKeywordHostQuery"},

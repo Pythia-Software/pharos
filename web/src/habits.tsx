@@ -1,5 +1,8 @@
+import { EMPTY_QUERY, loadSchema } from "@pythia-software/query-table-core";
+import { schemaDocuments } from "./schema-documents";
+import { habitsQueryContext } from "./dashboard-query-adapters";
 import { createPortal } from "react-dom";
-import { useDashboardHeadline } from "./usage-workspace";
+import { UsageDashboardLinks, useDashboardHeadline } from "./usage-workspace";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { DashboardSelect } from "./dashboard-select";
 import { ChartSelect } from "./usage-chart";
@@ -98,6 +101,7 @@ export function HabitsDashboard() {
         <Health data={data} />
         <p className="usage-dashboard-note">Your time is estimated from the messages you typed: each one adds its typing time, and messages within {settings.engagedGap} minutes join one engaged block. Agent turns are split by whether you were engaged and by who started them. {data.coverage.unmatched_turns ? `${data.coverage.unmatched_turns.toLocaleString()} of ${data.coverage.turns.toLocaleString()} turns have no prompt to read who started them; they count as unattended.` : ""}</p>
         <Automations data={data} />
+        <UsageDashboardLinks dataset="rhythm" schema={loadSchema(schemaDocuments.rhythm)} query={EMPTY_QUERY} context={habitsQueryContext(data, chart, cardView, day?.day)} />
         <HabitsSettingsPanel settings={settings} onChange={update} />
       </>}
     </section>

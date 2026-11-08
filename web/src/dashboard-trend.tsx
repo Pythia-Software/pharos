@@ -117,7 +117,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
         rollingPeriods={view.rollingPeriods} guides={guides} loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} /></DataReadinessEmpty>
       {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
       {children}
-      {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} /> : null}
+      {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} context={{ catalog, state: view, where, supporting: trend.supporting }} /> : null}
     </section>;
   }
   return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
@@ -133,6 +133,6 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     {measure.populationShare && measure.note ? <p className="usage-dashboard-note">{measure.note}</p> : null}
     </DataReadinessEmpty>
     {children}
-    {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} /> : null}
+    {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} context={{ catalog, state: view, where, supporting: trend.supporting }} /> : null}
   </section>;
 }
