@@ -87,7 +87,7 @@ same kind/batch, and per-kind failure counts must not grow.
 | Retained binary recovers interrupted dependency work | Passed, deterministic model fixture |
 | Retained binary recovers scheduled publication, then candidate handles another edit | Passed, deterministic model fixture |
 | Probe fixtures and independent evidence-integrity reviews | Passed; review findings corrected |
-| Harness unit tests | 35 passed |
+| Harness unit tests | 36 passed |
 | Go fast tier and full Go suite | Passed |
 | Web checks and full JavaScript matrix | Passed |
 | Real-model lifecycle trial on the full invalidation copy | 15 checks passed; sharing untested; INT8 model |
@@ -127,6 +127,25 @@ whole-process CPU was 4,054 seconds. Those figures are diagnostic: preparation
 initially ran concurrently, and measured host activity exceeded the comparison
 noise threshold. Measured comparison arms run sequentially after that trial;
 noisy pairs keep the existing refusal rules.
+
+## Initial FP32 reference
+
+The retained-source reference completed the full demanded queues in 295.83
+seconds of execution and 409.04 CPU seconds. The query-fact stage occupied
+273.69 seconds; the label stage occupied 18.11 seconds. These stage CPU/window
+measurements include concurrent product polling, not isolated task CPU.
+
+The reference's final product query returned 200 rows in about 55–57 ms.
+The first measured classic arm reached the pinned recent product milestone in
+26.30 seconds and full settlement in 335.09 seconds. The remaining A/A and A/B
+arms are still running; these individual figures are not a comparative verdict.
+
+The reference's sampled peak simultaneous footprint was 3.21 GiB. After the
+120-second idle period and forced GC, native children were gone and process-tree
+footprint retained about 235 MiB above work start. Resource retention is a
+diagnostic here, not evidence of a leak or an enforced preparation-memory grant.
+Host activity exceeded the quiet-comparison threshold and remains a limitation
+that the paired reports must preserve.
 
 ## Decision rule
 
