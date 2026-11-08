@@ -955,6 +955,40 @@ test('dynamic message reveal materializes its target without taking keyboard foc
  assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')||'[]').length>0);
 });
 
+test('right-click and Escape clear linked highlights, with a saved shortcut preference', {skip},async t=>{
+ const app=await open(t,{url:'/settings/preferences',ready:'#escapeClearsHighlights'}),{page}=app;
+ const toggle=page.getByRole('switch',{name:'Escape clears highlights'});
+ assert.equal(await toggle.getAttribute('aria-checked'),'true');
+ await page.evaluate(()=>{
+  const target=document.createElement('p');target.id='attention-fixture';target.textContent='Attention fixture';document.querySelector('#optionalBehaviors').append(target);
+ });
+ const mark=async()=>{
+  await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('reveal','section:attention-fixture');url.searchParams.append('highlight','page');history.replaceState(history.state,'',url);window.dispatchEvent(new Event('pharos:uri-changed'));});
+  await page.waitForFunction(()=>document.querySelector('#attention-fixture')?.classList.contains('pharos-reveal'));
+ };
+ const cleared=async()=>page.waitForFunction(()=>!new URLSearchParams(location.search).has('highlight')&&!new URLSearchParams(location.search).has('reveal')&&!document.querySelector('.pharos-reveal,.pharos-highlight'));
+ await mark();
+ await page.locator('#attention-fixture').click({button:'right'});
+ await page.getByRole('button',{name:'Clear highlights',exact:true}).last().click();await cleared();
+ await mark();
+ await page.locator('#settingsPageHeading').click({button:'right'});
+ await page.getByRole('button',{name:'Clear highlights',exact:true}).last().click();await cleared();
+ await mark();
+ await page.locator('#feedbackContactEmail').focus();await page.keyboard.press('Escape');
+ assert.equal(new URL(page.url()).searchParams.has('reveal'),true,'editing keeps its Escape behavior');
+ await page.evaluate(()=>{document.activeElement.blur();const dialog=document.createElement('dialog');dialog.id='attention-dialog';document.body.append(dialog);dialog.showModal();});
+ await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('#attention-dialog').open);
+ assert.equal(new URL(page.url()).searchParams.has('reveal'),true,'closing a dialog does not also clear attention');
+ await page.evaluate(()=>document.activeElement.blur());await page.keyboard.press('Escape');await cleared();
+ await toggle.click();assert.equal(await toggle.getAttribute('aria-checked'),'false');
+ await mark();await page.locator('#settingsPageHeading').click();await page.keyboard.press('Escape');
+ assert.equal(new URL(page.url()).searchParams.has('reveal'),true,'disabled shortcut preserves attention');
+ await page.reload();await page.locator('#escapeClearsHighlights').waitFor();
+ assert.equal(await toggle.getAttribute('aria-checked'),'false','the preference survives reload');
+ await page.keyboard.press('Escape');assert.equal(new URL(page.url()).searchParams.has('reveal'),true);
+ await toggle.click();await page.locator('#settingsPageHeading').click();await page.keyboard.press('Escape');await cleared();
+});
+
 test('agent event links restore both ends from the URL, opening folded prose without taking focus', {skip},async t=>{
  const filler='Some context about the async work that the person wants reviewed. '.repeat(14),prompt=`${filler}Please keep the \`drawer only\` removal flow working on phones.`;
  // Both ends cross inline code: each must stay one highlight around it.
