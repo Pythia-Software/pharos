@@ -193,7 +193,9 @@ func mergeDelegationSnapshots(parts []*delegationSnapshot, workspaces []string, 
 		case n.ParentCertainty == evidenceLegacy.String():
 			s.Coverage.UnverifiedParents++
 		}
-		if s.projection.res != nil {
+		// As in each part, only a row read as a part's own can be unqueried;
+		// context rows are other work's.
+		if !n.ContextOnly && s.projection.res != nil {
 			if x := s.projection.res.Executions[n.execution]; x != nil && s.projection.unqueried(x, readFor[n.ID]) {
 				s.Coverage.Unqueried++
 			}

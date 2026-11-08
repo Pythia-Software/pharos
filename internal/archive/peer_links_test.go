@@ -510,6 +510,53 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 	if rows := get("/api/work/other/delegation")["rows"].([]any); len(rows) != 1 {
 		t.Fatalf("unrelated hierarchy = %v", rows)
 	}
+	// Coverage counts a row unqueried only where a part read it as its own,
+	// as each part does: a context ancestor from other work never counts, and
+	// a peer's row that replaced its context copy counts against the peer. A
+	// child of the uncertain work and one of the certain review make one of
+	// each, so the group's count is its parts' sum.
+	if _, err := c.DB.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES
+		('impl-sub','impl','codex','local','impl-sub','other-c',1),('impl-review-sub','impl','codex','local','impl-review-sub','review-c',1)`); err != nil {
+		t.Fatal(err)
+	}
+	coverageGroup, err := c.workGroupSnapshot(t.Context(), "impl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := func(s *delegationSnapshot, conversation string) *delegationNode {
+		for _, n := range s.Nodes {
+			if n.ConversationID == conversation {
+				return n
+			}
+		}
+		return nil
+	}
+	readElsewhere := func(n *delegationNode) bool {
+		x := coverageGroup.projection.res.Executions[n.execution]
+		return x != nil && coverageGroup.projection.unqueried(x, "impl")
+	}
+	ownPart, err := c.delegationSnapshot(t.Context(), "impl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := ownPart.Coverage.Unqueried
+	for _, peer := range []string{"review", "late"} {
+		part, err := c.delegationSnapshot(t.Context(), peer)
+		if err != nil || part == nil {
+			t.Fatal(peer, err)
+		}
+		sum += part.Coverage.Unqueried
+	}
+	ancestor, reviewed := row(coverageGroup, "other-c"), row(coverageGroup, "review-c")
+	if ancestor == nil || !ancestor.ContextOnly || ancestor.Peer != nil || !readElsewhere(ancestor) {
+		t.Fatalf("precondition: the uncertain work's root is unqueried-looking context: %+v", ancestor)
+	}
+	if own := row(ownPart, "review-c"); own == nil || !own.ContextOnly || reviewed == nil || reviewed.ContextOnly || reviewed.Peer == nil || !readElsewhere(reviewed) {
+		t.Fatalf("precondition: the review's row replaced its context copy: own %+v, group %+v", own, reviewed)
+	}
+	if coverageGroup.Coverage.Unqueried != sum {
+		t.Fatalf("group unqueried %d, parts' sum %d", coverageGroup.Coverage.Unqueried, sum)
+	}
 }
 
 func asSlice(value any) []any {
