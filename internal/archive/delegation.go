@@ -1550,7 +1550,7 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 			relatives = append(relatives, id)
 		}
 	}
-	snapshot, err := s.Catalog.workGroupSnapshot(r.Context(), workspace, relatives)
+	snapshot, err := s.Catalog.workGroupSnapshot(r.Context(), workspace, relatives, r.URL.Query().Get("include_uncertain") == "1")
 	if err != nil {
 		writeError(w, err, 500)
 		return

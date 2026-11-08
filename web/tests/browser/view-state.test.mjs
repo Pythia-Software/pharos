@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture,pendingEvidenceApi} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture,pendingEvidenceApi,relatedWork} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import writingMessagesDocument from '../../../schemas/writing_messages.schema.json' with {type:'json'};
 import usageDocument from '../../../schemas/usage.schema.json' with {type:'json'};
@@ -65,6 +65,37 @@ test('workspace fingerprints restore across views and respect the global event d
  requests.length=0;await page.goBack();await page.goBack();
  await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
  assert.ok(requests.some(body=>body.events===true));
+});
+
+test('uncertain related work setting includes sessions and opens their conversations',{skip},async t=>{
+ const other=relatedWork.peers[1],conversation={id:'conv-maybe',workspace_id:other.workspace_id,provider:other.provider,title:other.title,peer:true,peer_role:other.role,peer_confidence:'low'};
+ const api={
+  'GET /api/work/:id':request=>({...defaultApi['GET /api/work/:id'](request),...relatedWork,peer_conversations:request.query.get('include_uncertain')==='1'?[...relatedWork.peer_conversations,conversation]:relatedWork.peer_conversations}),
+  'GET /api/work/:id/delegation':request=>{
+   const data=defaultApi['GET /api/work/:id/delegation'](request);
+   if(request.query.get('include_uncertain')!=='1')return data;
+   const peer={...data.rows[0],id:'s-maybe',workspace_id:other.workspace_id,conversation_id:conversation.id,label:other.title,order:data.rows.length,child_count:0,peer:{workspace_id:other.workspace_id,title:other.title,role:other.role,confidence:'low'}};
+   return {...data,rows:[...data.rows,peer],focus:[...data.focus,peer],matched:{...data.matched,[peer.id]:true},total:data.total+1,session_count:data.session_count+1};
+  },
+  'GET /api/work/:id/conversations/:conversation':request=>request.params.id===other.workspace_id?{...conversation,messages:[{id:'maybe-ask',role:'user',kind:'message',text:'Inspect the changes'}]}:undefined,
+  'GET /api/work/:id/conversations/:conversation/signals':request=>request.params.id===other.workspace_id?{conversation_id:conversation.id,signals:[],coverage:{}}:undefined,
+ };
+ const app=await open(t,{api,url:'/settings/preferences',ready:'#uncertainRelatedWork'}),{page}=app;
+ const toggle=page.getByRole('switch',{name:'Show uncertain related work',exact:true});
+ assert.equal(await toggle.getAttribute('aria-checked'),'false');
+ await toggle.click();await page.evaluate(()=>window.pharosPrefs.flush());
+ await page.goto(new URL(`/work/${workID}?explorer=timeline`,page.url()).href);
+ const lane=page.locator('[data-session-id="s-maybe"]').first();await lane.waitFor();
+ await page.waitForFunction(()=>document.querySelector('[data-session-id="s-maybe"]')?.textContent.includes('uncertain'));
+ await page.waitForFunction(()=>document.querySelector('.lt-recursive-lane[data-session-id="s-maybe"]'));
+ assert.ok(app.calls.some(call=>call.path.endsWith('/parallel')&&call.query.get('include_uncertain')==='1'&&(call.query.get('sessions')||'').includes('s-maybe')));
+ await lane.getByRole('button',{name:`Open session ${other.title}`,exact:true}).click();
+ await page.locator('.peer-reader-note').waitFor();
+ assert.match(await page.locator('.peer-reader-note').textContent(),/uncertain/);
+ await page.goto(new URL('/settings/preferences',page.url()).href);await toggle.waitFor();
+ assert.equal(await toggle.getAttribute('aria-checked'),'true');await toggle.click();await page.evaluate(()=>window.pharosPrefs.flush());
+ await page.goto(new URL(`/work/${workID}?explorer=timeline`,page.url()).href);await page.locator('.lt-recursive-lane').first().waitFor();
+ assert.equal(await page.locator('[data-session-id="s-maybe"]').count(),0);
 });
 
 test('Background Processing table queries and editor layout restore independently in a fresh browser',{skip},async t=>{

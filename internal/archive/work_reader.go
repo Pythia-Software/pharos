@@ -40,6 +40,10 @@ const readerMessageColumns = "id,native_id,role,kind,model,effort,text,raw_text,
 // WorkOverview is the workspace detail page's first request: everything but
 // the messages, plus what the page used to derive by scanning all of them.
 func (c *Catalog) WorkOverview(id string) (map[string]any, error) {
+	return c.workOverviewWithPeers(id, false)
+}
+
+func (c *Catalog) workOverviewWithPeers(id string, includeUncertain bool) (map[string]any, error) {
 	result, err := c.workDetail(id, false)
 	if err != nil || result == nil {
 		return result, err
@@ -70,7 +74,7 @@ func (c *Catalog) WorkOverview(id string) (map[string]any, error) {
 		return nil, err
 	}
 	result["peers"] = peers
-	if result["peer_conversations"], err = c.peerConversations(context.Background(), peers); err != nil {
+	if result["peer_conversations"], err = c.peerConversations(context.Background(), peers, includeUncertain); err != nil {
 		return nil, err
 	}
 	return result, nil
