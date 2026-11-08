@@ -898,6 +898,9 @@
     head.append(title);
     const actions = node('div', 'pharos-status-actions');
     actions.dataset.key = 'actions';
+    const settingsButton = iconButton('link-out', 'Open Background Processing settings', () => navigate('/settings/sync'));
+    settingsButton.dataset.key = 'settings';
+    actions.append(settingsButton);
     // Stop sits beside Eject: both act on everything running.
     if (model.stop) {
       const label = model.stop.stopping ? 'Stopping…' : 'Stop';
