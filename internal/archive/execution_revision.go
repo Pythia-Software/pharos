@@ -65,6 +65,7 @@ var executionSourceTables = []executionSourceTable{
 // launch results by (conversation, call ID) without scanning the transcript.
 var executionSourceIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS messages_call_idx ON messages(conversation_id, call_id) WHERE call_id<>''`,
+	`CREATE INDEX IF NOT EXISTS messages_workflow_call_idx ON messages(conversation_id,call_id) WHERE ` + claudeWorkflowCallSQL,
 }
 
 // ensureExecutionSourceGeneration installs the source generation, its change

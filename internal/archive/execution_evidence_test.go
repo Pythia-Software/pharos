@@ -36,6 +36,113 @@ func findClaim(claims []storedExecutionClaim, kind, subject string) *storedExecu
 	return nil
 }
 
+func workflowAck(root, run string) string {
+	return jsonText(map[string]any{"tool": "Workflow", "details": map[string]any{
+		"runId": run, "status": "async_launched", "taskType": "local_workflow",
+		"transcriptDir": "/logs/" + root + "/subagents/workflows/" + run,
+	}})
+}
+
+func TestClaudeWorkflowAcknowledgement(t *testing.T) {
+	ack := workflowAck("root", "wf_run")
+	for _, tc := range []struct {
+		name, native, result string
+		want                 bool
+	}{
+		{"root launcher", "root", ack, true},
+		{"nested launcher", "root:subagent:agent-owner", ack, true},
+		{"different session", "other", ack, false},
+		{"failed launch", "root", strings.Replace(ack, `"tool":"Workflow"`, `"tool":"Workflow","is_error":true`, 1), false},
+		{"report from Bash", "root", strings.Replace(ack, `"tool":"Workflow"`, `"tool":"Bash"`, 1), false},
+		{"prose quoting acknowledgement", "root", jsonText(map[string]any{"tool": "Workflow", "content": ack}), false},
+		{"different run directory", "root", strings.Replace(ack, `"runId":"wf_run"`, `"runId":"wf_other"`, 1), false},
+		{"missing session directory", "root", `{"tool":"Workflow","details":{"runId":"wf_run","status":"async_launched","taskType":"local_workflow"}}`, false},
+		{"invalid run", "root", workflowAck("root", "../wf_run"), false},
+		{"unknown status", "root", strings.Replace(ack, "async_launched", "failed", 1), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := claudeWorkflowAcknowledgement(tc.native, tc.result); (got != "") != tc.want {
+				t.Fatalf("acknowledgement = %q, accepted want %v", got, tc.want)
+			}
+		})
+	}
+	for _, native := range []string{
+		"root:subagent:workflows/wf_run/agent-one/nested/agent-two",
+		"root:subagent:workflows/wf_run/agent-",
+		"root:subagent:agent-one",
+	} {
+		if _, _, ok := claudeWorkflowOf(native); ok {
+			t.Fatalf("not an immediate workflow member: %s", native)
+		}
+	}
+}
+
+func TestClaudeWorkflowEvidenceIngestAndBackfill(t *testing.T) {
+	c, _ := testCatalog(t)
+	root, owner := "workflow-root", "workflow-root:subagent:agent-owner"
+	id := func(native string) string { return stableID("conversation", "claude", "local", native) }
+	record := WorkspaceRecord{SourceID: root, SourceKind: "claude", Account: "local", Conversations: []ConversationRecord{
+		{NativeID: root, Provider: "claude", Account: "local", Messages: []MessageRecord{
+			{NativeID: "launch-owner", Role: "assistant", Kind: "delegation", CallID: "owner-call", Text: `{"tool":"Agent","input":{"prompt":"Check tools"}}`},
+			{NativeID: "owner-ack", Role: "tool", Kind: "delegation_result", CallID: "owner-call", Text: `{"tool":"Agent","details":{"agentId":"owner"}}`},
+		}},
+		{NativeID: owner, ParentNativeID: root, Provider: "claude", Account: "local", AgentDepth: 1, Messages: []MessageRecord{
+			{NativeID: "assignment", Role: "agent", Kind: "message", Text: "Check tools"},
+			{NativeID: "workflow-call", Role: "assistant", Kind: "tool_call", CallID: "wf-call", Text: `{"tool":"Workflow","input":{"script":"return parallel([agent('one'), agent('two')])"}}`},
+			{NativeID: "workflow-result", Role: "tool", Kind: "tool_result", CallID: "wf-call", Text: workflowAck(root, "wf_run")},
+		}},
+	}}
+	children := []string{}
+	for _, agent := range []string{"one", "two"} {
+		native := root + ":subagent:workflows/wf_run/agent-" + agent
+		children = append(children, id(native))
+		record.Conversations = append(record.Conversations, ConversationRecord{NativeID: native, ParentNativeID: root, Provider: "claude", Account: "local", AgentDepth: 1,
+			Messages: []MessageRecord{{NativeID: "task-" + agent, Role: "agent", Kind: "message", Text: "[Workflow harness — computed task] " + agent}}})
+	}
+	reconcileClaudeLineage(&record)
+	ingestRecordTx(t, c, record)
+	check := func(stage string) {
+		t.Helper()
+		r := fixtureResolution(t, c)
+		for _, child := range children {
+			binding := r.BindConversation(child)
+			x := r.Execution(binding.ExecutionID)
+			if x == nil || binding.ExecutionID != executionID("conversation:"+child) || x.Parent.State != parentResolved ||
+				x.Parent.ParentID != executionID("conversation:"+id(owner)) || x.Parent.Certainty < evidenceDerived {
+				t.Fatalf("%s child %s = %+v", stage, child, x)
+			}
+			if ancestry := r.Ancestry(x.ID); !ancestry.Known || ancestry.Depth != 2 {
+				t.Fatalf("%s ancestry = %+v", stage, ancestry)
+			}
+		}
+	}
+	check("ingest")
+	claim := findClaim(executionClaimsOf(t, c.DB, id(owner)), evidenceWorkflowLaunch, "launch:wf-call")
+	if claim == nil || claim.Authority != authorityVerified || claim.Object != claudeWorkflowKey("local", root, "wf_run") {
+		t.Fatalf("workflow claim = %+v", claim)
+	}
+	// A Workflow is an orchestration call, not an extra child execution or a
+	// single launch handle that could merge its two independently retained agents.
+	var handles int
+	if err := c.DB.QueryRow(`SELECT count(*) FROM agent_sessions WHERE conversation_id=? AND native_id='wf-call'`, id(owner)).Scan(&handles); err != nil || handles != 0 {
+		t.Fatalf("workflow launch handles = %d (%v)", handles, err)
+	}
+	fixtureExec(t, c, `DELETE FROM execution_claims`)
+	fixtureExec(t, c, `DELETE FROM execution_evidence_state`)
+	check("legacy rows")
+	if _, err := c.BackfillExecutionEvidence(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	check("retained backfill")
+	if claim := findClaim(executionClaimsOf(t, c.DB, id(owner)), evidenceWorkflowLaunch, "launch:wf-call"); claim == nil || claim.Authority != authorityVerified {
+		t.Fatalf("backfilled workflow claim = %+v", claim)
+	}
+	before := sourceGeneration(t, c)
+	if n, err := c.BackfillExecutionEvidence(t.Context(), 100); err != nil || n != 0 || sourceGeneration(t, c) != before {
+		t.Fatalf("repeat backfill: n=%d err=%v", n, err)
+	}
+}
+
 // stampExecutionDigests records on seeded ledger rows the execution
 // dependency digest a run would have built them at, and propagates, as a
 // fixture that stands for built derivatives needs: a row without a digest
