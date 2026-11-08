@@ -421,6 +421,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureRequestEvidence(); err != nil {
 		return fmt.Errorf("initialize request evidence: %w", err)
 	}
+	if err := c.ensureCompactionBoundaries(); err != nil {
+		return fmt.Errorf("initialize compaction boundaries: %w", err)
+	}
 	// Columns such as effort are added above when opening a legacy catalog.
 	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_analytics_time_idx
  ON tool_calls(started_at DESC,workspace_id,provider,tool_name,tool_category,model,effort,duration_ms,
