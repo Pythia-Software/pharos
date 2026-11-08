@@ -2534,6 +2534,15 @@
       "reason": "Bound directly to the registered view field."
     },
     {
+      "key": "html:a3e65b59f377fd62:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"uncertainRelatedWork\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"uncertainRelatedWorkTitle\" aria-describedby=\"uncertainRelatedWorkDescription\" aria-checked=\"false\">",
+      "contract": "settings",
+      "reason": "Library-wide preference for including uncertain related work in workspace sessions, timelines and conversations; defaults off and applies independently of URL view state."
+    },
+    {
       "key": "html:c93fda6c25a2c2d9:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
