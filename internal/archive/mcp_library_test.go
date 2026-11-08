@@ -551,10 +551,6 @@ func TestMCPRestartKeepsTheConnection(t *testing.T) {
 	if err := command.Wait(); err != nil {
 		t.Fatalf("MCP process: %v; stderr: %s", err, stderr.String())
 	}
-	// A failed replacement would also have answered; this one replaced.
-	if log := stderr.String(); !strings.Contains(log, "restarting after a memory fault") || strings.Contains(log, "could not restart") {
-		t.Fatalf("the MCP process did not replace itself: %s", log)
-	}
 	if log := stderr.String(); !strings.Contains(log, "restarting after a memory fault") || strings.Contains(log, "could not restart") || strings.Contains(log, "another build") {
 		t.Fatalf("stderr: %s", log)
 	}
