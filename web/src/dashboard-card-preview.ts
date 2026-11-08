@@ -114,8 +114,8 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
       const built = trendSeries(source.catalog, { ...source.state, nonzero: false }, trend, await run(trend.query), { now, label });
       if (built.error) throw new Error(built.error);
       const value = (amount: number) => formatMetricOutput(amount, axis.bins.format).text;
-      const grid = heatmapGrid(trendHeatmap(built.buckets, built.series, axis.bins.scheme), { period: drawn.period, noun: axis.counted ? catalog.records.plural.toLowerCase() : weight.unit, label: axis.bins.label,
-        rollingPeriods: drawn.rollingPeriods, format: value, amount: weight.op === "count" ? undefined : amount => formatMetricOutput(amount, weight.format).text });
+      const grid = heatmapGrid(trendHeatmap(built.buckets, built.series, axis.bins.scheme), { period: drawn.period, noun: axis.unit ? catalog.units[axis.unit].plural.toLowerCase() : axis.counted ? catalog.records.plural.toLowerCase() : weight.unit, label: axis.bins.label,
+        rollingPeriods: drawn.rollingPeriods, format: value, amount: axis.counted || weight.op === "count" ? undefined : amount => formatMetricOutput(amount, weight.format).text });
       const ready = grid.cells.some(row => row.some(cell => cell !== null));
       return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, drawn), action: DASHBOARD_CARD_ACTION, note: analysisNote(catalog, drawn),
         ...ready ? { grid, coverHeight: gridCoverHeight(grid) } : {} };
