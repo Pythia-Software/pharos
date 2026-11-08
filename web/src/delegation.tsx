@@ -890,9 +890,7 @@ export function DelegationExplorer({
             link.type = "button";
             link.className = "delegation-transcript-link";
             link.dataset.delegationSession = n.id;
-            link.textContent = n.external_child
-              ? `${n.external_child.provider} · Open child ↗`
-              : `${n.provider} · ${formatted(n.self.clock?.value, "ms")} · Open child`;
+            link.textContent = "Open conversation ↗";
             link.onclick = (event) => {
               event.preventDefault();
               event.stopPropagation();

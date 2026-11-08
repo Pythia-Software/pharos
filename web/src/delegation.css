@@ -544,8 +544,9 @@
 .delegation-context:has(.delegation-segments),
 .workspace-inbox.sidebar-collapsed .delegation-context:has(.delegation-sidebar-link) { padding-top: 10px; }
 .delegation-transcript-link {
-  display: block;
-  margin-top: 4px;
+  display: inline-block;
+  margin: 0;
+  padding: 1px 5px;
   font-size: var(--fs-xs);
 }
 .delegation-parallel {

@@ -3328,15 +3328,6 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "127eea5e22e68f67:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "mount",
-      "tag": "button",
-      "control": "'button', 'button-with-icon', 'Next failed action'",
-      "contract": "action",
-      "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
-    },
-    {
       "key": "3f6f4aa5f5684795:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "mount",
@@ -3428,6 +3419,15 @@
       "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
+      "key": "8a991071267cd86c:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderConversation",
+      "tag": "button",
+      "control": "'button', 'button-with-icon', 'Close All Turns'",
+      "contract": "reader",
+      "reason": "Opens or closes each turn; the reader stores each turn disclosure by stable message identity in the URL."
+    },
+    {
       "key": "91fac2acbf38cf4f:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
@@ -3435,6 +3435,15 @@
       "control": "'details', 'source-details'",
       "contract": "reader",
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
+    },
+    {
+      "key": "a411f1fa02129dc8:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderConversation",
+      "tag": "button",
+      "control": "'button', 'button-with-icon', 'Open All Turns'",
+      "contract": "reader",
+      "reason": "Opens or closes each turn; the reader stores each turn disclosure by stable message identity in the URL."
     },
     {
       "key": "ae4e84b69857b628:0",
@@ -3456,15 +3465,6 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "ccb645811b24e75e:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderConversation",
-      "tag": "button",
-      "control": "'button', 'button-with-icon', 'Collapse all'",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
       "key": "e22fe96ffa687282:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
@@ -3479,15 +3479,6 @@
       "owner": "renderConversation",
       "tag": "input",
       "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "edeb69afa954fcef:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderConversation",
-      "tag": "button",
-      "control": "'button', 'button-with-icon', 'Expand all'",
       "contract": "reader",
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
