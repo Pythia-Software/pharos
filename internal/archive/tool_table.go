@@ -129,7 +129,12 @@ var toolCallDataset = sqlDataset{
 	},
 }
 
-func sqlDatasetFor(dataset string) (sqlDataset, bool) {
+func sqlDatasetFor(dataset string) (table sqlDataset, ok bool) {
+	defer func() {
+		if ok {
+			table = withAgentSessionIdentity(dataset, table)
+		}
+	}()
 	switch dataset {
 	case "message_labels":
 		return messageLabelDataset, true

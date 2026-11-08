@@ -66,9 +66,8 @@ test("every view of every measure and breakdown executes over its own dataset", 
 
 test("the Tools rollup has no observations to distribute or pair, and says so", () => {
   const options = Object.fromEntries(viewOptions(tools, { metric: "calls", split: "tool_name" }).map(([view, , reason]) => [view, reason]));
-  assert.deepEqual(Object.keys(options), analysisViews.map(([view]) => view));
+  assert.deepEqual(Object.keys(options), analysisViews.filter(([view]) => view !== "scatter").map(([view]) => view));
   assert.match(options.distribution, /summaries, with no value per observation/);
-  assert.match(options.scatter, /no such unit/);
   assert.match(options.cycle, /no hours or dates/);
   assert.equal(options.compare, undefined);
   for (const view of ["distribution", "scatter", "cycle"]) {
@@ -78,7 +77,7 @@ test("the Tools rollup has no observations to distribute or pair, and says so", 
   // Pharos requests are observations; a count of them has no value per request.
   assert.equal(normalizeAnalysis(mcp, { view: "distribution", metric: "calls", split: "tool_name" }).metric, "output", "the first measure with a value per request");
   assert.equal(normalizeAnalysis(mcp, { view: "distribution", metric: "time", split: "tool_name" }).metric, "time");
-  assert.equal(viewOptions(mcp, { metric: "calls", split: "none" }).find(([view]) => view === "scatter")[2] !== undefined, true, "no unit to pair");
+  assert.equal(validAnalysisState(mcp, { view: "scatter", metric: "calls", split: "none" }), false, "no unit to pair");
 });
 
 test("Tools reads its text days: every query and drill-down leaving the dashboard names whole days", () => {
@@ -561,7 +560,7 @@ test("every trend draws each %ile level it offers: reference lines over earlier 
       const asked = { view: "trend", metric, split, display, period: "day", nonzero: true, percentiles: levels };
       const catalog = peopleMessageLabelCatalog(shape, asked), schema = schemas[catalog.dataset];
       const view = normalizeAnalysis(catalog, asked), label = `${topic} ${display} ${view.metric} by ${view.split}`;
-      if (!schema || view.display !== display) continue;
+      if (!schema || !isTrendView(view.view) || view.display !== display) continue;
       const limit = percentileLimit(catalog, view, "p50");
       // A level a chart offers is drawn; one it cannot draw is never asked for.
       assert.deepEqual(view.percentiles, limit ? [] : display === "heatmap" ? levels.slice(1) : levels, label);

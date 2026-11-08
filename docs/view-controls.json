@@ -4549,6 +4549,15 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
+      "key": "1c41071e0b6e2887:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "AnalysisControls",
+      "tag": "ScatterMetricPicker",
+      "control": "value={view.metricY} onChange={metricY => set({ metricY })}",
+      "contract": "dashboard",
+      "reason": "The shared dashboard state writes committed point and axis choices into analyze_chart, restored by useUsageDashboardState. Metric suggestions filter by point type."
+    },
+    {
       "key": "1eebb9f108766619:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",
@@ -4576,15 +4585,6 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "383e7ecee267920e:0",
-      "file": "web/src/dashboard-analysis.tsx",
-      "owner": "AnalysisControls",
-      "tag": "ChartSelect",
-      "control": "value={view.unit} onChange={next => set({ unit: next })}",
-      "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
-    },
-    {
       "key": "48bb1628974b24ca:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",
@@ -4594,20 +4594,20 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
+      "key": "5db087ced6991612:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "AnalysisControls",
+      "tag": "ChartSelect",
+      "control": "value={view.unit} onChange={next => set(catalog.dataset === \"scatter\" ? normalizeAnalysis(catalog, { ...view, unit: next }) : { unit: next })}",
+      "contract": "dashboard",
+      "reason": "The shared dashboard state writes committed point and axis choices into analyze_chart, restored by useUsageDashboardState. Metric suggestions filter by point type."
+    },
+    {
       "key": "5f05fa83a56ab3a5:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",
       "tag": "ChartSelect",
       "control": "value={view.split} onChange={split => set({ split, selection: { values: [], excluded: false }, ...trend ? { seriesLimit: 15 } : {} })}",
-      "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
-    },
-    {
-      "key": "67ea78f679607d06:0",
-      "file": "web/src/dashboard-analysis.tsx",
-      "owner": "AnalysisControls",
-      "tag": "ChartSelect",
-      "control": "value={view.metricY} onChange={metricY => set({ metricY })}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
@@ -4637,6 +4637,15 @@
       "control": "value={view.cycle} onChange={cycle => set({ cycle })}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+    },
+    {
+      "key": "7ca0166ba7ab2cef:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "AnalysisControls",
+      "tag": "ScatterMetricPicker",
+      "control": "value={view.metric} onChange={metric => set({ metric })}",
+      "contract": "dashboard",
+      "reason": "The shared dashboard state writes committed point and axis choices into analyze_chart, restored by useUsageDashboardState. Metric suggestions filter by point type."
     },
     {
       "key": "8838351b5ea49acf:0",
@@ -7530,6 +7539,25 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "4d4841599157e69c:0",
+      "file": "web/src/scatter-metric-picker.tsx",
+      "owner": "ScatterMetricPicker",
+      "tag": "div",
+      "control": "id={`${id}-${key}`} onMouseDown={event => event.preventDefault()} onClick={() => select(key)}",
+      "contract": "editing",
+      "reason": "Transient autocomplete search, active suggestion and open state. Choosing a suggestion calls the shared dashboard state callback, which commits metric or metricY to analyze_chart; blur and Escape discard the draft."
+    },
+    {
+      "key": "f27c8e74195cd585:0",
+      "file": "web/src/scatter-metric-picker.tsx",
+      "owner": "ScatterMetricPicker",
+      "tag": "input",
+      "control": "id={id} aria-label={label} value={draft ?? catalog.measures[value].label} onFocus={() => { setDraft(\"\"); setActive(0); }} onBlur={() => setDraft(null)} onChange={event => { setDraft(event.target.value); setActive(0); }} onKeyDown={event => { if (event.key === \"Escape\") { event.preventDefault(); setDraft(null); } else if (event.key === \"ArrowDown\" || event.key === \"ArrowUp\") { event.preventDefault(); setDraft(draft ?? \"\"); setActive(current => Math.max(0, Math.min(matches.length - 1, current + (event.key === \"ArrowDown\" ? 1 : -1)))); } else if (event.key === \"Enter\" && draft !== null && matches.length) { event.preventDefault(); select(matches[chosen][0]); } }}",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Transient autocomplete search, active suggestion and open state. Choosing a suggestion calls the shared dashboard state callback, which commits metric or metricY to analyze_chart; blur and Escape discard the draft."
     },
     {
       "key": "0f43a5c72d8a7da5:0",

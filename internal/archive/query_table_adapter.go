@@ -54,6 +54,8 @@ func (a *queryTableAggregate) Final(_ *sqlite.FunctionContext) { a.fn = nil }
 
 func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 	switch dataset {
+	case "scatter":
+		return PharosScatterSchema(), nil
 	case "people_message_labels":
 		return PharosPeopleMessageLabelsSchema(), nil
 	case "message_labels":

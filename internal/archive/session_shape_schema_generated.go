@@ -8,6 +8,7 @@ func PharosSessionShapeSchema() querytable.Schema {
 		Name:    "pharos_session_shape",
 		IDField: "id",
 		Fields: map[string]querytable.FieldSpec{
+			"agent_session_id":          {Name: "agent_session_id", Kind: querytable.FieldText, Expr: "r.\"agent_session_id\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"agent_session_id\""},
 			"id":                        {Name: "id", Kind: querytable.FieldText, Expr: "r.\"id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"id\""},
 			"started_at":                {Name: "started_at", Kind: querytable.FieldDatetime, Expr: "r.\"started_at\"", Synthetic: false, SQLiteDatetimeFormat: "utc-millis", Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"started_at\""},
 			"last_message_at":           {Name: "last_message_at", Kind: querytable.FieldDatetime, Expr: "r.\"last_message_at\"", Synthetic: false, SQLiteDatetimeFormat: "utc-millis", Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"last_message_at\""},

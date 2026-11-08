@@ -1,3 +1,4 @@
+import { scatterAnalysisCatalog } from "./scatter-analysis-catalog";
 import {peopleMessageLabelCatalog} from "./people-message-labels";
 import { compactionAnalysisCatalog } from "./compaction-analysis-catalog";
 import {messageLabelsCatalog} from "./message-labels-catalog";
@@ -19,6 +20,7 @@ import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCo
 // their catalogs with the user's settings; these are their shapes, for
 // reading and comparing links.
 export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
+  scatter: scatterAnalysisCatalog,
   compaction: compactionAnalysisCatalog, labels:messageLabelsCatalog,
   calls: toolTimeAnalysisCatalog, activity: conversationAnalysisCatalog, tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: toolTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
   human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape, work_hours: habitsAnalysisCatalog, agent_experience: agentEventsAnalysisCatalog, session_shape: sessionShapeAnalysisCatalog,

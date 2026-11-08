@@ -4,7 +4,7 @@ import { boxCoverHeight } from "./compact-box-model";
 import type { QueryRecipe } from "./curiosity-data";
 import { usesWeekdayCover } from "./weekday-cover";
 
-export type CardLoadingKind = "value" | "columns" | "list" | "scatter" | "line" | "box" | "pie" | "donut" | "table" | "text";
+export type CardLoadingKind = "value" | "columns" | "list" | "scatter" | "line" | "box" | "pie" | "donut" | "heatmap" | "table" | "text";
 export type CardLoadingSpec = { kind: CardLoadingKind; count: number; headline?: boolean; belowLabels?: boolean; height?: number };
 
 // Read the same cover definition as the preview, before any requests finish.

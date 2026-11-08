@@ -58,6 +58,7 @@ const sessionShape: SummaryColumn[] = [count("idea_sessions", "Sessions"), sum("
 const agentEventMessages: SummaryColumn[] = [sum("message_count", "Messages read"), sum("candidates", "Keyword hits"), sum("events", "Events"), ratio("idea_events_per_message", "SUM([events])/NULLIF(SUM([message_count]),0)", "Events per message")];
 
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
+  scatter: [],
   messages: [], people_message_labels:[], message_labels:[],
   compactions: [idea("compactions", "triggers", "Compare", "Compactions by trigger and service", "Recorded boundary events by trigger and service", ["trigger", "provider"], [count("idea_compactions", "Compactions")])],
   model_requests: [idea("model_requests","models","Compare","Timing coverage by model","Retained requests and usable post-tool gaps by model",["model"],[count("idea_requests","Retained requests"),count("idea_timed","Usable gaps","gap_seconds")])],

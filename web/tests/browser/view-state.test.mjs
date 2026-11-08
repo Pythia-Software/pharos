@@ -1856,3 +1856,29 @@ test('dataset query ideas restore their query and disclosure, and All records cl
  await page.waitForSelector('.usage-workspace-table .qt-row');
  assert.equal(await record.getAttribute('aria-pressed'),'true','a record idea stays selected after native evidence and Detail columns are restored');
 });
+
+test('scatter axes search by dashboard, retain keyboard focus and restore their committed choices',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_topic=scatter&analyze_data=scatter',ready:'.usage-scatter-dashboard'}),{page}=app;
+ const x=page.getByRole('combobox',{name:'X axis',exact:true});
+ await x.fill('cache write');
+ await page.getByRole('listbox',{name:'X axis metrics'}).getByRole('option').first().waitFor();
+ await x.press('Enter');
+ assert.equal(await x.evaluate(node=>node===document.activeElement),true);
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).metric==='usage_cache_creation_input_tokens');
+ const saved=path(page);
+ await page.reload();
+ await page.getByRole('combobox',{name:'X axis',exact:true}).waitFor();
+ assert.equal(await page.getByRole('combobox',{name:'X axis',exact:true}).inputValue(),'Cache write tokens');
+ const y=page.getByRole('combobox',{name:'Y axis',exact:true});
+ await y.fill('session shape');
+ await page.getByRole('listbox',{name:'Y axis metrics'}).getByRole('group',{name:'Session Shape',exact:true}).waitFor();
+ await y.press('Escape');
+ assert.equal(path(page),saved,'typing and cancelling a search leaves the chart URL alone');
+ await page.getByLabel('Count each',{exact:true}).selectOption('agent_session');
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).unit==='agent_session');
+ const fresh=await open(t,{url:path(page),ready:'.usage-scatter-dashboard'});
+ assert.equal(await fresh.page.getByLabel('Count each',{exact:true}).inputValue(),'agent_session');
+ await fresh.page.getByLabel('Count each',{exact:true}).selectOption('message');
+ await fresh.page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).unit==='message');
+ await app.settled();await fresh.settled();
+});

@@ -16,7 +16,7 @@ import (
 )
 
 func (s *Server) queryTableSchema(dataset string) (querytable.Schema, error) {
-	if _, ok := s.Catalog.sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "people_message_labels" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "safety" && dataset != "fixes" && dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" {
+	if _, ok := s.Catalog.sqlDatasetFor(dataset); !ok && dataset != "scatter" && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "people_message_labels" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "safety" && dataset != "fixes" && dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" {
 		return querytable.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 	}
 	document, err := querySchemaDocument(dataset)
@@ -66,6 +66,8 @@ func (s *Server) queryTableRows(ctx context.Context, dataset string, values url.
 
 func (s *Server) queryTableSourceRows(ctx context.Context, dataset string, values url.Values, fields libraryFields, where ...[]querytable.WhereTerm) ([]map[string]any, error) {
 	switch dataset {
+	case "scatter":
+		return s.scatterRows(ctx, fields, where...)
 	case "library":
 		rows, _, err := s.libraryRows(ctx, values, fields, nil, where...)
 		return rows, err

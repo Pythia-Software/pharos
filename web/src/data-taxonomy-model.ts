@@ -39,6 +39,7 @@ export const dataEntityGroups = [
 
 // Each definition describes an input row, before filters and grouping.
 export const dataSources = {
+  scatter: { label: "Scatter plot points", entity: "conversations", grain: "One entity with independently computed metrics, matched by recorded identity" },
   messages: { label: "Messages", entity: "messages", grain: "One retained message, including user prompts, agent replies, thinking and tool messages; authorship fields are available when classified" },
   people_message_labels:{label:"People message labels",entity:"messages",grain:"One user message within a People dashboard population, assigned to its highest-confidence accepted specific label or missing-label coverage. Label groups add up to the message total."},
   message_labels: { label: "Message labels", entity: "messages", grain: "One accepted specific label on a saved message, or one record of labeling coverage. A message can have several labels" },

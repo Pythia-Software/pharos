@@ -7,10 +7,11 @@ import { concurrencyWindowRange } from "./concurrency-settings";
 import { windowedChart } from "./card-windows";
 import { generatedMessageField, generatedQueryTarget } from "./generated-query-target";
 
-export const queryDatasets = ["messages","people_message_labels","compactions","message_labels","model_requests", "library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "rhythm", "findings", "safety", "fixes", "agent_events", "agent_event_messages", "agent_event_rates", "session_shape"] as const;
+export const queryDatasets = ["scatter","messages","people_message_labels","compactions","message_labels","model_requests", "library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "rhythm", "findings", "safety", "fixes", "agent_events", "agent_event_messages", "agent_event_rates", "session_shape"] as const;
 export type QueryDataset = typeof queryDatasets[number];
 export type RollingWindow = { days: number; field: string; mode?: "relative" | "calendar" | "today"; untilField?: string; timezone?: string };
 const defaultTimeFields: Partial<Record<QueryDataset, string[]>> = {
+  scatter: ["first_at", "last_at"],
   messages: ["sent_at"],
   people_message_labels:["sent_at"], message_labels:["occurred_at"],
   compactions: ["occurred_at"], model_requests: ["requested_at"],

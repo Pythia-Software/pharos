@@ -17,6 +17,14 @@ import { analysisCatalogs } from "../../../src/analysis-catalogs";
 const { rows, hourly } = usageLedger(), schema = schemas.usage;
 const base = { period: "day", hours: 6, days: 3, rollingPeriods: 0, scale: "linear", display: "interval" };
 const range = [{ field: "last_usage_at", op: ">=", value: "-30d" }, { field: "first_usage_at", op: "<", value: "+0s" }];
+
+test("a trend keeps its selected drawing while results are loading", () => {
+  for (const [view, lines] of [["trend_line", true], ["trend_bar", false]]) {
+    const state = { ...base, view, metric: "tokens", split: "provider" };
+    const query = trendQuery(catalog, state, range, { now });
+    assert.equal(trendSeries(catalog, state, query, [], { now }).lines, lines);
+  }
+});
 function draw(state, { where = range, data = rows } = {}) {
   const query = trendQuery(catalog, state, where, { now });
   const results = core.evaluateMetrics(data, query.query, schema, { now }).metrics;

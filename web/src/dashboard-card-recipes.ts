@@ -6,6 +6,8 @@ const cover = (metricId: string) => ({ mode: "source" as const, metricId, kind: 
 const volume = "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage record’s placement; facts are not prorated.";
 
 export const dashboardCardRecipes: QueryRecipe[] = [
+  { id: "human-words-api-cost", title: "Typed words and API cost", description: "Your typed words versus API cost per conversation over the last {days} days.",
+    dataset: "scatter", field: "last_at", category: "human", idea: "human-01", unit: "conversations", days: [7, 30, 90], measures: [] },
   { id: "compactions-by-trigger", title: "Context compactions by trigger", description: "Recorded context compactions over the last {days} days, split by human, machine and unknown triggers.", dataset: "compactions", field: "occurred_at", category: "thinking", idea: "models-01", unit: "compactions", days: [7, 30, 90],
     measures: [{ id: "compactions_daily", op: "count", groupBy: ["day", "trigger"], groupLimit: 10000, label: "Compactions by trigger" }], cover: cover("compactions_daily"),
     destination: { topic: "compaction", dataset: "compactions", chart: { v: 1, view: "trend", metric: "compactions", split: "trigger", period: "day", scale: "linear", nonzero: false } }, action: "Explore Compaction",

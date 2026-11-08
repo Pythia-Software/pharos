@@ -233,7 +233,7 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 .usage-chart-break::after { right: -5px; }
 .usage-chart-break span { position: absolute; top: 50%; right: calc(100% + 10px); transform: translateY(-50%); color: var(--ink); font-size: var(--fs-2xs); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .usage-chart-bars { position: relative; display: flex; align-items: flex-end; gap: 0; height: 100%; transition: opacity .15s; }
-.usage-chart-bars.loading { opacity: .55; }
+.usage-chart-bars.loading > button > i, .usage-chart-bars.loading > .usage-chart-lines, .usage-chart-bars.loading > .usage-chart-reference { opacity: 0; }
 .usage-chart-bars > button { position: relative; border: 0; border-radius: 0; padding: 0; margin: 0; background: none; color: inherit; font: inherit; width: 0; flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column-reverse; gap: 0; cursor: default; outline-offset: 2px; }
 .usage-chart-bars > button > i { display: block; width: 100%; flex: none; box-shadow: inset 0 1px 0 var(--panel); }
 .usage-chart-bars > button:hover > i, .usage-chart-bars > button:focus > i, .usage-chart-bars > button.active > i { filter: brightness(1.15); }
