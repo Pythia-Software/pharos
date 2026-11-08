@@ -13,12 +13,32 @@ import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
 test('workspace fingerprints restore across views and respect the global event display setting',{skip},async t=>{
- const query={...EMPTY_QUERY,select:[{field:'title',width:280},{field:'fingerprint',width:180}],limit:5},requests=[];
- const api={'POST /api/fingerprints':request=>{requests.push(request.body);return defaultApi['POST /api/fingerprints'](request);}};
- const app=await open(t,{api,url:'/library?view=table&q_library='+encodeQuery(query),ready:'.message-label-fingerprint img'}),{page}=app;
+ const requests=[];
+ const api={'POST /api/fingerprints':request=>{
+  requests.push(request.body);
+  const result=defaultApi['POST /api/fingerprints'](request);
+  for(const item of result.items){
+   const height=item.profile==='wide'?128:256;
+   // Synthetic image with marks near both edges makes clipping visible in screenshots.
+   const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="${height}"><rect width="1024" height="${height}" fill="#ddd4bf"/><path d="M0 ${height*.35}h170v${height*.3}h-170z M240 ${height*.2}h180v${height*.6}h-180z M490 ${height*.3}h190v${height*.4}h-190z M750 ${height*.1}h274v${height*.8}H750z" fill="#557974"/><path d="M80 ${height*.9}Q400 ${height*.02} 850 ${height*.9}" fill="none" stroke="#a05437" stroke-width="8"/><circle cx="850" cy="${height*.9}" r="9" fill="#a05437"/></svg>`;
+   const src='data:image/svg+xml,'+encodeURIComponent(svg);item.images={light:src,dark:src};
+  }
+  return result;
+ }};
+ const app=await open(t,{api,url:'/library?view=table',ready:'.message-label-fingerprint img'}),{page}=app;
  assert.ok(await page.getByRole('img',{name:'Workspace fingerprint',exact:true}).count());
  await page.getByRole('group',{name:'Display results as'}).getByRole('button',{name:'Conversations',exact:true}).click();
  await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
+ assert.ok(requests.some(body=>body.items.some(item=>item.entity==='workspace'&&item.profile==='wide')));
+ const fingerprint=page.locator('.conversation-result-facts .fingerprint-image').first();
+ const geometry=await fingerprint.evaluate(node=>{const image=node.querySelector('img').getBoundingClientRect(),box=node.getBoundingClientRect();return {image:{width:image.width,height:image.height,top:image.top,bottom:image.bottom},box:{width:box.width,height:box.height,top:box.top,bottom:box.bottom}};});
+ assert.ok(Math.abs(geometry.image.width/geometry.image.height-8)<.05);
+ assert.ok(geometry.image.top>=geometry.box.top-.5&&geometry.image.bottom<=geometry.box.bottom+.5,'the full fingerprint fits in its container');
+ await app.shot('search-fingerprint');
+ await page.setViewportSize({width:320,height:900});
+ const narrow=await fingerprint.evaluate(node=>{const image=node.querySelector('img').getBoundingClientRect(),box=node.getBoundingClientRect();return {imageWidth:image.width,imageHeight:image.height,boxWidth:box.width};});
+ assert.ok(Math.abs(narrow.imageWidth/narrow.imageHeight-8)<.05&&narrow.imageWidth<=narrow.boxWidth+.5,'the fingerprint fits on a narrow screen');
+ await page.setViewportSize({width:1440,height:900});
  await app.settled();await page.reload();
  await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
  assert.equal(await page.getByRole('button',{name:'Conversations',exact:true}).getAttribute('aria-pressed'),'true');
