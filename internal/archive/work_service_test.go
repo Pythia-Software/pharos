@@ -433,6 +433,45 @@ func TestConversationWorkChargesFailuresAtCanonicalRevisions(t *testing.T) {
 		t.Fatalf("revision %v %v", revisions, err)
 	}
 	canonical := revisions["c-root"]
+	// Completion still checks the live revision after publication; narrowing
+	// the after read must never let a concurrent edit count as coverage.
+	for _, tc := range []struct {
+		name       string
+		edit       bool
+		superseded bool
+	}{
+		{name: "current"},
+		{name: "edited during publication", edit: true},
+		{name: "domain superseded", superseded: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runConversationWork(t.Context(), c, workSelection{Units: []workMember{{ID: "c-root", Revision: canonical}}}, workAllocation{CPUs: 1}, func(context.Context, []string, workAllocation) (workDomainStep, error) {
+				if tc.edit {
+					execTx(t, c.DB, `UPDATE conversations SET model='edited during publication' WHERE id='c-root'`)
+				}
+				if tc.superseded {
+					return workDomainStep{Superseded: []string{"c-root"}}, nil
+				}
+				return workDomainStep{Done: []string{"c-root"}}, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, err := c.readWorkRevisions(t.Context(), []string{"c-root"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []workMember{{ID: "c-root", Revision: current["c-root"]}}
+			if tc.edit || tc.superseded {
+				if len(out.Committed) != 0 || !slices.Equal(out.Superseded, want) {
+					t.Fatalf("edited publication counted as coverage: %+v", out)
+				}
+			} else if len(out.Superseded) != 0 || !slices.Equal(out.Committed, want) {
+				t.Fatalf("current publication: %+v", out)
+			}
+			canonical = current["c-root"]
+		})
+	}
 	library := workSelection{Units: []workMember{{ID: "c-root", Revision: "dirty-token"}}, CPUs: 1}
 	failedUnits := func(err error) []workMember {
 		t.Helper()

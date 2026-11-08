@@ -246,7 +246,11 @@ func runConversationWork(ctx context.Context, c *Catalog, selection workSelectio
 		// Charged at the canonical revisions, as finite targets are.
 		return workRetargetedFailures(selection.Units, before), workUnitFailed(err, canonicalMembers(selection.Units, before)...)
 	}
-	after, err := workRevisions(ctx, c, ids)
+	// Only finished or superseded units publish coverage. Pending and failed
+	// units use their before revision below; rereading the whole selection
+	// for a domain-limited step repeatedly scans units it has not reached.
+	afterIDs := workDomainIDs(append(slices.Clone(result.Done), result.Superseded...))
+	after, err := workRevisions(ctx, c, afterIDs)
 	if err != nil {
 		return workBatchResult{}, err
 	}
