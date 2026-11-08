@@ -456,13 +456,56 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 		t.Fatalf("review lane messages = %v", messages)
 	}
 
+	// Opting in includes the uncertain peer in the overview, hierarchy and
+	// timeline. Alternating modes must never reuse the other mode's cached graph.
+	for _, include := range []bool{false, true, false, true} {
+		suffix := ""
+		if include {
+			suffix = "include_uncertain=1"
+		}
+		overview := get("/api/work/impl?" + suffix)
+		otherConversation := false
+		for _, item := range overview["peer_conversations"].([]any) {
+			conversation := item.(map[string]any)
+			if conversation["id"] == "other-c" {
+				otherConversation = true
+				if conversation["peer_confidence"] != "low" {
+					t.Fatalf("uncertain conversation = %v", conversation)
+				}
+			}
+		}
+		if otherConversation != include {
+			t.Fatalf("include uncertain %v: conversations %v", include, overview["peer_conversations"])
+		}
+		graph := get("/api/work/impl/delegation?limit=100&" + suffix)
+		var other map[string]any
+		for _, item := range graph["rows"].([]any) {
+			row := item.(map[string]any)
+			if row["conversation_id"] == "other-c" && row["peer"] != nil {
+				other = row
+			}
+		}
+		if (other != nil) != include {
+			t.Fatalf("include uncertain %v: rows %v", include, graph["rows"])
+		}
+		if include {
+			if other["peer"].(map[string]any)["confidence"] != "low" {
+				t.Fatalf("uncertain peer = %v", other)
+			}
+			path := "/api/work/impl/parallel?" + suffix + "&snapshot=" + firstString(graph["snapshot"]) + "&sessions=" + firstString(other["id"])
+			if lanes := get(path)["lanes"].([]any); len(lanes) != 1 {
+				t.Fatalf("uncertain lane = %v", lanes)
+			}
+		}
+	}
+
 	// The group keeps each part's members and the revision every part shares,
 	// and an evidence commit composes it again from the new snapshots.
 	reviewID := firstString(review["id"])
 	if _, err := c.DB.Exec(`INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule) VALUES('review-c','late','record','launch_outcome','launch:call-late','','derived','test/v1')`); err != nil {
 		t.Fatal(err)
 	}
-	resolvedGroup, err := c.workGroupSnapshot(t.Context(), "impl", nil)
+	resolvedGroup, err := c.workGroupSnapshot(t.Context(), "impl", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,19 +534,19 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 		return &changed, nil
 	})
 	stale = 1
-	if resolvedGroup, err = c.workGroupSnapshot(t.Context(), "impl", []string{"retry"}); err != nil || resolvedGroup.ByID[reviewID] == nil || stale != 0 ||
+	if resolvedGroup, err = c.workGroupSnapshot(t.Context(), "impl", []string{"retry"}, false); err != nil || resolvedGroup.ByID[reviewID] == nil || stale != 0 ||
 		!slices.Equal(asked["review"], []string{"retry"}) {
 		t.Fatal("a retry composes the group", err, stale, asked)
 	}
 	stale = workGroupAttempts
-	if resolvedGroup, err = c.workGroupSnapshot(t.Context(), "impl", []string{"settle"}); err != nil || resolvedGroup.ByID[reviewID] != nil || resolvedGroup.GroupTotals != nil ||
+	if resolvedGroup, err = c.workGroupSnapshot(t.Context(), "impl", []string{"settle"}, false); err != nil || resolvedGroup.ByID[reviewID] != nil || resolvedGroup.GroupTotals != nil ||
 		!slices.Contains(resolvedGroup.Warnings, "Related work is changing; its agent sessions are left out until it settles.") {
 		t.Fatal("mixed revisions show the work alone", err, resolvedGroup)
 	}
 	if shared, _ := read(c, t.Context(), "impl", []string{"settle"}); slices.Contains(shared.Warnings, resolvedGroup.Warnings[len(resolvedGroup.Warnings)-1]) {
 		t.Fatal("the warning changed the cached snapshot")
 	}
-	if resolvedGroup, err = c.workGroupSnapshot(t.Context(), "impl", []string{"settle"}); err != nil || resolvedGroup.ByID[reviewID] == nil {
+	if resolvedGroup, err = c.workGroupSnapshot(t.Context(), "impl", []string{"settle"}, false); err != nil || resolvedGroup.ByID[reviewID] == nil {
 		t.Fatal("a settled group composes", err)
 	}
 	// Work without certain peers keeps its own snapshot.
@@ -519,7 +562,7 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 		('impl-sub','impl','codex','local','impl-sub','other-c',1),('impl-review-sub','impl','codex','local','impl-review-sub','review-c',1)`); err != nil {
 		t.Fatal(err)
 	}
-	coverageGroup, err := c.workGroupSnapshot(t.Context(), "impl", nil)
+	coverageGroup, err := c.workGroupSnapshot(t.Context(), "impl", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

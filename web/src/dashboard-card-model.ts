@@ -53,7 +53,7 @@ export function dashboardCardTargets(address: string, schema?: FieldSchema): Arr
   }
   if (isHabitsCardAddress(address)) {
     const params = new URL(address, location.origin).searchParams, view = readHabitsCardView(params);
-    return (["habits-streaks", habitsViewTarget(readHabitsView(params)), "habits-pace", "habits-automations"] as HabitsCardTarget[])
+    return (["habits-streaks", habitsViewTarget(readHabitsView(params)), "habits-pace"] as HabitsCardTarget[])
       .map(id => ({ id, label: habitsCardTitle(id, view), title: dashboardCardMetadata(address, id, schema).title }));
   }
   const { topic } = readDashboardCard(address), title = dashboardCardMetadata(address, "chart", schema).title;

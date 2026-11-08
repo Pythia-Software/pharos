@@ -10,12 +10,12 @@ import (
 
 // delegationPeer identifies related work whose agent sessions a workspace's
 // Hierarchy and Timeline show beside its own, so a review lines up with the
-// implementation it read. Only certain peers are merged; uncertain ones stay
-// chips on the page.
+// implementation it read. Uncertain peers are merged only when requested.
 type delegationPeer struct {
 	WorkspaceID string `json:"workspace_id"`
 	Title       string `json:"title"`
 	Role        string `json:"role"`
+	Confidence  string `json:"confidence"`
 }
 
 // workGroupPart reads one workspace's snapshot for a group (a package
@@ -31,7 +31,7 @@ var workGroupAttempts = 3
 var errWorkGroupRevisions = errors.New("related work was resolved at different execution revisions")
 
 // workGroupSnapshot is the workspace's delegation snapshot with the families
-// of its certain peers added as further top-level trees. Totals stay the
+// of its selected peers added as further top-level trees. Totals stay the
 // workspace's own; GroupTotals counts everything shown. relatives are the
 // explorer's delegation_relatives; each part expands the ones it shows.
 //
@@ -39,7 +39,7 @@ var errWorkGroupRevisions = errors.New("related work was resolved at different e
 // against the snapshot's revision, projection and members. A commit during
 // composition retries it a bounded number of times, then shows the
 // workspace's own snapshot alone rather than a mixed graph.
-func (c *Catalog) workGroupSnapshot(ctx context.Context, workspace string, relatives []string) (*delegationSnapshot, error) {
+func (c *Catalog) workGroupSnapshot(ctx context.Context, workspace string, relatives []string, includeUncertain bool) (*delegationSnapshot, error) {
 	relatives = slices.Compact(slices.Sorted(slices.Values(relatives)))
 	own, err := workGroupPart(c, ctx, workspace, relatives)
 	if err != nil || own == nil {
@@ -49,13 +49,13 @@ func (c *Catalog) workGroupSnapshot(ctx context.Context, workspace string, relat
 	if err != nil {
 		return nil, err
 	}
-	certain := []workPeer{}
+	selected := []workPeer{}
 	for _, p := range peers {
-		if p.Confidence == peerHigh {
-			certain = append(certain, p)
+		if p.Confidence == peerHigh || includeUncertain {
+			selected = append(selected, p)
 		}
 	}
-	if len(certain) == 0 {
+	if len(selected) == 0 {
 		return own, nil
 	}
 	for attempt := 0; attempt < workGroupAttempts; attempt++ {
@@ -63,6 +63,9 @@ func (c *Catalog) workGroupSnapshot(ctx context.Context, workspace string, relat
 		// idle pruning apply to it as well, and names the execution source
 		// generation and relatives as delegationSnapshotWith's key does.
 		key := "delegation:group:" + workspace
+		if includeUncertain {
+			key = "delegation:group-uncertain:" + workspace
+		}
 		if generation, tracked, err := executionSourceGeneration(ctx, c.reader()); err != nil {
 			return nil, err
 		} else if tracked {
@@ -78,14 +81,14 @@ func (c *Catalog) workGroupSnapshot(ctx context.Context, workspace string, relat
 			}
 			parts, workspaces := []*delegationSnapshot{own}, []string{workspace}
 			marks := []*delegationPeer{nil}
-			for _, p := range certain {
+			for _, p := range selected {
 				snapshot, err := workGroupPart(c, ctx, p.WorkspaceID, relatives)
 				if err != nil {
 					return nil, err
 				}
 				if snapshot != nil {
 					parts, workspaces = append(parts, snapshot), append(workspaces, p.WorkspaceID)
-					marks = append(marks, &delegationPeer{WorkspaceID: p.WorkspaceID, Title: p.Title, Role: p.Role})
+					marks = append(marks, &delegationPeer{WorkspaceID: p.WorkspaceID, Title: p.Title, Role: p.Role, Confidence: p.Confidence})
 				}
 			}
 			return mergeDelegationSnapshots(parts, workspaces, marks)

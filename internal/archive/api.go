@@ -481,7 +481,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 			s.getWorkPreview(w, r, parts[0])
 			return
 		case len(parts) == 1:
-			value, err = nilIfNoMap(s.Catalog.WorkOverview(parts[0]))
+			value, err = nilIfNoMap(s.Catalog.workOverviewWithPeers(parts[0], r.URL.Query().Get("include_uncertain") == "1"))
 		case len(parts) == 3 && parts[1] == "conversations":
 			value, err = nilIfNoMap(s.Catalog.WorkConversationContext(r.Context(), parts[0], parts[2]))
 		case len(parts) == 4 && parts[1] == "conversations" && parts[3] == "signals":

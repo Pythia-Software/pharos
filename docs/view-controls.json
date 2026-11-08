@@ -2452,15 +2452,6 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
-      "key": "html:305cae4f2d4663e4:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:settings>",
-      "tag": "button",
-      "control": "<button id=\"fingerprintEvents\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"fingerprintEventsTitle\" aria-describedby=\"fingerprintEventsDescription\" aria-checked=\"true\">",
-      "contract": "settings",
-      "reason": "Library-wide fingerprint event display preference, persisted independently of a page URL and applied immediately to every fingerprint."
-    },
-    {
       "key": "html:6ee22a83547c6076:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -2532,6 +2523,15 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "html:a3e65b59f377fd62:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"uncertainRelatedWork\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"uncertainRelatedWorkTitle\" aria-describedby=\"uncertainRelatedWorkDescription\" aria-checked=\"false\">",
+      "contract": "settings",
+      "reason": "Library-wide preference for including uncertain related work in workspace sessions, timelines and conversations; defaults off and applies independently of URL view state."
     },
     {
       "key": "html:c93fda6c25a2c2d9:0",

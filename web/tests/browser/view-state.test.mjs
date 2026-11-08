@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture,pendingEvidenceApi} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture,pendingEvidenceApi,relatedWork} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import writingMessagesDocument from '../../../schemas/writing_messages.schema.json' with {type:'json'};
 import usageDocument from '../../../schemas/usage.schema.json' with {type:'json'};
@@ -31,7 +31,7 @@ test('a pending background history save does not hold up navigation',{skip},asyn
  release({buffered:true});
 });
 
-test('workspace fingerprints restore across views and respect the global event display setting',{skip},async t=>{
+test('workspace fingerprints restore across views and show agent events despite an old preference',{skip},async t=>{
  const requests=[];
  const api={'POST /api/fingerprints':request=>{
   requests.push(request.body);
@@ -44,7 +44,7 @@ test('workspace fingerprints restore across views and respect the global event d
   }
   return result;
  }};
- const app=await open(t,{api,url:'/library?view=table',ready:'.message-label-fingerprint img'}),{page}=app;
+ const app=await open(t,{api,preferences:{'pharos-fingerprint-events':false},url:'/library?view=table',ready:'.message-label-fingerprint img'}),{page}=app;
  assert.ok(await page.getByRole('img',{name:'Workspace fingerprint',exact:true}).count());
  await page.getByRole('group',{name:'Display results as'}).getByRole('button',{name:'Conversations',exact:true}).click();
  await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
@@ -61,29 +61,42 @@ test('workspace fingerprints restore across views and respect the global event d
  await app.settled();await page.reload();
  await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
  assert.equal(await page.getByRole('button',{name:'Conversations',exact:true}).getAttribute('aria-pressed'),'true');
- const settings=async()=>{await activateHeaderTool(page,'settingsToggle');await page.getByRole('link',{name:'App preferences',exact:true}).click();await page.getByRole('switch',{name:'Agent events in fingerprints',exact:true}).waitFor();await app.settled();};
- await settings();
- const toggle=()=>page.getByRole('switch',{name:'Agent events in fingerprints',exact:true});
- assert.equal(await toggle().getAttribute('aria-checked'),'true');
- const settingsURL=path(page),saved=page.waitForResponse(response=>response.url().endsWith('/api/preferences')&&response.request().method()==='POST'&&response.request().postDataJSON()?.set?.['pharos-fingerprint-events']===false);
- await toggle().click();await saved;
- assert.equal(await toggle().getAttribute('aria-checked'),'false');assert.equal(path(page),settingsURL);
- requests.length=0;
- await page.goBack();await page.goBack();
- await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
- assert.ok(requests.some(body=>body.events===false&&body.items.some(item=>item.entity==='workspace')));
- requests.length=0;await page.reload();
- await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
- assert.ok(requests.length&&requests.every(body=>body.events===false));
- // The persisted preference also selects the conversation image variant.
+ assert.ok(requests.length&&requests.every(body=>body.events===true),'workspace images include events despite the saved off preference');
  requests.length=0;
  await page.goto(new URL('/analyze?analyze_mode=query&analyze_data=message_labels&label_results=cards',page.url()).href);
  await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
- assert.ok(requests.some(body=>body.events===false&&body.items.some(item=>item.entity==='conversation')));
- await settings();assert.equal(await toggle().getAttribute('aria-checked'),'false');await toggle().click();
- requests.length=0;await page.goBack();await page.goBack();
- await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
- assert.ok(requests.some(body=>body.events===true));
+ assert.ok(requests.some(body=>body.events===true&&body.items.some(item=>item.entity==='conversation')));
+});
+
+test('uncertain related work setting includes sessions and opens their conversations',{skip},async t=>{
+ const other=relatedWork.peers[1],conversation={id:'conv-maybe',workspace_id:other.workspace_id,provider:other.provider,title:other.title,peer:true,peer_role:other.role,peer_confidence:'low'};
+ const api={
+  'GET /api/work/:id':request=>({...defaultApi['GET /api/work/:id'](request),...relatedWork,peer_conversations:request.query.get('include_uncertain')==='1'?[...relatedWork.peer_conversations,conversation]:relatedWork.peer_conversations}),
+  'GET /api/work/:id/delegation':request=>{
+   const data=defaultApi['GET /api/work/:id/delegation'](request);
+   if(request.query.get('include_uncertain')!=='1')return data;
+   const peer={...data.rows[0],id:'s-maybe',workspace_id:other.workspace_id,conversation_id:conversation.id,label:other.title,order:data.rows.length,child_count:0,peer:{workspace_id:other.workspace_id,title:other.title,role:other.role,confidence:'low'}};
+   return {...data,rows:[...data.rows,peer],focus:[...data.focus,peer],matched:{...data.matched,[peer.id]:true},total:data.total+1,session_count:data.session_count+1};
+  },
+  'GET /api/work/:id/conversations/:conversation':request=>request.params.id===other.workspace_id?{...conversation,messages:[{id:'maybe-ask',role:'user',kind:'message',text:'Inspect the changes'}]}:undefined,
+  'GET /api/work/:id/conversations/:conversation/signals':request=>request.params.id===other.workspace_id?{conversation_id:conversation.id,signals:[],coverage:{}}:undefined,
+ };
+ const app=await open(t,{api,url:'/settings/preferences',ready:'#uncertainRelatedWork'}),{page}=app;
+ const toggle=page.getByRole('switch',{name:'Show uncertain related work',exact:true});
+ assert.equal(await toggle.getAttribute('aria-checked'),'false');
+ await toggle.click();await page.evaluate(()=>window.pharosPrefs.flush());
+ await page.goto(new URL(`/work/${workID}?explorer=timeline`,page.url()).href);
+ const lane=page.locator('[data-session-id="s-maybe"]').first();await lane.waitFor();
+ await page.waitForFunction(()=>document.querySelector('[data-session-id="s-maybe"]')?.textContent.includes('uncertain'));
+ await page.waitForFunction(()=>document.querySelector('.lt-recursive-lane[data-session-id="s-maybe"]'));
+ assert.ok(app.calls.some(call=>call.path.endsWith('/parallel')&&call.query.get('include_uncertain')==='1'&&(call.query.get('sessions')||'').includes('s-maybe')));
+ await lane.getByRole('button',{name:`Open session ${other.title}`,exact:true}).click();
+ await page.locator('.peer-reader-note').waitFor();
+ assert.match(await page.locator('.peer-reader-note').textContent(),/uncertain/);
+ await page.goto(new URL('/settings/preferences',page.url()).href);await toggle.waitFor();
+ assert.equal(await toggle.getAttribute('aria-checked'),'true');await toggle.click();await page.evaluate(()=>window.pharosPrefs.flush());
+ await page.goto(new URL(`/work/${workID}?explorer=timeline`,page.url()).href);await page.locator('.lt-recursive-lane').first().waitFor();
+ assert.equal(await page.locator('[data-session-id="s-maybe"]').count(),0);
 });
 
 test('Background Processing table queries and editor layout restore independently in a fresh browser',{skip},async t=>{
@@ -210,8 +223,10 @@ test('workspace sidebar visibility and width restore without leaving the selecte
  await hide.click();await children().waitFor();await app.shot('collapsed-root');
  const rootURL=new URL(page.url());await children().click();await hide.waitFor();
  assert.equal(new URL(page.url()).searchParams.get('conversation'),rootURL.searchParams.get('conversation'));
+ await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('reader_event_link','e7');history.replaceState(null,'',url)});
  await page.getByRole('table',{name:'Agent session hierarchy and usage'}).getByRole('button',{name:'Open session Review implementation',exact:true}).click();
  await page.locator('.conversation-panel [data-message-id="conv-child-reply"]').first().waitFor();
+ assert.equal(new URL(page.url()).searchParams.has('reader_event_link'),false,'event IDs belong to their source conversation');
  assert.ok(await chips().getByText('Machine: Laptop',{exact:true}).isVisible());
  assert.ok(await chips().getByText('Execution machine: Worker',{exact:true}).isVisible());
  assert.ok(await chips().getByText('1 turn',{exact:true}).isVisible());
@@ -403,6 +418,104 @@ test('workspace Timeline message links preserve source transcripts across canoni
  assert.equal(new URL(app.page.url()).searchParams.get('conversation'),'conv-child');
  assert.equal(new URL(app.page.url()).searchParams.get('message'),'conv-child-reply');
  await app.page.locator('.conversation-panel [data-message-id="conv-child-reply"]').first().waitFor();
+});
+
+test('moved conversation links resolve their workspace and unavailable links keep the reader usable',{skip},async t=>{
+ const work=defaultApi['GET /api/work/:id']({params:{id:workID}}),base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const analysis={...base,rows:[{...base.rows[0],child_count:0}],focus:[{...base.rows[0],child_count:0}],session_count:1,total:1};
+ const api={
+  'GET /api/work/:id':({params})=>({...work,id:params.id,conversations:[{...work.conversations[0],id:params.id===workID?rootConversation:'other-conversation'}]}),
+  'GET /api/work/:id/conversations/:conversation':request=>request.params.id===workID?defaultApi['GET /api/work/:id/conversations/:conversation'](request):{...defaultApi['GET /api/work/:id/conversations/:conversation']({params:{id:workID,conversation:rootConversation}}),id:request.params.conversation,workspace_id:request.params.id},
+  'GET /api/work/:id/conversations/:conversation/signals':({params})=>({conversation_id:params.conversation,signals:[]}),
+  'GET /api/work/:id/delegation':analysis,
+  'POST /api/query-object-references':({body})=>body.references.map(reference=>({reference,...reference.key.id===rootConversation?{href:`/work/${workID}/conversation/${rootConversation}`}:{}})),
+ };
+ const params=new URLSearchParams({conversation:rootConversation,message:'m-1',reader_view:'conversation',reader_content:JSON.stringify({'message:m-1':true}),sidebar_width:'490'});
+ const app=await open(t,{url:'/work/former-work?'+params,api,ready:'.conversation-panel:not(.conversation-loading)'}),{page}=app;
+ await app.settled();
+ assert.equal(new URL(page.url()).pathname,`/work/${workID}/conversation/${rootConversation}`);
+ for(const [key,value] of params)assert.equal(new URL(page.url()).searchParams.get(key),value);
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ // Search and Home must not keep a native conversation selection, and opening
+ // another workspace through the Library entry point selects its own reader.
+ await page.getByRole('button',{name:'Back to Search',exact:true}).click();await page.locator('#library.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.has('conversation'),false);
+ await page.evaluate(()=>{void window.pharosOpenDetail('former-work')});
+ await page.waitForURL(url=>url.searchParams.get('conversation')==='other-conversation');
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ await page.goBack();await page.locator('#library.active').waitFor();await app.settled();
+ await page.goForward();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),'other-conversation');
+ // Re-enter through the path form while the original workspace is mounted.
+ await page.evaluate(()=>window.pharosNavigate('/work/former-work'));
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/former-work/conversation/${rootConversation}?reader_view=conversation`);
+ await page.waitForURL(url=>url.pathname===`/work/${workID}/conversation/${rootConversation}`);
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ // A deleted conversation cannot resolve; show the one retained conversation.
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}?conversation=missing&reader_view=conversation`);
+ await page.getByRole('status').filter({hasText:'linked conversation'}).waitFor();await app.settled();
+ assert.equal(await page.getByRole('heading',{name:work.title,level:1,exact:true}).isVisible(),true);
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
+ const missingMessage=`/work/${workID}/conversation/${rootConversation}?message=missing-message`;
+ await page.getByRole('button',{name:'Back to Search',exact:true}).focus();
+ await page.evaluate(url=>window.pharosNavigate(url),missingMessage);
+ await page.getByRole('status').filter({hasText:'linked message or tool call'}).waitFor();
+ assert.equal(await page.getByRole('button',{name:'Back to Search',exact:true}).evaluate(element=>element===document.activeElement),true,'restoring a message target leaves keyboard focus alone');
+ await page.reload();await page.getByRole('status').filter({hasText:'linked message or tool call'}).waitFor();
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}/conversation/${rootConversation}?message=m-1`);
+ await page.getByRole('status').filter({hasText:'linked message or tool call'}).waitFor({state:'hidden'});
+ await page.locator('.conversation-panel [data-message-id="m-1"]').first().waitFor();await app.settled();
+ // Conversation-only references use the service's current-workspace redirect,
+ // including links opened through the shared in-app navigation entry point.
+ await page.route('**/conversation/conv-root?*',route=>route.fulfill({status:302,headers:{location:`/work/${workID}/conversation/${rootConversation}?message=m-1`}}));
+ await page.evaluate(()=>window.pharosNavigate('/conversation/conv-root?message=m-1'));
+ await page.waitForURL(url=>url.pathname===`/work/${workID}/conversation/${rootConversation}`);
+ await page.locator('.conversation-panel [data-message-id="m-1"]').first().waitFor();await app.settled();
+});
+
+test('leaving a workspace cancels pending overview, transcript and conversation resolution loads',{skip},async t=>{
+ const deferred=()=>{let resolve;const promise=new Promise(done=>resolve=done);return{promise,resolve}};
+ const overviewStarted=deferred(),overviewRelease=deferred(),transcriptStarted=deferred(),transcriptRelease=deferred();
+ const resolutionStarted=deferred(),resolutionRelease=deferred();
+ t.after(()=>{overviewRelease.resolve();transcriptRelease.resolve();resolutionRelease.resolve()});
+ const work=defaultApi['GET /api/work/:id']({params:{id:workID}}),base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const analysis={...base,rows:[{...base.rows[0],child_count:0}],focus:[{...base.rows[0],child_count:0}],session_count:1,total:1};
+ let holdOverview=true;
+ const api={
+  'GET /api/work/:id':async({params})=>{if(params.id==='delayed-work'&&holdOverview){overviewStarted.resolve();await overviewRelease.promise}return{...work,id:params.id,conversations:[{...work.conversations[0],workspace_id:params.id}]};},
+  'GET /api/work/:id/delegation':analysis,
+  'GET /api/work/:id/conversations/:conversation':async request=>{if(request.params.id==='delayed-work'){transcriptStarted.resolve();await transcriptRelease.promise}return{...defaultApi['GET /api/work/:id/conversations/:conversation']({...request,params:{...request.params,id:workID}}),workspace_id:request.params.id};},
+  'GET /api/work/:id/conversations/:conversation/signals':({params})=>({conversation_id:params.conversation,signals:[]}),
+  'POST /api/query-object-references':async({body})=>{resolutionStarted.resolve();await resolutionRelease.promise;return body.references.map(reference=>({reference,href:`/work/resolved-work/conversation/${rootConversation}`}));},
+ };
+ const app=await open(t,{url:`/work/${workID}`,api,ready:'.conversation-panel:not(.conversation-loading)'}),{page}=app;
+ const cancelled=path=>page.waitForEvent('requestfailed',{predicate:request=>new URL(request.url()).pathname===path});
+ let aborted=cancelled('/api/work/delayed-work');
+ await page.evaluate(()=>{void window.pharosOpenDetail('delayed-work')});await overviewStarted.promise;
+ await page.evaluate(()=>window.pharosNavigate('/cards'));await aborted;
+ overviewRelease.resolve();holdOverview=false;await page.locator('#cards.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/cards');
+ aborted=cancelled(`/api/work/delayed-work/conversations/${rootConversation}`);
+ await page.evaluate(()=>{void window.pharosOpenDetail('delayed-work')});await transcriptStarted.promise;
+ await page.evaluate(id=>{void window.pharosOpenDetail(id)},workID);await aborted;
+ transcriptRelease.resolve();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,`/work/${workID}/conversation/${rootConversation}`);
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ assert.equal(await page.locator('html').evaluate(element=>element.classList.contains('page-loading')),false);
+ aborted=cancelled('/api/query-object-references');
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}?conversation=elsewhere`);await resolutionStarted.promise;
+ await page.evaluate(()=>window.pharosNavigate('/settings/preferences'));await aborted;
+ resolutionRelease.resolve();await page.locator('#settings.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/settings/preferences');
+ assert.equal(await page.locator('#detail').isVisible(),false,'the obsolete resolution cannot mount its reader');
+ // A late redirect must not replace the destination's history entry either.
+ await page.goBack();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ await page.goForward();await page.locator('#settings.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/settings/preferences');
 });
 
 for(const width of [1440,390])test(`single-agent Conversation and Timeline share the actual reader at ${width}px`,{skip},async t=>{
@@ -1448,8 +1561,29 @@ test('Message Labels category menus apply to descendants and restore mixed selec
 });
 
 test('Habits switches views and restores the selected chart and its controls', {skip}, async t => {
- const app=await open(t,{url:'/analyze?analyze_topic=habits',ready:'.habits-calendar'}),{page}=app;
+ const api={'GET /api/habits':()=>{const data=defaultApi['GET /api/habits']();data.streaks.you.today='done';return data;}};
+ const app=await open(t,{url:'/analyze?analyze_topic=habits',viewport:{width:1920,height:1050},api,ready:'.habits-days-chart'}),{page}=app;
  const view=page.getByRole('combobox',{name:'View',exact:true});
+ assert.equal(await view.inputValue(),'days');
+ await app.shot('default');
+ const automation=page.getByRole('navigation',{name:'Explore this dashboard'}).getByRole('link',{name:/Automatic agent runs/});
+ await automation.scrollIntoViewIfNeeded();
+ await app.shot('automatic-link');
+ const automationURL=await automation.getAttribute('href');
+ const automationQuery=decodeQueryStrict(new URL(automationURL,page.url()).searchParams.get('q_rhythm'));
+ assert.deepEqual(automationQuery.grouping.keys,['initiator','automation']);
+ assert.ok(automationQuery.grouping.source.where.some(term=>term.field==='actor'&&term.value==='automated'));
+ await automation.click();
+ await page.locator('.usage-workspace-table').waitFor();await app.settled();
+ await page.getByRole('link',{name:/^Back to dashboard/}).waitFor();
+ const run=page.waitForResponse(response=>response.url().includes('/api/query/rhythm')&&response.request().method()==='POST');
+ await page.getByRole('button',{name:'Run Now',exact:true}).click();
+ assert.equal((await run).ok(),true);await app.settled();
+ await app.shot('automatic-table');
+ await page.goBack();
+ await page.locator('.habits-days-chart').waitFor();
+ await view.selectOption('calendar');
+ await page.locator('.habits-calendar').waitFor();
  await page.getByRole('combobox',{name:'Whose days',exact:true}).selectOption('agents');
  await page.getByRole('combobox',{name:'Calendar range',exact:true}).selectOption('13');
  await page.getByRole('combobox',{name:'Streaks count',exact:true}).selectOption('weekdays');
@@ -1484,7 +1618,6 @@ test('Habits standalone charts preview, pin, restore and open their records',{sk
   '.habits-days-chart',
   '.habits-calendar',
   '[data-pharos-target="section:habits-punchcard"] .habits-chart-inspection',
-  '.habits-automations',
  ];
  for(const selector of charts){
   await page.getByRole('combobox',{name:'View',exact:true}).selectOption(selector.includes('days-chart')?'days':selector.includes('calendar')?'calendar':'punchcard');
