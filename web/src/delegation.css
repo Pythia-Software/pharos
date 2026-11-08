@@ -1048,17 +1048,39 @@
 .lt-clock-heading{margin-right:22px}
 .lt-column-resizer{position:absolute;right:-5px;top:0;bottom:0;width:11px;padding:0;border:0;border-radius:0;background:transparent;cursor:col-resize;touch-action:none;z-index:8;display:flex;justify-content:center;align-items:center}
 .lt-column-resizer>i{width:3px;height:21px;background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:2px}.lt-column-resizer:hover>i,.lt-column-resizer:focus-visible>i{background:var(--gold)}
-/* One key line: each section (heading and its values) wraps as a unit, and
-   only a section wider than the line wraps inside itself. */
-.lt-timeline-legend{display:flex;flex-wrap:wrap;align-items:center;gap:6px 24px;padding:8px 0;font-size:var(--fs-xs);color:var(--muted)}
-.lt-timeline-legend .usage-legend-item{gap:5px;max-width:100%;text-align:left;white-space:normal}
-.lt-timeline-legend .usage-legend-chip{min-width:0;max-width:100%}
-.lt-timeline-legend .usage-legend-caret{margin-left:0}
-.lt-timeline-legend .usage-legend-category{padding-block:1px}
+/* Inline groups let headings and values share a line, with borders cloned
+   across wraps instead of moving a whole branch onto the next line. */
+.lt-timeline-legend{padding:5px 0;font-size:var(--fs-2xs);line-height:24px;color:var(--muted)}
+/* The disclosure keeps its Key control available beside either presentation. */
+.lt-key-disclosure{display:inline}
+.lt-timeline-legend.is-readonly{position:relative;z-index:11}
+.lt-timeline-legend.is-readonly :is(.usage-legend-item,.lt-key-open){cursor:zoom-in}
+.lt-key-open{background:none;color:var(--ink);font:inherit}
+.lt-key-disclosure::details-content{display:contents}
+.lt-timeline-legend.is-compact{display:flex;flex-wrap:wrap;align-items:center;gap:0 3px}
+:is(.lt-key-disclosure>summary,.lt-key-open){display:inline-flex;align-items:center;vertical-align:middle;min-height:20px;box-sizing:border-box;padding:0 5px;margin-right:4px;border:1px solid var(--line);border-radius:4px;font-size:var(--fs-xs);font-weight:600;line-height:18px;cursor:pointer;color:var(--ink)}
+.lt-key-disclosure>summary::-webkit-details-marker{display:none}
+:is(.lt-key-disclosure>summary,.lt-key-open):hover{background:color-mix(in srgb,var(--ink) 6%,transparent)}
+:is(.lt-key-disclosure>summary,.lt-key-open):focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.lt-timeline-legend.is-compact :is(.lt-legend-section,.lt-ontology-role,.lt-mode-group){display:contents;padding:0;margin:0;border:0}
+.lt-timeline-legend.is-compact .lt-legend-section+.lt-legend-section::before{content:'';flex:none;align-self:center;width:1px;height:12px;margin:0 3px;background:var(--line)}
+.lt-timeline-legend.is-compact .usage-legend-chip{margin-right:0}
+.lt-timeline-legend .is-icon-only>.usage-legend-item{justify-content:center;width:22px;height:20px;padding:2px}
+.lt-timeline-legend .is-icon-only>.usage-legend-item>svg:not(.event-link-glyph){width:20px;height:10px;flex:none}
+.lt-legend-section{display:inline;box-decoration-break:clone;-webkit-box-decoration-break:clone;padding:2px 3px;margin-right:4px;border:1px solid color-mix(in srgb,var(--ink) 18%,transparent);border-radius:5px}
+.lt-legend-section>.usage-legend-chip>.usage-legend-category{font-size:var(--fs-xs);font-weight:600}
+.lt-legend-items,.lt-timeline-legend :is(.lt-legend-line,.lt-mode-groups,.lt-ontology-families){display:contents}
+.lt-timeline-legend .usage-legend-item{gap:2px;max-width:100%;padding:0 3px;font-size:var(--fs-2xs);line-height:14px;text-align:left;white-space:normal}
+.lt-timeline-legend .usage-legend-chip{min-width:0;max-width:100%;margin-right:2px;vertical-align:middle}
+.lt-timeline-legend .usage-legend-caret{width:8px;height:8px;margin:0}
+.lt-timeline-legend .usage-legend-category{padding-block:0}
 .lt-timeline-legend .usage-legend-item.dimmed{color:var(--muted)}
 .lt-timeline-legend .usage-legend-item.dimmed :is(i,.event-link-glyph){filter:grayscale(1)}
-.lt-legend-line{display:flex;align-items:center;flex-wrap:wrap;gap:5px 13px;min-width:0;max-width:100%}.lt-legend-line>strong{font-weight:500;color:var(--ink)}.lt-legend-line>span{display:inline-flex;gap:5px;align-items:center}.lt-legend-line>small{font-size:10px}.lt-label-swatch,.lt-source-swatch{width:12px;height:10px;display:inline-block;flex:none}
-.lt-tool-swatch{display:inline-block;width:20px;height:1px;background:currentColor;position:relative;margin:4px 1px}.lt-tool-swatch:before{content:'';position:absolute;top:-3px;left:0;width:7px;height:7px;border-radius:50%;background:currentColor}
+.lt-legend-line{display:flex;align-items:center;flex-wrap:wrap;gap:5px 13px;min-width:0;max-width:100%}.lt-legend-line>strong{font-weight:500;color:var(--ink)}.lt-legend-line>span{display:inline-flex;gap:3px;align-items:center}.lt-legend-line>small{font-size:10px}.lt-label-swatch,.lt-source-swatch{width:10px;height:8px;display:inline-block;flex:none}
+.lt-timeline-legend .event-link-glyph{width:9px;height:9px}
+.lt-timeline-legend .lt-legend-line>span{vertical-align:middle;margin-right:3px;line-height:18px}
+.lt-timeline-legend .lt-legend-line>span>svg:not(.event-link-glyph){width:20px;height:10px;flex:none}
+.lt-tool-swatch{display:inline-block;width:14px;height:1px;background:currentColor;position:relative;margin:4px 1px}.lt-tool-swatch:before{content:'';position:absolute;top:-2px;left:0;width:5px;height:5px;border-radius:50%;background:currentColor}
 .lt-source-swatch.is-diagonal{background-image:repeating-linear-gradient(135deg,transparent 0 2px,color-mix(in srgb,var(--ink) 65%,transparent) 2px 2.8px,transparent 2.8px 4px)}.lt-source-swatch.is-dots{background-image:radial-gradient(color-mix(in srgb,var(--ink) 65%,transparent) .65px,transparent .65px);background-size:3px 3px}
 
 .lt-caller-row{background:color-mix(in srgb,var(--sea) 6%,transparent);margin-bottom:0;border-bottom:2px solid var(--line)}.lt-caller-row .lt-session-fold>.app-icon{width:17px;height:22px;color:var(--sea)}
@@ -1129,10 +1151,10 @@ button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--
 .is-preview .lt-session-fold{pointer-events:none}
 
 /* Borders belong to taxonomy keys, leaving the timeline ribbons borderless. */
-.lt-ontology-role{display:flex;flex-wrap:wrap;align-items:center;gap:3px 6px;min-width:0;max-width:100%;padding:1px 4px;border:1px solid color-mix(in srgb,var(--ink) 14%,transparent);border-radius:5px}
-.lt-ontology-role>strong{font-size:10px;font-weight:600;color:var(--ink)}
+.lt-ontology-role{display:inline;box-decoration-break:clone;-webkit-box-decoration-break:clone;padding:1px 2px;margin-right:2px;border:1px solid color-mix(in srgb,var(--ink) 14%,transparent);border-radius:4px}
+.lt-ontology-role>strong{font-size:var(--fs-2xs);font-weight:600;color:var(--ink)}
 .lt-ontology-families{display:flex;flex-wrap:wrap;align-items:center;gap:3px 5px;min-width:0;max-width:100%}
-.lt-ontology-families>.lt-mode-group{gap:3px 6px;padding:0 3px;border:1px solid color-mix(in srgb,var(--ink) 10%,transparent);border-radius:3px}
+.lt-ontology-families>.lt-mode-group{display:inline;box-decoration-break:clone;-webkit-box-decoration-break:clone;padding:0 2px;margin-right:2px;border:1px solid color-mix(in srgb,var(--ink) 10%,transparent);border-radius:3px}
 
 /* Skipped idle gaps (timeline-idle-model.ts): a bar across the overview, the
    clock and every row, with the time the session resumed to its left. */

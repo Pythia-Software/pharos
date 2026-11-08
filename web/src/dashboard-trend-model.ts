@@ -1,3 +1,4 @@
+import {sliceSelectionActive} from './chart-selection';
 import { EMPTY_QUERY, type AggregationClause, type AggregationResultEntry, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabel, periodStart, shiftPeriod } from "./chart-period";
 import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart } from "./chart-range";
@@ -76,7 +77,7 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   // rounded start to the end of the last whole period, and the legend
   // selection as a filter on the breakdown's fields, where the predicate
   // budget allows it with room for whole periods' two bounds.
-  const chosen = breakdown && state.selection?.values.length ? selectionWhere(breakdown.fields, state.selection, predicateCount(run(unique([...where, ...population]))) + 2) ?? [] : [];
+  const chosen = breakdown && state.selection && sliceSelectionActive(state.selection) ? selectionWhere(breakdown.fields, state.selection, predicateCount(run(unique([...where, ...population]))) + 2) ?? [] : [];
   let shown = [...where, ...chosen];
   if (state.completePeriods) {
     // From the first drawn bucket: a custom multi-day or multi-hour bucket
@@ -99,7 +100,7 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
 export type TrendSeries = {
   series: ChartSeries[]; buckets: ChartBucket[];
   // Series keys the legend selection draws, or hides when excluded.
-  selected: string[]; excluded: boolean;
+  selected: string[]; excluded: boolean; allHidden?: boolean;
   // Each level the state asks for (its percentiles: the mean, or a
   // percentile) of the drawn values at the normPeriods points before the
   // latest one, and how many of those points had a value.
@@ -260,7 +261,7 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   let references: TrendSeries["references"], normPoints: number | undefined;
   const nonzero = state.nonzero && !state.share;
   const selected = series.filter(item => item.value !== undefined && picked.includes(item.value)).map(item => item.key);
-  const drawn = selected.length ? series.filter(item => chosen.excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
+  const drawn = chosen.allHidden ? [] : selected.length ? series.filter(item => chosen.excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
   // Additive series add up to the drawn total; any other measure has levels
   // only when one series is drawn, never the first of several.
   if (drawsLevels(state) && trend.normFrom && trend.normTo && (additive || drawn.length === 1)) {
@@ -279,7 +280,7 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   }
   if (nonzero) buckets = withoutZeroes(buckets, drawn.map(item => item.key));
 
-  return { series, buckets, selected, excluded: chosen.excluded, references, normPoints, cumulativeStart: bounds.from ?? earliest, lines: drawing === "trend_line" || drawing !== "trend_bar" && !additive && series.length > 1, additive };
+  return { series, buckets, selected, excluded: chosen.excluded, ...(chosen.allHidden?{allHidden:true}:{}), references, normPoints, cumulativeStart: bounds.from ?? earliest, lines: drawing === "trend_line" || drawing !== "trend_bar" && !additive && series.length > 1, additive };
 }
 
 // A level of some values: their mean, or a percentile interpolated between

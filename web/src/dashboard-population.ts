@@ -78,9 +78,9 @@ export function withPopulationGroup(catalog: AnalysisCatalog, where: WhereTerm[]
 
 // A legend selection made the population: each selected group kept, or
 // each excluded group left out.
-export function selectionPopulation(catalog: AnalysisCatalog, where: WhereTerm[], split: string, selection: { values: string[]; excluded: boolean }): WhereTerm[] {
+export function selectionPopulation(catalog: AnalysisCatalog, where: WhereTerm[], split: string, selection: SliceSelection<string>): WhereTerm[] {
   const fields = catalog.breakdowns[split]?.fields ?? [];
   if (fields.length !== 1) return [...where, ...selectionWhere(fields, selection) ?? []];
-  if (!selection.excluded) return withSlice(where, fields[0], { values: selection.values.map(value => value || null), excluded: false });
+  if (!selection.excluded) return withSlice(where, fields[0], { ...selection, values: selection.values.map(value => value || null), excluded: false });
   return selection.values.reduce((next, value) => withPopulationGroup(catalog, next, split, value, "drop"), where);
 }

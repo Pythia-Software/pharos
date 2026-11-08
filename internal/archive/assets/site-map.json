@@ -7,7 +7,7 @@
    "readiness_scope": {"param":"readiness_scope","pages":["*"],"kind":"text","description":"The selected result, or page for all results shown on this page.","default":"page"},
    "readiness_preview": {"param":"readiness_preview","pages":["*"],"kind":"enum","description":"An example update status for reviewing the prototype. Does not change your data or settings.","values":["clear","minutes","recent","hours","orange","days","missing","running","paused","failed","unknown"],"default":"clear"},
    "label_results": {"param":"label_results","pages":["analyze/query/message_labels"],"kind":"enum","description":"Native Query Table host presentation, saved with the query. Cards and rows share filters, grouping and pagination.","values":["cards","table"],"default":"table"},
-   "timeline_visibility": {"param":"timeline_visibility","pages":["work"],"kind":"json","description":"Timeline Key visibility by section: modes (message label IDs, including ? for uncategorized), events (friction, learning, second-look, choices), tools (action categories or error), origins (caller text source IDs). Each optional section is {values:string[],excluded:boolean}; absent or empty values shows everything in that section. Selections only hide visualization elements, preserving the clock and underlying records.","default":{}},
+   "timeline_visibility": {"param":"timeline_visibility","pages":["work"],"kind":"json","description":"Timeline Key visibility by section: modes (message label IDs, including ? for uncategorized), events (friction, learning, second-look, choices), tools (action categories or error), origins (caller text source IDs). Optional sections selects whole layers by those same section IDs. Each optional selection is {values:string[],excluded:boolean}; allHidden:true with empty values and excluded:false hides the entire selection. absent or empty values shows everything in that section. Selections only hide visualization elements, preserving the clock and underlying records.","default":{}},
    "timeline_columns": {"param":"timeline_columns","pages":["work"],"kind":"json","description":"Timeline text column widths in CSS pixels: {execution,events,time:0}. Session and Events resize; the clock always fills the remaining space. Older fixed time widths are ignored. All rows share these widths.","default":{"execution":175,"events":165,"time":0}},
    "reader_view": {"param":"reader_view","pages":["work"],"kind":"enum","description":"Single-agent conversation presentation. Conversation retains the standard transcript; Timeline shows recursive message-mode and tool-action ribbons.","values":["conversation","timeline"],"default":"conversation"},
    "thinking_filters": {"param":"analyze_filters","pages":["analyze/thinking-overview","analyze/thinking-detail"],"kind":"text","description":"Additional native Model Requests population filters. The dashboard range and model controls intersect these filters; dates are replaced when Range changes."},
@@ -136,7 +136,7 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 946
+   "controls": 943
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],
@@ -151,7 +151,7 @@
    "findings/fixes": ["section:findings","section:findings:overview","section:findings:weekly","section:findings:weeks","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
    "findings/fixes/table": ["section:findings","section:findings:overview","section:findings:weekly","section:findings:weeks","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
    "findings/fixes/settings": ["section:findings","section:findings:overview","section:findings:weekly","section:findings:weeks","section:findingsAttemptsTitle","section:findingsCart","section:findingsCartTitle","section:findingsChartTitle","section:findingsDetectorsTitle","section:findingsHandoffTitle","section:findingsPage","section:findingsRankTitle","section:findingsTabPanel","section:findingsThresholdTitle","section:findingsUpdateTitle"],
-   "work": ["section:back","section:delegation:columns","section:delegation:definitions","section:delegation:scope","section:detail","section:detailBody"],
+   "work": ["section:back","section:delegation:columns","section:delegation:definitions","section:delegation:scope","section:detail","section:detailBody","section:timeline-key"],
    "analyze/parallelism": ["section:analyze","section:parallelism-calculation","section:parallelism-calculation-title","section:parallelism-title","section:parallelism-view","section:queryTableUsage"],
    "home": ["section:home","section:homePage"],
    "library": ["section:library","section:queryTableLibrary"],

@@ -48,7 +48,7 @@ export function ChartTooltip({ children }: { children: React.ReactNode }) {
     try { const raw = JSON.parse(target.getAttribute("data-chart-colors") ?? "[]"); if (Array.isArray(raw)) colors = raw.map(value => typeof value === "string" && /^(#[a-f0-9]{3,8}|rgba?\([\d.,% ]+\))$/i.test(value) ? value : null); } catch { /* Plain text tooltips remain valid. */ }
     setTip(text ? { text, colors, x: event.clientX, y: event.clientY } : null);
   };
-  return <span className="chart-tooltip-host" ref={host} onPointerMove={move} onPointerLeave={() => setTip(null)} onPointerDown={() => setTip(null)}>
+  return <span className="chart-tooltip-host" ref={host} onPointerMove={move} onPointerLeave={() => setTip(null)} onPointerDown={() => setTip(null)} onKeyDownCapture={() => setTip(null)}>
     {children}
     {tip && createPortal(<div ref={bubble} role="tooltip" className="chart-tooltip" style={position}>{tip.text.split("\n").map((line, index) => <span className="chart-tooltip-row" key={index}>{tip.colors[index] ? <i className="chart-tooltip-swatch" style={{ backgroundColor: tip.colors[index]! }} /> : null}{index === 0 ? <strong>{line}</strong> : line}</span>)}</div>, host.current?.closest("dialog") ?? document.body)}
   </span>;
