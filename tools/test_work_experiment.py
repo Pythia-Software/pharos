@@ -67,9 +67,10 @@ class WorkExperimentTests(Fixture):
         db.executescript("""
             ALTER TABLE messages ADD COLUMN conversation_id TEXT;
             ALTER TABLE messages ADD COLUMN created_at TEXT;
-            INSERT INTO conversations VALUES('old'),('recent');
+            INSERT INTO conversations VALUES('old'),('recent'),('empty');
             UPDATE messages SET conversation_id='old',created_at='2026-11-01T00:00:00.000Z';
             INSERT INTO messages VALUES('new','retained source text','recent','2026-11-07T00:00:00.000Z');
+            INSERT INTO messages VALUES('empty-msg','no label work','empty','2026-11-07T01:00:00.000Z');
             CREATE TABLE message_labels(message_id TEXT,conversation_id TEXT);
             INSERT INTO message_labels VALUES('kept','old'),('new','recent');
             CREATE TABLE message_labels_conversations(conversation_id TEXT PRIMARY KEY);
@@ -88,9 +89,11 @@ class WorkExperimentTests(Fixture):
             self.assertEqual(result["counts"], before["counts"])
             with sqlite3.connect(output / "catalog/catalog.sqlite3") as copied:
                 self.assertEqual(copied.execute("SELECT count(*) FROM message_labels").fetchone()[0], expected)
-                self.assertEqual(copied.execute("SELECT count(*) FROM messages").fetchone()[0], 2)
+                self.assertEqual(copied.execute("SELECT count(*) FROM messages").fetchone()[0], 3)
                 self.assertEqual(copied.execute("SELECT spans_json FROM message_authorship").fetchone()[0], "writing stays intact")
-                self.assertEqual(copied.execute("SELECT count(*) FROM parallelism_dirty").fetchone()[0], 2 - expected)
+                self.assertEqual(copied.execute("SELECT count(*) FROM parallelism_dirty").fetchone()[0], (1 if profile == "recent" else 3))
+                if profile == "recent":
+                    self.assertEqual(copied.execute("SELECT conversation_id FROM parallelism_dirty").fetchall(), [("recent",)])
         self.assertEqual(work.checked_master(master), before)
         with sqlite3.connect(master / "catalog/catalog.sqlite3") as original:
             self.assertEqual(original.execute("SELECT count(*) FROM message_labels").fetchone()[0], 2)
@@ -399,7 +402,8 @@ PRODUCT = {"route": work.PRODUCT_ROUTE, "query": {"version": 3}, "latency_ms": 2
 KINDS = ["analysis.authorship", "analysis.labels", "maintenance.labels.query", "maintenance.parallelism"]
 
 
-REPLAY = {"input": "arrivals", "source": {"name": "replay-claude", "kind": "claude", "account": ""},
+REPLAY = {"input": "arrivals", "source": {"name": "replay-claude", "kind": "claude", "account": "local"},
+          "identity": {"provider": "claude", "native_ids": ["s1", "s2"], "expect": "new"},
           "count_query": "SELECT count(*) FROM messages", "ready_checks": ["SELECT 1 WHERE 0"],
           "arrivals": [{"name": "a1", "at_seconds": 60, "files": [{"path": "proj/s1.jsonl", "lines": 1}]},
                        {"name": "a2", "at_seconds": 240, "files": [{"path": "proj/s1.jsonl"},
@@ -407,7 +411,13 @@ REPLAY = {"input": "arrivals", "source": {"name": "replay-claude", "kind": "clau
 
 
 def replay_arrivals(*names):
-    return {"arrivals": [{"name": name, "count_before": index, "count_after": index + 1}
+    ids = REPLAY["identity"]["native_ids"]
+    return {"identity": {"provider": "claude", "account": "local", "expect": "new", "native_ids": len(ids),
+                         "native_ids_sha256": hashlib.sha256(json.dumps(sorted(ids), separators=(",", ":")).encode()).hexdigest(),
+                         "present_before": 0, "present_after": len(ids),
+                         "other_conversations_before": 5, "other_conversations_after": 5},
+            "arrivals": [{"name": name, "count_before": index, "count_after": index + 1,
+                          "identity_message_count_before": index, "identity_message_count_after": index + 1}
                          for index, name in enumerate(names)], "followup_rounds": 1}
 
 
@@ -574,6 +584,33 @@ class ProbeArmTests(Fixture):
             work.probe_run(failing, failing_sha, master, self.root / "e", probe_descriptor(), "candidate", "classic", baseline_sha)
         self.assertIn("boom", json.loads((self.root / "e/report.json").read_text())["failure"]["message"])
 
+    def test_replay_must_overlap_primary_history_in_each_arm(self):
+        report = {"engine_actual": {"value": "classic"},
+                  "probe": {"steps": [{"name": "analysis.labels", "started_seconds": 1, "wall_seconds": 29}],
+                            "windows": {"work": [1000, 1100]}},
+                  "replay": {"arrivals": [{"applied_seconds": 10, "ready_pending_at_apply": True},
+                                           {"applied_seconds": 20, "ready_pending_at_apply": True}]}}
+        self.assertTrue(work.replay_overlap(report)["proven"])
+        report["replay"]["arrivals"][-1]["applied_seconds"] = 31
+        self.assertFalse(work.replay_overlap(report)["proven"])
+        report["probe"]["steps"].append({"name": "followup:analysis.labels", "started_seconds": 31, "wall_seconds": 90})
+        self.assertFalse(work.replay_overlap(report)["proven"])
+        report["replay"]["arrivals"][-1]["applied_seconds"] = 0.5
+        self.assertFalse(work.replay_overlap(report)["proven"])
+        report["replay"]["arrivals"][-1]["applied_seconds"] = 31
+        report["engine_actual"] = {"value": "scheduled", "requests": [
+            {"scope": "recent", "history_active_until_seconds": 100},
+            {"scope": "backfill", "requested_at": "1970-01-01T00:16:41Z", "ended_seconds": 32, "history_active_until_seconds": 30}]}
+        # The observed end and an unrelated recent request cannot extend proof.
+        self.assertFalse(work.replay_overlap(report)["proven"])
+        report["replay"]["arrivals"][-1]["applied_seconds"] = 29
+        self.assertTrue(work.replay_overlap(report)["proven"])
+        report["replay"]["arrivals"][-1]["ready_pending_at_apply"] = False
+        self.assertFalse(work.replay_overlap(report)["proven"])
+        report["replay"]["arrivals"][-1]["ready_pending_at_apply"] = True
+        del report["engine_actual"]["requests"][-1]["history_active_until_seconds"]
+        self.assertFalse(work.replay_overlap(report)["proven"])
+
     def test_replay_input_is_cloned_and_every_arrival_must_be_real(self):
         master = self.master()
         inputs = self.root / "frozen-arrivals/proj"
@@ -587,8 +624,28 @@ class ProbeArmTests(Fixture):
                                                             memory={"retention": retention}))
         report = work.probe_run(probe, sha, master, self.root / "r", descriptor, "baseline", "classic", sha)
         self.assertTrue((self.root / "r/inputs/arrivals/proj/s2.jsonl").is_file())
+        git = subprocess.run([str(self.root / "r/bin/git"), "config", "--get", "remote.origin.url"], capture_output=True)
+        self.assertNotEqual(git.returncode, 0)
+        self.assertEqual(git.stdout, b"")
+        self.assertIn("disabled", report["unfrozen_git_lookup"])
         self.assertEqual(report["memory_retention"], retention)
         self.assertEqual(report["replay"]["followup_rounds"], 1)
+        for field in ("identity", "account", "present_before", "native_ids_sha256"):
+            bad = replay_arrivals("a1", "a2")
+            if field == "identity":
+                del bad[field]
+            else:
+                del bad["identity"][field]
+            with self.assertRaisesRegex(RuntimeError, "declared replay identity"):
+                work.replay_identity_evidence(REPLAY, bad)
+        bad = replay_arrivals("a1", "a2")
+        bad["identity"]["other_conversations_after"] = 6
+        with self.assertRaisesRegex(RuntimeError, "undeclared conversations"):
+            work.replay_identity_evidence(REPLAY, bad)
+        bad = replay_arrivals("a1", "a2")
+        bad["arrivals"][0]["identity_message_count_after"] = 0
+        with self.assertRaisesRegex(RuntimeError, "grow the declared conversations"):
+            work.replay_identity_evidence(REPLAY, bad)
         # A missing arrival, or one that added nothing, is not a replayed arrival.
         for replay in (replay_arrivals("a1"), {"arrivals": [{"name": "a1", "count_before": 1, "count_after": 2},
                                                             {"name": "a2", "count_before": 2, "count_after": 2}]}):

@@ -415,8 +415,9 @@ def invalidate(master, destination, profile, clock, recent_conversations=20):
                 since = until - datetime.timedelta(hours=48)
                 stamp_time = lambda t: t.astimezone(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
                 db.execute("""INSERT INTO selected_conversations
-                    SELECT conversation_id FROM messages WHERE created_at>=? AND created_at<?
-                    GROUP BY conversation_id ORDER BY max(created_at) DESC,conversation_id LIMIT ?""",
+                    SELECT m.conversation_id FROM messages m WHERE m.created_at>=? AND m.created_at<?
+                      AND EXISTS (SELECT 1 FROM message_labels l WHERE l.conversation_id=m.conversation_id)
+                    GROUP BY m.conversation_id ORDER BY max(m.created_at) DESC,m.conversation_id LIMIT ?""",
                            (stamp_time(since), stamp_time(until), recent_conversations))
             ids = [row[0] for row in db.execute("SELECT id FROM selected_conversations ORDER BY id")]
             if not ids:
@@ -1295,19 +1296,27 @@ def validate_probe_descriptor(descriptor):
 
 def validate_replay(replay):
     """The probe's replay shape: arrivals staged from one frozen input, in order."""
-    if not isinstance(replay, dict) or not set(replay) <= {"input", "source", "count_query", "ready_checks",
+    if not isinstance(replay, dict) or not set(replay) <= {"input", "source", "identity", "count_query", "ready_checks",
                                                            "settle_timeout_seconds", "arrivals"}:
         raise ValueError("replay has input, source, count_query, arrivals and optional ready_checks/settle_timeout_seconds")
     if not NAME.match(input_name({"input": replay.get("input")})):
         raise ValueError("replay.input names a frozen input")
     source = replay.get("source")
-    if not isinstance(source, dict) or not {"name", "kind"} <= set(source) <= {"name", "kind", "account"} \
-            or not all(isinstance(v, str) for v in source.values()) or not NAME.match(source["name"]) or not source["kind"]:
-        raise ValueError("replay.source names a fresh source: name, kind and optional account")
+    if not isinstance(source, dict) or set(source) != {"name", "kind", "account"} \
+            or not all(isinstance(v, str) and v for v in source.values()) or not NAME.match(source["name"]):
+        raise ValueError("replay.source names a fresh source with explicit name, kind and account")
+    identity = replay.get("identity")
+    if not isinstance(identity, dict) or set(identity) != {"provider", "native_ids", "expect"} \
+            or not isinstance(identity["provider"], str) or not identity["provider"] \
+            or identity["expect"] not in ("new", "extend") \
+            or not isinstance(identity["native_ids"], list) or not identity["native_ids"] \
+            or not all(isinstance(v, str) and v for v in identity["native_ids"]) \
+            or len(identity["native_ids"]) != len(set(identity["native_ids"])):
+        raise ValueError("replay.identity pins provider, distinct native_ids and new or extend")
     if not isinstance(replay.get("count_query"), str) or not read_only_statement(replay["count_query"]):
         raise ValueError("replay.count_query is one read-only SELECT pinned to the replayed messages")
     ready = replay.get("ready_checks", [])
-    if not isinstance(ready, list) or not all(isinstance(q, str) and read_only_statement(q) for q in ready):
+    if not isinstance(ready, list) or not ready or not all(isinstance(q, str) and read_only_statement(q) for q in ready):
         raise ValueError("replay.ready_checks are read-only statements")
     timeout = replay.get("settle_timeout_seconds", 1800)
     if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
@@ -1359,6 +1368,31 @@ def scheduled_evidence(engine, descriptor):
     return problems
 
 
+def replay_identity_evidence(plan, replay):
+    """Require the probe's identity proof, including when an older probe ignores it."""
+    identity = plan["identity"]
+    ids = sorted(identity["native_ids"])
+    # Match Go encoding/json for a UTF-8 string slice, including HTML escaping.
+    encoded = json.dumps(ids, ensure_ascii=False, separators=(",", ":"))
+    for char, escaped in (("&", "\\u0026"), ("<", "\\u003c"), (">", "\\u003e"),
+                          ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
+        encoded = encoded.replace(char, escaped)
+    expected = {"provider": identity["provider"], "account": plan["source"]["account"],
+                "expect": identity["expect"], "native_ids": len(ids),
+                "native_ids_sha256": hashlib.sha256(encoded.encode()).hexdigest(),
+                "present_before": 0 if identity["expect"] == "new" else len(ids), "present_after": len(ids)}
+    actual = replay.get("identity") or {}
+    if any(actual.get(key) != value for key, value in expected.items()):
+        raise RuntimeError("the probe did not prove the declared replay identity")
+    before, after = actual.get("other_conversations_before"), actual.get("other_conversations_after")
+    if not isinstance(before, int) or before != after:
+        raise RuntimeError("the replay changed undeclared conversations or did not report their census")
+    for arrival in replay.get("arrivals") or []:
+        before, after = arrival.get("identity_message_count_before"), arrival.get("identity_message_count_after")
+        if not isinstance(before, int) or not isinstance(after, int) or after <= before:
+            raise RuntimeError("the replay did not grow the declared conversations in every arrival")
+
+
 def probe_run(probe, probe_sha256, master, destination, descriptor, role, engine, baseline_probe_sha256):
     """One probe arm: the compiled probe test binary on a fresh clone.
 
@@ -1392,12 +1426,24 @@ def probe_run(probe, probe_sha256, master, destination, descriptor, role, engine
            "PHAROS_WORK_ENGINE": engine}
     if descriptor.get("cpu_slots"):
         env["PHAROS_BACKGROUND_CPUS"] = str(descriptor["cpu_slots"])
+    if descriptor.get("replay"):
+        # Provider records retain their original cwd. The parser may ask Git
+        # about it even though the finishing Git analysis is deferred. Those
+        # checkouts are not frozen inputs, so suppress that optional enrichment
+        # symmetrically rather than consulting the user's changing worktrees.
+        tools = destination / "bin"
+        tools.mkdir(mode=0o700)
+        write_private(tools / "git", b"#!/bin/sh\nexit 1\n")
+        (tools / "git").chmod(0o700)
+        env["PATH"] = str(tools) + ":/usr/bin:/bin"
     timeout = descriptor.get("timeout_seconds", 14400)
     report = {"version": VERSION, "kind": "probe", "role": role, "engine_requested": engine,
               "engine_actual": {"value": None, "basis": "unavailable"}, "name": descriptor["name"],
               "probe_sha256": actual, "baseline_probe_sha256": baseline_probe_sha256,
               "descriptor_sha256": digest_of(descriptor), "corpus": load_marker(master, "master"),
               "cpu_basis": CPU_BASIS, "settled": False, "failure": None}
+    if descriptor.get("replay"):
+        report["unfrozen_git_lookup"] = "disabled; replay measures no Git enrichment"
     try:
         probe_report = destination / "probe-report.json"
         spans = lambda: _probe_spans(json.loads(probe_report.read_text())) if probe_report.is_file() else {}
@@ -1424,6 +1470,7 @@ def probe_run(probe, probe_sha256, master, destination, descriptor, role, engine
             raise RuntimeError("a classic request did not execute the classic path")
         if "replay" in descriptor:
             replay = inner.get("replay") or {}
+            replay_identity_evidence(descriptor["replay"], replay)
             applied = [a.get("name") for a in replay.get("arrivals") or [] if isinstance(a, dict)
                        and isinstance(a.get("count_before"), int) and isinstance(a.get("count_after"), int)
                        and a["count_after"] > a["count_before"]]
@@ -1544,6 +1591,44 @@ def _probe_spans(inner):
     return spans
 
 
+def replay_overlap(report):
+    """Prove each arrival became pending while primary history was unfinished.
+
+    A scheduled poll's last known-live time is a lower bound, unlike its
+    observed end, which could be a full poll late. Missing bounds prove nothing.
+    """
+    arrivals = (report.get("replay") or {}).get("arrivals") or []
+    inner, engine = report.get("probe") or {}, report.get("engine_actual") or {}
+    spans = []
+    if engine.get("value") == "classic":
+        primary = [step for step in inner.get("steps") or []
+                   if not str(step.get("name", "")).startswith("followup:")]
+        for step in primary:
+            start, wall = step.get("started_seconds"), step.get("wall_seconds")
+            if isinstance(start, (int, float)) and isinstance(wall, (int, float)) and start >= 0 and wall >= 0:
+                spans.append((start, start + wall))
+        # Between primary stages the original history demand is still unfinished.
+        if spans:
+            spans = [(min(s[0] for s in spans), max(s[1] for s in spans))]
+    elif engine.get("value") == "scheduled":
+        work = (inner.get("windows") or {}).get("work") or []
+        for request in engine.get("requests") or []:
+            until = request.get("history_active_until_seconds")
+            try:
+                start = rfc3339(request.get("requested_at")).timestamp() - work[0]
+            except (ValueError, TypeError, IndexError):
+                continue
+            if request.get("scope") == "backfill" and isinstance(until, (int, float)) and until >= start:
+                spans.append((max(0, start), until))
+    applied = [a.get("applied_seconds") for a in arrivals]
+    pending = [a.get("ready_pending_at_apply") for a in arrivals]
+    proven = bool(applied) and all(v is True for v in pending) and all(
+        isinstance(at, (int, float)) and any(start <= at <= until for start, until in spans) for at in applied)
+    return {"proven": proven, "primary_history_intervals_seconds": spans,
+            "arrival_applied_seconds": applied, "arrival_pending_at_apply": pending,
+            "basis": "primary classic steps, or scheduled requests last observed live; follow-ups excluded"}
+
+
 def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
     """Paired probe verdict. Never returns acceptance: one workload is one gate."""
     for report in (baseline, candidate):
@@ -1604,6 +1689,10 @@ def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
     regression = any(entry["regression"] for entry in [*metrics.values(), *startup.values()])
     noise = noise_problems("baseline", baseline) + noise_problems("candidate", candidate)
     blockers += noise + (["rerun quiet or in reverse order"] if noise else [])
+    overlap = {name: replay_overlap(report) for name, report in (("baseline", baseline), ("candidate", candidate))}
+    if baseline.get("replay") or candidate.get("replay"):
+        blockers += [f"{name}: replay did not prove arrival while history remained active"
+                     for name, evidence in overlap.items() if not evidence["proven"]]
     result = {"mode": mode, "semantic_parity": parity, "metrics": metrics, "startup": startup,
               "missing_metrics": missing, "blockers": blockers,
               "whole_process": {name: {"baseline": _metric(baseline, path), "candidate": _metric(candidate, path)}
@@ -1612,7 +1701,8 @@ def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
               "memory_retention": {role: report.get("memory_retention") for role, report in
                                    (("baseline", baseline), ("candidate", candidate))},
               "replay_followup_rounds": {role: (report.get("replay") or {}).get("followup_rounds") for role, report in
-                                         (("baseline", baseline), ("candidate", candidate))}}
+                                         (("baseline", baseline), ("candidate", candidate))},
+              "replay_overlap": overlap}
     if mode == "aa":
         # A/A measures the noise every later pair is judged against, so it is
         # refused on the same host-noise rule before any verdict.
@@ -1623,7 +1713,7 @@ def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
     return {**result, "rejected": rejected,
             "release_gate": "rejected" if rejected else "refused" if blockers else "incomplete",
             "remaining_evidence": ["the full-corpus settlement workload (all labels, coarse history)",
-                                   *([] if baseline.get("replay") else
+                                   *([] if all(v["proven"] for v in overlap.values()) else
                                      ["actual recent arrival during coarse history (source replay)"]),
                                    "reverse-order pair", "old-binary recovery after candidate publication",
                                    *(f"missing metric: {name}" for name in missing)]}

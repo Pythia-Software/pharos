@@ -93,6 +93,12 @@ func TestWorkProductionSnapshot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Committed pages may still live in the WAL and enlarge the snapshot.
+	if info, err := os.Stat(plan.catalog.Source + "-wal"); err == nil {
+		required += info.Size()
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 	// Snapshot and live WAL share a drive. Leave room for normal writes as
 	// well as the WAL growth the product snapshot explicitly permits.
 	if err := ensureFree(filepath.Dir(destination), required+(20<<30)+2*backupWALGrowth); err != nil {
