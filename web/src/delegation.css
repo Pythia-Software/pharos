@@ -578,8 +578,9 @@
   margin-top: 3px;
 }
 .delegation-transcript-link {
-  display: block;
-  margin-top: 4px;
+  display: inline-block;
+  margin: 0;
+  padding: 1px 5px;
   font-size: var(--fs-xs);
 }
 .delegation-parallel {
