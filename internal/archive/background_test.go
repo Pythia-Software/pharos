@@ -254,6 +254,13 @@ func TestBackgroundPlanRunsEachCadenceWhenDue(t *testing.T) {
 	if got := plan(settings(), failed, "writing"); got.Due || !got.Failed || !got.Next.Equal(at.Add(backgroundRetry-5*time.Minute)) {
 		t.Fatalf("a failed item waits %s before it runs again: %+v", backgroundRetry, got)
 	}
+	// A run a Stop withdrew finished with neither an error nor a success:
+	// not Failed, still pending, and it waits like a failure rather than
+	// asking a stopped kind again on every check.
+	failed.runs["writing"] = backgroundRunRow{finished: ago(5 * time.Minute), succeeded: ago(3 * time.Hour)}
+	if got := plan(settings(), failed, "writing"); got.Due || got.Failed || !got.Pending || !got.Next.Equal(at.Add(backgroundRetry-5*time.Minute)) {
+		t.Fatalf("a withdrawn item is pending, not failed, and waits %s: %+v", backgroundRetry, got)
+	}
 
 	manual := settings()
 	manual.Overrides["writing"] = cadenceManual

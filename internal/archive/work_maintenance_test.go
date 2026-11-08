@@ -290,6 +290,57 @@ func TestMaintainWorkKeepsProjectionsAndReadsRunningWhilePaused(t *testing.T) {
 	}
 }
 
+// A conversation whose projection keeps failing keeps its dirty row. The
+// coordinator's pending check leaves it to the failure's backoff instead of
+// submitting demand that selects nothing on every tick (which also kept
+// caches from warming). It rechecks it once per longest retry delay, so an
+// edited conversation is reread, and other dirty work is pending at once.
+func TestMaintenanceSkipsDirtyConversationsHeldByFailures(t *testing.T) {
+	c, config := testCatalog(t)
+	config.WorkEngine = "scheduled"
+	s := testServer(t, config, c)
+	w := s.work
+	w.once.Do(func() {})
+	routing := w.routing()
+	execTx(t, c.DB, `INSERT INTO session_shape_dirty(conversation_id,revision) VALUES('cv-bad','r1')`)
+	fail := func(f workFailure) {
+		w.runner.mu.Lock()
+		defer w.runner.mu.Unlock()
+		f.Kind, f.Unit = kindSessionShape, workMember{ID: "cv-bad", Revision: "c1"}
+		w.runner.byKind[kindSessionShape].failures["cv-bad\x00c1"] = &f
+	}
+	pending := func() bool { return w.dirtyPending(t.Context(), c, routing, kindSessionShape, "session_shape_dirty") }
+	if !pending() {
+		t.Fatal("a dirty conversation with no failure was not pending")
+	}
+	fail(workFailure{Attempts: 1, NextAt: time.Now().Add(time.Hour)})
+	if !pending() || pending() {
+		t.Fatal("a conversation in backoff was not rechecked exactly once")
+	}
+	fail(workFailure{Attempts: 3, Exhausted: true})
+	if pending() {
+		t.Fatal("an exhausted conversation resubmitted demand before the longest retry delay")
+	}
+	routing.mu.Lock()
+	routing.rechecked[kindSessionShape] = routing.rechecked[kindSessionShape].Add(-workRetryDelays[len(workRetryDelays)-1])
+	routing.mu.Unlock()
+	if !pending() {
+		t.Fatal("an exhausted conversation was not rechecked after the longest retry delay")
+	}
+	execTx(t, c.DB, `INSERT INTO session_shape_dirty(conversation_id,revision) VALUES('cv-new','r1')`)
+	if !pending() {
+		t.Fatal("new dirty work waited behind a held conversation")
+	}
+	execTx(t, c.DB, `DELETE FROM session_shape_dirty`)
+	w.runner.mu.Lock()
+	w.runner.byKind[kindSessionShape].full = true
+	w.runner.mu.Unlock()
+	execTx(t, c.DB, `INSERT INTO session_shape_dirty(conversation_id,revision) VALUES('cv-new','r2')`)
+	if pending() {
+		t.Fatal("a kind whose failure table is full, held until Retry, was pending")
+	}
+}
+
 // scheduledTestServer is a scheduled-mode server whose task table is defs,
 // so the work service's own submit/await paths run against fake adapters.
 func scheduledTestServer(t *testing.T, defs ...workDefinition) *Server {
@@ -416,6 +467,18 @@ func TestAwaitedRequestsWithdrawWhenHeld(t *testing.T) {
 	})
 	if !errors.Is(err, errWorkHeld) {
 		t.Fatalf("a paused pass returned %v", err)
+	}
+	// A standalone item (fingerprints, writing refinement) records the
+	// withdrawal as neither a failure nor a success; one that also failed
+	// still records its failure.
+	c.recordBackgroundRun(t.Context(), "writing-refine", time.Now(), true, nil)
+	succeeded := c.backgroundRuns(t.Context())["writing-refine"].succeeded
+	c.recordBackgroundRun(t.Context(), "writing-refine", time.Now(), true, err)
+	if run := c.backgroundRuns(t.Context())["writing-refine"]; run.err != "" || run.succeeded != succeeded || run.finished == "" {
+		t.Fatalf("a withdrawn item recorded %+v", run)
+	}
+	if backgroundWithdrawn(errors.Join(err, errors.New("boom"))) {
+		t.Fatal("a held kind hid another kind's failure")
 	}
 	ended()
 	if err := within("Run now while paused", func() error {

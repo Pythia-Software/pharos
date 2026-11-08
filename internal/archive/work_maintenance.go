@@ -276,6 +276,9 @@ type maintenanceRouting struct {
 	backfills map[string]*stageBackfill
 	tasks     map[string]*maintenanceTask
 	warmedAt  time.Time
+	// rechecked is when each dirty-table kind last had demand submitted
+	// only for units its failures hold (dirtyPending).
+	rechecked map[string]time.Time
 }
 
 type stageBackfill struct {
@@ -745,9 +748,9 @@ func (s *Server) submitPendingMaintenance(ctx context.Context, routing *maintena
 		pending := false
 		switch {
 		case kind == kindParallelism:
-			pending, _ = catalogExists(ctx, c, "SELECT 1 FROM parallelism_dirty")
+			pending = w.dirtyPending(ctx, c, routing, kind, "parallelism_dirty")
 		case kind == kindSessionShape:
-			pending, _ = catalogExists(ctx, c, "SELECT 1 FROM session_shape_dirty")
+			pending = w.dirtyPending(ctx, c, routing, kind, "session_shape_dirty")
 		case routing != nil && routing.tasks[kind] != nil:
 			selection, err := routing.tasks[kind].Next(ctx, nil)
 			pending = err == nil && (selection.ready() || selection.Blocker.Reason == workBlockedWriter)
@@ -764,6 +767,59 @@ func (s *Server) submitPendingMaintenance(ctx context.Context, routing *maintena
 		return
 	}
 	s.warmCachesNow(ctx, routing)
+}
+
+// dirtyPending is the pending check for a conversation projection with a
+// dirty table. A conversation the kind's failures hold (retry backoff or
+// exhausted) keeps its dirty row, so the table alone would submit demand
+// that selects nothing on every tick and keep caches from warming. The held
+// set is read from the runner's failure memory under its lock; the task's
+// own Next belongs to the runner. Held rows are rechecked once per longest
+// retry delay, the age at which the task rereads a held conversation's
+// revision, so an edited conversation is not left behind.
+func (w *workService) dirtyPending(ctx context.Context, c *Catalog, routing *maintenanceRouting, kind, table string) bool {
+	held, full := w.heldUnits(kind)
+	if full {
+		return false // the kind is held until Retry
+	}
+	ready, err := catalogExists(ctx, c, "SELECT 1 FROM "+table+" WHERE conversation_id NOT IN (SELECT value FROM json_each(?))", jsonText(held))
+	if err != nil || ready || len(held) == 0 || routing == nil {
+		return ready
+	}
+	if dirty, _ := catalogExists(ctx, c, "SELECT 1 FROM "+table); !dirty {
+		return false
+	}
+	now := w.runner.clock.Now()
+	routing.mu.Lock()
+	defer routing.mu.Unlock()
+	if now.Sub(routing.rechecked[kind]) < workRetryDelays[len(workRetryDelays)-1] {
+		return false
+	}
+	if routing.rechecked == nil {
+		routing.rechecked = map[string]time.Time{}
+	}
+	routing.rechecked[kind] = now
+	return true
+}
+
+// heldUnits is the units of kind its failures hold now, and whether its
+// failure table is full. It is bounded by workFailureLimit.
+func (w *workService) heldUnits(kind string) ([]string, bool) {
+	r := w.runner
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ks := r.byKind[kind]
+	if ks == nil {
+		return nil, false
+	}
+	now := r.clock.Now()
+	held := []string{}
+	for _, f := range ks.failures {
+		if !f.phase && (f.Exhausted || now.Before(f.NextAt)) {
+			held = append(held, f.Unit.ID)
+		}
+	}
+	return held, ks.full
 }
 
 // warmCachesNow reads the page caches warm at most every maintenanceWarmGap,

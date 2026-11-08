@@ -464,7 +464,9 @@ func (c *Catalog) backgroundRuns(ctx context.Context) map[string]backgroundRunRo
 }
 
 // recordBackgroundRun stores an item's outcome: started when it begins,
-// then finished with its error (nil for success).
+// then finished with its error (nil for success). A withdrawn run
+// (backgroundWithdrawn) finishes with neither: it did not fail, and its
+// work is still pending.
 func (c *Catalog) recordBackgroundRun(ctx context.Context, item string, started time.Time, finished bool, failure error) {
 	_ = c.writeTransaction(ctx, "background run", func(tx *sql.Tx) error {
 		if !finished {
@@ -472,13 +474,24 @@ func (c *Catalog) recordBackgroundRun(ctx context.Context, item string, started 
 				ON CONFLICT(host_id,item) DO UPDATE SET started_at=excluded.started_at`, currentHost().ID, item, formatTime(started))
 			return err
 		}
-		stamp := now()
+		stamp, problem := now(), errorString(failure)
+		if backgroundWithdrawn(failure) {
+			problem = ""
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO background_runs(host_id,item,started_at,finished_at,succeeded_at,error,seconds) VALUES(?,?,?,?,?,?,?)
 			ON CONFLICT(host_id,item) DO UPDATE SET finished_at=excluded.finished_at,succeeded_at=COALESCE(excluded.succeeded_at,background_runs.succeeded_at),
 			error=excluded.error,seconds=excluded.seconds`, currentHost().ID, item, formatTime(started), stamp, conditionalString(failure == nil, stamp),
-			nilIfEmpty(errorString(failure)), time.Since(started).Seconds())
+			nilIfEmpty(problem), time.Since(started).Seconds())
 		return err
 	})
+}
+
+// backgroundWithdrawn reports an item whose only outcome is work a Stop
+// held and its await withdrew (errWorkHeld): a deliberate Stop, not a
+// failure. Chain stages already return nil for this, as the classic
+// errStageContinues did.
+func backgroundWithdrawn(err error) bool {
+	return errors.Is(err, errWorkHeld) && len(withoutHeld(err)) == 0
 }
 
 // dailyInstant is the latest daily time at or before at, in local time.
@@ -724,8 +737,12 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			plan.Pending = true
 			standaloneNext(&plan, settings, quiet, at)
 		}
-		if value, ok := parseTime(run.finished); ok && run.err != "" && !value.Before(plan.LastDone) {
-			plan.Failed, plan.Error = true, run.err
+		if value, ok := parseTime(run.finished); ok && !value.Before(plan.LastDone) && (run.err != "" || run.finished != run.succeeded) {
+			// A failure, or a withdrawn run (finished with neither an error
+			// nor a success): both wait backgroundRetry, so a kind left
+			// stopped is not asked again on every check; only a failure
+			// says Failed.
+			plan.Failed, plan.Error = run.err != "", run.err
 			if retry := value.Add(backgroundRetry); retry.After(plan.Next) {
 				plan.Next = retry
 			}
@@ -1151,7 +1168,7 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 				err = ctx.Err()
 			}
 			record(id, started, err)
-			if err != nil && failure == nil {
+			if err != nil && failure == nil && !backgroundWithdrawn(err) {
 				failure = fmt.Errorf("%s: %w", item.Label, err)
 			}
 		}
