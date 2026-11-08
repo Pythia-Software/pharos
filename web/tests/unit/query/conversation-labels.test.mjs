@@ -63,7 +63,7 @@ test('a pre-refresh fingerprint failure leaves the replacement request cached',a
  assert.equal(cache.read('same'),current);assert.equal(requests,2);
 });
 
-import {timelinePreviewText} from '../../../src/timeline-preview.ts';
+import {timelinePreviewText,trimTimelineSnippet} from '../../../src/timeline-preview.ts';
 
 import {nativeTimelineLabels} from '../../../src/label-timeline-overlay.tsx';
 
@@ -380,6 +380,8 @@ test('Caller span inspection uses the actual run excerpt even after the message 
  assert.deepEqual(authorshipSegments(full).map(part=>authorshipExcerpt(full,part)),[{text:'é😎',truncated:false},{text:'done',truncated:false}]);
  const missing={...full,text:'é',truncated:true};
  assert.equal(authorshipExcerpt(missing,authorshipSegments(missing)[1]),null);
+ const paddedText='\n'.repeat(300)+'Review this\n  Keep indentation\n\n',padded=message('padded','P.request',{text:paddedText,authorship:[{category:'template',bytes:Buffer.byteLength(paddedText)}]});
+ assert.deepEqual(authorshipExcerpt(padded,authorshipSegments(padded)[0]),{text:'Review this\n  Keep indentation',truncated:false});
 });
 
 test('timeline column widths are bounded, portable and preserve automatic chart width',()=>{
@@ -425,6 +427,7 @@ test('timeline legends follow drawn intervals, errors and the visible portion of
 });
 
 test('timeline previews unwrap content and nested arguments without losing domain JSON or literal caller text',()=>{
+ assert.equal(trimTimelineSnippet('\n  Review this\n  Keep indentation\n\n'),'Review this\n  Keep indentation');
  for(const [body,expected,options] of [
   [JSON.stringify({content:[{text:'Async agent launched successfully.\nWorking in the background.'}],details:{agentId:'opaque'},tool:'Task'}),'Async agent launched successfully.\nWorking in the background.'],
   [JSON.stringify({message:{content:[{type:'output_text',text:'First'},{type:'text',text:'Second'}]},usage:{tokens:9}}),'First\n\nSecond'],

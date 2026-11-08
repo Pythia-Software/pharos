@@ -5,7 +5,7 @@ import {ViewDisclosure} from './view-disclosure';
 import {useViewEntry} from './view-state';
 import {useRibbonInspector,useRibbonPointer,type RibbonHit} from './label-ribbon-inspector';
 import {PageLink} from './nested-pages';
-import {timelinePreviewText} from './timeline-preview';
+import {timelinePreviewText,trimTimelineSnippet} from './timeline-preview';
 import {agentEventClock,ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointerHits,ribbonToolPlacement,ribbonOriginParts,sessionRibbonTree,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
 import {shortLabel,specificLabels,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
 import type {TimeRange,TimelineSessionBranch} from './timeline-label-model';
@@ -31,7 +31,7 @@ function SourceContent({item,sourceHref,close,children}:{item:RibbonObservation;
  return href?<PageLink href={href} className="lt-observation-source" onClick={event=>{event.stopPropagation();close?.();}}>{children}<span>Show in conversation →</span></PageLink>:<>{children}</>;
 }
 function MessagePreview({message}:{message:LabelMessage}){
- const body=timelinePreviewText(message.preview??message.text,{input:message.kind==='delegation',unwrap:message.role!=='user'||message.kind!=='message'}),characters=Array.from(body);
+ const body=trimTimelineSnippet(timelinePreviewText(message.preview??message.text,{input:message.kind==='delegation',unwrap:message.role!=='user'||message.kind!=='message'})),characters=Array.from(body);
  const clipped=characters.length>640||message.preview_truncated===true||message.preview===undefined&&message.truncated&&Array.from(message.text).length>=320;
  const label=message.chunks?specificLabels(message)[0]?.[0]:undefined;
  return <blockquote className="lt-message-quote" style={label?{'--message-label-color':stateColor(label)} as React.CSSProperties:undefined}>{characters.slice(0,640).join('')}{clipped&&!body.endsWith('…')?'…':''}</blockquote>;
@@ -58,7 +58,7 @@ function ObservationCard({items,sourceHref,eventHref,close}:{items:RibbonObserva
    {[...labels].slice(0,8).map(([id,ids])=><React.Fragment key={id}><dt><i style={{background:stateColor(id)}}/>{id==='?'?'Uncategorized':shortLabel(id)}</dt><dd>{ids.size}</dd></React.Fragment>)}
    {[...origins].map(([category,ids])=><React.Fragment key={category}><dt>{callerSource(category).name}</dt><dd>{ids.size}</dd></React.Fragment>)}
   </dl>}
-  {composition.length?composition.slice(0,4).map(part=><SourceContent key={part.id} item={part} sourceHref={sourceHref} close={close}>{part.excerpt?<blockquote className="lt-message-quote" style={part.label&&part.label!=='?'?{'--message-label-color':stateColor(part.label)} as React.CSSProperties:undefined}>{composition.length>1?<strong>{callerSource(part.authorship!).name}</strong>:null}{part.excerpt.text}{part.excerpt.truncated?'…':''}</blockquote>:<small>This part is outside the retained preview.</small>}</SourceContent>):(sourceHref?messages.slice(0,4):messages.length===1?messages:[]).map(message=><SourceContent key={message.id} item={items.find(item=>item.message?.id===message.id)!} sourceHref={sourceHref} close={close}><MessagePreview message={message}/></SourceContent>)}
+  {composition.length?composition.slice(0,4).map(part=><SourceContent key={part.id} item={part} sourceHref={sourceHref} close={close}>{part.excerpt?<blockquote className="lt-message-quote" style={part.label&&part.label!=='?'?{'--message-label-color':stateColor(part.label)} as React.CSSProperties:undefined}>{composition.length>1?<strong>{callerSource(part.authorship!).name}</strong>:null}{trimTimelineSnippet(part.excerpt.text)}{part.excerpt.truncated?'…':''}</blockquote>:<small>This part is outside the retained preview.</small>}</SourceContent>):(sourceHref?messages.slice(0,4):messages.length===1?messages:[]).map(message=><SourceContent key={message.id} item={items.find(item=>item.message?.id===message.id)!} sourceHref={sourceHref} close={close}><MessagePreview message={message}/></SourceContent>)}
   {tools.slice(0,4).map(item=>{
    const mark=item.mark!,elapsed=mark.end_known?mark.end-mark.start:null;
    return <SourceContent key={item.id} item={item} sourceHref={sourceHref} close={close}><div className="lt-tool-preview">
