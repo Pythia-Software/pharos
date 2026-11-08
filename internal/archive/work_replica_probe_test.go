@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -377,10 +378,15 @@ func TestWorkReplica(t *testing.T) {
 			}
 		}
 	})
+	// The work's context: a failed arrival cancels it at once with its own
+	// error as the cause, so the history work stops instead of finishing
+	// first, and the report names the arrival's error.
+	ctx, cancelWork := context.WithCancelCause(t.Context())
+	defer cancelWork(nil)
 	var arrivals *replicaArrivals
 	arrivalsDone := make(chan error, 1)
 	if replay != nil {
-		arrivals = newReplicaArrivals(replay, started)
+		arrivals = newReplicaArrivals(replay, started, cancelWork)
 		background.Go(func() {
 			arrivalsDone <- arrivals.run(pollCtx, func(index int) (string, error) {
 				memory.sample("arrival:" + replay.Arrivals[index].Name)
@@ -392,6 +398,8 @@ func TestWorkReplica(t *testing.T) {
 			}, func(ctx context.Context) (bool, error) {
 				ready, err := checksEmpty(ctx, checks, replay.ReadyChecks)
 				return !ready, err
+			}, func(ctx context.Context) (int, error) {
+				return replay.identityPresent(ctx, checks)
 			})
 		})
 		background.Go(func() {
@@ -455,12 +463,18 @@ func TestWorkReplica(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	// A failed stage still leaves its private report, unsettled.
+	// A failed stage still leaves its private report, unsettled. When a
+	// failed arrival stopped the work, its error is the failure and what it
+	// interrupted is kept beside it.
 	fail := func(format string, args ...any) {
 		stop()
-		report["failure"] = fmt.Sprintf(format, args...)
+		failure, interrupted := replicaFailure(ctx, fmt.Sprintf(format, args...))
+		report["failure"] = failure
+		if interrupted != "" {
+			report["interrupted"] = interrupted
+		}
 		save()
-		t.Fatalf(format, args...)
+		t.Fatal(failure)
 	}
 	settle := func(ctx context.Context, unit string) {
 		// Independent of what the method returned: its required work is done.
@@ -482,7 +496,6 @@ func TestWorkReplica(t *testing.T) {
 	}
 	steps := []map[string]any{}
 	report["steps"] = &steps
-	ctx := t.Context()
 	// submit posts one phase's demand to the work API and returns its id.
 	submit := func(phase replicaPhase) uint64 {
 		body := map[string]any{"action": phase.Action, "kinds": phase.Kinds}
@@ -504,9 +517,13 @@ func TestWorkReplica(t *testing.T) {
 		}
 		return uint64(parsed)
 	}
-	// await polls the work API until every request in ids has ended.
+	// await polls the work API until every request in ids has ended. Each
+	// request's history_active_until_seconds is the last poll that saw it
+	// not yet ended (null if none did): a lower bound on when its work
+	// ended, unlike ended_seconds, which is the first poll that saw it end.
 	await := func(ids []uint64, phase func(int) string) map[uint64]map[string]any {
 		ended := map[uint64]map[string]any{}
+		live := map[uint64]float64{}
 		for len(ended) < len(ids) {
 			status, value, err := probeJSON(server, config.APIToken, http.MethodGet, "/api/work", nil)
 			if err != nil || status != http.StatusOK {
@@ -520,8 +537,17 @@ func TestWorkReplica(t *testing.T) {
 					number, _ := facts["id"].(json.Number)
 					id, _ := number.Int64()
 					terminal := facts["state"] == "succeeded" || facts["state"] == "failed" || facts["state"] == "cancelled" || facts["state"] == "interrupted"
-					if i := slices.Index(ids, uint64(id)); i >= 0 && terminal && ended[uint64(id)] == nil {
+					i := slices.Index(ids, uint64(id))
+					switch {
+					case i < 0 || ended[uint64(id)] != nil:
+					case !terminal:
+						live[uint64(id)] = time.Since(started).Seconds()
+					default:
 						facts["ended_seconds"] = time.Since(started).Seconds()
+						facts["history_active_until_seconds"] = nil
+						if seen, ok := live[uint64(id)]; ok {
+							facts["history_active_until_seconds"] = seen
+						}
 						facts["phase"] = phase(i)
 						ended[uint64(id)] = facts
 					}
@@ -1129,7 +1155,8 @@ const replicaFollowupRounds = 3
 // arm-private source folder, then runs the service's background Capture &
 // index item for that one source. Conversation identity is provider,
 // account and native ID, so a session already in the snapshot gains only
-// the lines it did not have.
+// the lines it did not have; Identity says which sessions the arrivals
+// carry and whether they extend the snapshot or are new to it.
 type replicaReplay struct {
 	Input  string `json:"input"`
 	Source struct {
@@ -1143,7 +1170,17 @@ type replicaReplay struct {
 	// ReadyChecks must all be empty once every applied arrival is settled.
 	ReadyChecks   []string         `json:"ready_checks"`
 	SettleSeconds float64          `json:"settle_timeout_seconds"`
+	Identity      *replicaIdentity `json:"identity"`
 	Arrivals      []replicaArrival `json:"arrivals"`
+}
+
+// replicaIdentity is the conversations the arrivals carry, by provider and
+// native ID under the replay source's account: all new to the snapshot, or
+// all already in it and extended.
+type replicaIdentity struct {
+	Provider  string   `json:"provider"`
+	NativeIDs []string `json:"native_ids"`
+	Expect    string   `json:"expect"`
 }
 
 type replicaArrival struct {
@@ -1172,8 +1209,12 @@ func (r *replicaReplay) check() error {
 	if r.Input == "" || r.Input == "." || r.Input == ".." || strings.ContainsAny(r.Input, `/\`) {
 		return errors.New("replay.input names one frozen input")
 	}
-	if !validCaptureName(r.Source.Name) || r.Source.Kind == "" {
-		return errors.New("replay.source needs a capture-safe name and a kind")
+	if !validCaptureName(r.Source.Name) || r.Source.Kind == "" || r.Source.Account == "" {
+		return errors.New("replay.source needs a capture-safe name, a kind and an explicit account")
+	}
+	if id := r.Identity; id == nil || id.Provider == "" || len(id.NativeIDs) == 0 || id.Expect != "new" && id.Expect != "extend" ||
+		slices.Contains(id.NativeIDs, "") || len(slices.Compact(slices.Sorted(slices.Values(id.NativeIDs)))) != len(id.NativeIDs) {
+		return errors.New(`replay.identity needs a provider, distinct non-empty native_ids and expect "new" or "extend"`)
 	}
 	if !readOnlyCheck(r.CountQuery) {
 		return errors.New("replay.count_query is one SELECT or WITH statement")
@@ -1204,6 +1245,19 @@ func (r *replicaReplay) check() error {
 		}
 	}
 	return nil
+}
+
+// identityPresent is how many of the identity's conversations the catalog
+// holds under the replay source's account.
+func (r *replicaReplay) identityPresent(ctx context.Context, db *sql.DB) (int, error) {
+	args := []any{r.Identity.Provider, r.Source.Account}
+	for _, id := range r.Identity.NativeIDs {
+		args = append(args, id)
+	}
+	var n int
+	err := db.QueryRowContext(ctx, `SELECT count(DISTINCT native_id) FROM conversations WHERE provider=? AND account=? AND native_id IN (?`+
+		strings.Repeat(",?", len(r.Identity.NativeIDs)-1)+`)`, args...).Scan(&n)
+	return n, err
 }
 
 // replicaLinePrefix is data's first n newline-terminated lines.
@@ -1295,14 +1349,21 @@ type replicaArrivals struct {
 	mu        sync.Mutex
 	plan      *replicaReplay
 	started   time.Time
+	stop      context.CancelCauseFunc
+	identity  map[string]any
 	entries   []replicaArrivalReport
 	rounds    int
 	followups []any
 	settledAt *float64
 }
 
-func newReplicaArrivals(plan *replicaReplay, started time.Time) *replicaArrivals {
-	arrivals := &replicaArrivals{plan: plan, started: started}
+// newReplicaArrivals schedules plan's arrivals from started; stop cancels
+// the work they run beside when one fails.
+func newReplicaArrivals(plan *replicaReplay, started time.Time, stop context.CancelCauseFunc) *replicaArrivals {
+	ids := slices.Sorted(slices.Values(plan.Identity.NativeIDs))
+	arrivals := &replicaArrivals{plan: plan, started: started, stop: stop, identity: map[string]any{"provider": plan.Identity.Provider,
+		"account": plan.Source.Account, "expect": plan.Identity.Expect, "native_ids": len(ids), "native_ids_sha256": replicaIDsDigest(ids),
+		"present_before": nil, "present_after": nil}}
 	for _, arrival := range plan.Arrivals {
 		arrivals.entries = append(arrivals.entries, replicaArrivalReport{Name: arrival.Name, AtSeconds: arrival.AtSeconds})
 	}
@@ -1311,9 +1372,48 @@ func newReplicaArrivals(plan *replicaReplay, started time.Time) *replicaArrivals
 
 func replicaSeconds(d time.Duration) *float64 { value := d.Seconds(); return &value }
 
-// run applies every arrival at its time, in order. One that starts after
-// its time because the previous arrival was still running records how late.
-func (a *replicaArrivals) run(ctx context.Context, apply func(int) (string, error), count func(context.Context) (int64, error), pending func(context.Context) (bool, error)) error {
+// replicaArrivalFailure is a failed arrival's error as the cause that
+// cancelled the work.
+type replicaArrivalFailure struct{ err error }
+
+func (f replicaArrivalFailure) Error() string { return "replay: " + f.err.Error() }
+func (f replicaArrivalFailure) Unwrap() error { return f.err }
+
+// replicaFailure is the failure to report for message: the arrival error
+// that cancelled ctx, with message as what it interrupted, or message.
+func replicaFailure(ctx context.Context, message string) (failure, interrupted string) {
+	var arrival replicaArrivalFailure
+	if errors.As(context.Cause(ctx), &arrival) {
+		return arrival.Error(), message
+	}
+	return message, ""
+}
+
+// run applies every arrival at its time, in order, and fails, cancelling
+// the work, on the first error. One that starts after its time because the
+// previous arrival was still running records how late. Before the first
+// arrival none (new) or all (extend) of the identity's conversations are
+// in the catalog, and after the last all of them are.
+func (a *replicaArrivals) run(ctx context.Context, apply func(int) (string, error), count func(context.Context) (int64, error), pending func(context.Context) (bool, error), present func(context.Context) (int, error)) error {
+	err := a.arrive(ctx, apply, count, pending, present)
+	if err != nil && a.stop != nil {
+		a.stop(replicaArrivalFailure{err})
+	}
+	return err
+}
+
+func (a *replicaArrivals) arrive(ctx context.Context, apply func(int) (string, error), count func(context.Context) (int64, error), pending func(context.Context) (bool, error), present func(context.Context) (int, error)) error {
+	identity := a.plan.Identity
+	before, err := present(ctx)
+	if err != nil {
+		return fmt.Errorf("identity: %w", err)
+	}
+	a.mu.Lock()
+	a.identity["present_before"] = before
+	a.mu.Unlock()
+	if want := map[string]int{"new": 0, "extend": len(identity.NativeIDs)}[identity.Expect]; before != want {
+		return fmt.Errorf("identity: expected %s conversations, but %d of %d are already in the catalog", identity.Expect, before, len(identity.NativeIDs))
+	}
 	for index, arrival := range a.plan.Arrivals {
 		due := a.started.Add(time.Duration(arrival.AtSeconds * float64(time.Second)))
 		select {
@@ -1353,6 +1453,16 @@ func (a *replicaArrivals) run(ctx context.Context, apply func(int) (string, erro
 		entry.applied, entry.AppliedSeconds = applied, replicaSeconds(applied.Sub(a.started))
 		a.mu.Unlock()
 	}
+	after, err := present(ctx)
+	if err != nil {
+		return fmt.Errorf("identity: %w", err)
+	}
+	a.mu.Lock()
+	a.identity["present_after"] = after
+	a.mu.Unlock()
+	if after != len(identity.NativeIDs) {
+		return fmt.Errorf("identity: after the arrivals %d of %d conversations are in the catalog", after, len(identity.NativeIDs))
+	}
 	return nil
 }
 
@@ -1386,7 +1496,7 @@ func (a *replicaArrivals) report(host string) map[string]any {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return map[string]any{"input": a.plan.Input, "source": a.plan.Source.Name, "kind": a.plan.Source.Kind, "host": host,
-		"arrivals": slices.Clone(a.entries), "followup_rounds": a.rounds, "followups": a.followups, "settled_seconds": a.settledAt,
+		"identity": maps.Clone(a.identity), "arrivals": slices.Clone(a.entries), "followup_rounds": a.rounds, "followups": a.followups, "settled_seconds": a.settledAt,
 		"basis": "Each arrival writes its frozen input bytes into an arm-private source folder and runs the service's background Capture & index item for that source; count_query must increase. Settlement needs every arrival applied, ready_checks and every kind's pending_checks empty; classic follow-ups re-drain the demanded kinds and scheduled follow-ups submit recent demand."}
 }
 
@@ -1506,7 +1616,7 @@ func replicaRetention(samples []replicaMemorySample, plan replicaMemoryPlan) map
 		return nil
 	}
 	complete := !slices.ContainsFunc(samples, func(sample replicaMemorySample) bool { return !sample.Complete })
-	retention := map[string]any{"basis": replicaMemoryBasis, "retained_bytes": nil, "retained_self_bytes": nil, "retained_descendants_bytes": nil,
+	retention := map[string]any{"basis": replicaMemoryBasis, "retained_bytes": nil, "retained_self_bytes": nil, "retained_descendants_bytes": nil, "retained_go_heap_inuse_bytes": nil,
 		"coverage": map[string]any{"samples": len(samples), "interval_seconds": plan.IntervalSeconds, "idle_seconds": plan.IdleSeconds, "complete": complete}}
 	for key, label := range map[string]string{"work_start": "work-start", "settled": "settled", "idle_end": "idle", "idle_released": "idle-released"} {
 		retention[key] = nil
@@ -1530,6 +1640,7 @@ func replicaRetention(samples []replicaMemorySample, plan replicaMemoryPlan) map
 func replicaTestReplay(arrivals ...replicaArrival) *replicaReplay {
 	replay := &replicaReplay{Input: "arrivals", CountQuery: "SELECT count(*) FROM messages", ReadyChecks: []string{"SELECT 1 WHERE 0"}, Arrivals: arrivals}
 	replay.Source.Name, replay.Source.Kind, replay.Source.Account = "replay-claude", "claude", "local"
+	replay.Identity = &replicaIdentity{Provider: "claude", NativeIDs: []string{"s1"}, Expect: "new"}
 	return replay
 }
 
@@ -1566,6 +1677,18 @@ func TestWorkReplicaReplayPlan(t *testing.T) {
 			r.Arrivals[0].Files = append(file("p/s.jsonl", nil), file("p/s.jsonl", nil)...)
 		},
 		"negative deadline": func(r *replicaReplay) { r.SettleSeconds = -1 },
+		"implicit account":  func(r *replicaReplay) { r.Source.Account = "" },
+		"no identity":       func(r *replicaReplay) { r.Identity = nil },
+		"no provider":       func(r *replicaReplay) { r.Identity.Provider = "" },
+		"no native ids":     func(r *replicaReplay) { r.Identity.NativeIDs = nil },
+		"empty native id":   func(r *replicaReplay) { r.Identity.NativeIDs = []string{"s1", ""} },
+		"repeated id":       func(r *replicaReplay) { r.Identity.NativeIDs = []string{"s1", "s2", "s1"} },
+		"unknown intent":    func(r *replicaReplay) { r.Identity.Expect = "either" },
+	}
+	extend := replicaTestReplay(valid.Arrivals...)
+	extend.Identity.NativeIDs, extend.Identity.Expect = []string{"s1", "s2"}, "extend"
+	if err := extend.check(); err != nil {
+		t.Fatal(err)
 	}
 	for name, change := range refused {
 		replay := replicaTestReplay(slices.Clone(valid.Arrivals)...)
@@ -1615,6 +1738,8 @@ func TestWorkReplicaArrivalStaging(t *testing.T) {
 
 // Arrivals go through the service's own Capture & index item: each adds the
 // session's new lines to one conversation, and one that adds nothing fails.
+// The declared identity is checked before the first arrival and after the
+// last, and a failed arrival cancels the work with its own error.
 func TestWorkReplicaArrivals(t *testing.T) {
 	useHost(t, "replay-host")
 	catalog, config := testCatalog(t)
@@ -1625,6 +1750,7 @@ func TestWorkReplicaArrivals(t *testing.T) {
 	input, dir := filepath.Join(root, "inputs", "arrivals"), filepath.Join(root, "replay", "replay-claude")
 	writeSourceFile(t, filepath.Join(input, "-proj", "s1.jsonl"),
 		claudeLine("s1", "u1", "first", "/proj", 1)+claudeLine("s1", "u2", "second", "/proj", 2)+claudeLine("s1", "u3", "third", "/proj", 3))
+	writeSourceFile(t, filepath.Join(input, "-proj", "s2.jsonl"), claudeLine("s2", "v1", "first", "/proj", 4)+claudeLine("s2", "v2", "second", "/proj", 5))
 	replay := replicaTestReplay(
 		replicaArrival{Name: "a1", AtSeconds: 0, Files: []replicaArrivalFile{{Path: "-proj/s1.jsonl", Lines: replicaLines(1)}}},
 		replicaArrival{Name: "a2", AtSeconds: 0.2, Files: []replicaArrivalFile{{Path: "-proj/s1.jsonl"}}})
@@ -1640,15 +1766,28 @@ func TestWorkReplicaArrivals(t *testing.T) {
 		return n, err
 	}
 	pending := func(context.Context) (bool, error) { return false, nil }
-	arrivals := newReplicaArrivals(replay, time.Now())
-	if err := arrivals.run(t.Context(), func(index int) (string, error) {
-		return replicaApplyArrival(t.Context(), server, replay, input, dir, index, clock)
-	}, count, pending); err != nil {
-		t.Fatal(err)
+	// play runs a schedule beside a work context it may cancel.
+	play := func(plan *replicaReplay) (*replicaArrivals, context.Context, error) {
+		work, cancel := context.WithCancelCause(t.Context())
+		t.Cleanup(func() { cancel(nil) })
+		arrivals := newReplicaArrivals(plan, time.Now(), cancel)
+		err := arrivals.run(t.Context(), func(index int) (string, error) {
+			return replicaApplyArrival(t.Context(), server, plan, input, dir, index, clock)
+		}, count, pending, func(ctx context.Context) (int, error) { return plan.identityPresent(ctx, catalog.DB) })
+		return arrivals, work, err
 	}
-	report := arrivals.report("replay-host")["arrivals"].([]replicaArrivalReport)
+	arrivals, work, err := play(replay)
+	if err != nil || work.Err() != nil {
+		t.Fatal(err, work.Err())
+	}
+	result := arrivals.report("replay-host")
+	report := result["arrivals"].([]replicaArrivalReport)
 	if *report[0].CountBefore != 0 || *report[0].CountAfter != 1 || *report[1].CountAfter != 3 || report[1].LateSeconds == nil {
 		t.Fatalf("each arrival adds only its new lines: %+v", report)
+	}
+	if identity := result["identity"].(map[string]any); identity["expect"] != "new" || identity["present_before"] != 0 || identity["present_after"] != 1 ||
+		identity["account"] != "local" || identity["native_ids_sha256"] != replicaIDsDigest([]string{"s1"}) {
+		t.Fatalf("a new conversation is absent before and present after, by hash: %v", identity)
 	}
 	var conversations int
 	if err := catalog.DB.QueryRow(`SELECT count(DISTINCT conversation_id) FROM messages`).Scan(&conversations); err != nil || conversations != 1 {
@@ -1661,13 +1800,52 @@ func TestWorkReplicaArrivals(t *testing.T) {
 	if arrivals.waiting() || report[0].ReadySeconds != nil {
 		t.Fatal("ready marks the live entries, not a returned copy")
 	}
-	// Replaying the same bytes again is no arrival.
-	stale := replicaTestReplay(replicaArrival{Name: "again", Files: []replicaArrivalFile{{Path: "-proj/s1.jsonl"}}})
-	err = newReplicaArrivals(stale, time.Now()).run(t.Context(), func(index int) (string, error) {
-		return replicaApplyArrival(t.Context(), server, stale, input, dir, index, clock)
-	}, count, pending)
-	if err == nil || !strings.Contains(err.Error(), "not a real arrival") {
-		t.Fatalf("an arrival that adds nothing must fail: %v", err)
+	schedule := func(expect string, ids []string, path string, lines *int) *replicaReplay {
+		plan := replicaTestReplay(replicaArrival{Name: "again", Files: []replicaArrivalFile{{Path: path, Lines: lines}}})
+		plan.Identity.Expect, plan.Identity.NativeIDs = expect, ids
+		return plan
+	}
+	// failed checks that a schedule fails with want, applies nothing when
+	// refused up front, and cancels the work with its own error.
+	failed := func(name string, plan *replicaReplay, want string, applied bool) {
+		t.Helper()
+		var before int64
+		_ = catalog.DB.QueryRow(replay.CountQuery).Scan(&before)
+		arrivals, work, err := play(plan)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: want %q, got %v", name, want, err)
+		}
+		select {
+		case <-work.Done():
+		default:
+			t.Fatalf("%s: a failed arrival leaves the work running", name)
+		}
+		if failure, interrupted := replicaFailure(work, "labels: context canceled"); failure != "replay: "+err.Error() || interrupted != "labels: context canceled" {
+			t.Fatalf("%s: the arrival's error is the failure: %q (interrupted %q)", name, failure, interrupted)
+		}
+		if applied != (arrivals.report("replay-host")["arrivals"].([]replicaArrivalReport)[0].AppliedSeconds != nil) {
+			t.Fatalf("%s: applied=%v expected", name, applied)
+		}
+		var after int64
+		if _ = catalog.DB.QueryRow(replay.CountQuery).Scan(&after); !applied && after != before {
+			t.Fatalf("%s: a refused identity staged an arrival: %d -> %d", name, before, after)
+		}
+	}
+	// The same bytes again extend s1 by nothing: no arrival.
+	failed("stale", schedule("extend", []string{"s1"}, "-proj/s1.jsonl", nil), "not a real arrival", false)
+	// s1 is in the catalog, so it cannot be new; s2 is not, so it cannot extend.
+	failed("not new", schedule("new", []string{"s1"}, "-proj/s1.jsonl", nil), "already in the catalog", false)
+	failed("not extended", schedule("extend", []string{"s2"}, "-proj/s2.jsonl", nil), "already in the catalog", false)
+	// An arrival that never brings a declared conversation fails after it.
+	failed("missing", schedule("new", []string{"s2", "s9"}, "-proj/s2.jsonl", replicaLines(1)), "1 of 2 conversations", true)
+	// s2 now exists with one line; the rest of it extends that conversation.
+	// A later run stages with a later clock, as a later file write would.
+	clock = clock.Add(time.Minute)
+	if _, work, err := play(schedule("extend", []string{"s2"}, "-proj/s2.jsonl", nil)); err != nil || work.Err() != nil {
+		t.Fatalf("an existing conversation extends: %v", err)
+	}
+	if failure, interrupted := replicaFailure(t.Context(), "labels: boom"); failure != "labels: boom" || interrupted != "" {
+		t.Fatal("without a failed arrival the work's own failure stands")
 	}
 }
 
@@ -1703,11 +1881,20 @@ func TestWorkReplicaMemory(t *testing.T) {
 	plan := replicaMemoryPlan{IntervalSeconds: 5, IdleSeconds: 60}
 	samples := []replicaMemorySample{at("work-start", 100, 0, true), at("settled", 400, 300, true), at("idle", 300, 300, true), at("idle-released", 250, 300, true)}
 	retention := replicaRetention(samples, plan)
-	if retention["retained_bytes"] != int64(450) || retention["retained_descendants_bytes"] != int64(300) || retention["retained_self_bytes"] != int64(150) || retention["settled"] != uint64(700) {
+	if retention["retained_bytes"] != int64(450) || retention["retained_descendants_bytes"] != int64(300) || retention["retained_self_bytes"] != int64(150) ||
+		retention["retained_go_heap_inuse_bytes"] != int64(75) || retention["settled"] != uint64(700) {
 		t.Fatalf("retention is the released tree less the tree before work: %v", retention)
 	}
 	samples[0].Complete = false
 	if retention := replicaRetention(samples, plan); retention["retained_bytes"] != nil || retention["coverage"].(map[string]any)["complete"] != false {
+		t.Fatalf("an incomplete end leaves retention unavailable: %v", retention)
+	}
+	for _, key := range []string{"retained_bytes", "retained_self_bytes", "retained_descendants_bytes", "retained_go_heap_inuse_bytes"} {
+		if value, ok := replicaRetention(samples, plan)[key]; !ok || value != nil {
+			t.Fatalf("%s is null, not absent, when unavailable: %v %v", key, value, ok)
+		}
+	}
+	if retention := replicaRetention(samples, plan); retention["retained_bytes"] != nil {
 		t.Fatalf("an incomplete end leaves retention unavailable: %v", retention)
 	}
 	if retention := replicaRetention(samples[1:], plan); retention["retained_bytes"] != nil || retention["work_start"] != nil {
