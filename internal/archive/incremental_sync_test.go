@@ -1198,6 +1198,20 @@ func TestSyncStatusExposesLowercaseSourceChoices(t *testing.T) {
 	if pending() != false {
 		t.Fatal("a capture after the index did not clear Needs capture")
 	}
+	// Busy remains true during scheduled work, but manual maintenance can
+	// interrupt it. Foreground work must finish before another repair starts.
+	for _, kind := range []string{"automatic-sync", backgroundRunKind, "manual-sync", "verification", "library-update"} {
+		run := server.startRunNamed(kind, nil)
+		status := readStatus(server)
+		want := kind != "automatic-sync" && kind != backgroundRunKind
+		if status["busy"] != true || status["maintenance_busy"] != want {
+			t.Fatalf("%s maintenance availability: busy=%v maintenance_busy=%v", kind, status["busy"], status["maintenance_busy"])
+		}
+		server.updateRun(run.ID, func(run *SyncRun) { run.State = "complete" })
+	}
+	if status := readStatus(server); status["maintenance_busy"] != false {
+		t.Fatalf("finished work blocks maintenance: %v", status["maintenance_busy"])
+	}
 }
 
 func TestDeferredIdentityReconciliationHonorsCancellation(t *testing.T) {

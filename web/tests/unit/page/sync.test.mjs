@@ -93,6 +93,42 @@ test("mismatch actions request full verification in the selected source scope", 
   assert.equal(script.window.pharosSync.status().issues.length, 1);
 });
 
+test("maintenance actions yield scheduled work, while diagnostics remain available during foreground work", async () => {
+  const elements = root => [root, ...(root.children || []).flatMap(elements)];
+  for (const state of [
+    { busy: false },
+    { busy: true, maintenance_busy: false },
+    { busy: true, maintenance_busy: true },
+    { busy: true }, // Compatibility with services that only expose busy.
+  ]) {
+    const dashboard = syncDocument.createElement("div"), body = syncDocument.createElement("body");
+    dashboard.prepend = (...nodes) => dashboard.children.unshift(...nodes);
+    let detailsReads = 0;
+    const issue = { id: "mismatch", source_name: "claude", unit: "session.jsonl" };
+    loadClassicScript("sync.js", {
+      document: { ...syncDocument, body, getElementById: id => id === "syncDashboard" ? dashboard : null,
+        createElement: tag => Object.assign(syncDocument.createElement(tag), { showModal() {} }) },
+      fetch: async path => ({ ok: true, json: async () => {
+        if (path === "/api/sync/status") return { ...state, settings: {}, issues: [issue],
+          source_states: [{ source_name: "claude", preservation: { pending_newer_inputs: true } }],
+          recovery_jobs: [{ mode: "full", state: "interrupted", id: "repair" }] };
+        if (path === "/api/sync/issues") { detailsReads++; return { issues: [issue] }; }
+        return { runs: [] };
+      } }),
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    const disabled = state.maintenance_busy ?? state.busy;
+    const buttons = elements(dashboard).filter(el => el.tagName === "BUTTON");
+    for (const button of buttons) {
+      assert.equal(Boolean(button.disabled), button.textContent === "View details / copy diagnostics" ? false : disabled, `${JSON.stringify(state)}: ${button.textContent}`);
+    }
+    const before = detailsReads;
+    await buttons.find(el => el.textContent === "View details / copy diagnostics").onclick();
+    assert.ok(detailsReads > before);
+    assert.ok(body.children.some(el => el.tagName === "DIALOG"));
+  }
+});
+
 test("empty pages distinguish source setup, idle sources and a running sync", () => {
   const message = status => emptyLibraryState(status)?.message ?? null;
   assert.equal(emptyLibraryState(null), null);

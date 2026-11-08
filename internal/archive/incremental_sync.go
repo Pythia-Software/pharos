@@ -165,6 +165,19 @@ func syncSourceChoices(sources []SourceConfig) []map[string]any {
 	return choices
 }
 
+// Manual maintenance can interrupt scheduled indexing and background passes
+// through acquireManualIngest. Only capture and other foreground runs block it.
+func (s *Server) maintenanceBusy() bool {
+	if s.captureActive() {
+		return true
+	}
+	s.runsMu.RLock()
+	defer s.runsMu.RUnlock()
+	return slices.ContainsFunc(s.runs, func(run *SyncRun) bool {
+		return run.State == "running" && run.Kind != "automatic-sync" && run.Kind != backgroundRunKind
+	})
+}
+
 func (s *Server) acquireManualIngest() bool {
 	s.auto.mu.Lock()
 	s.auto.manualWaiters++
@@ -785,7 +798,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, 500)
 		return
 	}
-	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "library_empty": libraryEmpty, "has_sources": slices.ContainsFunc(s.Config().Sources, func(source SourceConfig) bool { return source.Enabled }), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns, "verification": s.Catalog.verificationStatus(r.Context())}, 200)
+	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "maintenance_busy": s.maintenanceBusy(), "library_empty": libraryEmpty, "has_sources": slices.ContainsFunc(s.Config().Sources, func(source SourceConfig) bool { return source.Enabled }), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns, "verification": s.Catalog.verificationStatus(r.Context())}, 200)
 }
 
 // capturePending is the Sources table's "Needs capture": the source was indexed
