@@ -138,7 +138,11 @@ remain unknown. Fixes also depends on Agent events, whose missing ledger evidenc
 stays unknown. Conversation rows carry their owning background `task_id` from
 source configuration or recorded source kind, so whole-source imports use Other
 sources for timing and Settings links. If ownership is unavailable, the prototype
-leaves that task and its schedule unspecified.
+leaves that task and its schedule unspecified. Capture rows carry `task_id`
+Preserve originals, which indexes every Mac's captures; when this Mac's Other
+sources task also reads the source in full, `task_ids` lists both and the modal
+uses whichever has the earlier planned run, since only the schedule knows which
+comes first.
 
 Bespoke chart indicators resolve dataset IDs through the same card-source reader
 as saved cards, rather than using schema names. Waiting results depend on the
