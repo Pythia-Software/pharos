@@ -408,6 +408,44 @@ test('private visit writes preserve deletion order and recover after a failed up
   await assert.rejects(failed,/offline/);await clear;
   assert.equal(events.at(-1),'clear');
 });
+test('background saves retry temporary failures and surface persistent or invalid requests', async () => {
+  const waits=[], busy=Object.assign(new Error('busy'),{status:503});
+  let attempts=0;
+  assert.equal(await model.askRetryBackground(()=>{if(++attempts<3)throw busy;return 'saved';},async ms=>waits.push(ms)),'saved');
+  assert.equal(attempts,3);
+  assert.deepEqual(waits,[500,1000]);
+  attempts=0;
+  await assert.rejects(model.askRetryBackground(()=>{attempts++;throw busy;},async()=>{}),/busy/);
+  assert.equal(attempts,3,'a persistent outage must be reported');
+  attempts=0;
+  await assert.rejects(model.askRetryBackground(()=>{attempts++;throw Object.assign(new Error('invalid'),{status:400});},async()=>{}),/invalid/);
+  assert.equal(attempts,1,'validation errors are not transient');
+  const networkModel=loadClassicScript('ask-model.js',{TypeError});
+  attempts=0;
+  assert.equal(await networkModel.askRetryBackground(()=>{if(++attempts===1)throw new TypeError('offline');return 'saved';},async()=>{}),'saved');
+});
+test('a retrying visit stays ahead of a later deletion', async () => {
+  const timers=[], events=[];
+  const queued=loadClassicScript('ask-model.js',{setTimeout:fn=>timers.push(fn)});
+  let attempts=0;
+  const visit=queued.askWriteVisit(()=>{events.push('visit');if(++attempts===1)throw Object.assign(new Error('busy'),{status:503});});
+  const removal=queued.askWriteVisit(()=>events.push('remove'));
+  while(!timers.length)await Promise.resolve();
+  assert.deepEqual(events,['visit']);
+  timers.shift()();await Promise.all([visit,removal]);
+  assert.deepEqual(events,['visit','visit','remove']);
+});
+test('a missed visit is reconciled from current history before the error clears', async () => {
+  let history=['new'],failed=true,cleared=0;
+  const writes=[];
+  const save=model.askVisitRecovery(input=>{writes.push(plain(input));if(failed)throw new Error('busy');},()=>({reconcile:true,visits:[...history]}),()=>cleared++);
+  await assert.rejects(save({reconcile:false,visits:['old']}),/busy/);
+  history=['newer'];failed=false;
+  await save({reconcile:false,visits:['new']});
+  await save({reconcile:false,visits:['last']});
+  assert.deepEqual(writes,[{reconcile:false,visits:['old']},{reconcile:true,visits:['newer']},{reconcile:false,visits:['last']}]);
+  assert.equal(cleared,1);
+});
 test('a single visit replaces one entry, while a full history write reconciles the private store', () => {
   const visit={url:'/analyze',at:2,title:'Analyze'};
   const one=plain(model.askVisitInput({entry:visit,replaced:{url:'/',at:1}}));
@@ -541,7 +579,7 @@ test('Ask stream failures reconcile instead of accepting an unfinished answer', 
   await assert.rejects(model.askReadResponse(stream('{"type":"progress","activity":{}}\n')),/before the answer/);
   await assert.rejects(model.askReadResponse(stream('{"type":"result","session":')),/before the answer/);
   await assert.rejects(model.askReadResponse(stream('not JSON\n')),/JSON|Unexpected/);
-  await assert.rejects(model.askReadResponse(new Response('{"error":"Model unavailable"}',{status:400})),/Model unavailable/);
+  await assert.rejects(model.askReadResponse(new Response('{"error":"Model unavailable"}',{status:400})),error=>error.message==='Model unavailable'&&error.status===400);
   const session={id:'older-server'};
   assert.deepEqual(plain(await model.askReadResponse(new Response(JSON.stringify(session)))),session);
 });
