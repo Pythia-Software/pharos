@@ -207,8 +207,9 @@ The derivation follows Parallelism's precedent
   facts are derived again. Message-body checks read only the message kinds
   they need: prompt whitespace for user messages and compaction text for metadata.
 - Every requesting page can cancel its wait for shared preparation, including
-  the page that starts the build. Shared builds retain their own budgets and
-  can finish for later requests. Closing the catalog cancels and joins them
+  the page that starts the build. A build no page waits for stops after a
+  three-second grace period, so a reload can reattach but an abandoned page
+  does not keep a reader busy. Closing the catalog cancels and joins builds
   before closing its connections.
 - Dimensions, roots, mirrors, sub-agent counts, tokens and cost are joined
   when the rows are built and cached until the catalog changes. A rename or
