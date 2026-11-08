@@ -65,6 +65,7 @@ var executionSourceTables = []executionSourceTable{
 // launch results by (conversation, call ID) without scanning the transcript.
 var executionSourceIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS messages_call_idx ON messages(conversation_id, call_id) WHERE call_id<>''`,
+	`CREATE INDEX IF NOT EXISTS messages_workflow_call_idx ON messages(conversation_id,call_id) WHERE ` + claudeWorkflowCallSQL(""),
 }
 
 // ensureExecutionSourceGeneration installs the source generation, its change
@@ -161,9 +162,9 @@ func retainedEvidenceTriggers(tx *sql.Tx) ([]string, error) {
  WHERE c.id=` + id + ` AND c.provider='claude'));`
 	}
 	// The messages backfill and Claude group lineage read: launches, results,
-	// Codex session notes and a conversation's first assignment.
+	// Workflow calls, Codex session notes and a conversation's first assignment.
 	read := func(row string) string {
-		return `(` + row + `.kind IN ('delegation','delegation_result') OR ` + row + `.kind='tool_result' AND ` + row + `.call_id<>''
+		return `(` + row + `.kind IN ('delegation','delegation_result') OR (` + claudeWorkflowCallSQL(row) + `) OR ` + row + `.kind='tool_result' AND ` + row + `.call_id<>''
  OR ` + row + `.kind='metadata' AND ` + row + `.text LIKE '{"payload":%"type":"session_meta"%' OR ` + row + `.kind='message' AND ` + row + `.role IN ('user','agent'))`
 	}
 	changed := func(columns ...string) string {

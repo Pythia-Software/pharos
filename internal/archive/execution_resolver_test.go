@@ -119,6 +119,106 @@ func fixtureCounts(t *testing.T, c *Catalog) *quickStatsCounts {
 	return w.quickStatsCounts
 }
 
+func TestWorkflowParentsUseScopedRunAcknowledgements(t *testing.T) {
+	c := executionFixture(t,
+		executionFixtureConversation{id: "root", provider: "claude"},
+		executionFixtureConversation{id: "owner", parent: "root", depth: 1, provider: "claude"},
+		executionFixtureConversation{id: "one", parent: "root", depth: 1, provider: "claude"},
+		executionFixtureConversation{id: "two", depth: 1, provider: "claude"},
+		executionFixtureConversation{id: "other-account", depth: 1, provider: "claude"},
+		executionFixtureConversation{id: "other-root", depth: 1, provider: "claude"},
+	)
+	for id, native := range map[string]string{
+		"owner": "root:subagent:agent-owner", "one": "root:subagent:workflows/wf_run/agent-one",
+		"two": "root:subagent:workflows/wf_run/agent-two", "other-account": "root:subagent:workflows/wf_run/agent-other",
+		"other-root": "another:subagent:workflows/wf_run/agent-other",
+	} {
+		fixtureExec(t, c, `UPDATE conversations SET native_id=? WHERE id=?`, native, id)
+	}
+	fixtureExec(t, c, `UPDATE conversations SET account='different' WHERE id='other-account'`)
+	addWorkflow := func(conversation, call, result string) {
+		t.Helper()
+		fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,call_id,text,content_hash)
+		 VALUES(?,?,?,'assistant','tool_call',?,'{"tool":"Workflow","input":{"script":"preflight()"}}','launch')`, call, conversation, call, call)
+		fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,call_id,text,content_hash)
+		 VALUES(?,?,?,'tool','tool_result',?,?,?)`, call+"-result", conversation, call+"-result", call, result, hashBytes([]byte(result)))
+	}
+	ack := workflowAck("root", "wf_run")
+	addWorkflow("owner", "workflow", ack)
+	check := func(want parentState) {
+		t.Helper()
+		r := fixtureResolution(t, c)
+		for _, id := range []string{"one", "two"} {
+			x := r.Execution(r.BindConversation(id).ExecutionID)
+			if x == nil || x.Parent.State != want || want == parentResolved && x.Parent.ParentID != "conversation:owner" {
+				t.Fatalf("%s parent = %+v, want %s", id, x, want)
+			}
+		}
+		for _, id := range []string{"other-account", "other-root"} {
+			if x := r.Execution(r.BindConversation(id).ExecutionID); x.Parent.State == parentResolved {
+				t.Fatalf("workflow escaped its namespace: %s = %+v", id, x.Parent)
+			}
+		}
+	}
+	check(parentResolved)
+	digests := func() map[string]string {
+		t.Helper()
+		d, err := executionDependencyDigestsFor(t.Context(), c.DB, []string{"one", "two"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	before := digests()
+	// No materialized parent or launch handle is needed for inverse discovery.
+	component, err := dependencyComponent(t.Context(), c.DB, []string{"two"})
+	if err != nil || component["owner"] == nil || component["one"] == nil {
+		t.Fatalf("workflow component = %v (%v)", maps.Keys(component), err)
+	}
+	// A correction invalidates warmed resolution and dependency caches, including
+	// the child's digest even though only the parent's result changed.
+	fixtureExec(t, c, `UPDATE messages SET text=?,content_hash='corrected' WHERE id='workflow-result'`, workflowAck("root", "wf_other"))
+	check(parentMissing)
+	for id, digest := range digests() {
+		if before[id] == digest {
+			t.Fatalf("corrected workflow did not change %s's digest", id)
+		}
+	}
+	fixtureExec(t, c, `UPDATE messages SET text=?,content_hash='restored' WHERE id='workflow-result'`, ack)
+	check(parentResolved)
+	// Two independent callers acknowledging the same run are conflicting
+	// evidence. Never pick the last row or merge the children with the caller.
+	addWorkflow("root", "competing", ack)
+	check(parentAmbiguous)
+	fixtureExec(t, c, `DELETE FROM messages WHERE id IN ('competing','competing-result')`)
+	check(parentResolved)
+	fixtureExec(t, c, `DELETE FROM messages WHERE id='workflow-result'`)
+	check(parentMissing)
+}
+
+func TestWorkflowParentDiscoversLateChild(t *testing.T) {
+	c := executionFixture(t, executionFixtureConversation{id: "owner", provider: "claude"})
+	fixtureExec(t, c, `INSERT INTO messages(id,conversation_id,native_id,role,kind,call_id,text,content_hash) VALUES
+	 ('wf','owner','wf','assistant','tool_call','call','{"tool":"Workflow"}','call'),
+	 ('ack','owner','ack','tool','tool_result','call',?,'ack')`, workflowAck("owner", "wf_late"))
+	before, err := executionDependencyDigestsFor(t.Context(), c.DB, []string{"owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureResolution(t, c) // warm before the child exists
+	fixtureExec(t, c, `INSERT INTO conversations(id,workspace_id,provider,account,native_id,agent_depth)
+	 VALUES('late','work','claude','local','owner:subagent:workflows/wf_late/agent-child',1)`)
+	r := fixtureResolution(t, c)
+	x := r.Execution(r.BindConversation("late").ExecutionID)
+	if x == nil || x.Parent.State != parentResolved || x.Parent.ParentID != "conversation:owner" {
+		t.Fatalf("late workflow child = %+v", x)
+	}
+	after, err := executionDependencyDigestsFor(t.Context(), c.DB, []string{"late"})
+	if err != nil || after["owner"] == "" || after["owner"] == before["owner"] {
+		t.Fatalf("late child dependency = %v (%v)", after, err)
+	}
+}
+
 func confirmedExecutions(r *executionResolution) int { return len(r.Executions) }
 
 func TestExecutionAuditCases(t *testing.T) {

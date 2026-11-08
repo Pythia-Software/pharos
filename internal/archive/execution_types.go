@@ -17,7 +17,8 @@ package archive
 // (sameCallCopies); those on a cycle are no longer copies either.
 // v6: a launch whose result ends in a validated harness usage footer
 // (readLegacyLaunchOutcome) created the agent it names, retained or not.
-const executionResolverVersion = "execution-v6"
+// v7: a Workflow's acknowledged run links each child to its issuing session.
+const executionResolverVersion = "execution-v7"
 
 // sourceKind names what a sourceRef locates.
 type sourceKind string

@@ -27,8 +27,9 @@ import (
 // Copilot session-parent fallbacks and bounds Cursor copies whose proof is
 // partial (a provider read; ingestStillComplete). v4 accepts a launch whose
 // result ends in a validated harness usage footer (agentUsageFooterOf),
-// derivable from retained rows.
-const executionEvidenceVersion = "execution-evidence-v4"
+// derivable from retained rows. v5 records Workflow run acknowledgements:
+// one parent for each immediate member, never one shared child execution.
+const executionEvidenceVersion = "execution-evidence-v5"
 
 // Persisted claim kinds. Subject is relative to the owning conversation
 // ("conversation", "launch:<call id>", "composer:<id>"); Object is a lookup
@@ -39,6 +40,8 @@ const (
 	evidenceParent = "parent"
 	// A launch call's outcome: detail.outcome accepted, rejected or unknown.
 	evidenceLaunchOutcome = "launch_outcome"
+	// A Workflow acknowledgement names a run containing several child agents.
+	evidenceWorkflowLaunch = "workflow_launch"
 	// The conversation begins with a copy of Object's history; detail gives
 	// the boundary and how its observations map to the original's.
 	evidenceHistoryCopy = "history_copy"
@@ -106,6 +109,9 @@ func executionLookupKeys(provider, account, native string, aliases []string) []s
 		}
 	}
 	if provider == "claude" {
+		if root, run, ok := claudeWorkflowOf(native); ok {
+			keys = append(keys, claudeWorkflowKey(account, root, run))
+		}
 		if root, rest, found := strings.Cut(native, ":subagent:"); found {
 			// The agent file's name, as the legacy launch-result reading
 			// takes it: after the last path or nesting separator.
@@ -260,7 +266,7 @@ func parseLaunchOutcomeFor(provider, launch, text string) launchOutcome {
 // function re-derives them from stored rows. Claude's group lineage (whose
 // stored parent may be a fallback) is written by writeClaudeLineageEvidence.
 func conversationExecutionEvidence(conversation ConversationRecord) []EvidenceRecord {
-	claims := []EvidenceRecord{}
+	claims := conversationWorkflowEvidence(conversation)
 	namespace := conversation.Provider + "/" + conversation.Account
 	// Claude's own parent field is written after group lineage chose it
 	// (writeClaudeLineageEvidence records that); a parent another provider
@@ -683,7 +689,7 @@ func backfillExecutionEvidence(ctx context.Context, tx *sql.Tx, ids []string, on
 			}
 		}
 		messages, err := tx.QueryContext(ctx, `SELECT native_id,kind,COALESCE(call_id,''),text FROM messages WHERE conversation_id=?
-		 AND (kind IN ('delegation','delegation_result') OR (kind='tool_result' AND call_id<>'') OR (kind='metadata' AND text LIKE '{"payload":%"type":"session_meta"%'))
+		 AND (kind IN ('delegation','delegation_result') OR (`+claudeWorkflowCallSQL("")+`) OR (kind='tool_result' AND call_id<>'') OR (kind='metadata' AND text LIKE '{"payload":%"type":"session_meta"%'))
 		 ORDER BY source_order IS NULL,source_order,created_at,id`, id)
 		if err != nil {
 			return err
@@ -787,7 +793,10 @@ func retainedParentNamespace(ctx context.Context, tx *sql.Tx, id string, convers
 // else an adapter retains changed since v1.
 func ingestStillComplete(provider, version string) bool {
 	switch {
-	case version == executionEvidenceVersion:
+	case version == executionEvidenceVersion, version == "execution-evidence-v3", version == "execution-evidence-v4":
+		// v4 and v5 add only evidence recoverable from retained messages;
+		// a provider read that already supplied v3's copy/parent evidence
+		// remains complete through those upgrades.
 		return true
 	case sessionParentProviders[provider], provider == "cursor":
 		return false
@@ -1213,7 +1222,7 @@ func persistedExecutionClaims(ctx context.Context, q queryer, e *executionEviden
 			e.Missing = appendMissing(e.Missing, missingCursorCopyEvidence)
 		}
 	}
-	stored, err := loadStoredExecutionClaims(ctx, q, `WHERE kind IN (?,?,?)`, evidenceParent, evidenceLaunchOutcome, evidenceHistoryCopy)
+	stored, err := loadStoredExecutionClaims(ctx, q, `WHERE kind IN (?,?,?,?)`, evidenceParent, evidenceLaunchOutcome, evidenceHistoryCopy, evidenceWorkflowLaunch)
 	if err != nil {
 		return err
 	}
@@ -1235,6 +1244,7 @@ func persistedExecutionClaims(ctx context.Context, q queryer, e *executionEviden
 		}
 	}
 	conversationRef := func(id string) sourceRef { return sourceRef{sourceConversation, id} }
+	appendWorkflowParents := workflowParentAppender(e)
 	for _, claim := range stored {
 		if _, current := states[claim.ConversationID]; !current && (claim.Source != evidenceSourceClaude || stale[claim.ConversationID]) {
 			continue
@@ -1249,6 +1259,8 @@ func persistedExecutionClaims(ctx context.Context, q queryer, e *executionEviden
 			locator = sourceRef{sourceMessage, messageCatalogID(claim.ConversationID, message)}
 		}
 		switch claim.Kind {
+		case evidenceWorkflowLaunch:
+			appendWorkflowParents(claim.ConversationID, claim.Object, locator, strength)
 		case evidenceParent:
 			parent, _ := index.resolve(claim.ConversationID, claim.Object)
 			if parent == "" || parent == claim.ConversationID {

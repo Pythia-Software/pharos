@@ -116,6 +116,9 @@ func dependencyRows(ctx context.Context, q queryer, ids []string) (map[string]*d
 	if err := dependencyLaunchResults(ctx, q, out, ids); err != nil {
 		return nil, err
 	}
+	if err := dependencyWorkflowLaunches(ctx, q, out, ids); err != nil {
+		return nil, err
+	}
 	if err := dependencyOriginParents(ctx, q, out, ids); err != nil {
 		return nil, err
 	}
@@ -410,6 +413,15 @@ func fillDependencyInverse(ctx context.Context, q queryer, entry *dependencyInve
 	for _, row := range rows {
 		launchers = append(launchers, firstString(row["id"]))
 	}
+	rows, err = queryMapsContext(ctx, q, `SELECT DISTINCT conversation_id id FROM messages WHERE `+claudeWorkflowCallSQL("")+within("conversation_id"), args...)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if id := firstString(row["id"]); !slices.Contains(launchers, id) {
+			launchers = append(launchers, id)
+		}
+	}
 	read := func(ids []string, fill func(map[string]*dependencyConversation) error, index map[string][]string) error {
 		if len(ids) == 0 {
 			return nil
@@ -443,7 +455,10 @@ func fillDependencyInverse(ctx context.Context, q queryer, entry *dependencyInve
 		return err
 	}
 	return read(launchers, func(cs map[string]*dependencyConversation) error {
-		return dependencyLaunchResults(ctx, q, cs, launchers)
+		if err := dependencyLaunchResults(ctx, q, cs, launchers); err != nil {
+			return err
+		}
+		return dependencyWorkflowLaunches(ctx, q, cs, launchers)
 	}, entry.handles)
 }
 
@@ -918,6 +933,14 @@ func dependencyInverse(ctx context.Context, q queryer, ids, keys []string) ([]st
 				natives = append(natives, parts)
 			}
 		} else if rest, ok := strings.CutPrefix(key, "claude-agent:"); ok {
+			if parts := strings.SplitN(rest, "|", 3); len(parts) == 3 {
+				root := [2]string{parts[0], parts[1]}
+				if agents[root] == nil {
+					agents[root] = map[string]bool{}
+				}
+				agents[root][key] = true
+			}
+		} else if rest, ok := strings.CutPrefix(key, "claude-workflow:"); ok {
 			if parts := strings.SplitN(rest, "|", 3); len(parts) == 3 {
 				root := [2]string{parts[0], parts[1]}
 				if agents[root] == nil {
