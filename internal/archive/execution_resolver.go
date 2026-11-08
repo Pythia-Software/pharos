@@ -889,34 +889,76 @@ func (r *executionResolution) resolveAncestry(id executionID) executionAncestry 
 	return a
 }
 
-// chooseLabel picks presentation once: an authored name, the originating
-// launch's assignment, the agent nickname, its path, then the native ID.
+// chooseLabel picks presentation once across the original's recordings.
+// Human text is the first excerpt fallback, even when it arrives after an
+// automated opening. No native identifier is ever a presentation fallback.
 func (r *executionResolution) chooseLabel(x *execution, bySubject map[sourceRef][]executionClaim) executionLabel {
 	var origin *executionStream
 	if x.Conversation != "" {
 		origin = r.streams[sourceRef{sourceConversation, x.Conversation}]
 	}
-	if origin != nil && origin.AuthoredName != "" {
-		return executionLabel{origin.AuthoredName, "authored"}
+	streams := []*executionStream{}
+	if origin != nil {
+		streams = append(streams, origin)
 	}
-	if launch := r.originatingLaunch(x, bySubject); launch != nil && launch.Assignment != "" {
-		return executionLabel{launch.Assignment, "assignment"}
+	seen := map[sourceRef]bool{}
+	if origin != nil {
+		seen[origin.Ref] = true
 	}
-	for _, m := range x.Streams {
-		if s := r.streams[m]; s.Assignment != "" {
-			return executionLabel{s.Assignment, "assignment"}
+	for _, cid := range x.Segments {
+		ref := sourceRef{sourceConversation, cid}
+		if s := r.streams[ref]; s != nil && !seen[ref] {
+			streams = append(streams, s)
+			seen[ref] = true
 		}
 	}
-	if origin == nil {
-		origin = r.streams[x.Streams[0]]
+	for _, m := range x.Streams {
+		if s := r.streams[m]; s != nil && !seen[m] {
+			streams = append(streams, s)
+			seen[m] = true
+		}
 	}
-	switch {
-	case origin.Nickname != "":
-		return executionLabel{origin.Nickname, "nickname"}
-	case origin.AgentPath != "":
-		return executionLabel{origin.AgentPath, "agent_path"}
+	for _, s := range streams {
+		if s.NameSource == "override" && meaningfulWorkspaceTitle(s.AuthoredName, s.NativeID) {
+			return executionLabel{s.AuthoredName, "override"}
+		}
 	}
-	return executionLabel{origin.NativeID, "native_id"}
+	var named *executionStream
+	for _, s := range streams {
+		if meaningfulWorkspaceTitle(s.AuthoredName, s.NativeID) && (named == nil || s.NameRank < named.NameRank) {
+			named = s
+		}
+	}
+	if named != nil {
+		return executionLabel{named.AuthoredName, "authored"}
+	}
+	for _, s := range streams {
+		if meaningfulWorkspaceTitle(s.HumanName, s.NativeID) {
+			return executionLabel{s.HumanName, "typed"}
+		}
+	}
+	if launch := r.originatingLaunch(x, bySubject); launch != nil && meaningfulWorkspaceTitle(launch.Assignment, launch.NativeID) {
+		return executionLabel{launch.Assignment, "assignment"}
+	}
+	for _, s := range streams {
+		if meaningfulWorkspaceTitle(s.Assignment, s.NativeID) {
+			return executionLabel{s.Assignment, "assignment"}
+		}
+		if meaningfulWorkspaceTitle(s.RequestName, s.NativeID) {
+			return executionLabel{s.RequestName, "assignment"}
+		}
+	}
+	for _, s := range streams {
+		if meaningfulWorkspaceTitle(s.Nickname, s.NativeID) {
+			return executionLabel{s.Nickname, "nickname"}
+		}
+	}
+	for _, s := range streams {
+		if meaningfulWorkspaceTitle(s.ContextName, s.NativeID) {
+			return executionLabel{s.ContextName, "context"}
+		}
+	}
+	return executionLabel{"Conversation without retained request", "unavailable"}
 }
 
 // originatingLaunch is the launch stream that created the execution: one with

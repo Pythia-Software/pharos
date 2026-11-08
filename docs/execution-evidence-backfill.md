@@ -17,10 +17,10 @@ they do not rewrite source transcripts or discard reported usage.
 
 | Change | Existing-catalog effect |
 | --- | --- |
-| Resolver `execution-v7` | Supersedes earlier labels/events execution digests once, including Workflow run parentage. Attribution and membership rebuild; inference can be reused when its complete inputs still match. Pending results remain visibly qualified. |
+| Resolver `execution-v8` | Supersedes earlier labels/events execution digests once, including Workflow run parentage and conversation names. Attribution and membership rebuild; inference can be reused when its complete inputs still match. Pending results remain visibly qualified. |
 | Request ledger `tools-v13-request-sources` | Adds first/last usage-message links and rebuilds request rows from stored messages. Request identities and reconciled accounting are preserved. |
-| Parallelism stored version `4/execution-v7` | Re-derives cached activity with the shared resolver occurrence index, including copied launches. Source-generation changes trigger a fingerprint sweep; a resolver-version change forces the existing one-time rebuild even when source data is unchanged. Corrected native-ID, locator and ancestry triggers are installed on existing catalogs too. |
-| Origins stored version `2/execution-v7`, execution-generation/fingerprint metadata | Recomputes origins once on a resolver upgrade, including when source data is unchanged; subsequent opens stay idle and source changes republish only when shared lineage changes. |
+| Parallelism stored version `4/execution-v8` | Re-derives cached activity with the shared resolver occurrence index, including copied launches. Source-generation changes trigger a fingerprint sweep; a resolver-version change forces the existing one-time rebuild even when source data is unchanged. Corrected native-ID, locator and ancestry triggers are installed on existing catalogs too. |
+| Origins stored version `2/execution-v8`, execution-generation/fingerprint metadata | Recomputes origins once on a resolver upgrade, including when source data is unchanged; subsequent opens stay idle and source changes republish only when shared lineage changes. |
 | Retained evidence inputs corrected or removed | Marks reconstructed evidence stale, withholds unsupported group claims and weakens materialized inference copies to hints. Ordinary backfill repairs the current claims; independent provider assertions are preserved. |
 
 Parallelism shares the resolver's complete occurrence index for activity and

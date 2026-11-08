@@ -495,7 +495,7 @@ func (c *Catalog) originsPass(ctx context.Context) {
 // that stores origins is one too. A pass that does nothing is forgotten.
 func (c *Catalog) maintainLibrary(ctx context.Context) {
 	schedule := searchScheduleGate{}
-	var view, previews, parallelism, shape *daemonPass
+	var view, previews, parallelism, shape, names *daemonPass
 	settle := func(pass **daemonPass, more bool, err error) {
 		if *pass != nil && (!more || err != nil) {
 			(*pass).end(err)
@@ -512,6 +512,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 		settle(&previews, false, nil)
 		settle(&parallelism, false, nil)
 		settle(&shape, false, nil)
+		settle(&names, false, nil)
 	}()
 	var originsAt time.Time
 	var resumeProjections func()
@@ -523,13 +524,13 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 	}()
 	for {
 		workCtx := ctx
-		for _, active := range []*daemonPass{view, previews, parallelism, shape} {
+		for _, active := range []*daemonPass{view, previews, parallelism, shape, names} {
 			if active.active() {
 				workCtx = active.context(ctx)
 				break
 			}
 		}
-		if schedule.wait(ctx, c, &view, &previews, &parallelism, &shape) != nil || c.queries.wait(workCtx) != nil {
+		if schedule.wait(ctx, c, &view, &previews, &parallelism, &shape, &names) != nil || c.queries.wait(workCtx) != nil {
 			return
 		}
 		if !c.libraryRefreshStopped() && (c.ingestRuns.Load() == 0 || time.Since(originsAt) >= originsRunInterval) {
@@ -548,7 +549,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 				if resumeProjections != nil {
 					resumeProjections()
 				}
-				resumeProjections = waitForDaemonPasses(reason, detail, view, previews, parallelism, shape)
+				resumeProjections = waitForDaemonPasses(reason, detail, view, previews, parallelism, shape, names)
 				projectionWaitReason = reason
 			}
 			select {
@@ -565,6 +566,16 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 		pass, done, running := c.libraryPass(ctx)
 		if !running {
 			continue
+		}
+		// Names advance even while a large Search projection is catching up.
+		begin(&names, kindNames)
+		var named int
+		var nameErr error
+		names.runIO(pass, func(ctx context.Context) { named, nameErr = c.refreshConversationNames(ctx, 25) })
+		names.worked(named)
+		settle(&names, named > 0, nameErr)
+		if nameErr != nil && pass.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Conversation names: %v\n", nameErr)
 		}
 		begin(&view, "maintenance.library-view")
 		var count int
@@ -627,6 +638,10 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 					if err != nil || shaped == 0 {
 						if err != nil && pass.Err() == nil {
 							fmt.Fprintf(os.Stderr, "Session shape: %v\n", err)
+						}
+						if named > 0 && nameErr == nil && err == nil {
+							done()
+							continue
 						}
 						wait = 2 * time.Second
 						// Warming only reads; its operation is never published.

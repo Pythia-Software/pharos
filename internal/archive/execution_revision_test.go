@@ -32,7 +32,7 @@ func TestExecutionSourceGenerationFollowsSourcesNotDerivatives(t *testing.T) {
 		`UPDATE messages SET raw_text='raw' WHERE id='note'`,
 		`UPDATE conversations SET origin_host_id='host' WHERE id='child'`,
 		`INSERT INTO parallelism_activity(conversation_id,turns,model_spans) VALUES('child',x'',x'')`,
-		`UPDATE workspaces SET title='renamed',activity_at='2026-02-01' WHERE id='work'`,
+		`UPDATE workspaces SET activity_at='2026-02-01' WHERE id='work'`,
 	} {
 		fixtureExec(t, c, statement)
 	}
@@ -83,6 +83,7 @@ func TestExecutionSourceGenerationFollowsSourcesNotDerivatives(t *testing.T) {
 		{`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('root','child','mirror',1,'{}')`, []string{"child", "root"}},
 		// Every conversation in the workspace reads its source kind.
 		{`UPDATE workspaces SET source_kind='claude' WHERE id='work'`, []string{"child", "root"}},
+		{`UPDATE workspaces SET title='A useful source rename' WHERE id='work'`, []string{"child", "root"}},
 	} {
 		if got := changes(step.statement); !reflect.DeepEqual(got, step.want) {
 			t.Fatalf("%s recorded %v, want %v", step.statement, got, step.want)

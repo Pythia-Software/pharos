@@ -26,6 +26,7 @@ import (
 // (SQL over %[1]s, the NEW or OLD row).
 type executionSourceTable struct {
 	table   string
+	tag     string   // optional second dependency on a narrower set of columns
 	owners  []string // SQL over the row, or a SELECT of owner rows
 	columns []string // nil: every column
 	// presence lists columns that matter only as zero or positive.
@@ -33,6 +34,16 @@ type executionSourceTable struct {
 }
 
 var executionSourceTables = []executionSourceTable{
+	// Source titles have conversation scope only while there is one root.
+	// A second root, a move or a corrected depth invalidates the other roots'
+	// names too. Nickname/usage changes keep their existing narrower owner.
+	{table: "conversations", tag: "name_scope", owners: []string{`SELECT id owner FROM conversations WHERE workspace_id=%[1]s.workspace_id
+ AND agent_depth=0 AND instr(native_id,':subagent:')=0
+ AND %[1]s.agent_depth=0 AND instr(%[1]s.native_id,':subagent:')=0`,
+		`SELECT c.id owner FROM conversations c JOIN workspace_names n ON n.workspace_id=c.workspace_id
+ WHERE n.display_workspace_id=%[1]s.workspace_id AND c.agent_depth=0 AND instr(c.native_id,':subagent:')=0
+ AND %[1]s.agent_depth=0 AND instr(%[1]s.native_id,':subagent:')=0`},
+		columns: []string{"id", "workspace_id", "native_id", "agent_depth", "parent_id", "provider"}},
 	{table: "conversations", owners: []string{"%[1]s.id"},
 		columns: []string{"id", "workspace_id", "provider", "account", "native_id", "parent_id", "agent_depth", "agent_path", "agent_nickname", "started_at", "aliases_json"}},
 	{table: "agent_sessions", owners: []string{"%[1]s.conversation_id"},
@@ -51,13 +62,21 @@ var executionSourceTables = []executionSourceTable{
 	{table: "model_requests", owners: []string{"%[1]s.conversation_id"}, columns: []string{"id", "conversation_id", "agent_session_id", "source_message_id", "final_message_id"}},
 	{table: "conversation_identity_links", owners: []string{"%[1]s.left_id", "%[1]s.right_id"}},
 	{table: "conversation_launches", owners: []string{"%[1]s.child_id", "%[1]s.parent_id"}},
+	{table: "conversation_name_candidates", owners: []string{"%[1]s.conversation_id"}},
+	{table: "authorship_message_state", owners: []string{"SELECT conversation_id owner FROM messages WHERE id=%[1]s.message_id"}},
+	{table: "workspace_names", owners: []string{"SELECT id owner FROM conversations WHERE workspace_id=%[1]s.workspace_id",
+		"SELECT c.id owner FROM conversations c JOIN workspace_names n ON n.workspace_id=c.workspace_id WHERE n.display_workspace_id=%[1]s.workspace_id"},
+		columns: []string{"workspace_id", "display_source", "source_scope", "display_workspace_id", "override_title"}},
+	{table: "tl1_attempts", owners: []string{"SELECT c.id owner FROM conversations c JOIN workspaces w ON w.id=c.workspace_id WHERE c.native_id=%[1]s.conversation_native_id AND w.source_kind='tl1' AND w.source_id=%[1]s.installation_id||':'||%[1]s.task_id"},
+		columns: []string{"installation_id", "task_id", "conversation_native_id", "attempt_number"}},
 	{table: "origin_observations", owners: []string{"%[1]s.conversation_id"},
 		// evidence_key says which adapter recorded a parent (its namespace).
 		columns: []string{"conversation_id", "evidence_key", "parent_native_id", "parent_provider", "parent_account"}},
 	{table: "execution_claims", owners: []string{"%[1]s.conversation_id"}},
 	// The source kind says which adapter recorded a retained parent with no
 	// recorded namespace (addRetainedNativeParents).
-	{table: "workspaces", owners: []string{"SELECT id owner FROM conversations WHERE workspace_id=%[1]s.id"}, columns: []string{"id", "source_kind"}},
+	{table: "workspaces", owners: []string{"SELECT id owner FROM conversations WHERE workspace_id=%[1]s.id",
+		"SELECT c.id owner FROM conversations c JOIN workspace_names n ON n.workspace_id=c.workspace_id WHERE n.display_workspace_id=%[1]s.id"}, columns: []string{"id", "source_id", "source_kind", "title"}},
 	{table: "execution_evidence_state", owners: []string{"%[1]s.conversation_id"}},
 }
 
@@ -229,7 +248,11 @@ func executionSourceTriggers(tx *sql.Tx, source executionSourceTable) ([]string,
  SELECT owner,(SELECT value FROM execution_source_generation WHERE id=1) FROM (` + owners(rows...) + `) WHERE owner IS NOT NULL
  ON CONFLICT(conversation_id) DO UPDATE SET generation=excluded.generation; END`
 	}
-	name := func(event string) string { return sqlIdentifier("execution_source_" + source.table + "_" + event) }
+	prefix := "execution_source_" + source.table
+	if source.tag != "" {
+		prefix += "_" + source.tag
+	}
+	name := func(event string) string { return sqlIdentifier(prefix + "_" + event) }
 	table := sqlIdentifier(source.table)
 	return []string{
 		fmt.Sprintf("CREATE TRIGGER %s AFTER INSERT ON %s %s", name("insert"), table, body("NEW")),

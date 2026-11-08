@@ -2142,6 +2142,8 @@ func TestAuthorshipQuickUpgradeRetainsExcludedMirrors(t *testing.T) {
 		`ALTER TABLE authorship_pending DROP COLUMN sent_at`, `ALTER TABLE authorship_pending DROP COLUMN queued_at`,
 		`DELETE FROM authorship_message_state WHERE disposition='suppressed'`,
 		`DROP INDEX authorship_disposition`,
+		`DROP TRIGGER IF EXISTS query_cache_authorship_message_state_UPDATE`,
+		`DROP TRIGGER IF EXISTS execution_source_authorship_message_state_update`,
 		`ALTER TABLE authorship_message_state DROP COLUMN disposition`, `ALTER TABLE authorship_message_state DROP COLUMN representative_id`,
 		`INSERT INTO authorship_pending(message_id,revision) VALUES('mirror','old-backlog')`,
 		`UPDATE meta SET value='1' WHERE key='authorship_quick_initialized'`,

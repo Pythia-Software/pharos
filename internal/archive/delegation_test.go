@@ -169,15 +169,19 @@ func TestDelegationTopLevelConversationLabels(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Every row's label is the resolver's (one label in every
-			// projection); the work's title or the opening request is a
-			// subtitle, never a substitute.
+			// Every row uses the resolver's name. A source title can name its
+			// one root; a shared workspace title cannot name several roots,
+			// and an unclassified document preview is not human text.
 			for _, n := range s.Nodes {
 				if x := s.projection.res.Executions[n.execution]; x == nil || n.Label != x.Label.Text {
 					t.Fatalf("%s label %q is not the resolver's %+v", n.ID, n.Label, x)
 				}
 			}
-			if got, sub := s.ByID["root-session"].Label, s.ByID["root-session"].Subtitle; got != "root-native" || sub != "Delegated work" {
+			want, subtitle := "Delegated work", "First root prompt"
+			if tc.second {
+				want, subtitle = "Conversation without retained request", "Delegated work"
+			}
+			if got, sub := s.ByID["root-session"].Label, s.ByID["root-session"].Subtitle; got != want || sub != subtitle {
 				t.Fatalf("first root label = %q (%q)", got, sub)
 			}
 			if tc.second {
@@ -185,7 +189,7 @@ func TestDelegationTopLevelConversationLabels(t *testing.T) {
 				if tc.derived {
 					id = "root-two-session"
 				}
-				if got, sub := s.ByID[id].Label, s.ByID[id].Subtitle; got != "root-two-native" || sub != "Delegated work" {
+				if got, sub := s.ByID[id].Label, s.ByID[id].Subtitle; got != "Conversation without retained request" || sub != "Delegated work" {
 					t.Fatalf("second root label = %q (%q)", got, sub)
 				}
 			}
@@ -200,6 +204,9 @@ func TestDelegationAssignmentLabels(t *testing.T) {
 	for _, tc := range []struct{ name, text, want string }{
 		{"codex task name after opaque message", `{"tool":"spawn_agent","input":{"fork_turns":"all","message":"gAAAA` + strings.Repeat("x", 12000) + `","task_name":"tooling_independent_review"}}`, "tooling_independent_review"},
 		{"task name before longer description", `{"input":{"task_name":"review","description":"Review all of the implementation"}}`, "review"},
+		{"task path uses retained message", `{"input":{"task_name":"/root/explore","message":"Inspect URL restoration"}}`, "Inspect URL restoration"},
+		{"task identifier uses retained prompt", `{"input":{"task_name":"01a128b8-395c-7121-bf40-9a1903a6f306","prompt":"Inspect URL restoration"}}`, "Inspect URL restoration"},
+		{"weak description uses retained prompt", `{"input":{"task_name":"Untitled","description":"/root/explore","prompt":"Inspect URL restoration"}}`, "Inspect URL restoration"},
 		{"claude description", `{"tool":"Task","input":{"description":"Check network","prompt":"Longer instructions"}}`, "Check network"},
 		{"prompt", `{"input":{"prompt":"Review the implementation"}}`, "Review the implementation"},
 		{"antigravity prompt", `{"tool":"invoke_subagent","input":{"Prompt":"check tests"}}`, "check tests"},
@@ -236,7 +243,7 @@ func TestDelegationAssignmentLabels(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, node := range []struct{ id, fallback string }{{"child-session", "Child nickname"}, {"embedded", "other-execution"}} {
+			for _, node := range []struct{ id, fallback string }{{"child-session", "Child nickname"}, {"embedded", "Conversation without retained request"}} {
 				want := firstString(tc.want, node.fallback)
 				if got := s.ByID[node.id].Label; got != want {
 					t.Fatalf("%s label = %q, want %q", node.id, got, want)

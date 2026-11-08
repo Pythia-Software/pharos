@@ -37,6 +37,7 @@ var cliCommandCoverage = map[string]string{
 	"labeling":              "reads only a static backup copy of a catalog (immutable) and writes only its own dataset directory; never opens a live catalog",
 
 	"execution-evidence": "execution-evidence run is the leased catalog.execution-evidence operation (cliCatalogOperation); status only reads",
+	"conversation-names": "audits through a query-only catalog open; never initializes or writes library data",
 }
 
 // Every writing Terminal command takes a lease and registers its
