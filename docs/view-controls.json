@@ -3841,15 +3841,6 @@
       "reason": "Library upgrade/migration preview or mutation action, not an applied content query."
     },
     {
-      "key": "eca88c5aa1a147f6:0",
-      "file": "web/src/agent-event-examples.tsx",
-      "owner": "AgentEventExamples",
-      "tag": "button",
-      "control": "onClick={() => setShown(value => value + 24)}",
-      "contract": "transient",
-      "reason": "Shows more example events in the panel; how many are shown is not part of the view and resets on reload."
-    },
-    {
       "key": "103123ac664d233e:0",
       "file": "web/src/app-navigation.tsx",
       "owner": "AppNavigation",

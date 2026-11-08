@@ -126,9 +126,7 @@ import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDataset
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
 import { agentEventFixLinks, agentEventRatesCatalog } from "./agent-event-rates-catalog";
-import { AgentEventExamples } from "./agent-event-examples";
-import { AgentEventRates } from "./agent-event-rates";
-import { agentEventReadWhere, daySpan, eventRates, ratePeriod } from "./agent-event-rates-model";
+import { agentEventReadWhere } from "./agent-event-rates-model";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
 import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink, useDashboardHeadline } from "./usage-workspace";
@@ -1345,26 +1343,10 @@ function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
     {card("In thinking", total ? `${(100 * value(events, "thinking") / total).toFixed(0)}%` : "—", "of these events were in agents' private reasoning")}
   </div></>;
 }
-// The rate panel: events by day and kind group over messages read by day,
-// under the dashboard's filters (the event-only ones narrow the events).
-const agentEventDailyEvents: AggregationClause[] = [{ id: "events", op: "count", groupBy: ["day", "family_group"] }];
-const agentEventDailyRead: AggregationClause[] = [{ id: "read", op: "count", groupBy: ["day"] }];
-function AgentExperienceRates({ where }: { where: WhereTerm[] }) {
-  const events = useMetrics("agent_events", where, agentEventDailyEvents);
-  const read = useMetrics("agent_event_messages", readWhere(where), agentEventDailyRead);
-  const readBuckets = read.metrics.find(metric => metric.id === "read")?.buckets ?? [];
-  const period = ratePeriod(daySpan(readBuckets));
-  const periods = eventRates(events.metrics.find(metric => metric.id === "events")?.buckets ?? [], readBuckets, period);
-  return <AgentEventRates periods={periods} period={period} loading={events.loading || read.loading} error={events.error || read.error} />;
-}
 function AgentExperienceDashboard() {
   return <CatalogDashboard catalog={agentEventsAnalysisCatalog} dataset="agent_events" name="agent-experience" defaults={dashboardDefaults.agent_experience}
     summary={where => <AgentExperienceSummary where={where} />}
-    panels={where => <>
-      <AgentExperienceRates where={where} />
-      <p className="usage-dashboard-note">Events are sentences a small model judged to express one kind of event, found from keyword candidates in agents' visible replies and thinking. It is model output, not review: expect some misses and false alarms, and compare rates rather than reading single counts. Confidence threshold 0.5.</p>
-      <AgentEventExamples where={where} queryURL={usageWorkspaceURL({ mode: "query", dataset: "agent_events", query: { ...EMPTY_QUERY, where } })} />
-    </>} />;
+    after={<p className="usage-dashboard-note">Events are sentences a small model judged to express one kind of event, found from keyword candidates in agents' visible replies and thinking. It is model output, not review: expect some misses and false alarms. Compare rates in <UsageWorkspaceLink href={usageWorkspaceURL({ mode: "dashboards", topic: "agent_event_rates" })}>Agent Events</UsageWorkspaceLink> rather than reading single counts. Confidence threshold 0.5.</p>} />;
 }
 
 // Agent Events: how often each kind of event occurs, over agent_event_rates
