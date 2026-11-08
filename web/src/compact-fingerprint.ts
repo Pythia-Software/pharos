@@ -1,4 +1,4 @@
-// Compact image layout shared by the background renderer and preview tools.
+// Reference compact layout for browser previews and native-renderer parity.
 // Detailed conversation and timeline layouts keep their own rendering.
 import {conversationRibbon, parallelEnvelopes, ribbonSegment} from './conversation-fingerprint-model';
 import {mainSession, stateColor, type LabelConversation, type LabelTool, type Taxonomy} from './conversation-labels';

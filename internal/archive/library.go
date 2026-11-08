@@ -519,7 +519,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 				break
 			}
 		}
-		if schedule.wait(ctx, c, &view, &previews, &parallelism) != nil || c.queries.wait(workCtx) != nil {
+		if schedule.wait(ctx, c, &view, &previews, &parallelism, &shape) != nil || c.queries.wait(workCtx) != nil {
 			return
 		}
 		if !c.libraryRefreshStopped() && (c.ingestRuns.Load() == 0 || time.Since(originsAt) >= originsRunInterval) {
@@ -545,6 +545,20 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 		c.noteLibraryRefresh(count, err)
 		view.worked(count)
 		settle(&view, count > 0, err)
+		// Session facts must also advance during a large Search refresh. Doing
+		// one conversation between view batches avoids waiting for every dirty
+		// workspace and preview before an upgrade's backfill can even start.
+		if count > 0 && err == nil {
+			begin(&shape, "maintenance.session-shape")
+			var shaped int
+			var shapeErr error
+			shape.runIO(pass, func(ctx context.Context) { shaped, shapeErr = c.refreshSessionShape(ctx, 1, false) })
+			shape.worked(shaped)
+			settle(&shape, shaped > 0, shapeErr)
+			if shapeErr != nil && pass.Err() == nil {
+				fmt.Fprintf(os.Stderr, "Session shape: %v\n", shapeErr)
+			}
+		}
 		wait := time.Duration(0)
 		if err != nil {
 			if ctx.Err() != nil {

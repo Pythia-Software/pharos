@@ -23,8 +23,13 @@ import (
 	"strings"
 	"time"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
 )
+
+// A page may derive a small increment, never an upgrade's whole backlog.
+// Tests lower this limit instead of constructing a large catalog.
+var sessionShapeInlineLimit = 32
 
 const (
 	// sessionShapeVersion names the derivation stored in session_shape_facts.
@@ -575,8 +580,8 @@ func readSessionShapeInput(ctx context.Context, q queryer, id string) (sessionSh
 	// the reader's context rail; its model_requests row holds a delta of
 	// cumulative usage instead, which can span earlier requests.
 	rows, err = queryMapsContext(ctx, q, `SELECT m.id,m.role,m.kind,m.created_at,
- m.role='user' AND m.kind='message' AND trim(m.text,' '||char(9,10,13))='' blank,
- m.kind='metadata' AND (m.text LIKE '%"subtype":"compact_boundary"%' OR m.text LIKE '%"compaction_trigger":"%') compaction,
+ CASE WHEN m.role='user' AND m.kind='message' THEN trim(m.text,' '||char(9,10,13))='' ELSE 0 END blank,
+ CASE WHEN m.kind='metadata' THEN (m.text LIKE '%"subtype":"compact_boundary"%' OR m.text LIKE '%"compaction_trigger":"%') ELSE 0 END compaction,
  CASE WHEN m.kind='metadata' AND instr(m.text,'"model_context_window"')>0 THEN substr(m.text,instr(m.text,'"model_context_window"'),40) END window,
  CASE WHEN m.kind='metadata' AND instr(m.text,'"last_token_usage"')>0 THEN substr(m.text,instr(m.text,'"last_token_usage"'),400) END last_usage
  FROM messages m INDEXED BY messages_conversation_idx WHERE m.conversation_id=? ORDER BY m.created_at IS NULL,m.created_at,m.rowid`, id)
@@ -725,9 +730,14 @@ func deriveSessionShapeBatch(ctx context.Context, q queryer, limit int) ([]sessi
 	if err != nil {
 		return nil, err
 	}
+	return deriveSessionShapeRows(ctx, q, dirty)
+}
+
+func deriveSessionShapeRows(ctx context.Context, q queryer, dirty []map[string]any) ([]sessionShapeDerived, error) {
 	result := make([]sessionShapeDerived, 0, len(dirty))
 	for _, row := range dirty {
 		derived := sessionShapeDerived{id: firstString(row["conversation_id"]), revision: asString(row["revision"])}
+		var err error
 		if derived.facts, derived.evidence, err = deriveSessionShapeOf(ctx, q, derived.id); err != nil {
 			return nil, err
 		}
@@ -802,15 +812,22 @@ func (c *Catalog) refreshSessionShape(ctx context.Context, limit int, wait bool)
 }
 
 // sessionShapeAllFacts returns every conversation's facts: stored facts for
-// clean conversations and fresh ones for dirty conversations. Storing the
-// dirty ones is left to maintainLibrary, so a page never writes.
+// clean conversations and fresh ones for a bounded increment of dirty ones.
+// A large backfill is left to maintenance; partial totals are never returned.
 func (c *Catalog) sessionShapeAllFacts(ctx context.Context) (map[string]sessionShapeFacts, error) {
 	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	dirty, err := deriveSessionShapeBatch(ctx, tx, -1)
+	pending, err := queryMapsContext(ctx, tx, "SELECT conversation_id,revision FROM session_shape_dirty LIMIT ?", sessionShapeInlineLimit+1)
+	if err != nil {
+		return nil, err
+	}
+	if len(pending) > sessionShapeInlineLimit {
+		return nil, sessionShapeIndexingError()
+	}
+	dirty, err := deriveSessionShapeRows(ctx, tx, pending)
 	if err != nil {
 		return nil, err
 	}
@@ -857,6 +874,10 @@ func (c *Catalog) sessionShapeAllFacts(ctx context.Context) (map[string]sessionS
 		}
 	}
 	return result, nil
+}
+
+func sessionShapeIndexingError() error {
+	return &qt.PlanDiagnostic{Code: qt.ErrorCodeResourceLimit, Message: "Session statistics are being indexed. Retry after Search indexing finishes; incomplete totals are not shown."}
 }
 
 // sessionShapeOf returns one conversation's facts and evidence: stored, or
@@ -1061,11 +1082,15 @@ func (c *Catalog) newSessionShapeTable(ctx context.Context, facts map[string]ses
 		}
 	}
 	kept, keptRows := map[string]bool{}, []map[string]any{}
-	for _, row := range c.suppressMirrors(candidates) {
+	mirrors, err := c.suppressMirrorsContext(ctx, candidates)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range mirrors {
 		kept[firstString(row["id"])] = true
 		keptRows = append(keptRows, map[string]any{"workspace_id": row["id"]})
 	}
-	lineage, err := c.usageConversationRoots(keptRows)
+	lineage, err := c.usageConversationRootsContext(ctx, keptRows)
 	if err != nil {
 		return nil, err
 	}

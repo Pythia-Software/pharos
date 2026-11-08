@@ -214,21 +214,25 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 				early, err = querytable.ResolveRelativeWhere(early, localSchema, time.UnixMilli(q.Now))
 				if err == nil {
 					readFields := libraryFieldsFor(required...)
-					if q.Grouping == nil && q.Rows && readFields != nil && readFields.hasAny(libraryCostFields) {
+					if q.Grouping == nil && q.Rows {
+						// libraryPage fills native display columns after filtering,
+						// sorting and paging. Only predicates, order, metrics and
+						// computed expressions need their inputs across all workspaces.
 						copy := q
-						copy.Result.Select = slices.DeleteFunc(slices.Clone(q.Result.Select), func(name string) bool { return slices.Contains(libraryCostFields, name) })
-						if !slices.Contains(copy.Result.Select, schema.IDField) {
-							copy.Result.Select = append(copy.Result.Select, schema.IDField)
+						copy.Result.Select = []string{schema.IDField}
+						for _, field := range q.Result.Select {
+							if _, native := localSchema.Fields[field]; !native {
+								copy.Result.Select = append(copy.Result.Select, field)
+							}
 						}
 						dependencies, e := s.queryV3SourceFields(ctx, schema, copy)
 						if e != nil {
 							return qt.QueryResultV3{}, nil, e
 						}
-						for _, field := range libraryCostFields {
-							if !slices.Contains(dependencies, field) {
-								delete(readFields, field)
-							}
-						}
+						readFields = libraryFieldsFor(dependencies...)
+					}
+					if record != nil && readFields != nil {
+						readFields[record.field] = true
 					}
 					rows, find, err = s.libraryRows(ctx, params, readFields, nil, early)
 				}
@@ -289,6 +293,28 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	if memoryScratch {
 		mode = 2
 	}
+	// Prepare cached dependencies before holding either a heavy slot or a
+	// reader transaction. Hour-dependent usage metrics stage a second source.
+	var hours []map[string]any
+	if dataset == "usage" && q.Grouping == nil && len(q.Metrics) > 0 && slices.Contains(required, "hour") {
+		localSchema, e := s.queryTableSchema("usage")
+		if e != nil {
+			return qt.QueryResultV3{}, nil, e
+		}
+		resolved, e := querytable.ResolveRelativeWhere(where, localSchema, time.UnixMilli(q.Now))
+		if e != nil {
+			return qt.QueryResultV3{}, nil, e
+		}
+		hours, err = s.Catalog.hourlyUsageForAggregation(ctx, resolved, required)
+		if err != nil {
+			return qt.QueryResultV3{}, nil, err
+		}
+	}
+	finish, err := heavyQueries.acquire(ctx)
+	if err != nil {
+		return qt.QueryResultV3{}, nil, err
+	}
+	defer finish()
 	tx, release, err := beginQueryWithTempStore(ctx, s.Catalog.reader(), mode)
 	if err != nil {
 		return qt.QueryResultV3{}, nil, err
@@ -308,7 +334,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	}
 	var result qt.QueryResultV3
 	if dataset == "usage" && q.Grouping == nil && len(q.Metrics) > 0 {
-		result, err = s.executeUsageQueryV3(ctx, tx, d, q, where, required)
+		result, err = s.executeUsageQueryV3(ctx, tx, d, q, hours, required)
 	} else {
 		result, err = d.ExecuteIn(ctx, tx, q, qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name})
 	}
@@ -318,6 +344,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	if err = release(); err != nil {
 		return qt.QueryResultV3{}, nil, err
 	}
+	finish()
 	// Group rows have their own identity. Source-record enrichment is only valid
 	// for the ordinary row projection and must never target a synthetic group ID.
 	if q.Grouping == nil && q.Rows {
@@ -344,7 +371,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 // Usage exposes daily rows but metrics that read hour reduce the hourly ledger.
 // Both populations are selected in the same request; Query Table owns every
 // filter, expression, row window and metric reduction on the staged sources.
-func (s *Server) executeUsageQueryV3(ctx context.Context, tx *sql.Tx, d qt.QueryDatasetV3, q qt.QueryRequestV3, originalWhere []qt.WhereTerm, required []string) (qt.QueryResultV3, error) {
+func (s *Server) executeUsageQueryV3(ctx context.Context, tx *sql.Tx, d qt.QueryDatasetV3, q qt.QueryRequestV3, hours []map[string]any, required []string) (qt.QueryResultV3, error) {
 	options := qt.PlanOptions{Identity: queryTableScope + ":" + d.Schema.Name, Resolver: qt.SQLiteComputedDefinitionResolver{Tx: tx, Scope: d.Scope, Dataset: d.Dataset}}
 	daily, hourly, shown := q, q, q
 	daily.Metrics, hourly.Metrics, shown.Metrics = nil, nil, nil
@@ -373,18 +400,6 @@ func (s *Server) executeUsageQueryV3(ctx context.Context, tx *sql.Tx, d qt.Query
 	result, err := d.ExecuteIn(ctx, tx, daily, options)
 	if err != nil || len(hourly.Metrics)+len(shown.Metrics) == 0 {
 		return result, err
-	}
-	localSchema, err := s.queryTableSchema("usage")
-	if err != nil {
-		return qt.QueryResultV3{}, err
-	}
-	resolved, err := querytable.ResolveRelativeWhere(originalWhere, localSchema, time.UnixMilli(q.Now))
-	if err != nil {
-		return qt.QueryResultV3{}, err
-	}
-	hours, err := s.Catalog.hourlyUsageForAggregation(ctx, resolved, required)
-	if err != nil {
-		return qt.QueryResultV3{}, err
 	}
 	byID := map[string]qt.MetricResult{}
 	for _, metric := range result.Metrics {

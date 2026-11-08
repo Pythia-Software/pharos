@@ -860,7 +860,7 @@ func (site *siteMap) allowedPhrase(given []string, allowed any, value any) strin
 		word, list = "not with ", no
 	}
 	// One given setting: name it once, then its values.
-	if len(given) == 1 && given[0] != "multiple_periods" {
+	if len(given) == 1 && given[0] != "multiple_periods" && given[0] != "single_selection" {
 		values := []string{}
 		for _, context := range list {
 			values = append(values, site.contextText(given, context))
@@ -947,6 +947,10 @@ func (site *siteMap) contextText(given, context []string) string {
 			parts[index] = "periods of several hours or days"
 		case name == "multiple_periods":
 			parts[index] = "single-unit periods"
+		case name == "single_selection" && value == "true":
+			parts[index] = "one group selected in the legend"
+		case name == "single_selection":
+			parts[index] = "no single group selected"
 		case value == site.Analyze.Absent:
 			parts[index] = name + " unset"
 		default:

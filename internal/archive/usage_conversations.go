@@ -1,6 +1,9 @@
 package archive
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 type usageConversationAttribution struct {
 	roots            map[string]map[string]any
@@ -23,6 +26,10 @@ func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConvers
 	return usageConversationRootsFrom(c.reader(), ledger)
 }
 
+func (c *Catalog) usageConversationRootsContext(ctx context.Context, ledger []map[string]any) (*usageConversationAttribution, error) {
+	return usageConversationRootsWithContext(ctx, c.reader(), ledger, nil)
+}
+
 // usageConversationRootsFrom is usageConversationRoots read through q.
 func usageConversationRootsFrom(q queryer, ledger []map[string]any) (*usageConversationAttribution, error) {
 	return usageConversationRootsWith(q, ledger, nil)
@@ -31,7 +38,11 @@ func usageConversationRootsFrom(q queryer, ledger []map[string]any) (*usageConve
 // usageConversationRootsWith resolves roots with the given launch links
 // (child_id, parent_id) in place of the stored ledger, when not nil.
 func usageConversationRootsWith(q queryer, ledger, derived []map[string]any) (*usageConversationAttribution, error) {
-	conversations, err := queryMaps(q, `SELECT c.id,c.workspace_id,c.parent_id,c.agent_depth,c.provider,
+	return usageConversationRootsWithContext(context.Background(), q, ledger, derived)
+}
+
+func usageConversationRootsWithContext(ctx context.Context, q queryer, ledger, derived []map[string]any) (*usageConversationAttribution, error) {
+	conversations, err := queryMapsContext(ctx, q, `SELECT c.id,c.workspace_id,c.parent_id,c.agent_depth,c.provider,
 		COALESCE(NULLIF(c.model,''),a.model) model,COALESCE(NULLIF(c.effort,''),a.effort) effort,
 		w.title root_title,r.display_name root_repository_name
 		FROM conversations c LEFT JOIN agent_sessions a ON a.conversation_id=c.id AND a.native_id='main'
@@ -39,17 +50,17 @@ func usageConversationRootsWith(q queryer, ledger, derived []map[string]any) (*u
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := queryMaps(q, `SELECT id,native_id,kind,conversation_id,parent_id,child_conversation_id FROM agent_sessions ORDER BY id`)
+	sessions, err := queryMapsContext(ctx, q, `SELECT id,native_id,kind,conversation_id,parent_id,child_conversation_id FROM agent_sessions ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
-	links, err := queryMaps(q, `SELECT left_id,right_id FROM conversation_identity_links ORDER BY left_id,right_id`)
+	links, err := queryMapsContext(ctx, q, `SELECT left_id,right_id FROM conversation_identity_links ORDER BY left_id,right_id`)
 	if err != nil {
 		return nil, err
 	}
 	launches := derived
 	if launches == nil {
-		if launches, err = queryMaps(q, `SELECT child_id,parent_id FROM conversation_launches ORDER BY child_id,parent_id`); err != nil {
+		if launches, err = queryMapsContext(ctx, q, `SELECT child_id,parent_id FROM conversation_launches ORDER BY child_id,parent_id`); err != nil {
 			return nil, err
 		}
 	}

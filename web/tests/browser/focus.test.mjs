@@ -125,6 +125,48 @@ const settingsLocal={id:'local',name:'Pending history',config:'/Libraries/Pendin
 const settingsArchive={id:'archive',name:'My archive',config:'/Volumes/Archive/library.toml',available:true};
 const settingsState={selected:settingsLocal.id,mcp:settingsLocal.id,busy:false,libraries:[settingsLocal,settingsArchive],local_library_parent:'/Users/test/Libraries'};
 
+for(const embedded of [false,true])test(`Obsolete folder pickers leave focus in the replacement source form (${embedded?'startup':'normal shell'})`,{skip},async t=>{
+  let releaseBroker,brokerStarted;
+  const brokerReady=new Promise(resolve=>{brokerStarted=resolve});
+  const {page}=await open(t,{url:embedded?'/app':'/settings/sources',ready:embedded?'#application-setup[open]':'#pharosAddSource',api:{
+    'POST /api/app/choose-folder':()=>new Promise(resolve=>{releaseBroker=resolve;brokerStarted()}),
+  }});
+  if(!embedded)await page.evaluate(()=>{
+    window.webkit={messageHandlers:{pharosLibrary:{postMessage:()=>new Promise((resolve,reject)=>{window.finishFolder=(fail)=>fail?reject(Error('Obsolete chooser error')):resolve('/obsolete')})}}};
+  });
+  const guide=page.locator('#pharosOnboarding');
+  for(const purpose of (embedded?['source']:['source','export'])){
+    await page.evaluate(({purpose})=>window.pharosOnboarding.open({mode:purpose==='source'?'manual':'import',kind:'claude'}),{purpose});
+    const field=guide.getByRole('textbox',{name:purpose==='source'?'Claude Code folder':'Export',exact:true});
+    await field.waitFor();
+    const picker=guide.getByRole('button',{name:purpose==='source'?'Choose folder… Claude Code folder':'Choose file… Export',exact:true});
+    await picker.evaluate(button=>{window.originalFolderButton=button});
+    await picker.click();
+    await page.waitForFunction(()=>window.originalFolderButton.disabled);
+    if(embedded)await brokerReady;
+    await guide.getByRole('button',{name:'Back',exact:true}).click();
+    if(!embedded&&purpose==='source'){
+      await guide.getByRole('button',{name:'Cancel',exact:true}).click();
+      await page.evaluate(()=>window.pharosOnboarding.open({mode:'manual',kind:'claude'}));
+    }else if(purpose==='source'){
+      await guide.getByRole('radio',{name:/I’ll tell Pharos where to look/}).check();
+      await guide.getByRole('button',{name:'Continue',exact:true}).click();
+    }else await guide.getByRole('button',{name:'Import an export',exact:true}).click();
+    const replacement=guide.getByRole('textbox',{name:purpose==='source'?'Claude Code folder':'Export',exact:true});
+    await replacement.fill('/replacement');
+    assert.ok(await replacement.evaluate(element=>document.activeElement===element));
+    if(embedded){
+      assert.ok(releaseBroker,'the startup broker chooser was not requested');
+      releaseBroker({path:'/obsolete'});releaseBroker=null;
+    }else await page.evaluate(fail=>window.finishFolder(fail),purpose==='export');
+    await page.waitForFunction(()=>!window.originalFolderButton.disabled);
+    assert.ok(await replacement.evaluate(element=>document.activeElement===element),'an obsolete picker moved focus out of the replacement form');
+    // Return to the start screen for the next purpose.
+    await guide.getByRole('button',{name:'Back',exact:true}).click();
+    if(!embedded)await guide.getByRole('button',{name:'Cancel',exact:true}).click();
+  }
+});
+
 test('Library settings opens inline forms and returns focus when cancelled', {skip}, async t => {
   const {page,shot}=await open(t,{url:'/settings',ready:'#healthCards .panel',managedLibrary:settingsLocal,api:{
     'GET /api/app/state':settingsState,
@@ -324,12 +366,12 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
   await page.getByLabel('Google Cloud project ID',{exact:true}).fill('pharos-example');
   await page.getByLabel('Require a password to restore',{exact:true}).selectOption('true');
   await page.getByRole('button',{name:'Review configuration & commands',exact:true}).click();
-  await page.evaluate(()=>{window.cloudCopies=0;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{window.cloudCopies++;}}});});
   for(const [index,label]of ['Copy preparation commands','Copy password setup command','Copy final commands'].entries()){
-    const button=page.getByRole('button',{name:label,exact:true});await button.focus();await page.keyboard.press('Enter');
-    await page.waitForFunction(count=>window.cloudCopies===count,index+1);
-    assert.ok(await button.evaluate(element=>element===document.activeElement));
+    const button=page.getByRole('button',{name:label,exact:true});
+    await deferredCopyKeepsFocus(page,button,{fail:index===1});
+    if(index===1)await deferredCopyKeepsFocus(page,button);
   }
+  await deferredCopyKeepsFocus(page,page.getByRole('button',{name:'Copy final commands',exact:true}),{moveFocusTo:page.getByRole('button',{name:'Reset cloud backup options',exact:true})});
   // Reset focuses the calculator; closing returns to Explore.
   await page.getByRole('button',{name:'Reset cloud backup options',exact:true}).click();
   assert.ok(await page.locator('#cloud-step-0').evaluate(panel=>panel===document.activeElement));
@@ -337,6 +379,69 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
   assert.ok(await page.getByLabel('Cloud provider',{exact:true}).evaluate(input=>input===document.activeElement));
   await page.getByRole('button',{name:'Close cloud backup options',exact:true}).click();
   assert.ok(await explore.evaluate(input=>input===document.activeElement));
+});
+
+async function deferredCopyKeepsFocus(page,button,{fail=false,moveFocusTo=null}={}){
+  await page.evaluate(()=>{
+    delete window.finishClipboardWrite;
+    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>new Promise((resolve,reject)=>{
+      window.finishClipboardWrite=fail=>fail?reject(new Error('Clipboard denied')):resolve();
+    })}});
+  });
+  await button.focus();await page.keyboard.press('Enter');
+  await page.waitForFunction(()=>typeof window.finishClipboardWrite==='function');
+  // Cross a rendering frame while the clipboard promise is still pending.
+  await page.evaluate(()=>new Promise(requestAnimationFrame));
+  assert.ok(await button.evaluate(element=>element===document.activeElement),'a pending clipboard write keeps keyboard focus');
+  if(moveFocusTo)await moveFocusTo.focus();
+  await page.evaluate(async fail=>{window.finishClipboardWrite(fail);await new Promise(requestAnimationFrame);},fail);
+  assert.ok(await (moveFocusTo??button).evaluate(element=>element===document.activeElement),'clipboard completion preserves the current keyboard focus');
+}
+
+test('Reader file copying keeps keyboard focus through delayed success, failure and retry', {skip},async t=>{
+  const {page}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.file-copy',api:{
+    'GET /api/work/:id/conversations/:conversation':call=>{
+      const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
+      const message=(id,role,kind,text,extra={})=>({id,native_id:id,role,kind,text:JSON.stringify(text),created_at:'2026-10-01T00:00:00Z',...extra});
+      return {...body,messages:[message('prompt','user','message','Read this file'),
+        message('read','assistant','tool_call',{name:'Read',input:{file_path:'/repo/notes.txt'}},{call_id:'read'}),
+        message('result','tool','tool_result',{content:'Notes'},{call_id:'read'})]};
+    },
+  }});
+  const button=page.getByRole('button',{name:'Copy path /repo/notes.txt',exact:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{fail:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{moveFocusTo:page.locator('#settingsToggle')});
+});
+
+test('Sync diagnostics copying keeps keyboard focus through delayed success, failure and retry', {skip}, async t=>{
+  const issue={id:'mismatch',source_name:'codex',unit:'/sessions/rollout.jsonl'};
+  const {page}=await open(t,{url:'/settings/sync',ready:'.sync-warning',api:{
+    'GET /api/sync/status':{...defaultApi['GET /api/sync/status'],issues:[issue]},
+    'GET /api/sync/issues':{issues:[issue]},
+  }});
+  await page.getByRole('button',{name:'View details / copy diagnostics',exact:true}).click();
+  const dialog=page.locator('dialog.sync-dialog');
+  const button=dialog.getByRole('button',{name:'Copy diagnostics',exact:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{fail:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{moveFocusTo:dialog.getByRole('button',{name:'Close',exact:true})});
+});
+
+test('Feedback inbox report copying keeps keyboard focus through delayed success, failure and retry', {skip}, async t=>{
+  const id='00000000-0000-4000-8000-000000000001',received_at='2026-10-01T00:00:00Z';
+  const application={name:'Example app',version:'1.0'};
+  const {page}=await open(t,{inbox:true,url:`/?submission=${id}`,ready:'.report-detail',api:{
+    'GET /api/submissions':{submissions:[{id,application,kind:'bug',comment:'Synthetic report',received_at,annotation_count:0,screenshot_count:0,has_diagnostics:false,tags:[],revision:'1'}]},
+    [`GET /api/submissions/${id}`]:{version:1,id,application,kind:'bug',comment:'Synthetic report',annotations:null,received_at,tags:[],revision:'1'},
+  }});
+  const button=page.getByRole('button',{name:'Copy report for an agent',exact:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{fail:true});
+  await deferredCopyKeepsFocus(page,button);
+  await deferredCopyKeepsFocus(page,button,{moveFocusTo:page.getByRole('button',{name:'Download report',exact:true})});
 });
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
@@ -1646,7 +1751,7 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
 
 // Whether focus moved while the chat loaded is unit tested (askFocusAfterLoad);
 // this checks the composer takes focus once the chat opened from History arrives.
-test("opening a saved chat from History focuses its composer", { skip }, async t => {
+test("the History drawer takes focus, returns it when dismissed, and its chat focuses the composer", { skip }, async t => {
   const selection = { provider: 'Codex', model: 'test-model', effort: 'Low' };
   const sessions = [{ id: 'focus-chat', createdAt: Date.now(), updatedAt: Date.now(), selection, draft: '', conversation: [{ id: 'focus-chat-turn', prompt: 'A prior question', cli: 'Codex', model: 'test-model', modelLabel: 'Test Model', effort: 'Low', status: 'multiple', message: '', elapsedMs: 1000, reply: 'A saved reply', cards: [] }] }];
   const { page, settled } = await open(t, { ready: '#pharos-ask .pharos-ai:not([hidden])', api: {
@@ -1656,13 +1761,33 @@ test("opening a saved chat from History focuses its composer", { skip }, async t
     'GET /api/ask/session': ({ query }) => sessions.find(session => session.id === query.get('id')),
     'POST /api/ask/session': ({ body }) => body,
   } });
-  await press(page.getByRole('button', { name: 'History', exact: true }));
+  const trigger = page.getByRole('button', { name: 'History', exact: true }), drawer = page.getByRole('dialog', { name: 'Chat history', exact: true });
+  const question = page.getByRole('textbox', { name: 'Ask a question', exact: true });
+  const focused = selector => page.waitForFunction(selector => document.activeElement?.matches(selector), selector);
+  await press(trigger);
+  await holdsFocus(page, drawer, trigger);
+  // The drawer is modal: a click beside it dismisses it.
+  await press(trigger);await focused('.pharos-history-close');
+  const size = page.viewportSize();
+  await page.mouse.click(size.width - 20, size.height / 2);
+  await focused('.pharos-history-trigger');
+  // Leaving full screen with Back moves the composer; the drawer must not stay open without its backdrop.
+  await page.locator('#homeAskSearch').getByRole('button', { name: 'Full screen', exact: true }).click();
+  await page.waitForURL(url => url.pathname === '/ask');await settled();
+  await press(trigger);await focused('.pharos-history-close');
+  await page.goBack();await page.waitForURL(url => url.pathname === '/');
+  await activateHeaderTool(page, 'askPharosToggle');
+  await question.waitFor();
+  assert.equal(await page.locator('#pharos-chat-history').evaluate(element => element.open), false, 'moving the composer closes History');
+  await press(trigger);
+  assert.ok(await drawer.evaluate(element => element.matches(':modal')), 'History reopens as a modal drawer');
+  await page.keyboard.press('Escape');await focused('.pharos-history-trigger');
+  await press(trigger);
   // Let the history list finish refreshing before choosing from it.
   await settled();
   await press(page.getByRole('link', { name: 'Open chat: A prior question', exact: true }));
   await page.getByRole('status').filter({ hasText: 'A saved reply' }).waitFor();
   await settled();
-  const question = page.getByRole('textbox', { name: 'Ask a question', exact: true });
   await page.waitForFunction(element => document.activeElement === element, await question.elementHandle());
 });
 
@@ -2037,6 +2162,24 @@ test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip},
   await modal.waitFor({state:'hidden'});
   const brand=page.locator('body>header .brand');await brand.focus();
   assert.ok(await brand.evaluate(element=>element===document.activeElement),'ordinary search results must allow background interaction');
+});
+
+test('Ask Pharos errors float over full screen and dismiss without moving it @ 390', {skip}, async t => {
+  // A saved CLI that is no longer installed reports without a failed request.
+  const {page,shot}=await open(t,{url:'/ask',viewport:{width:390,height:700},ready:'#askPage .pharos-notice:not([hidden])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection:{provider:'Removed',model:'',effort:'Default'}},providers:[{id:'Codex'}]},
+  }});
+  const notice=page.locator('#askPage .pharos-notice');
+  assert.match(await notice.getByRole('alert').textContent(),/Removed is unavailable/);
+  const surface=page.locator('#askPage .pharos-product > :not(.pharos-notice-anchor):not([hidden])').first();
+  const shown=await surface.boundingBox(),box=await notice.boundingBox(),ask=await page.locator('#askPage .pharos-product').boundingBox();
+  assert.ok(box.x>=ask.x&&box.x+box.width<=ask.x+ask.width&&box.y>=ask.y,'the message stays on screen over Ask');
+  await shot('ask-error-notice');
+  await notice.getByRole('button',{name:'Dismiss message',exact:true}).focus();
+  await page.keyboard.press('Enter');
+  await notice.waitFor({state:'hidden'});
+  assert.deepEqual(await surface.boundingBox(),shown,'showing the message must not move Ask');
+  assert.ok(await page.evaluate(()=>!!document.activeElement?.closest('#askPage .pharos-product')),'dismissing keeps focus in Ask');
 });
 
 test('Ask Pharos full screen moves the chat to its own page and back @ 390', {skip}, async t => {

@@ -514,6 +514,9 @@ func TestBackgroundSearchFollowsScheduleAndRunNow(t *testing.T) {
 	if dirtyCount(t, catalog) != 0 {
 		t.Fatal("Search Run now left workspaces waiting")
 	}
+	if countRows(t, catalog, "SELECT COUNT(*) FROM session_shape_dirty") != 0 {
+		t.Fatal("Search Run now left session statistics waiting")
+	}
 	settings, err := catalog.backgroundSettings(ctx, time.Now())
 	search, _ := backgroundItemByID("search")
 	if err != nil || settings.cadence(search) != cadenceManual {

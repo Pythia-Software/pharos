@@ -283,7 +283,7 @@ const ROUTES = [
   {name:"Ask Pharos ready",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI},
   {name:"Ask Pharos full screen",url:"/ask",ready:"#askPage #pharos-ask .pharos-ai:not([hidden])",api:askAPI},
   {name:"Ask Pharos model picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-model-trigger").click(),shown:"#pharos-model-menu:not([hidden])"},
-  {name:"Ask Pharos history",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-history-trigger").click(),shown:"#pharos-chat-history:not([hidden])"},
+  {name:"Ask Pharos history",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-history-trigger").click(),shown:"#pharos-chat-history[open]"},
   {name:"Ask Pharos conversation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-turn",api:askAPI,check:async page=>{
     const visible=await page.locator('.pharos-user-question').first().evaluate(message=>{
       const viewport=message.closest('.pharos-thread-viewport');
@@ -958,6 +958,19 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
   await page.evaluate(()=>window.pharosPrefs.flush());
   await page.reload();await toggle.waitFor();await viewport.waitFor();await settled();
   assert.equal(await toggle.getAttribute('aria-expanded'),'true');
+  // Full screen gives the row the window's width, so it reads more cards at once.
+  // Its suggestions give way to a draft, so clear the one chosen above.
+  await page.goto(new URL('/ask',page.url()).href);await editor.waitFor();await editor.fill('');
+  await viewport.waitFor();await settled();
+  assert.ok(await viewport.locator('[data-reading]').count()>3,'a wide full screen row shows more than three suggestions');
+  assert.deepEqual(await layoutProblems(page),[]);
+  await readable();
+  await distinctHint();
+  await shot('full-screen-2133');
+  await suggestions.getByRole('button',{name:'Next suggestions',exact:true}).click();
+  await page.waitForFunction(()=>!document.querySelector('.pharos-idea-viewport').hasAttribute('data-moving'));
+  await readable();
+  await distinctHint();
 });
 
 test("Background Processing items drag between all four columns for a week", { skip }, async t => {

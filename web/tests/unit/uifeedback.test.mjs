@@ -1,7 +1,46 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import vm from "node:vm";
+import { assets, loadClassicScript } from "./helpers/classic-script.mjs";
 import { safeURL, boundedLog, changeTags, pendingSubmission, normalizeEntry } from "../../src/uifeedback/model.ts";
 import { annotationForUpload, createAskFeedbackSender, feedbackReceipt, restoreReview } from "../../src/uifeedback/pharos-model.ts";
+
+test('report copy runs once while pending, settles before reporting and allows a retry', async () => {
+  const source=readFileSync(join(assets,'../../../web/src/uifeedback/inbox.tsx'),'utf8');
+  const copySource=source.slice(source.indexOf('  async function copyReport()'),source.indexOf('\n  async function mutate('));
+  for(const outcome of ['native','native-failure','browser-denial']){
+    const transfers=[],writes=[];let browserCalls=0;
+    const transfer=()=>{const pending=Promise.withResolvers();transfers.push(pending);return pending.promise;};
+    const window=loadClassicScript('host-services.js',{
+      ...(outcome==='browser-denial'?{}:{webkit:{messageHandlers:{pharosClipboard:{postMessage:text=>{writes.push(text);return transfer();}}}}}),
+      navigator:{clipboard:{writeText:()=>{browserCalls++;return outcome==='browser-denial'?transfer():Promise.reject(Error('Browser denied'));}}},
+    }).window;
+    const detail={id:'report',comment:'A report\nwith source text',annotations:[]};
+    // The guard is a ref, so presses before React re-renders see it too.
+    const copyPending={current:false};let copying=false,notice='Previous success',error='Previous failure';
+    const copy=vm.runInNewContext(copySource+';copyReport',{
+      window,detail,copyPending,setCopying:value=>{copying=value;},setNotice:value=>{notice=value;},setError:value=>{error=value;},
+    });
+    // The first attempt settles with the outcome; a retry then succeeds.
+    for(const succeed of outcome==='native'?[true]:[false,true]){
+      const started=transfers.length;
+      const pending=copy();
+      assert.equal(copying,true);assert.equal(notice,'');assert.equal(error,'');
+      await copy();await copy();
+      assert.equal(transfers.length,started+1,'repeat presses while pending do not start another write');
+      if(succeed)transfers.at(-1).resolve(true);else transfers.at(-1).reject(Error('Copy denied'));
+      await pending;
+      assert.equal(copying,false);assert.equal(copyPending.current,false);
+      if(succeed){assert.ok(notice);assert.equal(error,'');}
+      else {assert.equal(notice,'');assert.match(error,/could not copy/i);}
+    }
+    const attempts=outcome==='native'?1:2;
+    assert.deepEqual(writes,outcome==='browser-denial'?[]:Array(attempts).fill(JSON.stringify(detail,null,2)));
+    assert.equal(browserCalls,outcome==='browser-denial'?attempts:0);
+  }
+});
 
 test("annotation URLs preserve routing while excluding credentials and login tokens", () => {
   assert.equal(safeURL("http://user:secret@localhost:18765/library?q=filter&token=private&access_token=other#secret"), "http://localhost:18765/library?q=filter");

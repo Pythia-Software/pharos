@@ -317,7 +317,9 @@ implementation:
      rule came earlier, and its merged value (or `"(absent)"`) otherwise.
      `self` is the option's own merged value. `multiple_periods` is true when
      the merge over `fill_defaults` has `period` `hours` with `hours` > 1, or
-     `days` with `days` > 1.
+     `days` with `days` > 1. `single_selection` is true when the merged
+     `selection` holds exactly one value and `excluded` is not true: the
+     legend draws one group alone.
    - **Unchanged options.** An option with no rule is drawn as its merged
      value.
    - **List rules** (`list: true`; the %ile control's `percentiles`). The
@@ -328,7 +330,8 @@ implementation:
      catalog's default levels (a heatmap traces its median and 90th
      percentile). The constraints say which levels each context draws: none
      with shares or a cumulative display, or for a measure without a total
-     across groups; no mean on a heatmap.
+     across groups unless the legend selects one group (`single_selection`);
+     no mean on a heatmap.
 5. **Valid or coercible.** The chart is valid if every key it names among the
    view's `keys` is drawn as given, and coercible otherwise.
 

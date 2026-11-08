@@ -20,6 +20,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // Capture copies this Mac's raw source data onto the capture root, normally on
@@ -347,6 +349,27 @@ type captureSession struct {
 	buffers chan []byte
 }
 
+// The capture protocol's flocks, one variable per policy so tests can fail
+// each. Every acquisition is Try; only filelock.ErrContended means another
+// holder, and any other failure is never taken as a held or free lock.
+var (
+	// lockCaptureWriter takes the per-host capture lock for a capture or a
+	// target's reader/publisher: contention is errCaptureBusy.
+	lockCaptureWriter = filelock.Lock
+	// lockCaptureStatus probes the capture lock for status: any failure,
+	// contention or not, reports a capture as active.
+	lockCaptureStatus = filelock.Lock
+	// lockReaderLease takes a new reader lease before it is published.
+	lockReaderLease = filelock.Lock
+	// probeReaderLease tests an existing reader lease: only success shows
+	// its reader is gone, so only success permits removing it.
+	probeReaderLease = filelock.Lock
+	// lockCaptureIndex takes a capture's index lock.
+	lockCaptureIndex = filelock.Lock
+	// lockHistoryJob takes a history job's or output object's lock.
+	lockHistoryJob = filelock.Lock
+)
+
 // beginCapture takes the per-host capture lock, which also keeps a CLI run and
 // the service from capturing at once.
 func beginCapture(config Config) (*captureSession, error) {
@@ -379,9 +402,9 @@ func beginCapture(config Config) (*captureSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockCaptureWriter(lock, filelock.Exclusive, filelock.Try); err != nil {
 		lock.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+		if errors.Is(err, filelock.ErrContended) {
 			return nil, errCaptureBusy
 		}
 		return nil, err
@@ -672,23 +695,25 @@ func loadCaptureManifest(dir string) (*captureManifest, error) {
 	if manifest.Version > captureManifestUnderstood {
 		return nil, fmt.Errorf("capture manifest %s has version %d; this build understands up to %d", file, manifest.Version, captureManifestUnderstood)
 	}
-	if bad := manifest.unsafePath(); bad != "" {
-		return nil, fmt.Errorf("capture manifest %s names %q, outside its capture directory", file, bad)
+	if bad, unsafe := manifest.unsafePath(); unsafe {
+		return nil, fmt.Errorf("capture manifest %s names unsafe captured path %q", file, bad)
 	}
 	return manifest, nil
 }
 
-// unsafePath returns a captured path that is not clean, relative, and under
-// files/ (latest) or history/ (superseded), so that no manifest can make a
-// capture or an index read, move or delete anything outside its directory.
-func (m *captureManifest) unsafePath() string {
+// unsafePath reports the first captured path that is not a clean, native
+// relative name under files/ (latest) or history/ (superseded). The boolean
+// distinguishes an invalid required empty name from a valid manifest.
+// These are lexical bounds, not symlink-safe I/O checks.
+func (m *captureManifest) unsafePath() (string, bool) {
 	check := func(rel string, root string) bool {
-		return rel == path.Clean(rel) && !strings.Contains(rel, "\\") && (rel == root || strings.HasPrefix(rel, root+"/"))
+		_, err := filepath.Localize(rel)
+		return err == nil && rel == path.Clean(rel) && !strings.ContainsAny(rel, "\\\x00") && (rel == root || strings.HasPrefix(rel, root+"/"))
 	}
-	bad := ""
+	bad, unsafe := "", false
 	test := func(rel, root string) {
-		if bad == "" && !check(rel, root) {
-			bad = rel
+		if !unsafe && !check(rel, root) {
+			bad, unsafe = rel, true
 		}
 	}
 	for _, file := range m.Files {
@@ -712,7 +737,7 @@ func (m *captureManifest) unsafePath() string {
 	for _, mapping := range m.PathMap {
 		test(mapping.Captured, captureFilesDir)
 	}
-	return bad
+	return bad, unsafe
 }
 
 // lastCapturedDataAt ignores no-op captures and later indexing. Individual
@@ -981,7 +1006,7 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 	if err := os.Chtimes(temporary, mtime, mtime); err != nil {
 		return abandon(toDestination(err))
 	}
-	if err := syscall.Fsync(int(out.Fd())); err != nil {
+	if err := syncFileData(out); err != nil {
 		return abandon(toDestination(err))
 	}
 	if err := out.Close(); err != nil {
@@ -1306,9 +1331,10 @@ func removeCaptureTemporaries(dir string) {
 				}
 				// Active readers hold this lease flock, including audits.
 				// After a crash the lock is released, allowing native space back.
+				// Only a lock it takes removes it; contention or any failure keeps it.
 				lock, e := os.OpenFile(filepath.Join(file, ".reader.lock"), os.O_RDWR|os.O_CREATE, 0600)
 				if e == nil {
-					if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+					if probeReaderLease(lock, filelock.Exclusive, filelock.Try) == nil {
 						_ = os.RemoveAll(file)
 					}
 					lock.Close()
@@ -1359,7 +1385,7 @@ func syncPath(file string) (os.FileInfo, error) {
 		return nil, err
 	}
 	defer handle.Close()
-	if err := syscall.Fsync(int(handle.Fd())); err != nil {
+	if err := syncFileData(handle); err != nil {
 		return nil, err
 	}
 	return handle.Stat()

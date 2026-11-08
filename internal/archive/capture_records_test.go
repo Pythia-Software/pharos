@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 func recordTestStore(t *testing.T, config Config, source string) *recordStore {
@@ -126,6 +128,37 @@ func TestSQLiteRecordsTypedRoundTrip(t *testing.T) {
 	if e = offline.QueryRow(`SELECT b,CAST(invalid AS BLOB),i FROM "unknown; DROP TABLE sessions;--" LIMIT 1`).Scan(&raw, &original, &integer); e != nil || !reflect.DeepEqual(raw, bad) || !reflect.DeepEqual(original, bad) || integer != math.MaxInt64 {
 		t.Fatalf("offline new extractor: %x %x %d: %v", raw, original, integer, e)
 	}
+	t.Run("revision path guard", func(t *testing.T) {
+		for _, field := range []struct {
+			name string
+			set  func(*sqliteRevision, string)
+		}{
+			{"mapping", func(v *sqliteRevision, name string) { v.Mappings[0].Captured = name }},
+			{"database", func(v *sqliteRevision, name string) { v.Installations[0].CapturedDB = name }},
+			{"transcripts", func(v *sqliteRevision, name string) { v.Installations[0].CapturedTranscripts = name }},
+		} {
+			t.Run(field.name, func(t *testing.T) {
+				for _, name := range []string{"", "files/bad\x00name", "files/valid"} {
+					revision := revs[0].Revision
+					revision.Mappings = []capturePathMapping{{Original: "/src", Captured: "files"}}
+					revision.Installations = []capturedInstallation{{CapturedDB: "files/db", CapturedTranscripts: "files/transcripts"}}
+					field.set(&revision, name)
+					revision.Identity = sqliteEvidenceIdentity(revision)
+					ref, err := s.putJSON(revision)
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, err = s.loadRevision(ref)
+					valid := name == "files/valid" || name == "" && field.name == "transcripts"
+					if valid && err != nil {
+						t.Errorf("valid %s %q rejected: %v", field.name, name, err)
+					} else if !valid && (err == nil || !strings.Contains(err.Error(), "unsafe record path mapping")) {
+						t.Errorf("invalid %s %q bypassed path guard: %v", field.name, name, err)
+					}
+				}
+			})
+		}
+	})
 }
 func TestSQLiteRecordsRebuildKeepsAbsentSessionsAndLatestMessageSet(t *testing.T) {
 	useHost(t, "host-a")
@@ -245,6 +278,109 @@ func TestSQLiteRecordsRebuildKeepsAbsentSessionsAndLatestMessageSet(t *testing.T
 		t.Fatal("CLI replay did not resume after service ingestion finished", err)
 	}
 }
+func TestCatalogIngestLockFailures(t *testing.T) {
+	contended := fmt.Errorf("lock: %w", errors.Join(filelock.ErrContended, syscall.EWOULDBLOCK))
+	for _, failure := range []error{contended, filelock.ErrUnsupported, fmt.Errorf("lock: %w", syscall.EACCES), syscall.EIO, syscall.ENOLCK, syscall.EINTR, syscall.EWOULDBLOCK} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			config := testConfig(t)
+			var opened []*os.File
+			override(t, &lockCatalogIngestFile, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+				if mode != filelock.Exclusive || wait != filelock.Try {
+					t.Fatalf("ingest lock: %v, %v", mode, wait)
+				}
+				opened = append(opened, file)
+				return failure
+			})
+			want := failure
+			if errors.Is(failure, filelock.ErrContended) {
+				want = errCatalogIngestBusy
+			}
+			if lease, err := lockCatalogIngest(config.CatalogPath); lease != nil || !errors.Is(err, want) {
+				t.Fatalf("ingest acquisition: lease=%v err=%v, want %v", lease, err, want)
+			}
+			coordinator := ingestCoordinator{path: config.CatalogPath}
+			if coordinator.TryLock() {
+				coordinator.Unlock()
+				t.Fatal("coordinator admitted ingestion without a lock")
+			}
+			if coordinator.lease != nil || !coordinator.mu.TryLock() {
+				t.Fatal("failed acquisition retained coordinator state")
+			}
+			coordinator.mu.Unlock()
+			if err := runSQLiteRecordsCLI(config, []string{"replay", "host-a", "conductor"}); !errors.Is(err, want) {
+				t.Fatalf("CLI replay lost lock failure: %v, want %v", err, want)
+			}
+			if len(opened) != 3 {
+				t.Fatalf("unexpected acquisition retries: %d", len(opened))
+			}
+			for _, file := range opened {
+				if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+					t.Fatalf("failed ingest acquisition leaked its descriptor: %v", err)
+				}
+			}
+			if _, err := os.Stat(config.CatalogPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed replay opened a catalog: %v", err)
+			}
+			if _, err := os.Stat(config.CaptureRoot); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed replay published capture state: %v", err)
+			}
+		})
+	}
+}
+
+func TestCatalogIngestLockLifetime(t *testing.T) {
+	config := testConfig(t)
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(filepath.Dir(config.CatalogPath), alias); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(alias, filepath.Base(config.CatalogPath))
+	lease, err := lockCatalogIngest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	if lease.Name() != canonical(config.CatalogPath)+".ingest.lock" {
+		t.Fatalf("ingest lock did not use the canonical catalog path: %s", lease.Name())
+	}
+	info, err := lease.Stat()
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("ingest lock permissions: %v, %v", info, err)
+	}
+	coordinator := ingestCoordinator{path: config.CatalogPath}
+	if coordinator.TryLock() {
+		coordinator.Unlock()
+		t.Fatal("coordinator bypassed the lock through an alias")
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !coordinator.TryLock() {
+		t.Fatal("Close did not release the ingest lock")
+	}
+	held := coordinator.lease
+	if next, err := lockCatalogIngest(path); next != nil || !errors.Is(err, errCatalogIngestBusy) {
+		if next != nil {
+			next.Close()
+		}
+		coordinator.Unlock()
+		t.Fatalf("coordinator did not retain its lock: %v", err)
+	}
+	coordinator.Unlock()
+	if _, err := held.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("coordinator leaked its owning descriptor: %v", err)
+	}
+	final, err := lockCatalogIngest(path)
+	if err != nil {
+		t.Fatalf("coordinator unlock did not release its lock: %v", err)
+	}
+	defer final.Close()
+	current, err := final.Stat()
+	if err != nil || !os.SameFile(info, current) {
+		t.Fatalf("ingest lock was replaced: %v", err)
+	}
+}
+
 func TestSQLiteRecordsBudgetAndPublicationRecovery(t *testing.T) {
 	for _, stage := range []string{"records-objects", "records-inventory", "records-head", "records-receipt"} {
 		t.Run(stage, func(t *testing.T) {
@@ -493,6 +629,29 @@ func TestSQLiteRecordsLogicalAcquisitionUsesRetainedParserInput(t *testing.T) {
 		lock, err := lockCaptureTarget(t.Context(), sourceDir)
 		if err != nil {
 			t.Fatal(err)
+		}
+		// A reader whose liveness cannot be tested keeps its pins and lease;
+		// one reported contended is live.
+		readers, err := filepath.Glob(filepath.Join(sourceDir, ".reader-pin-*"+captureTempSuffix))
+		if err != nil || len(readers) == 0 {
+			t.Fatalf("no preservation reader leases: %v", err)
+		}
+		for _, failure := range captureLockFailures() {
+			override(t, &probeReaderLease, failingCaptureLock(t, filelock.Exclusive, failure.err, nil))
+			pins, loadErr := loadPreservationPins(sourceDir)
+			cleanupErr := cleanupPreservationReaders(sourceDir)
+			if failure.contended && (loadErr != nil || cleanupErr != nil || len(pins.pendingReaders) != 0) || !failure.contended && (!errors.Is(loadErr, failure.err) || !errors.Is(cleanupErr, failure.err)) {
+				t.Fatalf("reader liveness %s: pending %v, %v, %v", failure.name, pins.pendingReaders, loadErr, cleanupErr)
+			}
+			for _, reader := range readers {
+				if _, err := os.Stat(reader); err != nil {
+					t.Fatalf("reader liveness %s removed a lease: %v", failure.name, err)
+				}
+			}
+		}
+		override(t, &probeReaderLease, filelock.Lock)
+		if pins, err = loadPreservationPins(sourceDir); err != nil || len(pins.pendingReaders) != 1 {
+			t.Fatalf("a reader whose liveness was unknown lost its deferred cleanup: %+v, %v", pins, err)
 		}
 		err = cleanupPreservationReaders(sourceDir)
 		lock.Close()

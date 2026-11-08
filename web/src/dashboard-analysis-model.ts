@@ -388,11 +388,14 @@ export function reductionLabel(reduce: AnalysisReduce, measure: AnalysisMeasure,
 // old name never overrides a later choice.
 // A catalog's own older names (legacy), then the engine's: norm, the old
 // single reference line, is the %ile control's mean (norm: true is
-// percentiles ["mean"]; norm: false asks for none and is left out).
+// percentiles ["mean"]; norm: false asks for none and is left out). A state
+// that names its percentiles keeps them: a resolved state carries norm as
+// whether it draws them, so reading it again must not turn them into a mean.
 export function canonicalState<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): T {
   const read = catalog.legacy ? catalog.legacy(state) as T : state;
   if (typeof read.norm !== "boolean") return read;
   const { norm, ...rest } = read;
+  if (Array.isArray(read.percentiles)) return rest as T;
   return (norm ? { ...rest, percentiles: ["mean"] } : rest) as T;
 }
 
@@ -510,7 +513,7 @@ export function heatmapSource<T extends AnalysisState>(catalog: AnalysisCatalog,
 // Why each trend option is unavailable for this measure, breakdown and
 // display, if it is. The controls disable the option with this reason, and
 // normalizeTrend moves a state off it.
-export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalysis, "metric" | "split" | "display" | "share">) {
+export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalysis, "metric" | "split" | "display" | "share"> & Pick<AnalysisState, "selection">) {
   const measure = catalog.measures[state.metric], kind = trendKind(measure), name = measure.label.toLowerCase();
   const component = (split: string) => {
     const parts = catalog.components?.[split];
@@ -525,10 +528,14 @@ export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalys
     period: (period: ChartPeriod) => catalog.periods[periodField(period)] || catalog.timestamp ? undefined : `These records have no ${periodField(period)} to group by`,
     heatmap: heatmapAxis(catalog, state) ? undefined : state.split === noSplit ? `${measure.label} has no per-record value to draw as a heatmap`
       : !catalog.breakdowns[state.split]?.bins ? "A heatmap needs a breakdown over a continuous value, such as a band" : `${measure.label} does not add up across records, so a heatmap cannot total it`,
-    norm: state.display === "cumulative" ? "A reference level compares interval values, not running totals" : state.display === "heatmap" ? undefined : state.share ? "Shares have no reference level" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a reference level` : undefined,
+    norm: state.display === "cumulative" ? "A reference level compares interval values, not running totals" : state.display === "heatmap" ? undefined : state.share ? "Shares have no reference level" : !measure.additive && state.split !== noSplit && !singleSeries(state) ? `${measure.label} has no total across groups; choose no breakdown, or one group in the legend, for a reference level` : undefined,
     component, name,
   };
 }
+
+// Whether a legend selection draws exactly one group: a measure without a
+// total across groups has reference levels of that group alone.
+export const singleSeries = (state: Pick<AnalysisState, "selection">) => state.selection?.values.length === 1 && !state.selection.excluded;
 
 // Fill the trend's defaults and move each setting the measure cannot use to
 // the nearest one it can. Only drawing and querying use the result; the saved

@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // A backup copies the library to a folder on another drive, so the library
@@ -106,6 +108,16 @@ func (h backupHistory) growth() (float64, float64) {
 	return float64(backups[0].BytesTotal-oldest.BytesTotal) / days, days
 }
 
+// Backup's flocks go through filelock, one injectable call per policy so
+// tests can fail each: backups.json's history lock (Exclusive, Wait), a
+// destination's lock (Exclusive, Try) and a host's capture lock (Shared, Try).
+// Only filelock.ErrContended means another holder.
+var (
+	lockBackupHistory     = filelock.Lock
+	lockBackupDestination = filelock.Lock
+	lockBackupCaptures    = filelock.Lock
+)
+
 // updateBackupHistory changes backups.json under a lock shared by every
 // process, replacing it atomically when update reports a change.
 func updateBackupHistory(config Config, update func(*backupHistory) bool) (backupHistory, error) {
@@ -115,7 +127,8 @@ func updateBackupHistory(config Config, update func(*backupHistory) bool) (backu
 		return backupHistory{}, err
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	// One blocking acquisition; its failure is returned as is, before update.
+	if err := lockBackupHistory(lock, filelock.Exclusive, filelock.Wait); err != nil {
 		return backupHistory{}, err
 	}
 	history := loadBackupHistory(config)
@@ -625,8 +638,8 @@ func (j *backupJob) execute() error {
 		return toBackupDestination(err)
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+	if err := lockBackupDestination(lock, filelock.Exclusive, filelock.Try); err != nil {
+		if errors.Is(err, filelock.ErrContended) {
 			return errBackupDestinationBusy
 		}
 		return toBackupDestination(err)
@@ -956,11 +969,13 @@ func (j *backupJob) lockCaptures(hostDir string) (func(), error) {
 		return nil, err
 	}
 	for waiting := false; ; {
-		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+		err := lockBackupCaptures(lock, filelock.Shared, filelock.Try)
 		if err == nil {
 			return func() { lock.Close() }, nil
 		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
+		// Only another holder is worth waiting for; any other failure leaves
+		// the lock's state unknown, so this host is not copied.
+		if !errors.Is(err, filelock.ErrContended) {
 			lock.Close()
 			return nil, err
 		}
@@ -1211,7 +1226,7 @@ func (j *backupJob) copyFile(source, target string, info fs.FileInfo) error {
 	if err := os.Chtimes(temporary, info.ModTime(), info.ModTime()); err != nil {
 		return abandon(toBackupDestination(err))
 	}
-	if err := syscall.Fsync(int(out.Fd())); err != nil {
+	if err := syncFileData(out); err != nil {
 		return abandon(toBackupDestination(err))
 	}
 	if err := out.Close(); err != nil {

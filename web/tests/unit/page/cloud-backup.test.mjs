@@ -4,11 +4,39 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { loadClassicScript, plain } from '../helpers/classic-script.mjs';
+import vm from 'node:vm';
+import { assets, loadClassicScript, plain } from '../helpers/classic-script.mjs';
 
 const cloud = loadClassicScript('cloud-backup.js').window.pharosCloudBackup;
 const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-8, `${actual} != ${expected}`);
 const configured = extra => ({...cloud.defaults,provider:'aws',region:'us-east-1',tier:'aws-standard',compression:100,project:'pharos-example',subscription:'Backup subscription',bucket:'my-exact-backup-bucket',...extra});
+
+test('backup copy waits for the host, reports failure and restores its control', async () => {
+  const source=readFileSync(join(assets,'cloud-backup.js'),'utf8');
+  const copySource=source.slice(source.indexOf('  const pendingCopies='),source.indexOf('\n  const protectedCommands='));
+  for(const outcome of ['native','native-failure','browser-denial']){
+    const transfer=Promise.withResolvers(),writes=[],messages=[];let browserCalls=0;
+    const window=loadClassicScript('host-services.js',{
+      ...(outcome==='browser-denial'?{}:{webkit:{messageHandlers:{pharosClipboard:{postMessage:text=>{writes.push(text);return transfer.promise;}}}}}),
+      navigator:{clipboard:{writeText:()=>{browserCalls++;return outcome==='browser-denial'?transfer.promise:Promise.reject(Error('Browser denied'));}}},
+    }).window;
+    const copy=vm.runInNewContext(copySource+';copy',{window,message:(text,error=false)=>messages.push({text,error})});
+    const attributes=new Map(),button={disabled:false,setAttribute:(key,value)=>attributes.set(key,value),removeAttribute:key=>attributes.delete(key)},commands="printf '%s' '/Volumes/My drive/資料'\n";
+    const pending=copy(commands,button);
+    assert.equal(button.disabled,false,'pending copies stay focusable');assert.equal(attributes.get('aria-disabled'),'true');assert.equal(messages.at(-1).text,'');
+    await copy(commands,button);
+    assert.equal(writes.length+browserCalls,1,'pending clicks cannot dispatch twice');
+    if(outcome==='native')transfer.resolve(true);else transfer.reject(Error('Copy denied'));
+    await pending;
+    assert.equal(button.disabled,false);assert.equal(attributes.has('aria-disabled'),false);
+    assert.equal(messages.at(-1).error,outcome!=='native');
+    assert.ok(messages.at(-1).text);
+    assert.deepEqual(writes,outcome==='browser-denial'?[]:[commands]);
+    assert.equal(browserCalls,outcome==='browser-denial'?1:0);
+    await copy(commands,button);assert.equal(writes.length+browserCalls,2,'completion allows a retry');
+    button.disabled=true;await copy(commands,button);assert.equal(writes.length+browserCalls,2,'validation-disabled controls remain inactive');assert.equal(button.disabled,true);
+  }
+});
 
 test('new cloud plans default to GCP Standard in Iowa', () => {
   const p=cloud.normalize(cloud.defaults);

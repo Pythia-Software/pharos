@@ -22,6 +22,7 @@ import (
 
 	labelrt "github.com/gbdubs/pharos/internal/labeler"
 	"github.com/gbdubs/pharos/internal/labeler/labelertest"
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // agentEventsTestSettings are the fake worker (labelsTestSettings) and a
@@ -357,6 +358,45 @@ func TestAgentEventsRunsInLimitedSteps(t *testing.T) {
 	dry, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Full: true, DryRun: true})
 	if err != nil || dry.MessagesScored != 0 || dry.MessagesUnchanged != first.MessagesScored+rest.MessagesScored {
 		t.Fatalf("a dry run of a current ledger: %+v %v", dry, err)
+	}
+}
+
+// The pass's lease: only another holder is "already running", which the
+// analysis chain waits out; any other lock failure keeps its cause. Neither
+// scores anything, and both leave the in-process mutex free. A pass running
+// in this process is refused before any lease is tried.
+func TestAgentEventsLockFailures(t *testing.T) {
+	catalog := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	scored := func() (n int) {
+		_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages`).Scan(&n)
+		return n
+	}
+	for _, tc := range leaseLockFailures() {
+		t.Run(tc.name, func(t *testing.T) {
+			refused := failFileLease(t, ".agent-events.lock", tc.err)
+			catalog.agentEventsRun.Lock()
+			_, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+			catalog.agentEventsRun.Unlock()
+			if err != errAgentEventsRunning || len(*refused) != 0 {
+				t.Fatalf("beside a pass in this process: %v after %d lease attempts", err, len(*refused))
+			}
+			_, err = catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+			if errors.Is(err, errAgentEventsRunning) != errors.Is(tc.err, filelock.ErrContended) || !errors.Is(err, tc.err) {
+				t.Fatalf("lease failure: %v", err)
+			}
+			requireLeasesClosed(t, *refused, 1)
+			if !catalog.agentEventsRun.TryLock() {
+				t.Fatal("a failed lease kept the pass's mutex")
+			}
+			catalog.agentEventsRun.Unlock()
+			if n := scored(); n != 0 {
+				t.Fatalf("scored %d messages without the lease", n)
+			}
+		})
+	}
+	if stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{}); err != nil || stats.MessagesScored == 0 {
+		t.Fatalf("a pass after the failures: %+v %v", stats, err)
 	}
 }
 

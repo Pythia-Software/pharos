@@ -15,11 +15,18 @@ additional set lazily. The event-hidden set remains subscribed to source updates
 once requested. Identical PNG bytes share one SHA-256-addressed blob, including
 identical appearances or conversation/workspace images.
 
-The service embeds a build of the shared TypeScript layout and runs it in Goja.
-A pure-Go rasterizer supports precisely the generated SVG drawing vocabulary.
-There is no Node, browser, font, external asset or subprocess dependency at
-runtime. `npm --prefix web run build` prepares this ignored embedded bundle along
-with the UI bundles. Bundle verification checks it too.
+The service computes the compact layout, emits the small fingerprint SVG
+vocabulary, and rasterizes it entirely in Go. Its domain is deliberately limited
+to the two profiles above, a 320-unit layout, 1024-pixel PNGs, a 500-event ceiling,
+and the existing tool/relationship selection rules. It does not execute JavaScript
+or accept arbitrary SVG. There is no Node, browser, font, external asset or
+subprocess dependency at runtime.
+
+The TypeScript model remains the browser/prototype reference. Shared synthetic
+fixtures check both implementations' exact SVG hashes and the original 0.8.9
+Goja renderer's PNG hashes, including both event appearances. Native sources are
+hashed into the renderer version, so changes automatically requeue cached images.
+See [native renderer parity and performance](fingerprint-native-renderer.md).
 
 All state lives in the library's SQLite catalog:
 
@@ -54,8 +61,8 @@ the last good PNGs. Library opening and HTTP handlers never render. Full retaine
 histories are loaded by the background worker; the older bounded evidence
 endpoint keeps its existing contract.
 
-Full-speed continuous processing uses two workers, each with an embedded VM and
-bounded reusable raster/PNG scratch.
+Full-speed continuous processing uses two workers, each with bounded reusable
+native raster/PNG scratch.
 Each keeps an LRU of at most 64 identical drawings / 4 MiB of PNGs; nonvisual
 counts in SVG titles do not defeat reuse. In-memory reservations prevent two
 workers from rendering the same entity, including a newer source generation.
@@ -71,8 +78,8 @@ across both profiles and themes, outside the write transaction. Publication
 atomically stores PNGs and acknowledges only the matching source generation.
 A source update or new appearance request during rendering remains queued.
 
-Shutdown/eject cancels source reads, event target matching and JavaScript
-execution. Interrupted work stays dirty. Render failures retain last good images
+Shutdown/eject cancels source reads, event target matching, native input
+preparation and mark selection. Interrupted work stays dirty. Render failures retain last good images
 and record a bounded error with exponential retry delay (5 seconds to 5 minutes).
 Retries survive restart. A per-unit two-minute deadline prevents a pathological
 conversation from monopolizing the worker indefinitely; other entities progress
@@ -100,13 +107,14 @@ asynchronously and load lazily. Each image links to its detailed view.
 
 ## Extending and checking
 
-Profile geometry and budgets live in `web/src/compact-fingerprint.ts`; the embedded
-render entry is `web/src/fingerprint-renderer.ts`. Register additional profiles in
-that registry and the Go `fingerprintProfiles` registry; update request/component
-types for any new UI placements. The worker derives completeness from the registry
-and the embedded entry enumerates the shared profiles. Change the native version
-in `fingerprint_render.go` when rasterization changes. Layout and palette source
-changes invalidate automatically through the embedded bundle hash.
+Profile geometry and budgets live in `web/src/compact-fingerprint.ts` and the
+native `fingerprint_layout.go`. The native input projection and SVG encoder are
+`fingerprint_prepare.go` and `fingerprint_svg.go`; `fingerprint_render.go` owns
+rasterization and versioning. Extend both profile definitions and the Go
+`fingerprintProfiles` registry when adding a profile, then update request/component
+types and the shared parity corpus. All four native source files participate in
+the automatic renderer-version hash. Browser-only experimental widths and budgets
+are outside the native renderer's domain.
 
 The [100-conversation backfill profile](fingerprint-backfill-profile.md) records
 the measured speedup, storage/durability conditions and reproduction commands.

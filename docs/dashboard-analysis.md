@@ -601,8 +601,13 @@ no sum, cumulative or share.
   mid-afternoon draws only 29 whole days. When fewer earlier points have a
   value (all time, or a ratio with idle periods), the chart says how many it
   averaged. It is not offered for shares, cumulative displays, or
-  non-additive measures with several series. The legend and tooltip show it,
-  and the note says what it averages.
+  non-additive measures with several series; a non-additive measure by a
+  breakdown has levels once the legend selects one group (`singleSeries`),
+  and they are that group's own. The legend and tooltip show each level,
+  and the note says what they read. Normalizing a resolved state again (the
+  series builder and card previews do) keeps its levels: `canonicalState`
+  reads `norm` as the older single mean only in a state without
+  `percentiles`.
 - **Complete results only.** A clause with partial coverage, a truncated
   group count, hidden groups or a bucket error is an error beneath the chart,
   never idle periods, as in `buildCardTrend`. No results yet means loading,

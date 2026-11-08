@@ -196,13 +196,21 @@ The derivation follows Parallelism's precedent
     separately), tool calls or model requests;
   - its model;
   - which of its messages an embedded sub-agent owns.
-- The maintenance loop stores dirty conversations' facts after Parallelism's
-  (`maintenance.session-shape`), in batches of 200 with short read snapshots
-  and write transactions. A build clears only the token it read, so a change
-  made during the build is derived again.
-- A page never writes. It reads stored facts for clean conversations and
-  derives dirty ones afresh, as Parallelism does. Damaged stored facts are
-  derived again.
+- Maintenance stores dirty conversations' facts (`maintenance.session-shape`),
+  one conversation between Search view refresh batches, then batches of 200
+  after the view, previews and Parallelism have caught up. Explicit Search
+  catch-up runs also fill these facts. A build clears only the token it read,
+  so a change made during the build is derived again.
+- A page never writes. It reads stored facts and derives up to 32 pending
+  conversations afresh. Larger backlogs return an indexing message instead of
+  scanning every transcript or reporting incomplete totals. Damaged stored
+  facts are derived again. Message-body checks read only the message kinds
+  they need: prompt whitespace for user messages and compaction text for metadata.
+- Every requesting page can cancel its wait for shared preparation, including
+  the page that starts the build. A build no page waits for stops after a
+  three-second grace period, so a reload can reattach but an abandoned page
+  does not keep a reader busy. Closing the catalog cancels and joins builds
+  before closing its connections.
 - Dimensions, roots, mirrors, sub-agent counts, tokens and cost are joined
   when the rows are built and cached until the catalog changes. A rename or
   re-attribution therefore needs no re-derivation.

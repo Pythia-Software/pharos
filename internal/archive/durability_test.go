@@ -17,7 +17,8 @@ import (
 
 // A failed retained-file flush must be reported before replacing published
 // state, and its temporary copy must be removed. Exercise the file paths
-// whose real device flush ordinary fixtures skip.
+// whose real device flush ordinary fixtures skip. The plain flush
+// (syncFileData) has its own tests with the copies that use it.
 func TestRetainedWritePreservesPublishedFileOnFlushFailure(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -34,6 +35,12 @@ func TestRetainedWritePreservesPublishedFileOnFlushFailure(t *testing.T) {
 			}
 			failure := errors.New("device flush failed")
 			override(t, &syncToDrive, func(*os.File) error { return failure })
+			// Retained state is published through syncToDrive alone; the
+			// plain buffer flush is a separate, weaker operation.
+			override(t, &syncFileData, func(file *os.File) error {
+				t.Errorf("retained write used the plain flush for %s", file.Name())
+				return nil
+			})
 			if err := test.write(path); !errors.Is(err, failure) {
 				t.Fatalf("flush failure was lost: %v", err)
 			}

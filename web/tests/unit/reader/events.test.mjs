@@ -2,12 +2,43 @@
 // file paths in the conversation reader (reader-model.js).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { plain } from "../helpers/classic-script.mjs";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import vm from "node:vm";
+import { assets, loadClassicScript, plain } from "../helpers/classic-script.mjs";
 import { event, human, read, reader, render } from "../helpers/transcript.mjs";
 
 const { commandKind, conversationMessages, fileChanges, filePathParts, messageFailed, messageJSON, normalizeMessages, readableValue, todoItems, toolCategory, toolFailed, toolPayload } = reader;
 const ids = messages => plain([...messages].map(message => message.native_id));
 const calls = events => [...events].filter(message => message.kind === "tool_call");
+
+test('file path copy preserves source bytes and waits for a host acknowledgement', async () => {
+  const source=readFileSync(join(assets,'ui.py'),'utf8');
+  const chipSource=source.slice(source.indexOf('function fileChip('),source.indexOf('\nfunction actionRow('));
+  const wrapper=source.slice(source.indexOf('async function copyFeedbackText('),source.indexOf('\nfunction clearFeedback'));
+  for(const outcome of ['native','native-failure','browser-denial']){
+    const transfer=Promise.withResolvers(),writes=[];let browserCalls=0;
+    const window=loadClassicScript('host-services.js',{
+      ...(outcome==='browser-denial'?{}:{webkit:{messageHandlers:{pharosClipboard:{postMessage:text=>{writes.push(text);return transfer.promise;}}}}}),
+      navigator:{clipboard:{writeText:()=>{browserCalls++;return outcome==='browser-denial'?transfer.promise:Promise.reject(Error('Browser denied'));}}},
+    }).window;
+    const node=(tag,className,text)=>{const attributes=new Map();return Object.assign(window.document.createElement(tag),{className,textContent:text,disabled:false,setAttribute:(key,value)=>attributes.set(key,value),getAttribute:key=>attributes.get(key)??null,removeAttribute:key=>attributes.delete(key)});};
+    const fileChip=vm.runInNewContext(wrapper+'\n'+chipSource+';fileChip',{window,node,icon:name=>name,filePathParts});
+    const path='/Volumes/My drive/資料/../file\nname.txt';
+    const chip=fileChip(path,[],()=>{}),copy=chip.children.at(-1),event={stopPropagation(){},preventDefault(){}};
+    const pending=copy.onclick(event);
+    assert.equal(copy.disabled,false,'pending copies stay focusable');assert.equal(copy.getAttribute('aria-disabled'),'true');assert.deepEqual(copy.children,['copy']);
+    await copy.onclick(event);assert.equal(writes.length+browserCalls,1);
+    if(outcome==='native')transfer.resolve(true);else transfer.reject(Error('Copy denied'));
+    await pending;
+    assert.equal(copy.disabled,false);assert.equal(copy.getAttribute('aria-disabled'),null);
+    assert.deepEqual(copy.children,[outcome==='native'?'check':'error']);
+    if(outcome!=='native')assert.match(copy.title,/unavailable/i);
+    assert.deepEqual(writes,outcome==='browser-denial'?[]:[path]);
+    assert.equal(browserCalls,outcome==='browser-denial'?1:0);
+    await copy.onclick(event);assert.equal(writes.length+browserCalls,2,'completion allows a retry');
+  }
+});
 
 test("session and turn ages accept epoch and ISO timestamps and keep two useful units", () => {
   const now = Date.parse("2026-10-20T15:20:00Z");

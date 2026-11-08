@@ -1,7 +1,9 @@
 package archive
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 // shapeScript builds a session's inputs in order: each step adds messages at
@@ -462,6 +466,46 @@ func TestSessionShapeMirrorsAndRoots(t *testing.T) {
 func TestSessionShapeIncremental(t *testing.T) {
 	c, config := parallelismTestCatalog(t)
 	all := countRows(t, c, "SELECT COUNT(*) FROM conversations")
+	t.Run("an abandoned page stops its build", func(t *testing.T) {
+		override(t, &derivedIdleGrace, 0)
+		c.reader().SetMaxOpenConns(1)
+		defer c.reader().SetMaxOpenConns(readerConns)
+		held, err := c.reader().Conn(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer held.Close()
+		before := c.reader().Stats().WaitCount
+		page, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { _, err := c.sessionShapeQueryRows(page, nil); done <- err }()
+		waitUntil(t, time.Second, "the build to wait for a reader", func() bool { return c.reader().Stats().WaitCount > before })
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+		waitUntil(t, time.Second, "the build to stop", func() bool {
+			c.derived.mu.Lock()
+			defer c.derived.mu.Unlock()
+			return len(c.derived.builds) == 0
+		})
+		for key := range c.derived.entries {
+			if strings.HasPrefix(key, "session-shape:") {
+				t.Fatal("the abandoned build was cached")
+			}
+		}
+	})
+	t.Run("large backlog stays in maintenance", func(t *testing.T) {
+		override(t, &sessionShapeInlineLimit, 1)
+		rows, err := c.sessionShapeQueryRows(t.Context(), nil)
+		var diagnostic *qt.PlanDiagnostic
+		if len(rows) != 0 || !errors.As(err, &diagnostic) || diagnostic.Code != qt.ErrorCodeResourceLimit {
+			t.Fatalf("a page derived an unbounded backlog or returned partial totals: %d rows, %v", len(rows), err)
+		}
+		if countRows(t, c, "SELECT COUNT(*) FROM session_shape_facts") != 0 || countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty") != all {
+			t.Fatal("a page published the backfill")
+		}
+	})
 	// Pages derive dirty conversations without storing them; maintenance does.
 	if len(shapeRows(t, c)) == 0 || countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty") != all {
 		t.Fatal("a page stored session shape")

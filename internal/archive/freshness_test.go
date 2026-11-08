@@ -809,6 +809,32 @@ func TestStatusSnapshotCarriesTheLedger(t *testing.T) {
 	}
 }
 
+// Captures waiting to be indexed name the background tasks that read them,
+// so a surface can say when they will be read: Preserve originals for every
+// Mac's captures, and also Other sources for this Mac's whole-source kinds.
+// Which of those runs first is the background view's to say, so the row
+// lists both rather than guessing from cadences.
+func TestFreshnessCaptureSchedule(t *testing.T) {
+	host := sqlQuote(currentHost().ID)
+	captures := &freshnessFiles{captures: []freshnessCapture{{host: "other-mac", source: "codex", needsIndex: true}, {host: "other-mac", source: "tl1", needsIndex: true}}}
+	in := freshnessInput{files: captures, sourceKinds: map[string]string{"codex": "codex", "tl1": "tl1"}}
+	check := func(rows map[string]freshnessRow, domain, next string, tasks ...string) {
+		t.Helper()
+		row := expectRow(t, rows, domain, freshBehind, "not-indexed", "")
+		if row.TaskID != "preserve" || !slices.Equal(row.TaskIDs, tasks) || row.Next == nil || *row.Next != next {
+			t.Fatalf("%s: want tasks %v next %q, got %q %v %v", domain, tasks, next, row.TaskID, row.TaskIDs, row.Next)
+		}
+	}
+	f := newFreshnessFixture(t)
+	rows := f.ledger(in)
+	check(rows, "capt:other-mac/codex", nextDailyUpdate)
+	check(rows, "capt:other-mac/tl1", nextDailyUpdate, "preserve", "other-sources")
+	f.exec("INSERT INTO background_settings(host_id,overrides_json) VALUES(" + host + `,'{"preserve":"manual"}')`)
+	rows = f.ledger(in)
+	check(rows, "capt:other-mac/codex", nextManualIndex)
+	check(rows, "capt:other-mac/tl1", nextHourlyUpdate, "preserve", "other-sources")
+}
+
 // An unreadable capture folder keeps the captures it last read, unknown;
 // one that does not exist and never had captures has none.
 func TestFreshnessFilesKeepCapturesThroughAnUnreadableRoot(t *testing.T) {

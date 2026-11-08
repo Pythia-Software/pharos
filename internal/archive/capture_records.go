@@ -418,7 +418,7 @@ func (s *recordStore) loadRevision(ref recordObject) (sqliteRevision, error) {
 		return v, errors.New("unsupported SQLite evidence format; upgrade Pharos")
 	}
 	probe := captureManifest{PathMap: v.Mappings, Installations: v.Installations}
-	if probe.unsafePath() != "" {
+	if _, unsafe := probe.unsafePath(); unsafe {
 		return v, errors.New("unsafe record path mapping")
 	}
 	if v.Identity != sqliteEvidenceIdentity(v) {

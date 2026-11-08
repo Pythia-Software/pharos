@@ -63,11 +63,15 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 }
 
 func (c *Catalog) usageRowsFromLedger(location *time.Location, hourly bool, ledger []map[string]any) ([]map[string]any, error) {
-	origins, err := c.conversationOrigins(context.Background())
+	return c.usageRowsFromLedgerContext(context.Background(), location, hourly, ledger)
+}
+
+func (c *Catalog) usageRowsFromLedgerContext(ctx context.Context, location *time.Location, hourly bool, ledger []map[string]any) ([]map[string]any, error) {
+	origins, err := c.conversationOrigins(ctx)
 	if err != nil {
 		return nil, err
 	}
-	book, err := c.loadPriceBook()
+	book, err := c.loadPriceBookFrom(ctx, c.reader())
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +201,7 @@ func usageNeedsLineage(fields libraryFields) bool {
 }
 
 func (c *Catalog) localUsageLedger(ctx context.Context) ([]map[string]any, error) {
-	return cachedValue(ctx, c, "usage-ledger", func(context.Context) ([]map[string]any, error) { return c.representativeLedger() })
+	return cachedValue(ctx, c, "usage-ledger", c.representativeLedgerContext)
 }
 
 // usageCarbonSuffix ends usage cache keys with the reader's carbon
@@ -227,7 +231,7 @@ func (c *Catalog) usageBaseRows(ctx context.Context, hourly bool, carbon carbonA
 		if err != nil {
 			return nil, err
 		}
-		rows, err := c.usageRowsFromLedger(time.Local, hourly, ledger)
+		rows, err := c.usageRowsFromLedgerContext(ctx, time.Local, hourly, ledger)
 		if err != nil {
 			return nil, err
 		}
@@ -273,7 +277,7 @@ func (c *Catalog) localUsageRoots(ctx context.Context) (*usageConversationAttrib
 		if err != nil {
 			return nil, err
 		}
-		return c.usageConversationRoots(ledger)
+		return c.usageConversationRootsContext(ctx, ledger)
 	})
 }
 
@@ -396,7 +400,11 @@ func filterUsageRows(ctx context.Context, rows []map[string]any, where []qt.Wher
 }
 
 func (c *Catalog) representativeLedger() ([]map[string]any, error) {
-	ledger, err := c.usageLedger(nil)
+	return c.representativeLedgerContext(context.Background())
+}
+
+func (c *Catalog) representativeLedgerContext(ctx context.Context) ([]map[string]any, error) {
+	ledger, err := c.usageLedger(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +418,11 @@ func (c *Catalog) representativeLedger() ([]map[string]any, error) {
 		}
 	}
 	representative := map[string]bool{}
-	for _, row := range c.suppressMirrors(workspaces) {
+	mirrors, err := c.suppressMirrorsContext(ctx, workspaces)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range mirrors {
 		representative[firstString(row["id"])] = true
 	}
 	kept := ledger[:0]
@@ -423,7 +435,7 @@ func (c *Catalog) representativeLedger() ([]map[string]any, error) {
 }
 
 // usageLedger reads priced ledger entries, optionally for specific workspaces.
-func (c *Catalog) usageLedger(workspaceIDs []string) ([]map[string]any, error) {
+func (c *Catalog) usageLedger(ctx context.Context, workspaceIDs []string) ([]map[string]any, error) {
 	sums := make([]string, len(usageTokenFields))
 	for index, field := range usageTokenFields {
 		sums[index] = "u." + field
@@ -435,7 +447,7 @@ func (c *Catalog) usageLedger(workspaceIDs []string) ([]map[string]any, error) {
 			args = append(args, id)
 		}
 	}
-	return queryMaps(c.reader(), `SELECT u.agent_session_id,u.usage_hour,u.model usage_model,u.effort,u.attribution,`+strings.Join(sums, ",")+`,
+	return queryMapsContext(ctx, c.reader(), `SELECT u.agent_session_id,u.usage_hour,u.model usage_model,u.effort,u.attribution,`+strings.Join(sums, ",")+`,
 			a.kind session_kind,a.depth,a.provider,a.model session_model,a.conversation_id,
             CASE WHEN `+currentGroupConversation("c")+` THEN 1 ELSE 0 END current_group_member,
             c.harness,c.harness_version_first,c.harness_version_last,c.harness_version_source,
@@ -479,7 +491,7 @@ func (c *Catalog) attachWorkspaceCosts(ctx context.Context, rows []map[string]an
 		for _, row := range rows {
 			ids = append(ids, firstString(row["id"]))
 		}
-		totals, err = c.workspaceUsage(ids)
+		totals, err = c.workspaceUsage(ctx, ids)
 	} else {
 		totals, err = c.allWorkspaceUsage(ctx)
 	}
@@ -517,19 +529,19 @@ func (total *workspaceUsageTotal) add(other *workspaceUsageTotal) {
 // allWorkspaceUsage returns workspaceUsage for every workspace, kept until the
 // next commit or local day. The totals are shared and must not be modified.
 func (c *Catalog) allWorkspaceUsage(ctx context.Context) (map[string]*workspaceUsageTotal, error) {
-	return cachedValue(ctx, c, "workspace-usage:"+c.clock().Format("2006-01-02"), func(context.Context) (map[string]*workspaceUsageTotal, error) {
-		return c.workspaceUsage(nil)
+	return cachedValue(ctx, c, "workspace-usage:"+c.clock().Format("2006-01-02"), func(ctx context.Context) (map[string]*workspaceUsageTotal, error) {
+		return c.workspaceUsage(ctx, nil)
 	})
 }
 
 // workspaceUsage totals the priced ledger per workspace, for the given
 // workspaces or, with none, all of them.
-func (c *Catalog) workspaceUsage(workspaceIDs []string) (map[string]*workspaceUsageTotal, error) {
-	ledger, err := c.usageLedger(workspaceIDs)
+func (c *Catalog) workspaceUsage(ctx context.Context, workspaceIDs []string) (map[string]*workspaceUsageTotal, error) {
+	ledger, err := c.usageLedger(ctx, workspaceIDs)
 	if err != nil {
 		return nil, err
 	}
-	book, err := c.loadPriceBook()
+	book, err := c.loadPriceBookFrom(ctx, c.reader())
 	if err != nil {
 		return nil, err
 	}

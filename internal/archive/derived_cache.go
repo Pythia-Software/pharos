@@ -3,6 +3,8 @@ package archive
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -18,9 +20,12 @@ import (
 //
 //   - A key names the value and whatever else it depends on, such as the local
 //     date for costs at today's prices.
-//   - Concurrent requests for a missing value wait for one computation. It
-//     finishes even if the request that started it is abandoned, since the
-//     others still want it and the next request can use it.
+//   - Concurrent requests for a missing value wait for one computation. Every
+//     caller can cancel its wait, including the one that started it. A build
+//     that no request waits for stops after derivedIdleGrace, so a reload can
+//     reattach but an abandoned page does not keep a reader connection and its
+//     snapshot for minutes. Builds keep their own budgets otherwise, and stop
+//     on catalog close. Warm-up builds run to completion.
 //   - After source changes, warmCaches recomputes the values pages used recently,
 //     so the next visit does not wait.
 //
@@ -37,6 +42,15 @@ type derivedCache struct {
 	// happen while a computation is running outside mu.
 	version int64
 	entries map[string]*derivedEntry
+	// Builds have a lifetime independent of any one waiter. Close
+	// cancels and joins them before the catalog's connections are closed.
+	builds  map[*derivedEntry]context.CancelFunc
+	workers sync.WaitGroup
+	closed  bool
+	// A service exits immediately on mapped-memory faults, even after every
+	// waiter has left. Direct MCP calls receive the original panic instead.
+	onFault func(any)
+	fault   any
 }
 
 type derivedEntry struct {
@@ -44,9 +58,61 @@ type derivedEntry struct {
 	ready   chan struct{} // closed once value and err are set
 	value   any
 	err     error
+	fault   any
 	// compute and usedAt let warmCaches recompute a value still in use.
 	compute func(context.Context) (any, error)
 	usedAt  time.Time
+	// While the build runs, waiters counts the callers waiting for it. When
+	// the last leaves, idle waits derivedIdleGrace and then abandons the build:
+	// cancels it and discards whatever it returns. keep marks a build a warm-up
+	// started or joined; it is never abandoned.
+	waiters   int
+	keep      bool
+	idle      *time.Timer
+	abandoned bool
+}
+
+// derivedIdleGrace is how long a build that no request waits for keeps
+// running, so that a reload of the same page reattaches to it.
+var derivedIdleGrace = 3 * time.Second
+
+// leave records that a waiter stopped waiting for entry, with mu held.
+func (cache *derivedCache) leave(entry *derivedEntry) {
+	entry.waiters--
+	if entry.waiters > 0 || entry.keep || entry.idle != nil {
+		return
+	}
+	select {
+	case <-entry.ready:
+		return
+	default:
+	}
+	var idle *time.Timer
+	idle = time.AfterFunc(derivedIdleGrace, func() {
+		cache.mu.Lock()
+		defer cache.mu.Unlock()
+		if entry.idle == idle {
+			cache.abandon(entry)
+		}
+	})
+	entry.idle = idle
+}
+
+// abandon cancels a running build nobody waits for, with mu held. Its result
+// is discarded, so callers that arrive meanwhile wait for it to stop and then
+// start another: one build per key at a time.
+func (cache *derivedCache) abandon(entry *derivedEntry) {
+	if entry.idle != nil {
+		entry.idle.Stop()
+		entry.idle = nil
+	}
+	if entry.keep || entry.waiters > 0 {
+		return
+	}
+	if cancel := cache.builds[entry]; cancel != nil {
+		entry.abandoned = true
+		cancel()
+	}
 }
 
 // recentUse is how long after its last request a value is kept warm.
@@ -124,10 +190,33 @@ func (cache *derivedCache) pruneThinkingEntries(version int64, now time.Time) {
 }
 
 func (cache *derivedCache) close() {
-	cache.versions.close()
+	cache.closed = true
+	for _, cancel := range cache.builds {
+		cancel()
+	}
+	if cache.fault == nil {
+		cache.versions.close()
+	}
 	cache.entries = nil
 	cache.generation++
 	cache.version = 0
+}
+
+func (c *Catalog) closeDerivedCache() {
+	c.derived.mu.Lock()
+	c.derived.close()
+	c.derived.mu.Unlock()
+	c.derived.workers.Wait()
+	c.derived.repanicFault()
+}
+
+func (cache *derivedCache) repanicFault() {
+	cache.mu.Lock()
+	fault := cache.fault
+	cache.mu.Unlock()
+	if fault != nil {
+		panic(fault) // SQLite is unusable; never close or checkpoint it after a fault.
+	}
 }
 
 // cachedValue returns key's value while the catalog is unchanged, and
@@ -158,15 +247,42 @@ func isWarmOnly(ctx context.Context) bool { return ctx.Value(warmOnlyKey{}) == t
 // derivedValue is cachedValue without a type. A request marks the value as
 // used, which keeps it warm.
 func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(context.Context) (any, error), request bool) (any, error) {
+	if parent, _ := ctx.Value(derivedAdmissionKey{}).(*derivedAdmission); parent != nil {
+		// Do not hold a heavy slot while waiting for a shared dependency. A
+		// queue of parents waiting on queued children would otherwise deadlock.
+		parent.release()
+		ctx = context.WithValue(ctx, derivedAdmissionKey{}, (*derivedAdmission)(nil))
+		value, err := c.derivedValueUnadmitted(ctx, key, compute, request)
+		release, admissionErr := parent.gate.acquire(ctx)
+		if admissionErr != nil {
+			return nil, admissionErr
+		}
+		parent.release = release
+		return value, err
+	}
+	return c.derivedValueUnadmitted(ctx, key, compute, request)
+}
+
+func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, compute func(context.Context) (any, error), request bool) (any, error) {
 	// Attribution is published by writers (see ensureOrigins); publication
 	// advances the generation, so values computed from older origins are
 	// recomputed.
 	cache := &c.derived
 	for {
 		if err := ctx.Err(); err != nil {
+			cache.repanicFault()
 			return nil, err
 		}
 		cache.mu.Lock()
+		if cache.fault != nil {
+			fault := cache.fault
+			cache.mu.Unlock()
+			panic(fault)
+		}
+		if cache.closed {
+			cache.mu.Unlock()
+			return nil, context.Canceled
+		}
 		version, err := c.cacheVersion(ctx, &cache.versions)
 		if err != nil {
 			cache.entries = nil
@@ -178,7 +294,7 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			if isWarmOnly(ctx) {
 				return nil, errDerivedCold
 			}
-			return compute(ctx)
+			return computeDerived(ctx, compute)
 		}
 		cache.version = version
 		if isWarmOnly(ctx) {
@@ -189,6 +305,10 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			}
 			select {
 			case <-entry.ready:
+				cache.repanicFault()
+				if entry.fault != nil {
+					panic(entry.fault)
+				}
 				return entry.value, entry.err
 			default:
 				return nil, errDerivedCold
@@ -226,28 +346,34 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			}
 		}
 		entry := cache.entries[key]
-		if entry != nil && entry.version != version {
+		if entry != nil && (entry.version != version || entry.abandoned) {
 			select {
 			case <-entry.ready:
 			default:
 				// Finish the existing build before starting the latest generation.
 				// Several commits during a slow read must not launch several whole-
 				// catalog scans for the same value. New callers still get fresh data.
+				// A superseded build serves only the callers already waiting for it,
+				// so without them it stops now.
+				if entry.waiters == 0 {
+					cache.abandon(entry)
+				}
 				cache.mu.Unlock()
 				select {
 				case <-entry.ready:
 					continue
 				case <-ctx.Done():
+					cache.repanicFault()
 					return nil, ctx.Err()
 				}
 			}
 		}
-		if entry == nil || entry.version != version {
+		if entry == nil || entry.version != version || entry.abandoned {
 			usedAt := time.Time{}
 			if entry != nil {
 				usedAt = entry.usedAt
 			}
-			entry = &derivedEntry{version: version, ready: make(chan struct{}), compute: compute, usedAt: usedAt}
+			entry = &derivedEntry{version: version, ready: make(chan struct{}), compute: compute, usedAt: usedAt, keep: !request}
 			if cache.entries == nil {
 				cache.entries = map[string]*derivedEntry{}
 			}
@@ -256,32 +382,82 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 				entry.usedAt = time.Now()
 			}
 			generation := cache.generation
-			cache.mu.Unlock()
-			value, err := compute(context.WithoutCancel(ctx))
-			cache.mu.Lock()
-			entry.value, entry.err = value, err
-			if isThinkingCohortKey(key) {
-				// These entries rebuild on demand, never in warmCaches. Release the
-				// closure's selected request slice once its result is ready.
-				entry.compute = nil
+			work, cancel := context.WithCancel(context.WithoutCancel(ctx))
+			onFault := cache.onFault
+			if cache.builds == nil {
+				cache.builds = map[*derivedEntry]context.CancelFunc{}
 			}
-			if (err != nil || cache.generation != generation) && cache.entries[key] == entry {
-				delete(cache.entries, key)
-			}
-			close(entry.ready)
-			// The catalog may have changed while this computation was in flight.
-			// Use the monitor's latest observed version, so an old completion does
-			// not evict snapshots built for a newer commit.
-			cache.pruneDelegationEntries(cache.version, time.Now())
-			cache.pruneThinkingEntries(cache.version, time.Now())
+			cache.builds[entry] = cancel
+			cache.workers.Add(1)
+			go func() {
+				defer cache.workers.Done()
+				defer cancel()
+				debug.SetPanicOnFault(true)
+				var value any
+				var err error
+				var fault any
+				defer func() {
+					if failure := recover(); failure != nil {
+						if _, mapped := failure.(interface{ Addr() uintptr }); mapped {
+							fault = failure
+							// The service exits before any cleanup or cache locking can
+							// touch an unusable catalog. Direct MCP relays the fault.
+							if onFault != nil {
+								onFault(fault)
+							}
+							cache.mu.Lock()
+							cache.fault = fault
+							for _, stop := range cache.builds {
+								stop()
+							}
+							cache.mu.Unlock()
+						} else {
+							err = fmt.Errorf("building cached %s: %v", key, failure)
+						}
+					}
+					cache.mu.Lock()
+					defer cache.mu.Unlock()
+					entry.value, entry.err, entry.fault = value, err, fault
+					delete(cache.builds, entry)
+					if entry.idle != nil {
+						entry.idle.Stop()
+						entry.idle = nil
+					}
+					if isThinkingCohortKey(key) {
+						entry.compute = nil
+					}
+					if (err != nil || entry.abandoned || cache.generation != generation) && cache.entries[key] == entry {
+						delete(cache.entries, key)
+					}
+					close(entry.ready)
+					cache.pruneDelegationEntries(cache.version, time.Now())
+					cache.pruneThinkingEntries(cache.version, time.Now())
+				}()
+				value, err = computeDerived(work, compute)
+			}()
 		} else if request {
 			entry.usedAt = time.Now()
+		} else {
+			entry.keep = true
+		}
+		entry.waiters++
+		if entry.idle != nil {
+			entry.idle.Stop()
+			entry.idle = nil
 		}
 		cache.mu.Unlock()
 		select {
 		case <-entry.ready:
 		case <-ctx.Done():
+			cache.mu.Lock()
+			cache.leave(entry)
+			cache.mu.Unlock()
+			cache.repanicFault()
 			return nil, ctx.Err()
+		}
+		cache.repanicFault()
+		if entry.fault != nil {
+			panic(entry.fault)
 		}
 		return entry.value, entry.err
 	}
@@ -292,6 +468,9 @@ func (c *Catalog) catalogVersion(ctx context.Context) (int64, error) {
 	cache := &c.derived
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
+	if cache.fault != nil {
+		panic(cache.fault)
+	}
 	version, err := c.cacheVersion(ctx, &cache.versions)
 	if err != nil {
 		cache.entries = nil
@@ -331,7 +510,10 @@ func (c *Catalog) warmCaches(ctx context.Context) {
 	c.warmVersion = version
 	// The rows keep the fields recent requests needed, such as long text.
 	if usedAt, fields := c.libraryUse(); first || time.Since(usedAt) < recentUse {
-		_, _ = c.cachedLibraryRows(ctx, libraryCompactFields.union(fields))
+		if usedAt.IsZero() {
+			fields = libraryFieldsFor("title", "repository_name")
+		}
+		_, _ = c.cachedLibraryRows(ctx, fields)
 	}
 	if first {
 		// Usage, the Settings pricing card, and the Library's cost columns;

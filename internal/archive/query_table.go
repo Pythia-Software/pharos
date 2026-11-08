@@ -456,13 +456,17 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 // prepareSQLDataset brings the derived table an SQL dataset reads up to date:
 // the tool rollup for tool use, stored request timings for model requests,
 // and for user messages, a classification that is missing or by older rules
-// (see ensureAuthorship).
+// (see ensureAuthorship). Compactions only start their one-time boundary
+// backfill, which runs with the tools stage.
 func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
 	if dataset == "writing_messages" {
 		c.ensureAuthorship()
 		return nil
 	}
-	if dataset == "compactions" || dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "agent_event_rates" || dataset == "message_labels" {
+	if dataset == "compactions" {
+		return c.currentCompactionBoundaries(ctx)
+	}
+	if dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "agent_event_rates" || dataset == "message_labels" {
 		return nil // imported (agent_events.go); nothing to bring up to date
 	}
 	if dataset == "model_requests" {

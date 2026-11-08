@@ -224,21 +224,32 @@ test('library settings resolves local and external destinations and rejects inva
   assert.throws(()=>pharosLibraryProposal('Research','','network'),/store/);
 });
 
-test('startup folder choices use the host adapter or service picker and always restore the initiating control', async () => {
+test('startup folder choices restore controls and affect only their initiating wizard view', async () => {
   const page=readFileSync(join(assets,'application.html'),'utf8');
   const picker=page.slice(page.indexOf('async function pickFolder('),page.indexOf("\n$('choose-folder').onclick"));
-  for(const native of [true,false]) for(const result of ['/Volumes/Archive',null,new Error('Picker unavailable')]) {
-    const field={value:'/manual/path'},button={disabled:false,focus(){this.focused=true;}},busy={disabled:true};
-    const calls=[];
-    const window={pharosHost:{capabilities:{folders:{available:native}},folders:{chooseLibraryFolder:async()=>{calls.push('host');if(result instanceof Error)throw result;return result;}}}};
-    const model=vm.runInNewContext(picker+';({pickFolder})',{
-      window,$:id=>id==='library-form'?{querySelectorAll:()=>[button,busy]}:field,
-      notice(){},updateLibraryProposal(){},call:async(action,body)=>{calls.push([action,plain(body)]);if(result instanceof Error)throw result;return {path:result};},
+  for(const native of [true,false])for(const id of ['path','existing-path','backup','recover-path'])for(const result of ['/Volumes/Archive',null,new Error('Picker unavailable')])for(const change of ['current','field replaced','closed','view replaced','source setup']) {
+    let settle;
+    const pending=new Promise((resolve,reject)=>{settle=()=>result instanceof Error?reject(result):resolve(result)});
+    const field={value:'/manual/path',isConnected:true,closest:()=>null},button={isConnected:true,disabled:false,focus(){this.focused=true;}},busy={disabled:true};
+    let currentField=field,updated=0,sourceSetup=false;
+    const setup={hidden:false},dialog={open:true,classList:{contains:()=>sourceSetup}},notices=[],calls=[];
+    const window={pharosHost:{capabilities:{folders:{available:native}},folders:{chooseLibraryFolder:()=>{calls.push('host');return pending}}}};
+    const model=vm.runInNewContext('let wizardView=0;'+picker+';({pickFolder,replaceView(){wizardView++}})',{
+      window,dialog,$:key=>key==='library-form'?{querySelectorAll:()=>[button,busy]}:key==='setup'?setup:currentField,
+      notice:(text,error)=>{if(error)notices.push(text)},updateLibraryProposal:()=>updated++,call:async(action,body)=>{calls.push([action,plain(body)]);return {path:await pending}},
     });
-    if(result instanceof Error)await assert.rejects(model.pickFolder('path',button),/Picker unavailable/);
-    else await model.pickFolder('path',button);
-    assert.equal(field.value,typeof result==='string'?result:'/manual/path');
+    const operation=model.pickFolder(id,button);
+    assert.equal(button.disabled,true);assert.equal(busy.disabled,true);
+    if(change==='field replaced'){field.isConnected=false;currentField={...field,isConnected:true,value:'/replacement'}}
+    if(change==='closed'){setup.hidden=true;dialog.open=false}
+    if(change==='view replaced'){model.replaceView();currentField.value='/replacement'}
+    if(change==='source setup')sourceSetup=true;
+    settle();await operation;
+    const current=change==='current',selected=current&&typeof result==='string';
+    assert.equal(currentField.value,selected?result+(id==='recover-path'?'/Recovered Library':''):['field replaced','view replaced'].includes(change)?'/replacement':'/manual/path');
+    assert.equal(updated,selected&&id==='path'?1:0);
+    assert.deepEqual(notices,current&&result instanceof Error?['Picker unavailable']:[]);
     assert.deepEqual(calls,native?['host']:[['choose-folder',{}]]);
-    assert.equal(button.disabled,false);assert.equal(busy.disabled,true);assert.equal(button.focused,true);
+    assert.equal(button.disabled,false);assert.equal(busy.disabled,true);assert.equal(!!button.focused,current);
   }
 });

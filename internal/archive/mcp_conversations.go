@@ -123,8 +123,8 @@ func (c *Catalog) searchConversationsContext(ctx context.Context, args map[strin
 	// and its message count, are read only for the page (see conversationCards).
 	// Without filters, which is how agents usually search, the list is kept
 	// until the next commit.
-	candidates := func(context.Context) ([]map[string]any, error) {
-		return queryMaps(c.DB, `SELECT c.id conversation_id,c.started_at,w.activity_at,substr(w.title,1,101) title
+	candidates := func(ctx context.Context) ([]map[string]any, error) {
+		return queryMapsContext(ctx, c.DB, `SELECT c.id conversation_id,c.started_at,w.activity_at,substr(w.title,1,101) title
 			FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
 			LEFT JOIN repositories r ON r.id=w.repository_id WHERE `+strings.Join(clauses, " AND "), values...)
 	}
@@ -301,8 +301,8 @@ func (c *Catalog) collapseConversationMirrors(rows []map[string]any) []map[strin
 		}
 		return parent[id]
 	}
-	links, _ := cachedValue(context.Background(), c, "conversation-links", func(context.Context) ([]map[string]any, error) {
-		return queryMaps(c.DB, "SELECT left_id,right_id FROM conversation_identity_links")
+	links, _ := cachedValue(context.Background(), c, "conversation-links", func(ctx context.Context) ([]map[string]any, error) {
+		return queryMapsContext(ctx, c.DB, "SELECT left_id,right_id FROM conversation_identity_links")
 	})
 	for _, link := range links {
 		left, right := firstString(link["left_id"]), firstString(link["right_id"])

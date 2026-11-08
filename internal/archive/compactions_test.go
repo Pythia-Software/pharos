@@ -3,6 +3,8 @@ package archive
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
+	"sort"
 	"testing"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
@@ -76,6 +78,53 @@ func TestCompactionEvents(t *testing.T) {
 	if w := apiCall(t, server, "", http.MethodGet, "/api/query/compactions/capabilities", nil); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
+	t.Run("stored boundaries follow writes and backfill", func(t *testing.T) {
+		fields := []string{"id", "conversation_id", "occurred_at", "day", "trigger", "trigger_evidence", "model", "provider", "channel"}
+		expectStored := func(label string) {
+			t.Helper()
+			derived := compactionRowSet(t, c, compactionDataset, schema, fields)
+			if stored := compactionRowSet(t, c, compactionStoredDataset, schema, fields); len(derived) == 0 || !reflect.DeepEqual(stored, derived) {
+				t.Fatalf("%s: stored %v, derived %v", label, stored, derived)
+			}
+			if table, _ := c.sqlDatasetFor("compactions"); table.from != compactionStoredDataset.from {
+				t.Fatalf("%s: complete boundaries must be read from the stored table", label)
+			}
+		}
+		expectStored("seeded")
+		execTx(t, c.DB,
+			`UPDATE messages SET text='{"subtype":"compact_boundary","compactMetadata":{"trigger":"auto"}}' WHERE id='manual'`,
+			`UPDATE messages SET kind='message' WHERE id='auto'`,
+			`UPDATE messages SET text='{"subtype":"compact_boundary"}' WHERE id='prose'`,
+			`UPDATE messages SET model='claude-opus',created_at='2026-11-03T12:00:00Z' WHERE id='unknown'`,
+			`DELETE FROM messages WHERE id='codex-auto'`,
+			`INSERT OR REPLACE INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,source_order) VALUES('no-clock','conv-0','no-clock','system','metadata','{"type":"turn_duration"}','hash',3)`)
+		expectStored("after edits")
+		// A catalog that predates the table, or an older classification, starts
+		// over; queries derive the boundaries until the backfill finishes.
+		execTx(t, c.DB, `UPDATE meta SET value='compactions-v0' WHERE key='compaction_boundaries_version'`)
+		if err := c.ensureCompactionBoundaries(); err != nil {
+			t.Fatal(err)
+		}
+		if table, _ := c.sqlDatasetFor("compactions"); table.from != compactionDataset.from {
+			t.Fatal("an unfinished backfill must derive boundaries from messages")
+		}
+		var stored int
+		if err := c.DB.QueryRow("SELECT COUNT(*) FROM compaction_boundaries").Scan(&stored); err != nil || stored != 0 {
+			t.Fatal(stored, err)
+		}
+		w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/compactions/query-v3", groupRequest("trigger", qt.SummaryColumn{ID: "events", Op: "count"}))
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.SourceTotal != 4 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		// Triggers keep writes made during the backfill.
+		execTx(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order)
+ VALUES('late','conv-1','late','system','metadata','{"type":"compacted","compaction_trigger":"auto"}','hash','2026-11-04T12:00:00Z',20)`)
+		override(t, &compactionBoundaryBatch, 1)
+		if err := c.ensureToolRollup(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		expectStored("after backfill")
+	})
 	t.Run("native aliases without tool calls", func(t *testing.T) {
 		catalog, config := testCatalog(t)
 		seedToolCalls(t, catalog, 0)
@@ -157,4 +206,15 @@ func TestCompactionEvents(t *testing.T) {
 			t.Fatalf("inactive native falls back to an active boundary transcript: %v", got)
 		}
 	})
+}
+
+// compactionRowSet reads every row's fields, in identity order.
+func compactionRowSet(t *testing.T, c *Catalog, table sqlDataset, schema querytable.Schema, fields []string) []map[string]any {
+	t.Helper()
+	result, err := table.Rows(t.Context(), c.reader(), querytable.Query{Select: fields, Limit: 100}, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(result.Rows, func(i, j int) bool { return firstString(result.Rows[i]["id"]) < firstString(result.Rows[j]["id"]) })
+	return result.Rows
 }

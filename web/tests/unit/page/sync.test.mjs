@@ -14,6 +14,50 @@ const { pharosSync, document: syncDocument } = loadClassicScript("sync.js", { Da
 
 const run = (id, state, conversations = 0, workspaces = conversations) => ({ id, kind: "automatic-sync", state, phase: "checking", conversations, workspaces });
 
+test('issue diagnostics copy stays focusable, runs once while pending and settles before reporting', async () => {
+  const elements = root => [root, ...(root.children || []).flatMap(elements)];
+  for (const outcome of ['native', 'native-failure', 'browser-denial']) {
+    const dashboard=syncDocument.createElement('div'),body=syncDocument.createElement('body');
+    dashboard.prepend=(...nodes)=>dashboard.children.unshift(...nodes);
+    const transfers=[],writes=[];let browserCalls=0,refreshes=0;
+    const transfer=()=>{const pending=Promise.withResolvers();transfers.push(pending);return pending.promise;};
+    const details={id:'issue',source_name:'codex',unit:'/Volumes/My drive/資料\nfile'};
+    loadClassicScript('sync.js', {
+      document:{...syncDocument,body,getElementById:id=>id==='syncDashboard'?dashboard:null,createElement:tag=>{
+        const element=syncDocument.createElement(tag),attributes=new Map();element.showModal=()=>{};
+        Object.assign(element,{setAttribute:(name,value)=>attributes.set(name,String(value)),getAttribute:name=>attributes.get(name)??null,removeAttribute:name=>attributes.delete(name)});
+        return element;
+      }},
+      ...(outcome==='browser-denial'?{}:{webkit:{messageHandlers:{pharosClipboard:{postMessage:text=>{writes.push(text);return transfer();}}}}}),
+      navigator:{clipboard:{writeText:()=>{browserCalls++;return outcome==='browser-denial'?transfer():Promise.reject(Error('Browser denied'));}}},
+      fetch:async path=>{if(path==='/api/sync/status')refreshes++;return {ok:true,json:async()=>path==='/api/sync/status'?{settings:{},issues:[details]}:path==='/api/sync/issues'?{issues:[details]}:{runs:[]}};},
+    });
+    await new Promise(resolve=>setImmediate(resolve));
+    await elements(dashboard).find(el=>el.textContent==='View details / copy diagnostics').onclick();
+    const dialog=body.children.find(el=>el.tagName==='DIALOG');
+    const copy=elements(dialog).find(el=>el.textContent==='Copy diagnostics');
+    const status=dialog.children.find(el=>el.tagName==='P');
+    const settledRefreshes=refreshes;
+    // The first attempt settles with the outcome; a retry then succeeds.
+    for (const succeed of outcome==='native'?[true]:[false,true]) {
+      status.textContent='Previous outcome';
+      const pending=copy.onclick();
+      // Native disabled would drop keyboard focus; the pending control stays enabled.
+      assert.ok(!copy.disabled);assert.equal(copy.getAttribute('aria-disabled'),'true');assert.equal(status.textContent,'');
+      await copy.onclick();await copy.onclick();
+      assert.equal(transfers.length,succeed&&outcome!=='native'?2:1,'repeat presses while pending do not start another write');
+      const settle=transfers.at(-1);if(succeed)settle.resolve(true);else settle.reject(Error('Copy denied'));
+      await pending;
+      assert.equal(copy.getAttribute('aria-disabled'),null);
+      assert.match(status.textContent,succeed?/copied/i:/could not copy/i);
+    }
+    const attempts=outcome==='native'?1:2;
+    assert.deepEqual(writes,outcome==='browser-denial'?[]:Array(attempts).fill(JSON.stringify(details,null,2)));
+    assert.equal(browserCalls,outcome==='browser-denial'?attempts:0);
+    assert.equal(refreshes,settledRefreshes,'copying does not refresh the dashboard');
+  }
+});
+
 test("verification summaries distinguish selective repairs from unresolved checks", () => {
   assert.equal(pharosSync.verificationSummary(null), "");
   const verification = { checked: 5, passed: 2, reindexed: 1, mismatch: 1, deferred: 1, errors: 1 };

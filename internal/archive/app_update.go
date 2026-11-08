@@ -10,8 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
+
+// Tests replace only this consumer's lock calls to exercise adapter failures.
+var lockAppUpdate = filelock.Lock
 
 // Each bundled CLI holds a shared lease for its entire lifetime. The native
 // app creates a pending marker before stopping the service/MCP, then takes the
@@ -45,7 +49,7 @@ func acquireAppUpdateLease(executable, support string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open Pharos update lock: %w", err)
 	}
-	if err = syscall.Flock(int(lease.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+	if err = lockAppUpdate(lease, filelock.Shared, filelock.Try); err != nil {
 		lease.Close()
 		return nil, appUpdateLockError(err)
 	}
@@ -81,8 +85,8 @@ func acquireAppUpdateLease(executable, support string) (*os.File, error) {
 // reader of an unlinked marker cannot delete a fresh GUI handoff at that path.
 // GUI creation is exclusive and never overwrites an existing marker.
 func removeCompletedAppUpdate(pending *os.File, path string) error {
-	if err := syscall.Flock(int(pending.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+	if err := lockAppUpdate(pending, filelock.Exclusive, filelock.Try); err != nil {
+		if errors.Is(err, filelock.ErrContended) {
 			return nil // Another CLI is already cleaning up this completed handoff.
 		}
 		return fmt.Errorf("lock completed Pharos update state: %w", err)
@@ -108,7 +112,7 @@ func removeCompletedAppUpdate(pending *os.File, path string) error {
 }
 
 func appUpdateLockError(err error) error {
-	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+	if errors.Is(err, filelock.ErrContended) {
 		return fmt.Errorf("Pharos is updating; reconnect after the app reopens: %w", err)
 	}
 	return fmt.Errorf("acquire Pharos update lock: %w", err)

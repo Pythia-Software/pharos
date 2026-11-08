@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 	"github.com/gbdubs/pharos/internal/sourcepath"
 )
 
@@ -43,7 +43,8 @@ type captureView struct {
 	host     Host
 	dir      string // <capture_root>/<host-id>/<source>
 	manifest *captureManifest
-	// mappings pair original paths with absolute captured paths.
+	// mappings pair original paths with absolute captured paths. An empty
+	// captured path blocks an unusable destination without losing precedence.
 	mappings []capturePathMapping
 }
 
@@ -56,6 +57,9 @@ func (v *captureView) planSignature() string {
 func newCaptureView(host Host, dir string, manifest *captureManifest) *captureView {
 	view := &captureView{host: host, dir: dir, manifest: manifest}
 	for _, mapping := range manifest.PathMap {
+		// Keep every source prefix in its original order, including blocked
+		// destinations. Dropping one could select different captured evidence.
+		view.mappings = append(view.mappings, capturePathMapping{Original: mapping.Original})
 		// Views also serve temporary source/ and retained history/ readers.
 		// Validate archive names here without imposing persisted files/-only
 		// policy or changing the recorded manifest. Drive prefixes are invalid
@@ -71,7 +75,7 @@ func newCaptureView(host Host, dir string, manifest *captureManifest) *captureVi
 		}
 		captured := filepath.Join(dir, local)
 		if capturePathIsWithin(captured, dir) {
-			view.mappings = append(view.mappings, capturePathMapping{Original: mapping.Original, Captured: captured})
+			view.mappings[len(view.mappings)-1].Captured = captured
 		}
 	}
 	return view
@@ -109,13 +113,16 @@ func (v *captureView) translate(name string, forward bool) (string, bool) {
 	for _, mapping := range v.mappings {
 		from := mapping.Original
 		if !forward {
+			if mapping.Captured == "" {
+				continue // Blocked destinations are never physical roots.
+			}
 			from = filepath.ToSlash(mapping.Captured)
 		}
 		if rest, ok := sourcepath.CutLegacyPOSIX(name, from); ok && len(from) > length {
 			best, suffix, length = mapping, rest, len(from)
 		}
 	}
-	if length < 0 {
+	if length < 0 || best.Captured == "" {
 		return "", false
 	}
 	// Choose the longest prefix before resolving its suffix: an unsafe match
@@ -355,8 +362,11 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 		return fail(err)
 	}
 	defer releaseLockFile(lock)
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return fail(fmt.Errorf("%s is already being indexed: %w", target.label(), err))
+	if err := lockCaptureIndex(lock, filelock.Exclusive, filelock.Try); err != nil {
+		if errors.Is(err, filelock.ErrContended) {
+			return fail(fmt.Errorf("%s is already being indexed: %w", target.label(), err))
+		}
+		return fail(fmt.Errorf("lock the index of %s: %w", target.label(), err))
 	}
 	opFrom(ctx).holdLock(lock)
 	historyWarnings := []captureError{}

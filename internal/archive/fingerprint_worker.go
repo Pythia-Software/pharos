@@ -16,7 +16,7 @@ type fingerprintImageRenderer interface {
 }
 type fingerprintEntity struct{ entity, id string }
 
-// Two bounded slots each own a VM and native scratch. In-memory reservations
+// Two bounded slots each own native layout/raster scratch. In-memory reservations
 // exclude an entity until its render ends, including newer generations of it.
 // The service holds the exclusive library lock; a crash loses reservations,
 // while all unfinished work stays dirty in SQLite and resumes immediately.

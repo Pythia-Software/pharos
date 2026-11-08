@@ -27,7 +27,10 @@ import (
 // the tens of megabytes of purpose text out of memory and out of each rebuild.
 // Costs are also left out until a request filters, sorts, or groups on them.
 type libraryCache struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+	// build serializes rebuilds without keeping waiters behind a mutex that
+	// cannot observe their request cancellation.
+	build    chan struct{}
 	versions dataVersionMonitor
 	version  int64
 	day      string
@@ -59,28 +62,47 @@ func (c *Catalog) clock() time.Time {
 func (c *Catalog) cachedLibraryRows(ctx context.Context, fields libraryFields) ([]map[string]any, error) {
 	cache := &c.library
 	cache.mu.Lock()
-	defer cache.mu.Unlock()
+	if cache.build == nil {
+		cache.build = make(chan struct{}, 1)
+	}
+	build := cache.build
+	cache.mu.Unlock()
+	select {
+	case build <- struct{}{}:
+		defer func() { <-build }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cache.mu.Lock()
 	// Read the version before building: source changes during the build leave the
 	// rows tagged older than they are, which only costs an extra rebuild.
 	version, versionErr := cache.dataVersion(ctx, c)
 	day := c.clock().Format("2006-01-02")
 	current := versionErr == nil && cache.rows != nil && version == cache.version && day == cache.day
 	if current && cache.fields.covers(fields) {
-		return slices.Clone(cache.rows), nil
+		rows := slices.Clone(cache.rows)
+		cache.mu.Unlock()
+		return rows, nil
 	}
-	// Rebuild with the compact fields most requests need, adding long text and
-	// costs only once a request uses them; keep fields still-current rows had, so requests
-	// alternating between two long-text fields don't rebuild every time.
-	fields = libraryCompactFields.union(fields)
+	// Only derive fields a request needs. Even short output fields (tool error
+	// and compaction counts) can scan large message bodies on dirty workspaces.
+	// Keep fields already in this generation to avoid alternating rebuilds.
+	fields = libraryFieldsFor().union(fields)
 	if current {
 		fields = fields.union(cache.fields)
 	}
 	cache.rows, cache.fields = nil, fields
+	cache.mu.Unlock()
 	rows, err := c.computeSearchRows(SearchOptions{ctx: ctx}, fields)
 	if err != nil {
 		return nil, err
 	}
 	// Without a version the rows are still correct, just not reusable.
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
 	if versionErr == nil {
 		cache.rows, cache.version, cache.day, cache.fields = rows, version, day, fields
 	}

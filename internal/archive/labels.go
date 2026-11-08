@@ -22,6 +22,7 @@ import (
 	"time"
 
 	labelrt "github.com/gbdubs/pharos/internal/labeler"
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // The labels ledger (docs/local-labelrt.md): message-function labels from
@@ -472,8 +473,11 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 	defer c.labels.Unlock()
 	if c.Path != "" {
 		lease, err := fileLease(canonical(c.Path)+".labels.lock", true)
+		if errors.Is(err, filelock.ErrContended) {
+			return stats, fmt.Errorf("%w: %w", errLabelsRunning, err)
+		}
 		if err != nil {
-			return stats, fmt.Errorf("%w: %v", errLabelsRunning, err)
+			return stats, fmt.Errorf("lock the labels run: %w", err)
 		}
 		defer lease.Close()
 	}

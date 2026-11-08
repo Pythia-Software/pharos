@@ -1,6 +1,9 @@
 package archive
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // One row per most-specific accepted message label, or one coverage row when
 // none exists. Distinct message counts preserve overlapping labels; dirty
@@ -84,6 +87,14 @@ func messageLabelLiveDataset(conversations string) sqlDataset {
 // unlabelled library must expose its missing coverage without creating tables.
 func (c *Catalog) sqlDatasetFor(dataset string) (sqlDataset, bool) {
 	table, ok := sqlDatasetFor(dataset)
+	if dataset == "compactions" {
+		// Read stored boundaries once they are complete; until then, and in a
+		// catalog opened without Initialize, derive them from message bodies.
+		if ready, err := compactionBoundariesReady(context.Background(), c.reader()); err == nil && ready {
+			return compactionStoredDataset, true
+		}
+		return table, ok
+	}
 	if dataset != "message_labels" || !ok {
 		return table, ok
 	}

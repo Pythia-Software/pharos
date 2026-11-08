@@ -10,8 +10,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // compactFixture is a closed library catalog with messages whose rowids have
@@ -166,6 +169,42 @@ func TestCompactLibraryLeavesTheCatalogWhenItCannotFinish(t *testing.T) {
 		time.AfterFunc(100*time.Millisecond, func() { lease.Close() })
 		if receipt, err := CompactLibrary(t.Context(), config, nil); err != nil || receipt.FreeBytes == 0 {
 			t.Fatal("compaction after the lease ended", receipt, err)
+		}
+	})
+	t.Run("the use lock fails", func(t *testing.T) {
+		config := compactFixture(t)
+		free := compactPragma(t, config.CatalogPath, "freelist_count")
+		use := libraryUseLock(config)
+		// Every acquisition failure is retried until the deadline; then only
+		// contention is described as another process, and others keep
+		// their cause.
+		for _, tc := range leaseLockFailures() {
+			t.Run(tc.name, func(t *testing.T) {
+				override(t, &compactLeaseWait, 0)
+				refused := failFileLease(t, use, tc.err)
+				_, err := CompactLibrary(t.Context(), config, nil)
+				contended := errors.Is(tc.err, filelock.ErrContended)
+				if err == nil || strings.Contains(err.Error(), "another Pharos process") != contended || !contended && !errors.Is(err, tc.err) {
+					t.Fatalf("compaction lock failure: %v", err)
+				}
+				if len(*refused) == 0 {
+					t.Fatal("compaction never tried the lock")
+				}
+				requireLeasesClosed(t, *refused, len(*refused))
+				unchanged(t, config, free)
+			})
+		}
+		attempts := 0
+		override(t, &lockFileLease, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+			if strings.HasSuffix(file.Name(), use) {
+				if attempts++; attempts == 1 {
+					return syscall.EIO
+				}
+			}
+			return filelock.Lock(file, mode, wait)
+		})
+		if receipt, err := CompactLibrary(t.Context(), config, nil); err != nil || receipt.FreeBytes == 0 || attempts != 2 {
+			t.Fatal("compaction after a lock failure cleared", receipt, err, attempts)
 		}
 	})
 	t.Run("no room for the copy", func(t *testing.T) {

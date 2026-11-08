@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // backupFixture is a library with a catalog, captures, a host file and
@@ -103,6 +106,31 @@ func backupFileExists(t *testing.T, path string) bool {
 	t.Helper()
 	_, err := os.Lstat(path)
 	return err == nil
+}
+
+// checkedLock stands in for one of backup's lock calls: it checks each
+// acquisition's mode and wait, keeps the file so the test can check it was
+// closed, and returns what result says for that call (1-based).
+func checkedLock(t *testing.T, mode filelock.Mode, wait filelock.WaitMode, files *[]*os.File, result func(call int, file *os.File) error) func(*os.File, filelock.Mode, filelock.WaitMode) error {
+	return func(file *os.File, gotMode filelock.Mode, gotWait filelock.WaitMode) error {
+		if gotMode != mode || gotWait != wait || file == nil || file.Fd() == ^uintptr(0) {
+			t.Errorf("lock %v: mode %v, wait %v", file, gotMode, gotWait)
+		}
+		*files = append(*files, file)
+		return result(len(*files), file)
+	}
+}
+
+func requireLocksClosed(t *testing.T, files []*os.File, want int) {
+	t.Helper()
+	if len(files) != want {
+		t.Fatalf("%d lock attempts, want %d", len(files), want)
+	}
+	for _, file := range files {
+		if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("%s was left open: %v", file.Name(), err)
+		}
+	}
 }
 
 func runBackup(t *testing.T, config Config, dest string, prune bool) BackupRun {
@@ -328,14 +356,19 @@ func TestBackupWaitsForARunningCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const waitingPhase = "waiting for a capture to finish"
 	waiting := make(chan struct{})
-	var once atomic.Bool
+	notices, last := 0, ""
 	done := make(chan BackupRun)
 	go func() {
 		done <- job.Run(context.Background(), func(run BackupRun) {
-			if run.Phase == "waiting for a capture to finish" && once.CompareAndSwap(false, true) {
-				close(waiting)
+			// Later progress reports repeat the phase; count entries into it.
+			if run.Phase == waitingPhase && last != waitingPhase {
+				if notices++; notices == 1 {
+					close(waiting)
+				}
 			}
+			last = run.Phase
 		})
 	}()
 	select {
@@ -347,12 +380,149 @@ func TestBackupWaitsForARunningCapture(t *testing.T) {
 		t.Fatal("captures were copied while a capture held the lock")
 	}
 	lock.Close()
-	if run := <-done; run.State != "complete" {
-		t.Fatalf("backup after the capture: %+v", run)
+	if run := <-done; run.State != "complete" || notices != 1 {
+		t.Fatalf("backup after the capture (%d waiting notices): %+v", notices, run)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "captures", "host-a", "claude", "manifest.json")); err != nil {
 		t.Fatal(err)
 	}
+
+	// The capture lock is a shared, nonblocking acquisition. Only the
+	// adapter's contention waits; any other failure leaves the lock's state
+	// unknown, so that host is skipped while the rest of the backup goes on.
+	host := filepath.Join(config.CaptureRoot, "host-a")
+	direct := func(ctx context.Context) (*backupJob, *int) {
+		job, err := prepareBackup(config, dest, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		notices := 0
+		job.ctx, job.progress = ctx, func(run BackupRun) {
+			if run.Phase == waitingPhase {
+				notices++
+			}
+		}
+		return job, &notices
+	}
+	for _, failure := range captureLockFailures() {
+		t.Run(failure.name, func(t *testing.T) {
+			var files []*os.File
+			override(t, &lockBackupCaptures, checkedLock(t, filelock.Shared, filelock.Try, &files, func(call int, file *os.File) error {
+				switch {
+				case call == 1:
+					return failure.err
+				case !failure.contended:
+					// End the wait a regression would start, rather than hang.
+					t.Errorf("retried after %v", failure.err)
+				}
+				return filelock.Lock(file, filelock.Shared, filelock.Try)
+			}))
+			job, notices := direct(context.Background())
+			unlock, err := job.lockCaptures(host)
+			if failure.contended {
+				if err != nil || len(files) != 2 || *notices != 1 {
+					t.Fatalf("after contention: %v, %d attempts, %d notices", err, len(files), *notices)
+				}
+				if _, err := files[0].Stat(); err != nil {
+					t.Fatal("the capture lock was released before the copy:", err)
+				}
+				unlock()
+				requireLocksClosed(t, files, 2)
+				return
+			}
+			if unlock != nil || err != failure.err || *notices != 0 {
+				t.Fatalf("lock failure: %v, %d notices", err, *notices)
+			}
+			requireLocksClosed(t, files, 1)
+
+			files = nil
+			skipped := filepath.Join(filepath.Dir(dest), "Skipped "+failure.name)
+			job, err = prepareBackup(config, skipped, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := job.Run(context.Background(), nil)
+			if run.State != "failed" || len(run.Errors) != 1 || run.Errors[0].Error != failure.err.Error() || filepath.Base(run.Errors[0].Path) != "host-a" {
+				t.Fatalf("backup beside an unknown capture lock: %+v", run)
+			}
+			if backupFileExists(t, filepath.Join(skipped, "captures", "host-a")) || !backupFileExists(t, filepath.Join(skipped, "hosts", "host-a.toml")) {
+				t.Fatal("the host was copied, or the rest of the backup was not")
+			}
+			requireLocksClosed(t, files, 1)
+		})
+	}
+	t.Run("cancelled while waiting", func(t *testing.T) {
+		contended := errors.Join(filelock.ErrContended, syscall.EWOULDBLOCK)
+		var files []*os.File
+		override(t, &lockBackupCaptures, checkedLock(t, filelock.Shared, filelock.Try, &files, func(int, *os.File) error { return contended }))
+		ctx, cancel := context.WithCancel(context.Background())
+		job, notices := direct(ctx)
+		job.progress = func(run BackupRun) {
+			if run.Phase == waitingPhase {
+				*notices++
+				cancel()
+			}
+		}
+		if unlock, err := job.lockCaptures(host); unlock != nil || !errors.Is(err, context.Canceled) || *notices != 1 {
+			t.Fatalf("cancelled wait: %v, %d notices", err, *notices)
+		}
+		requireLocksClosed(t, files, 1)
+
+		// A pre-cancelled wait still makes its first attempt, and a lock it
+		// gets is kept.
+		files = nil
+		override(t, &lockBackupCaptures, checkedLock(t, filelock.Shared, filelock.Try, &files, func(_ int, file *os.File) error {
+			return filelock.Lock(file, filelock.Shared, filelock.Try)
+		}))
+		job, notices = direct(ctx)
+		unlock, err := job.lockCaptures(host)
+		if err != nil || len(files) != 1 || *notices != 0 {
+			t.Fatalf("pre-cancelled acquisition: %v, %d attempts, %d notices", err, len(files), *notices)
+		}
+		unlock()
+		requireLocksClosed(t, files, 1)
+
+		// A backup cancelled while it waits stops rather than skipping.
+		files = nil
+		override(t, &lockBackupCaptures, checkedLock(t, filelock.Shared, filelock.Try, &files, func(int, *os.File) error { return contended }))
+		cancelled := filepath.Join(filepath.Dir(dest), "Cancelled")
+		job, err = prepareBackup(config, cancelled, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel = context.WithCancel(context.Background())
+		defer cancel()
+		run := job.Run(ctx, func(run BackupRun) {
+			if run.Phase == waitingPhase {
+				cancel()
+			}
+		})
+		if run.State != "cancelled" || backupFileExists(t, filepath.Join(cancelled, "captures", "host-a")) {
+			t.Fatalf("backup cancelled while waiting: %+v", run)
+		}
+		requireLocksClosed(t, files, 1)
+	})
+	t.Run("missing lock", func(t *testing.T) {
+		override(t, &lockBackupCaptures, func(file *os.File, _ filelock.Mode, _ filelock.WaitMode) error {
+			t.Errorf("locked %s", file.Name())
+			return nil
+		})
+		if err := os.Remove(filepath.Join(host, captureLockName)); err != nil {
+			t.Fatal(err)
+		}
+		job, notices := direct(context.Background())
+		if unlock, err := job.lockCaptures(host); unlock == nil || err != nil || *notices != 0 {
+			t.Fatalf("missing capture lock: %v", err)
+		} else {
+			unlock()
+		}
+		if run := runBackup(t, config, filepath.Join(filepath.Dir(dest), "Unlocked"), false); run.State != "complete" {
+			t.Fatalf("backup without a capture lock: %+v", run)
+		}
+		if backupFileExists(t, filepath.Join(host, captureLockName)) {
+			t.Fatal("the backup created a capture lock")
+		}
+	})
 }
 
 func TestBackupRefusesADestinationInUse(t *testing.T) {
@@ -372,6 +542,40 @@ func TestBackupRefusesADestinationInUse(t *testing.T) {
 	}
 	if run := job.Run(context.Background(), nil); run.State != "failed" || len(run.Errors) != 1 || run.Errors[0].Error != errBackupDestinationBusy.Error() {
 		t.Fatalf("second backup to a destination in use: %+v", run)
+	}
+
+	// Only the adapter's contention is another backup; any other failure is
+	// the destination's, with its cause. Neither names the library nor
+	// writes the destination.
+	for _, failure := range captureLockFailures() {
+		t.Run(failure.name, func(t *testing.T) {
+			fresh := filepath.Join(filepath.Dir(dest), "Fresh "+failure.name)
+			job, err := prepareBackup(config, fresh, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Without an id the job would record one once it held the lock.
+			job.ctx, job.plan.library.ID = context.Background(), ""
+			override(t, &lockBackupHistory, func(file *os.File, _ filelock.Mode, _ filelock.WaitMode) error {
+				t.Errorf("recorded the library's id without the destination: %s", file.Name())
+				return nil
+			})
+			var files []*os.File
+			override(t, &lockBackupDestination, checkedLock(t, filelock.Exclusive, filelock.Try, &files, func(int, *os.File) error { return failure.err }))
+			err = job.execute()
+			if failure.contended {
+				if err != errBackupDestinationBusy {
+					t.Fatalf("contention: %v", err)
+				}
+			} else if !errors.As(err, new(backupDestinationError)) || !errors.Is(err, failure.err) || errors.Is(err, errBackupDestinationBusy) {
+				t.Fatalf("lock failure: %v", err)
+			}
+			requireLocksClosed(t, files, 1)
+			entries, err := os.ReadDir(fresh)
+			if err != nil || len(entries) != 1 || entries[0].Name() != backupLockName {
+				t.Fatalf("a refused backup wrote its destination: %v %v", entries, err)
+			}
+		})
 	}
 }
 
@@ -678,6 +882,65 @@ func TestBackupRecordsAreNotLost(t *testing.T) {
 	if history := loadBackupHistory(config); len(history.Backups) != 20 {
 		t.Fatalf("%d of 20 records kept", len(history.Backups))
 	}
+
+	// One blocking exclusive acquisition: a record waits for another holder,
+	// here a raw flock, and lands once it lets go.
+	holder, err := os.OpenFile(filepath.Join(filepath.Dir(backupRecordPath(config)), backupRecordLockName), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	if err := syscall.Flock(int(holder.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	var files []*os.File
+	blocking := make(chan struct{})
+	override(t, &lockBackupHistory, checkedLock(t, filelock.Exclusive, filelock.Wait, &files, func(_ int, file *os.File) error {
+		close(blocking)
+		return filelock.Lock(file, filelock.Exclusive, filelock.Wait)
+	}))
+	done := make(chan error)
+	go func() { done <- recordBackup(config, backupRecord{Destination: "after the holder", FinishedAt: now()}) }()
+	<-blocking
+	select {
+	case err := <-done:
+		t.Fatalf("recorded past another holder: %v", err)
+	default:
+	}
+	holder.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if history := loadBackupHistory(config); len(history.Backups) != 21 || history.Backups[0].Destination != "after the holder" {
+		t.Fatalf("record after the holder: %+v", history.Backups)
+	}
+	requireLocksClosed(t, files, 1)
+
+	// A failed acquisition is returned as itself, never as busy, before
+	// the update sees or writes the history.
+	before := readText(t, backupRecordPath(config))
+	for _, failure := range captureLockFailures() {
+		t.Run(failure.name, func(t *testing.T) {
+			var files []*os.File
+			override(t, &lockBackupHistory, checkedLock(t, filelock.Exclusive, filelock.Wait, &files, func(int, *os.File) error { return failure.err }))
+			if _, err := updateBackupHistory(config, func(*backupHistory) bool {
+				t.Error("updated the history without its lock")
+				return true
+			}); err != failure.err {
+				t.Fatalf("history lock failure: %v", err)
+			}
+			if err := recordBackup(config, backupRecord{Destination: "unlocked", FinishedAt: now()}); err != failure.err {
+				t.Fatalf("record: %v", err)
+			}
+			if id, err := libraryID(config); id != "" || err != failure.err {
+				t.Fatalf("library id: %q %v", id, err)
+			}
+			if readText(t, backupRecordPath(config)) != before {
+				t.Fatal("the history changed without its lock")
+			}
+			requireLocksClosed(t, files, 3)
+		})
+	}
 }
 
 // Item 6: credentials for other services stay out of the backup.
@@ -831,6 +1094,165 @@ func TestBackupTakenMidCompressionRestoresAValidCapture(t *testing.T) {
 			target := captureTarget{Host: currentHost(), Source: "conductor", Dir: capturedPath(restored, "conductor", "")}
 			if result := catalog.IndexCapture(t.Context(), target, nil); result.Error != nil || conversationMessages(t, catalog, "conductor:old") != 2 {
 				t.Fatalf("restored capture: %+v", result)
+			}
+		})
+	}
+}
+
+// A backup's copy is flushed after it has its timestamps and before its name.
+// A failed copy is never flushed; a failed flush is a destination error that
+// keeps the previous backup's file and leaves no partial copy or link.
+func TestBackupCopyFileFlushesBeforePublishing(t *testing.T) {
+	dir := t.TempDir()
+	source, target := filepath.Join(dir, "source"), filepath.Join(dir, "dest", "file")
+	writeSourceFile(t, source, "new bytes")
+	info, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newJob := func(ctx context.Context) *backupJob {
+		return &backupJob{ctx: ctx, buffer: make([]byte, 4)}
+	}
+	unchanged := func(t *testing.T, j *backupJob) {
+		t.Helper()
+		if text := readText(t, target); text != "old bytes" {
+			t.Fatalf("previous backup changed: %q", text)
+		}
+		if backupFileExists(t, target+backupTempSuffix) || len(j.links) != 0 {
+			t.Fatalf("failed copy left a partial copy or link: %v", j.links)
+		}
+	}
+	for _, failure := range fileSyncFailures() {
+		t.Run(failure.name, func(t *testing.T) {
+			writeSourceFile(t, target, "old bytes")
+			j := newJob(t.Context())
+			calls := failFileSync(t, failure.err, func(file *os.File) bool {
+				if stat, err := file.Stat(); err != nil || !stat.ModTime().Equal(info.ModTime()) {
+					t.Errorf("flushed before the copy had its timestamps: %v, %v", stat, err)
+				}
+				return file.Name() == target+backupTempSuffix
+			})
+			err := j.copyFile(source, target, info)
+			if !errors.As(err, new(backupDestinationError)) || !errors.Is(err, failure.is) || *calls != 1 {
+				t.Fatalf("copy = %v after %d flushes; want a destination error for %v once", err, *calls, failure.is)
+			}
+			unchanged(t, j)
+		})
+	}
+	t.Run("copy failure", func(t *testing.T) {
+		calls := failFileSync(t, errors.New("flushed a failed copy"), func(*os.File) bool { return true })
+		cancelled, cancel := context.WithCancel(t.Context())
+		cancel()
+		for _, test := range []struct {
+			name  string
+			ctx   context.Context
+			size  int64
+			error error
+		}{
+			{"cancelled", cancelled, info.Size(), context.Canceled},
+			{"source shrank", t.Context(), info.Size() + 1, errBackupSourceShrank},
+		} {
+			writeSourceFile(t, target, "old bytes")
+			j := newJob(test.ctx)
+			err := j.copyFile(source, target, sizedInfo{info, test.size})
+			if !errors.Is(err, test.error) || errors.As(err, new(backupDestinationError)) || *calls != 0 {
+				t.Fatalf("%s: copy = %v after %d flushes", test.name, err, *calls)
+			}
+			unchanged(t, j)
+		}
+	})
+	t.Run("success", func(t *testing.T) {
+		writeSourceFile(t, target, "old bytes")
+		j := newJob(t.Context())
+		calls := failFileSync(t, nil, func(file *os.File) bool {
+			if text := readText(t, target); text != "old bytes" {
+				t.Errorf("flushed after publishing: %q", text)
+			}
+			return false
+		})
+		if err := j.copyFile(source, target, info); err != nil || *calls != 0 {
+			t.Fatal(err)
+		}
+		copied, err := os.Stat(target)
+		if err != nil || readText(t, target) != "new bytes" || !copied.ModTime().Equal(info.ModTime()) || len(j.links) != 1 {
+			t.Fatalf("copy: %v, %v, links %v", copied, err, j.links)
+		}
+	})
+}
+
+// sizedInfo is a file's info with another size, as if it shrank afterwards.
+type sizedInfo struct {
+	os.FileInfo
+	size int64
+}
+
+func (s sizedInfo) Size() int64 { return s.size }
+
+// A failed flush of the catalog snapshot or a copied file fails the backup
+// before anything is published: the previous backup's files, manifest and
+// history stay as they were.
+func TestBackupFlushFailureKeepsThePreviousBackup(t *testing.T) {
+	readManifest := func(t *testing.T, dest string) backupManifest {
+		t.Helper()
+		var manifest backupManifest
+		if err := json.Unmarshal([]byte(readText(t, filepath.Join(dest, backupManifestName))), &manifest); err != nil {
+			t.Fatal(err)
+		}
+		return manifest
+	}
+	for _, test := range []struct {
+		name string
+		file func(manifest backupManifest) string
+	}{
+		{"catalog snapshot", func(manifest backupManifest) string { return manifest.Catalog.Path }},
+		{"copied file", func(backupManifest) string { return "captures/host-a/claude/files/p/b.jsonl" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config, dest := backupFixture(t)
+			runBackup(t, config, dest, false)
+			previous := readManifest(t, dest)
+			target := filepath.Join(dest, filepath.FromSlash(test.file(previous)))
+			before, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Change both, so that either is copied again.
+			writeSourceFile(t, filepath.Join(config.CaptureRoot, "host-a", "claude", "files", "p", "b.jsonl"), "rewritten\n")
+			catalog := reopenCatalog(t, config.CatalogPath)
+			if _, err := catalog.DB.Exec("INSERT INTO hosts(id,label,first_seen_at,last_seen_at) VALUES('host-y','Y','2026-01-01','2026-01-01')"); err != nil {
+				t.Fatal(err)
+			}
+			if err := catalog.Close(); err != nil {
+				t.Fatal(err)
+			}
+			failure := syscall.EIO
+			calls := failFileSync(t, failure, func(file *os.File) bool { return file.Name() == target+backupTempSuffix })
+			job, err := prepareBackup(config, dest, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := job.Run(t.Context(), nil)
+			if run.State != "failed" || *calls != 1 || len(run.Errors) == 0 || !strings.Contains(run.Errors[0].Error, failure.Error()) {
+				t.Fatalf("backup after %d failed flushes: %+v", *calls, run)
+			}
+			if after, err := os.ReadFile(target); err != nil || string(after) != string(before) {
+				t.Fatalf("previous backup's %s changed: %v", filepath.Base(target), err)
+			}
+			manifest := readManifest(t, dest)
+			if manifest.Complete || manifest.FinishedAt != "" || len(loadBackupHistory(config).Backups) != 1 {
+				t.Fatalf("a failed backup was recorded as finished: %+v", manifest)
+			}
+			if test.name == "catalog snapshot" && *manifest.Catalog != *previous.Catalog {
+				t.Fatalf("the unflushed snapshot was recorded: %+v", manifest.Catalog)
+			}
+			err = filepath.WalkDir(dest, func(path string, entry os.DirEntry, err error) error {
+				if err == nil && strings.HasSuffix(path, backupTempSuffix) {
+					t.Errorf("partial copy left behind: %s", path)
+				}
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

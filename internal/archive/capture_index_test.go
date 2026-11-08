@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -214,6 +215,60 @@ func TestCaptureViewSelectsLongestPrefixBeforeResolvingSuffix(t *testing.T) {
 	if got := view.original(filepath.Join(dir, "files", "a")); got != "/longer/a" {
 		t.Errorf("trailing separator lost captured prefix length: %q", got)
 	}
+	t.Run("invalid destinations preserve precedence", func(t *testing.T) {
+		for _, destination := range []string{"", "/outside", "../outside", "files/../../outside", "files/../outside",
+			"files//a", "files/a/", "./files", "files/./a", `files\a`, "C:/outside", "C:outside", "files/bad\x00name",
+			"files/CON", "files/a:b"} {
+			if runtime.GOOS != "windows" && (destination == "files/CON" || destination == "files/a:b") {
+				continue // These are representable literal names on POSIX hosts.
+			}
+			t.Run(fmt.Sprintf("%q", destination), func(t *testing.T) {
+				manifest := &captureManifest{PathMap: []capturePathMapping{
+					{Original: "/src", Captured: "source/base"},
+					{Original: "/src/longer", Captured: destination},
+					{Original: "/src/nested", Captured: destination},
+					{Original: "/src/nested", Captured: "source/later"},
+					{Original: "/src/nested/valid", Captured: "history/old"},
+					{Original: "/blocked", Captured: destination},
+					{Original: "/blocked/valid", Captured: "source/valid"},
+					{Original: "/equal", Captured: "source/shorter"},
+					{Original: "/equal/", Captured: destination},
+					{Original: "/other", Captured: "source/other"},
+				}}
+				before := jsonText(manifest)
+				view := newCaptureView(Host{}, dir, manifest)
+				for _, source := range []string{"/src/longer", "/src/longer/a", "/src/nested", "/src/nested/a", "/blocked", "/blocked/a", "/equal/a"} {
+					if got, ok := view.captured(source); ok || got != "" {
+						t.Errorf("blocked winner for %q fell back: (%q, %v)", source, got, ok)
+					}
+				}
+				for _, tc := range []struct{ source, captured string }{
+					{"/src/a", "source/base/a"},
+					{"/src/nested/valid", "history/old"},
+					{"/src/nested/valid/a", "history/old/a"},
+					{"/blocked/valid/a", "source/valid/a"},
+					{"/other/a", "source/other/a"},
+				} {
+					want := filepath.Join(dir, filepath.FromSlash(tc.captured))
+					if got, ok := view.captured(tc.source); !ok || got != want {
+						t.Errorf("valid mapping for %q = (%q, %v), want %q", tc.source, got, ok, want)
+					}
+					if got := view.original(want); got != tc.source {
+						t.Errorf("valid reverse mapping for %q = %q, want %q", want, got, tc.source)
+					}
+				}
+				invalidRoot := filepath.Join(dir, filepath.FromSlash(destination))
+				for _, name := range []string{invalidRoot, filepath.Join(invalidRoot, "a")} {
+					if got, ok := view.translate(name, false); ok || got != "" {
+						t.Errorf("invalid destination became reverse root for %q: (%q, %v)", name, got, ok)
+					}
+				}
+				if jsonText(manifest) != before {
+					t.Fatal("view construction or translation changed the manifest")
+				}
+			})
+		}
+	})
 }
 
 func TestIndexAttributesCapturesToTheCapturingHost(t *testing.T) {

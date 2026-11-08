@@ -106,6 +106,8 @@ Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Libr
 Compact fingerprints in tables and conversation cards use background-generated
 PNGs with a durable, versioned queue and deduplicated storage in the catalog.
 The two profiles are 1024×128 and 1024×256, each with light/dark appearances.
+Layout and rasterization run entirely in Go, with cross-language fixture parity
+against the TypeScript model and the original PNG renderer.
 Detailed timelines retain interactive rendering. See
 [Compact fingerprint images](fingerprint-images.md) for processing, invalidation,
 recovery and API details.
@@ -308,7 +310,7 @@ GET  /api/query/{library|activity|usage|…}/field-stats?fields=a,b
 POST /api/query/{library|activity|usage|…}/query-v3
 ```
 
-The query endpoints implement the published Query Table **1.0.0** V3 wire
+The query endpoints implement the published Query Table **1.0.1** V3 wire
 contract. Their allowlisted field definitions live in [`schemas`](../schemas),
 and the same documents drive the React frontend and generated Go SQLite schemas.
 Tables, charts, metrics, filter suggestions, field statistics and identity

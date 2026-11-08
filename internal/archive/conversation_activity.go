@@ -12,11 +12,11 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 		if err != nil {
 			return nil, err
 		}
-		ledger, err := c.representativeLedger()
+		ledger, err := c.representativeLedgerContext(ctx)
 		if err != nil {
 			return nil, err
 		}
-		lineage, err := c.usageConversationRoots(ledger)
+		lineage, err := c.usageConversationRootsContext(ctx, ledger)
 		if err != nil {
 			return nil, err
 		}

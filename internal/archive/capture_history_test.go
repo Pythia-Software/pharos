@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 func historyFixture(t *testing.T) (*Catalog, Config, string) {
@@ -515,7 +518,52 @@ func TestHistoryCancellationAndBudgets(t *testing.T) {
 	if _, e = prepareHistory(t.Context(), config, p, dest, 0, 1<<20); e == nil {
 		t.Fatal("unknown output budget accepted")
 	}
+	// Only a contended job lock is a running job; any other failure is an
+	// acquisition failure. Neither prepares, protects or runs anything.
+	jobDir, e := historyJobPath(p.CaptureRoot, p.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	lockFailed := func(e error, failure error, contended bool) bool {
+		running := strings.Contains(fmt.Sprint(e), "history job is already running")
+		return e != nil && running == contended && (contended || errors.Is(e, failure))
+	}
+	for _, failure := range captureLockFailures() {
+		t.Run("prepare-lock-"+failure.name, func(t *testing.T) {
+			calls := 0
+			override(t, &lockHistoryJob, failingCaptureLock(t, filelock.Exclusive, failure.err, &calls))
+			if _, e := prepareHistory(t.Context(), config, p, dest, 128<<20, 128<<20); calls != 1 || !lockFailed(e, failure.err, failure.contended) {
+				t.Fatalf("prepare with a failed job lock: %v", e)
+			}
+			if _, e := os.Stat(filepath.Join(jobDir, "job.json")); !errors.Is(e, os.ErrNotExist) {
+				t.Fatalf("a job that failed to lock was prepared: %v", e)
+			}
+		})
+	}
 	j := prepareHistoryFixture(t, config, dest)
+	before, e := os.ReadFile(filepath.Join(j.dir(), "job.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, failure := range captureLockFailures() {
+		override(t, &lockHistoryJob, failingCaptureLock(t, filelock.Exclusive, failure.err, nil))
+		if _, e := runHistory(t.Context(), config, j.ID); !lockFailed(e, failure.err, failure.contended) {
+			t.Fatalf("run with a failed job lock (%s): %v", failure.name, e)
+		}
+	}
+	override(t, &lockHistoryJob, filelock.Lock)
+	// A job another process runs, through the real lock.
+	held, e := historyJobLock(j.dir())
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e := runHistory(t.Context(), config, j.ID); !lockFailed(e, nil, true) {
+		t.Fatalf("run beside a running job: %v", e)
+	}
+	held.Close()
+	if after, e := os.ReadFile(filepath.Join(j.dir(), "job.json")); e != nil || !bytes.Equal(before, after) {
+		t.Fatalf("a job that failed to lock changed: %v", e)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, e = runHistory(ctx, config, j.ID); e == nil {

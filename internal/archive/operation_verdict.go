@@ -10,8 +10,9 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // The eject verdict (docs/background-work.md §4.2) is computed from what
@@ -348,9 +349,13 @@ func lowerFirst(text string) string {
 // tests can show that a polled read takes none (§4.2).
 var lockScans, lockProbes atomic.Int64
 
+// Tests replace only probeLockFile's lock calls to exercise adapter failures.
+var lockProbeFile = filelock.Lock
+
 // probeLockFile reports whether another holder has path's lock
 // exclusively (a shared, non-blocking lock cannot be taken), as captureActive
-// does. A missing file is not held; any other failure is an error.
+// does. A missing file is not held; any other failure, including a platform
+// without locks, is an error: it never vouches for a free lock.
 func probeLockFile(path string) (bool, error) {
 	lockProbes.Add(1)
 	file, err := os.Open(path)
@@ -361,14 +366,14 @@ func probeLockFile(path string) (bool, error) {
 		return false, err
 	}
 	defer file.Close()
-	switch err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); {
+	switch err := lockProbeFile(file, filelock.Shared, filelock.Try); {
 	case err == nil:
-		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = filelock.Unlock(file)
 		return false, nil
-	case errors.Is(err, syscall.EWOULDBLOCK):
+	case errors.Is(err, filelock.ErrContended):
 		return true, nil
 	default:
-		return false, err
+		return false, fmt.Errorf("probe lock %s: %w", path, err)
 	}
 }
 
