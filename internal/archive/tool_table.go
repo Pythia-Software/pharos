@@ -145,6 +145,8 @@ func sqlDatasetFor(dataset string) (sqlDataset, bool) {
 		return skillUsageDataset, true
 	case "writing_messages":
 		return writingMessageDataset, true
+	case "messages":
+		return messagesDataset, true
 	case "agent_events":
 		return agentEventDataset, true
 	case "agent_event_messages":

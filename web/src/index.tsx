@@ -1,4 +1,5 @@
 import { optimizeTableTitle, optimizeTableSchemas, type OptimizeTableSchemas } from "./optimize-table-title";
+import messagesDocument from "../../schemas/messages.schema.json";
 import { DataReadinessModal, HeaderDataReadiness, BackgroundProcessingWorkload, DataReadinessEmpty, DataReadinessIndicator } from "./data-readiness";
 import { startReadiness } from "./data-readiness-store";
 import {peopleMessageLabelCatalog} from "./people-message-labels";
@@ -10,7 +11,7 @@ import { queryRow } from "./query-transport";
 import {messageLabelLegacyURL} from "./message-label-legacy";
 import {withFingerprintColumn} from "./fingerprint-columns";
 import {MessageLabelDisplay,MessageLabelCards,messageLabelRenderers} from "./message-label-results";
-import {messageLabelHostQuery,messageLabelConversationQuery,labelResultsMode} from "./message-label-results-model";
+import {messageLabelHostQuery,labelResultsMode} from "./message-label-results-model";
 import {messageLabelsCatalog} from "./message-labels-catalog";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewEntry } from "./view-state";
@@ -152,7 +153,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "people_message_labels" | "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages" | "agent_event_rates" | "session_shape";
+type Dataset = "messages" | "people_message_labels" | "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages" | "agent_event_rates" | "session_shape";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -209,6 +210,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   message_labels:loadSchema<Row>(messageLabelsDocument),
   compactions: loadSchema<Row>(compactionsDocument),
   model_requests: loadSchema<Row>(modelRequestsDocument),
+  messages: loadSchema<Row>(messagesDocument),
   conversation_activity: loadSchema<Row>(conversationActivityDocument),
   library: loadSchema<Row>(libraryDocument),
   usage: loadSchema<Row>(usageDocument),
@@ -397,6 +399,7 @@ const emptyMessages: Record<Dataset, string> = {
   usage: "No token usage matches this query.",
   conversation_activity: "No recorded conversation activity matches this query.",
   writing: "No workspaces with user messages match this query.",
+  messages: "No messages match this query.",
   writing_messages: "No classified user messages match this query.",
   mcp_calls: "No Pharos MCP requests match this query.",
   tools: "No tool summaries match this query.",
@@ -517,7 +520,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     const stored = libraryStorageAdapter({ fresh: new URLSearchParams(location.search).get("fresh") === "1", onRecovery: () => setRecovered(true) });
     // Fit a new Analyze table by default, while respecting every restored URL,
     // named/default save and last-used manual sizing choice.
-    return usageActions ? { ...stored, loadLast: async (key: string) => await stored.loadLast(key) ?? (dataset==="message_labels"?messageLabelConversationQuery(fittedDefaultQuery(schema)):fittedDefaultQuery(schema)) } : stored;
+    return usageActions ? { ...stored, loadLast: async (key: string) => await stored.loadLast(key) ?? fittedDefaultQuery(schema) } : stored;
   }, [bookmarkRevision, usageActions, schema]);
   const propertyStorage = useMemo(() => jsonPropertyViewStorage(
     key => preferences().get<string | null>(key, null),

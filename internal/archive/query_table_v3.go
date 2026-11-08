@@ -67,6 +67,10 @@ func (s *Server) postQueryV3(w http.ResponseWriter, r *http.Request, dataset str
 		qt.WriteQueryError(w, err)
 		return
 	}
+	if dataset == "messages" && request.Distinct != nil && (request.Distinct.Field == "text" || request.Distinct.Field == "content" || request.Distinct.Field == "prompt") {
+		qt.WriteQueryError(w, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidQuery, Message: "message text has no distinct-value list"})
+		return
+	}
 	parent := r.Context()
 	if request.Distinct != nil {
 		var release func()
@@ -353,6 +357,8 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			err = s.Catalog.priceToolCalls(result.Rows)
 		case "writing_messages":
 			err = s.Catalog.attachAuthoredText(ctx, result.Rows)
+		case "messages":
+			err = s.Catalog.attachMessageText(ctx, result.Rows)
 		case "library":
 			result.Rows, err = s.Catalog.libraryPage(ctx, result.Rows)
 			if find != nil && err == nil {

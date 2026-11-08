@@ -13,7 +13,7 @@
   {
    "id": "message-labels",
    "label": "Conversation functions",
-   "pages": ["analyze/labels","analyze/query/message_labels","analyze/query/people_message_labels"],
+   "pages": ["analyze/labels","analyze/query/message_labels"],
    "signals": ["labels.coverage"]
   },
   {
@@ -25,7 +25,7 @@
   {
    "id": "tool-failures",
    "label": "Failing tool calls",
-   "pages": ["analyze/calls","analyze/tools","analyze/query/tool_calls","analyze/query/tools","analyze/session_shape","analyze/query/session_shape"],
+   "pages": ["analyze/calls","analyze/tools","analyze/query/tool_calls","analyze/session_shape","analyze/query/session_shape"],
    "signals": ["tools.failures"]
   },
   {
@@ -91,13 +91,13 @@
   {
    "id": "writing",
    "label": "My writing and steering",
-   "pages": ["analyze/human","analyze/query/writing","analyze/query/writing_messages","analyze/session_shape"],
+   "pages": ["analyze/human","analyze/query/messages","analyze/session_shape"],
    "signals": ["writing.volume","writing.back_and_forth"]
   },
   {
    "id": "supplied-context",
    "label": "Context I supply",
-   "pages": ["analyze/human","analyze/query/writing_messages"],
+   "pages": ["analyze/human","analyze/query/messages"],
    "signals": ["writing.supplied"]
   },
   {

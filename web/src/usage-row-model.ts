@@ -25,7 +25,7 @@ export function primaryUsageSource(dataset: UsageDataset, row: Row) {
   if (dataset === "parallelism" && !identifier(row.conversation_id) && identifier(row.location)) return queryURL("library", { ...EMPTY_QUERY, orderBy: [{ field: "activity_at", dir: "desc" }], where: [{ field: "location", op: "=", value: row.location }] });
   if (dataset === "writing") return conversationRowURL({ workspace_id: row.id });
   if(dataset === "people_message_labels") return conversationRowURL({workspace_id:row.source_workspace_id,conversation_id:row.source_conversation_id},row.message_id);
-  const message = dataset === "writing_messages" ? row.id : dataset === "tool_calls" ? row.call_message_id : dataset === "skill_usages" ? row.evidence_message_id : row.message_id;
+  const message = ["messages", "writing_messages"].includes(dataset) ? row.id : dataset === "tool_calls" ? row.call_message_id : dataset === "skill_usages" ? row.evidence_message_id : row.message_id;
   const at = dataset === "model_requests" ? row.requested_at : dataset === "usage" ? row.first_usage_at : dataset === "conversation_activity" ? row.event_at : dataset === "skill_usages" ? row.created_at : row.started_at;
   const href = conversationRowURL(row, message, at, dataset === "tool_calls" ? row.call_id : undefined);
   // An agent event's message opens with the reader's Events marks on.
@@ -71,6 +71,7 @@ export function usageRowLinks(dataset: UsageDataset, row: Row, current = new URL
 // Order is intentional: content/evidence first, then measures and provenance.
 // All other fields remain available in the native property picker.
 export const usageDetailFields: Record<UsageDataset, string[]> = {
+  messages: ["source_links", "text", "role", "kind", "sent_at", "model", "effort", "provider", "title", "repository_name", "has_authorship", "work_id", "authorship_title", "authorship_sent_at", "main_category", "typed_words", "pasted_words", "words", "segments", "text_truncated", "selected", "native_id", "source_account"],
   people_message_labels:["source_links","title","sent_at","label","family","label_status","people_scope","message_id","repository_name"],
   message_labels:["source_links","title","occurred_at","label","label_status","source","text","label_model","model","provider","kind","segment","subagent","labeled_at"],
   compactions: ["source_links","occurred_at","trigger","trigger_evidence","provider","harness","model","repository_name","channel","machine_id","execution_machine_id"],
@@ -92,6 +93,7 @@ export const usageDetailFields: Record<UsageDataset, string[]> = {
   session_shape: ["channel", "machine_id", "execution_machine_id", "source_links", "title", "started_at", "archetype", "length_band", "active_band", "tool_band", "autonomy_band", "messages", "typed_human_messages", "tool_calls", "active_seconds", "wall_seconds", "autonomy", "turn_cycle_p50_seconds", "forensic_events", "repository_name", "provider", "model_family", "agent_kind"],
 };
 const extraProperties: Partial<Record<UsageDataset, [string, string, "code" | "json" | "boolean" | "number"][]>> = {
+  messages: [["text_truncated", "Retained preview truncated", "boolean"], ["segments", "Classified spans and sources", "json"]],
   tool_calls: [["input_text", "Input excerpt", "code"], ["input_text_bytes", "Input bytes", "number"], ["input_text_truncated", "Input excerpt truncated", "boolean"], ["result_text", "Result excerpt", "code"], ["result_text_bytes", "Result bytes", "number"], ["result_text_truncated", "Result excerpt truncated", "boolean"], ["result_details", "Result metadata", "json"], ["commands", "Parsed commands", "json"], ["urls", "URLs and provenance", "json"], ["request", "Request context", "json"], ["next_request", "Following request", "json"]],
   writing_messages: [["text_truncated", "Retained preview truncated", "boolean"], ["segments", "Classified spans and sources", "json"]],
 };
@@ -101,7 +103,7 @@ export function usageDetailsSchema(schema: FieldSchema, dataset: string): FieldS
   const fields: FieldDef[] = schema.fields.map(field => ({ ...field, property: { ...field.property, default: defaults.includes(field.name), ...(field.name === "arguments_json" ? { render: "usage_json" } : field.name === "text" ? { render: "authored_text" } : ["command", "target", "skill_path", "file_path", "error_text", "error_signature", "search_query"].includes(field.name) ? { format: { kind: "code" as const } } : field.type === "datetime" ? { render: "usage_timestamp" } : {}) } }));
   fields.push({ name: "source_links", label: "Explore / source", type: "text", source: { kind: "derived", dependencies: [] }, render: "usage_sources", group: "Evidence", property: { default: defaults.includes("source_links") } });
   for (const [field, label, format] of extraProperties[name] ?? []) fields.push({ name: field, label, type: format === "boolean" ? "bool" : format === "number" ? "number" : "text", source: { kind: "backend" }, group: "Content", property: { default: defaults.includes(field), ...(["urls", "input_text", "result_text"].includes(field) ? {} : { format: { kind: format } }), ...(field === "urls" ? { render: "usage_tool_urls" } : ["input_text", "result_text"].includes(field) ? { render: "usage_payload" } : {}) } });
-  if (name === "writing_messages") fields.push({ name: "classification_sources", label: "Matched source passages", type: "text", source: { kind: "derived", dependencies: ["segments"] }, render: "usage_authorship_sources", group: "Evidence", property: { default: true } });
+  if (["messages", "writing_messages"].includes(name)) fields.push({ name: "classification_sources", label: "Matched source passages", type: "text", source: { kind: "derived", dependencies: ["segments"] }, render: "usage_authorship_sources", group: "Evidence", property: { default: true } });
   const rank = (field: FieldDef) => { const i = defaults.indexOf(field.name); return i < 0 ? defaults.length : i; };
   return { ...schema, fields: fields.sort((a, b) => rank(a) - rank(b)) };
 }

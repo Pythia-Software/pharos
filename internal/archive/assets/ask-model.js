@@ -1,4 +1,4 @@
-// DOM-free interaction rules shared by the composer and its unit tests.
+// Interaction rules shared by the composer and its unit tests.
 // The library chooses suggestions (GET /api/ask/suggestions,
 // docs/ask-suggestions.md); keep only well-formed, distinct questions.
 function askSuggestionItems(list) {
@@ -76,6 +76,63 @@ function askWaitStatus({activity=[],elapsedMs=0,message='',cli=''}) {
     message:latest?.message||message||'Starting '+cli+'…',
     elapsed:latest?elapsed+'s elapsed'+(silent>=10?' · '+silent+'s since last update':''):'',
   };
+}
+
+// Walk away from the solved board with legal moves, then reverse the walk.
+// Avoid returning the same board twice, including with a deterministic RNG.
+function askPuzzlePath(random=Math.random,previous=null) {
+  const solved=[1,2,3,4,5,6,7,8,0],boards=[solved],same=(a,b)=>!!b&&a.every((tile,index)=>tile===b[index]);
+  let board=solved,priorEmpty=-1;
+  const nextBoards=(avoidUndo=true)=>{
+    const empty=board.indexOf(0);
+    return board.flatMap((tile,index)=>{
+      if((avoidUndo&&index===priorEmpty)||Math.abs(index%3-empty%3)+Math.abs(Math.floor(index/3)-Math.floor(empty/3))!==1)return [];
+      const next=board.slice();next[empty]=tile;next[index]=0;return [next];
+    });
+  };
+  function advance(next){priorEmpty=board.indexOf(0);board=next;boards.push(next);}
+  for(let i=0;i<20;i++){const options=nextBoards();advance(options[Math.floor(random()*options.length)]);}
+  if(same(board,previous)||same(board,solved))advance(nextBoards(false).find(next=>!same(next,previous)&&!same(next,solved)));
+  return boards.reverse();
+}
+
+// One compositor-driven transform animation per tile. JavaScript only runs at
+// the end of a solve or reset, and cancels all motion when the turn is hidden.
+function askPuzzleMotion(host, {random=Math.random, media=matchMedia('(prefers-reduced-motion: reduce)')}={}) {
+  const tiles=[...host.children],step=640,pause=160,initial=1000,rest=2000,reset=400;
+  let active=false,animations=[],previous=null;
+  const position=(board,tile)=>{
+    const index=board.indexOf(tile),home=tile-1;
+    return `translate(${(index%3-home%3)*6}px,${(Math.floor(index/3)-Math.floor(home/3))*6}px)`;
+  };
+  function cancel(){animations.forEach(animation=>animation.cancel());animations=[];tiles.forEach(tile=>tile.style.removeProperty('transform'));}
+  function animate(frames,duration,done){
+    animations=tiles.map((tile,index)=>tile.animate(frames[index],{duration,fill:'forwards',easing:'linear'}));
+    animations[0].onfinish=()=>{if(active&&!media.matches)done();};
+  }
+  function solve(path,delay){
+    const moves=path.length-1,duration=delay+moves*step+(moves-1)*pause+rest;
+    const frames=tiles.map((_,index)=>{
+      const tile=index+1,first=position(path[0],tile),keyframes=[{transform:first,offset:0}];
+      if(delay)keyframes.push({transform:first,offset:delay/duration});
+      for(let i=1;i<path.length;i++){
+        const start=delay+(i-1)*(step+pause);
+        if(i>1)keyframes.push({transform:position(path[i-1],tile),offset:start/duration});
+        keyframes.push({transform:position(path[i],tile),offset:(start+step)/duration});
+      }
+      keyframes.push({transform:position(path.at(-1),tile),offset:1});return keyframes;
+    });
+    animate(frames,duration,()=>{
+      const next=askPuzzlePath(random,previous);previous=next[0];
+      const resetFrames=tiles.map((_,index)=>[{transform:position(path.at(-1),index+1)},{transform:position(next[0],index+1)}]);
+      cancel();animate(resetFrames,reset,()=>{cancel();solve(next,0);});
+    });
+  }
+  function start(){const path=askPuzzlePath(random,previous);previous=path[0];solve(path,initial);}
+  function setWorking(value){const next=!!value;if(next===active)return;active=next;cancel();if(active&&!media.matches)start();}
+  function changed(){cancel();if(active&&!media.matches)start();}
+  media.addEventListener('change',changed);
+  return {setWorking,destroy(){active=false;cancel();media.removeEventListener('change',changed);}};
 }
 function askComposerActions({draft = '', turns = [], pending = false, opening = false, enabled = false, model = ''}) {
   const populated = turns.length > 0 || draft.length > 0;

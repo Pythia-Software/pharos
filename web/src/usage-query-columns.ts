@@ -8,6 +8,7 @@ type DrilldownColumn = { kind: UsageDrilldown; label: string; dependencies: stri
 const source = (dependencies: string[]): DrilldownColumn => ({ kind: "source", label: "Evidence", dependencies });
 const conversation = ["workspace_id", "conversation_id"];
 export const usageDrilldownColumns: Record<UsageDataset, DrilldownColumn[]> = {
+  messages: [source([...conversation, "id"])],
   people_message_labels:[source(["source_workspace_id","source_conversation_id","message_id"])],
   message_labels:[source([...conversation,"message_id"])],
   compactions: [source([...conversation, "message_id"])],

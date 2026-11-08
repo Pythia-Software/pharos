@@ -13,6 +13,30 @@ and [error contract](https://github.com/Pythia-Software/query-table/blob/v1.0.1/
 define the integration. 1.0.1 only speeds up SQLite execution; it has no API
 or client changes, so the 1.0.0 declarations and follow-ups below still apply.
 
+## Analyze dataset pages
+
+Query tables in Analyze are organized by the source row described in
+`data-taxonomy-model.ts`. `analyzeQueryDatasets` defines the navigation and
+agent-facing site map. Navigation opens an explicit unfiltered, ungrouped record
+query; page headings identify the dataset throughout query changes.
+
+The Messages dataset reads all retained canonical messages, including user,
+assistant, thinking and tool records. Authorship joins are optional and never
+multiply or remove messages. Unclassified writing measures remain null. Writing
+context fields retain the credited workspace and stored authorship dates separately
+from the original message context, so generated writing links preserve their population. The
+classified-user source `writing_messages`, workspace writing totals, daily tool
+rollups and People label populations remain internal dashboard/storage sources.
+They are not separate navigation offerings.
+
+Query ideas are independent editable starting points with their own source
+filters, result grouping, metrics and columns. Choosing one clears previous
+query and keyword filters; All records restores the dataset's schema defaults.
+Grouped drill-ins retain the chosen idea's exact source population. Idea sections
+use `ViewDisclosure` so their openness round-trips in the URL. New ideas belong
+in `usage-query-ideas-model.ts` and must validate against the source schema and
+V3 execution contract.
+
 ## V3 execution
 
 `GET /api/query/:dataset/capabilities` supplies `queryCapabilities` from

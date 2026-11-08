@@ -90,9 +90,11 @@ test("Tools reads its text days: every query and drill-down leaving the dashboar
   const trend = trendQuery(tools, { metric: "calls", split: "tool_name" }, where, { now });
   assert.ok(trend.range.some(term => term.field === "day" && term.op === ">="), "drawing keeps the bounds");
   const href = dashboardChartURL({ dataset: "tools", where, time: tools.time, range: { from: new Date(now - 3 * 86400000), to: new Date(now - 2 * 86400000), rolling: false }, series: { key: "s:Bash", label: "Bash", color: "", value: "Bash" }, split: "tool_name", translate: terms => tools.executable(terms, now) });
-  const query = core.decodeQueryStrict(new URL(href, "http://localhost").searchParams.get("q_tools"));
+  const params = new URL(href, "http://localhost").searchParams, dataset = params.get("analyze_data");
+  assert.equal(dataset, "tool_calls");
+  const query = core.decodeQueryStrict(params.get(`q_${dataset}`));
   assert.ok(query.where.every(term => term.field !== "day" || term.op === "="), JSON.stringify(query.where));
-  const day = new Date(now - 3 * 86400000), opened = core.applyQuery(rows.tools, query, schemas.tools).rows;
+  const day = new Date(now - 3 * 86400000), opened = core.applyQuery(rows[dataset], query, schemas[dataset]).rows;
   assert.ok(opened.length && opened.every(row => row.tool_name === "Bash"));
   assert.ok(opened.some(row => row.day === `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`));
 });
@@ -355,8 +357,9 @@ test("Back to dashboard from a Tools query: an edited date predicate becomes the
   const opened = new URL(dashboardQueryLinks("tools", supporting, schemas.tools, dashboard)[0].href, "http://localhost").searchParams;
   const back = params => { const result = usageDashboardReturn(params); return { label: result.label, where: core.decodeQueryStrict(new URL(result.href, "http://localhost").searchParams.get("analyze_filters")).where }; };
   assert.deepEqual(back(opened), { label: "Back to dashboard", where });
-  const query = core.decodeQueryStrict(opened.get("q_tools")), source = query.grouping.source;
-  const edit = terms => { const next = new URLSearchParams(opened); next.set("q_tools", core.encodeQuery({ ...query, grouping: { ...query.grouping, source: { ...source, where: terms } } })); return back(next); };
+  const parameter = `q_${opened.get("analyze_data")}`;
+  const query = core.decodeQueryStrict(opened.get(parameter)), source = query.grouping?.source ?? query;
+  const edit = terms => { const next = new URLSearchParams(opened); next.set(parameter, core.encodeQuery(query.grouping ? { ...query, grouping: { ...query.grouping, source: { ...source, where: terms } } } : { ...query, where: terms })); return back(next); };
   // Deleting the translated days: no range at all, said in the link.
   const dayless = edit(source.where.filter(term => (term.field ?? term.any?.[0]?.field) !== "day"));
   assert.deepEqual([dayless.label, dayless.where.filter(term => (term.field ?? term.any?.[0]?.field) === "day")], ["Back to dashboard (dates from this query)", []]);

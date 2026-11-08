@@ -63,5 +63,5 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   if (has("token_count", "total_tokens") || dataset === "usage") return "usage";
   if (dataset === "tool_calls" || dataset === "tools" || dataset === "mcp_calls") return "tools";
   if (dataset === "tl1_attempts") return "delegation";
-  return "views";
+  return dataset === "messages" ? "library" : "views";
 }

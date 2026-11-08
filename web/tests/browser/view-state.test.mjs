@@ -38,7 +38,7 @@ test('workspace fingerprints restore across views and respect the global event d
  assert.ok(requests.length&&requests.every(body=>body.events===false));
  // The persisted preference also selects the conversation image variant.
  requests.length=0;
- await page.goto(new URL('/analyze?analyze_mode=query&analyze_data=message_labels',page.url()).href);
+ await page.goto(new URL('/analyze?analyze_mode=query&analyze_data=message_labels&label_results=cards',page.url()).href);
  await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
  assert.ok(requests.some(body=>body.events===false&&body.items.some(item=>item.entity==='conversation')));
  await settings();assert.equal(await toggle().getAttribute('aria-checked'),'false');await toggle().click();
@@ -1262,7 +1262,7 @@ test('native Message Labels dashboards and conversation cards share standard nav
 });
 
 test('compact fingerprint PNGs load and navigate to the detailed conversation with the keyboard',{skip},async t=>{
- const app=await open(t,{url:'/analyze?analyze_mode=query&analyze_data=message_labels',ready:'.message-label-fingerprint img',viewport:{width:390,height:480}}),{page}=app;
+ const app=await open(t,{url:'/analyze?analyze_mode=query&analyze_data=message_labels&label_results=cards',ready:'.message-label-fingerprint img',viewport:{width:390,height:480}}),{page}=app;
  const image=page.locator('.message-label-result-card .fingerprint-image img').first();
  await image.scrollIntoViewIfNeeded();
  await page.waitForFunction(()=>{const img=document.querySelector('.message-label-result-card .fingerprint-image img');return img?.complete&&img.naturalWidth>0;});
@@ -1467,4 +1467,46 @@ test('component share charts restore their controls across reloads and view swit
  const tokens=await open(t,{api:tokenAPI,url:'/analyze?analyze_topic=tokens&analyze_chart='+encodeURIComponent(JSON.stringify({view:'compare',metric:'input',split:'input_type',compareAs:'share'})),viewport:{width:1920,height:1050},ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
  await tokens.page.getByRole('button',{name:/^Cache reads:/}).waitFor();
  await tokens.shot('input-token-shares');
+});
+
+
+test('dataset query ideas restore their query and disclosure, and All records clears the population',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_mode=query&analyze_data=tool_calls',ready:'.usage-workspace-table .qt-row'});
+ const {page}=app;
+ const idea=page.getByRole('button',{name:/^Command families/,includeHidden:true});
+ const section=page.locator('.usage-ideas-section').filter({has:idea});
+ if(await section.getAttribute('open')===null)await section.locator('summary').click();
+ await idea.click();
+ const selected=await page.waitForFunction(()=>{
+  const token=new URLSearchParams(location.search).get('q_tool_calls');
+  return token&&document.querySelector('.usage-idea[aria-pressed="true"]')?token:null;
+ });
+ const query=decodeQueryStrict(await selected.jsonValue());
+ assert.ok(query.grouping);
+ assert.deepEqual(query.grouping.keys,['operation_key','operation_name']);
+ await section.locator('summary').click();
+ const disclosureKey=(await section.getAttribute('data-pharos-target')).slice('section:'.length);
+ await page.waitForFunction(key=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')[key]===false,disclosureKey);
+ const saved=path(page);
+ await page.reload();
+ await page.waitForSelector('.usage-workspace-table .qt-row');
+ assert.equal(await section.getAttribute('open'),null);
+ assert.equal(decodeQueryStrict(new URL(page.url()).searchParams.get('q_tool_calls')).grouping.keys[0],'operation_key');
+ const groupedToken=new URL(page.url()).searchParams.get('q_tool_calls');
+ await page.getByRole('button',{name:'All records',exact:true}).click();
+ await page.waitForFunction(token=>new URLSearchParams(location.search).get('q_tool_calls')!==token,groupedToken);
+ const reset=decodeQueryStrict(new URL(page.url()).searchParams.get('q_tool_calls'));
+ assert.equal(reset.grouping,undefined);
+ assert.deepEqual(reset.where,[]);
+ assert.deepEqual(reset.hostState?.params??{},{});
+ assert.notEqual(path(page),saved);
+ const record=page.getByRole('button',{name:/^Failed calls/,includeHidden:true});
+ const recordsSection=page.locator('.usage-ideas-section').filter({has:record});
+ if(await recordsSection.getAttribute('open')===null)await recordsSection.locator('summary').click();
+ await record.click();
+ await page.waitForFunction(()=>[...document.querySelectorAll('.usage-idea')].some(button=>button.querySelector('strong')?.textContent==='Failed calls'&&button.getAttribute('aria-pressed')==='true'));
+ await app.settled();
+ await page.reload();
+ await page.waitForSelector('.usage-workspace-table .qt-row');
+ assert.equal(await record.getAttribute('aria-pressed'),'true','a record idea stays selected after native evidence and Detail columns are restored');
 });

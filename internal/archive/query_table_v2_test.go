@@ -56,7 +56,7 @@ func metricRequest(specs ...qt.AggSpec) queryFixtureMetrics {
 }
 
 func TestGeneratedQuerySchemas(t *testing.T) {
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "safety", "fixes", "parallelism", "agent_events", "agent_event_messages", "agent_event_rates", "message_labels"} {
+	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "safety", "fixes", "parallelism", "agent_events", "agent_event_messages", "agent_event_rates", "message_labels"} {
 		t.Run(dataset, func(t *testing.T) {
 			doc, err := querySchemaDocument(dataset)
 			if err != nil {
