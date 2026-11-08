@@ -343,6 +343,25 @@ CREATE TABLE IF NOT EXISTS conversation_launches (
   program TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS conversation_launches_parent_idx ON conversation_launches(parent_id);
+-- Derived after authorship (peer_links.go): independently started work that
+-- worked on the same change, such as a review and the conversation it
+-- reviewed. Both sides are mirror representatives of top-level workspaces;
+-- left is the source (writer, quoted conversation), right the consumer.
+-- Messages anchor hand-offs; '' when a link has none.
+CREATE TABLE IF NOT EXISTS work_peer_links (
+  left_workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  right_workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  confidence TEXT NOT NULL,
+  left_message_id TEXT NOT NULL DEFAULT '',
+  right_message_id TEXT NOT NULL DEFAULT '',
+  at TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY(left_workspace_id, right_workspace_id, kind, left_message_id, right_message_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS work_peer_links_right_idx ON work_peer_links(right_workspace_id);
+CREATE INDEX IF NOT EXISTS work_peer_links_left_message_idx ON work_peer_links(left_message_id) WHERE left_message_id<>'';
+CREATE INDEX IF NOT EXISTS work_peer_links_right_message_idx ON work_peer_links(right_message_id) WHERE right_message_id<>'';
 -- Prose messages by role and time, for the human-authorship rebuild.
 CREATE INDEX IF NOT EXISTS messages_prose_idx ON messages(role, created_at) WHERE kind='message';
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(message_id UNINDEXED, text, tokenize='unicode61');

@@ -90,6 +90,7 @@ type delegationNode struct {
 	SubtreeStart      *float64                 `json:"subtree_start"`
 	SubtreeEnd        *float64                 `json:"subtree_end"`
 	TokenAttribution  *sessionTokenAttribution `json:"token_attribution,omitempty"`
+	Peer              *delegationPeer          `json:"peer,omitempty"` // related work's session (delegation_peers.go)
 	accountedTokens   map[string]delegationMetric
 	unallocatedTokens tokenCounts
 	unallocatedCost   float64
@@ -123,16 +124,18 @@ type delegationTool struct {
 	Duration  *float64 `json:"duration"`
 }
 type delegationSnapshot struct {
-	ID         string
-	Nodes      []*delegationNode
-	ByID       map[string]*delegationNode
-	Aliases    map[string]string
-	Roots      []*delegationNode
-	Maxima     map[string]map[string]float64
-	Totals     map[string]delegationMetric
-	Start, End *float64
-	Density    []int
-	Warnings   []string
+	ID      string
+	Nodes   []*delegationNode
+	ByID    map[string]*delegationNode
+	Aliases map[string]string
+	Roots   []*delegationNode
+	Maxima  map[string]map[string]float64
+	Totals  map[string]delegationMetric
+	// GroupTotals also counts related work; nil without any.
+	GroupTotals map[string]delegationMetric
+	Start, End  *float64
+	Density     []int
+	Warnings    []string
 }
 
 func delegationTime(value any) *float64 {
@@ -900,6 +903,13 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		}
 		n.Self["leaves"] = delegationNumber(leaf, "observed", 1, 1)
 	}
+	s.finish()
+	return s, nil
+}
+
+// finish orders the snapshot's trees by start time, numbers their outline,
+// and computes subtree totals, scale maxima, density and the content hash.
+func (s *delegationSnapshot) finish() {
 	less := func(a, b *delegationNode) bool {
 		if a.Start == nil {
 			return b.Start == nil && a.ID < b.ID
@@ -938,6 +948,8 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	walk(s.Roots, 0, "")
 	s.Nodes = ordered
 	s.Totals = delegationWorkspaceTotals(s.Nodes)
+	s.Maxima = map[string]map[string]float64{"self": {}, "all": {}}
+	s.Density = make([]int, 120)
 	for _, n := range s.Nodes {
 		for _, m := range delegationMetrics {
 			for scope, values := range map[string]map[string]delegationMetric{"self": n.Self, "all": n.All} {
@@ -964,7 +976,6 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	payload, _ := json.Marshal(hashInput)
 	hash := sha256.Sum256(payload)
 	s.ID = fmt.Sprintf("%x", hash[:12])
-	return s, nil
 }
 
 // Prefer repository identity so the same logical file across checkouts counts
@@ -1143,7 +1154,7 @@ type delegationCursor struct {
 }
 
 func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace string, timeline bool) {
-	snapshot, err := s.Catalog.delegationSnapshot(r.Context(), workspace)
+	snapshot, err := s.Catalog.workGroupSnapshot(r.Context(), workspace)
 	if err != nil {
 		writeError(w, err, 500)
 		return
@@ -1364,7 +1375,7 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 	for _, n := range append(append([]*delegationNode{}, page...), ancestors...) {
 		pageMatches[n.ID] = matched[n.ID]
 	}
-	writeJSON(w, map[string]any{"focus": focus, "focus_truncated": focusTruncated, "snapshot": snapshot.ID, "rows": page, "ancestors": ancestors, "ancestors_truncated": ancestorsTruncated, "matched": pageMatches, "total": len(nodes), "session_count": sessionCount, "offset": offset, "next_cursor": next, "metrics": delegationMetrics, "maxima": snapshot.Maxima, "totals": totals, "start": snapshot.Start, "end": snapshot.End, "density": snapshot.Density, "warnings": snapshot.Warnings}, 200)
+	writeJSON(w, map[string]any{"focus": focus, "focus_truncated": focusTruncated, "snapshot": snapshot.ID, "rows": page, "ancestors": ancestors, "ancestors_truncated": ancestorsTruncated, "matched": pageMatches, "total": len(nodes), "session_count": sessionCount, "offset": offset, "next_cursor": next, "metrics": delegationMetrics, "maxima": snapshot.Maxima, "totals": totals, "group_totals": snapshot.GroupTotals, "start": snapshot.Start, "end": snapshot.End, "density": snapshot.Density, "warnings": snapshot.Warnings}, 200)
 }
 
 type delegationMark struct {
