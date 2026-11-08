@@ -112,6 +112,11 @@ accounted, unallocated and observed-minimum tokens and source-message references
 The read API still supports filtering and matching-only accounting for analysis.
 
 The timeline retains a full-workspace density overview while detail is zoomed.
+Zoom keeps the current page of session rows visible, with empty lanes where no
+evidence falls in the window. Hierarchy & usage also keeps those rows; cells
+for sessions (or branches in Self + children scope) known to be outside the
+window are blank. Other usage values still cover whole sessions, not just the
+selected window, and unknown bounds do not remove usage.
 Drag across the timeline lanes or axis to zoom into a range, with a shared
 selection preview in every lane and the overview. Tool events remain clickable.
 Drag the overview window to pan without changing its duration, drag its edges
