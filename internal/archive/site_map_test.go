@@ -79,6 +79,39 @@ func testSiteMap(t *testing.T) *siteMap {
 	return site
 }
 
+func TestSiteLinkClassifiedMessagesUseCanonicalDataset(t *testing.T) {
+	site := testSiteMap(t)
+	for _, hidden := range []string{"writing_messages", "writing", "tools", "people_message_labels"} {
+		if site.Nodes["analyze/query/"+hidden] != nil {
+			t.Errorf("internal dataset %s has a generated Query page", hidden)
+		}
+	}
+	result, err := site.linkTool(linkArgs(t, `{"page":"analyze/query/messages","query":{"where":[{"field":"role","op":"=","value":"user"},{"field":"has_authorship","op":"=","value":"true"},{"field":"typed_words","op":">","value":"0"}]},"days":30}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := result["url"].(string)
+	address, err := url.Parse(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := address.Query().Get("analyze_data"); got != "messages" {
+		t.Errorf("dataset = %q, want messages", got)
+	}
+	if address.Query().Get("q_messages") == "" || address.Query().Has("q_writing_messages") || address.Query().Get("window_dataset") != "messages" {
+		t.Errorf("canonical message query/window missing: %s", link)
+	}
+	state := roundTrip(t, site, "classified messages", link)
+	want := []qt.WhereTerm{
+		{Field: "role", Op: "=", Value: "user"},
+		{Field: "has_authorship", Op: "=", Value: "true"},
+		{Field: "typed_words", Op: ">", Value: "0"},
+	}
+	if !reflect.DeepEqual(state.Filters, want) || state.Days != 30 {
+		t.Errorf("authorship population/window = %+v/%d, want %+v/30", state.Filters, state.Days, want)
+	}
+}
+
 func TestSiteMapJudgesEveryChartCaseAsThePageDoes(t *testing.T) {
 	site, cases := testSiteMap(t), readSiteCases(t)
 	count := 0

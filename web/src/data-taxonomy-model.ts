@@ -39,6 +39,7 @@ export const dataEntityGroups = [
 
 // Each definition describes an input row, before filters and grouping.
 export const dataSources = {
+  messages: { label: "Messages", entity: "messages", grain: "One retained message, including user prompts, agent replies, thinking and tool messages; authorship fields are available when classified" },
   people_message_labels:{label:"People message labels",entity:"messages",grain:"One user message within a People dashboard population, assigned to its highest-confidence accepted specific label or missing-label coverage. Label groups add up to the message total."},
   message_labels: { label: "Message labels", entity: "messages", grain: "One accepted specific label on a saved message, or one record of labeling coverage. A message can have several labels" },
   compactions: { label: "Context compactions", entity: "compactions", grain: "One recorded compaction, with a human, agent-app or unknown trigger" },
@@ -59,8 +60,8 @@ export const dataSources = {
   tl1_attempts: { label: "TL1 attempts", entity: "work_items", grain: "One recorded attempt at a TL1 work item" },
   agent_events: { label: "Agent events", entity: "messages", grain: "One sentence classified as one kind of event (experimental)" },
   agent_event_messages: { label: "Messages checked for agent events", entity: "messages", grain: "One agent reply or thinking block checked for events" },
-  agent_event_rates: { label: "Agent event rates", entity: "messages", grain: "One agent message checked for events, once per kind of event" },
-  session_shape: { label: "Session shape", entity: "agents", grain: "One agent session (a delegated run is its own), with its length, active time, tool calls, autonomy and the forensic signals that fired" },
+  agent_event_rates: { label: "Agent event observations", entity: "messages", grain: "One agent message checked for events, once per kind of event" },
+  session_shape: { label: "Agent sessions", entity: "agents", grain: "One agent session (a delegated run is its own), with its length, active time, tool calls, autonomy and the forensic signals that fired" },
   fixes: { label: "Fixes for Recurring Agent Problems", entity: "messages", grain: "One recurring problem agents ran into, grouped from agent events across work items" },
 } as const satisfies Record<string, { label: string; entity: DataEntity; grain: string }>;
 export type DataSource = keyof typeof dataSources;

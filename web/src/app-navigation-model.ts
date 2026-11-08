@@ -1,9 +1,12 @@
+import { loadSchema, type QueryState } from "@pythia-software/query-table-core";
+import { schemaDocuments } from "./schema-documents";
+import { fittedDefaultQuery } from "./usage-query-columns";
 import { nestedPageTrail, type NestedPage } from "./nested-pages-model";
 import { safetyURL } from "./safety-route";
 import { fixesURL } from "./fixes-route";
 import { logsRoute, logSourceFromParams, logSourceNavigationID } from "./logs-model";
 import { agentEventDatasets, agentEventTopics, agentEventsEnabled } from "./agent-events-flag";
-import { canonicalAnalyzeURL, readUsageWorkspace, usageDatasets, usageDatasetTopics, usageTopics, usageWorkspaceURL, type UsageTopic } from "./usage-workspace-model";
+import { canonicalAnalyzeURL, readUsageWorkspace, analyzeQueryDatasets, usageDatasets, usageDatasetTopics, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 
 export const findingsPages: readonly NestedPage[] = [
   { id: "findings:dashboard", label: "Dashboard", href: "/findings" },
@@ -39,17 +42,23 @@ const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   tokens: "Outcomes", carbon: "Outcomes",
 };
 
+// Schema defaults are immutable; loading all schemas on every URL edit makes
+// navigation needlessly repeat the same work.
+const datasetQueries = new Map<UsageDataset, QueryState>(analyzeQueryDatasets.map(dataset => [dataset, fittedDefaultQuery(loadSchema(schemaDocuments[dataset]))]));
+
 // Preview pages (agent-events-flag.ts) are listed only when turned on; Agent
 // Events is not one of them.
 export function analyzePages(params: URLSearchParams, previews = agentEventsEnabled()): NestedPage[] {
+  const datasetContext = new URLSearchParams(params);
+  for (const key of [...datasetContext.keys()]) if (/^(?:q_|record_|window_|analyze_|card_|label_)/.test(key)) datasetContext.delete(key);
   return [
     { id: "dashboards", label: "Dashboards", children: (["People", "Agents", "Outcomes"] as const).map(label => ({
       id: `dashboards:${label.toLowerCase()}`, label,
       children: Object.entries(usageTopics).filter(([topic]) => dashboardGroups[topic as UsageTopic] === label && (previews || !agentEventTopics.has(topic)))
         .map(([topic, item]) => ({ id: `dashboards:${topic}`, label: item.label, href: usageWorkspaceURL({ mode: "dashboards", topic: topic as UsageTopic, report: "" }, params) })),
     })) },
-    { id: "query", label: "Query", children: Object.entries(usageDatasets).filter(([dataset]) => previews || !agentEventDatasets.has(dataset))
-      .map(([dataset, item]) => ({ id: `query:${dataset}`, label: item.label, href: usageWorkspaceURL({ mode: "query", dataset: dataset as keyof typeof usageDatasets, topic: usageDatasetTopics[dataset as keyof typeof usageDatasets], report: "" }, params) })),
+    { id: "query", label: "Query tables", children: analyzeQueryDatasets.filter(dataset => previews || !agentEventDatasets.has(dataset))
+      .map(dataset => ({ id: `query:${dataset}`, label: usageDatasets[dataset].label, href: usageWorkspaceURL({ mode: "query", dataset, topic: usageDatasetTopics[dataset], report: "", query: datasetQueries.get(dataset)! }, datasetContext) })),
     },
   ];
 

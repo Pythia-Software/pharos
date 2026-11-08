@@ -219,7 +219,8 @@ export function cardDestination(recipe: QueryRecipe, query: QueryState, window?:
     address.searchParams.set("reveal", `section:${recipe.habits.target}`);
     return address.pathname + address.search;
   }
-  const url = queryURL(recipe.dataset, query, window), target = recipe.destination;
+  // Cards retain their source query for previews, durable snapshots and edits.
+  const url = queryURL(recipe.dataset, query, window, { preserveSource: true }), target = recipe.destination;
   if(recipe.thinking) {
     const parsed=new URL(url,"http://localhost");
     parsed.searchParams.set("analyze_mode","dashboards");parsed.searchParams.set("analyze_topic",recipe.thinking.overview?"thinking-overview":"thinking-detail");parsed.searchParams.set("analyze_data","model_requests");

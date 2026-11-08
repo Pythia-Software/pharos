@@ -1,3 +1,4 @@
+import messagesDocument from "../../../../schemas/messages.schema.json";
 import { capabilities } from "../../support/query-server.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -101,7 +102,7 @@ test("supplied-format percentages include context-only messages, exclude automat
   assert.equal(contributionSignals(image).file, false, "an image marker does not also count as a file reference");
   assert.equal(contributionSignals(automated).image, false);
   assert.equal(study.evidence.length, 2);
-  assert.ok(study.evidence.every(evidence => evidence.url.includes("q_writing_messages=")));
+  assert.ok(study.evidence.every(evidence => new URL(evidence.url, "http://study.test").searchParams.get("analyze_data") === "messages"));
   assert.match(study.sampleLabel, /3 assessed contributions/);
 });
 
@@ -118,7 +119,7 @@ test("example percentages use each shared workspace directory's contribution den
   const rows = [row("a", "Here is context", { pasted_words: 20 }), row("b", "My own direction"), row("c", "Another direction")];
   const study = buildHumanStudy("examples", rows, [{ id: "a", location: "/repo/tree", repository_name: "repo" }, { id: "b", location: "/repo/tree", repository_name: "repo" }, { id: "c", location: "/repo/other", repository_name: "repo" }], 7, now, "UTC");
   assert.deepEqual(study.workspaceRows.map(row => [row.location, row.count, row.total, row.value]), [["/repo/tree", 1, 2, .5], ["/repo/other", 0, 1, 0]]);
-  assert.ok(study.workspaceRows[0].url.includes("q_writing_messages="));
+  assert.ok(new URL(study.workspaceRows[0].url, "http://study.test").searchParams.get("analyze_data") === "messages");
 });
 
 for (const ids of ["work", "workspace", "mixed"]) test(`directory drill-down matches its contribution totals with ${ids} IDs`, () => {
@@ -140,8 +141,12 @@ for (const ids of ["work", "workspace", "mixed"]) test(`directory drill-down mat
   ];
   const study = buildHumanStudy("examples", [...rows, ...excluded], workspaces, 7, now, "UTC");
   const directory = study.workspaceRows.find(group => group.location === "/repo/tree");
-  const query = decodeQuery(new URL(directory.url, "http://study.test").searchParams.get("q_writing_messages"));
-  const actual = applyQuery([...rows, ...excluded], query, schema, { now }).rows;
+  const params = new URL(directory.url, "http://study.test").searchParams;
+  assert.equal(params.get("analyze_data"), "messages");
+  const query = decodeQuery(params.get("q_messages"));
+  const source = [...rows, ...excluded].map(message => ({ ...message, role: "user", has_authorship: true,
+    authorship_sent_at: message.sent_at, authorship_repository_name: message.repository_name, authorship_title: message.title }));
+  const actual = applyQuery(source, query, loadSchema(messagesDocument), { now }).rows;
   assert.deepEqual(actual.map(message => message.id).sort(), rows.map(message => message.id).sort());
   assert.equal(actual.length, directory.total);
   assert.equal(buildHumanStudy("examples", actual, workspaces, 7, now, "UTC").value, directory.value);

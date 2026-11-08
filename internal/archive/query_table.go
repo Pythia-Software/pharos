@@ -210,6 +210,10 @@ func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, 
 		return
 	}
 	field := r.URL.Query().Get("field")
+	if dataset == "messages" && (field == "text" || field == "content" || field == "prompt") {
+		writeError(w, fmt.Errorf("message text has no distinct-value list"), http.StatusBadRequest)
+		return
+	}
 	limit := 50
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil {
@@ -459,6 +463,9 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 // (see ensureAuthorship). Compactions only start their one-time boundary
 // backfill, which runs with the tools stage.
 func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
+	if dataset == "messages" {
+		return nil // canonical messages and any already-recorded authorship
+	}
 	if dataset == "writing_messages" {
 		c.ensureAuthorship()
 		return nil
@@ -510,6 +517,8 @@ func (s *Server) postSQLQueryTable(w http.ResponseWriter, r *http.Request, datas
 			err = s.Catalog.priceToolCalls(result.Rows)
 		case "writing_messages":
 			err = s.Catalog.attachAuthoredText(r.Context(), result.Rows)
+		case "messages":
+			err = s.Catalog.attachMessageText(r.Context(), result.Rows)
 		}
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)

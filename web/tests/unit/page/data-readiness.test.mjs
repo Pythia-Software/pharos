@@ -13,6 +13,8 @@ test('the displayed population, not unrelated backlog, determines the summary',(
  data.freshness.find(row=>row.domain==='an.authorship').behind.state='behind';
  assert.equal(readinessModel(data,[scope()],now).kind,'behind');
  assert.equal(readinessModel(data,[scope('tool_calls')],now).kind,'current');
+ assert.equal(readinessModel(data,[scope('messages',{query:{where:[{field:'role',op:'=',value:'assistant'}]}})],now).kind,'current','raw replies do not wait for optional writing classification');
+ for(const query of [{where:[{field:'has_authorship',op:'=',value:'true'}]},{aggregations:[{expression:'SUM([typed_words])'}]},{select:[{field:'authorship_title'}]}])assert.equal(readinessModel(data,[scope('messages',{query})],now).kind,'behind','writing-dependent queries include authorship backlog');
  assert.equal(readinessModel(data,[],now).kind,'unknown');
  assert.equal(readinessModel(data,[scope('future_dataset')],now).kind,'unknown');
 });

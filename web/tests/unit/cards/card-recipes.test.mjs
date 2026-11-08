@@ -646,13 +646,16 @@ test("selecting a time window returns a query that replaces every direct date co
   const kept = { field: "provider", op: "=", value: "codex" };
   for (const dataset of ["writing_messages", "usage"]) {
     const fields = dataset === "usage" ? ["first_usage_at", "last_usage_at"] : ["sent_at"];
+    const targetFields = dataset === "writing_messages" ? ["authorship_sent_at"] : fields;
     for (const op of ["=", ">", ">=", "<", "<="]) for (const choice of ["today", 1]) for (const grouped of [false, true]) {
       const source = { ...core.EMPTY_QUERY, offset: 50, where: [...fields.map(field => ({ field, op, value: "2026-01-31" })), kept] };
       const query = grouped ? { ...core.EMPTY_QUERY, offset: 100, grouping: { source, keys: ["provider"], summaries: [{ id: "n", op: "count", label: "Rows" }], representative: null } } : source;
       const adjusted = queryFromURL(updateQueryWindowURL(queryURL(dataset, query), choice, query));
       const applied = adjusted.query.grouping?.source ?? adjusted.query;
-      assert.deepEqual(applied.where.filter(term => !fields.includes(term.field)), [kept]);
-      assert.equal(applied.where.length, 3, `${dataset}: ${op} → ${choice}`);
+      const population = dataset === "writing_messages" ? [{ field: "role", op: "=", value: "user" }, { field: "has_authorship", op: "=", value: "true" }] : [];
+      assert.deepEqual(applied.where.filter(term => !targetFields.includes(term.field)), [...population, kept]);
+      if (dataset === "writing_messages") assert.equal(adjusted.window.field, "authorship_sent_at");
+      assert.equal(applied.where.length, 3 + population.length, `${dataset}: ${op} → ${choice}`);
       assert.ok(applied.where.some(term => term.op === "<" && term.value === "+0s"));
       assert.ok(applied.where.some(term => term.op === ">=" && term.value === (choice === "today" ? todayBounds()[0] : "-1d")));
       assert.equal(rollingQueryMatches(adjusted.query, adjusted.window), true);

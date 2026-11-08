@@ -1,9 +1,11 @@
 import { fitQueryToScreen } from "./query-fit";
-import { applyPatch, groupKeyFields, matchPatch, type AggregationClause, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, ITEM_DETAILS_COLUMN, applyPatch, groupKeyFields, matchPatch, type AggregationClause, type QueryState, type WhereClause, type WhereTerm, type SummaryColumn } from "@pythia-software/query-table-core";
 import { usageGroupPresets, usageComparisonPresets, usageTablePresetPatch, type UsageTablePreset } from "./usage-queries";
 import type { UsageDataset } from "./usage-workspace-model";
 
-export type QueryIdea = UsageTablePreset & { id: string; section: string; metrics?: AggregationClause[] };
+export type GroupedQueryIdea = UsageTablePreset & { id: string; section: string; metrics?: AggregationClause[]; where?: WhereTerm[] };
+export type RecordQueryIdea = { id: string; section: string; label: string; title: string; query: QueryState };
+export type QueryIdea = GroupedQueryIdea | RecordQueryIdea;
 const sum = (field: string, label: string): SummaryColumn => ({ id: `idea_${field}`, op: "sum", field, label });
 const count = (id: string, label: string, field?: string): SummaryColumn => ({ id, op: "count", ...(field ? { field } : {}), label });
 const distinct = (field: string, label: string): SummaryColumn => ({ id: `idea_${field}_count`, op: "count_distinct", field, label });
@@ -12,10 +14,9 @@ const duration = (field: string, label: string): SummaryColumn => ({ ...sum(fiel
 const conversation: SummaryColumn = { id: "idea_conversation", op: "link", label: "Conversation", link: { label: "Open conversation", to: { kind: "template", template: "/conversation/{field:conversation_id}" } } };
 const work: SummaryColumn = { id: "idea_work", op: "link", label: "Workspace", link: { label: "Open workspace", to: { kind: "template", template: "/work/{field:id}" } } };
 
-// Every idea is a native grouped query. Link summaries are calculated by Query
-// Table from the returned group row and never sent to the server. Records links
-// inherit source WHERE plus exact group-key predicates (including null keys).
-function finish(dataset: UsageDataset, idea: QueryIdea): QueryIdea {
+// Grouped ideas use native Query Table drilldown. Records links inherit each
+// idea's source WHERE and exact group-key predicates, including null keys.
+function finish(dataset: UsageDataset, idea: GroupedQueryIdea): GroupedQueryIdea {
   const summaries = idea.grouping.summaries;
   const links = summaries.filter(column => column.op === "link");
   const records: SummaryColumn = { id: "idea_records", op: "link", label: "Drill In", link: { label: "Matching records", to: { kind: "query", target: dataset } } };
@@ -23,7 +24,7 @@ function finish(dataset: UsageDataset, idea: QueryIdea): QueryIdea {
   const columns = [...(idea.columns ?? [...groupKeyFields(idea.grouping.keys), ...summaries.map(column => column.id)]).filter(field => !links.some(link => link.id === field)), ...links.map(link => link.id), records.id];
   return { ...idea, grouping: { ...idea.grouping, summaries: ordered }, columns };
 }
-function idea(dataset: UsageDataset, id: string, section: string, label: string, title: string, keys: string[], summaries: SummaryColumn[], sort = summaries.find(column => column.op !== "link")?.id, chronological = false): QueryIdea {
+function idea(dataset: UsageDataset, id: string, section: string, label: string, title: string, keys: string[], summaries: SummaryColumn[], sort = summaries.find(column => column.op !== "link")?.id, chronological = false): GroupedQueryIdea {
   const primary = summaries.find(column => column.id === sort && column.op !== "link");
   return finish(dataset, { id: `${dataset}:${id}`, section, label, title,
     grouping: { keys, summaries, representative: null },
@@ -57,7 +58,7 @@ const sessionShape: SummaryColumn[] = [count("idea_sessions", "Sessions"), sum("
 const agentEventMessages: SummaryColumn[] = [sum("message_count", "Messages read"), sum("candidates", "Keyword hits"), sum("events", "Events"), ratio("idea_events_per_message", "SUM([events])/NULLIF(SUM([message_count]),0)", "Events per message")];
 
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
-  people_message_labels:[], message_labels:[],
+  messages: [], people_message_labels:[], message_labels:[],
   compactions: [idea("compactions", "triggers", "Compare", "Compactions by trigger and service", "Recorded boundary events by trigger and service", ["trigger", "provider"], [count("idea_compactions", "Compactions")])],
   model_requests: [idea("model_requests","models","Compare","Timing coverage by model","Retained requests and usable post-tool gaps by model",["model"],[count("idea_requests","Retained requests"),count("idea_timed","Usable gaps","gap_seconds")])],
   tl1_attempts: [],
@@ -145,13 +146,29 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
   ],
 };
 
-export function queryIdeaPatch(idea: QueryIdea) {
+export function queryIdeaPatch(idea: GroupedQueryIdea) {
   const patch = usageTablePresetPatch(idea);
-  return { ...patch, id: idea.id, owns: [...patch.owns, "metrics" as const], query: { ...patch.query, aggregations: idea.metrics ?? [] } };
+  return { ...patch, id: idea.id, owns: [...patch.owns, "filters" as const, "metrics" as const], query: { ...patch.query, grouping: { ...patch.query.grouping!, source: { ...EMPTY_QUERY, where: idea.where ?? [] } }, aggregations: idea.metrics ?? [] } };
 }
-export function applyQueryIdea(query: QueryState, idea: QueryIdea): QueryState { return fitQueryToScreen(applyPatch(query, queryIdeaPatch(idea))); }
+// Ideas are independently reproducible views. Previous WHERE, HAVING, keyword
+// clauses, metrics and pagination must not leak into the next starting point.
+export function applyQueryIdea(_query: QueryState, idea: QueryIdea): QueryState {
+  const query = "query" in idea ? idea.query : applyPatch(EMPTY_QUERY, queryIdeaPatch(idea));
+  return fitQueryToScreen({ ...query, offset: 0, hostState: query.hostState ?? { version: 1, params: idea.id.startsWith("message_labels:") ? { label_results: ["table"] } : {} } });
+}
 export function queryIdeaMatches(query: QueryState, idea: QueryIdea): boolean {
-  return Boolean(query.grouping && matchPatch({ ...query, where: [] }, { ...queryIdeaPatch(idea), owns: ["grouping"] }).status === "active");
+  const expected = applyQueryIdea(EMPTY_QUERY, idea);
+  const dataFields = (value: QueryState) => value.select.map(column => column.field).filter(field => field !== ITEM_DETAILS_COLUMN && !field.startsWith("usage_drill_"));
+  if ("query" in idea) {
+    return !query.grouping && JSON.stringify(query.where) === JSON.stringify(expected.where)
+      && JSON.stringify(dataFields(query)) === JSON.stringify(dataFields(expected))
+      && JSON.stringify(query.orderBy) === JSON.stringify(expected.orderBy)
+      && JSON.stringify(query.aggregations) === JSON.stringify(expected.aggregations)
+      && JSON.stringify(query.hostState?.params ?? {}) === JSON.stringify(expected.hostState?.params ?? {});
+  }
+  return Boolean(query.grouping && matchPatch({ ...query, where: [] }, { ...queryIdeaPatch(idea), owns: ["grouping"] }).status === "active"
+    && JSON.stringify(query.grouping.source.where) === JSON.stringify(idea.where ?? [])
+    && JSON.stringify(query.hostState?.params ?? {}) === JSON.stringify(expected.hostState?.params ?? {}));
 }
 export function queryIdeasPreferenceKey(dataset: UsageDataset): string { return `pharos-query-ideas:${dataset}`; }
 export function queryIdeasOpen(saved: unknown): boolean { return typeof saved === "boolean" ? saved : true; }
@@ -172,7 +189,7 @@ usageQueryIdeas.tools.push(
   idea("tools", "agents", "Compare", "Main agents and sub-agents", "Compare call mix, failure rates and recorded durations by agent kind", ["session_kind", "tool_category"], toolTotals),
 );
 
-function withExample(dataset: UsageDataset, current: QueryIdea, sort: string, message: string, label: string, call?: string): QueryIdea {
+function withExample(dataset: UsageDataset, current: GroupedQueryIdea, sort: string, message: string, label: string, call?: string): QueryIdea {
   const helper = (field: string): SummaryColumn => ({ id: `example_${field}`, op: "row", field, label: field });
   const fields = ["conversation_id", message, ...(call ? [call] : [])];
   const link: SummaryColumn = { id: "idea_example", op: "link", label: "Source message", link: { label, to: { kind: "template", template: `/conversation/{field:example_conversation_id}?message={field:example_${message}}${call ? `&call={field:example_${call}}` : ""}` } } };
@@ -181,9 +198,9 @@ function withExample(dataset: UsageDataset, current: QueryIdea, sort: string, me
     columns: [...current.columns!.filter(field => field !== "idea_records"), link.id],
   });
 }
-usageQueryIdeas.writing_messages = usageQueryIdeas.writing_messages.map(current => current.id === "writing_messages:threads" ? withExample("writing_messages", current, "sent_at", "id", "Latest message") : current);
-usageQueryIdeas.tool_calls = usageQueryIdeas.tool_calls.map(current => current.id === "tool_calls:commands" ? withExample("tool_calls", current, "duration_ms", "call_message_id", "Inspect call", "call_id") : current);
-usageQueryIdeas.skill_usages = usageQueryIdeas.skill_usages.map(current => current.id === "skill_usages:types" ? withExample("skill_usages", current, "created_at", "evidence_message_id", "Latest evidence") : current);
+usageQueryIdeas.writing_messages = usageQueryIdeas.writing_messages.map(current => "grouping" in current && current.id === "writing_messages:threads" ? withExample("writing_messages", current, "sent_at", "id", "Latest message") : current);
+usageQueryIdeas.tool_calls = usageQueryIdeas.tool_calls.map(current => "grouping" in current && current.id === "tool_calls:commands" ? withExample("tool_calls", current, "duration_ms", "call_message_id", "Inspect call", "call_id") : current);
+usageQueryIdeas.skill_usages = usageQueryIdeas.skill_usages.map(current => "grouping" in current && current.id === "skill_usages:types" ? withExample("skill_usages", current, "created_at", "evidence_message_id", "Latest evidence") : current);
 
 const tokenTotals = usageGroupPresets[0].grouping.summaries;
 usageQueryIdeas.usage.push(
@@ -191,7 +208,7 @@ usageQueryIdeas.usage.push(
     ...tokenTotals, sum("cache_creation_input_tokens", "Cache writes"), sum("cache_read_input_tokens", "Cache reads"),
     ratio("idea_write_per_read", "SUM([cache_creation_input_tokens])/NULLIF(SUM([cache_read_input_tokens]),0)", "Writes per cached read"),
   ], "idea_write_per_read"),
-  idea("usage", "delegation", "Compare", "Delegation by top-level model", "Compare root and delegated run roles under their top-level provider/model; keep all matching source filters", ["root_provider", "root_model_family", "run_role"], tokenTotals, "usage_cost_usd"),
+  idea("usage", "delegation", "Compare", "Delegation by top-level model", "Compare root and delegated run roles under their top-level provider and model", ["root_provider", "root_model_family", "run_role"], tokenTotals, "usage_cost_usd"),
   { ...idea("usage", "root-tasks", "Explore", "Top-level conversations", "Compare total usage across each top-level conversation and its delegated work, then inspect contributing facts or the top-level conversation", ["root_conversation_id"], [
     { id: "idea_root_title", op: "max", field: "root_title", label: "Top-level conversation" }, ...tokenTotals, distinct("delegated_session_id", "Delegated agent sessions"),
     { id: "idea_root_thread", op: "link", label: "Top-level conversation", link: { label: "Open top-level conversation", to: { kind: "template", template: "/conversation/{field:root_conversation_id}" } } },
@@ -199,14 +216,14 @@ usageQueryIdeas.usage.push(
 );
 
 // Record explorations favor a compact table over another chart of opaque IDs.
-function recordIdea(dataset: UsageDataset, id: string, label: string, title: string, keys: string[], summaries: SummaryColumn[], sort: string): QueryIdea {
+function recordIdea(dataset: UsageDataset, id: string, label: string, title: string, keys: string[], summaries: SummaryColumn[], sort: string): GroupedQueryIdea {
   return { ...idea(dataset, id, "Explore", label, title, keys, summaries, sort), metrics: [] };
 }
 const workTitle: SummaryColumn = { id: "idea_title", op: "max", field: "title", label: "Workspace" };
 const message: SummaryColumn = { id: "idea_message", op: "link", label: "Message", link: { label: "Read message", to: { kind: "template", template: "/conversation/{field:conversation_id}?message={field:id}" } } };
 const rootThread: SummaryColumn = { id: "idea_root_thread", op: "link", label: "Top-level conversation", link: { label: "Open top-level conversation", to: { kind: "template", template: "/conversation/{field:root_conversation_id}" } } };
 usageQueryIdeas.usage.push(
-  recordIdea("usage", "sessions", "Agent sessions", "Inspect each agent session's usage within its conversation, preserving source filters and unpriced facts", ["agent_session_id", "conversation_id"], [workTitle, ...tokenTotals, conversation], "usage_cost_usd"),
+  recordIdea("usage", "sessions", "Agent sessions", "Inspect each agent session's usage within its conversation, including unpriced token facts", ["agent_session_id", "conversation_id"], [workTitle, ...tokenTotals, conversation], "usage_cost_usd"),
   recordIdea("usage", "conversation-cost", "Costliest conversations", "Rank individual conversations by recorded API price equivalent; unpriced usage remains visible in token totals", ["conversation_id"], [workTitle, ...tokenTotals, conversation], "usage_cost_usd"),
 );
 usageQueryIdeas.writing.push(
@@ -240,4 +257,135 @@ usageQueryIdeas.mcp_calls.push(
 usageQueryIdeas.parallelism.push(
   idea("parallelism", "busy-units", "Explore", "Busiest units", "Explore units ranked by additive activity hours, keeping workspace/conversation counting and turn-gap assumptions separate", ["counting", "gap_minutes", "unit_id"], [{ id: "idea_unit_label", op: "max", field: "unit_label", label: "Unit" }, ...occupancy], "idea_unit_hours"),
   idea("parallelism", "checkouts", "Explore", "Active checkouts", "Inspect activity at each repository and checkout directory; unit-hours count overlapping units separately", ["counting", "gap_minutes", "repository_name", "location"], occupancy, "idea_unit_hours"),
+);
+
+// Record ideas show the source row directly. The source-action columns are
+// supplied by the Analyze table, so these lists contain only schema fields.
+function records(dataset: UsageDataset, id: string, section: string, label: string, title: string, columns: string[], sort: string, where: WhereTerm[] = []): RecordQueryIdea {
+  return { id: `${dataset}:${id}`, section, label, title, query: {
+    ...EMPTY_QUERY, where, select: columns.map(field => ({ field })),
+    orderBy: [{ field: sort, dir: "desc", nulls: "last" }],
+  } };
+}
+function scoped(group: GroupedQueryIdea, where: WhereTerm[]): GroupedQueryIdea { return { ...group, where }; }
+const eq = (field: string, value: string): WhereClause => ({ field, op: "=", value });
+const positive = (field: string): WhereTerm => ({ field, op: ">", value: "0" });
+const known = (field: string): WhereTerm => ({ field, op: "is_not_null", value: "" });
+const messagePopulation = [count("idea_messages", "Messages"), distinct("conversation_id", "Conversations")];
+const authoredMessagePopulation = [count("idea_messages", "Classified user messages"), sum("typed_words", "Your words"), sum("pasted_words", "Likely pasted words"), sum("words", "All classified words"), ratio("idea_authored_share", "SUM([typed_words])/NULLIF(SUM([words]),0)", "Human-written word share", true)];
+
+usageQueryIdeas.messages.push(
+  records("messages", "own-writing", "Read messages", "Your writing", "Read user messages with classified human-written words; unclassified messages have no authorship measure", ["sent_at", "text", "typed_words", "pasted_words", "words", "main_category", "work_id", "conversation_id"], "sent_at", [eq("role", "user"), eq("has_authorship", "true"), positive("typed_words")]),
+  records("messages", "user-unclassified", "Read messages", "Unclassified user messages", "Inspect user-role messages without authorship evidence; missing word counts are unknown, not zero", ["sent_at", "text", "role", "kind", "sender", "has_authorship", "conversation_id"], "sent_at", [eq("role", "user"), eq("has_authorship", "false")]),
+  records("messages", "assistant-replies", "Read messages", "Assistant replies", "Read retained assistant reply text, with model and effort where recorded", ["sent_at", "text", "model", "effort", "sender", "conversation_id"], "sent_at", [eq("role", "assistant"), eq("kind", "message")]),
+  records("messages", "thinking", "Read messages", "Thinking blocks", "Read retained reasoning and thinking blocks separately from visible replies", ["sent_at", "text", "kind", "model", "effort", "conversation_id"], "sent_at", [eq("role", "assistant"), { any: [eq("kind", "reasoning"), eq("kind", "thinking")] }]),
+  records("messages", "tool-calls", "Read messages", "Tool call messages", "Inspect tool invocations and their call IDs as distinct message records", ["sent_at", "text", "kind", "call_id", "model", "conversation_id"], "sent_at", [eq("kind", "tool_call")]),
+  records("messages", "tool-results", "Read messages", "Tool result messages", "Inspect tool output messages, including retained errors and call IDs", ["sent_at", "text", "kind", "call_id", "conversation_id"], "sent_at", [eq("kind", "tool_result")]),
+  scoped(idea("messages", "workspace-writing", "Compare", "Writing by workspace", "Classified user messages grouped by authorship work ID; open the exact messages contributing to each workspace", ["work_id"], [{ id: "idea_workspace_title", op: "max", field: "authorship_title", label: "Workspace" }, ...authoredMessagePopulation, { id: "idea_work", op: "link", label: "Workspace", link: { label: { column: "idea_workspace_title" }, to: { kind: "template", template: "/work/{field:work_id}" } } }], "idea_typed_words"), [eq("role", "user"), eq("has_authorship", "true"), known("work_id")]),
+  scoped(idea("messages", "writing-weeks", "Over time", "Weekly human writing", "Compare classified user messages and human-written words by message week", ["authorship_week"], authoredMessagePopulation, "idea_typed_words", true), [eq("role", "user"), eq("has_authorship", "true")]),
+  idea("messages", "roles-kinds", "Compare", "Roles and message kinds", "Count retained prompts, replies, reasoning, tool calls and tool results without dropping unclassified messages", ["role", "kind"], messagePopulation),
+  scoped(idea("messages", "models", "Compare", "Assistant messages by model", "Compare retained assistant message kinds by recorded model; missing model remains a separate group", ["model", "kind"], messagePopulation), [eq("role", "assistant")]),
+  idea("messages", "conversation-volume", "Explore", "Messages by conversation", "Rank conversations by retained message count, then drill into exactly those messages", ["conversation_id"], [...messagePopulation, conversation]),
+);
+
+const attempts = [sum("attempt_count", "Attempts"), sum("advanced_count", "Advanced attempts"), sum("escalated_count", "Escalated attempts"), sum("error_count", "Error attempts"), sum("cost_usd", "Recorded cost"), count("idea_priced", "Priced attempts", "cost_usd")];
+usageQueryIdeas.tl1_attempts.push(
+  records("tl1_attempts", "attempts", "Inspect attempts", "Attempt details", "Inspect each attempt's task, configuration, disposition, attribution and transcript availability", ["started_at", "project", "task_id", "attempt_id", "flavor", "shape_version", "configuration", "model_effort", "disposition", "error_attribution", "cost_source", "has_transcript"], "started_at"),
+  records("tl1_attempts", "revisits", "Inspect attempts", "Revisited tasks", "Inspect iteration within each task; revisit does not establish that an earlier attempt failed", ["started_at", "project", "task_id", "attempt_id", "revisit", "configuration", "disposition", "error_class", "cost_usd"], "started_at", [eq("revisit", "true")]),
+  records("tl1_attempts", "infrastructure", "Inspect attempts", "Infrastructure errors", "Inspect error attribution, signature and disposition for attempts affected by infrastructure", ["started_at", "project", "task_id", "attempt_id", "execution_class", "error_attribution", "error_signature", "disposition", "has_transcript"], "started_at", [eq("error_attribution", "infrastructure")]),
+  scoped(idea("tl1_attempts", "llm-configurations", "Compare", "LLM configurations", "Compare advancement, escalation, errors and known cost within the LLM execution class", ["project", "flavor", "shape_version", "configuration"], attempts, "idea_advanced_count"), [eq("execution_class", "llm")]),
+  idea("tl1_attempts", "dispositions", "Compare", "Disposition and execution class", "Keep LLM and non-LLM attempts apart while comparing disposition and error attribution", ["execution_class", "disposition", "error_attribution"], attempts),
+  idea("tl1_attempts", "task-iterations", "Explore", "Attempts by task", "Follow attempts within a task; revisit marks iteration, not proven failure", ["project", "task_id"], attempts),
+  idea("tl1_attempts", "pricing", "Compare", "Cost coverage", "Compare known cost and priced attempt counts by source; unpriced attempts remain in the attempt total", ["cost_source", "execution_class"], attempts),
+);
+
+const requests = [count("idea_requests", "Retained responses"), count("idea_usable", "Usable post-tool gaps", "gap_seconds"), sum("input_tokens", "Input tokens"), sum("output_tokens", "Output tokens")];
+usageQueryIdeas.model_requests.push(
+  records("model_requests", "request-details", "Inspect requests", "Request timing details", "Inspect response time, preceding tool, timing quality, speed source and token counts", ["requested_at", "model_effort_speed", "speed_source", "preceding_tool", "timing_quality", "gap_seconds", "compacted_before", "input_tokens", "output_tokens", "reasoning_output_tokens", "conversation_id"], "requested_at"),
+  records("model_requests", "post-tool-waits", "Inspect requests", "Usable post-tool waits", "Inspect responses with a checked post-tool gap; gap seconds measure observed wait, not all model latency", ["requested_at", "preceding_tool", "gap_seconds", "timing_quality", "speed_source", "model_effort_speed", "conversation_id"], "gap_seconds", [known("gap_seconds")]),
+  idea("model_requests", "timing-quality", "Compare", "Timing quality by preceding tool", "Expose coverage before comparing post-tool waits; missing gaps remain in the response count", ["timing_quality", "preceding_tool"], requests),
+  scoped(idea("model_requests", "usable-speed", "Compare", "Usable wait by model and speed", "Compare observed post-tool waits per usable gap; assumed standard speed is a fallback classification", ["model_effort_speed", "speed_source"], [...requests, ratio("idea_mean_gap", "SUM([gap_seconds])/NULLIF(COUNT([gap_seconds]),0)", "Seconds per usable gap")], "idea_mean_gap"), [known("gap_seconds")]),
+  idea("model_requests", "compaction-boundary", "Compare", "Requests after compaction", "Compare retained response counts and timing coverage with and without a preceding compaction", ["compacted_before", "timing_quality"], requests),
+  idea("model_requests", "weekly-coverage", "Over time", "Weekly request coverage", "Track retained responses, usable gaps and tokens by request week", ["week"], requests, "idea_requests", true),
+);
+
+const labelCounts = [count("idea_labels", "Label observations"), distinct("message_id", "Messages"), distinct("conversation_id", "Conversations")];
+usageQueryIdeas.message_labels.push(
+  records("message_labels", "observations", "Inspect labels", "Label observations", "Read each classification with the message's role, kind, source and both generating and labeling models", ["occurred_at", "text", "source", "role", "kind", "label_status", "function_role", "family", "label", "model", "label_model", "message_id"], "occurred_at"),
+  records("message_labels", "matched", "Inspect labels", "Matched labels", "Inspect matched labels on individual messages; one message may carry several labels", ["occurred_at", "message_id", "label", "family", "function_role", "source", "model", "label_model"], "occurred_at", [eq("label_status", "matched")]),
+  idea("message_labels", "functions", "Compare", "Functions by source", "Count label observations and distinct messages by source, function role, family and status; shares can overlap", ["source", "function_role", "family", "label_status"], labelCounts),
+  idea("message_labels", "coverage", "Compare", "Label status by role", "Compare status across role and message kind; reading this table does not start labeling", ["role", "kind", "label_status"], labelCounts),
+  idea("message_labels", "classifiers", "Compare", "Generating and labeling models", "Keep the model that generated a message separate from the model that classified it", ["model", "label_model", "label_status"], labelCounts),
+  idea("message_labels", "weekly", "Over time", "Weekly label observations", "Follow accepted and other label observations by message week", ["week", "label_status"], labelCounts, "idea_labels", true),
+);
+
+const boundaryCounts = [count("idea_compactions", "Compactions"), distinct("conversation_id", "Conversations")];
+usageQueryIdeas.compactions.push(
+  records("compactions", "boundaries", "Inspect boundaries", "Boundary evidence", "Inspect the recorded or inferred trigger, evidence, model and source conversation for each boundary", ["occurred_at", "trigger", "trigger_evidence", "model", "agent_depth", "conversation_id", "title"], "occurred_at"),
+  idea("compactions", "weekly-evidence", "Over time", "Weekly triggers and evidence", "Count boundary events and affected conversations by week, trigger and evidence; consecutive boundaries still count", ["week", "trigger", "trigger_evidence"], boundaryCounts, "idea_compactions", true),
+  idea("compactions", "models", "Compare", "Service and model", "Compare boundary counts by provider and model, including unknown triggers", ["provider", "model"], boundaryCounts),
+  idea("compactions", "depth", "Compare", "Agent depth and trigger", "Compare compactions in main and delegated agent sessions without assuming a cause", ["agent_depth", "trigger"], boundaryCounts),
+);
+
+usageQueryIdeas.skill_usages.push(
+  records("skill_usages", "evidence-records", "Inspect evidence", "Skill evidence records", "Inspect the path, evidence type, status, call and message IDs for each observation", ["created_at", "skill_name", "skill_path", "evidence_type", "status", "tool_call_id", "evidence_message_id", "body_message_id", "content_bytes", "conversation_id"], "created_at"),
+  records("skill_usages", "retained-bodies", "Inspect evidence", "Retained skill bodies", "Inspect positive retained body sizes; repeated loads repeat bytes and a load does not prove instructions were followed", ["created_at", "skill_name", "skill_path", "content_bytes", "tool_call_id", "body_message_id", "status"], "content_bytes", [positive("content_bytes")]),
+  idea("skill_usages", "paths", "Compare", "Skill paths and evidence", "Distinguish paths, evidence types and status; paths may share one tool call", ["skill_name", "skill_path", "evidence_type", "status"], [...skills, distinct("tool_call_id", "Tool calls")]),
+  idea("skill_usages", "calls", "Compare", "Evidence by tool", "Compare invocations and loads by tool; count distinct calls separately from evidence rows", ["tool_name", "evidence_type", "status"], [...skills, distinct("tool_call_id", "Tool calls")]),
+  idea("skill_usages", "weekly", "Over time", "Weekly skill evidence", "Track observed loads and invocations by week and evidence type", ["week", "evidence_type"], skills, "idea_evidence", true),
+);
+
+const sessionEvidence = [count("idea_sessions", "Agent sessions"), sum("failed_calls", "Failed calls"), sum("identical_retries", "Identical retries"), sum("thrash_retries", "Thrash retries"), sum("mid_task_compactions", "Mid-task compactions"), sum("unverified_handbacks", "Unverified handbacks"), ratio("idea_failure_rate", "SUM([failed_calls])/NULLIF(SUM([tool_calls]),0)", "Failure rate", true)];
+usageQueryIdeas.session_shape.push(
+  records("session_shape", "evidence", "Inspect sessions", "Session evidence", "Inspect coverage flags beside retries, compactions, context pressure and handbacks; absent evidence is unknown", ["started_at", "title", "agent_kind", "archetype", "has_tool_data", "has_authorship", "has_timestamps", "has_context_window", "failed_calls", "identical_retries", "thrash_retries", "mid_task_compactions", "context_peak_ratio", "unverified_handbacks", "conversation_id"], "started_at"),
+  records("session_shape", "context-pressure", "Inspect sessions", "Context pressure", "Inspect known peak context ratios with context-window evidence and compactions", ["started_at", "title", "context_peak_ratio", "context_peak_tokens", "context_window", "has_context_window", "mid_task_compactions", "conversation_id"], "context_peak_ratio", [eq("has_context_window", "true"), known("context_peak_ratio")]),
+  records("session_shape", "retries", "Inspect sessions", "Repeated work", "Inspect identical and thrash retries alongside failed calls and evidence coverage", ["started_at", "title", "identical_retries", "thrash_retries", "failed_calls", "tool_calls", "has_tool_data", "conversation_id"], "identical_retries", [positive("identical_retries")]),
+  idea("session_shape", "kind-archetype", "Compare", "Agent kind and archetype", "Pool retries, compactions and failure counts across agent sessions by kind and archetype", ["agent_kind", "archetype"], sessionEvidence),
+  idea("session_shape", "coverage", "Compare", "Evidence coverage", "Compare agent sessions by availability of tool, authorship, timing and context-window evidence", ["has_tool_data", "has_authorship", "has_timestamps", "has_context_window"], [count("idea_sessions", "Agent sessions"), sum("forensic_events", "Forensic events")]),
+  idea("session_shape", "length", "Over time", "Weekly length bands", "Compare session counts and pooled failure parts by week and length band", ["week", "length_band"], sessionEvidence, "idea_sessions", true),
+);
+
+usageQueryIdeas.agent_events.push(
+  records("agent_events", "sentences", "Read events", "Classified sentences", "Read each classified sentence with subject, response, probability, source and event-model version", ["occurred_at", "sentence", "family", "subject", "response", "probability", "source", "event_model", "message_id", "conversation_id"], "occurred_at"),
+  records("agent_events", "high-probability", "Read events", "High-probability events", "Inspect strongly classified sentences in their original message; probabilities are classifier outputs", ["occurred_at", "sentence", "family", "probability", "source", "event_model", "message_id"], "probability", [{ field: "probability", op: ">=", value: "0.8" }]),
+  idea("agent_events", "source-version", "Compare", "Event source and model", "Compare classified sentence counts within each event-model version, keeping replies and thinking separate", ["event_model", "source", "family"], agentEvents),
+  idea("agent_events", "subjects", "Compare", "Events with subjects", "Compare event families by whether a subject was extracted, then inspect matching sentences", ["family", "has_subject", "source"], agentEvents),
+);
+usageQueryIdeas.agent_event_rates.push(
+  records("agent_event_rates", "message-observations", "Inspect observations", "Message-kind observations", "Inspect one checked message per event kind, including prompt source, model and event count", ["occurred_at", "family", "events", "source", "prompted_by", "model", "effort", "message_id", "conversation_id"], "occurred_at"),
+  idea("agent_event_rates", "family-source-prompt", "Compare", "Rates by prompt source", "Use distinct checked messages as the denominator within each event family, reply or thinking source, and prompt origin", ["family", "source", "prompted_by"], agentEventRates),
+  idea("agent_event_rates", "weekly-family", "Over time", "Weekly event rates", "Calculate events per 1,000 checked messages by week and event family", ["week", "family"], agentEventRates, "idea_events", true),
+  idea("agent_event_rates", "effort-family", "Compare", "Rates by model effort", "Compare rates within each model, effort and event family, keeping replies and thinking apart in the other views", ["model", "effort", "family"], agentEventRates),
+);
+usageQueryIdeas.agent_event_messages.push(
+  records("agent_event_messages", "checked-messages", "Inspect messages", "Checked messages", "Inspect reply and thinking messages read by the event classifier, including keyword hits and matched events", ["occurred_at", "source", "candidates", "events", "has_event", "event_model", "message_id", "conversation_id"], "occurred_at"),
+  records("agent_event_messages", "matched-messages", "Inspect messages", "Messages with events", "Read checked messages with at least one classified event", ["occurred_at", "source", "candidates", "events", "event_model", "message_id", "conversation_id"], "occurred_at", [positive("events")]),
+  idea("agent_event_messages", "classifier-coverage", "Compare", "Classifier coverage", "Compare checked replies and thinking by event-model version, including keyword hits without events", ["event_model", "source"], agentEventMessages),
+  idea("agent_event_messages", "weekly", "Over time", "Weekly checked messages", "Track checked message populations, keyword candidates and events by week and source", ["week", "source"], agentEventMessages, "idea_message_count", true),
+);
+
+usageQueryIdeas.tool_calls.push(
+  records("tool_calls", "failed-records", "Inspect calls", "Failed calls", "Inspect failed invocations with the command, error signature, status and recorded duration", ["started_at", "tool_name", "command", "status", "error_type", "error_signature", "duration_ms", "conversation_id"], "started_at", [positive("error_count")]),
+  records("tool_calls", "research-records", "Inspect calls", "Research calls", "Inspect retained search queries and reached hosts beside result size and context tokens", ["started_at", "tool_name", "search_query", "host", "url", "result_tokens", "carried_tokens", "conversation_id"], "started_at", [known("search_query")]),
+  records("tool_calls", "timed-records", "Inspect calls", "Longest timed calls", "Rank calls with recorded duration, including zero-duration results", ["started_at", "tool_name", "operation_name", "command", "duration_ms", "duration_source", "status", "conversation_id"], "duration_ms", [known("duration_ms")]),
+);
+usageQueryIdeas.usage.push(
+  records("usage", "usage-facts", "Inspect usage", "Usage facts", "Inspect retained usage facts with source conversation, model, tokens, cost and price status", ["day", "title", "provider", "model", "effort", "input_tokens", "output_tokens", "total_tokens", "cost_usd", "price_status", "conversation_id"], "day"),
+  records("usage", "unpriced", "Inspect usage", "Unpriced usage", "Inspect token facts without a recorded cost; missing price is not zero cost", ["day", "title", "provider", "model", "total_tokens", "cost_usd", "price_status", "conversation_id"], "day", [eq("price_status", "unpriced")]),
+);
+usageQueryIdeas.conversation_activity.push(
+  records("conversation_activity", "observations", "Inspect activity", "Activity observations", "Inspect the event source, top-level conversation and recorded human messages or output", ["event_at", "event_kind", "human_messages", "output_tokens", "root_conversation_id", "conversation_id", "message_id"], "event_at"),
+  idea("conversation_activity", "source-provider", "Compare", "Activity source and provider", "Compare human messages and recorded output by observation kind and top-level provider", ["event_kind", "root_provider"], activity),
+);
+usageQueryIdeas.rhythm.push(
+  records("rhythm", "hourly", "Inspect hours", "Hourly activity records", "Inspect the actor, initiator, counted turns and active versus elapsed hours for each observed hour", ["started_at", "actor", "initiator", "automation", "unit_label", "messages", "turns", "active_hours", "elapsed_hours", "conversation_id"], "started_at"),
+  idea("rhythm", "initiators", "Compare", "Who started the work", "Compare recorded activity hours and turns by actor and initiator", ["actor", "initiator"], rhythm),
+);
+usageQueryIdeas.parallelism.push(
+  records("parallelism", "hourly", "Inspect hours", "Hourly concurrent activity", "Inspect each unit-hour, counting method, gap assumption and recorded concurrency level", ["started_at", "counting", "gap_minutes", "unit_label", "repository_name", "level", "unit_hours", "elapsed_hours", "conversation_id"], "started_at"),
+  idea("parallelism", "methods", "Compare", "Counting assumptions", "Keep workspace and conversation counts and turn-gap settings apart while comparing additive unit-hours", ["counting", "gap_minutes"], occupancy),
+);
+usageQueryIdeas.mcp_calls.push(
+  records("mcp_calls", "requests", "Inspect requests", "Pharos MCP request log", "Inspect sanitized arguments, status, result count, estimated output and duration for retained requests", ["called_at", "tool_name", "status", "query_source", "arguments_json", "result_count", "estimated_output_tokens", "duration_ms", "truncated"], "called_at"),
+  records("mcp_calls", "truncated", "Inspect requests", "Truncated responses", "Inspect requests whose response was truncated, with estimated tokens and bytes; response text is not retained", ["called_at", "tool_name", "query_source", "response_bytes", "estimated_output_tokens", "truncated", "status"], "called_at", [eq("truncated", "true")]),
 );

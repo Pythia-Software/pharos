@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { localPageNavigation, nestedPageTrail } from "../../../src/nested-pages-model";
 import { analyzePages, appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, navigationPageURL, optimizePages, toggleNavigationSection } from "../../../src/app-navigation-model";
-import { usageTopics } from "../../../src/usage-workspace-model";
+import { EMPTY_QUERY, decodeQueryStrict, encodeQuery } from "@pythia-software/query-table-core";
+import { analyzeQueryDatasets, usageTopics } from "../../../src/usage-workspace-model";
 
 test("every dashboard belongs to People, Agents or Outcomes and retains its destination", () => {
   const params = new URLSearchParams('analyze_topic=human&analyze_days=7');
@@ -41,7 +42,7 @@ test("the app tree resolves global, nested, and legacy destinations without chan
   const active = appLocation('/analyze', params);
   assert.equal(appLocationLabel(sections, active).page.label, 'Token usage');
   const link = new URL(appLocationLabel(sections, active).page.href, 'https://pharos.test');
-  assert.equal(link.searchParams.get('q_usage'), 'saved');
+  assert.deepEqual(decodeQueryStrict(link.searchParams.get('q_usage')).where, [], 'dataset navigation opens the complete source');
   assert.equal(params.toString(), before, 'building navigation never mutates the current URL');
   assert.equal(appLocationLabel(sections, appLocation('/settings/sources', params)).page.label, 'Sources');
   assert.equal(appLocation('/work/work-1/conversation/conv-1', params).section, 'library');
@@ -168,5 +169,21 @@ test('sidebar presentation updates keep the picker open while page and query cha
   assert.equal(navigationPageURL(presentation.href), navigationPageURL(base));
   for (const destination of ['/settings', '/analyze?analyze_topic=human', '/analyze?analyze_topic=tokens&analyze_days=7', '/analyze?analyze_topic=tokens#chart']) {
     assert.notEqual(navigationPageURL(new URL(destination, base).href), navigationPageURL(base));
+  }
+});
+
+
+test("dataset navigation opens complete records independently of the current query", () => {
+  const current = new URLSearchParams({ analyze_mode: "query", analyze_data: "messages", q_messages: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "role", op: "=", value: "user" }] }), record_messages: "old keyword", window_dataset: "messages", window_days: "7" });
+  const pages = analyzePages(current, true).find(page => page.id === "query").children;
+  assert.deepEqual(pages.map(page => page.id), analyzeQueryDatasets.map(dataset => `query:${dataset}`));
+  for (const page of pages) {
+    const params = new URL(page.href, "https://pharos.test").searchParams;
+    const dataset = params.get("analyze_data"), query = decodeQueryStrict(params.get(`q_${dataset}`));
+    assert.ok(query, dataset);
+    assert.deepEqual(query.where, [], dataset);
+    assert.equal(query.grouping, undefined, dataset);
+    assert.equal([...params.keys()].some(key => key.startsWith("record_") || key.startsWith("window_")), false, dataset);
+    assert.equal(appLocation("/analyze", params).current, page.id);
   }
 });

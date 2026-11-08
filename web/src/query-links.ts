@@ -5,11 +5,13 @@ import { canonicalAnalyzeURL, readUsageWorkspace, usageDatasetTopics, type Usage
 import { cardDashboardWhere, cardSourceDataset } from "./card-exploration";
 import { concurrencyWindowRange } from "./concurrency-settings";
 import { windowedChart } from "./card-windows";
+import { generatedMessageField, generatedQueryTarget } from "./generated-query-target";
 
-export const queryDatasets = ["people_message_labels","compactions","message_labels","model_requests", "library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "rhythm", "findings", "safety", "fixes", "agent_events", "agent_event_messages", "agent_event_rates", "session_shape"] as const;
+export const queryDatasets = ["messages","people_message_labels","compactions","message_labels","model_requests", "library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "rhythm", "findings", "safety", "fixes", "agent_events", "agent_event_messages", "agent_event_rates", "session_shape"] as const;
 export type QueryDataset = typeof queryDatasets[number];
 export type RollingWindow = { days: number; field: string; mode?: "relative" | "calendar" | "today"; untilField?: string; timezone?: string };
 const defaultTimeFields: Partial<Record<QueryDataset, string[]>> = {
+  messages: ["sent_at"],
   people_message_labels:["sent_at"], message_labels:["occurred_at"],
   compactions: ["occurred_at"], model_requests: ["requested_at"],
   writing: ["first_message_at", "last_message_at"], conversation_activity: ["event_at"], mcp_calls: ["called_at"], library: ["activity_at"], usage: ["first_usage_at", "last_usage_at"], tool_calls: ["started_at"],
@@ -48,14 +50,19 @@ export function readRollingWindow(params: URLSearchParams, dataset: QueryDataset
 
 // null selects all time; undefined at the bookmark layer preserves a saved range.
 export function updateQueryWindowURL(url: string, days: WindowChoice | null, fallback?: QueryState): string {
-  const spec = queryFromURL(url, fallback), field = spec && (spec.window?.field ?? rollingWindowField(spec.dataset));
+  const spec = queryFromURL(url, fallback);
+  const sourceWhere = (spec?.query.grouping?.source ?? spec?.query)?.where ?? [];
+  const authoredMessages = spec?.dataset === "messages" && [
+    ["role", "user"], ["has_authorship", "true"],
+  ].every(([field, value]) => sourceWhere.some(term => "field" in term && !term.negated && term.field === field && term.op === "=" && term.value === value));
+  const field = spec && (spec.window?.field ?? (authoredMessages ? "authorship_sent_at" : rollingWindowField(spec.dataset)));
   if (!spec || !field || days === "today" && ["tl1_attempts", "findings"].includes(spec.dataset) || (days !== null && days !== "today" && !rollingWindowDays.some(value => value === days))) throw new Error("This view does not support that time window.");
   const window: RollingWindow | undefined = days === null ? undefined : { days: days === "today" ? 1 : days, field, mode: days === "today" ? "today" : "relative", ...(spec.window?.untilField ? { untilField: spec.window.untilField } : {}), ...(days === "today" && spec.window?.timezone ? {timezone:spec.window.timezone} : {}) };
   // Replace direct date selections, including older fixed ranges. Leave other
   // predicates (and compound date expressions) intact rather than rewriting
   // the user's logical query. Relative bounds are renewed on every evaluation.
   const source = spec.query.grouping?.source ?? spec.query;
-  const windowFields = spec.window ? [field, spec.window.untilField ?? field] : defaultTimeFields[spec.dataset] ?? [field];
+  const windowFields = spec.window ? [field, spec.window.untilField ?? field] : authoredMessages ? [field] : defaultTimeFields[spec.dataset] ?? [field];
   const adjusted = { ...source, where: source.where.filter(term => !("field" in term && windowFields.includes(term.field) && !term.negated && ["=", ">", ">=", "<", "<="].includes(term.op))) };
   if (days === null && adjusted.where.length === source.where.length && !spec.window) return url;
   const query = resolveRollingQuery(spec.query.grouping ? { ...spec.query, offset: 0, grouping: { ...spec.query.grouping, source: { ...adjusted, offset: 0 } } } : { ...adjusted, offset: 0 }, window);
@@ -117,7 +124,12 @@ export function rollingQueryMatches(query: QueryState, window: RollingWindow): b
   return start.getTime() === end.getTime();
 }
 
-export function queryURL(dataset: QueryDataset, query: QueryState, window?: RollingWindow): string {
+export function queryURL(dataset: QueryDataset, query: QueryState, window?: RollingWindow, options: { preserveSource?: boolean } = {}): string {
+  const sourceDataset = dataset;
+  const target = options.preserveSource ? { dataset, query } : generatedQueryTarget(dataset, query);
+  dataset = target.dataset as QueryDataset;
+  query = target.query;
+  if (sourceDataset === "writing_messages" && dataset === "messages" && window) window = { ...window, field: generatedMessageField(window.field), ...(window.untilField ? { untilField: generatedMessageField(window.untilField) } : {}) };
   const params = new URLSearchParams({ [`q_${dataset}`]: encodeQuery(window?.mode === "relative" || window?.mode === "today" ? resolveRollingQuery(query, window) : query) });
   let path = "/library";
   if (Object.hasOwn(usageDatasetTopics, dataset)) {

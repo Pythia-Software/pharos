@@ -8904,13 +8904,44 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "1e4eb0427655fd3d:0",
+      "key": "64fec98179f90768:0",
+      "file": "web/src/usage-query-ideas.tsx",
+      "owner": "renderIdea",
+      "tag": "button",
+      "control": "onClick={() => choose(applyQueryIdea(api.query, idea))}",
+      "contract": "query-table",
+      "reason": "Applies a complete native query through api.setDefinition, including reset host state; q_<dataset> owns URL restoration, saved queries and sharing."
+    },
+    {
+      "key": "2695db6f84ce314b:0",
       "file": "web/src/usage-query-ideas.tsx",
       "owner": "UsageQueryIdeas",
-      "tag": "QueryChip",
-      "control": "onClick={() => api.setQuery(previous => applyQueryIdea(previous, idea))}",
-      "contract": "native-query",
-      "reason": "Selecting a query idea replaces the native query definition; the ideas disclosure is content view state."
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`query:${dataset}:ideas:${section}`} defaultOpen={index === 0}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "29ce57361fa4f92d:0",
+      "file": "web/src/usage-query-ideas.tsx",
+      "owner": "UsageQueryIdeas",
+      "tag": "button",
+      "control": "onClick={() => choose(fittedDefaultQuery(loadSchema(schemaDocuments[dataset])))}",
+      "contract": "query-table",
+      "reason": "Applies a complete native query through api.setDefinition, including reset host state; q_<dataset> owns URL restoration, saved queries and sharing."
+    },
+    {
+      "key": "856487ce20a449e0:0",
+      "file": "web/src/usage-query-ideas.tsx",
+      "owner": "UsageQueryIdeas",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`query:${dataset}:ideas:${section}:more`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "e3fd4247c78ece38:0",
