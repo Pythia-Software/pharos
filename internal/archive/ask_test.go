@@ -2000,3 +2000,142 @@ func TestAskSiteLinksRespectCancellation(t *testing.T) {
 		t.Fatalf("cancelled correction: %d CLI calls, %v", calls, err)
 	}
 }
+
+func TestAskAnswerReceipts(t *testing.T) {
+	s := askTestServer(t)
+	askEnable(t, s)
+	session := askSession{ID: "receipts", CreatedAt: 1, UpdatedAt: 2, Selection: askSelection{Provider: "Codex", Model: "test-model", Effort: "Low"}, Draft: "Keep my draft", Conversation: []askTurn{
+		{ID: "answer", StartedAt: 10, Status: "multiple", Prompt: "First", Reply: "An answer"},
+		{ID: "running", StartedAt: 20, Status: "loading", Prompt: "Second"},
+	}}
+	if err := s.saveAskSession(t.Context(), session, false); err != nil {
+		t.Fatal(err)
+	}
+	read := func(id string, started int64) {
+		askOK(t, s, "read", map[string]any{"id": session.ID, "turnID": id, "startedAt": started})
+	}
+	read("answer", 9)
+	read("running", 20)
+	got, err := s.askSession(t.Context(), session.ID)
+	if err != nil || got.Conversation[0].SeenAt != 0 || got.Conversation[1].SeenAt != 0 {
+		t.Fatalf("stale or running receipt: %+v %v", got, err)
+	}
+	read("answer", 10)
+	got, err = s.askSession(t.Context(), session.ID)
+	if err != nil || got.Conversation[0].SeenAt == 0 || got.UpdatedAt != session.UpdatedAt || got.Draft != session.Draft {
+		t.Fatalf("saved receipt changed chat: %+v %v", got, err)
+	}
+	seen := got.Conversation[0].SeenAt
+	read("answer", 10)
+	restarted := testServer(t, s.Config(), s.Catalog)
+	got, err = restarted.askSession(t.Context(), session.ID)
+	if err != nil || got.Conversation[0].SeenAt != seen {
+		t.Fatalf("receipt did not persist idempotently: %+v %v", got, err)
+	}
+	summaries, err := s.askSessions(t.Context(), "First", 0)
+	if err != nil || len(summaries) != 1 || summaries[0].UnreadCount != 0 || summaries[0].LastStatus != "loading" {
+		t.Fatalf("inbox summary: %+v %v", summaries, err)
+	}
+
+	// A finished answer can still be waiting for the catalog writer.
+	got.Conversation[1].Status = "clarification"
+	s.ask.saving = map[string]*askSaving{session.ID: {session: got}}
+	read("running", 20)
+	if s.ask.saving[session.ID].version != 1 || s.ask.saving[session.ID].session.Conversation[1].SeenAt == 0 {
+		t.Fatal("receipt lost while saving answer")
+	}
+	if pending, err := s.saveFinishedAsk(session.ID); pending || err != nil {
+		t.Fatalf("save receipt: %v %v", pending, err)
+	}
+
+	// Reading an earlier answer during inference survives the final answer save.
+	got.Conversation = got.Conversation[:1]
+	got.Conversation[0].SeenAt = 0
+	if err := s.saveAskSession(t.Context(), got, false); err != nil {
+		t.Fatal(err)
+	}
+	started, finish := make(chan struct{}), make(chan struct{})
+	override(t, &askRunCLI, func(ctx context.Context, _ askProvider, _ askSelection, _ string) ([]byte, error) {
+		close(started)
+		select {
+		case <-finish:
+			return askReply("home"), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	defer close(finish)
+	input := askInput()
+	input["id"] = session.ID
+	input["turnID"] = "follow-up"
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- askCall(t, s, http.MethodPost, "send", input) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("follow-up did not start")
+	}
+	read("answer", 10)
+	askOK(t, s, "cancel", map[string]any{"id": session.ID})
+	select {
+	case response := <-done:
+		if response.Code != 200 {
+			t.Fatal(response.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("follow-up did not stop")
+	}
+	got, err = s.askSession(t.Context(), session.ID)
+	if err != nil || got.Conversation[0].SeenAt == 0 {
+		t.Fatalf("final save overwrote receipt: %+v %v", got, err)
+	}
+}
+
+func TestAskConcurrentChats(t *testing.T) {
+	s := askTestServer(t)
+	askEnable(t, s)
+	started, finish := make(chan struct{}, 2), make(chan struct{})
+	override(t, &askRunCLI, func(ctx context.Context, _ askProvider, _ askSelection, _ string) ([]byte, error) {
+		started <- struct{}{}
+		select {
+		case <-finish:
+			return askReply("home"), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	defer close(finish)
+	results := []chan *httptest.ResponseRecorder{make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)}
+	for i, id := range []string{"first", "second"} {
+		input := askInput()
+		input["id"] = id
+		go func() { results[i] <- askCall(t, s, http.MethodPost, "send", input) }()
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("question did not start")
+		}
+	}
+	third := askInput()
+	third["id"] = "third"
+	if response := askCall(t, s, http.MethodPost, "send", third); response.Code != 400 {
+		t.Fatalf("third request: %d", response.Code)
+	}
+	askOK(t, s, "cancel", map[string]any{"id": "first"})
+	select {
+	case <-results[0]:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first question did not cancel")
+	}
+	select {
+	case <-results[1]:
+		t.Fatal("canceling first also stopped second")
+	default:
+	}
+	askOK(t, s, "cancel", map[string]any{"id": "second"})
+	select {
+	case <-results[1]:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second question did not cancel")
+	}
+}

@@ -195,15 +195,15 @@ func TestQueryV2UsageHourly(t *testing.T) {
 			}
 		})
 	}
-	// Usage has its own group budget, beyond other datasets'; past it a metric
-	// fails rather than dropping groups.
-	override(t, &queryV3MaxGroups, 1)
+	// At the group budget a metric succeeds; beyond it, it fails rather than
+	// dropping groups.
+	override(t, &queryV3MaxGroups, 3)
 	hours := metricRequest(qt.AggSpec{ID: "hours", Expression: "COUNT()", GroupBy: []string{"hour"}})
 	result, err := server.executeQueryFixture(context.Background(), "usage", nil, schema, nil, &hours)
 	if err != nil || result.Metrics.Metrics[0].Error != "" || len(result.Metrics.Metrics[0].Buckets) != 3 {
 		t.Fatal("usage group budget", err, result.Metrics)
 	}
-	override(t, &queryV3UsageMaxGroups, 2)
+	queryV3MaxGroups = 2
 	if result, err = server.executeQueryFixture(context.Background(), "usage", nil, schema, nil, &hours); err != nil || !strings.Contains(result.Metrics.Metrics[0].Error, "group population exceeds host budget") {
 		t.Fatal("usage groups beyond the budget", err, result.Metrics)
 	}

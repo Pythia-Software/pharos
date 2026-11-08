@@ -1944,7 +1944,7 @@ test('Ask Pharos keeps long chats scrollable and the editor reachable @ 390', {s
   assert.ok(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(fits),'editor must stay on screen');
   assert.ok(await page.locator('.pharos-user-question').last().evaluate(fits),'latest prompt should be visible with a short reply');
   assert.ok(await page.getByRole('button',{name:'Send question',exact:true}).evaluate(fits),'send must stay on screen');
-  const clear=page.locator('.pharos-ai').getByRole('button',{name:'Clear',exact:true});
+  const clear=page.locator('.pharos-ai').getByRole('button',{name:'New Chat',exact:true});
   assert.ok(await clear.evaluate(button=>{
     const transcript=document.querySelector('.pharos-thread-viewport'),before=transcript.getBoundingClientRect();
     button.hidden=true;
@@ -2025,7 +2025,7 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   }});
   await shot('failed-chat');
   const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
-  const clear=page.locator('.pharos-recovery').getByRole('button',{name:'Clear',exact:true});
+  const clear=page.locator('.pharos-recovery').getByRole('button',{name:'New Chat',exact:true});
   await clear.focus();await page.keyboard.press('Enter');
   assert.ok(await question.evaluate(element=>element===document.activeElement),'clearing a failure returns focus to the composer');
   assert.equal(await question.evaluate(element=>element.value),'');
@@ -2112,7 +2112,9 @@ test("the History drawer takes focus, returns it when dismissed, and its chat fo
   // Leaving full screen with Back moves the composer; the drawer must not stay open without its backdrop.
   await page.locator('#homeAskSearch').getByRole('button', { name: 'Full screen', exact: true }).click();
   await page.waitForURL(url => url.pathname === '/ask');await settled();
-  await press(trigger);await focused('.pharos-history-close');
+  await drawer.waitFor();
+  assert.equal(await drawer.evaluate(element=>element.matches(':modal')),false,'fullscreen history leaves the conversation interactive');
+  await shot('ask-fullscreen-inbox');
   await page.goBack();await page.waitForURL(url => url.pathname === '/');
   await activateHeaderTool(page, 'askPharosToggle');
   await question.waitFor();
@@ -2165,13 +2167,13 @@ test('Ask Pharos chat links survive reload and browser Back', {skip,timeout:6000
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   await page.getByRole('status').filter({hasText:'Your latest reply'}).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),id);
-  await page.getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:'New Chat',exact:true}).click();
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),null);
   await page.goBack();await page.getByRole('status').filter({hasText:'Your latest reply'}).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),id);
   // Back can arrive before a slow chat load. Its late response must not
   // replace the page the user has already returned to.
-  await page.getByRole('button',{name:'Clear',exact:true}).click();await settled();
+  await page.getByRole('button',{name:'New Chat',exact:true}).click();await settled();
   delaySession=true;
   const loading=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/ask/session'&&request.method()==='GET');
   await page.evaluate(()=>window.pharosNavigate('/?ask_chat=saved-chat'));await loading;
@@ -2392,7 +2394,7 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   await modal.getByRole('button',{name:'History',exact:true}).click();await finishMotion();
   assert.ok(await modal.getByRole('button',{name:'Close chat history',exact:true}).evaluate(element=>{const box=element.getBoundingClientRect(),hit=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return element===hit||element.contains(hit);}),'history controls remain reachable as the dialog makes room for the menu');
   await modal.getByRole('button',{name:'Close chat history',exact:true}).click();await finishMotion();
-  const clear=modal.getByRole('button',{name:'Clear',exact:true}),close=modal.getByRole('button',{name:'Close Ask Pharos',exact:true});
+  const clear=modal.locator('.pharos-clear-chat'),close=modal.getByRole('button',{name:'Close Ask Pharos',exact:true});
   const checkWindowControls=async()=>{
     await finishMotion();
     const clearBox=await clear.boundingBox(),closeBox=await close.boundingBox();
@@ -2414,7 +2416,7 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   const draft=await modal.boundingBox();
   assert.ok(draft.y<empty.y&&draft.y+draft.height>empty.y+empty.height,'a growing prompt expands above and below the empty composer');
   await shot('draft-growth');
-  await editor.fill('An unsent question');await checkWindowControls();await shot('draft-clear');
+  await editor.fill('An unsent question');assert.equal(await clear.getAttribute('aria-label'),'Clear');await checkWindowControls();await shot('draft-clear');
   await clear.click();
   assert.equal(await editor.evaluate(element=>element.value),'');
   assert.ok(await editor.evaluate(element=>element===document.activeElement),'clearing a draft returns focus to the composer');
@@ -2423,6 +2425,7 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   await editor.fill('Give me a detailed overview of my recent work.');
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
+  assert.equal(await clear.getAttribute('aria-label'),'New Chat');
   await checkWindowControls();
   const activeFrame=await modal.locator('.pharos-ai-frame').boundingBox();
   if(width>1000)assert.ok(activeFrame.width>emptyFrame.width,'the active conversation uses the available width');
@@ -2628,8 +2631,8 @@ test('Ask Pharos full screen keeps a chat that is still loading', {skip}, async 
   await activateHeaderTool(page,'askPharosToggle');
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/ask');
-  await page.locator('.pharos-ai').getByRole('button',{name:'Clear',exact:true}).click();
-  await page.getByRole('button',{name:'History',exact:true}).click();
+  await page.locator('.pharos-ai').getByRole('button',{name:'New Chat',exact:true}).click();
+  if(!await page.getByRole('dialog',{name:'Chat history',exact:true}).isVisible())await page.getByRole('button',{name:'History',exact:true}).click();
   waiting={other:held('other')};
   await page.getByRole('link',{name:'Open chat: Other question',exact:true}).click();
   await page.getByRole('button',{name:'Exit full screen',exact:true}).click();
@@ -2753,7 +2756,7 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   await page.locator('body>header .brand').click();
   await page.locator('#homeAskSearch').getByRole('button',{name:'A. Tokens',exact:true}).waitFor();
   assert.ok((await homeFrame.boundingBox()).width>emptyHomeWidth,'a restored conversation uses more of the available Home width');
-  await page.locator('#homeAskSearch').getByRole('button',{name:'Clear',exact:true}).click();
+  await page.locator('#homeAskSearch').getByRole('button',{name:'New Chat',exact:true}).click();
   assert.ok(Math.abs((await homeFrame.boundingBox()).width-emptyHomeWidth)<1,'clearing the conversation restores the Home composer width');
 });
 
@@ -3016,7 +3019,7 @@ for (const [width, count, view] of [[390,2,'compare'],[1440,1,'trend']]) test(`A
     return;
   }
   await shot('ask-chart-previews');
-  await page.getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:'New Chat',exact:true}).click();
   await settled();
   assert.equal(await page.getByRole('figure',{name:/^Chart preview:/}).count(),0);
   assert.ok(await question.evaluate(element=>element===document.activeElement));
@@ -3269,4 +3272,96 @@ test('Browser clipboard denial displays copy failure and leaves focus on the cop
   await press(page.locator('#navigatorCopy'));
   await page.locator('#feedbackToast.visible').waitFor();
   assert.ok(await page.locator('#navigatorCopy').evaluate(element => element === document.activeElement));
+});
+
+test('Ask fullscreen inbox keeps concurrent chats running and reads only visible answers', {skip,timeout:60000}, async t=>{
+  const selection={provider:'Codex',model:'test-model',effort:'Low'},sessions=new Map(),finish=new Map(),attempts=new Map();
+  let recordFirst,releaseReceipt,receiptStarted,secondAttempt;
+  const firstRecording=new Promise(resolve=>{recordFirst=resolve;}),oldReceipt=new Promise(resolve=>{releaseReceipt=resolve;});
+  const readingError=new Promise(resolve=>{receiptStarted=resolve;});
+  t.after(()=>{recordFirst();releaseReceipt();});
+  t.after(()=>{for(const resolve of finish.values())resolve();});
+  const {page,settled,shot,calls}=await open(t,{url:'/ask',ready:'.pharos-new-chat',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/sessions':()=>({sessions:[...sessions.values()]}),
+    'GET /api/ask/session':({query})=>sessions.get(query.get('id')),
+    'POST /api/ask/session':({body})=>{const saved={createdAt:Date.now(),updatedAt:Date.now(),conversation:[],...sessions.get(body.id),...body};sessions.set(body.id,saved);return saved;},
+    'POST /api/ask/read':async({body})=>{
+      if(body.startedAt===secondAttempt){receiptStarted();await oldReceipt;}
+      const turn=sessions.get(body.id)?.conversation.find(turn=>turn.id===body.turnID&&turn.startedAt===body.startedAt);
+      if(turn)turn.seenAt=Date.now();return {ok:true};
+    },
+    'POST /api/ask/send':async({body})=>{
+      const attempt=(attempts.get(body.prompt)||0)+1;attempts.set(body.prompt,attempt);
+      if(body.prompt==='First question')await firstRecording;
+      const session={createdAt:Date.now(),updatedAt:Date.now(),...sessions.get(body.id),...body,conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',status:'loading',startedAt:(body.prompt==='First question'?10:20)+attempt,cards:[],reply:''}]};
+      sessions.set(body.id,session);
+      if(body.prompt==='Second question'&&attempt===1)secondAttempt=session.conversation[0].startedAt;
+      if(attempt===1)await new Promise(resolve=>finish.set(body.prompt,resolve));
+      session.conversation[0].status=body.prompt==='First question'?'single':attempt===1?'error':'multiple';
+      if(body.prompt==='First question')session.conversation[0].cards=[{id:'library',title:'Recorded work',description:'Explore your recorded work.',kind:'library',href:'/library'}];
+      session.conversation[0].reply=body.prompt==='First question'?'The answer to First question':attempt===1?'Original failure':'Recovered answer';session.updatedAt=Date.now();return session;
+    },
+  }});
+  const question=page.getByRole('textbox',{name:'Ask a question',exact:true}),drawer=page.getByRole('dialog',{name:'Chat history',exact:true});
+  const newChat=page.getByRole('button',{name:'New chat',exact:true});
+  await question.fill('First question');await page.getByRole('button',{name:'Send question',exact:true}).click();
+  await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
+  await newChat.click();
+  // The first send has not reached persistence: reopening must keep its local
+  // prompt mounted so both streaming progress and its final answer can render.
+  await page.getByRole('link',{name:'Open chat: First question',exact:true}).click();
+  await page.locator('.pharos-user-question').filter({hasText:'First question'}).waitFor();
+  await page.getByRole('button',{name:'Stop',exact:true}).waitFor();
+  recordFirst();
+  await newChat.click();await question.fill('Second question');await page.getByRole('button',{name:'Send question',exact:true}).click();
+  await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
+  await page.waitForFunction(()=>document.querySelectorAll('.pharos-history-entry[data-running="true"]').length===2);
+  assert.equal(calls.filter(call=>call.path==='/api/ask/cancel').length,0);
+  assert.equal(calls.filter(call=>call.path==='/api/ask/send').length,2);
+  await question.focus();
+  finish.get('First question')();
+  const first=page.getByRole('link',{name:'Open chat: First question',exact:true});
+  await first.locator('.pharos-history-state').filter({hasText:'unseen answer'}).waitFor();
+  assert.equal(calls.filter(call=>call.path==='/api/ask/read').length,0,'a background answer stays unseen');
+  assert.equal(new URL(page.url()).pathname,'/ask','a background destination leaves the inbox open');
+  assert.ok(await question.evaluate(element=>element===document.activeElement),'background completion preserves focus');
+  await shot('ask-inbox-background-answer');
+  await first.click();await page.getByRole('status').filter({hasText:'The answer to First question'}).waitFor();
+  await page.locator('.pharos-receipt').filter({hasText:'Seen'}).waitFor();
+  finish.get('Second question')();await settled();
+  assert.ok(calls.some(call=>call.path==='/api/ask/read'),'viewing an answer saves a receipt');
+  const transcript=page.getByRole('region',{name:'Chat messages, scroll for earlier replies'});
+  assert.ok(await transcript.evaluate(element=>element.getBoundingClientRect().left>=document.querySelector('#pharos-chat-history').getBoundingClientRect().right),'history sits beside the conversation');
+  assert.equal(await drawer.evaluate(element=>element.matches(':modal')),false);
+
+  // Delay the old error's Seen response across reopening and a successful
+  // retry. The response must never paint the captured error over that answer.
+  const second=page.getByRole('link',{name:'Open chat: Second question',exact:true});
+  await second.click();await page.getByRole('status').filter({hasText:'Original failure'}).waitFor();await readingError;
+  await first.click();await page.getByRole('status').filter({hasText:'The answer to First question'}).waitFor();
+  await second.click();await page.getByRole('button',{name:'Try again',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'Recovered answer'}).waitFor();
+  await page.locator('.pharos-receipt').filter({hasText:'Seen'}).waitFor();
+  const acknowledged=page.waitForResponse(response=>response.url().endsWith('/api/ask/read')&&response.request().postDataJSON()?.startedAt===secondAttempt);
+  releaseReceipt();const response=await acknowledged;await response.finished();await settled();
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
+  assert.ok(await page.getByRole('status').filter({hasText:'Recovered answer'}).isVisible(),'a delayed receipt preserves the retried answer');
+
+  // Both answers are already seen now, so no new receipt can mask a stale
+  // sidebar selection after opening either chat or starting a new one.
+  await first.click();await page.getByRole('status').filter({hasText:'The answer to First question'}).waitFor();
+  assert.equal(await first.getAttribute('aria-current'),'true');assert.equal(await second.getAttribute('aria-current'),'false');
+  assert.match(await first.getAttribute('aria-describedby').then(id=>page.locator('#'+id).textContent()),/Current chat/);
+  await second.click();await page.getByRole('status').filter({hasText:'Recovered answer'}).waitFor();
+  assert.equal(await second.getAttribute('aria-current'),'true');assert.equal(await first.getAttribute('aria-current'),'false');
+  await newChat.click();
+  assert.equal(await first.getAttribute('aria-current'),'false');assert.equal(await second.getAttribute('aria-current'),'false');
+  await page.setViewportSize({width:390,height:844});
+  await page.getByRole('button',{name:'History',exact:true}).click();
+  assert.ok(await drawer.evaluate(element=>element.matches(':modal')),'narrow windows use the history drawer');
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'narrow layout fits the window');
+  await page.keyboard.press('Escape');await question.click();
+  await shot('ask-inbox-phone');
 });

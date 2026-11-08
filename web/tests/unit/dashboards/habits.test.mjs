@@ -1,4 +1,5 @@
 import { habitsQueryContext } from "../../../src/dashboard-query-adapters";
+import { habitsAutomationsLink } from "../../../src/habits-automations-query";
 import { dashboardExplorations } from "../../../src/dashboard-query-explorations";
 import { dashboardQueryLinks } from "../../../src/dashboard-query-links";
 import { dashboardQuerySettings } from "../../../src/dashboard-query-settings";
@@ -190,9 +191,10 @@ test("Habits view links select the chart, with legacy section and pin restoratio
     assert.equal(params.get("habits_shape_days"), "14");
     assert.equal(params.get("habits_calendar"), "agents");
   }
-  assert.equal(readHabitsView(new URLSearchParams()), "calendar");
+  assert.equal(readHabitsView(new URLSearchParams()), "days");
   assert.equal(readHabitsView(new URLSearchParams({ habits_shape_days: "14" })), "days");
   assert.equal(readHabitsView(new URLSearchParams({ habits_punchcard: "unattended" })), "punchcard");
+  for (const field of ["habits_calendar", "habits_weekends", "habits_weeks", "habits_day"]) assert.equal(readHabitsView(new URLSearchParams({ [field]: "legacy" })), "calendar");
 });
 
 
@@ -222,4 +224,24 @@ test("Habits query cards keep actors, habit-day boundaries, weekday hiding and c
   }
   const selected = habitsQueryContext(data, "calendar", view, "2026-10-30");
   assert.deepEqual(applyQuery(rows, { ...EMPTY_QUERY, where: selected.where }, schema).rows.map(row => row.id), ["friday"]);
+});
+
+
+test("automatic run link groups only automatic activity in the habit-day range", () => {
+  const data = { timezone: "America/Denver", settings: normalizeHabitsSettings({ dayStart: 4, engagedGap: 30 }), punchcard: { from: "2026-10-28", to: "2026-11-03" } };
+  const link = habitsAutomationsLink(data, new URLSearchParams({ analyze_topic: "habits", habits_view: "days" }));
+  assert.equal(link.target, "section:habits-automations");
+  const params = new URL(link.href, "http://localhost").searchParams;
+  const query = decodeQueryStrict(params.get("q_rhythm"));
+  assert.deepEqual(query.grouping.keys, ["initiator", "automation"]);
+  assert.ok(params.has("analyze_opened"));
+  assert.equal(new URL(usageDashboardReturn(params).href, "http://localhost").searchParams.get("habits_view"), "days");
+  assert.deepEqual(JSON.parse(dashboardQuerySettings("rhythm", params).habits_settings), data.settings);
+  const rows = [
+    { id: "inside", actor: "automated", started_at: "2026-11-03T08:00:00Z" },
+    { id: "outside", actor: "automated", started_at: "2026-11-04T11:00:00Z" },
+    { id: "human", actor: "you", started_at: "2026-11-03T08:00:00Z" },
+  ];
+  assert.deepEqual(applyQuery(rows, { ...EMPTY_QUERY, where: query.grouping.source.where }, loadSchema(rhythmDocument)).rows.map(row => row.id), ["inside"]);
+  assert.doesNotThrow(() => toQueryRequestV3(query, loadSchema(rhythmDocument), { version: 3, profile: "qt-sqlite-v1", groupedRows: true, regexSourceFilters: true }));
 });

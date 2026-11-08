@@ -20,7 +20,7 @@ export const useDashboardHeadline = () => useContext(DashboardHeadline);
 
 export const DashboardQueryOverride = createContext<DashboardQueryContext | null>(null);
 
-export function UsageDashboardLinks({ dataset, query, schema, context }: { dataset: UsageDataset; query: QueryState; schema: FieldSchema; context: DashboardQueryContext }) {
+export function UsageDashboardLinks({ dataset, query, schema, context, extra }: { dataset: UsageDataset; query: QueryState; schema: FieldSchema; context: DashboardQueryContext; extra?: { title: string; note: string; href: string; target?: string } }) {
   const override = useContext(DashboardQueryOverride);
   const resolved = override ?? context;
   const params = new URLSearchParams(location.search);
@@ -35,7 +35,11 @@ export function UsageDashboardLinks({ dataset, query, schema, context }: { datas
       const className = `usage-query-destination usage-query-${link.purpose}`;
       return link.href ? <UsageWorkspaceLink className={className} key={link.purpose} href={link.href}>{content}</UsageWorkspaceLink>
         : <div className={className} key={link.purpose} aria-disabled="true">{content}</div>;
-    })}</div>
+    })}{extra ? <UsageWorkspaceLink className="usage-query-destination usage-query-compare" href={extra.href} data-pharos-target={extra.target}>
+      <span className="usage-query-purpose">Explore automatic work</span>
+      <span className="usage-query-destination-heading"><strong>{extra.title}</strong><Icon name="arrow-right" /></span>
+      <span className="usage-query-note">{extra.note}</span>
+    </UsageWorkspaceLink> : null}</div>
   </nav>;
 }
 
