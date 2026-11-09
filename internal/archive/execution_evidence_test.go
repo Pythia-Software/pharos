@@ -3096,6 +3096,9 @@ func TestPrimeDependencyInverseKeepsTheCommittedEntry(t *testing.T) {
 		return entry
 	}
 	ingestRecordTx(t, catalog, record("a"))
+	if err := catalog.ensureLabelsSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
 	forgetDependencyCaches()
 	first := primed("after a restart")
 	if again := primed("at the same generation"); again != first {
@@ -3104,5 +3107,15 @@ func TestPrimeDependencyInverseKeepsTheCommittedEntry(t *testing.T) {
 	ingestRecordTx(t, catalog, record("b"))
 	if next := primed("after another write"); next == first {
 		t.Fatal("priming kept an entry older than the committed generation")
+	}
+	// With no ledger to mark, no writer reads the index, so none is built.
+	forgetDependencyCaches()
+	override(t, &executionDependentLedgers, nil)
+	catalog.primeDependencyInverse(ctx)
+	dependencyInverseCache.Lock()
+	built := len(dependencyInverseCache.entries)
+	dependencyInverseCache.Unlock()
+	if built != 0 {
+		t.Fatal("priming built an index no ledger reads")
 	}
 }

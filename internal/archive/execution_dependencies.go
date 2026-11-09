@@ -349,6 +349,12 @@ func dependencyInverseIndex(ctx context.Context, q queryer) (*dependencyInverseE
 // to read what it needs itself.
 func (c *Catalog) primeDependencyInverse(ctx context.Context) {
 	reader := c.reader()
+	// Only marking a ledger's derivatives reads the index. A catalog with
+	// neither ledger (a first import) never asks for it, and bringing it
+	// forward after every record would copy its growing maps each time.
+	if ledgers, err := executionLedgersPresent(ctx, reader); err != nil || len(ledgers) == 0 {
+		return
+	}
 	file, generation, err := dependencyCacheKey(ctx, reader)
 	if err != nil || file == "" {
 		return
