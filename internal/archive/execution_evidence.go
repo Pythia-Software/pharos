@@ -941,6 +941,7 @@ func (c *Catalog) backfillExecutionEvidenceBounded(ctx context.Context, batch, l
 		if err != nil || len(ids) == 0 {
 			return done, err
 		}
+		c.primeDependencyInverse(ctx)
 		started := time.Now()
 		if err := c.writeTransaction(ctx, "derive execution evidence from retained rows", func(tx *sql.Tx) error {
 			if err := backfillExecutionEvidence(ctx, tx, ids, true); err != nil {

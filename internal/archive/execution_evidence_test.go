@@ -3064,3 +3064,58 @@ func TestDependencyInversePatchMatchesRows(t *testing.T) {
 		t.Fatalf("the root's walk: %v", walked)
 	}
 }
+
+// A writer's own read of the inverse index is never cached, so a writer that
+// finds no entry reads every conversation under the write lock. Priming
+// keeps the entry at the committed generation for it to patch.
+func TestPrimeDependencyInverseKeepsTheCommittedEntry(t *testing.T) {
+	ctx := t.Context()
+	catalog, _ := testCatalog(t)
+	record := func(id string) WorkspaceRecord {
+		return WorkspaceRecord{SourceID: id, SourceKind: "opencode", Account: "local", Conversations: []ConversationRecord{
+			{NativeID: id, Provider: "opencode", Account: "local", Aliases: []string{"alias-" + id},
+				Messages: []MessageRecord{{NativeID: "u", Role: "user", Kind: "message", Text: "hi"}}}}}
+	}
+	primed := func(label string) *dependencyInverseEntry {
+		t.Helper()
+		catalog.primeDependencyInverse(ctx)
+		file, generation, err := dependencyCacheKey(ctx, catalog.reader())
+		if err != nil || file == "" {
+			t.Fatalf("%s: cache key %q %v", label, file, err)
+		}
+		dependencyInverseCache.Lock()
+		entry := dependencyInverseCache.entries[file]
+		dependencyInverseCache.Unlock()
+		if entry == nil || entry.generation != generation {
+			t.Fatalf("%s: entry %+v, committed generation %d", label, entry, generation)
+		}
+		rows := rereadDependencyInverse(t, catalog.reader())
+		if !reflect.DeepEqual(entry.aliases, rows.aliases) || !reflect.DeepEqual(entry.origins, rows.origins) || !reflect.DeepEqual(entry.handles, rows.handles) {
+			t.Fatalf("%s: primed %v, rows %v", label, entry.aliases, rows.aliases)
+		}
+		return entry
+	}
+	ingestRecordTx(t, catalog, record("a"))
+	if err := catalog.ensureLabelsSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	forgetDependencyCaches()
+	first := primed("after a restart")
+	if again := primed("at the same generation"); again != first {
+		t.Fatal("priming at the cached generation read the index again")
+	}
+	ingestRecordTx(t, catalog, record("b"))
+	if next := primed("after another write"); next == first {
+		t.Fatal("priming kept an entry older than the committed generation")
+	}
+	// With no ledger to mark, no writer reads the index, so none is built.
+	forgetDependencyCaches()
+	override(t, &executionDependentLedgers, nil)
+	catalog.primeDependencyInverse(ctx)
+	dependencyInverseCache.Lock()
+	built := len(dependencyInverseCache.entries)
+	dependencyInverseCache.Unlock()
+	if built != 0 {
+		t.Fatal("priming built an index no ledger reads")
+	}
+}

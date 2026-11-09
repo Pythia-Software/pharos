@@ -407,6 +407,9 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		if tracker != nil {
 			heldParts = append(heldParts, tracker.pending...)
 		}
+		// The write below marks derivatives of changed execution evidence;
+		// read what that needs of other conversations before taking the writer.
+		c.primeDependencyInverse(ctx)
 		if err := c.retryCatalogWrite(ctx, operation, func() { report("waiting for catalog") }, func() error {
 			if tracker != nil {
 				tracker.pending = append(tracker.pending[:0], heldParts...)

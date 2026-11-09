@@ -340,6 +340,34 @@ func dependencyInverseIndex(ctx context.Context, q queryer) (*dependencyInverseE
 	return entry, nil
 }
 
+// primeDependencyInverse brings the cached inverse index up to the committed
+// source generation, outside any write transaction. A write transaction's
+// own read is never cached (its rows may roll back), so a writer that finds
+// no entry reads every conversation's lookups while it holds the catalog's
+// write lock. A writer calls this before it begins, and then patches the
+// entry only for its own rows. It is advisory: a failure leaves the writer
+// to read what it needs itself.
+func (c *Catalog) primeDependencyInverse(ctx context.Context) {
+	reader := c.reader()
+	// Only marking a ledger's derivatives reads the index. A catalog with
+	// neither ledger (a first import) never asks for it, and bringing it
+	// forward after every record would copy its growing maps each time.
+	if ledgers, err := executionLedgersPresent(ctx, reader); err != nil || len(ledgers) == 0 {
+		return
+	}
+	file, generation, err := dependencyCacheKey(ctx, reader)
+	if err != nil || file == "" {
+		return
+	}
+	dependencyInverseCache.Lock()
+	entry := dependencyInverseCache.entries[file]
+	dependencyInverseCache.Unlock()
+	if entry != nil && entry.generation >= generation {
+		return
+	}
+	_, _ = dependencyInverseIndex(ctx, reader)
+}
+
 // dependencyInversePatchLimit is how many changed conversations a cached
 // inverse index is patched for; past it the index is read again.
 var dependencyInversePatchLimit = 5000
@@ -1754,5 +1782,6 @@ func (c *Catalog) propagateExecutionChanges(ctx context.Context) error {
 			return err
 		}
 	}
+	c.primeDependencyInverse(ctx)
 	return c.writeTransaction(ctx, "propagate execution evidence changes", func(tx *sql.Tx) error { return markExecutionDependents(ctx, tx) })
 }
