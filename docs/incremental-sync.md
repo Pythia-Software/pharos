@@ -285,12 +285,20 @@ clears when its input passes, without rewriting it. **Verify & repair this
 source**, or **Verify all & repair mismatches** under Repair & maintenance,
 also reindexes inputs that still mismatch. Each repair uses the exact frozen
 record that failed comparison and verifies it again before clearing its issue.
+Outdated tool ledgers are upgraded from the selected conversations' stored
+messages before comparison, so a derivation upgrade does not require a full
+input reindex. Verification still checks the result independently and repairs
+any remaining source mismatch. Ordinary verification defers those upgrades.
 Healthy inputs are untouched; this avoids a full recapture and source-wide
 reindex. Copy authority and evidence-version guards still apply. Unreadable,
 changing or older inputs remain unresolved, with deferred/error counts shown
 separately from passed checks. Full verification can take time; Stop keeps
 committed repairs, and running it again checks the remaining inputs. Derived
 library analyses are marked for their usual background refresh.
+
+Reference comparisons use isolated copies of a process-cached empty schema
+in local temporary storage. Only those disposable catalogs skip device
+flushes; retained inputs and the library catalog keep their durability settings.
 
 Independent verification can discover changes before the next index pass.
 When a known unit's selected parts differ from its indexed input states, its

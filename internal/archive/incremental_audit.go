@@ -485,7 +485,9 @@ func (c *Catalog) auditUnitMode(ctx context.Context, unit syncUnit, runID string
 			}
 		}
 	}
-	dir, err := os.MkdirTemp(filepath.Dir(c.Path), ".pharos-verification-")
+	// Evidence and reference catalogs are disposable scratch, so keep their
+	// repeated writes off the library drive.
+	dir, err := os.MkdirTemp("", ".pharos-verification-")
 	if err != nil {
 		result.Detail = err.Error()
 		return
@@ -495,15 +497,18 @@ func (c *Catalog) auditUnitMode(ctx context.Context, unit syncUnit, runID string
 	compare := func(record WorkspaceRecord) error {
 		// A reference ingest uses today's ledger derivation. An older stored
 		// ledger is queued for upgrade, so its missing derived fields cannot
-		// establish corruption. Explicit repair may rebuild it and reverify.
-		if !repair {
-			pending, err := c.auditLedgerUpgradePending(ctx, record)
-			if err != nil {
+		// establish corruption. Explicit repair upgrades the derived rows from
+		// stored messages before comparing, avoiding a full source reingest.
+		pending, err := c.auditLedgerUpgradePending(ctx, record)
+		if err != nil {
+			return err
+		}
+		if pending && repair {
+			if err := c.upgradeAuditLedgers(ctx, record); err != nil {
 				return err
 			}
-			if pending {
-				return &auditDeferral{Reason: "derivation_pending", Detail: "selected input has a tool ledger upgrade waiting to be built"}
-			}
+		} else if pending {
+			return &auditDeferral{Reason: "derivation_pending", Detail: "selected input has a tool ledger upgrade waiting to be built"}
 		}
 		scope, err := os.MkdirTemp(dir, "scope-")
 		if err != nil {
@@ -606,14 +611,8 @@ func (c *Catalog) auditLedgerUpgradePending(ctx context.Context, record Workspac
 		return false, err
 	}
 	defer tx.Rollback()
-	id, err := storedWorkspaceID(tx, record)
-	if err != nil || id == "" {
-		return false, err
-	}
-	var pending bool
-	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM conversations c
-		JOIN tool_ledger_state s ON s.conversation_id=c.id WHERE c.workspace_id=? AND s.version<>?)`, id, toolLedgerVersion).Scan(&pending)
-	return pending, err
+	ids, err := pendingAuditLedgers(ctx, tx, record)
+	return len(ids) > 0, err
 }
 
 func (c *Catalog) openAuditIssue(ctx context.Context, unit syncUnit, runID string, differences []string, signature string) error {
