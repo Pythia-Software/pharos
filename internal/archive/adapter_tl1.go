@@ -22,7 +22,14 @@ type tl1Adapter struct {
 	snapshots []tl1Snapshot
 }
 
-type tl1Installation struct{ ID, Database, Repository, Transcripts, Project, ConfigPath string }
+type tl1Installation struct {
+	ID, Database, Repository, Transcripts, Project, ConfigPath string
+	// sourceDatabase and sourceTranscripts are the paths a capture's manifest
+	// records these were copied from. A capture's path map names each source
+	// path once, so an installation that another has since replaced at the
+	// same paths is not in it; these keep its original paths.
+	sourceDatabase, sourceTranscripts string
+}
 
 // tl1Snapshot is TL1's workflow state for one installation, normalized to the
 // tl1_* catalog tables. Rows are keyed by those tables' column names.
@@ -191,7 +198,8 @@ func (a *tl1Adapter) capturedInstallations() []tl1Installation {
 		if installation.CapturedTranscripts != "" {
 			transcripts = filepath.Join(a.view.dir, filepath.FromSlash(installation.CapturedTranscripts))
 		}
-		result = append(result, tl1Installation{ID: installation.ID, Database: database, Repository: installation.CodeRepo, Transcripts: transcripts, Project: installation.Project, ConfigPath: installation.ConfigPath})
+		result = append(result, tl1Installation{ID: installation.ID, Database: database, Repository: installation.CodeRepo, Transcripts: transcripts, Project: installation.Project, ConfigPath: installation.ConfigPath,
+			sourceDatabase: installation.DBPath, sourceTranscripts: installation.TranscriptsDir})
 	}
 	return result
 }
@@ -200,11 +208,35 @@ func (a *tl1Adapter) capturedInstallations() []tl1Installation {
 // paths of a capture's database and transcripts, which name them on the Mac
 // that has them (the analysis prompts hand them to agents there).
 func (a *tl1Adapter) recorded(installation tl1Installation) tl1Installation {
-	installation.Database = a.original(installation.Database)
-	if installation.Transcripts != "" {
-		installation.Transcripts = a.original(installation.Transcripts)
+	transcripts := installation.Transcripts
+	installation.Database = a.originalOf(installation, installation.Database)
+	if transcripts != "" {
+		installation.Transcripts = a.originalOf(installation, transcripts)
 	}
 	return installation
+}
+
+// originalOf is the source path of a captured path of installation: through
+// the capture's path map, else by the paths the manifest records for the
+// installation itself. Without the second, a replaced installation's paths
+// would stay those of the temporary directory its capture is read from,
+// which differ on every index and so would rewrite its records each time.
+func (a *tl1Adapter) originalOf(installation tl1Installation, path string) string {
+	if a.view == nil {
+		return path
+	}
+	if mapped, ok := a.view.translate(path, false); ok {
+		return mapped
+	}
+	if path == installation.Database && installation.sourceDatabase != "" {
+		return installation.sourceDatabase
+	}
+	if installation.sourceTranscripts != "" && installation.Transcripts != "" {
+		if rest, err := filepath.Rel(installation.Transcripts, path); err == nil && filepath.IsLocal(rest) {
+			return filepath.Join(installation.sourceTranscripts, rest)
+		}
+	}
+	return path
 }
 
 // ephemeralTL1 reports an installation whose repository is in a temporary
@@ -269,7 +301,16 @@ func (a *tl1Adapter) Fingerprint() (string, error) {
 	rows := []string{}
 	collect := func(path string) {
 		if info, e := a.files().Stat(path); e == nil {
-			rows = append(rows, fmt.Sprintf("%s:%d:%d", path, info.Size(), info.ModTime().UnixNano()))
+			// A capture is read from a temporary directory whose name differs
+			// on every index: name its files within it, or an unchanged
+			// capture would never be passed over.
+			name := path
+			if a.view != nil {
+				if rest, err := filepath.Rel(a.view.dir, path); err == nil && filepath.IsLocal(rest) {
+					name = filepath.ToSlash(rest)
+				}
+			}
+			rows = append(rows, fmt.Sprintf("%s:%d:%d", name, info.Size(), info.ModTime().UnixNano()))
 		}
 	}
 	collect(a.config.Path)
@@ -720,9 +761,10 @@ func (a *tl1Adapter) transcript(installation tl1Installation, taskID string, att
 		provider = "codex"
 	}
 	model := firstString(attempt["model"])
+	origin := a.originalOf(installation, path)
 	var source ConversationRecord
 	if provider == "codex" && a.files().codexExecTranscript(path) {
-		conversation, ok, err := a.files().parseCodexExec(path, a.original(path), recordedEffort(attempt))
+		conversation, ok, err := a.files().parseCodexExec(path, origin, recordedEffort(attempt))
 		if err != nil || !ok {
 			return ConversationRecord{}, false, err
 		}
@@ -734,6 +776,18 @@ func (a *tl1Adapter) transcript(installation tl1Installation, taskID string, att
 			return ConversationRecord{}, false, err
 		}
 		source = record.Conversations[0]
+		// The parser names what the path map gives it; name the same file
+		// as the Codex reading above does when the map has no entry.
+		if unmapped := a.original(path); unmapped != origin {
+			if source.Origin == unmapped {
+				source.Origin = origin
+			}
+			for index := range source.Messages {
+				if rest, ok := strings.CutPrefix(source.Messages[index].EvidenceLocator, unmapped); ok {
+					source.Messages[index].EvidenceLocator = origin + rest
+				}
+			}
+		}
 	}
 	aliases := uniqueStrings(append([]string{source.NativeID}, source.Aliases...))
 	source.NativeID = tl1ConversationNativeID(installation.ID, firstString(attempt["id"]), filename)
