@@ -347,9 +347,37 @@ func TestStatisticsIncrementalProjectionAndPriceInvalidation(t *testing.T) {
 	if statisticsItems(after)[0]["cost_usd"] == before {
 		t.Fatal("price update didn't invalidate projection")
 	}
-	// Reads compute the repriced metrics; maintenance stores them.
+	// Reads compute the repriced metrics; maintenance stores them. A price
+	// that changes while it computes makes what it computed obsolete: nothing
+	// is stored and the workspaces stay dirty for the next pass.
+	stored := func() (dirty int, projection string) {
+		t.Helper()
+		if err := c.DB.QueryRow("SELECT (SELECT COUNT(*) FROM mcp_metric_dirty),(SELECT COALESCE(group_concat(metrics_json,'|'),'') FROM (SELECT metrics_json FROM mcp_metric_projection ORDER BY entity,entity_id))").Scan(&dirty, &projection); err != nil {
+			t.Fatal(err)
+		}
+		return dirty, projection
+	}
+	pending, obsolete := stored()
+	override(t, &metricProjectionComputedHook, func() {
+		if _, err := c.DB.Exec("UPDATE cost_changes SET input_per_mtok=5 WHERE model_key='gpt-5.5'"); err != nil {
+			t.Error(err)
+		}
+	})
 	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
 		t.Fatal(err)
+	}
+	if dirty, projection := stored(); dirty != pending || projection != obsolete || pending == 0 {
+		t.Fatalf("a refresh overtaken by a price change stored its result: dirty %d → %d, changed %v", pending, dirty, projection != obsolete)
+	}
+	metricProjectionComputedHook = nil
+	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if dirty, projection := stored(); dirty != 0 || projection == obsolete {
+		t.Fatalf("the next refresh left %d dirty, stored anew %v", dirty, projection != obsolete)
+	}
+	if repriced := statisticsItems(statisticsCall(t, c, "query_statistics", args))[0]["cost_usd"]; repriced == statisticsItems(after)[0]["cost_usd"] {
+		t.Fatal("the stored projection kept the price it was overtaken at")
 	}
 	if _, err := c.DB.Exec("INSERT INTO mcp_calls(called_at,tool_name,status,duration_ms,response_bytes,estimated_output_tokens) VALUES('x','query_statistics','ok',0,0,0)"); err != nil {
 		t.Fatal(err)
