@@ -98,6 +98,9 @@ func TestAuditDefersChangesWaitingForIndex(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			// A library that has caught up must acquire new scheduled work
+			// when repair upgrades a ledger without reindexing its input.
+			execTx(t, server.Catalog.DB, "UPDATE sync_deferred SET completed_generation=generation")
 			result := server.Catalog.auditUnitMode(t.Context(), unit, "upgrade-complete", 0, repair)
 			if result.Outcome != "passed" || result.Reindexed != 0 {
 				t.Fatalf("upgraded ledger failed verification: %+v", result)
@@ -107,6 +110,20 @@ func TestAuditDefersChangesWaitingForIndex(t *testing.T) {
 			}
 			if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_integrity_issues WHERE state='open'") != 0 {
 				t.Fatal("verified upgrade did not resolve its issue")
+			}
+			if repair {
+				for _, stage := range []string{"tools", "findings"} {
+					if pending, err := deferredProbe(server.Catalog, stage)(t.Context()); err != nil || !pending {
+						t.Fatalf("ledger upgrade did not queue %s: pending=%t err=%v", stage, pending, err)
+					}
+				}
+				execTx(t, server.Catalog.DB, "UPDATE sync_deferred SET completed_generation=generation")
+				if result := server.Catalog.auditUnitMode(t.Context(), unit, "already-upgraded", 0, true); result.Outcome != "passed" || result.Reindexed != 0 {
+					t.Fatalf("healthy repair: %+v", result)
+				}
+				if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != 0 {
+					t.Fatal("healthy repair queued unnecessary analyses")
+				}
 			}
 			execTx(t, server.Catalog.DB, "UPDATE model_requests SET source_message_id=NULL")
 			if result := server.Catalog.auditUnit(t.Context(), unit, "current-ledger-corruption", 0); result.Outcome != "mismatch" || !slices.Contains(result.Differences, "model_requests") {

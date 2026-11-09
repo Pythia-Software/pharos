@@ -73,6 +73,11 @@ func (c *Catalog) upgradeAuditLedgers(ctx context.Context, record WorkspaceRecor
 				return err
 			}
 		}
+		if len(ids) > 0 {
+			// Dirty ledger partitions also need a pending analysis generation
+			// for both background schedulers to refresh their consumers.
+			return markSyncDeferred(tx)
+		}
 		return nil
 	})
 }
