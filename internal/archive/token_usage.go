@@ -530,7 +530,7 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 		if r.scope != "request" || r.counts == nil {
 			continue
 		}
-		raw, value := tokenObject(messages[i])
+		raw, value := raws[i], values[i]
 		msg := mapValueDefault(value["message"])
 		response := mapValueDefault(value["response"])
 		if msg["usage"] == nil || firstString(msg["id"], response["id"], value["response_id"], value["usage_message_id"]) != "" || !hasUsageEvidence(raw) {
@@ -554,8 +554,8 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 		}
 	}
 	if hasRequests || suppressCostState {
-		for i, m := range messages {
-			raw, value := tokenObject(m)
+		for i := range messages {
+			raw, value := raws[i], values[i]
 			if firstString(value["type"], raw["type"]) == "cost-state" {
 				reports[i].counts = nil
 			}

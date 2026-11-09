@@ -216,9 +216,13 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 	lastCWD := ""
 	for index, message := range messages {
 		if message.RawText != "" {
-			var raw map[string]any
+			// Only the top-level working directory matters here. Decoding all
+			// retained tool output just to read it creates large temporary maps.
+			var raw map[string]json.RawMessage
 			if json.Unmarshal([]byte(message.RawText), &raw) == nil {
-				if cwd := firstString(raw["cwd"]); cwd != "" {
+				var value any
+				_ = json.Unmarshal(raw["cwd"], &value)
+				if cwd := firstString(value); cwd != "" {
 					lastCWD = cwd
 				}
 			}

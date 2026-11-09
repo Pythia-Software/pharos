@@ -407,26 +407,11 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 		if err := ctx.Err(); err != nil {
 			return finish(index, err)
 		}
-		messages, err := storedMessages(ctx, c.DB, row["id"])
-		if err != nil {
-			return finish(index, err)
-		}
-		conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Effort: firstString(row["effort"]), Messages: messages}
 		if err := c.writeTransaction(ctx, "tool-ledger conversation="+firstString(row["id"]), func(tx *sql.Tx) error {
-			for i := range messages {
-				normalized := normalizeMessageInference(messages[i])
-				if normalized.Speed != messages[i].Speed || normalized.ServiceTier != messages[i].ServiceTier || normalized.SpeedSource != messages[i].SpeedSource {
-					if _, err := tx.Exec("UPDATE messages SET speed=?,service_tier=?,speed_source=? WHERE conversation_id=? AND native_id=?", normalized.Speed, nilIfEmpty(normalized.ServiceTier), normalized.SpeedSource, row["id"], normalized.NativeID); err != nil {
-						return err
-					}
-				}
-				messages[i] = normalized
-			}
-			conversation.Messages = messages
 			// The known checkouts are read in each write transaction: an index
 			// running alongside may add some, and re-resolves only the rows
 			// already written (see reresolveToolPaths).
-			return replaceToolLedger(tx, firstString(row["workspace_id"]), firstString(row["id"]), conversation)
+			return rebuildStoredToolLedger(ctx, tx, firstString(row["id"]))
 		}); err != nil {
 			return finish(index, err)
 		}
@@ -438,6 +423,32 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 		}
 	}
 	return finish(len(pending), nil)
+}
+
+// Read the messages and rebuild their derived ledger in one snapshot, so a
+// concurrent ingest cannot leave a newer transcript with an older ledger.
+func rebuildStoredToolLedger(ctx context.Context, tx *sql.Tx, id string) error {
+	var workspace, provider string
+	var model, effort sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT workspace_id,provider,model,effort FROM conversations WHERE id=?", id).Scan(&workspace, &provider, &model, &effort); err != nil {
+		return err
+	}
+	messages, err := storedMessages(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	record := WorkspaceRecord{Conversations: []ConversationRecord{{Provider: provider, Model: model.String, Effort: effort.String, Messages: messages}}}
+	prepareRecordAccounting(&record)
+	for i := range messages {
+		normalized := normalizeMessageInference(messages[i])
+		if normalized.Speed != messages[i].Speed || normalized.ServiceTier != messages[i].ServiceTier || normalized.SpeedSource != messages[i].SpeedSource {
+			if _, err := tx.ExecContext(ctx, "UPDATE messages SET speed=?,service_tier=?,speed_source=? WHERE conversation_id=? AND native_id=?", normalized.Speed, nilIfEmpty(normalized.ServiceTier), normalized.SpeedSource, id, normalized.NativeID); err != nil {
+				return err
+			}
+		}
+		messages[i] = normalized
+	}
+	return replaceToolLedger(tx, workspace, id, record.Conversations[0])
 }
 
 type toolLedgerBuild struct {
