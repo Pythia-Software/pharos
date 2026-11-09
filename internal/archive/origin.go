@@ -416,6 +416,16 @@ func (c *Catalog) publishOrigins(ctx context.Context) (published bool, err error
 	if err != nil {
 		return true, err
 	}
+	// Nearly every origin is as published. Compare with the published rows in
+	// this snapshot and write only those that differ, rather than offering
+	// every conversation's row to the catalog while holding its writer. The
+	// guard below keeps the comparison sound: it stops this write if anything
+	// else published since the snapshot.
+	stored, err := queryMapsContext(ctx, snapshot, `SELECT conversation_id,`+strings.Join(originFields, ",")+` FROM conversation_origins`)
+	if err != nil {
+		return true, err
+	}
+	rows = originsToWrite(rows, stored)
 	_ = snapshot.Rollback()
 	dependentWorkspaces := map[string][]string{}
 	for _, session := range linked {
@@ -471,6 +481,28 @@ func (c *Catalog) publishOrigins(ctx context.Context) (published bool, err error
 		}
 		return record(tx)
 	})
+}
+
+// originsToWrite is the computed rows that are not already stored as
+// computed. A value that merely might differ (a number computed as another
+// type) counts as different: the write itself changes only rows that do.
+func originsToWrite(computed, stored []map[string]any) []map[string]any {
+	published := make(map[string]map[string]any, len(stored))
+	for _, row := range stored {
+		published[firstString(row["conversation_id"])] = row
+	}
+	changed := []map[string]any{}
+	for _, row := range computed {
+		current, same := published[firstString(row["conversation_id"])]
+		for i := 0; same && i < len(originFields); i++ {
+			a, b := row[originFields[i]], current[originFields[i]]
+			same = a == nil && b == nil || a != nil && b != nil && fmt.Sprint(a) == fmt.Sprint(b)
+		}
+		if !same {
+			changed = append(changed, row)
+		}
+	}
+	return changed
 }
 
 // originBuiltLineage is the execution source generation and lineage
