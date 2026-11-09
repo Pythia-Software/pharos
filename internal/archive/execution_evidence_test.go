@@ -2935,6 +2935,20 @@ func TestCursorOnlyMarkRefreshesCachedViews(t *testing.T) {
 	if n := cached(); n != 0 {
 		t.Fatalf("the mark showed %s's superseded labels again (%d)", sibling, n)
 	}
+	// An analysis chain's stages write such rows too, and no index may follow
+	// for a while: the chain marks what it left before it ends.
+	if err := catalog.writeTransaction(ctx, "edit", func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE messages SET text=text||' (again)' WHERE id='m-c2'`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := testServer(t, Config{}, catalog).finishDeferredStages(ctx, findingsAuto, map[string]bool{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if behind, err := executionDependentsBehind(ctx, catalog.reader()); err != nil || behind != 0 {
+		t.Fatalf("the analysis chain left the cursor behind by %d (%v)", behind, err)
+	}
 }
 
 // rereadDependencyInverse reads the inverse lookups from the rows alone: no

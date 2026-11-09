@@ -408,7 +408,16 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 	forceFindings := findings == findingsForce
 	explicit := workCallerExplicit(ctx)
 	ctx, chain := s.Catalog.beginOp(ctx, OperationSpec{Kind: "analysis.chain", Trigger: triggerChained})
-	defer func() { chain.Finish(err) }()
+	defer func() {
+		// Stages change rows that labels and agent events were built on
+		// (authorship, origins, names). Mark what that leaves stale now: until
+		// it is marked, every reader that holds pending conversations back
+		// works the set out again after each further change.
+		if err == nil {
+			err = s.Catalog.propagateExecutionChanges(ctx)
+		}
+		chain.Finish(err)
+	}()
 	measure := runPhase
 	if measure == nil {
 		measure = func(_ string, work func() error) error { return work() }

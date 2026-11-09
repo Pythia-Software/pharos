@@ -310,6 +310,12 @@ func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, don
 		// The freshness ledger's count (§5): counted again once an upgrade
 		// completes.
 		if err == nil {
+			// A step that rewrote stored rows (tool ledgers, names) changed
+			// what derivatives were built on; mark them once, here, rather
+			// than leave readers to find them until the next index.
+			err = c.propagateExecutionChanges(ctx)
+		}
+		if err == nil {
 			c.storeUpgradeCount(ctx)
 		}
 		return err

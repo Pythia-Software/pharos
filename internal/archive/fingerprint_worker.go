@@ -150,9 +150,13 @@ func (c *Catalog) fingerprintSelectionSQL(ctx context.Context, columns string) (
 	}
 	query := `SELECT ` + columns + ` FROM fingerprint_entities WHERE dirty=1 AND next_attempt<=unixepoch()`
 	if len(pending) > 0 {
+		// One CASE, not an OR of the two entities: SQLite answers the OR from
+		// the primary key and then sorts the whole queue to take its first
+		// row, once per image; a CASE leaves it reading fingerprint_pending
+		// in order and stopping at the first ready entity.
 		query = `WITH pending_analysis(id) AS MATERIALIZED (` + strings.Join(pending, ` UNION `) + `),
 pending_workspaces(id) AS MATERIALIZED (SELECT DISTINCT workspace_id FROM conversations WHERE id IN (SELECT id FROM pending_analysis) AND workspace_id IS NOT NULL)
-` + query + ` AND (entity='conversation' AND id NOT IN (SELECT id FROM pending_analysis) OR entity='workspace' AND id NOT IN (SELECT id FROM pending_workspaces))`
+` + query + ` AND CASE entity WHEN 'conversation' THEN id NOT IN (SELECT id FROM pending_analysis) ELSE id NOT IN (SELECT id FROM pending_workspaces) END`
 	}
 	return query, nil
 }
