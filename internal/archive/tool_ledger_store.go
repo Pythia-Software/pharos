@@ -57,10 +57,14 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		return err
 	}
 	if priorVersion != toolLedgerVersion {
-		for _, table := range []string{"skill_usages", "tool_calls", "model_requests", "tool_ledger_inputs"} {
-			if _, err := tx.Exec("DELETE FROM "+table+" WHERE conversation_id=?", conversationID); err != nil {
-				return err
-			}
+		// Another version's rows are all offered again, whatever fingerprints
+		// were kept for them. They are not deleted first: most come out the
+		// same, and a row that is replaced by itself costs every index and
+		// trigger on these tables twice. The upserts below change only rows
+		// that differ, and the rows this version no longer derives are removed
+		// with the others that were not retained.
+		if _, err := tx.Exec("DELETE FROM tool_ledger_inputs WHERE conversation_id=?", conversationID); err != nil {
+			return err
 		}
 	}
 	rows, err := queryMaps(tx, "SELECT row_kind,row_id,fingerprint FROM tool_ledger_inputs WHERE conversation_id=?", conversationID)
@@ -153,9 +157,9 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		return stableID("message", conversationID, nativeID)
 	}
 	if len(requests) > 0 {
-		statement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,effort,speed,service_tier,speed_source,
+		statement, err := tx.Prepare(changedUpsertSQL(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,effort,speed,service_tier,speed_source,
 			input_tokens,uncached_input_tokens,cache_read_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,
-			context_growth_tokens,compacted_before,tool_call_count,source_message_id,final_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+			context_growth_tokens,compacted_before,tool_call_count,source_message_id,final_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "id"))
 		if err != nil {
 			return err
 		}
@@ -182,12 +186,12 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		statement.Close()
 	}
 	if len(calls) > 0 {
-		callStatement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_id,call_message_id,result_message_id,
+		callStatement, err := tx.Prepare(changedUpsertSQL(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_id,call_message_id,result_message_id,
 			sequence,provider,model,effort,kind,tool_name,tool_category,mcp_server,command,program,subcommand,command_category,command_count,
 			has_pipe,has_redirect,has_heredoc,backgrounded,file_path,started_at,ended_at,duration_ms,duration_source,status,error_type,exit_code,
 			interrupted,truncated,input_bytes,result_bytes,result_tokens,result_tokens_source,request_id,next_request_id,parallel_count,
 			output_tokens,carried_requests,carried_tokens,lines_added,lines_removed,url,host,hosts,url_count,search_query,error_signature,test_failure,repo_path,path_repository,path_repository_id,path_scope,path_absolute)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "id"))
 		if err != nil {
 			return err
 		}
@@ -255,8 +259,8 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 	}
 	usages := buildSkillUsages(conversation.Messages, calls)
 	if len(usages) > 0 {
-		statement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO skill_usages(id,workspace_id,conversation_id,tool_call_id,agent_session_id,
-			evidence_message_id,body_message_id,skill_name,skill_path,evidence_type,status,created_at,content_bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+		statement, err := tx.Prepare(changedUpsertSQL(`INSERT INTO skill_usages(id,workspace_id,conversation_id,tool_call_id,agent_session_id,
+			evidence_message_id,body_message_id,skill_name,skill_path,evidence_type,status,created_at,content_bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, "id"))
 		if err != nil {
 			return err
 		}
@@ -334,19 +338,6 @@ func changedUpsertSQL(statement string, key ...string) string {
 		changed[index] = table + "." + changed[index]
 	}
 	return statement + " ON CONFLICT(" + strings.Join(key, ",") + ") DO UPDATE SET " + strings.Join(updates, ",") + " WHERE " + strings.Join(changed, " OR ")
-}
-
-func derivedUpsertSQL(statement string) string {
-	start, end := strings.Index(statement, "("), strings.Index(statement, ")")
-	columns := strings.Split(statement[start+1:end], ",")
-	updates := []string{}
-	for _, column := range columns {
-		column = strings.TrimSpace(column)
-		if column != "id" {
-			updates = append(updates, column+"=excluded."+column)
-		}
-	}
-	return statement + " ON CONFLICT(id) DO UPDATE SET " + strings.Join(updates, ",")
 }
 
 // storedMessages reads a conversation's retained messages in source order.

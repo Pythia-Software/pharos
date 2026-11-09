@@ -777,3 +777,54 @@ func TestModelRequestSpeedEvidence(t *testing.T) {
 		t.Fatalf("backfill speed %q: %v", speed, err)
 	}
 }
+
+// Replaying another version's ledger brings every stored row to what this
+// version derives: a changed row is corrected, a row it no longer derives is
+// removed with its commands, and a row that comes out the same is left as it
+// is rather than replaced by itself.
+func TestToolLedgerReplayChangesOnlyRowsThatDiffer(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	root := t.TempDir()
+	writeFixture(t, root, "project/claude-replay.jsonl", claudeToolFixture)
+	ingestFixture(t, catalog, "claude", root)
+	ledger := func() string {
+		t.Helper()
+		out := []string{}
+		for _, statement := range []string{"SELECT * FROM tool_calls ORDER BY id", "SELECT * FROM tool_commands ORDER BY tool_call_id,position",
+			"SELECT * FROM model_requests ORDER BY id", "SELECT * FROM skill_usages ORDER BY id"} {
+			rows, err := queryMaps(catalog.DB, statement)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, jsonText(rows))
+		}
+		return strings.Join(out, "\n")
+	}
+	want := ledger()
+	var calls int
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM tool_calls").Scan(&calls); err != nil || calls < 2 {
+		t.Fatalf("fixture tool calls: %d %v", calls, err)
+	}
+	execTx(t, catalog.DB,
+		"CREATE TABLE replay_writes(id TEXT)",
+		"CREATE TRIGGER replay_update AFTER UPDATE ON tool_calls BEGIN INSERT INTO replay_writes VALUES(NEW.id); END",
+		"CREATE TRIGGER replay_delete AFTER DELETE ON tool_calls BEGIN INSERT INTO replay_writes VALUES(OLD.id); END",
+		"CREATE TRIGGER replay_insert AFTER INSERT ON tool_calls BEGIN INSERT INTO replay_writes VALUES(NEW.id); END",
+		// One call as an older version stored it, and one it derived that
+		// this version does not.
+		"UPDATE tool_calls SET tool_category='as an older version had it' WHERE id=(SELECT MIN(id) FROM tool_calls)",
+		"INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status) SELECT 'no-longer-derived',workspace_id,conversation_id,999,provider,kind,tool_name,tool_category,status FROM tool_calls LIMIT 1",
+		"INSERT INTO tool_commands(tool_call_id,position,command) VALUES('no-longer-derived',0,'true')",
+		"DELETE FROM replay_writes",
+		"UPDATE tool_ledger_state SET version='an older version'")
+	if _, err := catalog.BackfillToolLedger(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := ledger(); got != want {
+		t.Fatalf("replayed ledger differs:\n%s\n%s", got, want)
+	}
+	var written int
+	if err := catalog.DB.QueryRow("SELECT COUNT(DISTINCT id) FROM replay_writes").Scan(&written); err != nil || written != 2 {
+		t.Fatalf("replay wrote %d of %d calls, want the corrected and the removed one (%v)", written, calls+1, err)
+	}
+}
