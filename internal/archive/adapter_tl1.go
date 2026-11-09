@@ -315,11 +315,15 @@ func (a *tl1Adapter) Fingerprint() (string, error) {
 	}
 	collect(a.config.Path)
 	for _, installation := range installations {
+		// What the records say of the installation itself, by its original
+		// paths: a renamed project changes no file a capture holds.
+		named := a.recorded(installation)
+		rows = append(rows, "installation:"+jsonText([]string{named.ID, named.Database, named.Repository, named.Transcripts, named.Project, named.ConfigPath}))
 		collect(installation.Database)
 		collect(installation.Database + "-wal")
 		if installation.Transcripts != "" {
 			_ = a.files().WalkDir(installation.Transcripts, func(path string, entry os.DirEntry, e error) error {
-				if e == nil && !entry.IsDir() && strings.HasSuffix(strings.ToLower(path), ".jsonl") {
+				if e == nil && !entry.IsDir() && tl1ReadsTranscriptFile(entry.Name()) {
 					collect(path)
 				}
 				return nil
@@ -328,6 +332,21 @@ func (a *tl1Adapter) Fingerprint() (string, error) {
 	}
 	sort.Strings(rows)
 	return hashBytes([]byte(a.indexVersion() + ":" + strings.Join(rows, "\n"))), nil
+}
+
+// tl1ReadsTranscriptFile reports whether indexing reads a file of this name
+// in a task's transcripts directory: an agent transcript or a script log.
+func tl1ReadsTranscriptFile(name string) bool {
+	name = strings.ToLower(name)
+	if strings.HasSuffix(name, ".jsonl") {
+		return true
+	}
+	for _, suffix := range tl1ScriptLogs {
+		if strings.HasSuffix(name, "-"+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v4-origins" }

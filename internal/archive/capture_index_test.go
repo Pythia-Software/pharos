@@ -1241,9 +1241,10 @@ func TestIndexTL1CaptureOfAReplacedInstallationIsStable(t *testing.T) {
 		"INSERT INTO transcript_summaries VALUES('attempt-1','attempt.jsonl'),('attempt-2','1-codex.jsonl')")
 	db.Close()
 	registry := filepath.Join(root, "tl1", tl1RegistryFile)
+	project := "project"
 	register := func(id string) {
 		data, _ := json.Marshal(map[string]any{"installations": []map[string]string{{"installation_id": id, "db_path": database,
-			"config_path": filepath.Join(repository, "tl1.json"), "code_repo": repository, "transcripts_dir": transcripts, "project_name": "project"}}})
+			"config_path": filepath.Join(repository, "tl1.json"), "code_repo": repository, "transcripts_dir": transcripts, "project_name": project}}})
 		writeSourceFile(t, registry, string(data))
 	}
 	config := captureTestConfig(t, SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true})
@@ -1278,6 +1279,24 @@ func TestIndexTL1CaptureOfAReplacedInstallationIsStable(t *testing.T) {
 	execSQL(t, catalog.DB, "UPDATE source_states SET fingerprint=NULL WHERE host_id='host-a' AND source_name='tl1'")
 	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.SkippedUnchanged || result.Workspaces != 0 {
 		t.Fatalf("an unchanged TL1 capture was written again: %#v", result)
+	}
+	// Passing over a capture must not hide what indexing reads besides the
+	// transcripts: a script's log, and what the registry says of a project.
+	changes := map[string]func(){
+		"a script log":   func() { writeSourceFile(t, filepath.Join(transcripts, "task-1", "1-script.log"), "boom\n") },
+		"a project name": func() { project = "renamed"; register("current") },
+	}
+	for _, name := range []string{"a script log", "a project name"} {
+		changes[name]()
+		if summary := runCapture(t, config); !summary.OK {
+			t.Fatalf("capture after %s changed: %+v", name, summary)
+		}
+		if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.Error != nil || result.SkippedUnchanged {
+			t.Fatalf("%s changed and the capture was passed over: %#v", name, result)
+		}
+		if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; !result.SkippedUnchanged {
+			t.Fatalf("after %s changed, an unchanged capture was read again: %#v", name, result)
+		}
 	}
 }
 
