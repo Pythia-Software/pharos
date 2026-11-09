@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {loadClassicScript} from '../helpers/classic-script.mjs';
+import historyBudget from '../../../../testdata/page-history-budget.json' with {type:'json'};
 
 const keys=['pharos-ui-feedback-v1','pharos-ui-feedback-draft-v1','pharos-ui-feedback-layout-v1',
   'pharos-feedback-enabled','pharos-history-v1','pharos-nav-open','query-table:last:pharos_library','pharos-query-rejected:pharos_library'];
@@ -21,6 +22,29 @@ function session(database={},options={}) {
   });
   return{env,calls,paths,scope,storage:env.localStorage,flush:()=>env.pharosSession.flush()};
 }
+
+test('page history keeps the newest complete visits within the encoded preference limit',()=>{
+  const {serializePageHistory}=loadClassicScript('managed-storage.js');
+  // preferences_test.go checks these same byte budgets with encoding/json.
+  const entries=JSON.parse(historyBudget.prefixes.at(-1).value);
+  const {value:two,encoded_bytes:budget}=historyBudget.prefixes[2];
+  assert.equal(serializePageHistory(entries,{maxBytes:budget}),two);
+  assert.equal(serializePageHistory(entries,{maxBytes:budget-1}),JSON.stringify(entries.slice(0,1)));
+  assert.equal(serializePageHistory(entries,{limit:1}),JSON.stringify(entries.slice(0,1)));
+  const oversized={url:'/library?search='+'x'.repeat(budget),title:'Huge view',at:5};
+  assert.equal(serializePageHistory([oversized,...entries],{maxBytes:budget}),two,'an unstoreable visit does not erase usable history');
+  assert.equal(serializePageHistory([]),'[]');
+});
+
+test('session save failures include the server reason and retain the draft for retry',async()=>{
+  let failing=true;
+  const current=session({}, {send:()=>failing?{ok:false,status:400,json:async()=>({error:'preference is larger than 512 KB'})}:{ok:true}});
+  current.storage.setItem('pharos-ui-feedback-draft-v1','draft');
+  await assert.rejects(current.flush(),/HTTP 400.*larger than 512 KB/);
+  assert.equal(current.storage.getItem('pharos-ui-feedback-draft-v1'),'draft');
+  failing=false;await current.flush();
+  assert.equal(current.calls.length,2);
+});
 
 test('managed sessions restore working state from the library across empty web views',async()=>{
   const database={},first=session(database);

@@ -969,12 +969,16 @@ final class ArchiveService: ObservableObject {
             finished = true
             completion(error)
         }
-        let failure = UpdateFailure(message: "Could not save the current UI session. Keep Pharos open and retry before quitting or ejecting.")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { finish(failure) }
+        let message = "Could not save the current UI session. Keep Pharos open and retry before quitting or ejecting."
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            finish(UpdateFailure(message: message + "\n\nThe page did not finish saving within 5 seconds."))
+        }
         webView.callAsyncJavaScript("await window.pharosSession?.flush(); await window.pharosPrefs?.flush?.(); return true;", arguments: [:], in: nil, in: .page) { result in
             switch result {
             case .success: finish(nil)
-            case .failure: finish(failure)
+            case .failure(let error):
+                let detail = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription
+                finish(UpdateFailure(message: message + "\n\n" + detail))
             }
         }
     }
