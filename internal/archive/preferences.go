@@ -24,7 +24,7 @@ import (
 
 var preferenceKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.-]{0,199}$`)
 
-const maxPreferenceBytes = 512 << 10
+var maxPreferenceBytes = 512 << 10
 
 // UIPreferences returns every stored preference, keyed by name.
 func (c *Catalog) UIPreferences(ctx context.Context) (map[string]json.RawMessage, error) {
