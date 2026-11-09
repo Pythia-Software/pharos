@@ -1216,6 +1216,90 @@ func testIndexTL1CaptureWithoutTheOriginalPaths(t *testing.T, file string) {
 	}
 }
 
+// A capture's path map names each source path once. An installation that
+// another replaced at the same paths keeps its files in the capture but has
+// no entry in the map: its transcripts still record their original paths,
+// not the temporary directory an index reads the capture from, so indexing
+// the same capture again writes nothing.
+func TestIndexTL1CaptureOfAReplacedInstallationIsStable(t *testing.T) {
+	useHost(t, "host-a")
+	root := t.TempDir()
+	database := filepath.Join(root, "tl1", "project.db")
+	transcripts := filepath.Join(root, "tl1", "project", "transcripts")
+	repository := filepath.Join(root, "repo")
+	writeSourceFile(t, filepath.Join(repository, "tl1.json"), `{"project_name":"project"}`)
+	claude := filepath.Join(transcripts, "task-1", "attempt.jsonl")
+	codex := filepath.Join(transcripts, "task-2", "1-codex.jsonl")
+	writeSourceFile(t, claude, claudeLine("tl1-session", "u1", "do the task", repository, 1))
+	writeSourceFile(t, codex, `{"type":"thread.started","thread_id":"thread-1"}`+"\n"+`{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"done"}}`+"\n")
+	db := openWritableSQLite(t, database)
+	execSQL(t, db, "CREATE TABLE tasks(id TEXT, title TEXT, status TEXT, created_at TEXT)",
+		"CREATE TABLE task_attempts(id TEXT, task_id TEXT, attempt_number INTEGER, model TEXT, executor TEXT)",
+		"CREATE TABLE transcript_summaries(attempt_id TEXT, filename TEXT)",
+		"INSERT INTO tasks VALUES('task-1','The task','completed','2026-09-01T00:00:00Z'),('task-2','Another','completed','2026-09-01T00:00:00Z')",
+		"INSERT INTO task_attempts VALUES('attempt-1','task-1',1,'claude-x','claude'),('attempt-2','task-2',1,'gpt-x','codex')",
+		"INSERT INTO transcript_summaries VALUES('attempt-1','attempt.jsonl'),('attempt-2','1-codex.jsonl')")
+	db.Close()
+	registry := filepath.Join(root, "tl1", tl1RegistryFile)
+	project := "project"
+	register := func(id string) {
+		data, _ := json.Marshal(map[string]any{"installations": []map[string]string{{"installation_id": id, "db_path": database,
+			"config_path": filepath.Join(repository, "tl1.json"), "code_repo": repository, "transcripts_dir": transcripts, "project_name": project}}})
+		writeSourceFile(t, registry, string(data))
+	}
+	config := captureTestConfig(t, SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true})
+	for _, id := range []string{"replaced", "current"} {
+		register(id)
+		if summary := runCapture(t, config); !summary.OK {
+			t.Fatalf("capture of %s: %+v", id, summary)
+		}
+	}
+	catalog, _ := testCatalog(t)
+	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.Workspaces != 4 {
+		t.Fatalf("TL1 capture: %#v", result)
+	}
+	rows, err := queryMaps(catalog.DB, `SELECT w.source_id,c.origin,m.evidence_locator FROM workspaces w JOIN conversations c ON c.workspace_id=w.id
+		JOIN messages m ON m.conversation_id=c.id WHERE w.source_kind='tl1' ORDER BY w.source_id`)
+	if err != nil || len(rows) < 4 {
+		t.Fatalf("TL1 transcripts: %v %v", rows, err)
+	}
+	for _, row := range rows {
+		want := claude
+		if strings.HasSuffix(firstString(row["source_id"]), ":task-2") {
+			want = codex
+		}
+		if firstString(row["origin"]) != want || !strings.HasPrefix(firstString(row["evidence_locator"]), want) {
+			t.Fatalf("%s names %s (%s), not %s", row["source_id"], row["origin"], row["evidence_locator"], want)
+		}
+	}
+	// The same capture is passed over whole; read again, it writes nothing.
+	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; !result.SkippedUnchanged {
+		t.Fatalf("an unchanged TL1 capture was read again: %#v", result)
+	}
+	execSQL(t, catalog.DB, "UPDATE source_states SET fingerprint=NULL WHERE host_id='host-a' AND source_name='tl1'")
+	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.SkippedUnchanged || result.Workspaces != 0 {
+		t.Fatalf("an unchanged TL1 capture was written again: %#v", result)
+	}
+	// Passing over a capture must not hide what indexing reads besides the
+	// transcripts: a script's log, and what the registry says of a project.
+	changes := map[string]func(){
+		"a script log":   func() { writeSourceFile(t, filepath.Join(transcripts, "task-1", "1-script.log"), "boom\n") },
+		"a project name": func() { project = "renamed"; register("current") },
+	}
+	for _, name := range []string{"a script log", "a project name"} {
+		changes[name]()
+		if summary := runCapture(t, config); !summary.OK {
+			t.Fatalf("capture after %s changed: %+v", name, summary)
+		}
+		if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.Error != nil || result.SkippedUnchanged {
+			t.Fatalf("%s changed and the capture was passed over: %#v", name, result)
+		}
+		if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; !result.SkippedUnchanged {
+			t.Fatalf("after %s changed, an unchanged capture was read again: %#v", name, result)
+		}
+	}
+}
+
 // TL1's analysis tables (tl1_store.go) come from a capture too: attributed to
 // the capturing Mac with its original paths, script logs read from the
 // capture, and never rolled back by an older capture.
