@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -758,6 +759,54 @@ func TestConductorSignalsReadOnlySessionDependencies(t *testing.T) {
 			t.Fatal("signal omitted a changed dependency")
 		}
 		before = after
+	}
+}
+
+// A database with Conductor's cancellation index answers from it, and must
+// describe every session exactly as one without it does: a signal that moved
+// would reparse the whole source.
+func TestConductorSignalsAgreeWithAndWithoutACancellationIndex(t *testing.T) {
+	dir := t.TempDir()
+	execute := conductorFixture(t, dir)
+	for id, messages := range map[string]int{"quiet": 2, "cancelled": 2, "twice": 2, "empty": 0} {
+		execute(addConductorSession(id, messages)...)
+	}
+	execute("UPDATE session_messages SET cancelled_at='2026-09-02T00:00:00Z' WHERE id='cancelled-m0'",
+		"UPDATE session_messages SET cancelled_at='2026-09-03T00:00:00Z' WHERE id='twice-m0'",
+		"UPDATE session_messages SET cancelled_at='2026-09-04T00:00:00Z' WHERE id='twice-m1'",
+		"INSERT INTO session_messages VALUES('orphan-m0','orphan','user','no session','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z','2026-09-05T00:00:00Z')")
+	read := func(selection map[string]bool) map[string]sourcePart {
+		t.Helper()
+		db, err := openReadOnlySQLite(filepath.Join(dir, "conductor.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		sessions, err := queryMaps(db, "SELECT * FROM sessions")
+		if err != nil {
+			t.Fatal(err)
+		}
+		signals, err := conductorSignals(t.Context(), db, "sessions", "session_messages", "id", "session_id", sessions,
+			map[string]bool{}, map[string]bool{"sent_at": true, "cancelled_at": true}, map[string]bool{}, selection)
+		if err != nil || len(signals) != 4 {
+			t.Fatalf("signals: %+v %v", signals, err)
+		}
+		return signals
+	}
+	selections := []map[string]bool{nil, {"twice": true, "quiet": true}}
+	var grouped []map[string]sourcePart
+	for _, selection := range selections {
+		grouped = append(grouped, read(selection))
+	}
+	execute("CREATE INDEX messages_cancelled ON session_messages(session_id, cancelled_at)")
+	for index, selection := range selections {
+		if sought := read(selection); !reflect.DeepEqual(sought, grouped[index]) {
+			t.Fatalf("selection %v: signals changed with the index:\n%+v\n%+v", selection, grouped[index], sought)
+		}
+	}
+	execute("UPDATE session_messages SET cancelled_at='2026-09-06T00:00:00Z' WHERE id='quiet-m1'")
+	if after := read(nil); after["quiet"].signal == grouped[0]["quiet"].signal || after["twice"].signal != grouped[0]["twice"].signal {
+		t.Fatal("a new cancellation went unnoticed, or moved another session's signal")
 	}
 }
 
