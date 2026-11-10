@@ -19,5 +19,16 @@ test("a Git count outside a repository reads as not applicable, never zero", () 
   // Recorded Git data shows wherever it came from; a repository's zero is zero.
   assert.deepEqual(gitFactDisplay(2, "folder"), { text: "2", muted: false });
   assert.deepEqual(gitFactDisplay(0, "repository"), { text: "0", muted: false });
-  for (const name of ["pr_count", "branch_count"]) assert.equal(field(name).render, "git_count");
+  for (const name of ["pr_count", "branch_count", "linked_commits", "landed_commits"]) assert.equal(field(name).render, "git_count");
+});
+
+test("a repository local Git could not check reads Not checked with its reason, never zero", () => {
+  const reason = "No checkout of this repository was recorded on this Mac.";
+  assert.deepEqual(gitFactDisplay(null, "repository", "not_checked", reason), { text: "Not checked", muted: true, title: reason });
+  assert.equal(gitFactDisplay("", "repository", "not_checked").title, "Local Git has not been checked.");
+  // Not applicable wins over not checked, and a checked count shows.
+  assert.equal(gitFactDisplay(null, "folder", "not_checked").text, "Not a repository");
+  assert.deepEqual(gitFactDisplay(3, "repository", "checked"), { text: "3", muted: false });
+  assert.equal(gitFactDisplay(null, "repository", "not_applicable").text, "Not applicable");
+  assert.deepEqual(field("git_check").filter.values.options.map(option => option.value), ["checked", "not_checked", "not_applicable"]);
 });
