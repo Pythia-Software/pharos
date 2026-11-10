@@ -366,8 +366,21 @@ func (c *Catalog) attachLibraryFind(ctx context.Context, set *libraryFindSet, ro
 		}
 	}
 	set.attach(rows)
+	hits := []libraryHit{}
 	for _, row := range rows {
 		if hit, ok := row["find_hit"].(libraryHit); ok {
+			hits = append(hits, hit)
+		}
+	}
+	edits, err := c.firstEdits(ctx, hits)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if hit, ok := row["find_hit"].(libraryHit); ok {
+			if hit.firstEditOf != "" {
+				hit.withFirstEdit(edits[[2]string{hit.WorkspaceID, hit.firstEditOf}])
+			}
 			if found, exists := evidence[hit.MessageID]; exists {
 				hit.Title, hit.Provider, hit.StartedAt = found.Title, found.Provider, found.StartedAt
 				hit.Role, hit.MessageKind, hit.Snippet = found.Role, found.MessageKind, found.Snippet

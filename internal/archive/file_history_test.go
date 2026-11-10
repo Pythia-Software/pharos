@@ -135,6 +135,19 @@ func TestFileHistoryWithGit(t *testing.T) {
 			t.Fatalf("file search %s: %#v", query, hits)
 		}
 	}
+	// A Library table search, which has no cap, looks up a file's first edit
+	// only for the rows it shows, and they open at it as above.
+	set, err := f.catalog.libraryFindMatches(t.Context(), LibraryFindOptions{Kind: "file", Query: "lib_test.go", WorkspaceRows: true})
+	if err != nil || set.matches["patcher"] == nil || set.matches["patcher"].Hit.MessageID != "" {
+		t.Fatalf("table search: %v %#v", err, set)
+	}
+	rows := []map[string]any{{"id": "patcher"}}
+	if err := f.catalog.attachLibraryFind(t.Context(), set, rows); err != nil {
+		t.Fatal(err)
+	}
+	if hit := rows[0]["find_hit"].(libraryHit); hit.ConversationID != "patcher-c" || !strings.HasPrefix(hit.MessageID, "call-") || hit.Project == "" {
+		t.Fatalf("table search row: %#v", hit)
+	}
 	// A budget too small for one answer is an error, never an empty page or
 	// an answer past it.
 	for tool, args := range map[string]map[string]any{"list_outcomes": {}, "get_file_history": {"path": "main.go"}} {
