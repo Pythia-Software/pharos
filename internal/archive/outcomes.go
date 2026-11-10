@@ -46,10 +46,19 @@ const reworkShare = 0.5
 // Landed and Committed need Tier 2 evidence (local Git).
 var outcomeLabels = []string{"landed", "committed", "changed_kept", "changed_recent", "reworked", "no_changes", "unknown"}
 
-// toolRecordingSources are the source kinds whose sessions record tool calls,
-// so a session of theirs without an edit changed no files. Any other source,
-// such as a chat export, cannot tell, so its sessions are unknown.
-var toolRecordingSources = []string{"claude", "codex", "conductor", "antigravity", "antigravity-cli", "tl1", "tl1-export"}
+// recordsToolCalls reports whether a source kind's sessions record their tool
+// calls, so one without an edit changed no files: its provider declares tool
+// calls (always, or when its history holds them) and works in a folder. Any
+// other source, such as a chat export, cannot tell, so its sessions are
+// unknown.
+func recordsToolCalls(kind string) bool {
+	spec, ok := providerFor(kind)
+	if !ok {
+		return false
+	}
+	calls := spec.Content.support("tool_calls")
+	return (calls == supported || calls == varies) && spec.Content.support("cwd") != notApplicable
+}
 
 const outcomesSQL = `
 CREATE TABLE IF NOT EXISTS session_files(
@@ -547,7 +556,7 @@ func deriveSessionOutcome(ctx context.Context, tx *sql.Tx, workspace string, day
 			return err
 		}
 	}
-	recorded := len(calls) > 0 || slices.Contains(toolRecordingSources, source)
+	recorded := len(calls) > 0 || recordsToolCalls(source)
 	var first, last any
 	if len(facts.Files) > 0 {
 		// Without call times, the session's last activity stands in, so its

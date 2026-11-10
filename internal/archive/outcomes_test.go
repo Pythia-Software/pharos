@@ -197,6 +197,10 @@ func TestSessionOutcomeLabels(t *testing.T) {
 		f.session(id, "claude")
 	}
 	f.session("chat", "chatgpt-export")
+	f.session("web-chat", "claude-ai")
+	// Any provider that records tool calls in a working folder, by its
+	// declared capabilities.
+	f.session("quiet", "zed")
 	execTx(t, f.catalog.DB, `INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status,started_at)
 		VALUES('read','research','research-c',1,'claude','tool','Read','read','ok','`+daysAgo(30)+`')`)
 	f.edit("kept", "/notes/kept.md", "", "", 60, "", code("kept", 0, 5))
@@ -241,7 +245,7 @@ func TestSessionOutcomeLabels(t *testing.T) {
 	f.refresh()
 	labels := f.labels()
 	for id, want := range map[string]string{
-		"chat": "unknown", "research": "no_changes", "kept": "changed_kept", "recent": "changed_recent", "reworked": "reworked", "reworker": "changed_kept",
+		"chat": "unknown", "web-chat": "unknown", "quiet": "no_changes", "research": "no_changes", "kept": "changed_kept", "recent": "changed_recent", "reworked": "reworked", "reworker": "changed_kept",
 		"light": "changed_kept", "continued": "changed_kept", "slow": "changed_kept", "mirrored": "changed_kept", "tree-a": "reworked", "rewritten": "reworked",
 		"opaque": "changed_kept", "patched": "changed_kept", "deleted": "reworked",
 	} {

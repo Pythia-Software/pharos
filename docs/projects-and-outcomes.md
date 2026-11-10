@@ -159,7 +159,11 @@ a Conductor workspace. Its delegated agents' calls are its own.
   checkout and worktree of a repository shares it; any other file by its
   absolute path. Lines added and removed come from the ledger; Antigravity
   records none, so its counts are empty ("Not recorded"), not zero. Edits a
-  shell command makes (`sed -i`, redirections) are not counted.
+  shell command makes (`sed -i`, redirections) are not counted. A session
+  without edits changed no files when its source records tool calls: its
+  provider declares tool calls, always or when its history holds them, and
+  a working folder (`provider_registry.go`). A chat export cannot tell, so
+  its sessions are Unknown.
 - **Verified after the last edit.** How the last command whose
   `command_category` is `test` or `build` after the session's last edit
   ended: passed, failed, or no result; "not run" when none ran. The ledger
