@@ -2,6 +2,7 @@ package archive
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -523,6 +524,36 @@ func fileViewer(t *testing.T, f *gitFixture, commits map[string]string) {
 	if all, err := f.catalog.FileLog(ctx, FileLogOptions{Project: "app", Offset: 5}); err != nil || len(all["commits"].([]map[string]any)) != 1 || all["more"] != false {
 		t.Fatalf("the repository's last page: %#v %v", all, err)
 	}
+	// A path of any characters reads as it is, and a repository that shows
+	// signatures in its log runs no signing program for the viewer.
+	verified := filepath.Join(t.TempDir(), "verified")
+	signer := filepath.Join(t.TempDir(), "gpg")
+	if err := os.WriteFile(signer, []byte("#!/bin/sh\ncase \"$*\" in *--verify*) echo run >> '"+verified+"'; echo 'gpg: Good signature' >&2; exit 0;; esac\n"+
+		"cat >/dev/null; printf '\\n[GNUPG:] SIG_CREATED D 1 8 00 0 0\\n' >&2; printf -- '-----BEGIN PGP SIGNATURE-----\\n\\nx\\n-----END PGP SIGNATURE-----\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.repo.git(time.Now(), "config", "gpg.program", signer)
+	f.repo.commitAt(time.Now(), "Accents", map[string]string{"café/a\"b.txt": "x\n"})
+	f.repo.git(time.Now(), "commit", "-q", "-S", "--amend", "--no-edit")
+	signed := f.repo.git(time.Now(), "rev-parse", "HEAD")
+	f.repo.git(time.Now(), "config", "log.showSignature", "true")
+	accented, err := f.catalog.CommitDetail(ctx, FileGitOptions{Project: "app", Commit: signed})
+	if commit, _ := accented["commit"].(map[string]any); err != nil || commit["subject"] != "Accents" || fmt.Sprint(commit["files"]) != `[map[binary:false lines_added:1 lines_removed:0 path:café/a"b.txt]]` {
+		t.Fatalf("a signed commit of an accented path: %#v %v", accented, err)
+	}
+	if last, err := f.catalog.LastCommits(ctx, FileGitOptions{Project: "app", Commit: signed}); err != nil || last["entries"].(map[string]any)["café"].(map[string]any)["subject"] != "Accents" {
+		t.Fatalf("an accented directory's last commit: %#v %v", last, err)
+	}
+	if last, err := f.catalog.LastCommits(ctx, FileGitOptions{Project: "app", Path: "café", Commit: signed}); err != nil || last["entries"].(map[string]any)[`a"b.txt`] == nil {
+		t.Fatalf("an accented directory's entries: %#v %v", last, err)
+	}
+	if log, err := f.catalog.FileLog(ctx, FileLogOptions{Project: "app", Commit: signed}); err != nil || log["commits"].([]map[string]any)[0]["subject"] != "Accents" {
+		t.Fatalf("a signed commit's history: %#v %v", log, err)
+	}
+	if _, err := os.Stat(verified); !os.IsNotExist(err) {
+		t.Fatalf("the viewer ran the signing program: %v", err)
+	}
+	f.repo.git(time.Now(), "config", "--unset", "log.showSignature")
 	// Paths and commits are checked before Git sees them, and a commit the
 	// checkout lacks says so.
 	for _, options := range []FileGitOptions{{Project: "app", Path: "../outside"}, {Project: "app", Path: "a/../../b"}, {Project: "app", Path: "main.go", Commit: "--output=x"}} {

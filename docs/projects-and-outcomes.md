@@ -1009,6 +1009,10 @@ Within the checkout (`file_git.go`), every command:
   `rev-parse`, `rev-list`) with `GIT_NO_LAZY_FETCH=1`,
   `GIT_OPTIONAL_LOCKS=0`, `core.fsmonitor=false`, `--no-textconv
   --no-ext-diff`, under `nice`;
+- runs no program the repository's or the person's configuration names:
+  `log.showSignature=false`, so no log verifies a signature;
+- reads paths as they are (`core.quotePath=false`, and `-z` where it lists
+  them), so a name with accents, quotes or tabs links to its file;
 - has a 15-second limit and an output cap (1 MiB of content or diff, 8 MiB
   of blame, 20,000 lines), past which the page says the file is too large;
 - waits for one of two slots, so the viewer never runs more than two Git
