@@ -690,6 +690,26 @@ func TestLinkOnceKeepsTheStrongerEvidence(t *testing.T) {
 	}) {
 		t.Fatalf("links: %s", got)
 	}
+	// A fixup an interactive rebase folded into its commit took the place of
+	// nothing but its own change; work abandoned on another base stays.
+	commits = map[string]*gitCommit{
+		"work":     {Hash: "work", ParentHashes: []string{"base"}, Tree: "t2", Subject: "Work"},
+		"fixup":    {Hash: "fixup", ParentHashes: []string{"old-work"}, Tree: "t2", Subject: "fixup! Work", Replaced: true},
+		"old-work": {Hash: "old-work", ParentHashes: []string{"base"}, Tree: "t1", Subject: "Old work", Replaced: true},
+		"given-up": {Hash: "given-up", ParentHashes: []string{"elsewhere"}, Tree: "t3", Subject: "Given up", Replaced: true},
+	}
+	links = linkOnce([]gitLink{
+		{Session: "s", Hash: "work", Method: "message", Confidence: 0.95},
+		{Session: "s", Hash: "fixup", Method: "message", Confidence: 0.95},
+		{Session: "s", Hash: "old-work", Method: "message", Confidence: 0.95},
+		{Session: "s", Hash: "given-up", Method: "message", Confidence: 0.95},
+	}, commits)
+	if got := fmt.Sprint(links); got != fmt.Sprint([]gitLink{
+		{Session: "s", Hash: "work", Method: "message", Confidence: 0.95},
+		{Session: "s", Hash: "given-up", Method: "message", Confidence: 0.95},
+	}) {
+		t.Fatalf("links: %s", got)
+	}
 }
 
 // A rebase's own commits were made in the checkout; the commit it started
