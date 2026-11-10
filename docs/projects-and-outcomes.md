@@ -705,12 +705,19 @@ a file:
   another `git log` per edited file; it is not done.
 
 A path can be repository-relative (`src/main.go`, matching that path in
-every repository, or the end of a longer one), a folder path
-(`~/notes/plan.md`), or an absolute path in a checkout a session edited in,
-which maps to its repository file. A patch's other files than the one its
-call recorded are found too: any of the session's edits in the checkout
-places the checkout, and the reader link opens the edit call at the file's
-first edit.
+every repository), a folder path (`~/notes/plan.md`), or an absolute or
+`~/` path in any checkout this Mac recorded (a repository's known location,
+or a workspace's location or sighting), which maps to its repository file as
+tool call paths do, whether or not a session edited in that checkout. An
+exact match wins; only when nothing matches exactly does a path ending match
+(`index.ts` finding `src/index.ts`), so `src/index.ts` is never crowded out
+by `packages/*/src/index.ts`. A project narrows the match before it is
+bounded at 50 files; more are marked `files_truncated` and the page says
+so. When the project hides every match, the note says the path was edited
+in other projects rather than by nobody, and a project that names nothing
+is an error, as for every project filter. A patch's other files than the
+one its call recorded are found too, and the reader link opens the edit
+call at the file's first edit.
 
 **Storage.** `git_commit_files` holds, per repository, the commits that
 changed a file some session edited there, with lines added and removed. The
@@ -750,7 +757,8 @@ rules.
   confidence, evidence and whether they count.
 - `get_file_history`: the file timeline above. It sheds the oldest sessions
   and commits first to fit `max_output_tokens`, marking the file
-  `truncated`, then files past the first (`files_truncated`).
+  `truncated`, then files past the first. `files_truncated` marks files
+  matched past the bound or shed.
 
 A budget too small for one session, or one file with one session and one
 commit, is an error naming `max_output_tokens`, never an empty page whose

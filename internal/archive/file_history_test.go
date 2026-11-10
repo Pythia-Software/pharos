@@ -46,6 +46,16 @@ func TestFileHistoryWithGit(t *testing.T) {
 	byHand := repo.commit(2, "By hand", map[string]string{"main.go": "package main\n\nfunc main() { run() }\n"})
 	repo.commit(1, "Unrelated", map[string]string{"other.go": "package other\n"})
 	f.edit("elsewhere", "util.go", 3)
+	// A path ending that sorts before the exact path, and two files that
+	// only end in x.go, with room for one file per answer.
+	f.edit("elsewhere", "a/main.go", 3)
+	f.edit("elsewhere", "a/x.go", 3)
+	f.edit("elsewhere", "b/x.go", 3)
+	override(t, &fileHistoryFiles, 1)
+	// Another checkout of the repository this Mac recorded, where no
+	// session edited.
+	copy := filepath.Join(t.TempDir(), "copy")
+	execTx(t, f.catalog.DB, `INSERT INTO workspace_sightings(workspace_id,host_id,source_name,location,first_seen_at,last_seen_at) VALUES('elsewhere','`+currentHost().ID+`','conductor','`+copy+`','x','x')`)
 	// A patch's second file is recorded only in session_files, placed by
 	// the session's checkout.
 	f.session("patcher", "")
@@ -61,10 +71,13 @@ func TestFileHistoryWithGit(t *testing.T) {
 	if stored := countRows(t, f.catalog, `SELECT COUNT(*) FROM git_commit_files WHERE path='other.go'`); stored != 0 {
 		t.Fatalf("kept %d commits of a file no session edited", stored)
 	}
-	for _, path := range []string{"main.go", filepath.Join(repo.dir, "main.go")} {
+	// A path in the home folder (~/…) and a path in any recorded checkout
+	// name the repository file too.
+	t.Setenv("HOME", filepath.Dir(repo.dir))
+	for _, path := range []string{"main.go", filepath.Join(repo.dir, "main.go"), "~/" + filepath.Base(repo.dir) + "/main.go", filepath.Join(copy, "main.go")} {
 		history := callProjectTool(t, f.catalog, "get_file_history", map[string]any{"path": path})
 		files := history["files"].([]any)
-		if len(files) != 1 {
+		if len(files) != 1 || history["files_truncated"] != false {
 			t.Fatalf("%s: %#v", path, history)
 		}
 		file := files[0].(map[string]any)
@@ -94,9 +107,16 @@ func TestFileHistoryWithGit(t *testing.T) {
 			t.Fatalf("a patch's second file at %s: %#v", path, history)
 		}
 	}
+	// Without an exact match a path ending matches, and an answer cut at the
+	// file bound says so.
+	endings := callProjectTool(t, f.catalog, "get_file_history", map[string]any{"path": "x.go"})
+	if files := endings["files"].([]any); len(files) != 1 || files[0].(map[string]any)["path"] != "a/x.go" || endings["files_truncated"] != true ||
+		!strings.Contains(firstString(endings["note"]), "More than 1 files") {
+		t.Fatalf("path endings past the bound: %#v", endings)
+	}
 	// File search finds each edited file once, with its project and the
 	// message of its first edit, a change set's find included.
-	for query, want := range map[string]int{"main.go": 2, "lib_test.go": 1} {
+	for query, want := range map[string]int{"main.go": 3, "lib_test.go": 1} {
 		found, err := f.catalog.LibraryFind(t.Context(), LibraryFindOptions{Kind: "file", Query: query, Limit: 10})
 		if err != nil {
 			t.Fatal(err)
@@ -129,7 +149,7 @@ func TestFileHistoryWithGit(t *testing.T) {
 	}
 	// A path in no session's edits says so instead of an empty list.
 	none := callProjectTool(t, f.catalog, "get_file_history", map[string]any{"path": "other.go"})
-	if len(none["files"].([]any)) != 0 || !strings.Contains(firstString(none["note"]), "No session") {
+	if len(none["files"].([]any)) != 0 || !strings.Contains(firstString(none["note"]), "No workspace") {
 		t.Fatalf("unedited file: %#v", none)
 	}
 	if _, err := callMCP(f.catalog, "get_file_history", map[string]any{}); err == nil {

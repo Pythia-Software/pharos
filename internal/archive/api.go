@@ -462,7 +462,16 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, map[string]any{"items": value}, err)
 	case path == "/api/file-history":
 		q := r.URL.Query()
-		value, err := s.Catalog.FileHistory(r.Context(), FileHistoryOptions{Path: q.Get("path"), Project: q.Get("project"), Limit: queryInt(r, "limit", 50)})
+		// A project that names nothing is an error, as for every project
+		// filter, not a file nobody edited.
+		var value map[string]any
+		err := error(nil)
+		if project := q.Get("project"); project != "" {
+			err = s.Catalog.checkProjectFilter(project)
+		}
+		if err == nil {
+			value, err = s.Catalog.FileHistory(r.Context(), FileHistoryOptions{Path: q.Get("path"), Project: q.Get("project"), Limit: queryInt(r, "limit", 50)})
+		}
 		if err != nil {
 			writeError(w, err, http.StatusBadRequest)
 		} else {

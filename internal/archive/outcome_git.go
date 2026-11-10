@@ -106,6 +106,8 @@ CREATE TABLE IF NOT EXISTS git_commit_files(
   lines_added INTEGER NOT NULL,
   lines_removed INTEGER NOT NULL,
   PRIMARY KEY(repository_id,path,hash)) WITHOUT ROWID;
+-- File history finds a file by its path (findFileHistoryKeys).
+CREATE INDEX IF NOT EXISTS session_files_path_idx ON session_files(path);
 CREATE TABLE IF NOT EXISTS git_repository_scans(
   repository_id TEXT NOT NULL,
   host_id TEXT NOT NULL,

@@ -300,17 +300,28 @@ func TestProjectParityWithoutGit(t *testing.T) {
 	file := files[0].(map[string]any)
 	session := file["sessions"].([]any)[0].(map[string]any)
 	if file["project"] != notes || file["git"].(map[string]any)["status"] != "not_applicable" || integer(session["lines_added"]) != 4 ||
-		!strings.Contains(firstString(session["url"]), "call=") || strings.Contains(firstString(history["note"]), "No session") {
+		!strings.Contains(firstString(session["url"]), "call=") || strings.Contains(firstString(history["note"]), "No workspace") {
 		t.Fatalf("file history without Git: %#v", history)
 	}
-	// The page and its endpoint answer the same, with no error.
-	for _, target := range []string{"/files?file=plan.md", "/api/file-history?path=plan.md&project=" + url.QueryEscape(notes)} {
-		request := httptest.NewRequest(http.MethodGet, target, nil)
+	// Another project hides the file: the answer says it is edited
+	// elsewhere, not that nobody edited it.
+	hidden := callProjectTool(t, library.catalog, "get_file_history", map[string]any{"path": "plan.md", "project": research})
+	if len(hidden["files"].([]any)) != 0 || !strings.Contains(firstString(hidden["note"]), "other projects") {
+		t.Fatalf("get_file_history in another project: %#v", hidden)
+	}
+	// The endpoint answers as the tool does, and a project that names
+	// nothing is an error naming list_projects, as for every project filter.
+	for _, check := range []struct {
+		project string
+		code    int
+		want    string
+	}{{notes, http.StatusOK, `"not_applicable"`}, {"~/nowhere-at-all", http.StatusBadRequest, "list_projects"}} {
+		request := httptest.NewRequest(http.MethodGet, "/api/file-history?path=plan.md&project="+url.QueryEscape(check.project), nil)
 		request.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)
-		if response.Code != http.StatusOK || strings.Contains(target, "/api/") && !strings.Contains(response.Body.String(), `"not_applicable"`) {
-			t.Fatalf("%s: %d %s", target, response.Code, response.Body.String())
+		if response.Code != check.code || !strings.Contains(response.Body.String(), check.want) {
+			t.Fatalf("file history in %s: %d %s", check.project, response.Code, response.Body.String())
 		}
 	}
 }
