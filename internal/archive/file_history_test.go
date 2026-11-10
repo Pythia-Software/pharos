@@ -192,6 +192,11 @@ func TestFileHistoryWithGit(t *testing.T) {
 		strings.Join(fileHistoryHashes(files[0].(map[string]any)), "|") != scripted[:7]+" scripted" {
 		t.Fatalf("a committed file: %#v", history)
 	}
+	// A session that only committed through a shell has no file targets
+	// but its page still shows its files and commits.
+	if overview, err := f.catalog.WorkOverview("scripted"); err != nil || len(overview["files"].([]map[string]any)) != 0 || integer(overview["linked_commits"]) != 1 {
+		t.Fatalf("a committing session's overview: files %v, linked commits %v, %v", overview["files"], overview["linked_commits"], err)
+	}
 	// The commit's link opens where the session made it.
 	if link := history["files"].([]any)[0].(map[string]any)["commits"].([]any)[0].(map[string]any)["sessions"].([]any)[0].(map[string]any); link["url"] != "/work/scripted?conversation=scripted-c" {
 		t.Fatalf("a command's commit link: %#v", link)
