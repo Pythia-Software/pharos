@@ -588,34 +588,67 @@ func (s *Server) refreshResults(ctx context.Context, sweeps bool) {
 // before they can answer (the Usage rows take seconds, and half a minute
 // after a restart). The maintenance pass warms them too, but only after all
 // its other work, which a backlog or a schedule can hold off indefinitely.
+//
+// Each generation (derivedKeyGeneration) settles by itself: label commits
+// arriving every second do not hold back the Usage rows, which read none.
 type derivedFollower struct {
-	started, opened bool
-	seen, rebuilt   int64
+	started bool
+	opened  bool // the Usage rows have been computed once since starting
+	seen    cacheGenerations
+	rebuilt map[string]int64
 }
 
+var derivedGenerationScopes = []string{generationCore, generationEvents, generationAll}
+
 func (s *Server) rebuildDerivedAfterChange(ctx context.Context, f *derivedFollower, free func() bool) {
-	version, err := s.Catalog.catalogVersion(ctx)
-	if err != nil {
+	c := s.Catalog
+	// An ingest, a projection batch and a stopped library all mean the
+	// catalog is not at rest, or that the person asked for no such work.
+	generations, ok := c.settledGenerations(ctx)
+	if !ok {
+		f.started = false
 		return
 	}
-	if f.started && version != f.seen {
-		// Not settled: more changes may follow, each undoing a rebuild.
-		f.seen = version
+	previous, started := f.seen, f.started
+	f.started, f.seen = true, generations
+	if !started || c.projectionBatches.Load() > 0 || c.libraryRefreshStopped() || !free() {
 		return
 	}
-	f.started, f.seen = true, version
-	if f.opened && version == f.rebuilt || !free() || s.Catalog.projectionBatches.Load() > 0 {
+	// Settled: the same at two looks. More changes may follow one that is
+	// not, each undoing a rebuild.
+	due := map[string]bool{}
+	for _, scope := range derivedGenerationScopes {
+		if at := generations.of(scope); at == previous.of(scope) {
+			if done, known := f.rebuilt[scope]; !known || done != at {
+				due[scope] = true
+			}
+		}
+	}
+	if len(due) == 0 && f.opened {
 		return
 	}
-	build, cancel := context.WithTimeout(backgroundQuery(ctx), resultBuildDeadline)
-	defer cancel()
-	if !f.opened {
-		// What the page the app opens on reads, as the maintenance pass
-		// warms: after a restart nothing has been requested yet.
-		_, _ = s.Catalog.localUsageRows(build)
-	}
-	s.Catalog.recomputeStaleDerived(build)
-	f.opened, f.rebuilt = true, version
+	s.runCacheWarm(ctx, func(ctx context.Context) {
+		build, cancel := context.WithTimeout(backgroundQuery(ctx), resultBuildDeadline)
+		defer cancel()
+		if !f.opened && generations.of(generationCore) == previous.of(generationCore) {
+			// What the page the app opens on reads, as the maintenance pass
+			// warms: after a restart nothing has been requested yet.
+			if _, err := c.localUsageRows(build); err != nil {
+				return
+			}
+			f.opened = true
+		}
+		// A page that starts waiting stops the rebuild between values.
+		if len(due) == 0 || !c.recomputeStaleDerived(build, func(scope string) bool { return due[scope] }, free) || build.Err() != nil {
+			return
+		}
+		if f.rebuilt == nil {
+			f.rebuilt = map[string]int64{}
+		}
+		for scope := range due {
+			f.rebuilt[scope] = generations.of(scope)
+		}
+	})
 }
 
 func (s *Server) refreshResultsWhile(ctx context.Context, cache *resultCache, free func() bool, sweep *time.Timer) {

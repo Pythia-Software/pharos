@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -276,6 +277,9 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 }
 
 func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, compute func(context.Context) (any, error), request bool) (any, error) {
+	if request && ctx.Value(backgroundQueryKey{}) == nil {
+		defer heavyQueries.attend()()
+	}
 	// Attribution is published by writers (see ensureOrigins); publication
 	// advances the generation, so values computed from older origins are
 	// recomputed.
@@ -578,13 +582,20 @@ func (c *Catalog) warmCaches(ctx context.Context) {
 		_, _ = c.allWorkspaceUsage(ctx)
 		_ = c.currentToolRollup(ctx)
 	}
-	c.recomputeStaleDerived(ctx)
+	c.recomputeStaleDerived(ctx, nil, nil)
 }
+
+// derivedKeyDay finds the calendar day a key was computed for.
+var derivedKeyDay = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
 
 // recomputeStaleDerived recomputes the derived values requested recently
 // that a change has left behind, such as the Usage rows, so that a request
-// finds them ready instead of computing them itself.
-func (c *Catalog) recomputeStaleDerived(ctx context.Context) {
+// finds them ready instead of computing them itself. wanted, when given,
+// selects the generations (derivedKeyGeneration) whose values to recompute,
+// and proceed is asked before each value whether to go on. It reports
+// whether every selected value was recomputed.
+func (c *Catalog) recomputeStaleDerived(ctx context.Context, wanted func(generation string) bool, proceed func() bool) bool {
+	today := c.clock().In(time.Local).Format("2006-01-02")
 	cache := &c.derived
 	cache.mu.Lock()
 	stale := map[string]func(context.Context) (any, error){}
@@ -592,17 +603,49 @@ func (c *Catalog) recomputeStaleDerived(ctx context.Context) {
 		if strings.HasPrefix(key, "delegation:") || strings.HasPrefix(key, "machine-time:") || isThinkingCohortKey(key) {
 			continue
 		}
-		if entry.version != cache.versions.generations.of(derivedKeyGeneration(key)) && time.Since(entry.usedAt) < recentUse {
+		// A value computed for another day is not asked for again.
+		if day := derivedKeyDay.FindString(key); day != "" && day != today {
+			continue
+		}
+		generation := derivedKeyGeneration(key)
+		if wanted != nil && !wanted(generation) {
+			continue
+		}
+		if entry.version != cache.versions.generations.of(generation) && time.Since(entry.usedAt) < recentUse {
 			stale[key] = entry.compute
 		}
 	}
 	cache.mu.Unlock()
 	for key, compute := range stale {
-		if ctx.Err() != nil {
-			return
+		if ctx.Err() != nil || proceed != nil && !proceed() {
+			return false
 		}
-		_, _ = c.derivedValue(ctx, key, compute, false)
+		if _, err := c.derivedValue(ctx, key, compute, false); err != nil && ctx.Err() != nil {
+			return false
+		}
 	}
+	return true
+}
+
+// settledGenerations reads the catalog's generations for work that follows
+// changes, without the side effects of a request's read: a failed read
+// leaves the cache as it is (the next request finds the failure itself),
+// and nothing is reported while an ingest runs, when the version read is
+// the one from before it (cacheVersion).
+func (c *Catalog) settledGenerations(ctx context.Context) (cacheGenerations, bool) {
+	if c.ingestRuns.Load() > 0 {
+		return cacheGenerations{}, false
+	}
+	cache := &c.derived
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.closed || cache.fault != nil {
+		return cacheGenerations{}, false
+	}
+	if _, err := c.cacheVersion(ctx, &cache.versions); err != nil {
+		return cacheGenerations{}, false
+	}
+	return cache.versions.generations, true
 }
 
 func isThinkingCohortKey(key string) bool {
