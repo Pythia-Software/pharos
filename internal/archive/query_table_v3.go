@@ -169,6 +169,9 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	var required []string
 	var find *libraryFindSet
 	var err error
+	// counted is the source projected to what a count reads (narrowCount).
+	var counted string
+	var countedFields []string
 	if sqlBacked {
 		if err = s.Catalog.prepareSQLDataset(ctx, dataset); err != nil {
 			return qt.QueryResultV3{}, nil, err
@@ -193,8 +196,16 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			var bounds map[string][2]string
 			bounds, err = queryBucketBounds(ctx, s.Catalog.reader(), where)
 			if err == nil {
-				projected, _ := table.project(required).preferCoveringScan(where)
+				projected, covering := table.project(required).preferCoveringScan(where)
 				d.SourceSQL, d.SourceArgs = projected.windowedQuerySource(schema, where, time.UnixMilli(q.Now), bounds)
+				if ordered, ok := projected.newestFirstScan(q, where); ok && !covering {
+					d.SourceSQL, _ = ordered.windowedQuerySource(schema, where, time.UnixMilli(q.Now), bounds)
+				}
+				if q.Grouping == nil && q.Distinct == nil {
+					countedFields = append([]string{schema.IDField}, whereFields(where)...)
+					narrow, _ := table.project(countedFields).preferCoveringScan(where)
+					counted, _ = narrow.windowedQuerySource(schema, where, time.UnixMilli(q.Now), bounds)
+				}
 			}
 		}
 	} else {
@@ -344,7 +355,11 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		// query generation (or stay in step with ones that do), so its
 		// counts are reusable within one. Staged rows are read outside the
 		// transaction, and record search gives each request its own plan.
-		d.PopulationCounter = s.Catalog.populationCounter(queryDatasetGeneration(dataset), queryPopulationFastCounts(dataset, schema, table)...)
+		var narrow queryPopulationCount
+		if counted != "" {
+			narrow = narrowCount(d.SourceSQL, counted, countedFields)
+		}
+		d.PopulationCounter = s.Catalog.populationCounter(queryDatasetGeneration(dataset), narrow, queryPopulationFastCounts(dataset, schema, table)...)
 	}
 	var result qt.QueryResultV3
 	if dataset == "usage" && q.Grouping == nil && len(q.Metrics) > 0 {

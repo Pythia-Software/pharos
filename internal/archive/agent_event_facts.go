@@ -481,6 +481,7 @@ var agentEventRateDataset = func() sqlDataset {
 			"w": " LEFT JOIN workspaces w ON w.id=c.workspace_id",
 			"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
 		},
-		pageFrom: "FROM agent_event_facts f",
+		pageFrom:    "FROM agent_event_facts f",
+		newestFirst: map[string]string{"occurred_at": "agent_event_facts_time_idx"},
 	}
 }()
