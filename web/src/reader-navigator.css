@@ -1,13 +1,10 @@
 .reader-navigator-host{position:sticky;top:0;z-index:6;background:var(--bg);border-block:1px solid var(--line);isolation:isolate;transform:translateZ(0)}
-.reader-navigator{padding:7px var(--workspace-page-gutter,16px);font-size:var(--fs-xs);--navigator-label:58px}
-.reader-navigator-controls{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;min-height:26px}
-.reader-navigator-controls strong{font-weight:500;color:var(--muted)}
-.reader-navigator-controls label{display:inline-flex;align-items:center;gap:4px;cursor:pointer}
-.reader-navigator-controls input{margin:0;accent-color:var(--accent)}
-.reader-navigator-position{margin-left:auto;min-width:95px;text-align:right;white-space:nowrap;color:var(--muted);font:10px ui-monospace,monospace}
-.reader-navigator-bars{position:relative;margin-top:4px}
+.reader-navigator{position:relative;padding:7px var(--workspace-page-gutter,16px);font-size:var(--fs-xs);--navigator-label:72px}
+.reader-navigator-choice{display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-size:10px;color:var(--muted);white-space:nowrap}
+.reader-navigator-choice input{margin:0;width:11px;height:11px;accent-color:var(--accent)}
+.reader-navigator-hidden{display:inline-flex;flex-wrap:wrap;gap:4px 12px}
+.reader-navigator-bars{position:relative}
 .reader-navigator-row{display:grid;grid-template-columns:var(--navigator-label) minmax(0,1fr);align-items:center;min-height:26px;gap:0}
-.reader-navigator-row>span{font-size:10px;color:var(--muted)}
 .reader-navigator-track{height:24px;position:relative;min-width:0;background:var(--panel);border-bottom:1px solid var(--line);overflow:hidden}
 .reader-navigator-timeline{height:34px;cursor:pointer}
 .reader-navigator-timeline .lt-session-ribbon{height:34px;width:100%;margin-right:0}
@@ -27,7 +24,13 @@
 .reader-navigator-context .token-marker:hover,.reader-navigator-context .token-marker:focus-visible{outline:1px solid var(--ink);outline-offset:-1px}
 .reader-navigator-track>small{display:block;color:var(--muted);font-size:10px;padding:5px}
 .reader-navigator-note{display:block;font-size:10px;color:var(--muted);margin-top:4px}
+/* The context bar's explanation floats over the transcript while the bar is
+ * hovered or focused, so it neither takes a row nor moves the sticky rail. */
+.reader-navigator-context-note{display:none;position:absolute;top:calc(100% + 2px);left:calc(var(--workspace-page-gutter,16px) + var(--navigator-label));max-width:calc(100% - 2 * var(--workspace-page-gutter,16px) - var(--navigator-label));box-sizing:border-box;padding:4px 8px;font-size:10px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;box-shadow:0 4px 12px rgb(0 0 0/.25);pointer-events:none}
+.reader-navigator:has(.reader-navigator-context:hover,.reader-navigator-context :focus-visible) .reader-navigator-context-note{display:block}
 .reader-navigator-key{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin:6px 0 0 var(--navigator-label);font-size:10px;color:var(--muted)}
 .reader-navigator-key>span{display:inline-flex;align-items:center;gap:4px}
-.reader-navigator-key i{width:8px;height:8px;display:inline-block}
-@media(max-width:580px){.reader-navigator{--navigator-label:45px;padding:5px 8px}.reader-navigator-controls{gap:6px 8px}.reader-navigator-position{font-size:9px}.reader-navigator-key{gap:4px 8px}}
+.reader-navigator-key.is-bare{margin:0}
+/* Tool swatches keep their own dot-and-line shape (delegation.css). */
+.reader-navigator-key i:not(.lt-tool-swatch){width:8px;height:8px;display:inline-block}
+@media(max-width:580px){.reader-navigator{--navigator-label:64px;padding:5px 8px}.reader-navigator-context-note{left:8px;max-width:calc(100% - 16px)}.reader-navigator-key{gap:4px 8px}}

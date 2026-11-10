@@ -479,8 +479,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/api/work/"):
 		// /api/work/{id}, /api/work/{id}/conversations/{conversation}, and
 		// /api/work/{id}/find: the reader loads a workspace in pieces.
-		// /api/work/{id}/conversations/{conversation}/signals feeds its
-		// Session signals strip.
+		// /api/work/{id}/conversations/{conversation}/signals lists the
+		// session's forensic signals and their messages.
 		// /api/work/{id}/matches places a Search's matches in its summary.
 		parts := strings.Split(strings.TrimPrefix(path, "/api/work/"), "/")
 		var value any
@@ -497,7 +497,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		case len(parts) == 3 && parts[1] == "conversations":
 			value, err = nilIfNoMap(s.Catalog.WorkConversationContext(r.Context(), parts[0], parts[2]))
 		case len(parts) == 4 && parts[1] == "conversations" && parts[3] == "signals":
-			// The reader's Session signals strip (session_shape.go).
+			// One session's forensic signals (session_shape.go).
 			value, err = nilIfNoMap(s.Catalog.SessionSignals(r.Context(), parts[0], parts[2]))
 		case len(parts) == 2 && parts[1] == "matches":
 			matches, err := s.Catalog.WorkMatches(r.Context(), parts[0], r.URL.Query())

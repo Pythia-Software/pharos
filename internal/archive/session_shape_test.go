@@ -377,7 +377,7 @@ func TestSessionShapeCatalogInputs(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v\nwant %#v", got, want)
 	}
-	// The reader's strip names each signal by its field and lists the
+	// SessionSignals names each signal by its field and lists the
 	// messages to step through; another workspace's reader gets nothing.
 	status, body := delegationGET(t, testServer(t, config, c), "/api/work/ws-1/conversations/cv-1/signals")
 	signals := map[string]any{}

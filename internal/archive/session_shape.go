@@ -53,8 +53,8 @@ const (
 	sessionShapeCompactBefore, sessionShapeCompactAfter, sessionShapeCompactShared = 10, 5, 2
 )
 
-// sessionShapeSignals are the forensic signals with evidence, in the order the
-// reader's strip and the docs list them. forensic_events sums their counts.
+// sessionShapeSignals are the forensic signals with evidence, in the order
+// SessionSignals and the docs list them. forensic_events sums their counts.
 var sessionShapeSignals = []string{"failed_calls", "failure_streak", "identical_retries", "thrash_retries", "churned_files",
 	"mid_task_compactions", "context_pressure", "corrections", "interrupts", "rejections", "hook_blocks",
 	"unverified_handbacks", "ended_on_failure", "long_unprompted_runs"}
@@ -1355,8 +1355,8 @@ func (c *Catalog) sessionShapeQueryRows(ctx context.Context, fields libraryField
 	return rows, nil
 }
 
-// SessionSignals is one conversation's forensic signals for the reader's
-// strip: each signal that fired, named by its dataset field, with its count
+// SessionSignals is one conversation's forensic signals: each signal that
+// fired, named by its dataset field, with its count
 // and the messages that triggered it, and the session's evidence coverage.
 // Nil when the conversation is not in the workspace.
 func (c *Catalog) SessionSignals(ctx context.Context, workspaceID, conversationID string) (map[string]any, error) {

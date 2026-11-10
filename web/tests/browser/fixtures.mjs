@@ -952,16 +952,6 @@ export const defaultApi = {
     const overview = work.conversations.find(item => item.id === params.conversation);
     return params.id === workID && overview ? { ...overview, repo_root: work.location, messages: params.conversation === rootConversation ? transcript() : childMessages(params.conversation) } : undefined;
   },
-  // The Session signals strip: the failed call's result, and two late prompts
-  // as corrections, so stepping lands in a collapsed turn.
-  "GET /api/work/:id/conversations/:conversation/signals": ({ params }) => {
-    if (params.id !== workID && params.id !== peerWorkID) return undefined;
-    const coverage = { has_tool_data: true, has_timestamps: true, has_authorship: true, has_context_window: false };
-    if (params.conversation !== rootConversation) return { conversation_id: params.conversation, signals: [], coverage };
-    const messages = transcript(), failed = messages.filter(message => message.kind === "tool_result" && JSON.parse(message.text).is_error), late = messages.filter(message => message.role === "user").slice(-2);
-    return { conversation_id: rootConversation, signals: [{ signal: "failed_calls", count: failed.length, message_ids: failed.map(message => message.id) }, { signal: "corrections", count: late.length, message_ids: late.map(message => message.id) }],
-      coverage };
-  },
   "GET /api/work/:id/delegation": ({ query }) => delegation(query),
   "GET /api/work/:id/parallel": ({ query }) => parallel(query),
   "GET /api/work/:id/preview": ({ params, query }) => workPreview(params.id, query),

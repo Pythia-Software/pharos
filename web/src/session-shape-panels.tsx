@@ -86,7 +86,7 @@ export function SessionsToRead({ where }: { where: WhereTerm[] }) {
   return <section className="session-shape-panel" aria-busy={result.loading}>
     <header>
       <h3>Sessions to read</h3>
-      <p className="muted">Sessions where a signal fired, most first. Open one in the reader; its Session signals strip marks where each fired.</p>
+      <p className="muted">Sessions where a signal fired, most first. Open one in the reader.</p>
       <label className="session-shape-signal-select">Signal <select value={signal} data-view-field="session_signal" onChange={event => setSignal(event.target.value as "all" | SessionSignal)}>
         <option value="all">All forensic events</option>
         {sessionSignals.map(id => <option key={id} value={id}>{sessionSignalLabels[id]}</option>)}
