@@ -717,7 +717,7 @@ func TestSessionGitCommandLinks(t *testing.T) {
 	// The checkout is the repository's by its remote (gitIdentity.holds).
 	execTx(t, f.catalog.DB, `UPDATE repositories SET normalized_remote='github.com/acme/app' WHERE id='repo-app'`)
 	repo.git(time.Now(), "remote", "add", "origin", "git@github.com:acme/app.git")
-	for _, id := range []string{"quiet", "heredoc", "scripted", "wrong", "hand", "nested", "rebased", "long", "short", "treed", "listed", "twin", "pulled", "picker", "tester"} {
+	for _, id := range []string{"quiet", "heredoc", "scripted", "wrong", "hand", "nested", "rebased", "long", "short", "treed", "listed", "twin", "pulled", "picker", "tester", "squasher", "amender"} {
 		f.session(id, "")
 	}
 	base := time.Now().Add(-20 * 24 * time.Hour).Truncate(time.Second)
@@ -825,6 +825,24 @@ func TestSessionGitCommandLinks(t *testing.T) {
 	f.command("tester", "npm test && git commit -qaF .git/MESSAGE", "", at(24, 0), 4*time.Minute)
 	byHand := worktree.commitAt(at(24, 100), "Made by hand meanwhile", map[string]string{"by-hand.go": "package byhand\n"})
 	tested := repo.commitAt(at(24, 230), "From a message file", map[string]string{"tested.go": "package tested\n"})
+	// Commits the session's own squash or amend replaced are its work once:
+	// the replaced ones, which only the reflog holds, are not counted again.
+	f.command("squasher", `git commit -qm "Step one"`, "", at(25, 0), 3*time.Second)
+	repo.commitAt(at(25, 1), "Step one", map[string]string{"b.go": "package b\n"})
+	f.command("squasher", `git commit -qm "Step two"`, "", at(25, 10), 3*time.Second)
+	repo.commitAt(at(25, 11), "Step two", map[string]string{"c.go": "package c\n"})
+	f.command("squasher", `git reset --soft HEAD~2 && git commit -qm "All the work at once"`, "", at(25, 20), 3*time.Second)
+	repo.git(at(25, 21), "reset", "--soft", "HEAD~2")
+	repo.git(at(25, 21), "commit", "-q", "-m", "All the work at once")
+	squashedAll := repo.git(at(25, 21), "rev-parse", "HEAD")
+	f.command("amender", `git commit -qm "First take"`, "", at(26, 0), 3*time.Second)
+	repo.commitAt(at(26, 1), "First take", map[string]string{"d.go": "package d\n"})
+	if err := os.WriteFile(filepath.Join(repo.dir, "d.go"), []byte("package d\n\nvar taken = 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.command("amender", `git commit -q --amend -am "Second take"`, "", at(26, 10), 3*time.Second)
+	repo.git(at(26, 11), "commit", "-q", "--amend", "-am", "Second take")
+	amended := repo.git(at(26, 11), "rev-parse", "HEAD")
 	repo.git(time.Now(), "update-ref", "refs/remotes/origin/main", "HEAD")
 	f.refresh()
 
@@ -842,7 +860,7 @@ func TestSessionGitCommandLinks(t *testing.T) {
 		"hand": hand[:7] + " inferred 0.7", "nested": messages(nested), "rebased": rebased[:7] + " rewrite 1",
 		"short": concurrent[:7] + " window 0.5", "treed": messages(treed, treedMore), "listed": messages(listed, common),
 		"twin": messages(twin), "pulled": messages(pulled, pulledMore, side), "picker": cherry[:7] + " transcript 1",
-		"tester": tested[:7] + " window 0.9",
+		"tester": tested[:7] + " window 0.9", "squasher": messages(squashedAll), "amender": messages(amended),
 	} {
 		if strings.Join(links[id], ", ") != want {
 			t.Errorf("%s links: %v, want %s", id, links[id], want)
@@ -881,7 +899,7 @@ func TestSessionGitCommandLinks(t *testing.T) {
 			t.Errorf("%s: %s, want %s (%s)", id, labels[id][0], want, labels[id][1])
 		}
 	}
-	for id, want := range map[string]string{"listed": "2 2 1", "twin": "1 1 0", "quiet": "1 1 1"} {
+	for id, want := range map[string]string{"listed": "2 2 1", "twin": "1 1 0", "quiet": "1 1 1", "squasher": "1 2 2", "amender": "1 3 3"} {
 		var got string
 		if err := f.catalog.DB.QueryRow(`SELECT linked_commits||' '||lines_added||' '||lines_landed FROM session_git WHERE workspace_id=?`, id).Scan(&got); err != nil || got != want {
 			t.Errorf("%s commits and lines: %q, want %q (%v)", id, got, want, err)

@@ -1502,7 +1502,8 @@ func (squashes *gitSquashes) changedAll(squash string, commit *gitCommit) bool {
 // linkOnce links each session once to each change: of the copies a rebase,
 // amend or cherry-pick made (the same author, author time and subject, or
 // the same change on mainline), to the one on mainline, then one a ref
-// still holds, then the newest.
+// still holds, then the newest. A replaced commit the session's own later
+// work took the place of is left out (dropSuperseded).
 func linkOnce(links []gitLink, commits map[string]*gitCommit) []gitLink {
 	change := func(hash string) string {
 		commit := commits[hash]
@@ -1552,7 +1553,61 @@ func linkOnce(links []gitLink, commits map[string]*gitCommit) []gitLink {
 			kept = append(kept, link)
 		}
 	}
-	return kept
+	return dropSuperseded(kept, commits)
+}
+
+// dropSuperseded leaves out a session's links to replaced commits that a
+// commit of its own, one a ref holds and counted, took the place of: one
+// with the tree of a commit in the replaced commit's line (the replaced
+// commits joined to it by parents), as a squash by reset or a fixup an
+// interactive rebase folded in has; or one made on the parent that line
+// started from, as an amend that changed the subject or a redo is. Its
+// change is the held commit's, or was given up for it: counted too, its
+// lines would count twice.
+func dropSuperseded(links []gitLink, commits map[string]*gitCommit) []gitLink {
+	trees, parents := map[string]bool{}, map[string]bool{}
+	for _, link := range links {
+		if commit := commits[link.Hash]; !commit.Replaced && link.Confidence >= outcomeGitCounted {
+			trees[link.Session+"\x00"+commit.Tree] = true
+			for _, parent := range commit.ParentHashes {
+				parents[link.Session+"\x00"+parent] = true
+			}
+		}
+	}
+	if len(trees) == 0 {
+		return links
+	}
+	children := map[string][]string{}
+	for hash, commit := range commits {
+		if commit.Replaced {
+			for _, parent := range commit.ParentHashes {
+				children[parent] = append(children[parent], hash)
+			}
+		}
+	}
+	superseded := func(session, hash string) bool {
+		seen, stack := map[string]bool{hash: true}, []string{hash}
+		for len(stack) > 0 {
+			commit := commits[stack[len(stack)-1]]
+			stack = stack[:len(stack)-1]
+			if trees[session+"\x00"+commit.Tree] {
+				return true
+			}
+			for _, other := range slices.Concat(commit.ParentHashes, children[commit.Hash]) {
+				if parents[session+"\x00"+other] && slices.Contains(commit.ParentHashes, other) {
+					return true
+				}
+				if next := commits[other]; next != nil && next.Replaced && !seen[other] {
+					seen[other] = true
+					stack = append(stack, other)
+				}
+			}
+		}
+		return false
+	}
+	return slices.DeleteFunc(links, func(link gitLink) bool {
+		return commits[link.Hash].Replaced && superseded(link.Session, link.Hash)
+	})
 }
 
 // patchIDs gives each commit's patch-id, of its change or of its inverse:

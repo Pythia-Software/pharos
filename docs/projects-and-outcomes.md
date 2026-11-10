@@ -392,7 +392,15 @@ no linked commit is judged on its Tier 1 facts.
   mainline) is linked once: to the copy on mainline, then one a ref still
   holds, then the newest. The link kept carries the strongest evidence of
   the copies' links, so a printed hash still counts when only inference
-  linked the copy kept. Another session's link to a copy stays.
+  linked the copy kept. Another session's link to a copy stays. A replaced
+  commit whose change went into a counted commit of the session's that a
+  ref holds is dropped as well, since its lines would count twice: the held
+  commit has the tree of the replaced commit or of one built on it (a
+  `reset --soft` squash, a fixup an interactive rebase folded in), or was
+  made on the parent its line of replaced commits started from (an amend
+  that changed the subject, or work redone after a reset). A replaced commit
+  nothing took the place of (abandoned work, or a deleted branch whose
+  squash is on mainline) stays linked and counted.
 - **Reverts.** A later commit reverts a linked one when its message says
   `This reverts commit <hash>`, or when it changes the same files with the
   added and removed counts swapped and its patch-id equals the linked
