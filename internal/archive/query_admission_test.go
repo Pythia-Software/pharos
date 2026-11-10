@@ -113,6 +113,122 @@ func TestQueryAdmissionFIFOAndCancellation(t *testing.T) {
 	}
 }
 
+// Work whose kind last ran slowly leaves the last slot to quicker work, which
+// passes it in the queue; it still starts as soon as a second slot is free.
+func TestQueryAdmissionKeepsASlotForQuickWork(t *testing.T) {
+	gate := &queryAdmission{limit: 2, lasted: map[string]time.Duration{"slow": time.Hour}}
+	first, err := gate.acquireKind(t.Context(), "slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := make(chan func(), 1)
+	go func() {
+		finish, err := gate.acquireKind(t.Context(), "slow")
+		if err != nil {
+			t.Error(err)
+		}
+		second <- finish
+	}()
+	waitForQueryQueue(t, gate, 1)
+	// The free slot goes to quick work, ahead of the slow waiter.
+	quick, err := gate.acquireKind(t.Context(), "quick")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-second:
+		t.Fatal("slow work took the last slot")
+	default:
+	}
+	quick()
+	waitForQueryQueue(t, gate, 1)
+	first()
+	// Each run is remembered: a kind that turns out quick is no longer held
+	// back. Work given up on says nothing about how long it would have run.
+	(<-second)()
+	gate.lasted["abandoned"] = time.Hour
+	gone, cancel := context.WithCancel(t.Context())
+	abandoned, err := gate.acquireKind(gone, "abandoned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	abandoned()
+	if gate.lasted["abandoned"] != time.Hour || gate.lasted["slow"] >= slowQuery {
+		t.Fatalf("remembered %v", gate.lasted)
+	}
+	a, err := gate.acquireKind(t.Context(), "slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := gate.acquireKind(t.Context(), "slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a()
+	b()
+	// A kind learned slow while its requests queue holds them back when
+	// their turn comes: they are judged then, not on arrival.
+	holders := [2]func(){}
+	for i := range holders {
+		if holders[i], err = gate.acquire(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	learned := make(chan func(), 2)
+	for i := range 2 {
+		go func() {
+			finish, err := gate.acquireKind(t.Context(), "learned")
+			if err != nil {
+				t.Error(err)
+			}
+			learned <- finish
+		}()
+		waitForQueryQueue(t, gate, i+1)
+	}
+	gate.mu.Lock()
+	gate.lasted["learned"] = time.Hour
+	gate.mu.Unlock()
+	holders[0]()
+	holders[1]()
+	finish := <-learned
+	gate.mu.Lock()
+	active, slow, queued := gate.active, gate.slow, gate.wait.Len()
+	gate.mu.Unlock()
+	if active != 1 || slow != 1 || queued != 1 {
+		t.Fatalf("requests of a kind learned slow while queued: active=%d slow=%d queued=%d", active, slow, queued)
+	}
+	finish()
+	(<-learned)()
+	// A build that yields its slot to a dependency resumes as the work it
+	// has been: the part it ran is neither its kind's duration nor forgotten.
+	build, err := gate.lease(t.Context(), "build", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build.started = build.started.Add(-time.Hour)
+	ran := build.yield()
+	if _, recorded := gate.lasted["build"]; recorded || ran < time.Hour {
+		t.Fatalf("yield recorded %v, ran %s", gate.lasted["build"], ran)
+	}
+	resumed, err := gate.lease(t.Context(), "build", ran)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resumed.slow {
+		t.Fatal("a long build resumed as quick work")
+	}
+	resumed.release()
+	if gate.lasted["build"] < time.Hour {
+		t.Fatalf("build remembered as %s", gate.lasted["build"])
+	}
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.active != 0 || gate.slow != 0 || gate.wait.Len() != 0 {
+		t.Fatalf("admission leaked: active=%d slow=%d queued=%d", gate.active, gate.slow, gate.wait.Len())
+	}
+}
+
 func TestQueryAdmissionBoundsConcurrentWork(t *testing.T) {
 	gate := &queryAdmission{limit: 3}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
