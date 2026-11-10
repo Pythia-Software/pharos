@@ -20,7 +20,7 @@ const metricProjectionVersion = "metrics-v4-consuming-layer-leaves"
 // is not published and the workspace stays dirty.
 func (c *Catalog) ensureMetricSchema() error {
 	_, err := c.DB.Exec(`CREATE TABLE IF NOT EXISTS mcp_metric_dirty(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE);
-	CREATE TABLE IF NOT EXISTS mcp_metric_claims(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,token TEXT NOT NULL);
+	CREATE TABLE IF NOT EXISTS mcp_metric_claims(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,token TEXT NOT NULL,claimed_at INTEGER NOT NULL);
 	CREATE TABLE IF NOT EXISTS mcp_metric_projection(entity TEXT NOT NULL,entity_id TEXT NOT NULL,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,metrics_json TEXT NOT NULL,total_tokens REAL,cost_usd REAL,tool_error_count REAL,PRIMARY KEY(entity,entity_id));
 	CREATE INDEX IF NOT EXISTS mcp_metric_workspace_idx ON mcp_metric_projection(workspace_id);
 	CREATE INDEX IF NOT EXISTS mcp_metric_tokens_idx ON mcp_metric_projection(entity,total_tokens);
@@ -92,6 +92,11 @@ func (c *Catalog) ensureMetricSchema() error {
 	return err
 }
 
+// metricClaimAbandoned is how old a claim is before another refresh may take
+// its workspaces: longer than any batch takes to compute. A refresh that
+// outlives its claim publishes nothing for those workspaces.
+var metricClaimAbandoned = 10 * time.Minute
+
 // metricProjectionComputedHook, when set (tests), runs after a refresh has
 // computed its batch and before it publishes.
 var metricProjectionComputedHook func()
@@ -106,8 +111,19 @@ func (c *Catalog) refreshMetricProjections(ctx context.Context, batch int, works
 		where = " WHERE workspace_id IN (SELECT value FROM json_each(?))"
 		args = append(args, jsonText(workspaceIDs))
 	}
-	args = append(args, batch)
-	// Nothing dirty: return without waiting for the writer.
+	// A workspace another refresh has claimed (the app's and a CLI's loops
+	// overlap) is that refresh's to publish. Its claim stands until it is
+	// released, published or abandoned: taking it over would have each
+	// refresh revoke the other's and neither store anything.
+	abandoned := time.Now().Add(-metricClaimAbandoned).Unix()
+	unclaimed := " workspace_id NOT IN (SELECT workspace_id FROM mcp_metric_claims WHERE claimed_at>=?)"
+	if where == "" {
+		where = " WHERE" + unclaimed
+	} else {
+		where += " AND" + unclaimed
+	}
+	args = append(args, abandoned, batch)
+	// Nothing dirty and unclaimed: return without waiting for the writer.
 	pending, err := queryMapsContext(ctx, c.reader(), `SELECT workspace_id FROM mcp_metric_dirty`+where+` LIMIT ?`, args...)
 	if err != nil || len(pending) == 0 {
 		return 0, err
@@ -116,14 +132,16 @@ func (c *Catalog) refreshMetricProjections(ctx context.Context, batch int, works
 	for _, row := range pending {
 		ids = append(ids, firstString(row["workspace_id"]))
 	}
-	// Claim before reading. A claim left by a refresh that never finished is
-	// dropped here; its workspaces are still dirty.
+	// Claim before reading. Only a claim whose refresh never finished is
+	// dropped; its workspaces are still dirty. One taken since the read above
+	// is kept, and this refresh computes the rest.
 	token := randomToken()
 	if err := c.writeTransaction(ctx, "metric-projection claim", func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM mcp_metric_claims`); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM mcp_metric_claims WHERE claimed_at<?`, abandoned); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO mcp_metric_claims(workspace_id,token) SELECT workspace_id,? FROM mcp_metric_dirty WHERE workspace_id IN (SELECT value FROM json_each(?))`, token, jsonText(ids))
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO mcp_metric_claims(workspace_id,token,claimed_at) SELECT workspace_id,?,? FROM mcp_metric_dirty WHERE workspace_id IN (SELECT value FROM json_each(?))`,
+			token, time.Now().Unix(), jsonText(ids))
 		return err
 	}); err != nil {
 		return 0, err

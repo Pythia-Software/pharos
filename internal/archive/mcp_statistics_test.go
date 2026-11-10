@@ -376,6 +376,33 @@ func TestStatisticsIncrementalProjectionAndPriceInvalidation(t *testing.T) {
 	if dirty, projection := stored(); dirty != 0 || projection == obsolete {
 		t.Fatalf("the next refresh left %d dirty, stored anew %v", dirty, projection != obsolete)
 	}
+	// A refresh that overlaps another's leaves the other's claim alone, so
+	// the first still publishes; only an abandoned claim is taken over.
+	if _, err := c.DB.Exec("INSERT OR IGNORE INTO mcp_metric_dirty SELECT id FROM workspaces"); err != nil {
+		t.Fatal(err)
+	}
+	metricProjectionComputedHook = func() {
+		metricProjectionComputedHook = nil
+		if attempted, err := c.refreshMetricProjections(context.Background(), 10); err != nil || attempted != 0 {
+			t.Errorf("an overlapping refresh took %d claimed workspaces (%v)", attempted, err)
+		}
+	}
+	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if dirty, _ := stored(); dirty != 0 {
+		t.Fatalf("an overlapping refresh kept the first from publishing: %d dirty", dirty)
+	}
+	if _, err := c.DB.Exec(`INSERT OR IGNORE INTO mcp_metric_dirty SELECT id FROM workspaces;
+		INSERT INTO mcp_metric_claims SELECT id,'a refresh that never finished',? FROM workspaces`, time.Now().Add(-2*metricClaimAbandoned).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if dirty, _ := stored(); dirty != 0 {
+		t.Fatalf("an abandoned claim kept %d workspaces dirty", dirty)
+	}
 	if repriced := statisticsItems(statisticsCall(t, c, "query_statistics", args))[0]["cost_usd"]; repriced == statisticsItems(after)[0]["cost_usd"] {
 		t.Fatal("the stored projection kept the price it was overtaken at")
 	}
