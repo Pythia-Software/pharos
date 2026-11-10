@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -212,8 +213,77 @@ func TestResultCachePolicies(t *testing.T) {
 	}
 }
 
-// A card's query is one entry however often the page loads, is served
-// without touching the catalog, and is recomputed after the data changes.
+// The Usage rows are rebuilt for a request to find ready, but only once the
+// catalog is at rest and nobody is waiting.
+func TestDerivedValuesAreRebuiltOnceAChangeSettles(t *testing.T) {
+	catalog, config := libraryFixture(t)
+	server := testServer(t, config, catalog)
+	// current reports whether the Usage rows are computed for the catalog as it is.
+	current := func() bool {
+		t.Helper()
+		if _, err := catalog.catalogVersion(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		cache := &catalog.derived
+		cache.mu.Lock()
+		defer cache.mu.Unlock()
+		for key, entry := range cache.entries {
+			if strings.HasPrefix(key, "usage:") {
+				return entry.version == cache.versions.generations.of(derivedKeyGeneration(key))
+			}
+		}
+		return false
+	}
+	change := func(statement string) {
+		t.Helper()
+		if _, err := catalog.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const rows, labels = `UPDATE workspaces SET title=title||'.' WHERE id='c'`, `UPDATE query_cache_generation SET value=value+1 WHERE id=1; UPDATE query_cache_domains SET value=value+1 WHERE name='labels'`
+	var follower derivedFollower
+	busy, free := func() bool { return false }, func() bool { return true }
+	look := func(idle func() bool, want bool, what string) {
+		t.Helper()
+		if server.rebuildDerivedAfterChange(t.Context(), &follower, idle); current() != want {
+			t.Fatalf("%s: Usage rows current = %v, want %v", what, !want, want)
+		}
+	}
+	look(free, false, "first look after starting")
+	look(busy, false, "a query is waiting")
+	look(free, true, "at rest after starting")
+	change(rows)
+	look(free, false, "a change that has not settled")
+	// An ingest repeats the version from before it began, which is not rest.
+	catalog.ingestRuns.Add(1)
+	look(free, false, "an ingest is running")
+	look(free, false, "an ingest is still running")
+	catalog.ingestRuns.Add(-1)
+	look(free, false, "first look after the ingest")
+	// Writes the rows do not read (labels) never hold them back.
+	change(labels)
+	look(free, true, "settled, while labels keep changing")
+	// A stopped library is left alone.
+	change(rows)
+	look(free, false, "another change")
+	catalog.catchUp.mu.Lock()
+	catalog.catchUp.stopped = true
+	catalog.catchUp.mu.Unlock()
+	look(free, false, "the library is stopped")
+	catalog.catchUp.mu.Lock()
+	catalog.catchUp.stopped = false
+	catalog.catchUp.mu.Unlock()
+	look(free, true, "the library runs again")
+	// A request waiting for a derived value counts as waiting, whoever builds it.
+	attended := heavyQueries.attend()
+	if heavyQueries.interactive() != 1 {
+		t.Fatal(heavyQueries.interactive())
+	}
+	if attended(); heavyQueries.interactive() != 0 {
+		t.Fatal(heavyQueries.interactive())
+	}
+}
+
 func TestQueryResultStampNamesZoneAndBuild(t *testing.T) {
 	at := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	zones := map[string]string{}
@@ -237,6 +307,8 @@ func TestQueryResultStampNamesZoneAndBuild(t *testing.T) {
 	}
 }
 
+// A card's query is one entry however often the page loads, is served
+// without touching the catalog, and is recomputed after the data changes.
 func TestQueryResultsAreCached(t *testing.T) {
 	catalog, config := libraryFixture(t)
 	server := testServer(t, config, catalog)

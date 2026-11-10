@@ -34,6 +34,9 @@ type queryAdmission struct {
 	// background counts the running and waiting work that only improves
 	// later answers (backgroundQuery), which interactive() leaves out.
 	background int
+	// attending counts requests waiting for a derived value, whoever is
+	// computing it (attend).
+	attending int
 	// lasted is how long each kind of work took the last time it ran to
 	// completion or was given up on.
 	lasted map[string]time.Duration
@@ -234,7 +237,25 @@ func (a *queryAdmission) busy() bool {
 func (a *queryAdmission) interactive() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.active + a.wait.Len() - a.background
+	return a.active + a.wait.Len() - a.background + a.attending
+}
+
+// attend counts a request as waiting for work from now until the returned
+// function is called. A request that needs a derived value may be waiting
+// for a build that background work started, which holds a background
+// lease: the service is not idle while someone waits for it.
+func (a *queryAdmission) attend() func() {
+	a.mu.Lock()
+	a.attending++
+	a.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			a.mu.Lock()
+			a.attending--
+			a.mu.Unlock()
+		})
+	}
 }
 
 type derivedAdmissionKey struct{}

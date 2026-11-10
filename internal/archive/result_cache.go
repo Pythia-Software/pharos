@@ -66,6 +66,9 @@ var (
 	resultSweepEvery   = 2 * time.Minute
 	// resultBuildDeadline bounds one background refresh.
 	resultBuildDeadline = 2 * time.Minute
+	// resultChangeEvery is how often the refresher looks for a change to
+	// the catalog. One that is still there at the next look has settled.
+	resultChangeEvery = 5 * time.Second
 )
 
 // resultDomain is one kind of cached response.
@@ -580,10 +583,82 @@ func (s *Server) refreshResults(ctx context.Context, sweeps bool) {
 	s.refreshResultsWhile(ctx, cache, free, sweep)
 }
 
+// derivedFollower rebuilds, once a change to the catalog has settled and
+// nobody is waiting for a query, the derived values that requests compute
+// before they can answer (the Usage rows take seconds, and half a minute
+// after a restart). The maintenance pass warms them too, but only after all
+// its other work, which a backlog or a schedule can hold off indefinitely.
+//
+// Each generation (derivedKeyGeneration) settles by itself: label commits
+// arriving every second do not hold back the Usage rows, which read none.
+type derivedFollower struct {
+	started bool
+	opened  bool // the Usage rows have been computed once since starting
+	seen    cacheGenerations
+	rebuilt map[string]int64
+}
+
+var derivedGenerationScopes = []string{generationCore, generationEvents, generationAll}
+
+func (s *Server) rebuildDerivedAfterChange(ctx context.Context, f *derivedFollower, free func() bool) {
+	c := s.Catalog
+	// An ingest, a projection batch and a stopped library all mean the
+	// catalog is not at rest, or that the person asked for no such work.
+	generations, ok := c.settledGenerations(ctx)
+	if !ok {
+		f.started = false
+		return
+	}
+	previous, started := f.seen, f.started
+	f.started, f.seen = true, generations
+	if !started || c.projectionBatches.Load() > 0 || c.libraryRefreshStopped() || !free() {
+		return
+	}
+	// Settled: the same at two looks. More changes may follow one that is
+	// not, each undoing a rebuild.
+	due := map[string]bool{}
+	for _, scope := range derivedGenerationScopes {
+		if at := generations.of(scope); at == previous.of(scope) {
+			if done, known := f.rebuilt[scope]; !known || done != at {
+				due[scope] = true
+			}
+		}
+	}
+	if len(due) == 0 && f.opened {
+		return
+	}
+	s.runCacheWarm(ctx, func(ctx context.Context) {
+		build, cancel := context.WithTimeout(backgroundQuery(ctx), resultBuildDeadline)
+		defer cancel()
+		if !f.opened && generations.of(generationCore) == previous.of(generationCore) {
+			// What the page the app opens on reads, as the maintenance pass
+			// warms: after a restart nothing has been requested yet.
+			if _, err := c.localUsageRows(build); err != nil {
+				return
+			}
+			f.opened = true
+		}
+		// A page that starts waiting stops the rebuild between values.
+		if len(due) == 0 || !c.recomputeStaleDerived(build, func(scope string) bool { return due[scope] }, free) || build.Err() != nil {
+			return
+		}
+		if f.rebuilt == nil {
+			f.rebuilt = map[string]int64{}
+		}
+		for scope := range due {
+			f.rebuilt[scope] = generations.of(scope)
+		}
+	})
+}
+
 func (s *Server) refreshResultsWhile(ctx context.Context, cache *resultCache, free func() bool, sweep *time.Timer) {
-	var swept <-chan time.Time
+	var swept, changed <-chan time.Time
+	var follower derivedFollower
 	if sweep != nil {
 		swept = sweep.C
+		look := time.NewTicker(resultChangeEvery)
+		defer look.Stop()
+		changed = look.C
 	}
 	for {
 		select {
@@ -591,6 +666,8 @@ func (s *Server) refreshResultsWhile(ctx context.Context, cache *resultCache, fr
 			return
 		case <-cache.wake:
 			cache.woke()
+		case <-changed:
+			s.rebuildDerivedAfterChange(ctx, &follower, free)
 		case <-swept:
 			s.sweepResults(ctx)
 			sweep.Reset(resultSweepEvery)

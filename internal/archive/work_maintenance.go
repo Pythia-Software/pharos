@@ -838,7 +838,7 @@ func (w *workService) heldUnits(kind string) ([]string, bool) {
 // warmCachesNow reads the page caches warm at most every maintenanceWarmGap,
 // as the classic pass did once its projections were idle.
 func (s *Server) warmCachesNow(ctx context.Context, routing *maintenanceRouting) {
-	w, c := s.work, s.Catalog
+	c := s.Catalog
 	routing.mu.Lock()
 	due := time.Since(routing.warmedAt) >= maintenanceWarmGap
 	if due {
@@ -848,18 +848,28 @@ func (s *Server) warmCachesNow(ctx context.Context, routing *maintenanceRouting)
 	if !due {
 		return
 	}
-	// Cache warming is opportunistic: it takes a free slot now or skips this
-	// tick. Waiting for one would stop this one coordinator from submitting
-	// new projection and label-fact demand while every slot is busy.
-	cpus, ok, _ := w.authority.tryCPUs(1, 1, 0, false)
-	if !ok {
-		return
+	s.runCacheWarm(ctx, c.warmCaches)
+}
+
+// runCacheWarm runs work that reads page caches warm as the maintenance
+// pass does: at background I/O priority and, under population execution,
+// inside the CPU budget. Cache warming is opportunistic: it takes a free
+// slot now or is skipped, and reports which. Waiting for one would stop
+// its caller from doing anything else while every slot is busy.
+func (s *Server) runCacheWarm(ctx context.Context, run func(context.Context)) bool {
+	if w := s.work; w != nil {
+		cpus, ok, _ := w.authority.tryCPUs(1, 1, 0, false)
+		if !ok {
+			return false
+		}
+		defer w.authority.releaseCPUs(cpus)
+		ctx = withWorkAdmission(ctx, w.authority, workAllocation{CPUs: cpus})
 	}
-	defer w.authority.releaseCPUs(cpus)
-	ctx = withWorkAdmission(ctx, w.authority, workAllocation{CPUs: cpus})
-	warm := c.beginPass(ctx, "maintenance.cache-warm", triggerChained)
-	warm.runIO(ctx, func(ctx context.Context) { c.warmCaches(ctx) })
+	// Warming only reads; its operation is never published.
+	warm := s.Catalog.beginPass(ctx, "maintenance.cache-warm", triggerChained)
+	warm.runIO(ctx, run)
 	warm.end(nil)
+	return true
 }
 
 // submitPendingTask submits continuing demand for a coarse task whose own
