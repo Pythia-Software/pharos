@@ -1,6 +1,6 @@
 import { chartSeriesStyle, orderedScope, otherSeriesColor } from "./chart-colors";
 import { periodBuckets, periodIndex, periodKey, periodStart, type ChartPeriod } from "./chart-period";
-import { columnScale, type ChartScale } from "./chart-scale";
+import { columnScale, type AxisUnit, type ChartScale } from "./chart-scale";
 
 export type ChartSeries = { key: string; label: string; color: string; value?: string; hiddenCount?: number; foldedValues?: string[]; group?: string; groupPath?: string[] };
 export type LegendGroup = { label: string; path: string[]; items: ChartSeries[]; groups: LegendGroup[] };
@@ -38,13 +38,16 @@ export const validChartDisplay = (value: unknown): value is ChartDisplay | undef
 
 // Logarithmic timelines compare each series independently: a stack's segment
 // heights would depend on the amounts below it, rather than its own value.
-export function timelineGeometry(buckets: ChartBucket[], series: ChartSeries[], { scale, lines = false, bars = false, grouped = false, percent = false, reference = 0 }: { scale: ChartScale; lines?: boolean; bars?: boolean; grouped?: boolean; percent?: boolean; reference?: number }) {
+// Lines and grouped bars draw every series' value on its own, so the linear +
+// log break looks at all of them: one series far above the rest, even for
+// many periods, gets the compressed top half instead of flattening the rest.
+export function timelineGeometry(buckets: ChartBucket[], series: ChartSeries[], { scale, lines = false, bars = false, grouped = false, percent = false, reference = 0, unit }: { scale: ChartScale; lines?: boolean; bars?: boolean; grouped?: boolean; percent?: boolean; reference?: number; unit?: AxisUnit }) {
   lines = !bars && (lines || scale === "logarithmic" && !percent);
-  const peaks = buckets.map(bucket => {
+  const heights = buckets.flatMap(bucket => {
     const values = series.map(item => bucket.values[item.key] ?? 0);
-    return lines || grouped ? Math.max(0, ...values) : values.reduce((sum, value) => sum + value, 0);
+    return lines || grouped ? values : [values.reduce((sum, value) => sum + value, 0)];
   });
-  return { ...columnScale([...peaks, reference], percent ? "linear" : scale), lines };
+  return { ...columnScale([...heights, reference], percent ? "linear" : scale, percent ? undefined : unit), lines };
 }
 
 // Missing additive amounts are idle periods; missing ratios break the line.

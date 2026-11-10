@@ -261,14 +261,14 @@ test('native query help includes every referenced public type from the pinned re
 test("the %ile levels: checked in every view, drawn by context as the page draws them, norm read as the mean", () => {
   const judge = (topic, chart) => judgeChart(map.analyze.dashboards[topic], map.analyze.version, chart);
   const drawn = (topic, chart) => drawChart(map.analyze.dashboards[topic].views[chart.view], readChart(map.analyze.dashboards[topic], chart).merged).percentiles;
-  const lines = { v: 2, view: "trend", metric: "tokens", split: "none" };
+  const lines = { v: 3, view: "trend", metric: "tokens", split: "none" };
   for (const [topic, chart, levels, verdict] of [
     ["tokens", { ...lines, percentiles: ["p50", "p90"] }, ["p50", "p90"], "valid"],
     ["tokens", { ...lines, percentiles: ["p90", "mean"] }, ["mean", "p90"], "coercible"],
     ["tokens", { ...lines, split: "provider", share: true, percentiles: ["p50"] }, [], "coercible"],
     ["tokens", { ...lines, display: "cumulative", percentiles: ["mean"] }, [], "coercible"],
-    ["session_shape", { v: 2, view: "trend", metric: "sessions", split: "length_band", percentiles: ["mean", "p90"] }, ["p90"], "coercible"],
-    ["session_shape", { v: 2, view: "trend", metric: "sessions", split: "none", percentiles: ["mean", "p99"] }, ["mean", "p99"], "valid"],
+    ["session_shape", { v: 3, view: "trend", metric: "sessions", split: "length_band", percentiles: ["mean", "p90"] }, ["p90"], "coercible"],
+    ["session_shape", { v: 3, view: "trend", metric: "sessions", split: "none", percentiles: ["mean", "p99"] }, ["mean", "p99"], "valid"],
   ]) {
     const name = `${topic} ${JSON.stringify(chart)}`;
     assert.deepEqual(drawn(topic, chart), levels, name);
@@ -276,7 +276,7 @@ test("the %ile levels: checked in every view, drawn by context as the page draws
     assert.equal(judge(topic, chart), verdict, name);
     assert.equal(chartVerdict(topic, chart), verdict, `${name}: the page`);
   }
-  for (const chart of [{ ...lines, percentiles: ["p42"] }, { ...lines, percentiles: "p50" }, { ...lines, percentiles: ["p50", "p50"] }, { v: 2, view: "compare", metric: "tokens", split: "provider", percentiles: ["p42"] }])
+  for (const chart of [{ ...lines, percentiles: ["p42"] }, { ...lines, percentiles: "p50" }, { ...lines, percentiles: ["p50", "p50"] }, { v: 3, view: "compare", metric: "tokens", split: "provider", percentiles: ["p42"] }])
     assert.equal(judge("tokens", chart), "invalid", JSON.stringify(chart));
   // An older link's norm opens as the mean, written under its current name.
   const old = { ...lines, norm: true };

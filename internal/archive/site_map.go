@@ -126,7 +126,10 @@ type siteWindows struct {
 }
 
 type siteAnalyze struct {
-	Version      int            `json:"version"`
+	Version int `json:"version"`
+	// ReadableVersions are the chart versions the page opens; one before
+	// Version is an older link, which the page migrates.
+	ReadableVersions []int          `json:"readable_versions"`
 	FillDefaults map[string]any `json:"fill_defaults"`
 	Absent       string         `json:"absent"`
 	Fallback     string         `json:"fallback"`
@@ -188,6 +191,9 @@ type siteView struct {
 	Domains  map[string][]any       `json:"domains"`
 	Numeric  map[string]siteNumeric `json:"numeric"`
 	Rules    []siteRule             `json:"rules"`
+	// Kept lists view settings a chart may hold as the reader chose them,
+	// which the rules neither check nor fill; viewChart keeps them.
+	Kept []string `json:"kept"`
 	// The display a catalog that chooses its charts draws, by the given
 	// options' values (metric, then split).
 	ChosenDisplay *struct {
@@ -603,7 +609,7 @@ func (site *siteMap) judge(d *siteDashboard, chart map[string]any) (string, *cha
 	if view == nil {
 		return verdictInvalid, &chartProblem{Key: "view", Reason: fmt.Sprintf("%q is not a view of this dashboard", viewName)}
 	}
-	if v, ok := merged["v"]; ok && v != nil && !sameValue(v, float64(site.Analyze.Version)) {
+	if v, ok := merged["v"]; ok && v != nil && !slices.ContainsFunc(site.Analyze.ReadableVersions, func(version int) bool { return sameValue(v, float64(version)) }) {
 		return verdictInvalid, &chartProblem{Key: "v", Reason: fmt.Sprintf("v must be %d", site.Analyze.Version)}
 	} else if ok && v == nil {
 		return verdictInvalid, &chartProblem{Key: "v", Reason: fmt.Sprintf("v must be %d", site.Analyze.Version)}
@@ -623,6 +629,9 @@ func (site *siteMap) judge(d *siteDashboard, chart map[string]any) (string, *cha
 	}
 	if _, hasV := merged["v"]; !hasV {
 		return verdictCoercible, &chartProblem{Key: "v", Reason: "a chart without v is an older link, which the page migrates"}
+	}
+	if !sameValue(merged["v"], float64(site.Analyze.Version)) {
+		return verdictCoercible, &chartProblem{Key: "v", Reason: fmt.Sprintf("a chart before version %d is an older link, which the page migrates", site.Analyze.Version)}
 	}
 	if renamed {
 		return verdictCoercible, &chartProblem{Key: "metric", Reason: "the chart uses an older name, which the page renames"}
@@ -887,8 +896,8 @@ func (site *siteMap) allowedHere(view *siteView, merged map[string]any, option s
 }
 
 // viewChart is the chart Go writes: older names read as current ones, then
-// only the keys its view draws, in the view's order, and a non-empty legend
-// selection (docs/site-map.md, "Go writes current names and only the view's
+// only the keys its view draws, in the view's order, the view settings it
+// leaves to the page (Kept), and a non-empty legend selection (docs/site-map.md, "Go writes current names and only the view's
 // keys").
 func (d *siteDashboard) viewChart(chart map[string]any) orderedObject {
 	merged := mergeChart(d.MergeDefaults, chart)
@@ -911,7 +920,7 @@ func (d *siteDashboard) viewChart(chart map[string]any) orderedObject {
 	if view == nil {
 		return out
 	}
-	for _, key := range view.Keys {
+	for _, key := range append(append([]string{}, view.Keys...), view.Kept...) {
 		if value, ok := current[key]; ok {
 			out.set(key, value)
 		}

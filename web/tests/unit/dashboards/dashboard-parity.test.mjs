@@ -199,7 +199,8 @@ for (const [name, filter, selected] of [["all usage", [], false], ["one provider
   const { days, ends } = cardTrendDays(7, true, at);
   const card = buildCardTrend(trend, 7, cardTrendQueries(filter, trend, days).map(query => core.evaluateMetrics(rows, query, schema, { now: at }).metrics), at).study;
   const where = [...withTimeRange([], usageTime, undefined, undefined, "30d"), ...selected ? [] : filter];
-  const state = { metric: "tokens", split: filter.length ? "provider" : "none", period: "day", hours: 6, days: 3, rollingPeriods: 7, rollingOp: "mean", completePeriods: true, norm: true, ...selected ? { selection: { values: ["codex"], excluded: false } } : {} };
+  // With its zeroes, as the card's dashboard (card-destinations) draws it.
+  const state = { metric: "tokens", split: filter.length ? "provider" : "none", period: "day", hours: 6, days: 3, rollingPeriods: 7, rollingOp: "mean", completePeriods: true, norm: true, nonzero: false, ...selected ? { selection: { values: ["codex"], excluded: false } } : {} };
   const query = trendQuery(tokenAnalysisSource, state, where, { now: at });
   const built = trendSeries(tokenAnalysisSource, state, query, core.evaluateMetrics(rows, query.query, schema, { now: at }).metrics, { where, now: at });
   assert.deepEqual(built.buckets.map(bucket => bucket.key), ends.slice(2), "29 whole days through yesterday: the partial first day is left out");

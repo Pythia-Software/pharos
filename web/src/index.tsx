@@ -145,7 +145,7 @@ import { conversationAnalysisCatalog } from "./conversation-analysis-catalog";
 import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
 import { isTrendView, analysisVersion, canonicalState, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
-import { dashboardDefaults } from "./dashboard-defaults";
+import { dashboardDefaults, legacyViewDefaults } from "./dashboard-defaults";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { PricingNotice } from "./pricing-notice";
 import { describeTerm, humanAnalysisCatalog, readHumanLink } from "./human-analysis-catalog";
@@ -1194,7 +1194,7 @@ type TokenTrendView = Omit<TokenChartView, "metric" | "split"> & AnalysisState;
 const validTokenDashboard = (view: TokenTrendView) => validAnalysisState(tokenAnalysisCatalog, view);
 
 function TokenUsageDashboard() {
-  const state = useUsageDashboardState<TokenTrendView>(dashboardDefaults.tokens as TokenTrendView, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where));
+  const state = useUsageDashboardState<TokenTrendView>(dashboardDefaults.tokens as TokenTrendView, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where, legacyViewDefaults.tokens));
   const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
   return <><PricingNotice copy={copyText} />{state.error ? <p className="query-table-error" role="alert">{state.error}</p>
     : !isTrendView(state.view.view) ? <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
@@ -1221,7 +1221,7 @@ function HumanUsageDashboard() {
 // combined values, a legend selection of a combined group) are left out and
 // listed, with the legacy Writing view where they still apply.
 const readHumanWhere: ReadWhere = (where, state) => {
-  const read = readHumanLink(where, state.v === analysisVersion);
+  const read = readHumanLink(where, typeof state.v === "number" && state.v >= 2);
   if (!read.unsupported.length) return read;
   const selection = (term: WhereTerm) => predicatesOf(term).some(clause => clause.field === state.split);
   return { where: read.where, notice: <>This older link’s {read.unsupported.some(selection) ? "legend selection and filters" : "filters"} on whole workspaces cannot keep their meaning for messages, so they are left out: {read.unsupported.map(describeTerm).join("; ")}.</> };
@@ -1299,12 +1299,14 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
   frame?: (views: CatalogViews, where: WhereTerm[], onFilter: FilterChange) => React.ReactNode;
 }) {
   // An older link is read in the catalog's terms once (canonicalState) and
-  // rewritten, so a later change never merges with its old vocabulary.
+  // rewritten, so a later change never merges with its old vocabulary. Its
+  // topic's earlier view defaults are the ones defaults was written with.
   const notice = useRef<React.ReactNode>(null);
+  const legacy = legacyViewDefaults[Object.entries(dashboardDefaults).find(([, value]) => value === defaults)?.[0] as keyof typeof legacyViewDefaults];
   const state = useUsageDashboardState<AnalysisState>(defaults, view => validAnalysisState(linkCatalog, view), linkCatalog.time, (view, where) => {
     const read = readWhere?.(where, view);
     notice.current = read?.notice ?? null;
-    return readAnalysisLink(linkCatalog, canonicalState(linkCatalog, view), read ? read.where : where);
+    return readAnalysisLink(linkCatalog, canonicalState(linkCatalog, view), read ? read.where : where, legacy);
   });
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const resolved=peopleMessageLabelCatalog(catalog,state.view), resolvedDataset=resolved.dataset as UsageDataset;

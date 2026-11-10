@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import document from "../../../../schemas/session_shape.schema.json";
 import { core, schemas, queryRecipes, recipeById, instantiateRecipe, cardCoverQuery } from "../helpers/recipes.mjs";
-import { analysisQuery, catalogProblems, heatmapAxis, heatmapSource, nativeCycleResult, normalizeAnalysis, selectGroups, trendDrawing } from "../../../src/dashboard-analysis-model";
+import { analysisQuery, catalogProblems, changeState, heatmapAxis, heatmapSource, nativeCycleResult, normalizeAnalysis, selectGroups, trendDrawing } from "../../../src/dashboard-analysis-model";
 import { heatmapGrid, trendHeatmap } from "../../../src/dashboard-heatmap-model";
 import { binOf } from "../../../src/value-bins";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
@@ -78,10 +78,10 @@ test("rates pool their parts over the sessions with the evidence they need, neve
   assert.ok(trend.query.aggregations.some(clause => clause.groupBy.includes("messages_bin")));
 });
 
-// Each chart is drawn one way, whatever the link asked for: the state's
-// display, shares, scale and norm are the catalog's choice.
-test("Session Shape chooses each chart: heatmaps of a band's value, distributions of banded measures, lines for rates and single series, stacks for totals", () => {
-  const drawn = change => { const state = normalizeAnalysis(catalog, { view: "trend", display: "cumulative", share: true, scale: "logarithmic", ...change }); return [state.display, state.share, trendDrawing(catalog, state)]; };
+// Each chart's default view follows its data; the View controls change any
+// of it, and a choice holds until the breakdown or analysis changes.
+test("Session Shape's default views: heatmaps of a band's value, lines for rates, columns for totals", () => {
+  const drawn = change => { const state = normalizeAnalysis(catalog, { view: "trend", ...change }); return [state.display, state.share, trendDrawing(catalog, state)]; };
   assert.deepEqual(drawn({ metric: "sessions", split: "length_band" }), ["heatmap", false, "trend"]);
   assert.deepEqual(drawn({ metric: "active_hours", split: "archetype" }), ["heatmap", false, "trend"]);
   // A rate by band has no total to spread over the band's value: a line per band.
@@ -89,13 +89,28 @@ test("Session Shape chooses each chart: heatmaps of a band's value, distribution
   assert.equal(heatmapAxis(catalog, { metric: "failure_rate", split: "archetype" }), undefined);
   for (const metric of ["autonomy", "active_time", "turn_cycle", "context_peak"]) assert.deepEqual(drawn({ metric, split: "none" }), ["heatmap", false, "trend"], metric);
   assert.deepEqual(drawn({ metric: "failure_rate", split: "none" }), ["interval", false, "trend_line"]);
-  assert.equal(normalizeAnalysis(catalog, { view: "trend", metric: "sessions", split: "none" }).norm, true);
+  // A single smoothed line draws its mean; columns draw each day as counted.
+  assert.equal(normalizeAnalysis(catalog, { view: "trend", metric: "failure_rate", split: "none" }).norm, true);
+  assert.equal(normalizeAnalysis(catalog, { view: "trend", metric: "sessions", split: "none" }).norm, false);
   assert.deepEqual(drawn({ metric: "active_hours", split: "repository_name" }), ["interval", false, "trend"]);
   assert.deepEqual(drawn({ metric: "failure_rate", split: "model_family" }), ["interval", false, "trend_line"]);
-  // Outside Over time, long-tailed times and counts are on a log axis.
-  const scale = (view, metric) => normalizeAnalysis(catalog, { view, metric, split: "provider", scale: "linear" }).scale;
-  assert.deepEqual([scale("distribution", "turn_cycle"), scale("distribution", "context_peak"), scale("compare", "sessions")], ["logarithmic", "linear", "linear"]);
-  assert.equal(normalizeAnalysis(catalog, { view: "compare", metric: "sessions", split: "harness", compareAs: "share" }).compareAs, "bars");
+  // A day's rates are smoothed over a week, and a band's heatmap; a week's
+  // are not, nor are a day's columns.
+  const rolling = (metric, split, period) => normalizeAnalysis(catalog, { view: "trend", metric, split, period }).rollingPeriods;
+  assert.deepEqual([rolling("failure_rate", "model_family", "day"), rolling("failure_rate", "model_family", "week"), rolling("sessions", "length_band", "day"), rolling("sessions", "repository_name", "day")], [7, 0, 7, 0]);
+  // Outside Over time, long-tailed times and counts are on a log axis; a
+  // count split into a few groups is not.
+  const scale = (view, metric, split = "provider") => normalizeAnalysis(catalog, { view, metric, split }).scale;
+  assert.deepEqual([scale("distribution", "turn_cycle"), scale("distribution", "context_peak"), scale("compare", "sessions"), scale("compare", "sessions", "agent_kind"), scale("compare", "failure_rate")], ["logarithmic", "linear", "logarithmic", "linear", "linear"]);
+  // What the reader chooses is drawn instead, where the chart can draw it.
+  const chosen = normalizeAnalysis(catalog, { view: "trend", metric: "sessions", split: "repository_name", display: "cumulative", share: true, scale: "logarithmic", rollingPeriods: 0 });
+  assert.deepEqual([chosen.display, chosen.share, chosen.scale, chosen.rollingPeriods], ["cumulative", true, "logarithmic", 0]);
+  assert.equal(normalizeAnalysis(catalog, { view: "trend", metric: "sessions", split: "length_band", display: "interval" }).display, "interval", "a heatmap's band may draw as columns");
+  assert.equal(normalizeAnalysis(catalog, { view: "distribution", metric: "turn_cycle", split: "provider", scale: "linear" }).scale, "linear");
+  assert.equal(normalizeAnalysis(catalog, { view: "compare", metric: "sessions", split: "harness", compareAs: "share" }).compareAs, "share");
+  // A new breakdown returns the view to its defaults.
+  const regrouped = normalizeAnalysis(catalog, changeState(catalog, { view: "trend", metric: "sessions", split: "repository_name", display: "cumulative" }, { split: "length_band" }));
+  assert.equal(regrouped.display, "heatmap");
 });
 
 test("durations read as people say them", () => {

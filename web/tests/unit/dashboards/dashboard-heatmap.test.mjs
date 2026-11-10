@@ -142,7 +142,7 @@ test("Human Words heatmaps bin each conversation's period total, including zero,
     { id: "missing", conversation_id: "", sent_at: "2026-11-01T14:00:00Z", typed_words: 100, words: 100, provider: "codex" },
   ];
   const where = [{ field: "sent_at", op: ">=", value: new Date(2026, 10, 1).toISOString() }, { field: "sent_at", op: "<", value: new Date(2026, 10, 4).toISOString() }, { field: "provider", op: "=", value: "codex" }];
-  const state = normalizeAnalysis(human, { view: "trend", metric: "typed", split: "none", display: "heatmap", period: "day" });
+  const state = normalizeAnalysis(human, { view: "trend", metric: "typed", split: "none", display: "heatmap", period: "day", nonzero: false });
   assert.equal(state.display, "heatmap");
   assert.equal(trendTitle(human, state), "Conversations per day by typed words per conversation");
   const axis = heatmapAxis(human, state), source = heatmapSource(human, state);

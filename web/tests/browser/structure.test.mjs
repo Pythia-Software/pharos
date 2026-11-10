@@ -515,7 +515,7 @@ const ROUTES = [
     cycle: { view: "cycle", cycle: "hour", metric: "tokens", split: "none" },
   }).map(([view, chart]) => ({ name: `Tokens and Cost ${view} view`, url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify(chart))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations',
     check: async page => assert.equal(await page.locator(".usage-analysis-dashboard [role=alert]").count(), 0, "the analysis reports an error") })),
-  { name: "Tokens and Cost trend ratio", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "day", metric: "cache_read_share", split: "provider_model", rollingPeriods: 7 }))}`,
+  { name: "Tokens and Cost trend ratio", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "day", metric: "cache_read_share", split: "provider_model", rollingPeriods: 7 }))}&disclosures=${encodeURIComponent(JSON.stringify({ "dashboard:view": true }))}`,
     api: { 'GET /api/pricing': missingPrices },
     ready: '.usage-dashboard section[aria-label="Over time"][aria-busy="false"] .usage-query-destinations',
     check: async page => assert.equal(await page.locator('section[aria-label="Over time"] .query-table-error').count(), 0, "the trend reports an error") },
@@ -1248,7 +1248,7 @@ test("dashboard loading follows the chart and keeps controls usable", { skip }, 
   try {
     const trend = page.locator('section[aria-label="Over time"]');
     const column = await trend.locator('.usage-chart-bars > button').first().elementHandle();
-    const view = trend.getByLabel('View', { exact: true });
+    const view = trend.getByLabel('Analysis', { exact: true });
     for (const event of ['dataset', 'focus', 'visibilitychange']) {
       await column.focus();
       await page.evaluate(event => {
@@ -1275,7 +1275,7 @@ test("dashboard loading follows the chart and keeps controls usable", { skip }, 
     await page.locator(overTimeReady).waitFor();
 
     response = new Promise(resolve => { release = resolve; });
-    await trend.getByLabel('View', { exact: true }).selectOption('compare');
+    await trend.getByLabel('Analysis', { exact: true }).selectOption('compare');
     const analysis = page.locator('.usage-analysis-dashboard');
     await analysis.locator('[data-loading-kind="list"]').waitFor();
     assert.deepEqual(await layoutProblems(page), []);
@@ -1615,7 +1615,7 @@ test("Card dashboard opens from the Card Library, fits, and supports changing vi
   const app = await open(t, { url: '/cards?card_search=error-signatures&card_topic=all&card_window=7', ready: '.query-card-open' });
   const { page } = app;
   await page.locator('.query-card-open').first().click();
-  const view = page.getByRole('combobox', { name: 'View', exact: true });
+  const view = page.getByRole('combobox', { name: 'Analysis', exact: true });
   await view.waitFor();
   assert.equal(new URL(page.url()).searchParams.get('analyze_topic'), 'calls');
   await page.locator('.usage-query-destinations a').first().waitFor();
@@ -1640,8 +1640,8 @@ test("Card dashboard opens from the Card Library, fits, and supports changing vi
   await view.selectOption('trend');
   await page.waitForFunction(() => JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).view === 'trend');
   await page.reload();
-  await page.getByRole('combobox', { name: 'View', exact: true }).waitFor();
-  assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'trend');
+  await page.getByRole('combobox', { name: 'Analysis', exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: 'Analysis', exact: true }).inputValue(), 'trend');
   await app.settled();
   assert.deepEqual(app.problems(), []);
 });
@@ -1710,7 +1710,7 @@ test('Tokens and Cost keeps missing pricing actionable across refresh, chart vie
   await page.reload();
   await prompt.waitFor();
   assert.equal(await prompt.inputValue(), missingPrices.prompt, 'the expanded prompt restores after reload');
-  await page.getByRole('combobox', { name: 'View', exact: true }).selectOption('compare');
+  await page.getByRole('combobox', { name: 'Analysis', exact: true }).selectOption('compare');
   await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();
   assert.ok(await notice.isVisible(), 'comparison views keep the pricing notice');
   pricing = defaultApi['GET /api/pricing'];

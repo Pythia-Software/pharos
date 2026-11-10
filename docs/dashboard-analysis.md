@@ -244,7 +244,7 @@ what each offers and why.
 - **Record views** follow from the catalog. Without units, Scatter is
   unavailable; without units or any measure with a per-record `value`,
   Distribution is too (the Tools rollup: a daily summary is not an
-  observation). The View control disables them with the reason
+  observation). The Analysis control disables them with the reason
   (`viewUnavailable`), and a link asking for one opens Compare. Where records
   carry values but some measure does not (Pharos MCP's call count), the
   distribution's Metric control disables that measure.
@@ -420,7 +420,7 @@ can:
 - **Leaving for the trend.** The trend draws every measure and population
   over records. A unit compare maps only when it adds up records (Total). A
   count, mean, median or largest of units is another quantity, so
-  `trendUnavailable` disables Over time for it, the View control shows the
+  `trendUnavailable` disables Over time for it, the Analysis control shows the
   reason, and `switchView` leaves the state unchanged. A breakdown carries
   across. A summed component breakdown also carries between Over time and
   Compare groups; distribution and scatter need record fields, so use `none`.
@@ -657,21 +657,35 @@ no sum, cumulative or share.
   without totals (`lines`, `additive`), name the window (`rolling`) and draw
   the norm (`reference`). The other dashboards still pass interval amounts
   and let it transform them.
-- **Controls.** `AnalysisControls` is the one control bar for every view;
-  the trend adds Show as (values or shares), Display, Time bucket,
-  Smoothing with its Window (average or total), Periods (whole periods
-  only) and %ile, a multi-select of reference levels (`PercentileControl`;
-  a level the chart cannot draw is disabled with its reason,
-  `percentileLimit`).
-- **Chosen charts.** A catalog may choose each chart itself (`present`):
-  given the view, measure and breakdown, how it is drawn — display, shares,
-  scale, a default reference level, Compare's bars or shares, and for Over time whether it draws
-  lines or bars (`trendDrawing`, without changing the state's view). The
-  choice overrides what a link asked for, the controls for those settings
-  are hidden, and the site map leaves them out of the topic's chart keys
-  (`topicChartKeys`), so a link neither holds nor checks them. Session
-  Shape is the one catalog that chooses
-  ([its charts](session-shape.md#charts)).
+- **Controls.** `AnalysisControls` is the one control bar for every view,
+  in two groups (`ControlSections`). **Data** chooses what the chart
+  holds: Analysis (Over time, Compare groups, Distribution, Scatter plot,
+  cycle; the state's `view` key), Count each, Metric, Breakdown, Combine
+  or Summarize, Minimum, Cycle, Population, Range, and for the trend Time
+  bucket and Periods (whole periods only). **View** chooses how those same
+  groups, records and periods are drawn. Since the chart draws its defaults
+  without help, View is a disclosure (`ViewDisclosure`, key
+  `dashboard:view` in `disclosures`) closed at the end of the controls,
+  marked "changed" when the reader has chosen a view setting; open, it
+  takes a row of its own. It holds Display, Show as (values, without
+  zeroes or shares; Compare's bars or share of total), Scale, Smoothing with its Window (average or total)
+  and %ile, a multi-select of reference levels (`PercentileControl`; a
+  level the chart cannot draw is disabled with its reason,
+  `percentileLimit`). The test for View: the chart's underlying table
+  (its groups, records and periods) is the same whatever the control's
+  value, even when the drawn numbers are transformed (shares, a trailing
+  window). Legend selection is visibility, not a control; "Make this the
+  population" moves it into Data.
+- **Default views.** A state holds a View setting (`viewKeys`) only when
+  the reader chose it. An absent one is drawn as `viewDefaults` says,
+  from the data settings alone ([Default views](#default-views)).
+  Changing the Breakdown or the
+  Analysis returns every view setting to its default (`changeState`,
+  `switchView`), and the View section's Reset view does so at once
+  (`clearView`). `dashboardDefaults` hold data settings only. Version 3 of
+  `analyze_chart` holds only chosen view settings; `readAnalysisLink`
+  leaves out a version 2 link's values equal to the defaults its page
+  wrote into it (`legacyViewDefaults`).
 - **Heatmap.** Display = Heatmap draws a value on a continuous axis over
   time, as an observability heatmap does: one column per period, the value
   up the side, and each cell shaded by how much falls in that narrow range
@@ -725,6 +739,43 @@ no sum, cumulative or share.
     histograms: those bin each group with its own linear edges, so rows
     would not line up across columns, and a query cannot group by a
     computed expression.
+
+### Default views
+
+Every dashboard chooses its view the same way (`suggestedView`), from the
+analysis, measure, breakdown, counting unit, reduction and time bucket and
+from catalog metadata, never from a result: a link draws the same way
+before its data arrives and wherever it opens. A catalog's `defaultView`
+may adjust the suggestion (heatmap sources keep their own), and a
+measure's `spread` overrides whether it is long-tailed (`longTailed`:
+totals, counts and durations are; rates and percentages are not). The
+rules come from a survey of a real library (30 days, every dashboard,
+about 800 charts):
+
+| Analysis | Data asked for | Drawn as | Evidence |
+|---|---|---|---|
+| Over time | a breakdown of a value on a binned axis (`heatmapAxis` without a unit) | heatmap, with a trailing week on days | a band's own value shows a shift within the band |
+| Over time | a total | stacked columns, without empty days, Linear + log | totals add up across groups; days are bursty (a peak above ten times the 80th percentile on several dashboards), and linear + log keeps the rest readable |
+| Over time | a rate, mean or distinct count | a line per group, a trailing week on days | day-to-day change is 0.4–0.9 of the value (the median relative step); a week's window brings it to 0.1–0.2. Distinct counts do not add up across days or groups |
+| Over time | a single daily line, no shares | with its mean over the prior range | a reference only where the line is smooth enough to compare with it |
+| Over time | a measure with a population share and a breakdown | shares, linear | Message Labels' groups overlap; their counts mislead without the whole |
+| Over time | a percentage or a share | linear | a bounded value; compression would hide the change |
+| Compare | a total or count by a breakdown of more than four groups | log bars | the 12 largest groups span a median 95–183× (10⁴–10⁵ by provider); linear bars leave most at zero width |
+| Compare | a rate, a mean, or four or fewer groups | linear bars | rates span 1–10×; a few known groups read as proportions |
+| Distribution | a long-tailed value by a breakdown | log boxes | linear boxes squash every box to the bottom |
+| Distribution | a value with Pharos's own fine bins (`distributionBins`) | their axis, usually log | bins chosen for the value |
+| Distribution | any other value, no breakdown | a linear histogram | Query Table bins evenly, so its first bin holds 72–100% of records either way; a log axis would only stretch that bar ([handoff](handoffs/query-table-log-axes.md)) |
+| Two measures | a long-tailed value on either axis | a log axis, saying that zeros are left out | 60–67% of conversations have no typed words, and the rest span four decades |
+
+Lines and grouped bars put every series' values, not each period's
+highest, into Linear + log's typical value, so one series far above the
+rest compresses above the break instead of flattening the rest
+(`timelineGeometry`). Durations count gridlines in round times (`measureAxisUnit`):
+a minute, 15 minutes, an hour, 6 hours, and tool time in hours by round hours.
+
+`dashboard-catalogs.test.mjs` normalizes every combination of every
+dashboard and checks that each default survives (the chart can draw it)
+and follows the table.
 
 ### Queries
 

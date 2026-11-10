@@ -1528,7 +1528,7 @@ func TestAskSiteLinkDestinations(t *testing.T) {
 		"malformed URL":      {"id": "", "url": "/analyze?analyze_mode=%zz"},
 		"control separators": {"id": "", "url": strings.ReplaceAll(canonical, "&", "\x1f")},
 		"unknown parameter":  {"id": "", "url": with(func(v url.Values) { v.Set("colour", "red") })},
-		"coercible state":    {"id": "", "url": with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"cost","split":"type"}`) })},
+		"coercible state":    {"id": "", "url": with(func(v url.Values) { v.Set("analyze_chart", `{"v":3,"view":"trend","metric":"cost","split":"type"}`) })},
 		"Ask chat":           {"id": "", "url": "/?ask_chat=chat-1"},
 		"other site":         {"id": "", "url": "https://example.com/analyze"},
 		"both":               {"id": "analyze", "url": canonical},

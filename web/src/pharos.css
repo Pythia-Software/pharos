@@ -180,11 +180,26 @@
 .usage-chart-head h3 { margin: 2px 0 0; font-size: var(--fs-base); }
 .usage-chart-average-label { display: inline-block; margin-left: 10px; color: var(--muted); font-size: var(--fs-sm); font-weight: 400; }
 /* Keep dashboard controls at their natural width and wrap whole fields. */
-:is(.usage-chart-controls, .usage-tools-controls, .concurrency-controls) { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
-:is(.usage-chart-controls, .usage-tools-controls, .concurrency-controls) > * { flex: 0 0 auto; width: max-content; min-width: 0; max-width: 100%; }
+:is(.usage-chart-controls, .usage-tools-controls, .concurrency-controls, .dashboard-controls-view-body) { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+:is(.usage-chart-controls, .usage-tools-controls, .concurrency-controls, .dashboard-controls-view-body) > * { flex: 0 0 auto; width: max-content; min-width: 0; max-width: 100%; }
 .usage-chart-controls { width: 100%; }
 /* Controls share out each row's spare width, so a row reaches the end. */
-.usage-chart-controls > * { flex: 1 1 auto; }
+.usage-chart-controls > *, .usage-chart-controls .dashboard-controls-view-body > * { flex: 1 1 auto; }
+/* How the chart is drawn (View, ControlSections) closes to a chip at the end
+   of the controls; open, it takes a row of its own, set off by a rule. */
+:is(.usage-chart-controls, .usage-tools-controls) > .dashboard-controls-view { flex: 0 0 auto; align-self: flex-end; width: auto; }
+:is(.usage-chart-controls, .usage-tools-controls) > .dashboard-controls-view[open] { flex: 1 0 100%; width: 100%; padding-top: 10px; border-top: 1px solid var(--line); }
+.dashboard-controls-view > summary { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); cursor: pointer; list-style: none; }
+.dashboard-controls-view > summary::-webkit-details-marker { display: none; }
+.dashboard-controls-view > summary::before { content: ""; width: 0; height: 0; border-block: 4px solid transparent; border-left: 5px solid currentColor; transition: transform .12s; }
+.dashboard-controls-view[open] > summary { min-height: 0; padding: 0; border-color: transparent; }
+.dashboard-controls-view[open] > summary::before { transform: rotate(90deg); }
+.dashboard-controls-view > summary:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.dashboard-controls-view[open] > summary:hover { border-color: transparent; }
+.dashboard-controls-heading { font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.dashboard-controls-changed { padding: 0 6px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--ink); font-size: var(--fs-2xs); }
+.dashboard-controls-view-body { margin-top: 8px; }
+:is(.usage-chart-controls, .usage-tools-controls) .dashboard-controls-view-body > .dashboard-controls-reset { flex: 0 0 auto; align-self: flex-end; min-height: 30px; margin-left: auto; }
 .usage-chart-controls .dashboard-select { width: 100%; }
 .usage-chart-controls .usage-presets { margin: 0; }
 .usage-chart-controls .usage-preset-label { min-width: 0; margin-right: 2px; }
