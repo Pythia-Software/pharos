@@ -77,7 +77,7 @@ function FilesLink({ to, children, ...props }: { to: FilePageTarget } & Omit<Rea
 // FileHistoryPage is the Files page: a project's tree in a sidebar beside a
 // directory, a file or a commit. A file has tabs for its code, blame and
 // history, which Git reads from the repository's chosen checkout, the diffs
-// its sessions' edits made and the sessions themselves.
+// its agents' edits made and the workspaces that made them.
 export function FileHistoryPage() {
   useLocationRevision();
   const active = location.pathname === fileHistoryRoute;
@@ -94,7 +94,7 @@ export function FileHistoryPage() {
   const treeProject = project || (found?.path === path ? found.project : "");
   if (!active) return null;
   if (!treeProject) return <div className="file-history-page">
-    <div className="view-heading"><div><h1>Files</h1><p className="muted">Every file sessions edited and, in a Git repository, every file in its tree: its code, blame and history, who changed it, and where in their transcripts.</p></div></div>
+    <div className="view-heading"><div><h1>Files</h1><p className="muted">Every file agents edited and, in a Git repository, every file in its tree: its code, blame and history, who changed it, and where in their transcripts.</p></div></div>
     <PathForm path={path} onPath={setPath} />
     {path ? <FilePane path={path} project="" view={fileView} onProject={ref => setFound({ path, project: ref })} /> : <ProjectsPane />}
   </div>;
@@ -144,10 +144,10 @@ function ProjectsPane() {
       {projects.map(project => <li key={project.ref}>
         {project.kind === "folder" ? <FolderIcon /> : <SidebarIcon />}
         <FilesLink to={{ project: project.ref }}>{project.name}</FilesLink>
-        <span className="muted">{project.kind === "folder" ? "folder" : "repository"} · {plural(project.files ?? 0, "file")} edited by {plural(project.sessions ?? 0, "session")}</span>
+        <span className="muted">{project.kind === "folder" ? "folder" : "repository"} · {plural(project.files ?? 0, "file")} edited in {plural(project.sessions ?? 0, "workspace")}</span>
         <span className="file-history-when">{day(project.last_at)}</span>
       </li>)}
-    </ul> : <p className="muted">No session has edited a file yet.</p>}
+    </ul> : <p className="muted">No agent has edited a file yet.</p>}
   </section>;
 }
 
@@ -285,7 +285,7 @@ function CheckoutSetup({ checkout, onDone }: { checkout: RepositoryCheckout; onD
   const candidates = (checkout.candidates ?? []).filter(path => path !== checkout.path);
   return <section className="files-checkout" aria-label="Repository checkout">
     <h2>{checkout.status === "set" ? "Change this repository's checkout" : `See ${checkout.name ?? "this repository"}'s code, blame and history`}</h2>
-    <p>{checkout.status === "unavailable" ? `${checkout.reason} ` : ""}Choose where {checkout.name ?? "this repository"} is checked out on this Mac. When you open its code, blame, history or a commit's diff, Pharos runs read-only Git there, and stores nothing it reads. Sessions and their edits show without one.</p>
+    <p>{checkout.status === "unavailable" ? `${checkout.reason} ` : ""}Choose where {checkout.name ?? "this repository"} is checked out on this Mac. When you open its code, blame, history or a commit's diff, Pharos runs read-only Git there, and stores nothing it reads. Workspaces and their agents' edits show without one.</p>
     {candidates.length ? <ul className="files-checkout-candidates">{candidates.map(path => <li key={path}>
       <button type="button" className="files-button" disabled={saving} onClick={() => void post({ path })}>Use <code>{path}</code></button>
     </li>)}</ul> : null}
@@ -321,12 +321,12 @@ function Outcome({ label, why }: { label?: string; why?: string }) {
   return <span className="file-history-outcome" title={outcome.description}>{outcome.label}{why ? <span className="muted"> · {why}</span> : null}</span>;
 }
 
-// SessionLinks are the sessions linked to a commit, each opening where it
-// printed or made the commit, else the session.
+// SessionLinks are the workspaces linked to a commit, each opening where it
+// printed or made the commit, else the workspace.
 function SessionLinks({ links, empty = true }: { links: FileHistoryLink[]; empty?: boolean }) {
-  if (!links.length) return empty ? <span className="muted">No linked session</span> : null;
+  if (!links.length) return empty ? <span className="muted">No linked workspace</span> : null;
   return <span className="files-session-links">{links.map((link, index) => <React.Fragment key={link.workspace_id}>{index ? ", " : ""}
-    <PageLink href={link.url ?? `/work/${encodeURIComponent(link.workspace_id)}`} title={linkText(link)}>{link.title || (link.counted ? "Session" : "Candidate session")}</PageLink>
+    <PageLink href={link.url ?? `/work/${encodeURIComponent(link.workspace_id)}`} title={linkText(link)}>{link.title || (link.counted ? "Workspace" : "Candidate workspace")}</PageLink>
     {link.counted ? null : <span className="muted"> (candidate)</span>}
   </React.Fragment>)}</span>;
 }
@@ -377,7 +377,7 @@ function FilePane({ path, project, view, onProject }: { path: string; project: s
     <ul className="file-history-list">{files!.map(file => <li key={file.file_key}>
       <FileIcon />
       {file.project_ref ? <FilesLink to={{ project: file.project_ref, file: file.relative_path ?? file.path }}><code>{file.relative_path ?? file.path}</code></FilesLink> : <code>{file.path}</code>}
-      <span className="muted">{file.project ?? ""} · {plural(file.sessions.length, "session")}</span>
+      <span className="muted">{file.project ?? ""} · {plural(file.sessions.length, "workspace")}</span>
     </li>)}</ul>
   </section>;
   return <FileView file={files![0]} view={view} />;
@@ -393,9 +393,9 @@ function FileView({ file, view }: { file: FileHistoryFile; view: string }) {
     {repository ? <LatestCommit project={project} path={relative} checkout={checkout} stored={file.commits[0]} count={file.commits.length}
       history={{ project, file: relative, view: "history" }} /> : null}
     <p className="muted files-summary">
-      {file.sessions.length ? `Edited by ${plural(file.sessions.length, "session")}${file.sessions_truncated ? "+" : ""}` : "No session edited this file through its tool calls"}
+      {file.sessions.length ? `Edited in ${plural(file.sessions.length, "workspace")}${file.sessions_truncated ? "+" : ""}` : "No agent edited this file through its tool calls"}
       {file.in_tree === false && file.git.tree_commit ? ` · ${notInTreeText(file.git)}` : ""}
-      {!repository ? " · a folder, not a Git repository: its history is its sessions' edits" : ""}
+      {!repository ? " · a folder, not a Git repository: its history is its agents' edits" : ""}
     </p>
     {repository ? <CheckoutLine checkout={checkout} /> : null}
     <Tabs tabs={fileTabs(repository)} labels={fileViewLabels} current={tab} target={view => ({ project, file: relative, view })} />
@@ -438,7 +438,7 @@ function BlameView({ project, path }: { project: string; path: string }) {
   const rows = blameRows(blame), commits = blame.commits ?? {};
   const bySessions = Object.values(commits).filter(commit => commit.sessions.some(link => link.counted)).length;
   return <div className="files-blob">
-    <div className="files-blob-head muted">{plural(blame.lines.length, "line")} from {plural(Object.keys(commits).length, "commit")}{bySessions ? `, ${bySessions} linked to sessions (marked)` : ""}</div>
+    <div className="files-blob-head muted">{plural(blame.lines.length, "line")} from {plural(Object.keys(commits).length, "commit")}{bySessions ? `, ${bySessions} linked to workspaces (marked)` : ""}</div>
     <div className="files-blame">
       {rows.map(row => {
         const commit = commits[row.hash], linked = commit?.sessions.some(link => link.counted);
@@ -465,7 +465,7 @@ function HistoryView({ project, path, checkout, stored }: { project: string; pat
     <CheckoutSetup checkout={checkout} />
     {stored?.commits.length ? <>
       <h2 className="files-subheading">Commits Pharos recorded</h2>
-      <p className="muted">The commits local Git found since the repository's first session edit; the full history needs the checkout.</p>
+      <p className="muted">The commits local Git found since the repository's first recorded edit; the full history needs the checkout.</p>
       <ol className="files-commits">{stored.commits.map(commit => <li key={commit.hash}>
         <div className="files-commit-main">
           <FilesLink to={{ project, commit: commit.hash, file: path || undefined }}><code>{commit.hash.slice(0, 7)}</code></FilesLink>
@@ -507,7 +507,7 @@ function LogCommit({ project, path, commit }: { project: string; path: string; c
     <div className="files-commit-main">
       <FilesLink className="files-commit-subject" to={{ project, commit: commit.hash, file: path && !path.endsWith("/") ? path : undefined }}>{commit.subject}</FilesLink>
       <span className="muted">{commit.author} · <span title={commit.author_at}>{age(commit.author_at)}</span>{state ? ` · ${state}` : ""}{commit.parents.length > 1 ? " · merge" : ""}</span>
-      {commit.sessions.length ? <span className="files-commit-sessions">Sessions: <SessionLinks links={commit.sessions} /></span> : null}
+      {commit.sessions.length ? <span className="files-commit-sessions">Workspaces: <SessionLinks links={commit.sessions} /></span> : null}
     </div>
     <FilesLink to={{ project, commit: commit.hash }} className="files-hash" title={commit.hash}><code>{commit.hash.slice(0, 7)}</code></FilesLink>
   </li>;
@@ -528,9 +528,9 @@ function ChangesPage({ project, path, offset, last, onMore }: { project: string;
   const value = loaded.value!;
   if (value.choices) return <Choices choices={value.choices} target={{ file: path, view: "changes" }} />;
   const changes = value.changes ?? [];
-  if (!changes.length && !offset) return <p className="muted">{value.note ?? "No session edited this file with an edit tool. Sessions that changed it another way (a script, a generator) show in its history, through the commits."}</p>;
+  if (!changes.length && !offset) return <p className="muted">{value.note ?? "No agent edited this file with an edit tool. Workspaces whose agents changed it another way (a script, a generator) show in its history, through the commits."}</p>;
   return <>
-    {offset ? null : <p className="muted files-summary">Each edit as the session's call made it, read from its transcript. Replacements do not know the file's line numbers.</p>}
+    {offset ? null : <p className="muted files-summary">Each edit as the agent's call made it, read from its transcript. Replacements do not know the file's line numbers.</p>}
     {changes.map((change, index) => <article key={`${offset}-${index}`} className="files-change">
       <div className="files-change-head">
         <PageLink href={change.session_url} className="files-change-session">{change.title || change.workspace_id}</PageLink>
@@ -572,12 +572,12 @@ function DiffTable({ hunks, numbered }: { hunks: { header: string; lines: DiffLi
 }
 
 function SessionsView({ file }: { file: FileHistoryFile }) {
-  if (!file.sessions.length) return <p className="muted">No session edited this file through its tool calls. Sessions that changed it another way (a script, a generator) are linked to its commits, where local Git found them.</p>;
+  if (!file.sessions.length) return <p className="muted">No agent edited this file through its tool calls. Workspaces whose agents changed it another way (a script, a generator) are linked to its commits, where local Git found them.</p>;
   return <>
     <ol className="file-history-list file-sessions">
       {file.sessions.map(session => <SessionEntry key={session.workspace_id} file={file} session={session} />)}
     </ol>
-    {file.sessions_truncated ? <p className="muted">Older sessions are not shown.</p> : null}
+    {file.sessions_truncated ? <p className="muted">Older workspaces are not shown.</p> : null}
   </>;
 }
 
@@ -586,17 +586,17 @@ function SessionEntry({ file, session }: { file: FileHistoryFile; session: FileH
   return <li className="file-session" id={`session-${session.workspace_id}`}>
     <div className="file-session-head">
       <span className="file-history-when">{day(session.last_edit_at)}</span>
-      <PageLink href={session.url} title="Open the session at its first edit of this file">{session.title || session.workspace_id}</PageLink>
+      <PageLink href={session.url} title="Open the workspace at its first edit of this file">{session.title || session.workspace_id}</PageLink>
       <span className="muted">{plural(session.edits ?? 0, "edit")} · {linesText(session.lines_added, session.lines_removed)}{session.rewrote ? " · rewrote the file" : ""}</span>
     </div>
     <Outcome label={session.outcome_label} why={session.outcome_why} />
     {places.length ? <div className="file-places" aria-label="Edits in the transcript">
       {places.map((place, index) => <PageLink key={index} className="file-place" href={place.url} title={`Open this edit in the transcript${place.path ? `: ${place.path}` : ""}`}>{placeText(place, index)}</PageLink>)}
-      {session.places_truncated ? <PageLink className="file-place" href={`/work/${encodeURIComponent(session.workspace_id)}`}>More edits in the session…</PageLink> : null}
+      {session.places_truncated ? <PageLink className="file-place" href={`/work/${encodeURIComponent(session.workspace_id)}`}>More edits in the workspace…</PageLink> : null}
     </div> : null}
-    {session.reworked_by?.length ? <p className="file-rework">Later sessions removed its lines: {session.reworked_by.map((other, index) => <React.Fragment key={other.workspace_id}>{index ? "; " : ""}
+    {session.reworked_by?.length ? <p className="file-rework">Later workspaces removed its lines: {session.reworked_by.map((other, index) => <React.Fragment key={other.workspace_id}>{index ? "; " : ""}
       <PageLink href={other.url}>{other.title || other.workspace_id}</PageLink> {reworkText(other, "by")}</React.Fragment>)}</p> : null}
-    {session.reworked?.length ? <p className="file-rework">It removed lines earlier sessions added: {session.reworked.map((other, index) => <React.Fragment key={other.workspace_id}>{index ? "; " : ""}
+    {session.reworked?.length ? <p className="file-rework">It removed lines earlier workspaces added: {session.reworked.map((other, index) => <React.Fragment key={other.workspace_id}>{index ? "; " : ""}
       <PageLink href={other.url}>{other.title || other.workspace_id}</PageLink> {reworkText(other, "of")}</React.Fragment>)}</p> : null}
     {committed.length ? <p className="muted">Committed in {committed.map(({ commit, link }, index) => <React.Fragment key={commit.hash}>{index ? ", " : ""}
       <FilesLink to={{ project: file.project_ref, commit: commit.hash, file: file.relative_path }} title={linkText(link)}><code>{commit.hash.slice(0, 7)}</code></FilesLink>{link.counted ? "" : " (candidate)"}</React.Fragment>)}</p> : null}
@@ -639,7 +639,7 @@ function DirectoryTable({ project, dir, tree, fromGit }: { project: string; dir:
     if (read) return { node: <FilesLink to={{ project, commit: read.hash, file }} title={`${read.subject} (${read.hash.slice(0, 7)}, ${read.author})`}>{read.subject}</FilesLink>, at: read.author_at };
     const commit = entry.last_commit, session = entry.last_session;
     if (fromGit === undefined && commit && (!session?.at || (commit.author_at ?? "") >= session.at)) return { node: <FilesLink to={{ project, commit: commit.hash, file }}><code>{commit.hash.slice(0, 7)}</code></FilesLink>, at: commit.author_at };
-    if (session) return { node: <PageLink href={session.url} className="files-table-session" title="The session that last edited it">{session.title || session.workspace_id}</PageLink>, at: session.at };
+    if (session) return { node: <PageLink href={session.url} className="files-table-session" title="The workspace whose agents last edited it">{session.title || session.workspace_id}</PageLink>, at: session.at };
     return { node: null, at: fromGit === null ? undefined : entry.last_at ?? undefined };
   };
   return <table className="files-table">
@@ -651,7 +651,7 @@ function DirectoryTable({ project, dir, tree, fromGit }: { project: string; dir:
         return <tr key={entry.path} className={gone ? "file-tree-gone" : undefined}>
           <td className="files-table-name"><FilesLink to={entry.kind === "dir" ? { project, dir: entry.path } : { project, file: entry.path }} title={gone ? notInTreeText(tree.git) : undefined}>
             {entry.kind === "dir" ? <FolderIcon /> : <FileIcon />}<span>{entry.name}</span></FilesLink></td>
-          <td className="files-table-change">{last.node}{entry.sessions ? <span className="muted files-table-count">{last.node ? " · " : ""}{plural(entry.sessions, "session")}</span> : null}</td>
+          <td className="files-table-change">{last.node}{entry.sessions ? <span className="muted files-table-count">{last.node ? " · " : ""}{plural(entry.sessions, "workspace")}</span> : null}</td>
           <td className="files-table-when muted" title={last.at}>{age(last.at)}</td>
         </tr>;
       })}
@@ -660,7 +660,7 @@ function DirectoryTable({ project, dir, tree, fromGit }: { project: string; dir:
 }
 
 function DirectorySessions({ tree }: { tree: FileTree }) {
-  if (!tree.sessions?.length) return <p className="muted">No session edited a file here.</p>;
+  if (!tree.sessions?.length) return <p className="muted">No agent edited a file here.</p>;
   return <ol className="file-history-list">{tree.sessions.map(session => <li key={session.workspace_id}>
     <span className="file-history-when">{day(session.last_edit_at)}</span>
     <PageLink href={session.url}>{session.title || session.workspace_id}</PageLink>
@@ -670,7 +670,7 @@ function DirectorySessions({ tree }: { tree: FileTree }) {
 }
 
 // CommitPane is one commit: its message from the checkout, where it stands,
-// the sessions linked to it and each file's diff, the focused file's open.
+// the workspaces linked to it and each file's diff, the focused file's open.
 function CommitPane({ project, commit, focus }: { project: string; commit: string; focus: string }) {
   const stored = useFiles<FileCommitDetail>(`/api/file-commit?${query({ project, commit })}`);
   const { checkout, repository } = useProjectTree(project);
@@ -703,11 +703,11 @@ function CommitPane({ project, commit, focus }: { project: string; commit: strin
         : commitState(detail)}{detail.mainline_evidence ? <span className="muted"> · {detail.mainline_evidence}</span> : null}</p> : null)
         : git ? null : <p className="muted">{value.note}</p>}
       <div className="files-commit-sessions-box">
-        <h2 className="files-subheading">Sessions</h2>
+        <h2 className="files-subheading">Workspaces</h2>
         {sessions.length ? <ul className="files-commit-session-list">{sessions.map(link => <li key={link.workspace_id}>
           <PageLink href={link.url ?? `/work/${encodeURIComponent(link.workspace_id)}`}>{link.title || link.workspace_id}</PageLink>
           <span className="muted"> {linkText(link)} · confidence {link.confidence.toFixed(2)}</span>
-        </li>)}</ul> : <p className="muted">No session is linked to this commit: it was made outside the sessions this library holds, or they left no trace of it.</p>}
+        </li>)}</ul> : <p className="muted">No workspace is linked to this commit: it was made outside the workspaces this library holds, or their agents left no trace of it.</p>}
       </div>
     </div>
     {repository ? <CheckoutLine checkout={checkout} /> : null}
@@ -721,7 +721,7 @@ function CommitPane({ project, commit, focus }: { project: string; commit: strin
         const known = storedFiles.get(file.path);
         const summary = <span className="files-commit-file">
           <FilesLink to={{ project, file: file.path }}><code>{file.path}</code></FilesLink>
-          <span className="muted">{file.binary ? "binary" : linesText(file.lines_added, file.lines_removed)}{known?.sessions ? ` · edited by ${plural(known.sessions, "session")}` : ""}{known && !known.in_tree ? ` · ${notInTreeText(value.git)}` : ""}</span>
+          <span className="muted">{file.binary ? "binary" : linesText(file.lines_added, file.lines_removed)}{known?.sessions ? ` · edited in ${plural(known.sessions, "workspace")}` : ""}{known && !known.in_tree ? ` · ${notInTreeText(value.git)}` : ""}</span>
         </span>;
         return checkout?.status === "set" && fromGit?.value?.commit
           ? <CommitFile key={file.path} project={project} commit={hash} path={file.path} summary={summary} open={file.path === focus || (!focus && files.length <= 5)} />

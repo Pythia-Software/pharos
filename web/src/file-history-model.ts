@@ -99,7 +99,7 @@ export function readFilePageRoute(search: URLSearchParams): Required<FilePageTar
 // file has no Git, so only the last two.
 export const fileViews = ["code", "blame", "history", "changes", "sessions"] as const;
 export type FileView = typeof fileViews[number];
-export const fileViewLabels: Record<FileView, string> = { code: "Code", blame: "Blame", history: "History", changes: "Changes", sessions: "Sessions" };
+export const fileViewLabels: Record<FileView, string> = { code: "Code", blame: "Blame", history: "History", changes: "Changes", sessions: "Workspaces" };
 export function fileTabs(repository: boolean): FileView[] {
   return repository ? [...fileViews] : ["changes", "sessions"];
 }
@@ -114,7 +114,7 @@ export function fileTab(asked: string, repository: boolean, inTree = true): File
 // has none) and the sessions that edited files in it.
 export const directoryViews = ["files", "commits", "sessions"] as const;
 export type DirectoryView = typeof directoryViews[number];
-export const directoryViewLabels: Record<DirectoryView, string> = { files: "Files", commits: "Commits", sessions: "Sessions" };
+export const directoryViewLabels: Record<DirectoryView, string> = { files: "Files", commits: "Commits", sessions: "Workspaces" };
 export function directoryTabs(repository: boolean): DirectoryView[] {
   return repository ? [...directoryViews] : ["files", "sessions"];
 }
@@ -162,22 +162,22 @@ export function fileTreeKey(project: string, dir: string): string {
   return `files:${project}:${dir}`;
 }
 
-// entryText is what touched a tree entry: sessions that edited it and
+// entryText is what touched a tree entry: workspaces whose agents edited it and
 // commits that changed it; a folder's entries have no commits to count.
 export function entryText(entry: Pick<FileTreeEntry, "sessions" | "commits">, git: boolean): string {
   const parts = [];
-  if (entry.sessions) parts.push(`${entry.sessions.toLocaleString("en-US")} session${entry.sessions === 1 ? "" : "s"}`);
+  if (entry.sessions) parts.push(`${entry.sessions.toLocaleString("en-US")} workspace${entry.sessions === 1 ? "" : "s"}`);
   if (git && entry.commits) parts.push(`${entry.commits.toLocaleString("en-US")} commit${entry.commits === 1 ? "" : "s"}`);
   return parts.join(" · ");
 }
 
 // treeText says where a project's tree comes from: local Git's tree at the
-// mainline tip, or, without Git, the files its sessions edited.
+// mainline tip, or, without Git, the files agents edited in it.
 export function treeText(git: FileHistoryGit | undefined): string {
-  if (!git || git.status === "not_applicable") return "A folder, not a Git repository: these are the files its sessions edited.";
-  if (git.status === "checked" && git.tree_commit) return `The tree at ${git.tree_ref || "HEAD"} (${git.tree_commit.slice(0, 7)}), read by local Git, with files sessions edited that it does not hold.`;
-  if (git.status === "checked") return "Local Git did not read this repository's tree (too large or no commit), so these are the files sessions edited and commits changed.";
-  return `${git.reason || "Local Git has not checked this repository."} These are the files its sessions edited.`;
+  if (!git || git.status === "not_applicable") return "A folder, not a Git repository: these are the files agents edited in it.";
+  if (git.status === "checked" && git.tree_commit) return `The tree at ${git.tree_ref || "HEAD"} (${git.tree_commit.slice(0, 7)}), read by local Git, with files agents edited that it does not hold.`;
+  if (git.status === "checked") return "Local Git did not read this repository's tree (too large or no commit), so these are the files agents edited and commits changed.";
+  return `${git.reason || "Local Git has not checked this repository."} These are the files agents edited in it.`;
 }
 
 // notInTreeText marks a repository file the tree does not hold: deleted,
@@ -193,10 +193,10 @@ export function placeText(place: FilePlace, index: number): string {
   return [`Edit ${index + 1}`, when, lines].filter(Boolean).join(" · ");
 }
 
-// reworkText is one side of rework between sessions on a file.
+// reworkText is one side of rework between workspaces on a file.
 export function reworkText(rework: FileRework, direction: "by" | "of"): string {
   const lines = `${rework.removed_lines.toLocaleString("en-US")} line${rework.removed_lines === 1 ? "" : "s"}`;
-  return direction === "by" ? `removed ${lines} it added` : `had ${lines} removed by this session`;
+  return direction === "by" ? `removed ${lines} it added` : `had ${lines} removed by this workspace`;
 }
 
 // sessionCommits are the commits of a file a session is linked to.

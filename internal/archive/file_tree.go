@@ -247,7 +247,7 @@ func (c *Catalog) FileTree(ctx context.Context, options FileTreeOptions) (map[st
 			return nil, err
 		}
 	} else {
-		result["git"] = map[string]any{"status": "not_applicable", "reason": "A folder, not a Git repository: its files are those its sessions edited."}
+		result["git"] = map[string]any{"status": "not_applicable", "reason": "A folder, not a Git repository: its files are those agents edited in it."}
 		entries, err = c.folderTreeEntries(ctx, project.Folder, dir)
 		if err != nil {
 			return nil, err

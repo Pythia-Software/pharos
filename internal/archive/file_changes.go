@@ -235,7 +235,7 @@ func (c *Catalog) FileChanges(ctx context.Context, options FileChangesOptions) (
 		}
 	}
 	if len(keys) == 0 {
-		result["note"] = "No session edited " + options.Path + " with an edit tool."
+		result["note"] = "No agent edited " + options.Path + " with an edit tool."
 		return result, nil
 	}
 	rows, err := queryMapsContext(ctx, c.reader(), `SELECT e.workspace_id,e.conversation_id,e.message_id,e.call_id,e.edited_at,e.lines_added,e.lines_removed,e.path,

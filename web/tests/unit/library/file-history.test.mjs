@@ -128,25 +128,25 @@ test("a path's directories open the tree and lead back to the root", () => {
 });
 
 test("tree entries, edits and rework say what touched them", () => {
-  assert.equal(entryText({ sessions: 2, commits: 1 }, true), "2 sessions · 1 commit");
-  assert.equal(entryText({ sessions: 1, commits: 0 }, true), "1 session");
+  assert.equal(entryText({ sessions: 2, commits: 1 }, true), "2 workspaces · 1 commit");
+  assert.equal(entryText({ sessions: 1, commits: 0 }, true), "1 workspace");
   // Without Git a folder has no commits to count.
-  assert.equal(entryText({ sessions: 3, commits: 0 }, false), "3 sessions");
+  assert.equal(entryText({ sessions: 3, commits: 0 }, false), "3 workspaces");
   assert.match(treeText({ status: "checked", tree_ref: "origin/main", tree_commit: "0123456789" }), /^The tree at origin\/main \(0123456\)/);
   assert.match(treeText({ status: "not_applicable" }), /folder/);
-  assert.match(treeText({ status: "not_checked", reason: "The checkout is gone." }), /^The checkout is gone\. These are the files its sessions edited/);
+  assert.match(treeText({ status: "not_checked", reason: "The checkout is gone." }), /^The checkout is gone\. These are the files agents edited in it/);
   assert.match(notInTreeText({ status: "checked", tree_ref: "origin/main" }), /^Not in the tree at origin\/main/);
   assert.match(placeText({ at: "2026-11-01T10:00:00Z", lines_added: 3, lines_removed: 1, url: "/work/w" }, 1), /^Edit 2 · .+ · \+3 −1$/);
   assert.equal(placeText({ url: "/work/w" }, 0), "Edit 1");
   assert.equal(reworkText({ workspace_id: "w", removed_lines: 8, url: "" }, "by"), "removed 8 lines it added");
-  assert.equal(reworkText({ workspace_id: "w", removed_lines: 1, url: "" }, "of"), "had 1 line removed by this session");
+  assert.equal(reworkText({ workspace_id: "w", removed_lines: 1, url: "" }, "of"), "had 1 line removed by this workspace");
   const link = { workspace_id: "w-1", method: "transcript", confidence: 1, counted: true };
   const commits = [{ hash: "a", sessions: [link] }, { hash: "b", sessions: [] }];
   assert.deepEqual(sessionCommits({ commits }, "w-1").map(item => item.commit.hash), ["a"]);
   assert.deepEqual(sessionCommits({ commits }, "w-2"), []);
 });
 
-test("a session's files and commits summarize what they hold", () => {
+test("a workspace's files and commits summarize what they hold", () => {
   const file = { places: [], reworked_by: [], reworked: [] };
   assert.equal(workFilesSummary({ files: [file, file], commits: [] }), "2 files edited");
   assert.equal(workFilesSummary({ files: [file], files_truncated: true, commits: [{ counted: true }, { counted: false }] }), "1+ file edited · 1 linked commit and 1 candidate");
