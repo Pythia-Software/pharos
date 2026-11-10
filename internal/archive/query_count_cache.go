@@ -214,9 +214,47 @@ func toolCubeCount(schema qt.Schema) queryPopulationCount {
 
 // queryPopulationFastCounts are the counts a dataset can answer from a
 // maintained rollup instead of its rows.
-func queryPopulationFastCounts(dataset string, schema qt.Schema) []queryPopulationCount {
-	if dataset == "tool_calls" {
+func queryPopulationFastCounts(dataset string, schema qt.Schema, table sqlDataset) []queryPopulationCount {
+	switch dataset {
+	case "tool_calls":
 		return []queryPopulationCount{toolCubeCount(schema)}
+	case "agent_event_rates":
+		return []queryPopulationCount{agentEventRateCount(table.base)}
 	}
 	return nil
+}
+
+// agentEventRateCount answers an Agent event rates count filtered by kind
+// alone. Every message read has one row for every kind
+// (agentEventRateDataset), so the count is the messages the dataset serves
+// (base is its predicate over agent_event_facts f) times the kinds the
+// filter keeps, without visiting a row per pair.
+func agentEventRateCount(base string) queryPopulationCount {
+	return func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount) (int64, bool, error) {
+		kinds := int64(0)
+	families:
+		for _, family := range agentEventFamilies {
+			for _, term := range p.Where {
+				value := family.Key
+				if term.Field == "family_group" {
+					value = family.Group
+				}
+				if (term.Field != "family" && term.Field != "family_group") || term.IsGroup() || term.Negated || term.Value == "" ||
+					(term.Op != "=" && term.Op != "!=") {
+					return 0, false, nil
+				}
+				if (value == term.Value) != (term.Op == "=") {
+					continue families
+				}
+			}
+			kinds++
+		}
+		statement := "SELECT COUNT(*) FROM agent_event_facts f"
+		if base != "" {
+			statement += " WHERE " + base
+		}
+		var messages int64
+		err := tx.QueryRowContext(ctx, statement).Scan(&messages)
+		return messages * kinds, err == nil, err
+	}
 }

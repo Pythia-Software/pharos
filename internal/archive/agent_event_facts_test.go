@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
@@ -226,5 +228,46 @@ func TestAgentEventRatesKeepTheirDenominators(t *testing.T) {
 	repositories := metrics(nil, []string{"repository_name", "agent_role"}, read)
 	if value(repositories[0], "alpha", "main") != 3 || value(repositories[0], "alpha", "subagent") != 1 {
 		t.Fatalf("repositories: %+v", repositories[0].Buckets)
+	}
+
+	// A table of rates counts a row per message and kind. Kind and prompter
+	// filters are applied by the source, and a count by kind alone is the
+	// messages times the kinds kept, without reading a row per pair.
+	friction := 0
+	for _, family := range agentEventFamilies {
+		if family.Group == "Friction" {
+			friction++
+		}
+	}
+	term := func(field, op, value string) qt.WhereTerm { return qt.WhereTerm{Field: field, Op: op, Value: value} }
+	for _, c := range []struct {
+		name  string
+		where []qt.WhereTerm
+		want  int
+		fast  bool
+	}{
+		{"every kind", nil, 4 * len(agentEventFamilies), true},
+		{"one kind", []qt.WhereTerm{term("family", "=", "obstacle")}, 4, true},
+		{"a group but one kind", []qt.WhereTerm{term("family_group", "=", "Friction"), term("family", "!=", "obstacle")}, 4 * (friction - 1), true},
+		{"a kind for one prompter", []qt.WhereTerm{term("family", "=", "stuck"), term("prompted_by", "=", "person")}, 2, false},
+		{"other prompters and kinds", []qt.WhereTerm{term("family", "!=", "stuck"), term("prompted_by", "!=", "person")}, 2 * (len(agentEventFamilies) - 1), false},
+	} {
+		before := catalog.queryCounts.snapshot()
+		var result qt.QueryResultV3
+		w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/agent_event_rates/query-v3", ungroupedRowsRequest(time.Now(), c.where...))
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Total != int64(c.want) {
+			t.Fatalf("%s: total %d, want %d (%d %s)", c.name, result.Total, c.want, w.Code, w.Body.String())
+		}
+		for _, row := range result.Rows {
+			id := firstString(row["id"])
+			for _, where := range c.where {
+				if where.Field == "family" && strings.HasSuffix(id, ":"+where.Value) != (where.Op == "=") {
+					t.Fatalf("%s: row %s", c.name, id)
+				}
+			}
+		}
+		if after := catalog.queryCounts.snapshot(); (after.Fast > before.Fast) != c.fast {
+			t.Fatalf("%s: counted from the messages = %v, want %v", c.name, after.Fast > before.Fast, c.fast)
+		}
 	}
 }
