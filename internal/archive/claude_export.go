@@ -114,38 +114,29 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 	if !info.IsDir() {
 		return []claudeExportInput{{path: root, conversations: true}}, nil
 	}
-	var inventories, candidates []string
-	count := 0
-	err = files.WalkDir(root, func(name string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if err := files.context().Err(); err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(root, name)
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("Claude export contains a symbolic link: %s", rel)
-		}
-		if entry.IsDir() {
-			if strings.Count(filepath.ToSlash(rel), "/") > claudeExportLimits.Depth {
-				return fmt.Errorf("Claude export exceeds the directory depth limit")
-			}
-			return nil
-		}
-		count++
-		if count > claudeExportLimits.Parts {
-			return fmt.Errorf("Claude export exceeds the file limit")
-		}
-		if entry.Name() == claudeInventoryName {
-			inventories = append(inventories, name)
-		} else if claudeConversationName(entry.Name()) || strings.EqualFold(filepath.Ext(name), ".zip") {
-			candidates = append(candidates, name)
-		}
-		return nil
-	})
+	// A managed collection keeps its inventories in known places. Anything
+	// else is a person's folder, which may hold unrelated files: only its own
+	// top-level conversation files are read, as an unzipped export has them.
+	// ZIPs there are not read, since they can carry account records that
+	// collection would strip.
+	inventories, err := claudeInventories(files, root)
 	if err != nil {
 		return nil, err
+	}
+	var candidates []string
+	if len(inventories) == 0 {
+		entries, err := files.ReadDir(root)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if entry.Type().IsRegular() && claudeConversationName(entry.Name()) {
+				candidates = append(candidates, filepath.Join(root, entry.Name()))
+			}
+		}
+		if len(candidates) > claudeExportLimits.Parts {
+			return nil, fmt.Errorf("Claude export exceeds the file limit")
+		}
 	}
 	var inputs []claudeExportInput
 	for _, name := range inventories {
@@ -175,6 +166,11 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 			}
 			seen[asset.Path] = true
 			local := filepath.Join(filepath.Dir(name), filepath.FromSlash(asset.Path))
+			for dir := local; dir != filepath.Dir(name) && dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+				if link, err := os.Lstat(dir); err == nil && link.Mode()&os.ModeSymlink != 0 {
+					return nil, fmt.Errorf("Claude export contains a symbolic link: %s", asset.Path)
+				}
+			}
 			info, err := files.Stat(local)
 			if err != nil || !info.Mode().IsRegular() || info.Size() != asset.Size {
 				return nil, fmt.Errorf("Claude export part %s is missing or its size changed", asset.Filename)
@@ -190,8 +186,6 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 	}
 	if len(inventories) == 0 {
 		for _, name := range candidates {
-			// Standalone category ZIPs are preserved too. Discovery decides
-			// which members actually contain conversations.
 			inputs = append(inputs, claudeExportInput{path: name, conversations: true, snapshot: root})
 		}
 	}
@@ -202,6 +196,55 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 		return inputs[i].path < inputs[j].path
 	})
 	return inputs, nil
+}
+
+// claudeInventories finds a managed collection's inventories: the root's own,
+// or one per snapshot. Pharos writes these trees, so a link there is refused.
+func claudeInventories(files sourceFiles, root string) ([]string, error) {
+	var inventories []string
+	check := func(dir string) error {
+		entries, err := files.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.Name() != claudeInventoryName {
+				continue
+			}
+			if !entry.Type().IsRegular() {
+				return fmt.Errorf("Claude export inventory %s is not a regular file", filepath.Join(dir, entry.Name()))
+			}
+			inventories = append(inventories, filepath.Join(dir, entry.Name()))
+		}
+		return nil
+	}
+	if err := check(root); err != nil {
+		return nil, err
+	}
+	snapshots := filepath.Join(root, "snapshots")
+	entries, err := files.ReadDir(snapshots)
+	if errors.Is(err, fs.ErrNotExist) {
+		return inventories, nil
+	} else if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if err := files.context().Err(); err != nil {
+			return nil, err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("Claude export contains a symbolic link: %s", filepath.Join("snapshots", entry.Name()))
+		}
+		if entry.IsDir() {
+			if err := check(filepath.Join(snapshots, entry.Name())); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if len(inventories) > claudeExportLimits.Parts {
+		return nil, fmt.Errorf("Claude export exceeds the inventory limit")
+	}
+	return inventories, nil
 }
 
 func verifyClaudeExportInput(files sourceFiles, input claudeExportInput) error {

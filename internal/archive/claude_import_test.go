@@ -291,6 +291,39 @@ func TestClaudeImportKeepsSnapshotsSeparateAndRejectsStaleDownloads(t *testing.T
 			t.Fatalf("snapshot version %d, want the download time", input.version)
 		}
 	}
+	// A person's folder contributes only its own top-level conversation
+	// files: an unrelated or nested ZIP and a link elsewhere are not read.
+	folder := t.TempDir()
+	probePut(t, filepath.Join(folder, "conversations.json"), "[]")
+	writeClaudeAIZip(t, filepath.Join(folder, "unrelated.zip"))
+	if err := os.MkdirAll(filepath.Join(folder, "nested"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeClaudeAIZip(t, filepath.Join(folder, "nested", "conversations-000.zip"))
+	if err := os.Symlink(t.TempDir(), filepath.Join(folder, "elsewhere")); err != nil {
+		t.Fatal(err)
+	}
+	if inputs, err := claudeExportInputs(sourceFiles{}, folder); err != nil || len(inputs) != 1 || filepath.Base(inputs[0].path) != "conversations.json" {
+		t.Fatal(inputs, err)
+	}
+	// A collection is Pharos's own tree, so a linked part is refused.
+	part := filepath.Join(snapshot, filepath.FromSlash(loose.Parts[0].Storage))
+	target := filepath.Join(t.TempDir(), "elsewhere.zip")
+	if err := os.Rename(part, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, part); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := claudeExportInputs(sourceFiles{}, snapshot); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatal("a linked part was accepted", err)
+	}
+	if err := os.Remove(part); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(target, part); err != nil {
+		t.Fatal(err)
+	}
 	other := filepath.Join(input, "manifest-second.json")
 	probePut(t, other, `{"version":"1.0","created_at":"2026-08-02T00:00:00Z","data_files":[{"filename":"conversations-000.zip","category":"conversations"}]}`)
 	if _, err := collectClaudeExport(context.Background(), config, claudeImportRequest{Paths: []string{input}}); err == nil || !strings.Contains(err.Error(), "multiple manifests") {
