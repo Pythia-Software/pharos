@@ -50,7 +50,8 @@ import { highlightParts, matchFindState, plainSnippetParts, summaryEntries, type
 import { findPattern, writeFindParameters } from "./page-find-model";
 import { queryForSearchResultsView, searchResultsView } from "./search-results-view-model";
 import { newKeywordSearch, searchSentence } from "./text-search-model";
-import { CarbonImpact } from "./carbon-impact";
+import { CarbonImpact, type CarbonImpactUsage } from "./carbon-impact";
+import { carbonChoiceMetrics, carbonChoices, carbonUsage, carbonUsageMetrics } from "./carbon-usage";
 import { carbonCatalogShape } from "./carbon-analysis-catalog";
 import { usageSummaryURL } from "./usage-summary-links";
 import { readConcurrencySettings } from "./concurrency-settings";
@@ -84,6 +85,7 @@ import { acceptDefaultQuery, libraryStorageAdapter, rejectDefaultQuery, retryDef
 import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-request";
 import { PageErrorBoundary, QueryRecovery, tableRecoveryQuery } from "./query-recovery";
 import { createMCPMonitor, type MCPStatus } from "./mcp-monitor";
+import { loadWritingTotals, type WritingTotals } from "./writing-totals";
 import { HomePage } from "./home";
 import { AskPharosSearch, AskPharosSettings } from "./ask-pharos";
 import { CardLibraryPage } from "./card-library";
@@ -207,6 +209,7 @@ declare global {
       filterRepository: (repository: string) => void;
       filterModel: (model: string) => void;
       summaryURL: typeof usageSummaryURL;
+      writingTotals: (publish: (totals: WritingTotals) => void, signal: AbortSignal) => Promise<void>;
     };
   }
 }
@@ -1141,7 +1144,19 @@ const carbonLoading = <p className="muted" role="status">Loading your Carbon ass
 function CarbonDashboard() {
   const carbon = useCarbonCatalog();
   return <CatalogDashboard catalog={carbon.catalog ?? carbonCatalogShape} dataset="usage" name="carbon" defaults={dashboardDefaults.carbon}
-    frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonImpact>} />;
+    frame={(views, where, onFilter) => <CarbonUsageFrame where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonUsageFrame>} />;
+}
+// The estimate's usage and the filters' choices, through query-v3. A
+// retry asks the Usage views again, as a refresh of the dataset does.
+function CarbonUsageFrame({ where, onFilter, children }: { where: WhereTerm[]; onFilter: FilterChange; children: React.ReactNode }) {
+  const usage = useMetrics("usage", where, carbonUsageMetrics), options = useMetrics("usage", [], carbonChoiceMetrics);
+  const read = useMemo(() => {
+    try { return { usage: usage.loading || usage.error ? null : carbonUsage(usage.metrics), error: usage.error };
+    } catch (failure) { return { usage: null, error: failure instanceof Error ? failure.message : String(failure) }; }
+  }, [usage.metrics, usage.loading, usage.error]);
+  const choices = useMemo(() => { try { return options.loading || options.error ? {} : carbonChoices(options.metrics); } catch { return {}; } }, [options.metrics, options.loading, options.error]);
+  const state: CarbonImpactUsage = { ...read, choices, readiness: usage.readiness, retry: () => window.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: "usage" })) };
+  return <CarbonImpact where={where} onFilter={onFilter} usage={state}>{children}</CarbonImpact>;
 }
 
 // Parallelism's views follow the saved counting and gap, with which the
@@ -1491,11 +1506,11 @@ function MCPSettingsPage() {
   const [status, setStatus] = useState<MCPStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [readErrors, setReadErrors] = useState({ status: "" });
+  const [readError, setReadError] = useState("");
   const [copied, setCopied] = useState("");
   const monitor = useMemo(() => createMCPMonitor({
     status: setStatus,
-    error: (part, failure) => setReadErrors(previous => ({ ...previous, [part]: failure?.message ?? "" })),
+    error: failure => setReadError(failure?.message ?? ""),
   }), []);
 
   useEffect(() => {
@@ -1528,14 +1543,14 @@ function MCPSettingsPage() {
   return <div className="mcp-page pharos-query-page">
     <div className="mcp-settings-actions"><UsageWorkspaceLink href={usageWorkspaceURL({ topic: "mcp" })}>View MCP usage<Icon name="arrow-right" /></UsageWorkspaceLink><button type="button" className="mcp-refresh" disabled={busy} onClick={() => { setError(""); void monitor.refresh(true); }}>Refresh</button></div>
     {error ? <div className="query-table-error" role="alert">{error}</div> : null}
-    {readErrors.status ? <div className="query-table-error" role="alert">Connection settings could not be loaded: {readErrors.status}</div> : null}
+    {readError ? <div className="query-table-error" role="alert">Connection settings could not be loaded: {readError}</div> : null}
     <section className="mcp-card mcp-status-card" aria-label="MCP availability">
-      <div><span className={`mcp-status ${status?.enabled ? "enabled" : "disabled"}`}>{status ? status.enabled ? "Available" : "Off" : readErrors.status ? "Unavailable" : "Loading"}</span><h2>Agent access</h2><p className="muted">{status?.note ?? (readErrors.status ? "Use Refresh to try loading connection settings again." : "Loading connection settings…")}</p>{status?.install_location ? <p className="muted">Pharos installation: <code>{status.install_location}</code></p> : null}</div>
+      <div><span className={`mcp-status ${status?.enabled ? "enabled" : "disabled"}`}>{status ? status.enabled ? "Available" : "Off" : readError ? "Unavailable" : "Loading"}</span><h2>Agent access</h2><p className="muted">{status?.note ?? (readError ? "Use Refresh to try loading connection settings again." : "Loading connection settings…")}</p>{status?.install_location ? <p className="muted">Pharos installation: <code>{status.install_location}</code></p> : null}</div>
       <button type="button" className={`toggle ${status?.enabled ? "on" : ""}`} role="switch" aria-checked={Boolean(status?.enabled)} aria-label="Enable MCP" disabled={!status || busy} onClick={() => void toggle()} />
     </section>
     <div className="mcp-setup-grid">
-      <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Connection</h2><p className="muted">Add this stdio server in an agent client’s MCP settings. The client launches Pharos locally.</p></div><button type="button" disabled={!status} onClick={() => void copy("connection", connection)}>{copied === "connection" ? "Copied" : "Copy JSON"}</button></div><pre className="mcp-code"><code>{connection || (readErrors.status ? "Connection settings unavailable. Use Refresh to try again." : "Loading…")}</code></pre><p className="mcp-fineprint">Client settings formats vary. Use the command and args shown here if your client does not accept this JSON shape.</p></section>
-      <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Prompt for an agent</h2><p className="muted">Paste this when asking an agent to add Pharos and use it efficiently.</p></div><button type="button" disabled={!status} onClick={() => void copy("prompt", prompt)}>{copied === "prompt" ? "Copied" : "Copy prompt"}</button></div><pre className="mcp-prompt">{prompt || (readErrors.status ? "Connection settings unavailable. Use Refresh to try again." : "Loading…")}</pre></section>
+      <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Connection</h2><p className="muted">Add this stdio server in an agent client’s MCP settings. The client launches Pharos locally.</p></div><button type="button" disabled={!status} onClick={() => void copy("connection", connection)}>{copied === "connection" ? "Copied" : "Copy JSON"}</button></div><pre className="mcp-code"><code>{connection || (readError ? "Connection settings unavailable. Use Refresh to try again." : "Loading…")}</code></pre><p className="mcp-fineprint">Client settings formats vary. Use the command and args shown here if your client does not accept this JSON shape.</p></section>
+      <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Prompt for an agent</h2><p className="muted">Paste this when asking an agent to add Pharos and use it efficiently.</p></div><button type="button" disabled={!status} onClick={() => void copy("prompt", prompt)}>{copied === "prompt" ? "Copied" : "Copy prompt"}</button></div><pre className="mcp-prompt">{prompt || (readError ? "Connection settings unavailable. Use Refresh to try again." : "Loading…")}</pre></section>
       {status?.skill?.text ? <section className="mcp-card mcp-skill-card"><div className="mcp-card-heading"><div><h2>Skill for agents</h2><p className="muted">A short skill that teaches an agent to search past coding conversations with Pharos, and to ask you to turn on MCP when it isn’t available. Save it as:</p></div><button type="button" onClick={() => void copy("skill", status.skill?.text ?? "")}>{copied === "skill" ? "Copied" : "Copy skill"}</button></div>
         <ul className="mcp-skill-paths">{Object.entries(status.skill.paths ?? {}).map(([harness, where]) => <li key={harness}><span>{harness === "claude" ? "Claude Code" : harness === "codex" ? "Codex" : harness}</span><code>{where}</code></li>)}</ul>
         <pre className="mcp-prompt">{status.skill.text}</pre></section> : null}
@@ -1674,6 +1689,7 @@ window.pharosQueryTables = {
   filterModel(model) {
     filterLibrary([{ field: "models", op: "contains", value: model }]);
   },
+  writingTotals: (publish, signal) => loadWritingTotals(schemas.writing_messages, publish, signal),
 };
 
 window.dispatchEvent(new Event("pharos:search-ready"));

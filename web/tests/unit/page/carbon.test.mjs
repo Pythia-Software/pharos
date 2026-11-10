@@ -5,6 +5,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import factors from "../../../../carbon/co2_factors.json";
 import { loadClassicScript } from "../helpers/classic-script.mjs";
+import carbonRequests from "../../../../testdata/carbon-usage-metrics.json";
+import usageDocument from "../../../../schemas/usage.schema.json";
+import { EMPTY_QUERY, loadSchema, toQueryRequestV3 } from "@pythia-software/query-table-core";
+import { queryCapabilities } from "../../support/query-server.mjs";
+import { carbonChoiceMetrics, carbonChoices, carbonUsage, carbonUsageMetrics } from "../../../src/carbon-usage";
 import shared from "../../../../testdata/carbon-estimates.json";
 import { deriveCarbon } from "../../../src/carbon-analysis-catalog";
 
@@ -148,4 +153,37 @@ test("each dashboard card estimates its own Carbon assumptions without changing 
   close(calculator.estimate(factors,period,settings).co2,20.8,"card assumptions");
   close(calculator.estimate(factors,period).co2,before.co2,"calculator assumptions stay intact");
   assert.equal(calculator.settingsSnapshot(factors).scenario,"low");
+});
+
+test("Carbon Impact reads its usage through query-v3 with the requests Go runs", () => {
+  assert.deepEqual({ usage: carbonUsageMetrics, choices: carbonChoiceMetrics }, { usage: carbonRequests.usage, choices: carbonRequests.choices });
+  const request = toQueryRequestV3({ ...EMPTY_QUERY, where: [{ field: "provider", op: "=", value: "codex" }], aggregations: carbonUsageMetrics }, loadSchema(usageDocument), queryCapabilities, undefined, { rows: false });
+  assert.equal(request.metrics.length, carbonUsageMetrics.length);
+  const bucket = (keys, value) => ({ keys, value });
+  const results = carbonRequests.usage.map(({ id }) => ({ id, buckets: [] }));
+  const set = (id, buckets) => { results.find(metric => metric.id === id).buckets = buckets; };
+  set("dated:uncached_input_tokens", [bucket(["small"], 500), bucket(["large"], 200)]);
+  set("undated:unclassified_tokens", [bucket(["small"], 10)]);
+  set("dated:output_tokens", [bucket(["small"], 30)]);
+  set("undated:output_tokens", [bucket(["small"], 5)]);
+  set("undated:total_tokens", [bucket([], 15)]);
+  set("dated:default_models", [bucket(["mystery"], 40), bucket(["other"], 90)]);
+  set("undated:default_models", [bucket(["mystery"], 60)]);
+  set("dated:unreported", [bucket([], null)]);
+  set("undated:unreported", [bucket([], 7)]);
+  const usage = carbonUsage(results);
+  assert.deepEqual(usage.windows[0].tokens, {
+    small: { uncached_input: 510, cache_read: 0, cache_write: 0, output: 35 },
+    large: { uncached_input: 200, cache_read: 0, cache_write: 0, output: 0 },
+  });
+  assert.equal(usage.undated_tokens, 15);
+  assert.equal(usage.unclassified_tokens, 10);
+  assert.equal(usage.default_tier_unknown_tokens, 7);
+  assert.deepEqual(usage.default_tier_models, [{ model: "mystery", tokens: 100 }, { model: "other", tokens: 90 }]);
+  // A list cut short or a failed bucket fails the read rather than understating.
+  set("dated:default_models", [bucket(["mystery"], 40)]);
+  results.find(metric => metric.id === "dated:default_models").groupCount = 2;
+  assert.throws(() => carbonUsage(results), /incomplete/);
+  const choices = carbonChoices(carbonRequests.choices.map(({ id }) => ({ id, buckets: id === "choices:repository_name" ? [bucket(["b/repo"], 1), bucket([null], 2), bucket(["a/repo"], 1)] : [] })));
+  assert.deepEqual(choices.repository_name, ["", "a/repo", "b/repo"]);
 });

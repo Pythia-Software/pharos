@@ -1871,9 +1871,9 @@ func walkAuthorshipInputs(ctx context.Context, inputs []authorInput, classifier 
 	return results, nil
 }
 
-// AuthorshipStats summarizes user-turn text for Settings: all-time and
-// last-30-day totals, and a daily series the page rolls up by week or month.
-// Every total has characters and words per category.
+// AuthorshipStats is the state of the writing estimates: whether they are
+// built, running or catching up. The words themselves are the
+// writing_messages dataset, read through query-v3.
 func (c *Catalog) AuthorshipStats(ctx context.Context) (map[string]any, error) {
 	stale := c.ensureAuthorship()
 	refinedAt, err := c.metaValue(ctx, "authorship_refined_at")
@@ -1884,24 +1884,6 @@ func (c *Catalog) AuthorshipStats(ctx context.Context) (map[string]any, error) {
 	if builtAt == "" {
 		builtAt, _ = c.metaValue(ctx, "authorship_built_at")
 	}
-	if err != nil {
-		return nil, err
-	}
-	sums := []string{"COUNT(*) messages", "COALESCE(SUM(typed_words>0),0) typed_messages"}
-	for _, column := range authorshipColumns() {
-		sums = append(sums, fmt.Sprintf("COALESCE(SUM(%s),0) %s", column, column))
-	}
-	aggregate := strings.Join(sums, ",")
-	totals, err := queryMapsContext(ctx, c.DB, "SELECT "+aggregate+",COALESCE(SUM(total_chars),0) total_chars,MIN(day) first_day,MAX(day) last_day FROM message_authorship")
-	if err != nil {
-		return nil, err
-	}
-	since := c.clock().AddDate(0, 0, -29).Format("2006-01-02")
-	recent, err := queryMapsContext(ctx, c.DB, "SELECT "+aggregate+" FROM message_authorship WHERE day>=?", since)
-	if err != nil {
-		return nil, err
-	}
-	daily, err := queryMapsContext(ctx, c.DB, "SELECT day,"+aggregate+" FROM message_authorship GROUP BY day ORDER BY day")
 	if err != nil {
 		return nil, err
 	}
@@ -1931,7 +1913,7 @@ func (c *Catalog) AuthorshipStats(ctx context.Context) (map[string]any, error) {
 		"refined_at": nilIfEmpty(refinedAt), "refinement_pending": refinementPending, "provisional_messages": provisional, "deferred_messages": deferred, "pending_messages": backlog.Pending,
 		"pending_recent_messages": backlog.Recent, "pending_historical_messages": backlog.Historical, "oldest_pending_sent_at": nilIfEmpty(backlog.OldestSent), "oldest_pending_queued_at": nilIfEmpty(backlog.OldestQueued), "complete_at": nilIfEmpty(completeAt), "refining": state.refining,
 		"version": authorshipVersion, "built_at": nilIfEmpty(builtAt), "running": state.running, "stale": stale, "error": nilIfEmpty(state.lastError),
-		"window_hours": int(authorshipWindow.Hours()), "totals": totals[0], "last_30_days": recent[0], "daily": daily,
+		"window_hours": int(authorshipWindow.Hours()),
 	}, nil
 }
 

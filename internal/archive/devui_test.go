@@ -137,7 +137,7 @@ func TestDevUIServesCheckoutAndForwardsAPIWithToken(t *testing.T) {
 	if forwarded != nil {
 		t.Fatal("pages and assets must not reach the service")
 	}
-	for path, field := range map[string]string{"/api/health/carbon": "factors", "/api/query/usage/carbon": "factors", "/api/usage/summary": "carbon_factors"} {
+	for path, field := range map[string]string{"/api/health/carbon": "factors", "/api/usage/summary": "carbon_factors"} {
 		response := serve(http.MethodGet, path, nil)
 		var body map[string]any
 		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
