@@ -169,6 +169,11 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	// counted is the source projected to what a count reads (narrowCount).
 	var counted string
 	var countedFields []string
+	// newest, when set, is the source bounded to its newest rows, given the
+	// timestamp newestNth returns newestRows back (newestBound).
+	var newest func(cutoff string) string
+	var newestNth string
+	var newestRows int
 	if sqlBacked {
 		if err = s.Catalog.prepareSQLDataset(ctx, dataset); err != nil {
 			return qt.QueryResultV3{}, nil, err
@@ -197,6 +202,14 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 				d.SourceSQL, d.SourceArgs = projected.windowedQuerySource(schema, where, time.UnixMilli(q.Now), bounds)
 				if ordered, ok := projected.newestFirstScan(q, where); ok && !covering {
 					d.SourceSQL, _ = ordered.windowedQuerySource(schema, where, time.UnixMilli(q.Now), bounds)
+				} else if field, through, ok := newestPage(q); ok && record == nil && through <= maxNewestPage {
+					if bound, has := projected.newestBounds[field]; has {
+						newestNth, newestRows = bound.nth, newestDepth(through)
+						newest = func(cutoff string) string {
+							bounded, _ := projected.boundedNewest(field, cutoff).windowedQuerySource(schema, where, time.UnixMilli(q.Now), bounds)
+							return bounded
+						}
+					}
 				}
 				if q.Grouping == nil && q.Distinct == nil {
 					countedFields = append([]string{schema.IDField}, whereFields(where)...)
@@ -347,6 +360,8 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	if err = record.restrictSource(ctx, tx, &d, q); err != nil {
 		return qt.QueryResultV3{}, nil, err
 	}
+	// whole is d before its source was bounded to its newest rows.
+	var whole qt.QueryDatasetV3
 	if sqlBacked && record == nil {
 		// A SQL-backed source reads only catalog tables that advance the
 		// query generation (or stay in step with ones that do), so its
@@ -356,13 +371,26 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		if counted != "" {
 			narrow = narrowCount(d.SourceSQL, counted, countedFields)
 		}
-		d.PopulationCounter = s.Catalog.populationCounter(queryDatasetGeneration(dataset), narrow, queryPopulationFastCounts(dataset, schema, table)...)
+		fast := queryPopulationFastCounts(dataset, schema, table)
+		d.PopulationCounter = s.Catalog.populationCounter(queryDatasetGeneration(dataset), narrow, fast...)
+		whole = d
+		if newest != nil {
+			var cutoff sql.NullString
+			if e := tx.QueryRowContext(ctx, newestNth, newestRows).Scan(&cutoff); e == nil && cutoff.String != "" {
+				d.SourceSQL = newest(cutoff.String)
+				d.PopulationCounter = s.Catalog.populationCounter(queryDatasetGeneration(dataset), wholeSourceCount(d.SourceSQL, whole.SourceSQL, narrow), fast...)
+			}
+		}
 	}
 	var result qt.QueryResultV3
 	if dataset == "usage" && q.Grouping == nil && len(q.Metrics) > 0 {
 		result, err = s.executeUsageQueryV3(ctx, tx, d, q, hours, required)
 	} else {
 		result, err = d.ExecuteIn(ctx, tx, q, qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name})
+		// The newest stored rows fill the page, or the page is of the whole source.
+		if d.SourceSQL != whole.SourceSQL && whole.SourceSQL != "" && (err != nil || len(result.Rows) < q.Result.Limit) && ctx.Err() == nil {
+			result, err = whole.ExecuteIn(ctx, tx, q, qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name})
+		}
 	}
 	if err != nil {
 		return qt.QueryResultV3{}, nil, fmt.Errorf("%s query: %w", strings.TrimPrefix(schema.Name, "pharos_"), err)

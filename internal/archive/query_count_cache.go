@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -288,6 +289,37 @@ func narrowCount(source, narrow string, fields []string) queryPopulationCount {
 		}
 		var total int64
 		err := tx.QueryRowContext(ctx, p.SQL[:at]+narrow+p.SQL[at+len(source):], p.Args...).Scan(&total)
+		return total, err == nil, err
+	}
+}
+
+// maxNewestPage is how far into a newest-first listing a page may end and
+// still read only the newest rows (newestBound).
+var maxNewestPage = 500
+
+// newestDepth is how many stored rows back a page ending at row through
+// reads: deep enough that rows a filter or the source leaves out rarely
+// empty the page.
+var newestDepth = func(through int) int { return max(1000, 20*through) }
+
+// wholeSourceCount counts for a request whose source was bounded to its
+// newest rows: over whole, the source without the bound, narrowed when
+// narrow applies. It fails rather than let the executor count the bounded
+// source, whose total would be the bound's.
+func wholeSourceCount(bounded, whole string, narrow queryPopulationCount) queryPopulationCount {
+	return func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount) (int64, bool, error) {
+		at := strings.Index(p.SQL, bounded)
+		if at < 0 {
+			return 0, false, fmt.Errorf("count statement does not read the bounded source")
+		}
+		p.SQL = p.SQL[:at] + whole + p.SQL[at+len(bounded):]
+		if narrow != nil {
+			if total, ok, err := narrow(ctx, tx, p); ok || err != nil {
+				return total, ok, err
+			}
+		}
+		var total int64
+		err := tx.QueryRowContext(ctx, p.SQL, p.Args...).Scan(&total)
 		return total, err == nil, err
 	}
 }
