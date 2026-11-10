@@ -400,9 +400,13 @@ test("an unversioned saved card link opens its related dashboard with the card's
     assert.equal(related.has("card_query"), false);
     const read = readAnalysisLink(catalog, JSON.parse(related.get("analyze_chart")), core.decodeQueryStrict(related.get("analyze_filters")).where);
     assert.deepEqual([read.where, read.state.selection], [filters, undefined], `${id}: the card's filters stay its population`);
-    // Leaving the card for a query view marks it current too.
+    // Its page wrote view defaults into it, as every link before version 3
+    // did: they are left out, not read as the reader's choices.
+    const legacy = readAnalysisLink(catalog, JSON.parse(related.get("analyze_chart")), [], legacyViewDefaults.skills).state;
+    assert.deepEqual([legacy.display, legacy.rollingPeriods], [undefined, undefined], `${id}: written defaults are not choices`);
+    // Leaving the card for a query view marks it the same way.
     const query = new URL(usageWorkspaceURL({ mode: "query", dataset: catalog.dataset === "usage" ? "usage" : catalog.dataset }, url.searchParams), "http://localhost").searchParams;
-    if (query.has("analyze_chart") && !query.has("card_query")) assert.equal(JSON.parse(query.get("analyze_chart")).v, analysisVersion, id);
+    if (query.has("analyze_chart") && !query.has("card_query")) assert.equal(JSON.parse(query.get("analyze_chart")).v, 2, id);
   }
 });
 

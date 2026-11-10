@@ -443,8 +443,9 @@ export function canonicalState<T extends AnalysisState>(catalog: AnalysisCatalog
 // filter on the breakdown's single field: that filter becomes the state's
 // selection, and the rest of where stays the population. Either way the
 // result is marked, so it is read the same way again.
-// A card's link is marked current where it stops being a card link
-// (stampCardChart), since cards always wrote their filters as the population.
+// A card's unversioned link is marked version 2 where it stops being a card
+// link (stampCardChart): cards always wrote their filters as the population,
+// and wrote their page's view defaults like any other old link.
 // Before version 3, a page wrote its defaults into every link it opened:
 // legacyView names the view settings its page drew without a value (the
 // topic's own, over the engine's), and a version 2 or older link's value
@@ -467,6 +468,14 @@ export function readAnalysisLink<T extends AnalysisState>(catalog: AnalysisCatal
   if (!catalog.legacySlices || fields.length !== 1 || !where.some(term => isSliceTerm(term, field))) return { state: read, where };
   const slice = readSlice(where, field);
   return { state: { ...read, selection: { ...slice, values: slice.values.map(value => value ?? "") } }, where: where.filter(term => !isSliceTerm(term, field)) };
+}
+
+// Scatter's Count each: a new unit may not offer either measure or the
+// colour, so the change takes the data fields a normalized state settles on,
+// and only those; the view stays as the reader left it, chosen or not.
+export function scatterUnitChange(catalog: AnalysisCatalog, state: AnalysisState, unit: string): Partial<AnalysisState> {
+  const { metric, metricY, split } = normalizeAnalysis(catalog, { ...state, unit });
+  return { unit, metric, metricY, split };
 }
 
 // A control's change, applied to the state as asked for rather than as drawn.

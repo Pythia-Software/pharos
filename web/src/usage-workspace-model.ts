@@ -1,7 +1,6 @@
 import { fitQueryToScreen } from "./query-fit";
 import { retainPageView } from "./view-contract";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, predicatesOf, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
-import { analysisVersion } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
 import { peopleMessageLabelScope } from "./people-message-labels";
 import { generatedMessageField, generatedQueryTarget, toolWhereCanUseCalls, writingMessageSourceField } from "./generated-query-target";
@@ -302,14 +301,15 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
 // Dashboards on the analysis engine read an unversioned analyze_chart as one
 // whose legend may have written its selection into the filters
 // (readAnalysisLink). A card's filters are always its population, so where a
-// link stops being a card link its chart is marked current, and its filters
-// stay the population.
+// link stops being a card link its chart is marked version 2: its filters
+// stay the population, and, as with any link from before version 3, view
+// settings equal to its page's old defaults are left out (readLegacyView).
 const analysisTopics = new Set<string>(["labels", "tokens", "calls", "activity", "tools", "mcp", "time", "skills", "agent_experience", "agent_event_rates"]);
 export function stampCardChart(params: URLSearchParams) {
   if (!analysisTopics.has(params.get("analyze_topic") ?? "") || !params.has("analyze_chart")) return;
   try {
     const chart = JSON.parse(params.get("analyze_chart")!);
-    if (chart && typeof chart === "object" && !Array.isArray(chart) && chart.v === undefined) params.set("analyze_chart", JSON.stringify({ ...chart, v: analysisVersion }));
+    if (chart && typeof chart === "object" && !Array.isArray(chart) && chart.v === undefined) params.set("analyze_chart", JSON.stringify({ ...chart, v: 2 }));
   } catch { /* An invalid chart stays as it is and reports itself. */ }
 }
 

@@ -6,7 +6,7 @@ import { MetricCard, defaultRenderers, formatMetricOutput, type MetricTheme } fr
 import { BinnedHistogram, histogramOf } from "./dashboard-histogram";
 import { chartSeriesStyle, colorFields, metricSeriesColor } from "./chart-colors";
 import { orderedValues } from "./session-shape-bands";
-import { isTrendView, changeState, canonicalState, clearView, viewChosen, cycleUnavailable, notTrended, sampleSubject, analysisResult, analysisLabels, analysisFields, comparisonComponentUnavailable, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, percentileLimit, distributionBins, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { isTrendView, changeState, canonicalState, clearView, viewChosen, cycleUnavailable, notTrended, sampleSubject, analysisResult, analysisLabels, analysisFields, comparisonComponentUnavailable, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, scatterUnitChange, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, percentileLimit, distributionBins, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery } from "./analysis-request";
 import type { RequestParams } from "./metric-request";
 import { useDatasetRefresh } from "./use-dataset-refresh";
@@ -81,7 +81,7 @@ export function AnalysisControls({ catalog, view, chosen = false, set, onView, b
   // and periods it covers.
   const data = <>
     {onView && catalog.views?.length !== 1 ? <AnalysisViewControl catalog={catalog} state={view} onChange={onView} /> : null}
-    {grouped ? <ChartSelect label="Count each" value={view.unit} options={view.view === "scatter" ? unitOptions.filter(([id]) => id !== records) : unitOptions} title="What one observation is" onChange={next => set(catalog.dataset === "scatter" ? normalizeAnalysis(catalog, { ...view, unit: next }) : { unit: next })} /> : null}
+    {grouped ? <ChartSelect label="Count each" value={view.unit} options={view.view === "scatter" ? unitOptions.filter(([id]) => id !== records) : unitOptions} title="What one observation is" onChange={next => set(catalog.dataset === "scatter" ? scatterUnitChange(catalog, view, next) : { unit: next })} /> : null}
     {view.view === "scatter" && catalog.dataset === "scatter" ? <>
       <ScatterMetricPicker label="X axis" value={view.metric} other={view.metricY} unit={view.unit} catalog={catalog} onChange={metric => set({ metric })} />
       <ScatterMetricPicker label="Y axis" value={view.metricY} other={view.metric} unit={view.unit} catalog={catalog} onChange={metricY => set({ metricY })} />
