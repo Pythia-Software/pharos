@@ -217,3 +217,37 @@ func TestResolveFolderProjectsBounds(t *testing.T) {
 		}
 	}
 }
+
+// A project filter that is exactly a project's name, remote or folder key
+// names only that project; anything else matches by part of a name.
+func TestProjectPredicateExactFirst(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	execTx(t, catalog.DB,
+		`INSERT INTO repositories(id,display_name,canonical_remote,created_at,updated_at) VALUES('r-app','app','github.com/me/app','x','x'),('r-application','application',NULL,'x','x')`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,location,repository_id,project_folder,indexed_at) VALUES
+			('w-home','claude','local','home','H','/Users/me',NULL,'~','x'),
+			('w-notes','claude','local','notes','N','/Users/me/notes',NULL,'~/notes','x'),
+			('w-notes-old','claude','local','notes-old','O','/Users/me/notes-old',NULL,'~/notes-old','x'),
+			('w-app','claude','local','app','A','/src/app','r-app','/src/app','x'),
+			('w-application','claude','local','application','B','/src/application','r-application','/src/application','x')`)
+	for value, want := range map[string]string{
+		"~":                 "w-home",
+		"/Users/other":      "w-home",
+		"~/notes":           "w-notes",
+		"/home/me/notes":    "w-notes",
+		"notes":             "w-notes,w-notes-old",
+		"app":               "w-app",
+		"APP":               "w-app",
+		"github.com/me/app": "w-app",
+		"appl":              "w-application",
+		"ap":                "w-app,w-application",
+	} {
+		rows, err := queryMaps(catalog.DB, `SELECT group_concat(id) ids FROM (SELECT w.id FROM workspaces w WHERE `+projectPredicate("w")+` ORDER BY w.id)`, projectArgs(value)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := firstString(rows[0]["ids"]); got != want {
+			t.Errorf("project %q: %q, want %q", value, got, want)
+		}
+	}
+}

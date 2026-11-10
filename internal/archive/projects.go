@@ -274,16 +274,25 @@ func projectIDSQL(w string) string {
 }
 
 // projectPredicate selects the workspaces (alias w) of the projects a project
-// filter names: a repository by name or remote, as the repository filter
-// matches, including the folders checked out inside it; or a folder project
-// by its key (~/notes), any part of it, or its absolute path. A workspace in
-// a repository is that repository's project, even inside a folder project's
-// directory, so a folder name matches only workspaces outside any repository,
-// as projectKindSQL tells them. Its arguments are projectArgs.
+// filter names. A value that is exactly a project's name, a repository's
+// remote, or a folder project's key (~/notes, ~, or its absolute path) names
+// only that project. Otherwise it matches as the repository filter does, by
+// any part of a repository's name or remote, including the folders checked
+// out inside it, or any part of a folder project's key. A workspace in a
+// repository is that repository's project, even inside a folder project's
+// directory, so a folder matches only workspaces outside any repository, as
+// projectKindSQL tells them. Its arguments are projectArgs.
 func projectPredicate(w string) string {
 	repository := "COALESCE(" + w + ".repository_id," + w + ".folder_repository_id)"
-	return "(" + repository + " IN (SELECT pr.id FROM repositories pr WHERE " + repositoryNamePredicate("pr") + ")" +
-		" OR instr(lower(" + w + ".project_folder),lower(?))>0 AND NOT EXISTS(SELECT 1 FROM repositories pf WHERE pf.id=" + repository + "))"
+	outside := "NOT EXISTS(SELECT 1 FROM repositories pf WHERE pf.id=" + repository + ")"
+	exactRepository := "(lower(%[1]s.display_name)=lower(?) OR lower(COALESCE(%[1]s.canonical_remote,''))=lower(?))"
+	// Uncorrelated, so SQLite evaluates it once per statement.
+	exact := "(EXISTS(SELECT 1 FROM repositories px WHERE " + fmt.Sprintf(exactRepository, "px") + ")" +
+		" OR EXISTS(SELECT 1 FROM workspaces wx WHERE wx.repository_id IS NULL AND wx.project_folder=? AND NOT EXISTS(SELECT 1 FROM repositories pf WHERE pf.id=wx.folder_repository_id)))"
+	return "(CASE WHEN " + exact + " THEN " +
+		repository + " IN (SELECT pr.id FROM repositories pr WHERE " + fmt.Sprintf(exactRepository, "pr") + ") OR " + w + ".project_folder=? AND " + outside +
+		" ELSE " + repository + " IN (SELECT pr.id FROM repositories pr WHERE " + repositoryNamePredicate("pr") + ")" +
+		" OR instr(lower(" + w + ".project_folder),lower(?))>0 AND " + outside + " END)"
 }
 
 func projectArgs(value string) []any {
@@ -291,7 +300,7 @@ func projectArgs(value string) []any {
 	if key := projectFolder(value); key != "" {
 		folder = key
 	}
-	return []any{value, value, folder}
+	return []any{value, value, folder, value, value, folder, value, value, folder}
 }
 
 // checkProjectFilter reports an error when a project filter matches no

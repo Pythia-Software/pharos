@@ -123,6 +123,9 @@ point metadata.
   unchanged as the repository-only view. `search_conversations`,
   `search_work`, `search_messages`, `search_text` and `query_statistics`
   take a `project` filter, and `query_statistics` groups by `project`.
+  A filter that is exactly a project's name, a repository's remote or a
+  folder's key or path (`~`, `~/notes`) names only that project; any other
+  text matches by part of a name, as the `repository` filter does.
   `trace_worktree` and `list_findings` stay repository-only: findings are
   computed per repository.
 
