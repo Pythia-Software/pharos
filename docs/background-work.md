@@ -466,7 +466,8 @@ nothing.
 **Slow requests and contention.** A request (or an MCP tool call) that ran
 for a second or more, or that its client abandoned, leaves one `Slow
 request:` line on stderr with where its time went: waiting for the catalog
-writer and behind which operations, waiting for derived values, in its own
+writer and behind which operations, waiting for derived values, queued for
+one of the heavy-query slots, in its own
 statements (with the code that ran the slowest), and the rest, plus the read
 pool's use and the WAL's size. The same breakdown is the detail of the
 request's entry in Settings → Logs. The line names the route or tool, never a

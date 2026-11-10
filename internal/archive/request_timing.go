@@ -70,6 +70,8 @@ type requestTiming struct {
 	derivedWait    time.Duration
 	derivedSlowest time.Duration
 	derivedKey     string
+	// queueWait is the time spent queued for a heavy-query slot (heavyQueries).
+	queueWait time.Duration
 }
 
 // mcpRPCPath is the route an agent's MCP process forwards tool calls to.
@@ -274,6 +276,16 @@ func (t *requestTiming) derivedValue(key string, waited time.Duration) {
 	}
 }
 
+// queryQueued records a wait for a heavy-query slot.
+func (t *requestTiming) queryQueued(waited time.Duration) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.queueWait += waited
+}
+
 // codeCaller names the innermost of stack's frames in this package's own
 // code, below database/sql and the query helpers: who ran a statement.
 func codeCaller(stack []uintptr) string {
@@ -297,8 +309,9 @@ func codeCaller(stack []uintptr) string {
 func secondsText(d time.Duration) string { return fmt.Sprintf("%.2fs", d.Seconds()) }
 
 // breakdown says where elapsed went: waiting for the catalog writer, waiting
-// for derived values, in the request's own statements, and the rest
-// (computing, encoding, waiting for a connection or the processor).
+// for derived values, queued for a heavy-query slot, in the request's own
+// statements, and the rest (computing, encoding, waiting for a connection or
+// the processor).
 func (t *requestTiming) breakdown(elapsed time.Duration) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -315,11 +328,12 @@ func (t *requestTiming) breakdown(elapsed time.Duration) string {
 	if t.derived > 0 {
 		derived += fmt.Sprintf(" derived_values=%d slowest_derived=%s:%s", t.derived, t.derivedKey, secondsText(t.derivedSlowest))
 	}
-	parts = append(parts, derived, fmt.Sprintf("database=%s statements=%d", secondsText(t.database), t.statements))
+	parts = append(parts, derived, "query_queue="+secondsText(t.queueWait),
+		fmt.Sprintf("database=%s statements=%d", secondsText(t.database), t.statements))
 	if caller := codeCaller(t.slowestStack); caller != "" {
 		parts = append(parts, fmt.Sprintf("slowest_statement=%s at %q", secondsText(t.slowest), caller))
 	}
-	parts = append(parts, "other="+secondsText(max(0, elapsed-t.writerWait-t.derivedWait-t.database)))
+	parts = append(parts, "other="+secondsText(max(0, elapsed-t.writerWait-t.derivedWait-t.queueWait-t.database)))
 	if c := t.catalog; c != nil && c.DB != nil {
 		// The pool's counters cover every request, not only this one: waits
 		// here mean requests queued for a read connection while it ran.
