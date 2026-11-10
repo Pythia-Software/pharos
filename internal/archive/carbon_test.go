@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -366,6 +367,157 @@ func TestCarbonSharedEstimates(t *testing.T) {
 			if got := a.grams(byCategory[category]); !close(got, want) {
 				t.Errorf("%s %s: %v g, want %v g", c.Name, category, got, want)
 			}
+		}
+	}
+}
+
+// carbonUsageRequests are Carbon Impact's query-v3 requests on Usage
+// (web/src/carbon-usage.ts keeps to this file).
+type carbonUsageRequests struct {
+	Usage   []qt.AggSpec `json:"usage"`
+	Choices []qt.AggSpec `json:"choices"`
+}
+
+// carbonUsageRead is what the page reads from them: the estimate's token
+// counts by tier and category, and what its notes name.
+type carbonUsageRead struct {
+	Tokens                         map[string]map[string]int64
+	Undated, Unclassified, Unknown int64
+	Models                         map[string]int64
+	Choices                        map[string][]string
+}
+
+func carbonUsageV3(t *testing.T, s *Server, where []qt.WhereTerm) carbonUsageRead {
+	t.Helper()
+	raw, err := os.ReadFile("../../testdata/carbon-usage-metrics.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requests carbonUsageRequests
+	if err := json.Unmarshal(raw, &requests); err != nil {
+		t.Fatal(err)
+	}
+	run := func(metrics []qt.AggSpec, where []qt.WhereTerm) map[string]qt.MetricResult {
+		q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Result: qt.WireQuery{Where: where, Limit: 1}, Metrics: metrics}
+		result, _, err := s.executeQueryV3(t.Context(), "usage", nil, PharosUsageSchema(), q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byID := map[string]qt.MetricResult{}
+		for _, metric := range result.Metrics {
+			if metric.Error != "" || metric.GroupCount > int64(len(metric.Buckets)) {
+				t.Fatalf("%s: %+v", metric.ID, metric)
+			}
+			byID[metric.ID] = metric
+		}
+		return byID
+	}
+	metrics := run(requests.Usage, where)
+	read := carbonUsageRead{Tokens: map[string]map[string]int64{}, Models: map[string]int64{}, Choices: map[string][]string{}}
+	category := map[string]string{"uncached_input_tokens": "uncached_input", "unclassified_tokens": "uncached_input",
+		"cache_creation_input_tokens": "cache_write", "cache_read_input_tokens": "cache_read", "output_tokens": "output"}
+	for _, side := range []string{"dated", "undated"} {
+		for field, key := range category {
+			for _, bucket := range metrics[side+":"+field].Buckets {
+				tier := firstString(bucket.Keys[0])
+				if read.Tokens[tier] == nil {
+					read.Tokens[tier] = map[string]int64{"uncached_input": 0, "cache_write": 0, "cache_read": 0, "output": 0}
+				}
+				read.Tokens[tier][key] += integer(bucket.Value)
+				if field == "unclassified_tokens" {
+					read.Unclassified += integer(bucket.Value)
+				}
+			}
+		}
+		for _, bucket := range metrics[side+":default_models"].Buckets {
+			read.Models[firstString(bucket.Keys[0])] += integer(bucket.Value)
+		}
+		for _, bucket := range metrics[side+":unreported"].Buckets {
+			read.Unknown += integer(bucket.Value)
+		}
+	}
+	for _, bucket := range metrics["undated:total_tokens"].Buckets {
+		read.Undated += integer(bucket.Value)
+	}
+	for id, metric := range run(requests.Choices, nil) {
+		field := strings.TrimPrefix(id, "choices:")
+		read.Choices[field] = []string{}
+		for _, bucket := range metric.Buckets {
+			read.Choices[field] = append(read.Choices[field], firstString(bucket.Keys[0]))
+		}
+		sort.Strings(read.Choices[field])
+	}
+	return read
+}
+
+// Parity with the endpoint the page read before (POST /api/query/usage/carbon).
+func TestCarbonUsageV3MatchesCarbonEndpoint(t *testing.T) {
+	previousLocation := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = previousLocation })
+	catalog, config := testCatalog(t)
+	ingestUsageFixture(t, catalog, `{"type":"token_usage_record","timestamp":"2026-09-21T03:05:00Z","payload":{"response_id":"r3","usage":{"input_tokens":90,"output_tokens":10,"total_tokens":100},"thread_token_usage":{"total_tokens":3150}}}`)
+	execTx(t, catalog.DB, `INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('carbon-repo','example/repo','','')`, `UPDATE workspaces SET repository_id='carbon-repo'`)
+	server := testServer(t, config, catalog)
+	compare := func(name, where string) {
+		t.Helper()
+		compareCarbonUsage(t, server, name, where)
+	}
+	for _, sample := range []struct{ name, where string }{
+		{"all", `[]`},
+		{"repository and provider", `[{"field":"repository_name","op":"=","value":"example/repo"},{"field":"provider","op":"=","value":"codex"}]`},
+		{"partial day with offset", `[{"field":"last_usage_at","op":">=","value":"2026-09-20T19:00:00-06:00"},{"field":"first_usage_at","op":"<","value":"2026-09-20T21:00:00-06:00"}]`},
+		{"no match", `[{"field":"repository_name","op":"=","value":"other/repo"}]`},
+		{"no repository", `[{"field":"repository_name","op":"is_null","value":""}]`},
+	} {
+		compare(sample.name, sample.where)
+	}
+	execTx(t, catalog.DB, `UPDATE agent_sessions SET model='mystery-model'`, `UPDATE agent_session_usage SET unclassified_tokens=10,total_tokens=total_tokens+10 WHERE output_tokens=30`)
+	compare("named fallback and unclassified", `[]`)
+	compare("named fallback, partial day", `[{"field":"first_usage_at","op":">=","value":"2026-09-21T02:00:00Z"}]`)
+	// Every tier, and usage with no date.
+	_, tiers, _ := carbonUsageFixture(t)
+	compareCarbonUsage(t, tiers, "tiers", `[]`)
+	compareCarbonUsage(t, tiers, "tiers, one hour", `[{"field":"hour","op":"=","value":"2026-09-21T01:00:00Z"}]`)
+	execTx(t, tiers.Catalog.DB, `UPDATE agent_session_usage SET usage_hour='' WHERE output_tokens=30`)
+	compareCarbonUsage(t, tiers, "undated", `[]`)
+	compareCarbonUsage(t, tiers, "undated, one day", `[{"field":"day","op":"=","value":"2026-09-21"}]`)
+}
+
+func compareCarbonUsage(t *testing.T, server *Server, name, where string) {
+	t.Helper()
+	{
+		response := httptest.NewRecorder()
+		server.postQueryTable(response, httptest.NewRequest(http.MethodPost, "/api/query/usage/carbon", strings.NewReader(`{"where":`+where+`}`)), "usage", "carbon")
+		var old struct {
+			Windows      []carbonWindow      `json:"windows"`
+			Choices      map[string][]string `json:"choices"`
+			Undated      int64               `json:"undated_tokens"`
+			Unclassified int64               `json:"unclassified_tokens"`
+			Unknown      int64               `json:"default_tier_unknown_tokens"`
+			Models       []struct {
+				Model  string `json:"model"`
+				Tokens int64  `json:"tokens"`
+			} `json:"default_tier_models"`
+		}
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &old) != nil {
+			t.Fatalf("%s: HTTP %d %s", name, response.Code, response.Body.String())
+		}
+		var terms []qt.WhereTerm
+		if err := json.Unmarshal([]byte(where), &terms); err != nil {
+			t.Fatal(err)
+		}
+		got := carbonUsageV3(t, server, terms)
+		models := map[string]int64{}
+		for _, model := range old.Models {
+			models[model.Model] = model.Tokens
+		}
+		want := carbonUsageRead{Tokens: old.Windows[0].Tokens, Undated: old.Undated, Unclassified: old.Unclassified, Unknown: old.Unknown, Models: models, Choices: old.Choices}
+		if a, b := must(json.Marshal(got)), must(json.Marshal(want)); string(a) != string(b) {
+			t.Fatalf("%s:\n query-v3 %s\n endpoint %s", name, a, b)
+		}
+		if name != "no match" && name != "no repository" && len(got.Tokens) == 0 {
+			t.Fatalf("%s: no usage compared", name)
 		}
 	}
 }

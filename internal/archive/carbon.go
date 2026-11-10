@@ -215,6 +215,20 @@ func loadCarbonDocument() (carbonDocument, error) {
 	return doc, nil
 }
 
+// carbonTierBasis is a model's tier and how it was chosen: matched by name,
+// the default for a reported model no fragment matches, or the default for
+// a source that reported no model (placeholderModel).
+func carbonTierBasis(doc carbonDocument, model string) (tier, basis string) {
+	tier, matched := doc.tier(model)
+	switch {
+	case matched:
+		return tier, "matched"
+	case placeholderModel(model):
+		return tier, "unreported"
+	}
+	return tier, "default"
+}
+
 // tier places a model in a size tier by the first matching name fragment.
 // Unrecognized and placeholder models take the default tier.
 func (doc carbonDocument) tier(model string) (string, bool) {
