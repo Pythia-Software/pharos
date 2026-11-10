@@ -1535,7 +1535,7 @@ test('session navigator scrolling reuses transcript geometry on a long session',
   // Opening and closing content must refresh the layout without relocating focus.
   await page.locator('.turn').nth(80).locator(':scope > summary').click();
   await settled();
-  assert.ok(await page.locator('.reader-navigator-position').textContent());
+  assert.ok(await page.locator('.reader-navigator-window').evaluate(band=>!band.hidden),'the visible window survives the relayout');
   await page.setViewportSize({width:390,height:844});
   await settled();
   assert.ok(await page.locator('.reader-navigator').isVisible());

@@ -139,7 +139,7 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 955
+   "controls": 954
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],

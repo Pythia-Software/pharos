@@ -669,6 +669,7 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .reader-key .usage-legend-menu-heading .reader-key-swatch { margin-right: 6px; vertical-align: -1px; }
 .reader-key-unavailable { color: var(--muted); }
 .transcript-key-notes { display: grid; gap: 3px; margin-left: calc(5em + 8px); }
+.reader-key.human-writing-legend .reader-key-swatch { background: color-mix(in srgb,var(--gold) 24%,transparent); border-color: var(--gold); }
 .reader-key.event-target-legend .reader-key-swatch { background: color-mix(in srgb,var(--event-link) 7%,transparent); border: 0; border-bottom: 2px dashed var(--event-link); }
 .show-events :is(.event-link-n,.event-badge).reader-event-hidden { display: none; }
 @media (max-width: 600px) {

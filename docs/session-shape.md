@@ -361,31 +361,17 @@ The dashboard counts each session or root conversation as a group, so
 `session_shape` queries get the same 100,000-group budget as `usage`
 (`queryV3Dataset`).
 
-## The reader's Session signals strip
+## One session's signals
 
-The conversation reader shows the signals that fired in a session as chips
-under its head, such as "Failed calls · 3", in the dashboard's order and
-with its labels.
-- They come from `GET /api/work/{id}/conversations/{conversation}/signals`
-  (`SessionSignals`). Each signal is named by its dataset field and carries
-  its count and the messages that triggered it.
-- The strip loads after the transcript. A session whose stored shape is
-  dirty is derived afresh, and that never delays the reader.
-- Clicking a chip writes `reveal=message:<id>` for one of its messages and
-  `highlight` for the others, at most 40. Each click moves to the next
-  message, and the chip shows which one ("2 of 3"). The click drops the
-  reader's own landing anchors (`message`, `at`, `call`), and a link with
-  `reveal` leaves landing to the attention runtime, so a reload returns to
-  the revealed message.
-- The page's attention runtime opens the message's turn, scrolls to it and
-  marks it. It never moves keyboard focus, and Clear highlights removes the
-  marks.
-- A session lacking the evidence for some signals says so under the chips
-  ("Not enough evidence for …"). Those signals are not counted, not zero.
+`GET /api/work/{id}/conversations/{conversation}/signals` (`SessionSignals`)
+returns the signals that fired in one session. Each signal is named by its
+dataset field and carries its count and the messages that triggered it,
+from the stored evidence. A session lacking the evidence for some signals
+says so in `coverage`; those signals are not counted, not zero.
 
-The model is `sessionSignalStrip`, `sessionSignalAttention` and
-`sessionSignalActive` in `reader-model.js`. A unit test keeps their signals
-and labels the same as the dashboard's.
+The reader no longer shows these as a strip of chips under the conversation
+head. Failed calls appear as Error marks on the session timeline, and
+compactions and context use on its Context bar.
 
 ## Related dashboards
 

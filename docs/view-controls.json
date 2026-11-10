@@ -3400,15 +3400,6 @@
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
     },
     {
-      "key": "97a8fc4b6ef3368e:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "mountSessionSignals",
-      "tag": "button",
-      "control": "'button', 'session-signal'",
-      "contract": "navigation",
-      "reason": "Writes reveal=message:<id> and highlight to the URL to step through the messages where a session signal fired: scroll and highlight, never focus. The URL owns the state."
-    },
-    {
       "key": "089cfe80425bbb90:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "rawDisclosure",
@@ -7370,6 +7361,16 @@
       "reason": "A whole-key default atomically writes reader_filter_level, reader_filter, reader_writing, reader_events, reader_labels and reader_highlight_hidden through the classic reader owner; its selected radio is derived from those fields."
     },
     {
+      "key": "58b5064e2d686b61:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "choice",
+      "tag": "input",
+      "control": "data-view-field=\"reader_navigator\" checked={shown.includes(name)} onChange={event=>{const checked=event.currentTarget.checked;setShown(previous=>choices.filter(item=>item===name?checked:previous.includes(item)));}}",
+      "binding": "reader_navigator",
+      "contract": "view.reader_navigator",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "5c536168277a2959:0",
       "file": "web/src/reader-navigator.tsx",
       "owner": "ReaderNavigator",
@@ -7395,16 +7396,6 @@
       "control": "onClick={()=>{const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}",
       "contract": "transient",
       "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
-    },
-    {
-      "key": "889adb994f9d4635:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "ReaderNavigator",
-      "tag": "input",
-      "control": "data-view-field=\"reader_navigator\" checked={shown.includes(choice)} onChange={event=>{const checked=event.currentTarget.checked;setShown(previous=>choices.filter(item=>item===choice?checked:previous.includes(item)));}}",
-      "binding": "reader_navigator",
-      "contract": "view.reader_navigator",
-      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "e4dc3a33e88064d4:0",

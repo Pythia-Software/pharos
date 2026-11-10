@@ -6,10 +6,9 @@ import type {TimeRange} from './timeline-label-model';
  * Resize/toggle/filter/materialization invalidate the cached layout. */
 export function trackReaderViewport(panel:HTMLElement,host:HTMLElement,data:ReaderNavigatorData,byID:Map<string,TimeRange>){
   const list=panel.querySelector<HTMLElement>('.turn-list')!,scroller=panel.closest<HTMLElement>('.workspace-reader-content')!;
-  const band=host.querySelector<HTMLElement>('.reader-navigator-window')!,edges=[...host.querySelectorAll<HTMLElement>('.reader-navigator-boundary')],status=host.querySelector<HTMLElement>('.reader-navigator-position')!;
-  let frame=0,stale=true,disposed=false,geometry=readerGeometry([]),origin=0,viewTop=0,viewBottom=0,trackWidth=1,last='',positionTimer:ReturnType<typeof setTimeout>|undefined;
+  const band=host.querySelector<HTMLElement>('.reader-navigator-window')!,edges=[...host.querySelectorAll<HTMLElement>('.reader-navigator-boundary')];
+  let frame=0,stale=true,disposed=false,geometry=readerGeometry([]),origin=0,viewTop=0,viewBottom=0,trackWidth=1,last='';
   const full=host.dataset.range!.split(',').map(Number),span=full[1]-full[0];
-  const showPosition=(text:string)=>{if(status.firstChild)status.firstChild.nodeValue=text;else status.append(document.createTextNode(text));};
   const measure=(scroll:number)=>{
     const root=scroller.getBoundingClientRect(),sticky=host.getBoundingClientRect();
     origin=root.top;
@@ -56,7 +55,6 @@ export function trackReaderViewport(panel:HTMLElement,host:HTMLElement,data:Read
     // occupy their own compositor layers, so movement never resizes the SVG.
     if(relaid)scroller.style.setProperty('--reader-navigator-height',`${viewTop}px`);
     band.hidden=!range;for(const edge of edges)edge.hidden=!range;
-    clearTimeout(positionTimer);
     if(range){
       const left=Math.max(0,Math.min(1,(range[0]-full[0])/span)),right=Math.max(left,Math.min(1,(range[1]-full[0])/span));
       band.dataset.position=String((left+right)/2);
@@ -64,10 +62,6 @@ export function trackReaderViewport(panel:HTMLElement,host:HTMLElement,data:Read
       band.style.transform=`translateX(${start*100}%) scaleX(${width})`;
       edges[0].style.transform=`translateX(${start*100}%)`;
       edges[1].style.transform=`translateX(calc(${(start+width)*100}% - 2px))`;
-      const text=`${Math.round(left*100)}–${Math.round(right*100)}% visible`;
-      // Replacing text on every frame invalidates long WebKit documents.
-      // Keep the existing text node and update the readout after scrolling.
-      if(relaid)showPosition(text);else positionTimer=setTimeout(()=>showPosition(text),120);
     }
   };
   const schedule=()=>{if(!frame)frame=requestAnimationFrame(update);};
@@ -83,5 +77,5 @@ export function trackReaderViewport(panel:HTMLElement,host:HTMLElement,data:Read
   const events=['toggle','input','transcript-filter','transcript-materialized'];
   for(const name of events)panel.addEventListener(name,invalidate,true);
   scroller.addEventListener('scroll',schedule,{passive:true});window.addEventListener('resize',invalidate);schedule();
-  return()=>{disposed=true;cancelAnimationFrame(frame);clearTimeout(positionTimer);observer.disconnect();mutations.disconnect();for(const name of events)panel.removeEventListener(name,invalidate,true);scroller.removeEventListener('scroll',schedule);window.removeEventListener('resize',invalidate);scroller.style.removeProperty('--reader-navigator-height');};
+  return()=>{disposed=true;cancelAnimationFrame(frame);observer.disconnect();mutations.disconnect();for(const name of events)panel.removeEventListener(name,invalidate,true);scroller.removeEventListener('scroll',schedule);window.removeEventListener('resize',invalidate);scroller.style.removeProperty('--reader-navigator-height');};
 }
