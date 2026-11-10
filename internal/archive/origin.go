@@ -384,12 +384,16 @@ func (c *Catalog) publishOrigins(ctx context.Context) (published bool, err error
 		return true, err
 	}
 	// guard: whether another process published this snapshot or a later one.
+	// moved reports any publication since this snapshot, including one of an
+	// older snapshot, which this one must still overwrite.
+	moved := false
 	guard := func(tx *sql.Tx) (bool, error) {
 		var current int64
 		if err := tx.QueryRowContext(ctx, "SELECT built FROM origin_state WHERE id=1").Scan(&current); err != nil {
 			return false, err
 		}
 		stored, _, err := originBuiltLineage(ctx, tx)
+		moved = current != built || stored != builtGeneration
 		return current > revision || current == revision && (!tracked || stored >= generation), err
 	}
 	record := func(tx *sql.Tx) error {
@@ -419,14 +423,19 @@ func (c *Catalog) publishOrigins(ctx context.Context) (published bool, err error
 	// Nearly every origin is as published. Compare with the published rows in
 	// this snapshot and write only those that differ, rather than offering
 	// every conversation's row to the catalog while holding its writer. The
-	// guard below keeps the comparison sound: it stops this write if anything
-	// else published since the snapshot.
+	// comparison holds only while those published rows stand: if another
+	// process published since the snapshot, even an older snapshot than this
+	// one, every row is offered instead.
 	stored, err := queryMapsContext(ctx, snapshot, `SELECT conversation_id,`+strings.Join(originFields, ",")+` FROM conversation_origins`)
 	if err != nil {
 		return true, err
 	}
-	rows = originsToWrite(rows, stored)
+	computed := rows
+	rows = originsToWrite(computed, stored)
 	_ = snapshot.Rollback()
+	if originsComputedHook != nil {
+		originsComputedHook()
+	}
 	dependentWorkspaces := map[string][]string{}
 	for _, session := range linked {
 		id := firstString(session["child_conversation_id"])
@@ -436,6 +445,9 @@ func (c *Catalog) publishOrigins(ctx context.Context) (published bool, err error
 		// Another process may have published a later snapshot meanwhile.
 		if done, err := guard(tx); err != nil || done {
 			return err
+		}
+		if moved {
+			rows = computed
 		}
 		cols := append([]string{"conversation_id"}, originFields...)
 		updates, changes := []string{}, []string{}
@@ -482,6 +494,10 @@ func (c *Catalog) publishOrigins(ctx context.Context) (published bool, err error
 		return record(tx)
 	})
 }
+
+// originsComputedHook runs between computing origins and storing them.
+// Tests publish from another process's point of view there.
+var originsComputedHook func()
 
 // originsToWrite is the computed rows that are not already stored as
 // computed. A value that merely might differ (a number computed as another

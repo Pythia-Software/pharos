@@ -564,3 +564,38 @@ func TestOriginsToWriteKeepsOnlyChangedRows(t *testing.T) {
 		t.Fatalf("rows to write: %v, want %s", got, want)
 	}
 }
+
+// Another process can publish an older snapshot between this one's read and
+// its write. Its rows are overwritten even where this snapshot computed what
+// was published when it read.
+func TestOriginsPublishedOverAnOlderSnapshotsRows(t *testing.T) {
+	c := executionFixture(t, executionFixtureConversation{id: "root"})
+	fixtureExec(t, c, `UPDATE conversations SET harness='codex/codex_desktop' WHERE id='root'`)
+	channel := func() any {
+		t.Helper()
+		var value any
+		if err := c.DB.QueryRow("SELECT channel FROM conversation_origins WHERE conversation_id='root'").Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	publishOrigins(t, c)
+	if channel() != "desktop" {
+		t.Fatalf("precondition, the root's channel: %v", channel())
+	}
+	fixtureExec(t, c, "UPDATE origin_state SET revision=revision+2")
+	override(t, &originsComputedHook, func() {
+		fixtureExec(t, c, "UPDATE conversation_origins SET channel='cli' WHERE conversation_id='root'")
+		fixtureExec(t, c, "UPDATE origin_state SET built=revision-1")
+	})
+	if _, err := c.publishOrigins(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if channel() != "desktop" {
+		t.Fatalf("an older snapshot's row outlived a newer publication: %v", channel())
+	}
+	var revision, built int64
+	if err := c.DB.QueryRow("SELECT revision,built FROM origin_state").Scan(&revision, &built); err != nil || revision != built {
+		t.Fatalf("origins are not current: %d %d %v", revision, built, err)
+	}
+}
