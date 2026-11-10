@@ -110,7 +110,7 @@ func (c *Catalog) usageRowsFromLedgerContext(ctx context.Context, location *time
 				"cost_usd": nil, "cost_today_usd": nil, "price_status": "", "priced_model": nil,
 			}
 			copyOrigin(row, origins[firstString(entry["conversation_id"])])
-			row["carbon_tier"], _ = carbon.tier(model)
+			row["carbon_tier"], row["carbon_tier_basis"] = carbonTierBasis(carbon, model)
 			for _, field := range usageTokenFields {
 				row[field] = int64(0)
 			}

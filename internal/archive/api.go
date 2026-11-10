@@ -739,9 +739,6 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/mcp":
 		value, err := s.Catalog.MCPStatus(s.Config())
 		writeResult(w, value, err)
-	case path == "/api/mcp/calls":
-		value, err := s.Catalog.MCPCallHistory(queryInt(r, "limit", 50), queryInt(r, "offset", 0), r.URL.Query().Get("tool"), r.URL.Query().Get("status"))
-		writeResult(w, value, err)
 	case strings.HasPrefix(path, "/api/receipt/"):
 		id := strings.TrimPrefix(path, "/api/receipt/")
 		rows, err := queryMaps(s.Catalog.reader(), "SELECT * FROM receipts WHERE id=? OR operation_id=?", id, id)

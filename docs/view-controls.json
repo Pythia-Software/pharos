@@ -4200,15 +4200,6 @@
       "reason": "Carbon assumptions and dashboard filters; save defaults is a separate settings action."
     },
     {
-      "key": "78780669fe380618:0",
-      "file": "web/src/carbon-impact.tsx",
-      "owner": "CarbonImpact",
-      "tag": "button",
-      "control": "onClick={() => setRefresh(value => value + 1)}",
-      "contract": "view.carbon",
-      "reason": "Carbon assumptions and dashboard filters; save defaults is a separate settings action."
-    },
-    {
       "key": "8cd5bb555e2167cb:0",
       "file": "web/src/carbon-impact.tsx",
       "owner": "CarbonImpact",
@@ -4216,6 +4207,15 @@
       "control": "onClick={() => onFilter(() => [])}",
       "contract": "view.carbon",
       "reason": "Carbon assumptions and dashboard filters; save defaults is a separate settings action."
+    },
+    {
+      "key": "a2fd08fcb66bc234:0",
+      "file": "web/src/carbon-impact.tsx",
+      "owner": "CarbonImpact",
+      "tag": "button",
+      "control": "onClick={state.retry}",
+      "contract": "action",
+      "reason": "Retry re-reads Carbon Impact's usage after a failed read; it changes no view state."
     },
     {
       "key": "225bab816a157f99:0",
@@ -6537,13 +6537,22 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "a1c0d824787f4221:0",
+      "key": "0b8adaf7ff500944:0",
       "file": "web/src/index.tsx",
       "owner": "CarbonDashboard",
+      "tag": "CarbonUsageFrame",
+      "control": "onFilter={onFilter}",
+      "contract": "view.carbon",
+      "reason": "Carbon assumptions and dashboard filters; save defaults is a separate settings action."
+    },
+    {
+      "key": "91cb7cd295e21f2f:0",
+      "file": "web/src/index.tsx",
+      "owner": "CarbonUsageFrame",
       "tag": "CarbonImpact",
       "control": "onFilter={onFilter}",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
+      "contract": "view.carbon",
+      "reason": "Carbon assumptions and dashboard filters; save defaults is a separate settings action."
     },
     {
       "key": "00e22af22344e13c:0",

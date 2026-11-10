@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	"math/rand"
 	"path/filepath"
 	"slices"
@@ -301,7 +302,7 @@ func TestAuthorshipTypingSpeedOnlyFlagsImpossibleRates(t *testing.T) {
 }
 
 func TestAuthorshipRebuildCountsRepresentativeWorkOnce(t *testing.T) {
-	catalog, _ := testCatalog(t)
+	catalog, config := testCatalog(t)
 	if err := catalog.Initialize(); err != nil {
 		t.Fatal(err)
 	}
@@ -333,20 +334,50 @@ func TestAuthorshipRebuildCountsRepresentativeWorkOnce(t *testing.T) {
 	if err := catalog.RebuildAuthorship(context.Background(), "test"); err != nil {
 		t.Fatal(err)
 	}
-	stats, err := catalog.AuthorshipStats(context.Background())
+	totals, err := queryMaps(catalog.DB, `SELECT COUNT(*) messages,SUM(typed_words) typed_words,SUM(typed_words>0) typed_messages,SUM(automated_chars) automated_chars,SUM(quoted_chars) quoted_chars,
+ SUM(harness_chars) harness_chars,SUM(quoted_words) quoted_words,SUM(automated_words) automated_words,MIN(day) first_day,MAX(day) last_day FROM message_authorship`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	totals := stats["totals"].(map[string]any)
-	if integer(totals["messages"]) != 3 || integer(totals["typed_words"]) != 9 || integer(totals["automated_chars"]) != int64(len("Audit the grammar")) ||
-		integer(totals["quoted_chars"]) != int64(len(reply)) || integer(totals["harness_chars"]) == 0 {
-		encoded, _ := json.Marshal(stats)
-		t.Fatalf("stats = %s", encoded)
+	if got := totals[0]; integer(got["messages"]) != 3 || integer(got["typed_words"]) != 9 || integer(got["automated_chars"]) != int64(len("Audit the grammar")) ||
+		integer(got["quoted_chars"]) != int64(len(reply)) || integer(got["harness_chars"]) == 0 || integer(got["quoted_words"]) != 16 || integer(got["automated_words"]) != 3 ||
+		got["first_day"] != got["last_day"] || got["first_day"] != "2026-09-01" && got["first_day"] != "2026-09-02" {
+		t.Fatalf("totals = %#v", got)
 	}
-	daily, _ := stats["daily"].([]map[string]any)
-	if len(daily) != 1 || daily[0]["day"] != "2026-09-01" && daily[0]["day"] != "2026-09-02" || integer(daily[0]["quoted_words"]) != 16 ||
-		integer(daily[0]["automated_words"]) != 3 || integer(totals["quoted_words"]) != 16 {
-		t.Fatalf("daily = %#v, totals = %#v", daily, totals)
+	// Settings' Health card reads its totals (writing-totals.ts) through
+	// query-v3, with the numbers the summing endpoint gave.
+	// day is the service's local date of sent_at (authorship_store.go), so a
+	// window of days starts at a local midnight.
+	localMidnight := func(day string, after int) string {
+		at, err := time.ParseInLocation("2006-01-02", day, time.Local)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return at.AddDate(0, 0, after).UTC().Format(time.RFC3339)
+	}
+	health := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Result: qt.WireQuery{Limit: 1}, Metrics: []qt.AggSpec{
+		{ID: "typed", Op: "sum", Field: "typed_words"},
+		{ID: "typed_messages", Op: "sum", Expression: "SUM(IF([typed_words]>0,1,0))"},
+		{ID: "recent_typed", Op: "sum", Field: "typed_words", Where: []qt.WhereTerm{{Field: "sent_at", Op: ">=", Value: localMidnight(firstString(totals[0]["first_day"]), 0)}}},
+		{ID: "later_typed", Op: "sum", Field: "typed_words", Where: []qt.WhereTerm{{Field: "sent_at", Op: ">=", Value: localMidnight(firstString(totals[0]["last_day"]), 1)}}},
+	}}
+	result, _, err := testServer(t, config, catalog).executeQueryV3(t.Context(), "writing_messages", nil, PharosWritingMessagesSchema(), health)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]any{}
+	for _, metric := range result.Metrics {
+		if metric.Error != "" || len(metric.Buckets) != 1 {
+			t.Fatalf("%s: %+v", metric.ID, metric)
+		}
+		values[metric.ID] = metric.Buckets[0].Value
+	}
+	if integer(values["typed"]) != 9 || integer(values["typed_messages"]) != 2 || integer(totals[0]["typed_messages"]) != 2 || integer(values["recent_typed"]) != 9 || integer(values["later_typed"]) != 0 {
+		t.Fatalf("Health totals = %v", values)
+	}
+	stats, err := catalog.AuthorshipStats(t.Context())
+	if err != nil || stats["built_at"] == nil || stats["totals"] != nil {
+		t.Fatalf("status = %v %v", stats, err)
 	}
 	rows, err := queryMaps(catalog.DB, "SELECT w.id FROM workspaces w WHERE w.source_id='other'")
 	if err != nil || len(rows) != 1 {

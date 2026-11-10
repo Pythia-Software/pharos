@@ -527,7 +527,7 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 		{"GET", "/api/menu-bar/usage", ""}, {"GET", "/api/tools/status", ""}, {"GET", "/api/sources", ""},
 		// The first shows the lost run as failed and stores that in the
 		// background, which waits for the writer; the next does not.
-		{"GET", "/api/cloud-backup", ""}, {"GET", "/api/cloud-backup", ""}, {"GET", "/api/mcp/calls", ""}, {"GET", "/api/search?q=parser", ""},
+		{"GET", "/api/cloud-backup", ""}, {"GET", "/api/cloud-backup", ""}, {"GET", "/api/search?q=parser", ""},
 		{"POST", "/api/search/text", `{"query":"parser"}`}, {"GET", "/api/work/" + workspace, ""}, {"GET", "/api/findings", ""},
 		{"GET", "/api/tl1", ""}, {"GET", "/api/preferences", ""}, {"GET", "/api/sync/status", ""},
 		// The operations snapshot reads the registry and the journal, which
@@ -720,10 +720,10 @@ func TestQueuedRequestWriteNamesTheWriterItWaitedBehind(t *testing.T) {
 	}
 	// The slowest statement is named by the code that ran it.
 	override(t, &slowStatement, time.Duration(0))
-	if code := apiCall(t, server, config.APIToken, "GET", "/api/mcp/calls", nil).Code; code != http.StatusOK {
-		t.Fatalf("MCP calls returned %d", code)
+	if code := apiCall(t, server, config.APIToken, "GET", "/api/receipt/none", nil).Code; code != http.StatusNotFound {
+		t.Fatalf("a missing receipt returned %d", code)
 	}
-	if got := detail("/api/mcp/calls"); !strings.Contains(got, `slowest_statement=`) || !strings.Contains(got, `at "archive.`) {
+	if got := detail("/api/receipt/none"); !strings.Contains(got, `slowest_statement=`) || !strings.Contains(got, `at "archive.`) {
 		t.Errorf("the entry does not name the slowest statement's caller: %s", got)
 	}
 	if got := detail("/api/sources"); strings.Contains(got, "statements=0") || !strings.Contains(got, "writer_wait=0.00s") || strings.Contains(got, "behind=") {
