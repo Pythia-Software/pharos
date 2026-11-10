@@ -51,8 +51,9 @@ CREATE TABLE IF NOT EXISTS agent_events_dirty (
 // the earliest time it was read from, ” for all of it); 3 the execution
 // dependency digest it was built against, so a read can tell rows built on
 // superseded execution evidence (agentEventsExecutionCurrent); 4 the members
-// of each component built at (ensureExecutionDependencyMembers).
-const agentEventsLedgerVersion = "4"
+// of each component built at (ensureExecutionDependencyMembers); 5 stamp
+// triggers that advance the events cache domain.
+const agentEventsLedgerVersion = "5"
 
 // agentEventStoreFloor is the lowest probability stored: rows between it and
 // agentEventThreshold are not events, but let a later threshold be studied
