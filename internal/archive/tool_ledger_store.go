@@ -615,6 +615,10 @@ func (c *Catalog) ensureToolRollup(ctx context.Context) error {
 	if err := c.refreshRequestTimings(ctx); err != nil {
 		return err
 	}
+	// So are session outcomes, which leave mirrors out of rework.
+	if err := c.refreshSessionOutcomes(ctx); err != nil {
+		return err
+	}
 	// The stored compaction boundaries need a one-time backfill alongside.
 	return c.backfillCompactionBoundaries(ctx)
 }

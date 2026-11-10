@@ -18,6 +18,7 @@ import {withFingerprintColumn} from "./fingerprint-columns";
 import {MessageLabelDisplay,MessageLabelCards,messageLabelRenderers} from "./message-label-results";
 import {messageLabelHostQuery,labelResultsMode} from "./message-label-results-model";
 import {messageLabelsCatalog} from "./message-labels-catalog";
+import { gitFactDisplay, outcomeDisplay } from "./outcomes";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewEntry } from "./view-state";
 import { installViewAttention, registerDetailAttentionResolver } from "./view-attention";
@@ -352,6 +353,16 @@ const renderers: RenderRegistry<Row> = {
   project({ value, row }: CellContext<Row>) {
     if (value == null || value === "") return row.project_kind === "none" ? <span className="qt-muted">No project</span> : "";
     return <span title={row.project_kind === "folder" ? `Folder ${value}` : `Repository ${value}`}>{String(value)}</span>;
+  },
+  // A workspace's outcome label, with the evidence that decided it.
+  outcome_label({ value, row }: CellContext<Row>) {
+    const outcome = outcomeDisplay(value);
+    return <span className={`qt-outcome ${outcome.id}`} title={String(row.outcome_why ?? outcome.description)}>{outcome.label}</span>;
+  },
+  // A Git count is not applicable to a folder, which is not zero.
+  git_count({ value, row }: CellContext<Row>) {
+    const fact = gitFactDisplay(value, row.project_kind);
+    return fact.muted ? <span className="qt-muted" title={fact.title}>{fact.text}</span> : fact.text;
   },
   run_state({ value }: CellContext<Row>) {
     const state = String(value ?? "unknown");
