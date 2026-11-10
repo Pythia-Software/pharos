@@ -172,12 +172,13 @@ func (c *Catalog) checkoutFileKeys(ctx context.Context, absolute string) ([]any,
 }
 
 // firstEditCallSQL selects fields of the call where a session first edited
-// the session_files row sf: its first edit call that recorded the file as
-// its own or, for a patch's other files, which only session_files records,
-// its edit call at the file's first edit.
+// the session_files row sf: its first successful edit call that recorded the
+// file as its own or, for a patch's other files, which only session_files
+// records, its edit call at the file's first edit. session_files counts only
+// successful edits, so a failed call is never the first edit.
 func firstEditCallSQL(sf, fields string) string {
 	return `COALESCE((SELECT ` + fields + ` FROM tool_calls t
-			WHERE t.workspace_id=` + sf + `.workspace_id AND t.tool_category='edit'
+			WHERE t.workspace_id=` + sf + `.workspace_id AND t.tool_category='edit' AND t.status='ok'
 			AND (` + sf + `.repository_id IS NOT NULL AND t.path_repository_id=` + sf + `.repository_id AND t.repo_path=` + sf + `.path
 				OR ` + sf + `.repository_id IS NULL AND 'path:'||t.path_absolute=` + sf + `.file_key)
 			ORDER BY COALESCE(t.started_at,''),t.sequence LIMIT 1),

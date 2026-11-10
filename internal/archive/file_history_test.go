@@ -38,6 +38,10 @@ func TestFileHistoryWithGit(t *testing.T) {
 	}
 	f.edit("first", "main.go", 10)
 	first := repo.commit(9.99, "First", map[string]string{"main.go": "package main\n"})
+	// A failed edit before second's first is not its first edit.
+	execTx(t, f.catalog.DB, `INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status,started_at,
+		path_absolute,repo_path,path_repository_id,path_scope,call_message_id) VALUES('failed','second','second-c',0,'claude','tool','Edit','edit','error','`+daysAgo(5.5)+`','`+
+		filepath.Join(repo.dir, "main.go")+`','main.go','repo-app','repo','failed-m')`)
 	f.edit("second", "main.go", 5)
 	f.edit("second", "main.go", 4.9)
 	second := repo.commit(4.89, "Second", map[string]string{"main.go": "package main\n\nfunc main() {}\n"})
@@ -85,7 +89,7 @@ func TestFileHistoryWithGit(t *testing.T) {
 			t.Fatalf("%s sessions: %s", path, got)
 		}
 		latest := file["sessions"].([]any)[0].(map[string]any)
-		if integer(latest["edits"]) != 2 || latest["outcome_label"] != "landed" || !strings.Contains(firstString(latest["url"]), "message=call-") {
+		if integer(latest["edits"]) != 2 || latest["outcome_label"] != "landed" || !strings.Contains(firstString(latest["url"]), "message=call-") || strings.Contains(firstString(latest["url"]), "failed") {
 			t.Fatalf("latest session: %#v", latest)
 		}
 		// Git was read from a day before the first session edit, and says so.
