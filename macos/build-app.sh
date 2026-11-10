@@ -12,6 +12,8 @@
 #   PHAROS_CODESIGN_TIMESTAMP Set to 1 for a secure signing timestamp (required
 #                             for Developer ID notarization). Default: 0.
 #   PHAROS_ENABLE_UPDATES     Set to 1 only for Developer ID releases. Default: 0.
+#   PHAROS_DEBUG_SYMBOLS      Set to 1 to retain Go symbols/DWARF for debugging.
+#                             Default: 0; app executables omit debug metadata.
 #   SDKROOT                  macOS SDK path. Default: installed macOS 26.5 SDK.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -37,6 +39,11 @@ CGO_CXXFLAGS="${CGO_CXXFLAGS:--O2 -g} -mmacosx-version-min=$MACOS_MIN"
 CGO_LDFLAGS="${CGO_LDFLAGS:--O2 -g} -mmacosx-version-min=$MACOS_MIN"
 export CGO_CFLAGS CGO_CXXFLAGS CGO_LDFLAGS
 VERSION=${PHAROS_VERSION:-0.2.0}
+case "${PHAROS_DEBUG_SYMBOLS:-0}" in
+    0) GO_LDFLAGS='-s -w' ;;
+    1) GO_LDFLAGS= ;;
+    *) echo "PHAROS_DEBUG_SYMBOLS must be 0 or 1." >&2; exit 2 ;;
+esac
 case "$VERSION" in
     *[!0-9.]*|.*|*.|*..*) echo "PHAROS_VERSION must be major.minor.patch (numeric)." >&2; exit 2 ;;
 esac
@@ -84,16 +91,16 @@ for goarch in $GOARCHES; do
     esac
     ARCHS="$ARCHS $arch"
     echo "Building the Go service ($arch)…"
-    (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED="$CGO" go build -o "$WORK/pharos-$arch" ./cmd/pharos)
+    (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED="$CGO" go build -trimpath -ldflags="$GO_LDFLAGS" -o "$WORK/pharos-$arch" ./cmd/pharos)
     # The worker calls ONNX Runtime's C API, so it always needs cgo.
     echo "Building the labeling worker ($arch)…"
-    (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED=1 go build -o "$WORK/pharos-labeler-ort-$arch" ./cmd/pharos-labeler-ort)
+    (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED=1 go build -trimpath -ldflags="$GO_LDFLAGS" -o "$WORK/pharos-labeler-ort-$arch" ./cmd/pharos-labeler-ort)
     echo "Building the Swift wrapper ($arch)…"
     /bin/sh "$ROOT/macos/swift-toolchain.sh" compile -parse-as-library -target "$arch-apple-macos$MACOS_MIN" -framework SwiftUI -framework WebKit \
         -framework DiskArbitration -framework Security -F "$SPARKLE" -framework Sparkle \
         -Xlinker -rpath -Xlinker '@executable_path/../Frameworks' \
         "$ROOT/macos/PharosApp.swift" "$ROOT/macos/LibraryVolume.swift" "$ROOT/macos/Launch.swift" \
-        "$ROOT/macos/MenuBar.swift" \
+        "$ROOT/macos/MenuBar.swift" "$ROOT/macos/Dictation.swift" \
         "$ROOT/macos/UpdateLifecycle.swift" "$ROOT/macos/UpdateNotice.swift" \
         -o "$WORK/PharosApp-$arch"
 done
@@ -155,6 +162,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>CFBundleShortVersionString</key><string>$VERSION</string>
 <key>CFBundleVersion</key><string>$VERSION</string>
 <key>LSMinimumSystemVersion</key><string>$MACOS_MIN</string>
+<key>NSMicrophoneUsageDescription</key><string>Pharos listens only while you dictate into a text box, and transcribes your speech on this Mac.</string>
 </dict></plist>
 PLIST
 python3 - "$APP/Contents/Info.plist" "$ROOT/macos/sparkle.json" "${PHAROS_ENABLE_UPDATES:-0}" <<'PY'
@@ -202,11 +210,11 @@ case "${PHAROS_CODESIGN_TIMESTAMP:-0}" in
     1) set -- "$@" --timestamp ;;
     *) echo "PHAROS_CODESIGN_TIMESTAMP must be 0 or 1." >&2; exit 2 ;;
 esac
-# The hardened runtime needs no entitlements here: WebKit's JIT runs in Apple's
-# WebContent process, the Go service needs no JIT or unsigned memory, and
-# launching it with Process() is unrestricted. It blocks DYLD_* injection and
-# debugger attachment, making it harder for other local code to borrow Pharos's
-# privacy grants.
+# The hardened runtime needs only audio input, for dictation (the app's own
+# entitlements, below): WebKit's JIT runs in Apple's WebContent process, the Go
+# service needs no JIT or unsigned memory, and launching it with Process() is
+# unrestricted. It blocks DYLD_* injection and debugger attachment, making it
+# harder for other local code to borrow Pharos's privacy grants.
 if [ "${PHAROS_HARDENED_RUNTIME:-1}" != 0 ]; then
     set -- "$@" --options runtime
 fi
@@ -245,18 +253,17 @@ cat > "$WORK/worker.entitlements" <<'PLIST'
 </dict></plist>
 PLIST
 codesign "$@" --entitlements "$WORK/worker.entitlements" --identifier "$SERVICE_ID.labeler" "$APP/Contents/MacOS/pharos-labeler-ort"
+# The app records from the microphone only while the page dictates
+# (Dictation.swift); the hardened runtime denies audio input without this.
+APP_ENTITLEMENTS='<key>com.apple.security.device.audio-input</key><true/>'
 if [ "${PHAROS_HARDENED_RUNTIME:-1}" != 0 ] && \
     ! codesign -dvv "$APP/Contents/MacOS/pharos" 2>&1 | grep -Eq '^Authority=(Apple Development|Developer ID Application):'; then
     # Ad hoc and self-signed development builds cannot pass library validation.
     # Developer ID and Apple Development builds retain full library validation.
-    cat > "$WORK/debug.entitlements" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
-<key>com.apple.security.cs.disable-library-validation</key><true/>
-</dict></plist>
-PLIST
-    set -- "$@" --entitlements "$WORK/debug.entitlements"
+    APP_ENTITLEMENTS="$APP_ENTITLEMENTS<key>com.apple.security.cs.disable-library-validation</key><true/>"
 fi
-codesign "$@" --identifier "$BUNDLE_ID" "$APP"
+printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>' "$APP_ENTITLEMENTS" '</dict></plist>' > "$WORK/app.entitlements"
+codesign "$@" --entitlements "$WORK/app.entitlements" --identifier "$BUNDLE_ID" "$APP"
 if [ "${PHAROS_ENABLE_UPDATES:-0}" = 1 ]; then
     if ! codesign -dvv "$APP" 2>&1 | grep -q 'Authority=Developer ID Application:'; then
         echo "Only Developer ID signed builds may enable production updates." >&2

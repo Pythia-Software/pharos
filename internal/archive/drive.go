@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -191,14 +190,6 @@ func nearestExisting(path string) string {
 	}
 }
 
-func deviceOf(path string) (uint64, bool) {
-	var stat syscall.Stat_t
-	if err := syscall.Stat(path, &stat); err != nil {
-		return 0, false
-	}
-	return uint64(stat.Dev), true
-}
-
 // librarySizes counts what the library keeps on the checked volume.
 type librarySizes struct {
 	CatalogBytes   int64 `json:"catalog_bytes"`
@@ -226,7 +217,7 @@ type captureSize struct {
 }
 
 func measureLibrary(ctx context.Context, config Config, device uint64) librarySizes {
-	on := func(path string) bool { value, ok := deviceOf(path); return ok && value == device }
+	on := func(path string) bool { value, err := deviceOf(path); return err == nil && value == device }
 	sizes := librarySizes{}
 	if on(config.CatalogPath) {
 		for _, suffix := range []string{"", "-wal", "-shm"} {
@@ -260,10 +251,15 @@ func measureLibrary(ctx context.Context, config Config, device uint64) librarySi
 	return sizes
 }
 
+// captureHardlinkKey is hardlinkKey outside tests.
+var captureHardlinkKey = hardlinkKey
+
 // measureCaptures sizes the capture root per host and source, following the
 // layout described in capture.go. Each file counts once: readers' temporary
 // directories (.reader-*) hard-link the captures they read, so they are walked
-// last and add only what files/ and history/ do not already hold.
+// last and add only what files/ and history/ do not already hold. The sizes
+// are informational: a file whose device and inode cannot be observed is
+// counted without deduplication rather than under a made-up key.
 func measureCaptures(ctx context.Context, root string) []captureSize {
 	index := map[[2]string]*captureSize{}
 	seen := map[[2]uint64]bool{}
@@ -295,8 +291,7 @@ func measureCaptures(ctx context.Context, root string) []captureSize {
 			if err != nil {
 				return nil
 			}
-			if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-				inode := [2]uint64{uint64(stat.Dev), uint64(stat.Ino)}
+			if inode, err := captureHardlinkKey(info); err == nil {
 				if seen[inode] {
 					return nil
 				}
@@ -394,10 +389,13 @@ func driveScope(config Config) (string, string) {
 }
 
 type driveState struct {
-	facts   volumeFacts
-	sizes   librarySizes
-	checked time.Time
-	growth  cloudGrowth
+	// identity is the driveKey the state was collected under; "" when the
+	// drive's identity could not be observed, so no cache keeps it.
+	identity string
+	facts    volumeFacts
+	sizes    librarySizes
+	checked  time.Time
+	growth   cloudGrowth
 	// shares divide sizes for the storage breakdown. They are read with the
 	// sizes, so both describe the same moment and a sync's commits do not
 	// send the breakdown back to the catalog.
@@ -406,50 +404,66 @@ type driveState struct {
 
 func collectDrive(ctx context.Context, config Config) *driveState {
 	_, path := driveScope(config)
+	key, device, err := driveKey(config)
 	state := &driveState{facts: inspectVolume(ctx, path), checked: time.Now()}
-	if device, ok := deviceOf(path); ok {
+	if err == nil {
+		state.identity = key
 		state.sizes = measureLibrary(ctx, config, device)
 	}
 	return state
 }
 
 // driveCache keeps the last drive state per checked directory and device,
-// so a remount or another drive at the same path is checked afresh.
+// so a remount or another drive at the same path is checked afresh. A drive
+// whose device cannot be observed has no key: nothing is reused for it, and
+// two failed observations do not show that it stayed the same drive.
 type driveCache struct {
 	mu         sync.Mutex
-	key        string
+	key        string // "" when nothing is cached
 	state      *driveState
 	refreshing bool
 }
 
 var drives driveCache
 
-func driveKey(config Config) string {
+// driveKey identifies the checked directory and the device it is on now.
+func driveKey(config Config) (string, uint64, error) {
 	_, path := driveScope(config)
-	device, _ := deviceOf(path)
-	return fmt.Sprintf("%s\x00%d", path, device)
+	device, err := deviceOf(path)
+	if err != nil {
+		return "", 0, err
+	}
+	return fmt.Sprintf("%s\x00%d", path, device), device, nil
 }
 
 // cached returns the state for config, if any, and whether the caller should
-// refresh it; only one caller at a time is told to.
-func (c *driveCache) cached(config Config) (*driveState, bool) {
-	key := driveKey(config)
+// refresh it; only one caller at a time is told to. It fails, after dropping
+// any cached state, when the drive's identity cannot be observed: a refresh
+// could not be kept, and an earlier state cannot be shown to still apply.
+func (c *driveCache) cached(config Config) (*driveState, bool, error) {
+	key, _, err := driveKey(config)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.key != key {
+	if err != nil || c.key != key {
 		c.key, c.state = key, nil
+	}
+	if err != nil {
+		return nil, false, err
 	}
 	stale := c.state == nil || time.Since(c.state.checked) > driveFactsTTL
 	if !stale || c.refreshing {
-		return c.state, false
+		return c.state, false, nil
 	}
 	c.refreshing = true
-	return c.state, true
+	return c.state, true, nil
 }
 
 // peek returns the state for config, if any, without taking on a refresh.
 func (c *driveCache) peek(config Config) *driveState {
-	key := driveKey(config)
+	key, _, err := driveKey(config)
+	if err != nil {
+		return nil
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.key != key {
@@ -458,24 +472,28 @@ func (c *driveCache) peek(config Config) *driveState {
 	return c.state
 }
 
+// store ends the refresh in flight, keeping state if it is still current.
 func (c *driveCache) store(config Config, state *driveState) {
-	key := driveKey(config)
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.refreshing = false
-	if state != nil && c.key == key {
-		c.state = state
+	c.mu.Unlock()
+	if state != nil {
+		c.publish(config, state)
 	}
 }
 
 // publish makes state the current one while its refresh is still running:
 // unlike store, it leaves refreshing set, so no other refresh starts until
-// this one finishes.
+// this one finishes. state is kept only while the drive still has the
+// identity it was collected under; an unobservable drive clears the cache.
 func (c *driveCache) publish(config Config, state *driveState) {
-	key := driveKey(config)
+	key, _, err := driveKey(config)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.key == key {
+	switch {
+	case err != nil:
+		c.key, c.state = "", nil
+	case c.key == key && state.identity == key:
 		c.state = state
 	}
 }
@@ -496,7 +514,10 @@ func (c *driveCache) setGrowth(published *driveState, growth cloudGrowth) {
 // background, so a slow diskutil never holds up a poll.
 func (s *Server) driveHealth() map[string]any {
 	config := s.Config()
-	state, refresh := drives.cached(config)
+	state, refresh, err := drives.cached(config)
+	if err != nil {
+		return driveUnidentifiedReport(config, err)
+	}
 	if refresh {
 		// A read that writes one library_size_history row (§3.4, hidden). The
 		// sizes are published before that write, which waits for the catalog
@@ -527,10 +548,22 @@ func (s *Server) driveHealth() map[string]any {
 	return driveReport(config, state)
 }
 
+// driveUnidentifiedReport answers for a drive whose device cannot be
+// observed, which nothing cached may describe.
+func driveUnidentifiedReport(config Config, err error) map[string]any {
+	scope, path := driveScope(config)
+	if _, statErr := os.Stat(path); statErr != nil {
+		return driveDisconnectedReport(config)
+	}
+	check := driveCheck{ID: "volume", Status: "unknown", Summary: "Could not identify the drive holding " + path + ": " + err.Error()}
+	return map[string]any{"status": check.Status, "scope": scope, "path": path, "checks": []driveCheck{check}}
+}
+
 // Health polls need the volume identity (for storage() and the pin check),
 // which comes from diskutil. It is cached per path and device; a poll only
 // waits for the first lookup, bounded by identityTimeout, and afterwards gets
-// the cached value while at most one refresh runs in the background.
+// the cached value while at most one refresh runs in the background. A path
+// whose device cannot be observed has no cache entry: each poll looks it up.
 var (
 	identityTTL     = time.Minute
 	identityTimeout = 2 * time.Second
@@ -548,7 +581,11 @@ type cachedIdentity struct {
 }
 
 func cachedVolumeIdentity(path string) string {
-	device, _ := deviceOf(path)
+	device, err := deviceOf(path)
+	if err != nil {
+		value, _ := lookupVolumeIdentity(path)
+		return value
+	}
 	key := fmt.Sprintf("%s\x00%d", path, device)
 	volumeIdentities.Lock()
 	entry := volumeIdentities.values[key]
@@ -570,8 +607,17 @@ func cachedVolumeIdentity(path string) string {
 			if !ok {
 				ttl = min(ttl, 10*time.Second) // retry a failed lookup soon
 			}
+			// The lookup answers its waiters, but is kept for key only if
+			// the path is still on the device it was looked up for.
+			now, err := deviceOf(path)
 			volumeIdentities.Lock()
 			entry.value, entry.expires, entry.pending = value, time.Now().Add(ttl), nil
+			if err != nil || now != device {
+				entry.expires = time.Time{}
+				if volumeIdentities.values[key] == entry {
+					delete(volumeIdentities.values, key)
+				}
+			}
 			volumeIdentities.Unlock()
 			close(pending)
 		}()
@@ -604,7 +650,8 @@ func lookupVolumeIdentity(path string) (string, bool) {
 			}
 		}
 	}
-	if device, ok := deviceOf(path); ok {
+	// Unlike volumeIdentity's fallback, this spells the device unsigned.
+	if device, err := deviceOf(path); err == nil {
 		return fmt.Sprintf("device:%d", device), false
 	}
 	return "unavailable", false
@@ -623,21 +670,16 @@ type driveCheck struct {
 
 var checkRank = map[string]int{"ok": 0, "info": 1, "unknown": 2, "warning": 3, "problem": 4}
 
+// driveReport describes the drive from state, which must not be nil, unless
+// the checked directory is missing.
 func driveReport(config Config, state *driveState) map[string]any {
 	scope, path := driveScope(config)
-	history := loadBackupHistory(config)
-	var last any
-	if len(history.Backups) > 0 {
-		last = history.Backups[0]
-	}
-	report := map[string]any{"scope": scope, "path": path, "last_backup": last}
-	checks := []driveCheck{}
 	if _, err := os.Stat(path); err != nil {
-		report["status"] = "disconnected"
-		checks = append(checks, backupCheck(config, history, volumeFacts{}))
-		report["checks"] = checks
-		return report
+		return driveDisconnectedReport(config)
 	}
+	history := loadBackupHistory(config)
+	report := map[string]any{"scope": scope, "path": path, "last_backup": lastBackup(history)}
+	checks := []driveCheck{}
 	facts := state.facts
 	total, free := diskUsage(path)
 	report["volume"] = facts
@@ -656,6 +698,22 @@ func driveReport(config Config, state *driveState) map[string]any {
 	report["status"] = status
 	report["checks"] = checks
 	return report
+}
+
+// driveDisconnectedReport answers for a missing checked directory from the
+// backup history alone; it needs no drive state.
+func driveDisconnectedReport(config Config) map[string]any {
+	scope, path := driveScope(config)
+	history := loadBackupHistory(config)
+	checks := []driveCheck{backupCheck(config, history, volumeFacts{})}
+	return map[string]any{"scope": scope, "path": path, "last_backup": lastBackup(history), "status": "disconnected", "checks": checks}
+}
+
+func lastBackup(history backupHistory) any {
+	if len(history.Backups) > 0 {
+		return history.Backups[0]
+	}
+	return nil
 }
 
 func unknownCheck(id string, facts volumeFacts) driveCheck {

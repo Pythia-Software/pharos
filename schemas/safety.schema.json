@@ -212,6 +212,22 @@
               "label": "Published Git history rewritten"
             },
             {
+              "value": "safeguard-gate",
+              "label": "Agent bypassed a product rule, gate or policy"
+            },
+            {
+              "value": "safeguard-other",
+              "label": "Agent got around an instruction another way"
+            },
+            {
+              "value": "safeguard-restriction",
+              "label": "Agent got around a harness or tool restriction"
+            },
+            {
+              "value": "safeguard-test",
+              "label": "Agent weakened, skipped or removed a test or check"
+            },
+            {
               "value": "system",
               "label": "System or disk changed"
             }

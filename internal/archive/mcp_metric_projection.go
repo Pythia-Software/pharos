@@ -10,13 +10,17 @@ import (
 	"time"
 )
 
-const metricProjectionVersion = "metrics-v2-stored-sessions"
+const metricProjectionVersion = "metrics-v4-consuming-layer-leaves"
 
 // Projections are invalidated by authoritative table writes, never by MCP audit
-// writes. Publication takes the writer lock before reading, so concurrent ingest
-// cannot have its dirty marker removed by an obsolete calculation.
+// writes. A projection is computed from a read snapshot and published in a
+// short write (refreshMetricProjections). Before it reads, the refresh claims
+// the workspaces it will compute; every write that would mark a workspace
+// dirty also releases its claim, so a calculation made obsolete while it ran
+// is not published and the workspace stays dirty.
 func (c *Catalog) ensureMetricSchema() error {
 	_, err := c.DB.Exec(`CREATE TABLE IF NOT EXISTS mcp_metric_dirty(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE);
+	CREATE TABLE IF NOT EXISTS mcp_metric_claims(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,token TEXT NOT NULL,claimed_at INTEGER NOT NULL);
 	CREATE TABLE IF NOT EXISTS mcp_metric_projection(entity TEXT NOT NULL,entity_id TEXT NOT NULL,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,metrics_json TEXT NOT NULL,total_tokens REAL,cost_usd REAL,tool_error_count REAL,PRIMARY KEY(entity,entity_id));
 	CREATE INDEX IF NOT EXISTS mcp_metric_workspace_idx ON mcp_metric_projection(workspace_id);
 	CREATE INDEX IF NOT EXISTS mcp_metric_tokens_idx ON mcp_metric_projection(entity,total_tokens);
@@ -51,7 +55,7 @@ func (c *Catalog) ensureMetricSchema() error {
 	}
 	for table, lookup := range dependencies {
 		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
-			marks := []string{}
+			marks, releases := []string{}, []string{}
 			rows := []string{"NEW"}
 			if event == "DELETE" {
 				rows = []string{"OLD"}
@@ -64,6 +68,15 @@ func (c *Catalog) ensureMetricSchema() error {
 			if _, err = c.DB.Exec(`CREATE TRIGGER IF NOT EXISTS mcp_metric_` + table + `_` + strings.ToLower(event) + ` AFTER ` + event + ` ON ` + table + ` BEGIN ` + strings.Join(marks, " ") + ` END`); err != nil {
 				return err
 			}
+			// Claims exist only while a refresh computes, so this trigger's
+			// body is skipped for nearly every write.
+			for _, row := range rows {
+				releases = append(releases, `DELETE FROM mcp_metric_claims WHERE workspace_id IN (`+lookup(row)+`);`)
+			}
+			if _, err = c.DB.Exec(`CREATE TRIGGER IF NOT EXISTS mcp_metric_release_` + table + `_` + strings.ToLower(event) + ` AFTER ` + event + ` ON ` + table +
+				` WHEN EXISTS(SELECT 1 FROM mcp_metric_claims) BEGIN ` + strings.Join(releases, " ") + ` END`); err != nil {
+				return err
+			}
 		}
 	}
 	var version string
@@ -73,47 +86,141 @@ func (c *Catalog) ensureMetricSchema() error {
 	}
 	if version != metricProjectionVersion {
 		_, err = c.DB.Exec(`INSERT OR IGNORE INTO mcp_metric_dirty SELECT id FROM workspaces;
+		DELETE FROM mcp_metric_claims;
 		INSERT INTO meta(key,value) VALUES('mcp_metric_version','` + metricProjectionVersion + `') ON CONFLICT(key) DO UPDATE SET value=excluded.value;`)
 	}
 	return err
 }
 
+// metricClaimAbandoned is how old a claim is before another refresh may take
+// its workspaces: longer than any batch takes to compute. A refresh that
+// outlives its claim publishes nothing for those workspaces.
+var metricClaimAbandoned = 10 * time.Minute
+
+// metricProjectionComputedHook, when set (tests), runs after a refresh has
+// computed its batch and before it publishes.
+var metricProjectionComputedHook func()
+
+// refreshMetricProjections publishes the projections of up to batch dirty
+// workspaces and reports how many it attempted. It holds the catalog writer
+// twice, briefly: to claim them, and to store what it computed in between
+// from a read snapshot.
 func (c *Catalog) refreshMetricProjections(ctx context.Context, batch int, workspaceIDs ...string) (int, error) {
-	tx, finish, err := c.beginTrackedWrite(ctx, "metric-projection")
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = tx.Rollback(); finish() }()
 	where, args := "", []any{}
 	if workspaceIDs != nil {
 		where = " WHERE workspace_id IN (SELECT value FROM json_each(?))"
 		args = append(args, jsonText(workspaceIDs))
 	}
-	args = append(args, batch)
-	rows, err := queryMapsContext(ctx, tx, `DELETE FROM mcp_metric_dirty WHERE workspace_id IN (SELECT workspace_id FROM mcp_metric_dirty`+where+` LIMIT ?) RETURNING workspace_id`, args...)
-	if err != nil || len(rows) == 0 {
+	// A workspace another refresh has claimed (the app's and a CLI's loops
+	// overlap) is that refresh's to publish. Its claim stands until it is
+	// released, published or abandoned: taking it over would have each
+	// refresh revoke the other's and neither store anything.
+	abandoned := time.Now().Add(-metricClaimAbandoned).Unix()
+	unclaimed := " workspace_id NOT IN (SELECT workspace_id FROM mcp_metric_claims WHERE claimed_at>=?)"
+	if where == "" {
+		where = " WHERE" + unclaimed
+	} else {
+		where += " AND" + unclaimed
+	}
+	args = append(args, abandoned, batch)
+	// Nothing dirty and unclaimed: return without waiting for the writer.
+	pending, err := queryMapsContext(ctx, c.reader(), `SELECT workspace_id FROM mcp_metric_dirty`+where+` LIMIT ?`, args...)
+	if err != nil || len(pending) == 0 {
 		return 0, err
 	}
-	completed := maintenanceBatch(ctx, tx, "Updating workspace metrics", "workspace", len(rows),
-		"SELECT ?+count(*) FROM mcp_metric_dirty", len(rows))
-	book, err := c.loadPriceBookFrom(ctx, tx)
+	ids := make([]string, 0, len(pending))
+	for _, row := range pending {
+		ids = append(ids, firstString(row["workspace_id"]))
+	}
+	// Claim before reading. Only a claim whose refresh never finished is
+	// dropped; its workspaces are still dirty. One taken since the read above
+	// is kept, and this refresh computes the rest.
+	token := randomToken()
+	if err := c.writeTransaction(ctx, "metric-projection claim", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM mcp_metric_claims WHERE claimed_at<?`, abandoned); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO mcp_metric_claims(workspace_id,token,claimed_at) SELECT workspace_id,?,? FROM mcp_metric_dirty WHERE workspace_id IN (SELECT value FROM json_each(?))`,
+			token, time.Now().Unix(), jsonText(ids))
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	// Compute what the claim covers from one snapshot that includes it.
+	type projection struct {
+		entity, id string
+		values     map[string]statMetricValue
+	}
+	computed := map[string][]projection{}
+	completed := func(error) {}
+	if err := func() error {
+		snapshot, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return err
+		}
+		defer snapshot.Rollback()
+		claimed, err := queryMapsContext(ctx, snapshot, `SELECT workspace_id FROM mcp_metric_claims WHERE token=?`, token)
+		if err != nil || len(claimed) == 0 {
+			return err
+		}
+		completed = maintenanceBatch(ctx, snapshot, "Updating workspace metrics", "workspace", len(claimed),
+			"SELECT count(*) FROM mcp_metric_dirty")
+		book, err := c.loadPriceBookFrom(ctx, snapshot)
+		if err != nil {
+			return err
+		}
+		for _, row := range claimed {
+			id := firstString(row["workspace_id"])
+			computed[id] = []projection{}
+			if err := c.projectWorkspaceMetrics(ctx, snapshot, book, id, func(entity, entityID string, values map[string]statMetricValue) error {
+				computed[id] = append(computed[id], projection{entity, entityID, values})
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return 0, err
+	}
+	if metricProjectionComputedHook != nil {
+		metricProjectionComputedHook()
+	}
+	tx, finish, err := c.beginTrackedWrite(ctx, "metric-projection")
 	if err != nil {
 		return 0, err
 	}
-	for _, row := range rows {
-		id := firstString(row["workspace_id"])
+	defer func() { _ = tx.Rollback(); finish() }()
+	for id, rows := range computed {
+		// Released since the claim: something it depends on was written, so
+		// what was computed may be obsolete. It is still dirty.
+		var held int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM mcp_metric_claims WHERE workspace_id=? AND token=?`, id, token).Scan(&held); err != nil {
+			return 0, err
+		}
+		if held == 0 {
+			continue
+		}
 		if _, err = tx.ExecContext(ctx, "DELETE FROM mcp_metric_projection WHERE workspace_id=?", id); err != nil {
 			return 0, err
 		}
-		if err = c.projectWorkspaceMetrics(ctx, tx, book, id, func(entity, entityID string, values map[string]statMetricValue) error {
-			return storeMetricProjection(ctx, tx, entity, entityID, id, values)
-		}); err != nil {
+		for _, row := range rows {
+			if err := storeMetricProjection(ctx, tx, row.entity, row.id, id, row.values); err != nil {
+				return 0, err
+			}
+		}
+		if _, err = tx.ExecContext(ctx, "DELETE FROM mcp_metric_dirty WHERE workspace_id=?", id); err != nil {
 			return 0, err
 		}
 	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM mcp_metric_claims WHERE token=?", token); err != nil {
+		return 0, err
+	}
 	err = tx.Commit()
 	completed(err)
-	return len(rows), err
+	// Workspaces written to meanwhile stay dirty and count as attempted, so
+	// the caller comes back for them.
+	return len(ids), err
 }
 
 // metricProjections are metrics computed for reading but not stored, keyed by
@@ -238,22 +345,18 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 		if err != nil {
 			return err
 		}
-		ownUsage := []map[string]any{}
-		hasChildren := false
-		for _, u := range usage {
-			if firstString(u["native_id"]) != "main" {
-				hasChildren = true
-			}
-		}
-		var childExists bool
-		if err = tx.QueryRowContext(ctx, childConversationQuery, cid).Scan(&childExists); err != nil {
+		// Aggregate usage belongs to the owner when there are no delegates that
+		// could share it. Include navigation placeholders and external children.
+		var hasDelegates bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE conversation_id=? AND native_id<>'main')
+			OR (`+childConversationQuery+`)`, cid, cid).Scan(&hasDelegates); err != nil {
 			return err
 		}
-		hasChildren = hasChildren || childExists
+		ownUsage := []map[string]any{}
 		unassigned := false
 		for _, u := range usage {
 			if firstString(u["native_id"]) == "main" {
-				if firstString(conv["provider"]) == "claude" && hasChildren && firstString(u["attribution"]) == "session-remainder" {
+				if hasDelegates && strings.HasSuffix(firstString(u["attribution"]), "-remainder") {
 					unassigned = true
 					continue
 				}
@@ -394,7 +497,7 @@ func metricFallback(ctx context.Context, tx *sql.Tx, workspace, cid string, valu
 	seen := map[string]bool{}
 	for _, row := range rows {
 		name := firstString(row["name"])
-		if seen[name] || values[name].Value != nil && (cid != "" || values[name].Status == "complete") {
+		if seen[name] || values[name].Status == "unattributable" || values[name].Value != nil && (cid != "" || values[name].Status == "complete") {
 			continue
 		}
 		seen[name] = true

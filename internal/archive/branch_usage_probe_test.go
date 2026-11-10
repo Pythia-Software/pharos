@@ -75,14 +75,35 @@ func TestBranchUsageProbe(t *testing.T) {
 
 	// The coverage split of repository sessions' tokens, as the dataset
 	// splits them (tokens rather than cost: pricing needs the current schema).
-	ledger, err := queryMapsContext(ctx, db, `SELECT u.agent_session_id,u.usage_hour,u.model,u.attribution,u.total_tokens,w.branch
+	ledger, err := queryMapsContext(ctx, db, `SELECT u.agent_session_id,u.usage_hour,u.model,u.attribution,u.total_tokens,w.branch,w.id workspace_id,w.source_kind
 		FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id JOIN workspaces w ON w.id=a.workspace_id
-		WHERE w.repository_id IS NOT NULL AND u.total_tokens>0`)
+		LEFT JOIN conversations c ON c.id=a.conversation_id
+		WHERE w.repository_id IS NOT NULL AND u.total_tokens>0 AND `+currentGroupConversation("c"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	coverage := map[string]int64{}
+	// A mirror counts once, as in the Usage dataset.
+	links, err := queryMapsContext(ctx, db, identityLinkWorkspacesSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaces, seen := []map[string]any{}, map[string]bool{}
 	for _, entry := range ledger {
+		if id := firstString(entry["workspace_id"]); !seen[id] {
+			seen[id] = true
+			workspaces = append(workspaces, map[string]any{"id": id, "source_kind": entry["source_kind"]})
+		}
+	}
+	representative := map[string]bool{}
+	for _, row := range suppressMirrorRows(workspaces, links) {
+		representative[firstString(row["id"])] = true
+	}
+	coverage, mirrored := map[string]int64{}, int64(0)
+	for _, entry := range ledger {
+		if !representative[firstString(entry["workspace_id"])] {
+			mirrored += integer(entry["total_tokens"])
+			continue
+		}
 		session, tokens := firstString(entry["agent_session_id"]), integer(entry["total_tokens"])
 		turns := shares[session]
 		switch {
@@ -116,4 +137,5 @@ func TestBranchUsageProbe(t *testing.T) {
 	for name, tokens := range coverage {
 		t.Logf("%-36s %16d tokens %5.1f%%", name, tokens, 100*float64(tokens)/float64(all))
 	}
+	t.Logf("%-36s %16d tokens (left out)", "mirrors", mirrored)
 }

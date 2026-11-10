@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeIntervals, workspaceSpans, concurrencyAverage, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration, clipIntervals, workSessions, concurrencyMetrics, stackSegments, zonedDayBounds } from "../../../src/concurrency-data";
+import { concurrencyThreadPlace, mergeIntervals, workspaceSpans, concurrencyAverage, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration, clipIntervals, workSessions, concurrencyMetrics, stackSegments, zonedDayBounds } from "../../../src/concurrency-data";
 import { invalidateConcurrencyData, loadConcurrencyData, threadedSummaryWindow, quickStatsRuntimeWindow, openConcurrencyModal, closeConcurrencyModal } from "../../../src/concurrency-store";
 import { normalizeConcurrencySettings, resolveConcurrencyRange } from "../../../src/concurrency-settings";
+import { parallelismAnalysisCatalog } from "../../../src/parallelism-analysis-catalog";
 import { describeDataSource } from "../../../src/data-taxonomy-model";
 
 const minute = 60_000;
@@ -176,6 +177,12 @@ test("delegation contributes compute inside a workspace, never a user thread", (
 test("agent counting separates simultaneous conversations in a shared workspace", () => {
   assert.equal(describeDataSource("parallelism", "workspace").entity, "workspaces");
   assert.equal(describeDataSource("parallelism", "agent").entity, "conversations");
+  for (const [counting, noun] of [["workspace", "Workspace"], ["agent", "Conversation"]]) {
+    const catalog = parallelismAnalysisCatalog(counting);
+    assert.equal(catalog.units.agent.label, noun);
+    assert.equal(catalog.measures.agents.unit, `${noun.toLowerCase()}s`);
+    assert.deepEqual(catalog.units.agent.key, "unit_id");
+  }
   const threads = [thread("one", "checkout", [[0, 10]]), thread("two", "checkout", [[0, 10]])];
   for (const mode of ["model", "user"]) {
     const workspace = concurrencySpans(threads, mode, 0, "workspace");
@@ -408,4 +415,10 @@ test("Quick Stats runtimes count parallel sessions separately and union wall tim
   const gaps = {...data,threads:[thread("gaps", "same", [[base,base+minute],[base+10*minute,base+11*minute]])]};
   assert.equal(quickStatsRuntimeWindow(gaps, 0, "1h", base + hour).agent, 2*minute);
   assert.equal(quickStatsRuntimeWindow(gaps, 15, "1h", base + hour).agent, 11*minute);
+});
+
+test("the hover and selection detail name a thread's project, folder or none", () => {
+  assert.equal(concurrencyThreadPlace({ project: "app", workspace_name: "lisbon" }), "app / lisbon");
+  assert.equal(concurrencyThreadPlace({ project: "~/notes", repository: "", workspace_name: "notes" }), "~/notes / notes");
+  assert.equal(concurrencyThreadPlace({ project: "", workspace_name: "chat" }), "No project / chat");
 });

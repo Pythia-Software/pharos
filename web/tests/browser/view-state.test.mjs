@@ -1,8 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi,busyStatus,eventStream,conversationLabelsFixture} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture,pendingEvidenceApi,relatedWork} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
+import writingMessagesDocument from '../../../schemas/writing_messages.schema.json' with {type:'json'};
+import usageDocument from '../../../schemas/usage.schema.json' with {type:'json'};
 import toolCallsDocument from '../../../schemas/tool_calls.schema.json' with {type:'json'};
 import mcpCallsDocument from '../../../schemas/mcp_calls.schema.json' with {type:'json'};
 import safetyDocument from '../../../schemas/safety.schema.json' with {type:'json'};
@@ -10,17 +12,91 @@ import messageLabelsDocument from '../../../schemas/message_labels.schema.json' 
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
-test('workspace fingerprint columns restore in search tables and conversation cards',{skip},async t=>{
- const query={...EMPTY_QUERY,select:[{field:'title',width:280},{field:'fingerprint',width:180}],limit:5};
- const app=await open(t,{url:'/library?view=table&q_library='+encodeQuery(query),ready:'.message-label-fingerprint svg'}),{page}=app;
- assert.ok(await page.getByRole('img',{name:/recorded branches workspace fingerprint/}).count());
+test('a pending background history save does not hold up navigation',{skip},async t=>{
+ let release, observed, block=false;const blocked=new Promise(resolve=>{release=resolve});const requested=new Promise(resolve=>{observed=resolve});
+ t.after(()=>release());
+ const managedSession={preferences:'pharos-session:0123456789abcdef0123456789abcdef:',storage:'library:instance:',legacy:'library:'};
+ const app=await open(t,{url:'/library?view=table',ready:'#queryTableLibrary .qt-row',managedSession,preferences:{'pharos-header-tools-v1':['navigator','settings']},api:{'POST /api/session-preferences':()=>{if(!block)return {buffered:true};observed();return blocked}}}),{page}=app;
+ await page.evaluate(()=>localStorage.setItem('pharos-history-v1',JSON.stringify([{url:'/library',title:'Search',at:Date.now()}])));
+ await activateHeaderTool(page,'navigatorToggle');
+ await page.locator('#historyToggle').click();
+ const cleared=page.waitForResponse(response=>response.url().endsWith('/api/preferences')&&response.request().postDataJSON()?.set?.[managedSession.preferences+'pharos-history-v1']==='[]');
+ await page.locator('#historyClear').click();await cleared;await page.locator('#historyClose').click();
+ block=true;
+ await page.evaluate(()=>localStorage.setItem('pharos-history-v1','[]'));
+ await requested;
+ await page.evaluate(()=>{const link=document.createElement('a');link.href='/app';link.textContent='Open library';document.body.append(link)});
+ await page.getByRole('link',{name:'Open library',exact:true}).click();
+ await page.waitForURL('**/app');
+ release({buffered:true});
+});
+
+test('workspace fingerprints restore across views and show agent events despite an old preference',{skip},async t=>{
+ const requests=[];
+ const api={'POST /api/fingerprints':request=>{
+  requests.push(request.body);
+  const result=defaultApi['POST /api/fingerprints'](request);
+  for(const item of result.items){
+   const height=item.profile==='wide'?128:256;
+   // Synthetic image with marks near both edges makes clipping visible in screenshots.
+   const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="${height}"><rect width="1024" height="${height}" fill="#ddd4bf"/><path d="M0 ${height*.35}h170v${height*.3}h-170z M240 ${height*.2}h180v${height*.6}h-180z M490 ${height*.3}h190v${height*.4}h-190z M750 ${height*.1}h274v${height*.8}H750z" fill="#557974"/><path d="M80 ${height*.9}Q400 ${height*.02} 850 ${height*.9}" fill="none" stroke="#a05437" stroke-width="8"/><circle cx="850" cy="${height*.9}" r="9" fill="#a05437"/></svg>`;
+   const src='data:image/svg+xml,'+encodeURIComponent(svg);item.images={light:src,dark:src};
+  }
+  return result;
+ }};
+ const app=await open(t,{api,preferences:{'pharos-fingerprint-events':false},url:'/library?view=table',ready:'.message-label-fingerprint img'}),{page}=app;
+ assert.ok(await page.getByRole('img',{name:'Workspace fingerprint',exact:true}).count());
  await page.getByRole('group',{name:'Display results as'}).getByRole('button',{name:'Conversations',exact:true}).click();
- await page.locator('.conversation-result-facts .message-label-fingerprint svg').first().waitFor();
- await app.settled();
- await page.reload();
- await page.locator('.conversation-result-facts .message-label-fingerprint svg').first().waitFor();
- assert.ok(await page.getByRole('button',{name:'Conversations',exact:true}).getAttribute('aria-pressed')==='true');
- await app.shot('workspace-fingerprints');
+ await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
+ assert.ok(requests.some(body=>body.items.some(item=>item.entity==='workspace'&&item.profile==='wide')));
+ const fingerprint=page.locator('.conversation-result-facts .fingerprint-image').first();
+ const geometry=await fingerprint.evaluate(node=>{const image=node.querySelector('img').getBoundingClientRect(),box=node.getBoundingClientRect();return {image:{width:image.width,height:image.height,top:image.top,bottom:image.bottom},box:{width:box.width,height:box.height,top:box.top,bottom:box.bottom}};});
+ assert.ok(Math.abs(geometry.image.width/geometry.image.height-8)<.05);
+ assert.ok(geometry.image.top>=geometry.box.top-.5&&geometry.image.bottom<=geometry.box.bottom+.5,'the full fingerprint fits in its container');
+ await app.shot('search-fingerprint');
+ await page.setViewportSize({width:320,height:900});
+ const narrow=await fingerprint.evaluate(node=>{const image=node.querySelector('img').getBoundingClientRect(),box=node.getBoundingClientRect();return {imageWidth:image.width,imageHeight:image.height,boxWidth:box.width};});
+ assert.ok(Math.abs(narrow.imageWidth/narrow.imageHeight-8)<.05&&narrow.imageWidth<=narrow.boxWidth+.5,'the fingerprint fits on a narrow screen');
+ await page.setViewportSize({width:1440,height:900});
+ await app.settled();await page.reload();
+ await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
+ assert.equal(await page.getByRole('button',{name:'Conversations',exact:true}).getAttribute('aria-pressed'),'true');
+ assert.ok(requests.length&&requests.every(body=>body.events===true),'workspace images include events despite the saved off preference');
+ requests.length=0;
+ await page.goto(new URL('/analyze?analyze_mode=query&analyze_data=message_labels&label_results=cards',page.url()).href);
+ await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
+ assert.ok(requests.some(body=>body.events===true&&body.items.some(item=>item.entity==='conversation')));
+});
+
+test('uncertain related work setting includes sessions and opens their conversations',{skip},async t=>{
+ const other=relatedWork.peers[1],conversation={id:'conv-maybe',workspace_id:other.workspace_id,provider:other.provider,title:other.title,peer:true,peer_role:other.role,peer_confidence:'low'};
+ const api={
+  'GET /api/work/:id':request=>({...defaultApi['GET /api/work/:id'](request),...relatedWork,peer_conversations:request.query.get('include_uncertain')==='1'?[...relatedWork.peer_conversations,conversation]:relatedWork.peer_conversations}),
+  'GET /api/work/:id/delegation':request=>{
+   const data=defaultApi['GET /api/work/:id/delegation'](request);
+   if(request.query.get('include_uncertain')!=='1')return data;
+   const peer={...data.rows[0],id:'s-maybe',workspace_id:other.workspace_id,conversation_id:conversation.id,label:other.title,order:data.rows.length,child_count:0,peer:{workspace_id:other.workspace_id,title:other.title,role:other.role,confidence:'low'}};
+   return {...data,rows:[...data.rows,peer],focus:[...data.focus,peer],matched:{...data.matched,[peer.id]:true},total:data.total+1,session_count:data.session_count+1};
+  },
+  'GET /api/work/:id/conversations/:conversation':request=>request.params.id===other.workspace_id?{...conversation,messages:[{id:'maybe-ask',role:'user',kind:'message',text:'Inspect the changes'}]}:undefined,
+  'GET /api/work/:id/conversations/:conversation/signals':request=>request.params.id===other.workspace_id?{conversation_id:conversation.id,signals:[],coverage:{}}:undefined,
+ };
+ const app=await open(t,{api,url:'/settings/preferences',ready:'#uncertainRelatedWork'}),{page}=app;
+ const toggle=page.getByRole('switch',{name:'Show uncertain related work',exact:true});
+ assert.equal(await toggle.getAttribute('aria-checked'),'false');
+ await toggle.click();await page.evaluate(()=>window.pharosPrefs.flush());
+ await page.goto(new URL(`/work/${workID}?explorer=timeline`,page.url()).href);
+ const lane=page.locator('[data-session-id="s-maybe"]').first();await lane.waitFor();
+ await page.waitForFunction(()=>document.querySelector('[data-session-id="s-maybe"]')?.textContent.includes('uncertain'));
+ await page.waitForFunction(()=>document.querySelector('.lt-recursive-lane[data-session-id="s-maybe"]'));
+ assert.ok(app.calls.some(call=>call.path.endsWith('/parallel')&&call.query.get('include_uncertain')==='1'&&(call.query.get('sessions')||'').includes('s-maybe')));
+ await lane.getByRole('button',{name:`Open session ${other.title}`,exact:true}).click();
+ await page.locator('.peer-reader-note').waitFor();
+ assert.match(await page.locator('.peer-reader-note').textContent(),/uncertain/);
+ await page.goto(new URL('/settings/preferences',page.url()).href);await toggle.waitFor();
+ assert.equal(await toggle.getAttribute('aria-checked'),'true');await toggle.click();await page.evaluate(()=>window.pharosPrefs.flush());
+ await page.goto(new URL(`/work/${workID}?explorer=timeline`,page.url()).href);await page.locator('.lt-recursive-lane').first().waitFor();
+ assert.equal(await page.locator('[data-session-id="s-maybe"]').count(),0);
 });
 
 test('Background Processing table queries and editor layout restore independently in a fresh browser',{skip},async t=>{
@@ -67,19 +143,126 @@ test('saved Parallel activity links open the native Timeline and retain the sele
  assert.equal(await copy.page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
 });
 
+test('legacy delegation session IDs restore to canonical sessions once and keep unrelated state',{skip},async t=>{
+ // s-legacy is an old row ID of s-child; s-split no longer names one session.
+ const aliases={'s-legacy':'s-child','s-split':null};
+ const api={'GET /api/work/:id/delegation':({query})=>{
+  const data=defaultApi['GET /api/work/:id/delegation']({query}),asked=query.getAll('resolve').filter(id=>id in aliases);
+  return asked.length?{...data,aliases:Object.fromEntries(asked.map(id=>[id,aliases[id]]))}:data;
+ }};
+ const disclosures={'delegation-labels:s-legacy:session':true,'delegation-labels:s-split:session':true,'unrelated-section':true};
+ const params=new URLSearchParams({delegation_session:'s-legacy',delegation_collapsed:'s-legacy,s-split',disclosures:JSON.stringify(disclosures)});
+ const app=await open(t,{url:`/work/${workID}?${params}`,api,ready:'.delegation-table tbody tr'}),{page}=app;
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('delegation_session')==='s-child');await app.settled();
+ const url=new URL(page.url());
+ assert.equal(url.searchParams.get('delegation_collapsed'),'s-child,s-split');
+ assert.deepEqual(JSON.parse(url.searchParams.get('disclosures')),{'delegation-labels:s-child:session':true,'delegation-labels:s-split:session':true,'unrelated-section':true});
+ const resolving=()=>app.calls.filter(call=>call.query.getAll('resolve').length).length,once=resolving();
+ await page.reload();await page.locator('.delegation-table tbody tr').first().waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-child','a canonical URL stays canonical');
+ assert.ok(resolving()<=once+1,'restoration does not loop');
+});
+
+test('relatives left out at the family bound load from the URL in a fresh browser',{skip},async t=>{
+ const loaded=page=>page.locator('.delegation-table [data-session-id="s-relative-1"]').first();
+ const app=await open(t,{url:`/work/${workID}`,api:pendingEvidenceApi,ready:'.delegation-table .delegation-relatives'}),{page}=app;
+ await page.getByRole('button',{name:/^Show 2 more related sessions of /}).click();
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('delegation_relatives')==='["s-child"]');
+ await loaded(page).waitFor();await app.settled();
+ assert.ok(app.calls.some(call=>call.path.endsWith('/delegation')&&call.query.get('relatives')==='s-child'));
+ const copy=await open(t,{url:path(page),api:pendingEvidenceApi,ready:'.delegation-table tbody tr'});
+ await loaded(copy.page).waitFor();
+ assert.ok(copy.calls.some(call=>call.path.endsWith('/delegation')&&call.query.get('relatives')==='s-child'));
+});
+
+test('Timeline pending events stay announced for a collapsed session, after restoration and without taking focus',{skip},async t=>{
+ const status=page=>page.locator('[role=status].delegation-truncation');
+ const caption=page=>page.locator('.lt-recursive-lane[data-session-id="s-nested"] .lt-session-notice');
+ const app=await open(t,{url:`/work/${workID}?explorer=timeline`,api:pendingEvidenceApi,ready:'.lt-recursive-lane[data-session-id="s-nested"] .lt-session-notice'}),{page}=app;
+ await status(page).first().waitFor();const drawn=await status(page).first().textContent();
+ assert.equal(await page.evaluate(()=>document.activeElement===document.body),true,'the status does not take focus');
+ // Collapsing the parent hides the pending lane and its notice; the Timeline still says so.
+ await page.getByRole('button',{name:/^Collapse child sessions of Review implementation/}).click();
+ await caption(page).waitFor({state:'detached'});
+ await page.waitForFunction(text=>[...document.querySelectorAll('[role=status].delegation-truncation')].some(el=>el.textContent!==text),drawn);
+ await app.settled();
+ const copy=await open(t,{url:path(page),api:pendingEvidenceApi,ready:'.lt-session-root'});
+ await status(copy.page).first().waitFor();
+ await copy.page.getByRole('button',{name:/^Expand child sessions of Review implementation/}).waitFor();
+ assert.notEqual(await status(copy.page).first().textContent(),drawn,'the restored status still counts the unshown session');
+});
+
+test('workspace sidebar visibility and width restore without leaving the selected conversation',{skip},async t=>{
+ const api={'GET /api/work/:id/conversations/:conversation':request=>{
+  const conversation=defaultApi['GET /api/work/:id/conversations/:conversation'](request);
+  if(request.params.conversation!=='conv-child')return {...conversation,machine:'Unknown',execution_machine:'Unknown'};
+  return {...conversation,machine:'Laptop',execution_machine:'Worker',effort:'medium',messages:conversation.messages.filter(message=>message.role!=='user')};
+ }};
+ const app=await open(t,{api,url:`/work/${workID}/conversation/${rootConversation}?sidebar_width=460`,ready:'.conversation-panel .turn'}),{page}=app;
+ const show=page.getByRole('button',{name:'Show agent sessions',exact:true}),hide=page.getByRole('button',{name:'Hide agent sessions',exact:true});
+ const divider=page.getByRole('separator',{name:'Resize agent sessions sidebar',exact:true});
+ assert.equal(await divider.getAttribute('aria-valuenow'),'460');
+ await hide.click();await page.reload();await show.waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('sidebar_visible'),'0');
+ await show.click();await divider.waitFor();assert.equal(await divider.getAttribute('aria-valuenow'),'460');
+ await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('sidebar_visible','0');url.searchParams.set('sidebar_width','340');history.pushState(null,'',url);dispatchEvent(new PopStateEvent('popstate'));});
+ await show.waitFor();await page.goBack();await hide.waitFor();await app.settled();
+ assert.equal(await divider.getAttribute('aria-valuenow'),'460');
+ await page.goForward();await show.waitFor();await show.click();await app.settled();
+ assert.equal(await divider.getAttribute('aria-valuenow'),'340');
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
+ const context=()=>page.locator('.conversation-panel .delegation-context');
+ const children=()=>context().getByRole('button',{name:'1 child session',exact:true});
+ await page.locator('.delegation-session-heading').waitFor();
+ assert.equal(await children().isVisible(),false);
+ const chips=()=>page.locator('.conversation-panel .conversation-title-content > .chips');
+ assert.equal(await chips().getByText(/^(Machine|Execution machine):/).count(),0);
+ assert.equal(await chips().getByText(/^Effort:/).count(),0);
+ assert.equal(await chips().getByText('claude-opus-5-5',{exact:true}).count(),0);
+ assert.equal(await context().getByText(/This agent session/).count(),0);
+ await hide.click();await children().waitFor();await app.shot('collapsed-root');
+ const rootURL=new URL(page.url());await children().click();await hide.waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootURL.searchParams.get('conversation'));
+ await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('reader_event_link','e7');history.replaceState(null,'',url)});
+ await page.getByRole('table',{name:'Agent session hierarchy and usage'}).getByRole('button',{name:'Open session Review implementation',exact:true}).click();
+ await page.locator('.conversation-panel [data-message-id="conv-child-reply"]').first().waitFor();
+ assert.equal(new URL(page.url()).searchParams.has('reader_event_link'),false,'event IDs belong to their source conversation');
+ assert.ok(await chips().getByText('Machine: Laptop',{exact:true}).isVisible());
+ assert.ok(await chips().getByText('Execution machine: Worker',{exact:true}).isVisible());
+ assert.ok(await chips().getByText('1 turn',{exact:true}).isVisible());
+ assert.equal(await page.locator('.turn-list > .turn').count(),1);
+ await hide.click();const parent=()=>context().getByRole('button',{name:'Parent session',exact:true});
+ await parent().waitFor();await children().waitFor();await app.shot('collapsed-child');
+ const childURL=new URL(page.url());await parent().click();await hide.waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),childURL.searchParams.get('conversation'));
+ assert.equal(new URL(page.url()).searchParams.get('delegation_session'),childURL.searchParams.get('delegation_session'));
+ assert.equal(await parent().isVisible(),false);assert.equal(await children().isVisible(),false);
+ await page.setViewportSize({width:390,height:900});await children().waitFor();
+ await children().click();await page.getByRole('dialog',{name:'Agent sessions'}).waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),childURL.searchParams.get('conversation'));
+});
+
 for(const width of [1440,390])test(`workspace Timeline beside a reader expands before editing at ${width}px`,{skip},async t=>{
- const root=`delegation-labels:caller:${workID}:`,disclosures=Object.fromEntries(['session','authorship','authorship:m-1'].map(id=>[root+id,true]));
+ const root=`delegation-labels:caller:${workID}:`,disclosures={'timeline-key':true,...Object.fromEntries(['session','authorship','authorship:m-1'].map(id=>[root+id,true]))};
  const params=new URLSearchParams({explorer:'timeline',conversation:rootConversation,message:'m-1',disclosures:JSON.stringify(disclosures),timeline_columns:JSON.stringify({execution:205,events:185,time:480})});
  const app=await open(t,{url:`/work/${workID}?${params}`,viewport:{width,height:900},ready:'.lt-preview-activate'}),{page}=app;
  await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
- const reveal=async()=>{if(width<960){await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();}};
- const settings=()=>page.evaluate(()=>{const p=new URLSearchParams(location.search);return Object.fromEntries(['delegation_start','delegation_end','timeline_columns','disclosures','delegation_collapsed','delegation_event'].map(key=>[key,p.get(key)]));});
+ const reveal=async()=>{if(width<960){await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();}};
+ const settings=()=>page.evaluate(()=>{const p=new URLSearchParams(location.search);return Object.fromEntries(['delegation_start','delegation_end','timeline_columns','disclosures','timeline_visibility','delegation_collapsed','delegation_event'].map(key=>[key,p.get(key)]));});
  await reveal();
  const before=await settings(),saved=path(page),activate=page.getByRole('button',{name:'Open full-width timeline',exact:true});
+ const key=page.locator('.lt-timeline-legend'),friction=key.getByRole('button',{name:'Friction',exact:true});
+ assert.equal(await friction.innerText(),'','the sidebar key stays compact even when the full Key is expanded');
+ assert.equal(await friction.getAttribute('aria-haspopup'),null,'preview icons never offer a visibility menu');
+ await friction.hover();await page.getByRole('tooltip').getByText('Friction',{exact:true}).waitFor();
+ assert.deepEqual(await settings(),before,'hovering the preview leaves view settings unchanged');
+ await app.shot('sidebar-key-hover');
+ await page.mouse.move(0,0);
+
  assert.equal(await page.getByRole('slider',{name:'Timeline window start',exact:true}).evaluate(el=>{el.focus();return document.activeElement===el;}),false,'preview controls cannot receive keyboard focus');
  assert.equal(await page.locator('.delegation-parallel').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'static overview fits the sidebar');
  if(width===1440){
-  await page.getByRole('separator',{name:'Resize workspace sessions sidebar',exact:true}).press('End');
+  await page.getByRole('separator',{name:'Resize agent sessions sidebar',exact:true}).press('End');
   await page.locator('.workspace-inbox:not(.compact)').waitFor();
   assert.equal(await activate.isVisible(),true,'a wide sidebar still uses the read-only overview');
   // Even a zoom-like drag is consumed by the overview activation.
@@ -89,6 +272,7 @@ for(const width of [1440,390])test(`workspace Timeline beside a reader expands b
  await page.waitForFunction(()=>!document.querySelector('.workspace-inbox').classList.contains('viewing'));await app.settled();
  assert.deepEqual(await settings(),before,'activation preserves saved timeline settings');
  assert.equal(new URL(page.url()).searchParams.get('conversation'),null);
+ assert.equal(await key.locator('.lt-key-disclosure').evaluate(el=>el.open),true,'the full Timeline keeps its own expanded Key');
  assert.equal(await page.locator(`[data-pharos-target="section:${root}authorship:m-1"]`).evaluate(el=>el.open),true);
  const start=page.getByRole('slider',{name:'Timeline window start',exact:true});assert.equal(await start.isVisible(),true);
  await page.goBack();await page.locator('.lt-preview-activate').waitFor();await app.settled();
@@ -98,11 +282,71 @@ for(const width of [1440,390])test(`workspace Timeline beside a reader expands b
  await page.goBack();await page.locator('.lt-preview-activate').waitFor();await app.settled();
  await page.goForward();await page.waitForFunction(()=>!document.querySelector('.workspace-inbox').classList.contains('viewing'));await app.settled();
  await start.focus();await start.press('ArrowRight');await app.settled();assert.ok(Number(new URL(page.url()).searchParams.get('delegation_start'))>Number(before.delegation_start));
+ await page.getByRole('button',{name:'Reset',exact:true}).click();await app.settled();
+ // Choose only Friction in the full Timeline, then enter a conversation.
+ await friction.click();await page.getByRole('menuitem',{name:'Hide others',exact:true}).click();await app.settled();
+ await page.locator('[data-agent-event="e-s-root-open"]').first().waitFor({state:'attached'});
+ const chosen=new URL(page.url()).searchParams.get('timeline_visibility');
+ await key.locator('.lt-key-disclosure > summary').click();await app.settled();
+ await page.getByRole('button',{name:/^Open session /}).first().click();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await page.locator('.lt-preview-activate').waitFor();await app.settled();
+ await reveal();
+ assert.equal(new URL(page.url()).searchParams.get('timeline_visibility'),chosen,'conversation navigation retains visibility selections');
+ await page.locator('[data-agent-event="e-s-root-open"]').first().waitFor({state:'attached'});
+ assert.equal(await page.locator('[data-agent-event="e-s-root"]').count(),0,'the preview also draws only Friction');
+ assert.equal(await page.locator('.lt-session-preview [data-tool-id]').count(),0,'hidden tools stay hidden in the conversation preview');
+ await friction.hover();await page.getByRole('tooltip').getByText('Friction',{exact:true}).waitFor();
+ await app.shot('sidebar-key-only-friction');
+ await friction.click();await page.waitForFunction(()=>!document.querySelector('.workspace-inbox').classList.contains('viewing'));await app.settled();
+ assert.equal(await page.getByRole('menu').count(),0,'clicking a preview icon opens the full Timeline without editing visibility');
+ assert.equal(new URL(page.url()).searchParams.get('timeline_visibility'),chosen);
+ assert.equal(await key.locator('.lt-key-disclosure').evaluate(el=>el.open),false,'returning retains the full Key’s deliberately collapsed state');
  const copy=await open(t,{url:saved,viewport:{width,height:900},ready:'.lt-preview-activate'});await copy.settled();
  assert.equal(await copy.page.locator('.delegation-parallel [inert]').count(),1);
  assert.equal(await copy.page.locator('.delegation-parallel details[open]').count(),0);
  assert.equal(JSON.parse(new URL(copy.page.url()).searchParams.get('disclosures'))[root+'authorship:m-1'],true);
  assert.ok(await copy.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+});
+
+for(const width of [1440,390])test(`hierarchy metric scope and session timeline navigation restore from copied links at ${width}px`, {skip}, async t => {
+ const base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const child=base.rows.find(row=>row.id==='s-child');
+ const api={'GET /api/work/:id/delegation':({query})=>{
+  const data=defaultApi['GET /api/work/:id/delegation']({query});
+  return {...data,rows:data.rows.map(row=>row.id===child.id?{...row,start:base.start+10000,end:base.end-10000}:row)};
+ }};
+ const app=await open(t,{url:`/work/${workID}`,api,viewport:{width,height:900},ready:'.delegation-table tbody tr'}),{page}=app;
+ await app.settled();
+ const scope=page.getByRole('combobox',{name:'Session metric scope',exact:true});
+ await scope.selectOption('self');await app.settled();
+ await page.getByRole('button',{name:'Tool calls',exact:true}).click();await app.settled();
+ assert.equal(await scope.inputValue(),'self');
+ await scope.selectOption('all');await app.settled();
+ await page.getByRole('button',{name:'Session',exact:true}).click();await app.settled();
+ assert.equal(await scope.inputValue(),'all');
+ await scope.selectOption('self');await app.settled();
+ const tableLink=path(page);
+ await app.shot('hierarchy-usage-table');
+ await page.locator('.delegation-table [data-session-id="s-child"] .delegation-timeline-button').click();
+ await page.locator('[data-pharos-target="section:delegation-labels:s-child:session"][open]').waitFor();await app.settled();
+ await page.getByRole('tab',{name:'Hierarchy & usage',exact:true}).click();await page.locator('.delegation-table tbody tr').first().waitFor();await app.settled();
+ const row=page.locator('.delegation-table [data-session-id="s-child"]');
+ await row.getByRole('button',{name:/^Open session /}).click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
+ assert.equal(await page.locator('.workspace-reader').isVisible(),true);
+ if(width<960)await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();
+ await page.getByRole('button',{name:'Open workspace overview',exact:true}).first().click();await app.settled();
+ await page.getByRole('button',{name:`View timeline for ${child.label}`,exact:true}).click();
+ const expanded=page.locator('[data-pharos-target="section:delegation-labels:s-child:session"]');
+ await expanded.waitFor();await page.waitForFunction(()=>document.querySelector('[data-pharos-target="section:delegation-labels:s-child:session"]').open);await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),null);
+ assert.equal(await page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
+ assert.equal(await page.locator('.delegation-parallel [inert]').count(),0);
+ assert.equal(await expanded.locator('details[open]').count(),0);
+ const timelineLink=path(page);
+ await app.shot('hierarchy-session-timeline');
+ const copy=await open(t,{url:timelineLink,api,ready:'[data-pharos-target="section:delegation-labels:s-child:session"][open]'});await copy.settled();
+ assert.equal(await copy.page.locator('[data-pharos-target="section:delegation-labels:s-child:session"] details[open]').count(),0);
+ await page.evaluate(url=>window.pharosNavigate(url),tableLink);await page.locator('.delegation-table tbody tr').first().waitFor();await app.settled();
+ assert.equal(await scope.inputValue(),'self');
 });
 
 for(const width of [1280,390])test(`Timeline session navigation and event expansion remain independent at ${width}px`,{skip},async t=>{
@@ -112,11 +356,14 @@ for(const width of [1280,390])test(`Timeline session navigation and event expans
  await app.settled();const before=await settings();
  await session('s-root').click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-root');await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-root');assert.deepEqual(await settings(),before);
- const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();};
+ const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();};
  await show();await session('s-child').click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-child');assert.equal(await page.locator('.workspace-reader').isVisible(),true);assert.deepEqual(await settings(),before);
  await show();
- const eventBox=await page.locator('[data-session-id="s-child"] .lt-session-row-label').boundingBox();await page.mouse.click(eventBox.x+eventBox.width/2,eventBox.y+eventBox.height/2);
+ const current=page.locator('[data-session-id="s-child"] [aria-current="true"]');
+ await current.click();await app.settled();assert.equal(new URL(page.url()).searchParams.get('conversation'),'conv-child','the current identity leaves the reader and timeline overview in place');
+ await app.shot('timeline-sidebar');
+ const clockBox=await page.locator('[data-session-id="s-child"] .lt-session-ribbon').boundingBox();await page.mouse.click(clockBox.x+clockBox.width/2,clockBox.y+clockBox.height/2);
  await page.waitForFunction(()=>!document.querySelector('.workspace-inbox').classList.contains('viewing'));await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('conversation'),null);assert.equal(await page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');assert.deepEqual(await settings(),before);
  const compactWidth=(await page.locator('.lt-column-heading').nth(1).boundingBox()).width,root=page.locator('[data-pharos-target="section:delegation-labels:s-root:session"] > summary');
@@ -126,6 +373,36 @@ for(const width of [1280,390])test(`Timeline session navigation and event expans
  await show();await session('s-root').press('Enter');await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-root');await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-root');
  await page.goBack();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-child');
+});
+
+for(const width of [1280,390])test(`session hierarchy sidebar retains navigation and fits usage columns at ${width}px`,{skip},async t=>{
+ const params=new URLSearchParams({conversation:rootConversation,delegation_mode:'rank',delegation_sort:'cost',delegation_direction:'asc',delegation_scope:'all'});
+ const app=await open(t,{url:`/work/${workID}?${params}`,viewport:{width,height:900},ready:'.delegation-inbox-row'}),{page}=app;
+ const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();};
+ await show();await app.settled();
+ assert.equal(app.calls.filter(call=>call.path.endsWith('/delegation')).at(-1).query.get('mode'),'hierarchy','the compact table loads the hierarchy even for a saved ranking');
+ const table=page.getByRole('table',{name:'Agent session hierarchy and usage'});
+ assert.equal(await table.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'session names leave space for both usage columns');
+ const current=table.locator('[aria-current="true"]');await current.click();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
+ await table.getByRole('button',{name:'Open session Review implementation',exact:true}).click();
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
+ await show();await app.shot('hierarchy-sidebar');
+ await table.getByRole('button',{name:'Collapse Review implementation',exact:true}).click();await app.settled();
+ await table.getByRole('button',{name:'Expand Review implementation',exact:true}).waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),'conv-child','folding the selected session leaves its reader open');
+ await table.getByRole('button',{name:'Expand Review implementation',exact:true}).click();await app.settled();
+ await table.getByRole('button',{name:'Open session Review timing',exact:true}).waitFor();
+ if(width>=960){
+  await page.getByRole('separator',{name:'Resize agent sessions sidebar',exact:true}).press('End');
+  await page.locator('.workspace-inbox:not(.compact)').waitFor();await app.settled();
+  await page.locator('.delegation-table').getByRole('button',{name:'Open session Review timing',exact:true}).click();
+  await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-nested');await app.settled();
+  await app.shot('hierarchy-wide-sidebar');
+ }
+ await page.getByRole('button',{name:'Open workspace overview',exact:true}).first().click();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('delegation_mode'),'rank','the fixed sidebar presentation preserves the full-width ranking');
+ await app.shot('hierarchy-full-width');
 });
 
 test('workspace Timeline message links preserve source transcripts across canonical session aliases',{skip},async t=>{
@@ -141,6 +418,104 @@ test('workspace Timeline message links preserve source transcripts across canoni
  assert.equal(new URL(app.page.url()).searchParams.get('conversation'),'conv-child');
  assert.equal(new URL(app.page.url()).searchParams.get('message'),'conv-child-reply');
  await app.page.locator('.conversation-panel [data-message-id="conv-child-reply"]').first().waitFor();
+});
+
+test('moved conversation links resolve their workspace and unavailable links keep the reader usable',{skip},async t=>{
+ const work=defaultApi['GET /api/work/:id']({params:{id:workID}}),base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const analysis={...base,rows:[{...base.rows[0],child_count:0}],focus:[{...base.rows[0],child_count:0}],session_count:1,total:1};
+ const api={
+  'GET /api/work/:id':({params})=>({...work,id:params.id,conversations:[{...work.conversations[0],id:params.id===workID?rootConversation:'other-conversation'}]}),
+  'GET /api/work/:id/conversations/:conversation':request=>request.params.id===workID?defaultApi['GET /api/work/:id/conversations/:conversation'](request):{...defaultApi['GET /api/work/:id/conversations/:conversation']({params:{id:workID,conversation:rootConversation}}),id:request.params.conversation,workspace_id:request.params.id},
+  'GET /api/work/:id/conversations/:conversation/signals':({params})=>({conversation_id:params.conversation,signals:[]}),
+  'GET /api/work/:id/delegation':analysis,
+  'POST /api/query-object-references':({body})=>body.references.map(reference=>({reference,...reference.key.id===rootConversation?{href:`/work/${workID}/conversation/${rootConversation}`}:{}})),
+ };
+ const params=new URLSearchParams({conversation:rootConversation,message:'m-1',reader_view:'conversation',reader_content:JSON.stringify({'message:m-1':true}),sidebar_width:'490'});
+ const app=await open(t,{url:'/work/former-work?'+params,api,ready:'.conversation-panel:not(.conversation-loading)'}),{page}=app;
+ await app.settled();
+ assert.equal(new URL(page.url()).pathname,`/work/${workID}/conversation/${rootConversation}`);
+ for(const [key,value] of params)assert.equal(new URL(page.url()).searchParams.get(key),value);
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ // Search and Home must not keep a native conversation selection, and opening
+ // another workspace through the Library entry point selects its own reader.
+ await page.getByRole('button',{name:'Back to Search',exact:true}).click();await page.locator('#library.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.has('conversation'),false);
+ await page.evaluate(()=>{void window.pharosOpenDetail('former-work')});
+ await page.waitForURL(url=>url.searchParams.get('conversation')==='other-conversation');
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ await page.goBack();await page.locator('#library.active').waitFor();await app.settled();
+ await page.goForward();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),'other-conversation');
+ // Re-enter through the path form while the original workspace is mounted.
+ await page.evaluate(()=>window.pharosNavigate('/work/former-work'));
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/former-work/conversation/${rootConversation}?reader_view=conversation`);
+ await page.waitForURL(url=>url.pathname===`/work/${workID}/conversation/${rootConversation}`);
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ // A deleted conversation cannot resolve; show the one retained conversation.
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}?conversation=missing&reader_view=conversation`);
+ await page.getByRole('status').filter({hasText:'linked conversation'}).waitFor();await app.settled();
+ assert.equal(await page.getByRole('heading',{name:work.title,level:1,exact:true}).isVisible(),true);
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
+ const missingMessage=`/work/${workID}/conversation/${rootConversation}?message=missing-message`;
+ await page.getByRole('button',{name:'Back to Search',exact:true}).focus();
+ await page.evaluate(url=>window.pharosNavigate(url),missingMessage);
+ await page.getByRole('status').filter({hasText:'linked message or tool call'}).waitFor();
+ assert.equal(await page.getByRole('button',{name:'Back to Search',exact:true}).evaluate(element=>element===document.activeElement),true,'restoring a message target leaves keyboard focus alone');
+ await page.reload();await page.getByRole('status').filter({hasText:'linked message or tool call'}).waitFor();
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}/conversation/${rootConversation}?message=m-1`);
+ await page.getByRole('status').filter({hasText:'linked message or tool call'}).waitFor({state:'hidden'});
+ await page.locator('.conversation-panel [data-message-id="m-1"]').first().waitFor();await app.settled();
+ // Conversation-only references use the service's current-workspace redirect,
+ // including links opened through the shared in-app navigation entry point.
+ await page.route('**/conversation/conv-root?*',route=>route.fulfill({status:302,headers:{location:`/work/${workID}/conversation/${rootConversation}?message=m-1`}}));
+ await page.evaluate(()=>window.pharosNavigate('/conversation/conv-root?message=m-1'));
+ await page.waitForURL(url=>url.pathname===`/work/${workID}/conversation/${rootConversation}`);
+ await page.locator('.conversation-panel [data-message-id="m-1"]').first().waitFor();await app.settled();
+});
+
+test('leaving a workspace cancels pending overview, transcript and conversation resolution loads',{skip},async t=>{
+ const deferred=()=>{let resolve;const promise=new Promise(done=>resolve=done);return{promise,resolve}};
+ const overviewStarted=deferred(),overviewRelease=deferred(),transcriptStarted=deferred(),transcriptRelease=deferred();
+ const resolutionStarted=deferred(),resolutionRelease=deferred();
+ t.after(()=>{overviewRelease.resolve();transcriptRelease.resolve();resolutionRelease.resolve()});
+ const work=defaultApi['GET /api/work/:id']({params:{id:workID}}),base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const analysis={...base,rows:[{...base.rows[0],child_count:0}],focus:[{...base.rows[0],child_count:0}],session_count:1,total:1};
+ let holdOverview=true;
+ const api={
+  'GET /api/work/:id':async({params})=>{if(params.id==='delayed-work'&&holdOverview){overviewStarted.resolve();await overviewRelease.promise}return{...work,id:params.id,conversations:[{...work.conversations[0],workspace_id:params.id}]};},
+  'GET /api/work/:id/delegation':analysis,
+  'GET /api/work/:id/conversations/:conversation':async request=>{if(request.params.id==='delayed-work'){transcriptStarted.resolve();await transcriptRelease.promise}return{...defaultApi['GET /api/work/:id/conversations/:conversation']({...request,params:{...request.params,id:workID}}),workspace_id:request.params.id};},
+  'GET /api/work/:id/conversations/:conversation/signals':({params})=>({conversation_id:params.conversation,signals:[]}),
+  'POST /api/query-object-references':async({body})=>{resolutionStarted.resolve();await resolutionRelease.promise;return body.references.map(reference=>({reference,href:`/work/resolved-work/conversation/${rootConversation}`}));},
+ };
+ const app=await open(t,{url:`/work/${workID}`,api,ready:'.conversation-panel:not(.conversation-loading)'}),{page}=app;
+ const cancelled=path=>page.waitForEvent('requestfailed',{predicate:request=>new URL(request.url()).pathname===path});
+ let aborted=cancelled('/api/work/delayed-work');
+ await page.evaluate(()=>{void window.pharosOpenDetail('delayed-work')});await overviewStarted.promise;
+ await page.evaluate(()=>window.pharosNavigate('/cards'));await aborted;
+ overviewRelease.resolve();holdOverview=false;await page.locator('#cards.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/cards');
+ aborted=cancelled(`/api/work/delayed-work/conversations/${rootConversation}`);
+ await page.evaluate(()=>{void window.pharosOpenDetail('delayed-work')});await transcriptStarted.promise;
+ await page.evaluate(id=>{void window.pharosOpenDetail(id)},workID);await aborted;
+ transcriptRelease.resolve();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,`/work/${workID}/conversation/${rootConversation}`);
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ assert.equal(await page.locator('html').evaluate(element=>element.classList.contains('page-loading')),false);
+ aborted=cancelled('/api/query-object-references');
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}?conversation=elsewhere`);await resolutionStarted.promise;
+ await page.evaluate(()=>window.pharosNavigate('/settings/preferences'));await aborted;
+ resolutionRelease.resolve();await page.locator('#settings.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/settings/preferences');
+ assert.equal(await page.locator('#detail').isVisible(),false,'the obsolete resolution cannot mount its reader');
+ // A late redirect must not replace the destination's history entry either.
+ await page.goBack();await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ await page.goForward();await page.locator('#settings.active').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).pathname,'/settings/preferences');
 });
 
 for(const width of [1440,390])test(`single-agent Conversation and Timeline share the actual reader at ${width}px`,{skip},async t=>{
@@ -262,6 +637,39 @@ test('Timeline grows with its rows and scrolls in the page instead of a nested v
  assert.equal(await app.page.locator('[data-session-id="many-34"]').isVisible(),true);
 });
 
+test('timeline zoom retains sessions and blanks out-of-window usage',{skip},async t=>{
+ const base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()}), start=base.start;
+ const rows=base.rows.map(row=>row.id==='s-root'?row:{...row,end:start+30000,subtree_end:start+30000});
+ const api={
+  'GET /api/work/:id/delegation':()=>({...base,rows,focus:rows}),
+  'GET /api/work/:id/parallel':({query})=>{
+   const data=defaultApi['GET /api/work/:id/parallel']({query});
+   return {...data,lanes:data.lanes.map(lane=>lane.session==='s-root'?{...lane,marks:[{...lane.marks[0],start:start+160000,end:start+180000}]}:Number(query.get('start'))>start+30000?{...lane,messages:[],marks:[],model_inferred:[],agent_events:[]}:lane)};
+  },
+ };
+ const params=new URLSearchParams({explorer:'timeline',delegation_start:String(start+150000),delegation_end:String(start+200000)});
+ const app=await open(t,{url:`/work/${workID}?${params}`,api,viewport:{width:1440,height:900},ready:'.lt-caller-row'}),{page}=app;
+ await page.locator('.delegation-lane-scroll[aria-busy="false"]').waitFor();await app.settled();
+ for(const id of ['s-root','s-child','s-nested'])assert.equal(await page.locator(`.lt-recursive-lane[data-session-id="${id}"]`).isVisible(),true);
+ assert.equal(await page.locator('.lt-recursive-lane[data-session-id="s-child"] .lt-session-empty-root').count(),1);
+ assert.equal(await page.locator('.lt-recursive-lane[data-session-id="s-root"] [data-tool-id="tool-read"]').count(),1);
+ await app.shot('timeline-empty-sessions');
+ await page.getByRole('tab',{name:'Hierarchy & usage',exact:true}).click();await page.locator('.delegation-table tbody tr').first().waitFor();await app.settled();
+ const table=page.locator('.delegation-table');
+ assert.equal(await table.locator('[data-session-id="s-child"]').count(),1);
+ assert.ok((await table.locator('[data-session-id="s-root"] td').nth(1).textContent()).trim());
+ assert.deepEqual(await table.locator('[data-session-id="s-child"] td[title="Outside the selected timeline window"]').allTextContents(),Array(await table.locator('thead th').count()-2).fill(''));
+ await app.shot('hierarchy-empty-sessions');
+ await table.getByRole('button',{name:'Open session Review implementation',exact:true}).click();await page.locator('.delegation-inbox-row[data-session-id="s-child"]').waitFor();await app.settled();
+ const sidebar=page.locator('.delegation-inbox-row[data-session-id="s-child"]');
+ assert.deepEqual(await sidebar.locator('.delegation-inbox-metric').allTextContents(),['','']);
+ await page.getByRole('button',{name:'Open workspace overview',exact:true}).first().click();
+ await page.getByRole('tab',{name:'Timeline',exact:true}).click();await page.getByRole('button',{name:'Reset',exact:true}).click();
+ await page.locator('.lt-recursive-lane[data-session-id="s-child"] [data-tool-id="tool-read"]').first().waitFor({state:'attached'});
+ await page.getByRole('tab',{name:'Hierarchy & usage',exact:true}).click();await app.settled();
+ assert.ok((await page.locator('.delegation-table [data-session-id="s-child"] td').nth(1).textContent()).trim(),'reset restores usage');
+});
+
 test('Timeline tool hover selects the recorded call on each overlapping track',{skip},async t=>{
  const api={'GET /api/work/:id/parallel':({query})=>{
   const data=defaultApi['GET /api/work/:id/parallel']({query});
@@ -281,6 +689,106 @@ test('Timeline tool hover selects the recorded call on each overlapping track',{
  }
 });
 
+test('Timeline Key menus filter ribbons and restore selections with keyboard access',{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?explorer=timeline`,ready:'.lt-timeline-legend .usage-legend-item'}),{page}=app;
+ await app.settled();
+ const key=page.locator('.lt-timeline-legend'),button=name=>key.getByRole('button',{name,exact:true});
+ const choices=button('Choices'),menu=page.getByRole('menu',{name:'Filter Choices',exact:true});
+ const choose=async(name,label)=>{await button(name).click();await page.getByRole('menuitem',{name:label,exact:true}).click();await app.settled();};
+ const isolate=async name=>{await button(name).click();await page.getByRole('menuitem',{name:/^(Hide others|Show and Hide Others)$/}).click();await app.settled();};
+ await choices.focus();await choices.press('ArrowDown');
+ assert.equal(await menu.getByRole('menuitem',{name:'Hide',exact:true}).evaluate(el=>el===document.activeElement),true);
+ await app.shot('legend-menu-visible');
+ await menu.getByRole('menuitem',{name:'Hide',exact:true}).click();await app.settled();
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').waitFor({state:'detached'});
+ assert.ok(await page.locator('.lt-session-root [data-agent-event="e-s-root-open"]').count());
+ await choose('Read / search','Hide');
+ await page.locator('.lt-session-root [data-tool-id="tool-read"]').waitFor({state:'detached'});
+ assert.ok(await page.locator('.lt-session-root [data-tool-id="tool-error"]').count());
+ await choices.click();await app.shot('legend-menu-hidden');
+ await menu.getByRole('menuitem',{name:'Show',exact:true}).click();await app.settled();
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').first().waitFor();
+ assert.equal(await page.locator('.lt-session-root [data-tool-id="tool-read"]').count(),0,'Show retains other hidden values');
+ await isolate('Sender category');
+ await button('Message modes category').click();await app.shot('legend-menu-mixed');
+ await page.getByRole('menuitem',{name:'Show 1 value',exact:true}).click();await app.settled();
+ await choose('Plan','Hide');
+ await choose('Message modes category','Hide 1 value');
+ await page.waitForFunction(()=>!document.querySelector('.lt-session-root [data-agent-event],.lt-session-root [data-tool-id]'));
+ await choose('Choices','Show All');
+ await choose('Choices','Hide');await choose('Read / search','Hide');await choose('Human typed','Hide');await choose('Sender category','Hide');
+ const saved=path(page),fresh=await open(t,{url:saved,ready:'.lt-timeline-legend .usage-legend-item'});await fresh.settled();
+ const restored=fresh.page.locator('.lt-timeline-legend');
+ for(const [name,pressed] of [['Choices','false'],['Friction','true'],['Read / search','false'],['Error','true'],['Human typed','false'],['Likely pasted','true'],['Sender category','false'],['Receiver category','true']]){
+  assert.equal(await restored.getByRole('button',{name,exact:true}).getAttribute('aria-pressed'),pressed,name);
+ }
+ assert.deepEqual(JSON.parse(new URL(fresh.page.url()).searchParams.get('timeline_visibility')),JSON.parse(new URL(page.url()).searchParams.get('timeline_visibility')));
+ await page.setViewportSize({width:390,height:900});await choices.click();
+ const bounds=await menu.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=390&&bounds.y>=0&&bounds.y+bounds.height<=900);
+ await page.keyboard.press('Escape');assert.equal(await choices.evaluate(el=>el===document.activeElement),true);
+ await choose('Choices','Show All');
+ await page.locator('.lt-session-root [data-tool-id="tool-read"]').first().waitFor({state:'attached'});
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').first().waitFor();
+ await isolate('Tool actions category');
+ await page.waitForFunction(()=>!document.querySelector('.lt-session-root [data-agent-event]'));
+ assert.ok(await page.locator('.lt-session-root [data-tool-id="tool-error"]').count());
+ await isolate('Agent events category');
+ await page.waitForFunction(()=>!document.querySelector('.lt-session-root [data-tool-id]'));
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').first().waitFor();
+ for(const name of ['Message modes category','Caller text category'])await isolate(name);
+ await choose('Caller text category','Hide');
+ await choose('Tool actions category','Show');await choose('Agent events category','Show');
+ const layers=await open(t,{url:path(page),ready:'.lt-timeline-legend .usage-legend-item'});await layers.settled();
+ for(const [name,pressed] of [['Agent events category','true'],['Tool actions category','true'],['Message modes category','false'],['Caller text category','false']]){
+  assert.equal(await layers.page.getByRole('button',{name,exact:true}).getAttribute('aria-pressed'),pressed,name);
+ }
+ await choose('Tool actions category','Show All');
+ await app.shot('timeline-key-visibility');
+ // Compact keeps every visual key entry, its menu and immediate hover name.
+ const toggle=()=>key.locator('.lt-key-disclosure > summary');
+ await toggle().click();await app.settled();
+ assert.equal(await key.locator('.lt-key-disclosure').evaluate(el=>el.open),false);
+ for(const name of ['Implement','Plan','Friction','Choices','Read / search','Error','Human typed','Likely pasted']){
+  const icon=button(name);assert.ok(await icon.isVisible(),name);
+  assert.equal(await icon.innerText(),'','compact icons retain accessible names without visible labels');
+ }
+ await choices.hover();await page.getByRole('tooltip').getByText('Choices',{exact:true}).waitFor();
+ await choices.focus();await choices.press('ArrowDown');await menu.waitFor();
+ assert.equal(await page.getByRole('tooltip').count(),0,'keyboard menus also dismiss the hover name');
+ await page.keyboard.press('Escape');
+ await choices.hover();await page.getByRole('tooltip').getByText('Choices',{exact:true}).waitFor();
+ await choices.click();await menu.waitFor();
+ assert.equal(await page.getByRole('tooltip').count(),0,'opening a menu dismisses the hover name');
+ await page.getByRole('menuitem',{name:'Hide',exact:true}).click();await app.settled();
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').waitFor({state:'detached'});
+ await choices.focus();await choices.press('ArrowDown');await menu.waitFor();
+ await page.keyboard.press('Escape');assert.equal(await choices.evaluate(el=>el===document.activeElement),true);
+ const eventHints=button('Agent events category');
+ await eventHints.first().hover();await page.getByRole('tooltip').getByText('Arc back to the earlier text it is about',{exact:true}).waitFor();
+ await eventHints.nth(1).hover();await page.getByRole('tooltip').getByText('On the axis: no target found',{exact:true}).waitFor();
+ await eventHints.first().click();await page.getByRole('menu',{name:'Filter Agent events category',exact:true}).waitFor();
+ await page.keyboard.press('Escape');
+ await app.shot('timeline-key-compact');
+ const compact=await open(t,{url:path(page),ready:'.lt-timeline-legend'});await compact.settled();
+ const compactKey=compact.page.locator('.lt-timeline-legend');
+ assert.equal(await compactKey.locator('.lt-key-disclosure').evaluate(el=>el.open),false);
+ assert.equal(await compactKey.getByRole('button',{name:'Choices',exact:true}).getAttribute('aria-pressed'),'false');
+ const selected=new URL(compact.page.url()).searchParams.get('timeline_visibility');
+ await compactKey.locator('.lt-key-disclosure > summary').click();await compact.settled();
+ await compactKey.getByRole('button',{name:'Sender category',exact:true}).waitFor();
+ assert.equal(new URL(compact.page.url()).searchParams.get('timeline_visibility'),selected,'expanding preserves visibility choices');
+ await compact.page.reload();await compact.settled();
+ await compactKey.getByRole('button',{name:'Sender category',exact:true}).waitFor();
+ // Restoring compact on the mounted page and returning through history agrees with reloads.
+ const compactURL=new URL(compact.page.url());
+ const disclosures=JSON.parse(compactURL.searchParams.get('disclosures'));disclosures['timeline-key']=false;
+ compactURL.searchParams.set('disclosures',JSON.stringify(disclosures));
+ await compact.page.evaluate(url=>{history.pushState(null,'',url);window.dispatchEvent(new PopStateEvent('popstate'));},compactURL.href);
+ await compact.page.waitForFunction(()=>document.querySelector('.lt-key-disclosure')?.open===false);
+ await compact.page.goBack();await compact.page.waitForFunction(()=>document.querySelector('.lt-key-disclosure')?.open===true);
+ await compact.page.goForward();await compact.page.waitForFunction(()=>document.querySelector('.lt-key-disclosure')?.open===false);
+});
+
 test('Timeline segments pin exact content before revealing their conversation source',{skip},async t=>{
  const app=await open(t,{url:`/work/${workID}?explorer=timeline`,ready:'.lt-session-root'}),{page}=app;
  const root=page.locator('[data-session-id="s-root"] .lt-session-root > summary'),pinned=page.getByRole('group',{name:'Ribbon segment details',exact:true});
@@ -293,6 +801,13 @@ test('Timeline segments pin exact content before revealing their conversation so
  await page.mouse.move(20,80);assert.equal(await pinned.isVisible(),true);
  const link=pinned.getByRole('link'),url=new URL(await link.getAttribute('href'),'http://localhost');
  assert.equal(url.searchParams.get('conversation'),rootConversation);assert.equal(url.searchParams.get('message'),'m-1');assert.equal(url.searchParams.get('call'),'tool-read');
+ await page.keyboard.press('Escape');await pinned.waitFor({state:'hidden'});
+ // Agent event marks share that hit test and pin: a click on the mark itself.
+ const mark=await root.locator('[data-agent-event="e-s-root"]').boundingBox();
+ await page.mouse.click(mark.x+mark.width/2,mark.y+mark.height/2);await pinned.waitFor();
+ assert.equal(path(page),before,'pinning an event does not navigate or toggle disclosures');
+ const eventLink=pinned.getByRole('link',{name:/Show both in conversation/});
+ assert.equal(new URL(await eventLink.getAttribute('href'),'http://localhost').searchParams.get('reader_event_link'),'e-s-root');
  await page.keyboard.press('Escape');await pinned.waitFor({state:'hidden'});
  // Keyboard inspection pins the focused message and makes the source link reachable.
  const caller=page.locator('.lt-caller-row').getByRole('button',{name:/Inspect Events ribbon/});await caller.focus();await caller.press('Enter');await pinned.waitFor();
@@ -333,10 +848,14 @@ test('nested navigation branches restore independently in a fresh browser',{skip
  await toggle('Dashboards');await tokens.waitFor({state:'hidden'});
  await toggle('Dashboards');await tokens.waitFor();
  assert.equal(await human.isVisible(),false);
+ const messages=navigation.getByRole('link',{name:'Messages',exact:true});
+ assert.equal(await messages.isVisible(),false);
+ await toggle('Conversations & agent sessions');await messages.waitFor();
  const fresh=await open(t,{url:path(page),viewport,ready:'.usage-dashboard .usage-chart'});
  const restored=fresh.page.getByRole('complementary',{name:'Analyze navigation',exact:true});
  assert.equal(await restored.getByRole('link',{name:'Human Words',exact:true}).isVisible(),false);
  assert.equal(await restored.getByRole('link',{name:'Tokens and Cost',exact:true}).isVisible(),true);
+ assert.equal(await restored.getByRole('link',{name:'Messages',exact:true}).isVisible(),true);
  await restored.getByText('People',{exact:true}).click();
  await restored.getByRole('link',{name:'Human Words',exact:true}).waitFor();
  await fresh.shot('nested-dashboards');
@@ -446,7 +965,7 @@ test('automatic oversized query references resolve in a fresh browser with no lo
 });
 
 test('conversation result links restore their session, matched message and inline agent without taking focus',{skip},async t=>{
- const message=(id,role,text)=>({id,native_id:id,role,kind:'message',text});
+ const message=(id,role,text)=>({id,native_id:id,role,kind:'message',text,...(role==='user'?{authorship:{spans:[{category:'typed',start:0,end:text.length}]}}:{})});
  const api={
   'POST /api/query/library/:operation':request=>{
    const result=defaultApi['* /api/query/:dataset/:operation']({...request,params:{dataset:'library',operation:request.params.operation}});
@@ -475,6 +994,8 @@ test('conversation result links restore their session, matched message and inlin
  await preview.getByText('Final reply',{exact:true}).waitFor();
  await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).waitFor();
  assert.equal(await preview.evaluate(element=>element.contains(document.activeElement)),false);
+ await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/First session prompt/}).click();
+ await preview.getByText('First session prompt',{exact:true}).waitFor();
  await app.page.getByRole('navigation',{name:'Conversation outline',exact:true}).getByRole('button',{name:/Sub-agent · Timing auditor/}).click();
  await preview.getByText('Timing checked.',{exact:true}).waitFor();
  const fresh=await open(t,{url:path(app.page),api,ready:'.conversation-result-card'});
@@ -502,7 +1023,8 @@ test('copied Cards view overrides preferences in a fresh context and follows Bac
 
 test('reader category and disclosure state survive a fresh browser', {skip},async t=>{
  const first=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,ready:'.transcript-filter'});
- await first.page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).click();
+ await first.page.getByRole('button',{name:'Key',exact:true}).click();
+ await first.page.getByRole('menuitemradio',{name:/^Read replies/}).click();
  await first.page.waitForFunction(()=>new URLSearchParams(location.search).get('reader_filter_level')==='primary');
  const turn=first.page.locator('.turn').first();
  await turn.locator(':scope > summary').click();
@@ -512,9 +1034,39 @@ test('reader category and disclosure state survive a fresh browser', {skip},asyn
  await summary.click();
  await first.page.waitForFunction(()=>Object.keys(JSON.parse(new URLSearchParams(location.search).get('reader_content')||'{}')).some(key=>key.endsWith(':turn-summary-prompt')));
  const fresh=await open(t,{url:path(first.page),ready:'.transcript-filter'});
- assert.equal(await fresh.page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
+ await fresh.page.getByRole('button',{name:'Key',exact:true}).click();
+ assert.equal(await fresh.page.getByRole('menuitemradio',{name:/^Read replies/}).getAttribute('aria-checked'),'true');await fresh.page.keyboard.press('Escape');
  assert.equal(await fresh.page.locator('.turn').first().evaluate(element=>element.open),wasOpen);
  assert.equal(await fresh.page.locator('.turn').first().getByRole('button',{name:'Collapse turn ask',exact:true}).getAttribute('aria-expanded'),'true');
+ await fresh.page.getByRole('button',{name:'Close All Turns',exact:true}).click();
+ assert.ok(await fresh.page.locator('.turn').evaluateAll(turns=>turns.length>1&&turns.every(turn=>!turn.open)));
+ await fresh.page.getByRole('button',{name:'Open All Turns',exact:true}).click();
+ assert.ok(await fresh.page.locator('.turn').evaluateAll(turns=>turns.length>1&&turns.every(turn=>turn.open)));
+});
+
+test('sub-agent assignments and recorded output restore their disclosures', {skip},async t=>{
+ const event=(id,kind,text,extra={})=>({id,native_id:id,role:'assistant',kind,text:typeof text==='string'?text:JSON.stringify(text),created_at:'2026-10-01T00:00:00Z',...extra});
+ const messages=[event('prompt','message','Review the change',{role:'user'}),
+  event('m-15','delegation',{name:'Task',input:{subagent_type:'Reviewer',description:'Review the cache',prompt:'Inspect the cache and report the result.'}},{call_id:'child'}),
+  event('child-reply','message','The cache is safe.',{parent_native_id:'child'}),
+  event('result','delegation_result',{content:'Async agent launched successfully. Internal launch metadata.'},{call_id:'child'})];
+ const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages})};
+ const first=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,api,ready:'.subagent-run'}),{page}=first;
+ const run=page.locator('.subagent-run').first(),summary=run.locator(':scope > summary');
+ assert.match(await summary.innerText(),/Reviewer.*Review the cache/);
+ assert.doesNotMatch(await summary.innerText(),/Async agent launched/);
+ await summary.click();
+ await run.locator('.subagent-assignment').getByText('Inspect the cache and report the result.',{exact:true}).waitFor();
+ await run.getByText('The cache is safe.',{exact:true}).waitFor();
+ assert.equal(await run.getByText('Async agent launched successfully. Internal launch metadata.',{exact:true}).isVisible(),false);
+ await first.shot('subagent-expanded');
+ await run.getByText('Recorded output and metadata',{exact:true}).click();
+ await run.getByText('Async agent launched successfully. Internal launch metadata.',{exact:true}).waitFor();
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('reader_expanded')||'[]').length>=2);
+ const fresh=await open(t,{url:path(page),api,ready:'.subagent-run'});
+ await fresh.page.getByText('The cache is safe.',{exact:true}).waitFor();
+ await fresh.page.getByText('Async agent launched successfully. Internal launch metadata.',{exact:true}).waitFor();
+ assert.equal(await fresh.page.evaluate(()=>document.activeElement===document.body),true);
 });
 
 test('dynamic message reveal materializes its target without taking keyboard focus, and linked attention opens once', {skip},async t=>{
@@ -537,6 +1089,85 @@ test('dynamic message reveal materializes its target without taking keyboard foc
  await page.evaluate(()=>window.pharosView.refresh());await opened.settled();
  assert.equal(await page.evaluate(()=>window.linkedDisclosure.open),false);
  assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')||'[]').length>0);
+});
+
+test('right-click and Escape clear linked highlights, with a saved shortcut preference', {skip},async t=>{
+ const app=await open(t,{url:'/settings/preferences',ready:'#escapeClearsHighlights'}),{page}=app;
+ const toggle=page.getByRole('switch',{name:'Escape clears highlights'});
+ assert.equal(await toggle.getAttribute('aria-checked'),'true');
+ await page.evaluate(()=>{
+  const target=document.createElement('p');target.id='attention-fixture';target.textContent='Attention fixture';document.querySelector('#optionalBehaviors').append(target);
+ });
+ const mark=async()=>{
+  await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('reveal','section:attention-fixture');url.searchParams.append('highlight','page');history.replaceState(history.state,'',url);window.dispatchEvent(new Event('pharos:uri-changed'));});
+  await page.waitForFunction(()=>document.querySelector('#attention-fixture')?.classList.contains('pharos-reveal'));
+ };
+ const cleared=async()=>page.waitForFunction(()=>!new URLSearchParams(location.search).has('highlight')&&!new URLSearchParams(location.search).has('reveal')&&!document.querySelector('.pharos-reveal,.pharos-highlight'));
+ await mark();
+ await page.locator('#attention-fixture').click({button:'right'});
+ await page.getByRole('button',{name:'Clear highlights',exact:true}).last().click();await cleared();
+ await mark();
+ await page.locator('#settingsPageHeading').click({button:'right'});
+ await page.getByRole('button',{name:'Clear highlights',exact:true}).last().click();await cleared();
+ await mark();
+ await page.locator('#feedbackContactEmail').focus();await page.keyboard.press('Escape');
+ assert.equal(new URL(page.url()).searchParams.has('reveal'),true,'editing keeps its Escape behavior');
+ await page.evaluate(()=>{document.activeElement.blur();const dialog=document.createElement('dialog');dialog.id='attention-dialog';document.body.append(dialog);dialog.showModal();});
+ await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('#attention-dialog').open);
+ assert.equal(new URL(page.url()).searchParams.has('reveal'),true,'closing a dialog does not also clear attention');
+ await page.evaluate(()=>document.activeElement.blur());await page.keyboard.press('Escape');await cleared();
+ await toggle.click();assert.equal(await toggle.getAttribute('aria-checked'),'false');
+ await mark();await page.locator('#settingsPageHeading').click();await page.keyboard.press('Escape');
+ assert.equal(new URL(page.url()).searchParams.has('reveal'),true,'disabled shortcut preserves attention');
+ await page.reload();await page.locator('#escapeClearsHighlights').waitFor();
+ assert.equal(await toggle.getAttribute('aria-checked'),'false','the preference survives reload');
+ await page.keyboard.press('Escape');assert.equal(new URL(page.url()).searchParams.has('reveal'),true);
+ await toggle.click();await page.locator('#settingsPageHeading').click();await page.keyboard.press('Escape');await cleared();
+});
+
+test('agent event links restore both ends from the URL, opening folded prose without taking focus', {skip},async t=>{
+ const filler='Some context about the async work that the person wants reviewed. '.repeat(14),prompt=`${filler}Please keep the \`drawer only\` removal flow working on phones.`;
+ // Both ends cross inline code: each must stay one highlight around it.
+ const reply='I read `drawer only` as the bottom sheet. Done.',quote='`drawer only` removal',start=prompt.indexOf(quote);
+ const messages=[
+  {id:'link-prompt',native_id:'link-prompt',role:'user',kind:'message',text:prompt,created_at:new Date(1760000000000).toISOString()},
+  {id:'link-reply',native_id:'link-reply',role:'assistant',kind:'message',text:reply,created_at:new Date(1760000001000).toISOString(),
+   agent_events:[{id:'e-hidden',kind:'obstacle',label:'Obstacle',group:'Friction',probability:0.95,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
+    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start:prompt.indexOf('phones'),end:prompt.indexOf('phones')+6,text:'phones',strong:true}},
+    ...['e-link','e-alias'].map((id,index)=>({id,kind:'assumption',label:'Assumption',group:index?'Reactions and learning':'Choices you may not see',probability:0.9,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
+    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start,end:start+quote.length,text:quote,strong:true}}))]},
+ ];
+ const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages,agent_events:{messages_read:2}})};
+ const hidden=['events:event-friction','events:event-choices','events:event-learning','events:event-target-legend','labels:C.report'];
+ const opened=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_events=1&reader_event_link=e-alias`,preferences:{'pharos-reader-highlight-hidden':hidden},ready:'.conversation-panel.show-events mark.event-target.link-selected'}),{page}=opened;
+ await opened.settled();
+ // The target sits past the fold of a long prompt; restoring the link opens it.
+ assert.equal(await page.locator('mark.event-target.link-selected').first().evaluate(mark=>mark.closest('.message-prose').classList.contains('prose-truncated')),false);
+ assert.ok(await page.locator('mark.agent-event.link-selected').count());
+ for(const selector of ['mark.agent-event.link-selected','mark.event-target.link-selected'])assert.deepEqual(await page.locator(selector).evaluateAll(marks=>marks.map(mark=>mark.querySelectorAll('code').length)),[1],`${selector} is one element around the inline code`);
+ assert.equal(await page.evaluate(()=>document.activeElement===document.body||!document.activeElement),true);
+ assert.ok(await page.locator('.event-link-gutter path.is-selected').count(),'the gutter connects the two ends');
+ assert.equal(await page.locator('mark.link-selected.reader-event-hidden').count(),0,'explicit links override the relevant saved hue and target exclusions');
+ assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')),['events:event-friction','labels:C.report'],'unrelated exclusions survive link restoration');
+ assert.deepEqual(await page.evaluate(()=>pharosPrefs.get('pharos-reader-highlight-hidden',[])),hidden,'opening a link leaves saved preferences intact');
+ await opened.shot('linked-highlights-restored');
+ // The first event on this sentence is hidden and points somewhere else.
+ await page.evaluate(()=>window.pharosView.write('reader_highlight_hidden',[
+  ...window.pharosView.read('reader_highlight_hidden',[]),'events:event-choices',
+ ]));await opened.settled();
+ await page.evaluate(()=>window.pharosView.write('reader_event_link',null));
+ const observation=page.locator('mark.agent-event');await observation.hover();
+ await page.locator('.event-link-n.is-observation.link-focus:not(.reader-event-hidden)').waitFor();
+ assert.deepEqual(await page.locator('.event-link-n.is-observation.link-focus').evaluateAll(nodes=>nodes.map(node=>node.dataset.eventLink)),['e-link']);
+ await observation.click();await opened.settled();
+ assert.equal(new URL(page.url()).searchParams.get('reader_event_link'),'e-link','click selects the remaining visible pair, including its merged alias');
+ assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')).includes('events:event-choices'),'clicking a visible pair preserves its hidden sibling group');
+ // Follow the canonical visibility binding while the linked reveal may still be scrolling.
+ await page.evaluate(()=>window.pharosView.write('reader_events',false));await opened.settled();
+ assert.equal(await page.locator('.event-link-gutter path.is-selected').count(),0,'a later visibility change is respected');
+ assert.equal(new URL(page.url()).searchParams.get('reader_events'),'0');
+ const copied=await open(t,{api,url:path(page),ready:'.event-link-gutter path.is-selected'});
+ assert.equal(await copied.page.locator('mark.link-selected.reader-event-hidden').count(),0,'an explicit copied URL also restores excluded highlights');
 });
 
 test('literal text reveal opens page Find on the reader and reveals a match without focusing its input', {skip},async t=>{
@@ -653,9 +1284,10 @@ test('reader disclosure history restores empty overrides to native defaults, and
  const turn=page.locator('.turn').first(),id=await turn.getAttribute('data-pharos-disclosure');
  assert.ok(id);
  await page.evaluate(id=>{const url=new URL(location.href);url.searchParams.delete('reader_filter');url.searchParams.delete('reader_expanded');url.searchParams.set('reader_filter_level','primary');url.searchParams.set('reader_collapsed',JSON.stringify([id]));window.pharosNavigate(url.pathname+url.search);},id);
- await page.waitForFunction(()=>document.querySelector('.transcript-levels button[aria-pressed="true"]')?.textContent==='Primary only'&&!document.querySelector('.turn').open);
+ await page.waitForFunction(()=>document.querySelector('.reader-key-current')?.textContent==='Read replies'&&!document.querySelector('.turn').open);
  await app.settled();
- assert.equal(await page.getByRole('group',{name:'Show in transcript',exact:true}).getByRole('button',{name:'Primary only',exact:true}).getAttribute('aria-pressed'),'true');
+ await page.getByRole('button',{name:'Key',exact:true}).click();
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Read replies/}).getAttribute('aria-checked'),'true');await page.keyboard.press('Escape');
  assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')),[id]);
  assert.equal(await page.evaluate(()=>window.__sameDocument),true,'the reader did not reload the document');
 });
@@ -690,15 +1322,6 @@ test('header navigation clears source attention and explicit destination links r
  assert.deepEqual(new URL(page.url()).searchParams.getAll('highlight'),['page']);assert.equal(new URL(page.url()).searchParams.get('reveal'),'page');
 });
 
-
-test('Next failed action reveals retained failures without a script error',{skip},async t=>{
- const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}`,ready:'.conversation-panel'}),{page}=app;
- const next=page.getByRole('button',{name:'Next failed action',exact:true});
- await next.click();
- await page.waitForFunction(()=>[...document.querySelectorAll('.tool-event.error')].some(item=>item.open));
- await next.click();await app.settled();
- assert.ok(await page.locator('.tool-event.error').count());
-});
 
 test('page Find stepping moves the landing highlight without a server search',{skip},async t=>{
  const app=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&highlight=text:please look`,ready:'.pharos-find'}),{page}=app;
@@ -801,20 +1424,22 @@ test('row disclosures record deliberate choices without capturing every rendered
 });
 
 test('accordion links restore capture/index diagnostics in fresh browsers and history, and reveal a closed accordion without opening it',{skip},async t=>{
- const keys=['sync:separate','sync:repairs','sync:diagnostics','sync:forecast:capture-forecast'],ready='#syncDiagnosticTables details';
+ const keys=['sync:history','sync:sources','sync:repairs','sync:diagnostics','sync:forecast:capture-forecast','background:labels','background:agent_events'],ready='#syncDiagnosticTables details';
  const route=entries=>'/settings/sync?'+new URLSearchParams({disclosures:JSON.stringify(entries)});
- const entries=Object.fromEntries(keys.map(key=>[key,true])),defaults=Object.fromEntries(keys.map(key=>[key,false]));
+ const entries=Object.fromEntries(keys.map(key=>[key,true])),defaults=Object.fromEntries(keys.map(key=>[key,['sync:history','sync:sources'].includes(key)]));
  const app=await open(t,{url:route(entries),ready}),{page}=app;
  const state=(browser,expected)=>browser.waitForFunction(expected=>Object.entries(expected).every(([key,open])=>{
   const element=[...document.querySelectorAll('[data-view-key],[data-pharos-target]')].find(element=>element.dataset.viewKey===key||element.dataset.pharosTarget==='section:'+key);
   return element&&(element.tagName==='DETAILS'?element.open:element.getAttribute('aria-expanded')==='true')===open;
  }),expected);
  await state(page,entries);
- const first=page.locator('[data-view-key="'+keys[0]+'"]');
+ const first=page.locator('[data-view-key="'+keys[0]+'"],[data-pharos-target="section:'+keys[0]+'"]');
  if(await first.evaluate(element=>element.tagName==='DETAILS'))await first.locator('summary').first().click();else await first.click();
  await state(page,{...entries,[keys[0]]:false});
  await page.waitForFunction(key=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')[key]===false,keys[0]);await app.settled();
  const fresh=await open(t,{url:path(page),ready});
+ await state(fresh.page,{...entries,[keys[0]]:false});
+ await fresh.page.evaluate(()=>window.pharosSync.refresh());
  await state(fresh.page,{...entries,[keys[0]]:false});
  await page.evaluate(url=>window.pharosNavigate(url),route({}));
  await state(page,defaults);
@@ -822,7 +1447,7 @@ test('accordion links restore capture/index diagnostics in fresh browsers and hi
  await page.goForward();await state(page,defaults);
  assert.equal(app.calls.some(call=>call.method!=='GET'&&/^\/api\/(background\/(settings|run)|sync\/|cloud-backup\/(schedule|start))/.test(call.path)),false,'restoring sections must not run work or save settings');
  // Revealing a closed accordion highlights its summary without overriding explicit false.
- const closed={'sync:separate':false,'sync:diagnostics':false};
+ const closed={'sync:history':false,'sync:sources':false,'sync:diagnostics':false};
  await page.evaluate(url=>window.pharosNavigate(url),route(closed)+'&'+new URLSearchParams({reveal:'section:sync:diagnostics'}));
  const target=page.locator('[data-pharos-target="section:sync:diagnostics"].pharos-reveal');await target.waitFor({state:'visible'});
  await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
@@ -882,7 +1507,7 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  const control=name=>page.locator('.thinking-controls').getByRole('combobox',{name,exact:true});
  const state=()=>JSON.parse(new URL(page.url()).searchParams.get('thinking'));
  const topic=()=>new URL(page.url()).searchParams.get('analyze_topic');
- await control('Model').selectOption('gpt-6.1-sol');await app.settled();
+ await control('Model').selectOption('gpt-6.1-sol');await control('Breakdown').selectOption('model_speed');await app.settled();
  const chart=page.locator('.thinking-brush').first();await chart.scrollIntoViewIfNeeded();const rect=await chart.boundingBox();
  await page.mouse.move(rect.x+rect.width*.3,rect.y+rect.height*.4);await page.mouse.down();await page.mouse.move(rect.x+rect.width*.65,rect.y+rect.height*.4,{steps:8});await page.mouse.up();
  await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('thinking')).range==='custom');await app.settled();
@@ -890,9 +1515,10 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  const fresh=await open(t,{url:path(page),ready});
  assert.deepEqual(JSON.parse(new URL(fresh.page.url()).searchParams.get('thinking')),selected);
  const detailTopic=topic();
- await page.locator('.thinking-links').getByRole('link',{name:'Waiting and Compaction →',exact:true}).click();await page.locator(ready).waitFor();await app.settled();
+ await page.locator('.thinking-links').getByRole('link',{name:'Waiting →',exact:true}).click();await page.locator(ready).waitFor();await app.settled();
  const overviewTopic=topic();assert.notEqual(overviewTopic,detailTopic);
  assert.equal(state().from,selected.from);
+ assert.equal(await control('Breakdown').inputValue(),'model_speed');
  await page.getByText('Methodology, exclusions and production limits',{exact:true}).click();await app.settled();
  // An already-open validation section must fetch its evidence on restoration,
  // even though shared accordions notify onOpenChange only for deliberate toggles.
@@ -908,8 +1534,12 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  assert.ok(copied.calls.some(call=>call.path==='/api/thinking'&&call.query.get('evidence')==='1'));
  await page.goBack();await page.waitForFunction(topic=>new URLSearchParams(location.search).get('analyze_topic')===topic,detailTopic);await page.locator(ready).waitFor();
  assert.equal(state().model,'gpt-6.1-sol');assert.equal(state().from,selected.from);
+ assert.equal(await control('Breakdown').inputValue(),'model_speed');
  await page.goForward();await page.waitForFunction(topic=>new URLSearchParams(location.search).get('analyze_topic')===topic,overviewTopic);await page.locator(ready).waitFor();
  assert.equal(state().from,selected.from);
+ assert.equal(await control('Breakdown').inputValue(),'model_speed');
+ await control('Breakdown').selectOption('model_effort_speed');await app.settled();
+ assert.ok(app.calls.some(call=>call.path==='/api/thinking'&&call.query.get('overview')==='1'&&call.query.get('groupBy')==='model_effort_speed'));
 });
 
 // Date arithmetic is covered in node; here verify the shared editor is wired to
@@ -944,16 +1574,17 @@ test('Message Labels category menus apply to descendants and restore mixed selec
  const category=page.getByRole('button',{name:'Difficulty category',exact:true});
  await category.focus();await category.press('ArrowDown');
  const menu=page.getByRole('menu',{name:'Filter Difficulty category',exact:true});
- assert.equal(await menu.getByRole('menuitem',{name:/Show only this category/}).evaluate(node=>node===document.activeElement),true);
- await menu.getByRole('menuitem',{name:/Show only this category/}).click();await app.settled();
+ assert.equal(await menu.getByRole('menuitem',{name:'Hide',exact:true}).evaluate(node=>node===document.activeElement),true);
+ await menu.getByRole('menuitem',{name:'Hide others',exact:true}).click();await app.settled();
  assert.equal(await category.getAttribute('aria-pressed'),'true');
  assert.equal(await page.getByRole('button',{name:'Receiver category',exact:true}).getAttribute('aria-pressed'),'mixed');
  await page.getByRole('button',{name:'Missing context',exact:true}).click();
- await page.getByRole('menuitem',{name:/Remove from selection/}).click();await app.settled();
+ await page.getByRole('menuitem',{name:'Hide',exact:true}).click();await app.settled();
  assert.equal(await category.getAttribute('aria-pressed'),'mixed');
- await category.click();await menu.getByRole('menuitem',{name:/Add all to selection/}).click();await app.settled();
+ await category.click();await menu.getByRole('menuitem',{name:'Show 1 value',exact:true}).click();await app.settled();
  assert.equal(await category.getAttribute('aria-pressed'),'true');
- await category.click();await menu.getByRole('menuitem',{name:/Show all except this category/}).click();await app.settled();
+ await category.click();await menu.getByRole('menuitem',{name:'Show All',exact:true}).click();await app.settled();
+ await category.click();await menu.getByRole('menuitem',{name:'Hide',exact:true}).click();await app.settled();
  assert.equal(await category.getAttribute('aria-pressed'),'false');
  const saved=path(page),fresh=await open(t,{url:saved,api,ready:'.usage-chart-legend'});
  assert.equal(await fresh.page.getByRole('button',{name:'Difficulty category',exact:true}).getAttribute('aria-pressed'),'false');
@@ -963,17 +1594,115 @@ test('Message Labels category menus apply to descendants and restore mixed selec
  await page.keyboard.press('Escape');assert.equal(await category.evaluate(node=>node===document.activeElement),true);
 });
 
+test('Habits switches views and restores the selected chart and its controls', {skip}, async t => {
+ const api={'GET /api/habits':()=>{const data=defaultApi['GET /api/habits']();data.streaks.you.today='done';return data;}};
+ const app=await open(t,{url:'/analyze?analyze_topic=habits',viewport:{width:1920,height:1050},api,ready:'.habits-days-chart'}),{page}=app;
+ const view=page.getByRole('combobox',{name:'View',exact:true});
+ assert.equal(await view.inputValue(),'days');
+ await app.shot('default');
+ const automation=page.getByRole('navigation',{name:'Explore this dashboard'}).getByRole('link',{name:/Automatic agent runs/});
+ await automation.scrollIntoViewIfNeeded();
+ await app.shot('automatic-link');
+ const automationURL=await automation.getAttribute('href');
+ const automationQuery=decodeQueryStrict(new URL(automationURL,page.url()).searchParams.get('q_rhythm'));
+ assert.deepEqual(automationQuery.grouping.keys,['initiator','automation']);
+ assert.ok(automationQuery.grouping.source.where.some(term=>term.field==='actor'&&term.value==='automated'));
+ await automation.click();
+ await page.locator('.usage-workspace-table').waitFor();await app.settled();
+ await page.getByRole('link',{name:/^Back to dashboard/}).waitFor();
+ const run=page.waitForResponse(response=>response.url().includes('/api/query/rhythm')&&response.request().method()==='POST');
+ await page.getByRole('button',{name:'Run Now',exact:true}).click();
+ assert.equal((await run).ok(),true);await app.settled();
+ await app.shot('automatic-table');
+ await page.goBack();
+ await page.locator('.habits-days-chart').waitFor();
+ await view.selectOption('calendar');
+ await page.locator('.habits-calendar').waitFor();
+ await page.getByRole('combobox',{name:'Whose days',exact:true}).selectOption('agents');
+ await page.getByRole('combobox',{name:'Calendar range',exact:true}).selectOption('13');
+ await page.getByRole('combobox',{name:'Streaks count',exact:true}).selectOption('weekdays');
+ await view.selectOption('punchcard');
+ await page.locator('[data-pharos-target="section:habits-punchcard"]').waitFor();
+ await page.getByRole('combobox',{name:'Punchcard time',exact:true}).selectOption('unattended');
+ await page.getByRole('combobox',{name:'Punchcard range',exact:true}).selectOption('30');
+ await view.selectOption('days');await page.locator('.habits-days-chart').waitFor();
+ await page.getByRole('combobox',{name:'Your days range',exact:true}).selectOption('14');
+ await page.locator('.habits-settings > summary').click();
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('disclosures')??'{}')['habits-settings']===true);await app.settled();
+ const fresh=await open(t,{url:path(page),ready:'.habits-days-chart'});
+ assert.equal(await fresh.page.getByRole('combobox',{name:'View',exact:true}).inputValue(),'days');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Your days range',exact:true}).inputValue(),'14');
+ assert.equal(await fresh.page.locator('.habits-settings').evaluate(element=>element.open),true);
+ const restored=fresh.page.getByRole('combobox',{name:'View',exact:true});
+ await restored.selectOption('punchcard');await fresh.page.locator('[data-pharos-target="section:habits-punchcard"]').waitFor();
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Punchcard time',exact:true}).inputValue(),'unattended');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Punchcard range',exact:true}).inputValue(),'30');
+ await restored.selectOption('calendar');await fresh.page.locator('.habits-calendar').waitFor();
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Whose days',exact:true}).inputValue(),'agents');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Calendar range',exact:true}).inputValue(),'13');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Streaks count',exact:true}).inputValue(),'weekdays');
+ await fresh.shot('habits-restored');
+});
+
+test('Habits standalone charts preview, pin, restore and open their records',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_topic=habits&habits_view=days',ready:'.habits-days-chart [role="button"]'}),{page}=app;
+ const tip=page.locator('.habits-chart-popover');
+ const focus=()=>page.evaluate(()=>document.activeElement?.getAttribute('aria-label')??document.activeElement?.tagName);
+ const charts=[
+  '.habits-days-chart',
+  '.habits-calendar',
+  '[data-pharos-target="section:habits-punchcard"] .habits-chart-inspection',
+ ];
+ for(const selector of charts){
+  await page.getByRole('combobox',{name:'View',exact:true}).selectOption(selector.includes('days-chart')?'days':selector.includes('calendar')?'calendar':'punchcard');
+  const mark=page.locator(selector).getByRole('button').first();
+  await mark.scrollIntoViewIfNeeded();
+  const before=path(page),focused=await focus();
+  await mark.hover();await tip.waitFor();
+  assert.equal(path(page),before,'hover leaves the URL alone');
+  assert.equal(await focus(),focused,'hover leaves focus alone');
+  assert.equal(await tip.getByRole('link').count(),0);
+  await mark.click();await tip.getByRole('link').first().waitFor();await app.settled();
+  const url=path(page),name=await mark.getAttribute('aria-label');
+  const fresh=await open(t,{url,ready:'.habits-chart-popover.pinned a'});
+  const restoredMark=fresh.page.locator(selector).getByRole('button',{name,exact:true});
+  assert.equal(await restoredMark.getAttribute('aria-pressed'),'true');
+  for(const key of ['Enter','Space']){
+   await restoredMark.focus();await restoredMark.press(key);await fresh.settled();
+   assert.equal(await fresh.page.locator('.habits-chart-popover.pinned').getByRole('link').first().evaluate(node=>node===document.activeElement),true,`${selector}: ${key} reaches the detail link of a restored pin`);
+  }
+  await page.mouse.move(1,1);assert.ok(await tip.isVisible(),'a pin survives leaving the mark');
+  await page.keyboard.press('Escape');await tip.waitFor({state:'hidden'});
+ }
+ await page.setViewportSize({width:320,height:800});
+ await page.getByRole('combobox',{name:'View',exact:true}).selectOption('days');
+ const mark=page.locator('.habits-days-chart').getByRole('button').first();
+ await mark.scrollIntoViewIfNeeded();await mark.focus();await mark.press('Enter');
+ await tip.getByRole('link').first().waitFor();
+ assert.equal(await tip.getByRole('link').first().evaluate(node=>node===document.activeElement),true,'keyboard inspection reaches the detail link');
+ const box=await tip.boundingBox();assert.ok(box.x>=0&&box.y>=0&&box.x+box.width<=320&&box.y+box.height<=800);
+ await app.shot('daily-schedule-details');
+ await page.keyboard.press('Escape');await tip.waitFor({state:'hidden'});
+ assert.equal(await mark.evaluate(node=>node===document.activeElement),true,'Escape returns focus to the inspected mark');
+ await mark.press('Space');await tip.getByRole('link').first().waitFor();
+ await tip.getByRole('link').first().click();await page.locator('.usage-workspace-table').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('analyze_data'),'rhythm');
+ assert.equal(new URL(page.url()).searchParams.get('analyze_mode'),'query');
+ await page.getByRole('link',{name:/^Back to dashboard/}).click();await page.locator('.habits-days-chart').waitFor();
+ assert.equal(await page.getByRole('combobox',{name:'View',exact:true}).inputValue(),'days');
+});
+
 test('native Message Labels dashboards and conversation cards share standard navigation and saved query presentation',{skip},async t=>{
  const definitions=new Map(),api={'PUT /api/query-snapshots':({body})=>{definitions.set(body.code,body);return body},'GET /api/query-snapshots':({query})=>definitions.get(query.get('code'))};
  const read=page=>{const token=new URL(page.url()).searchParams.get('q_message_labels');return decodeQueryStrict(token?.startsWith('@')?definitions.get(token.slice(1)).token:token)};
  const app=await open(t,{api,url:'/analyze?label_lab=distribution&label_audience=thinking',ready:'.usage-labels-dashboard'}),{page}=app;
  assert.equal(new URL(page.url()).searchParams.get('analyze_topic'),'labels');assert.equal(new URL(page.url()).searchParams.has('label_lab'),false);
- const view=page.getByRole('combobox',{name:'View',exact:true});
+ const view=page.getByRole('combobox',{name:'Analysis',exact:true});
  assert.equal(await view.inputValue(),'trend_line');
  await view.selectOption({label:'Over time - bar'});await app.settled();
  assert.equal(JSON.parse(new URL(page.url()).searchParams.get('analyze_chart')).view,'trend_bar');
  await page.locator('.usage-chart-legend').getByRole('button',{name:'Report',exact:true}).click();
- await page.getByRole('menuitem',{name:/Show all except this value/}).click();await app.settled();
+ await page.getByRole('menuitem',{name:'Hide',exact:true}).click();await app.settled();
  assert.equal(JSON.parse(new URL(page.url()).searchParams.get('analyze_chart')).selection.excluded,true);
  await page.getByRole('button',{name:'Show all',exact:true}).click();await app.settled();
  const point=page.locator('.usage-chart-bars').getByRole('button',{name:/Report/}).first();await point.focus();await point.press('Enter');
@@ -982,32 +1711,35 @@ test('native Message Labels dashboards and conversation cards share standard nav
  const plot=await page.locator('.usage-chart-bars').boundingBox();await page.mouse.move(plot.x+plot.width*.2,plot.y+plot.height/2);await page.mouse.down();await page.mouse.move(plot.x+plot.width*.7,plot.y+plot.height/2);await page.mouse.up();await app.settled();
  assert.ok(new URL(page.url()).searchParams.get('analyze_filters'));
  await page.getByRole('combobox',{name:'Breakdown',exact:true}).selectOption('label');
+ // View is closed until the reader opens it; the URL keeps it open.
+ assert.equal(await page.getByRole('combobox',{name:'Scale',exact:true}).count(),0);
+ await page.locator('.dashboard-controls-view > summary').click();
  await page.getByRole('combobox',{name:'Show as',exact:true}).selectOption('values');
  await page.getByRole('combobox',{name:'Scale',exact:true}).selectOption('logarithmic');await app.settled();
  const copy=await open(t,{api,url:path(page),ready:'.usage-labels-dashboard'});assert.equal(await copy.page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'label');
- assert.equal(await copy.page.getByRole('combobox',{name:'View',exact:true}).inputValue(),'trend_bar');
- await copy.page.getByRole('combobox',{name:'View',exact:true}).selectOption({label:'Over time - line'});await copy.settled();
- const line=await open(t,{api,url:path(copy.page),ready:'.usage-labels-dashboard'});assert.equal(await line.page.getByRole('combobox',{name:'View',exact:true}).inputValue(),'trend_line');
+ assert.equal(await copy.page.getByRole('combobox',{name:'Scale',exact:true}).inputValue(),'logarithmic');
+ assert.equal(await copy.page.getByRole('combobox',{name:'Analysis',exact:true}).inputValue(),'trend_bar');
+ await copy.page.getByRole('combobox',{name:'Analysis',exact:true}).selectOption({label:'Over time - line'});await copy.settled();
+ const line=await open(t,{api,url:path(copy.page),ready:'.usage-labels-dashboard'});assert.equal(await line.page.getByRole('combobox',{name:'Analysis',exact:true}).inputValue(),'trend_line');
  await page.getByRole('link',{name:/Matching conversations/}).click();await page.locator('.message-label-result-card').first().waitFor();await app.settled();
  const native=read(page);assert.ok(native.grouping);assert.ok(native.grouping.source.where.some(term=>term.field==='source'&&term.value==='thinking'));
  await page.getByRole('button',{name:'Table',exact:true}).click();await page.locator('.qt-row').first().waitFor();await app.settled();
  const rowsURL=path(page),fresh=await open(t,{api,url:rowsURL,ready:'.qt-row'});assert.equal(await fresh.page.getByRole('button',{name:'Table',exact:true}).getAttribute('aria-pressed'),'true');
  await page.getByRole('button',{name:'Cards',exact:true}).click();await page.locator('.message-label-result-card').first().waitFor();await app.settled();
  const cards=read(page);assert.deepEqual(cards.grouping.source.where,native.grouping.source.where);
- assert.ok(await page.locator('.message-label-result-card .message-label-fingerprint svg').count());
+ assert.ok(await page.locator('.message-label-result-card .message-label-fingerprint img').count());
  const link=await page.locator('.message-label-source').first().getAttribute('href');assert.ok(link.includes('/conversation/')||link.includes('/work/'));
 });
 
-test('fingerprint taxonomy inspection supports pointer handoff and scrolling without changing URL selection',{skip},async t=>{
- const snapshot=structuredClone(conversationLabelsFixture),ids=['P.request.work.implement','P.request.work.review','P.request.work.verify','P.request.input.information','P.request.input.permission','P.frame.scope','P.frame.constraint','P.control.redirect','C.input.answer','C.input.permission.grant','C.feedback.accept','C.feedback.challenge','C.report.finding','C.report.product','C.report.progress','C.deliberation.plan','C.deliberation.hypothesis','C.difficulty.blocker'];
- snapshot.conversations[0].messages[0].labels=ids.map(id=>[id,.9]);
- const app=await open(t,{url:'/analyze?analyze_mode=query&analyze_data=message_labels',api:{'GET /api/labels/conversations/:id':({params})=>({conversation:{...snapshot.conversations[0],id:params.id},taxonomy:snapshot.taxonomy,truncated:false})},ready:'.message-label-fingerprint svg',viewport:{width:390,height:480}}),{page}=app;
- const before=path(page);await page.locator('.message-label-result-card svg g[tabindex]').first().hover();const tooltip=page.getByRole('tooltip');await tooltip.waitFor();await tooltip.hover();
- const box=await tooltip.boundingBox(),viewport=page.viewportSize();assert.ok(box.x>=0&&box.y>=0&&box.x+box.width<=viewport.width&&box.y+box.height<=viewport.height);
- const scroller=tooltip.locator('.lt-ribbon-taxonomy-scroll');await scroller.hover();await page.mouse.wheel(0,420);await page.waitForFunction(()=>document.querySelector('.lt-ribbon-taxonomy-scroll')?.scrollTop>0);
- assert.equal(path(page),before);await page.keyboard.press('Escape');await tooltip.waitFor({state:'hidden'});
- await page.locator('.message-label-result-card svg g[tabindex]').first().focus();await page.getByRole('tooltip').waitFor();assert.equal(path(page),before);await page.keyboard.press('Escape');
- await app.shot('fingerprint-taxonomy');
+test('compact fingerprint PNGs load and navigate to the detailed conversation with the keyboard',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_mode=query&analyze_data=message_labels&label_results=cards',ready:'.message-label-fingerprint img',viewport:{width:390,height:480}}),{page}=app;
+ const image=page.locator('.message-label-result-card .fingerprint-image img').first();
+ await image.scrollIntoViewIfNeeded();
+ await page.waitForFunction(()=>{const img=document.querySelector('.message-label-result-card .fingerprint-image img');return img?.complete&&img.naturalWidth>0;});
+ const link=page.locator('.message-label-result-card .fingerprint-image').first().getByRole('link',{name:'Open conversation',exact:true});
+ await link.focus();await link.press('Enter');
+ await page.locator('.conversation-panel').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
 });
 
 test('Risky actions table edits are Back/Forward steps that restore the table',{skip},async t=>{
@@ -1031,5 +1763,316 @@ test('Risky actions table edits are Back/Forward steps that restore the table',{
  await page.goForward();
  await page.waitForFunction(()=>/\/srv\/c/.test(document.querySelector('.safety-table .qt-row')?.textContent??''));
  assert.deepEqual(read().orderBy,[{field:'subject',dir:'desc'}]);
+ const questions=page.locator('details').filter({has:page.getByText('Questions for each notice',{exact:true})});
+ await questions.locator('summary').click();
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('disclosures') || '{}')['safety-check:permissions:questions'] === true);
+ await page.reload(); await page.waitForFunction(()=>document.querySelector('.optimize-table-questions')?.open);
+});
 
+
+test('Compaction chart controls and source query restore in a fresh browser', {skip}, async t => {
+ const ready = '.usage-compaction-dashboard section[aria-label="Over time"][aria-busy="false"] .usage-query-destinations';
+ const app = await open(t, {url:'/analyze?analyze_topic=compaction&analyze_data=compactions', ready}), {page} = app;
+ const control = name => page.locator('.usage-compaction-dashboard').getByRole('combobox', {name, exact:true});
+ await control('Breakdown').selectOption('trigger_provider'); await app.settled();
+ await control('Range').selectOption('30d'); await app.settled();
+ await control('Analysis').selectOption('compare');
+ await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor(); await app.settled();
+ const saved = path(page);
+ const fresh = await open(t, {url:saved, ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
+ assert.equal(await fresh.page.getByRole('combobox', {name:'Breakdown', exact:true}).inputValue(), 'trigger_provider');
+ assert.equal(await fresh.page.getByRole('combobox', {name:'Analysis', exact:true}).inputValue(), 'compare');
+ const source = fresh.page.locator('.usage-query-destination').first();
+ await source.click(); await fresh.page.locator('.usage-workspace-table .qt-row').first().waitFor(); await fresh.settled();
+ assert.equal(new URL(fresh.page.url()).searchParams.get('analyze_data'), 'compactions');
+ await app.shot('compaction-compare');
+});
+
+
+test('Data Guide terms and example restore and return focus',{skip},async t=>{
+ const app=await open(t,{url:'/library',ready:'.pharos-query-page .view-heading'}),{page}=app;
+ const trigger=page.getByRole('button',{name:'Data Guide',exact:true});
+ await trigger.click();
+ const guide=page.getByRole('dialog',{name:'Data Guide',exact:true});
+ await guide.waitFor();
+ const appsBranch=guide.getByText('Apps & machines',{exact:true});
+ await appsBranch.click();
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('nav_expanded'))?.['data-guide']?.apps===false);
+ await guide.getByRole('button',{name:'Work items',exact:true}).click();
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='work_items');
+ await page.reload();
+ await guide.waitFor();
+ assert.equal(await appsBranch.evaluate(element=>element.closest('details').open),false,'shared guide menu expansion did not restore');
+ assert.equal(await guide.getByRole('button',{name:'Work items',exact:true}).getAttribute('aria-current'),'page');
+ await guide.getByRole('button',{name:'Conversations',exact:true}).click();
+ await guide.getByRole('button',{name:'Conversation Review',exact:true}).click();
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_example')==='review');
+ await guide.getByRole('button',{name:'Repositories',exact:true}).click();
+ await app.settled();
+ await app.shot('data-guide');
+ const linked=path(page);
+ const fresh=await open(t,{url:linked,viewport:{width:320,height:820},ready:'.data-guide[open]'});
+ const mobileGuide=fresh.page.getByRole('dialog',{name:'Data Guide',exact:true});
+ assert.equal(await mobileGuide.getByRole('combobox',{name:'Guide term',exact:true}).inputValue(),'repositories');
+ const picker=mobileGuide.getByRole('combobox',{name:'Guide term',exact:true});
+ await picker.selectOption('machines');
+ await fresh.page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='machines');
+ assert.equal(await mobileGuide.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
+ await fresh.shot('data-guide-narrow');
+ const olderLink=new URL(fresh.page.url());olderLink.searchParams.set('guide_entity','execution_machines');
+ await fresh.page.goto(olderLink.href);
+ await mobileGuide.waitFor();
+ assert.equal(await picker.inputValue(),'machines','older execution-machine links open the combined Machines topic');
+ // Switching illustration types retains the linked example conversation.
+ await picker.selectOption('conversations');
+ assert.equal(await mobileGuide.getByRole('button',{name:'Conversation Review',exact:true}).getAttribute('aria-pressed'),'true');
+ for(const term of ['skills','compactions','tokens']){
+  await picker.selectOption(term);
+  await fresh.page.waitForFunction(value=>new URLSearchParams(location.search).get('guide_entity')===value,term);
+  assert.equal(await mobileGuide.getByRole('button',{name:'Conversation Review',exact:true}).getAttribute('aria-pressed'),'true');
+ }
+ await picker.selectOption('agents');
+ await fresh.page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='agents');
+ await fresh.page.reload();
+ await mobileGuide.waitFor();
+ assert.equal(await picker.inputValue(),'agents');
+ await mobileGuide.getByRole('button',{name:'Explain tool calls',exact:true}).first().click();
+ await fresh.page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='tool_calls');
+ await fresh.page.reload();
+ await mobileGuide.waitFor();
+ assert.equal(await picker.inputValue(),'tool_calls');
+ await mobileGuide.getByRole('button',{name:'Conversation Implementation',exact:true}).click();
+ await fresh.page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_example')!=='review');
+ await guide.getByRole('button',{name:'Close data guide',exact:true}).click();
+ await trigger.click();
+ await page.keyboard.press('Escape');
+ await page.waitForFunction(()=>!document.querySelector('.data-guide').open);
+ assert.equal(await trigger.evaluate(el=>document.activeElement===el),true);
+});
+
+test('message card labels and sentence events restore independently in the reader',{skip},async t=>{
+ const at='2026-11-05T14:00:00Z',prompt='Please review the importer and keep the existing CSV format. Show the evidence before changing the parser.',thought='I should compare the parser with the saved fixtures first. The import fails when a quoted cell contains a newline. I will preserve that cell and add a focused check.'+' Additional context.'.repeat(30),reply='The parser now keeps quoted newlines inside their cells. The existing fixtures pass, and the added check covers the failing import.';
+ const labeled=(id,role,kind,text,label,segment,seconds)=>({id,native_id:id,role,kind,text,created_at:new Date(Date.parse(at)+seconds*1000).toISOString(),labels:{ids:[label],probs:{[label]:.94},segment}});
+ const messages=[labeled('tint-prompt','user','message',prompt,'P.request.work.implement','H-typed',0),labeled('tint-thinking','assistant','reasoning',thought,'C.deliberation.plan','TH',10),labeled('tint-reply','assistant','message',reply,'C.report.verification','AR',25)];
+ const sentence='The import fails when a quoted cell contains a newline.';
+ messages[1].agent_events=[{id:'e-tint',kind:'obstacle',label:'Obstacle or roadblock',group:'Friction',probability:.91,sentence:[thought.indexOf(sentence),thought.indexOf(sentence)+sentence.length],subject:[],response:[]}];
+ const taxonomy=[{id:'P.request.work.implement',name:'Implement',definition:'Requests a concrete change.'},{id:'C.deliberation.plan',name:'Plan',definition:'Considers how to do the work.'},{id:'C.report.verification',name:'Verification',definition:'Reports checks and their evidence.'}];
+ const api={'GET /api/work/:id':request=>({...defaultApi['GET /api/work/:id'](request),title:'Review the CSV importer'}),'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),title:'Review the CSV importer',first_prompt:prompt,agent_nickname:'Review the CSV importer',messages,labels:{labeled:3,pending:false,taxonomy},agent_events:{messages_read:2}})};
+ api['GET /api/work/:id/delegation']=request=>{
+  const data=defaultApi['GET /api/work/:id/delegation'](request);
+  const named=row=>row.conversation_id===rootConversation?{...row,label:'Review the CSV importer'}:row;
+  return {...data,rows:data.rows.map(named),focus:data.focus.map(named)};
+ };
+ const elsewhere=['events:event-learning','labels:P.frame'];
+ const url=`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all&reader_labels=1&reader_events=1&reader_writing=0&reader_highlight_hidden=${encodeURIComponent(JSON.stringify(elsewhere))}`;
+ const app=await open(t,{api,url,ready:'.conversation-panel.show-labels.show-events'}),{page}=app;
+ const reasoning=page.locator('.action-row details').filter({has:page.locator('summary .activity-title',{hasText:'Reasoning'})}).first();
+ await reasoning.locator('summary').click();
+ await page.locator('.thinking-card mark.agent-event').waitFor();
+ assert.equal(await page.getByText(sentence,{exact:false}).count()>0,true);
+ const card=page.locator('.thinking-card'),tip=page.getByRole('tooltip');
+ await card.hover({position:{x:3,y:3}});await tip.waitFor();
+ assert.match(await tip.textContent(),/Plan/);
+ await card.locator('.message-prose').hover();assert.equal(await tip.isVisible(),false,'message text does not show the card label');
+ await card.locator('mark.agent-event').hover();assert.match(await tip.textContent(),/Obstacle/,'highlighted sentence still shows its event');
+ await card.hover({position:{x:3,y:3}});await tip.waitFor();
+ await page.mouse.down();assert.equal(await tip.isVisible(),false,'pressing to select hides the tooltip');
+ await card.locator('.message-prose').hover();await card.hover({position:{x:3,y:3}});
+ assert.equal(await tip.isVisible(),false,'dragging does not reopen the tooltip');await page.mouse.up();
+ await card.locator('.message-toggle').hover();assert.equal(await tip.isVisible(),false,'card controls do not show the label');
+ await card.locator('.message-toggle').click();assert.equal(await card.locator('.message-toggle').getAttribute('aria-expanded'),'true');
+ const human=page.locator('.speaker-row.human[data-label-family]').first();
+ await human.hover({position:{x:3,y:3}});await tip.waitFor();assert.match(await tip.textContent(),/Implement/);
+ await human.locator('.message-prose').hover();assert.equal(await tip.isVisible(),false);
+ await page.mouse.move(0,0);
+ await app.shot('message-card-tints-dark');
+ const choose=async(name,action)=>{await page.locator('.transcript-highlights').getByRole('button',{name,exact:true}).click();await page.getByRole('menuitem',{name:action}).click();await app.settled();};
+ await choose('Message labels category',/^Hide$/);
+ assert.equal(new URL(page.url()).searchParams.get('reader_labels'),'0');
+ await choose('Message labels category',/^Show$/);
+ assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')),elsewhere,'editing this conversation preserves exclusions available elsewhere');
+ await choose('Agent events category',/^Hide$/);
+ const copied=await open(t,{api,url:path(page),ready:'.conversation-panel.show-labels'});
+ assert.equal(await copied.page.locator('.transcript-highlights').getByRole('button',{name:'Agent events category',exact:true}).getAttribute('aria-pressed'),'false');
+ assert.match(await copied.page.locator('.thinking-card').textContent(),/quoted cell/);
+ await choose('Agent events category',/^Show$/);
+ // The shared menu owns keyboard navigation and restores focus after a choice.
+ const report=page.locator('.transcript-highlights').getByRole('button',{name:'Report',exact:true});
+ await report.focus();await page.keyboard.press('ArrowDown');
+ assert.equal(await page.getByRole('menuitem',{name:/^Hide$/}).evaluate(el=>el===document.activeElement),true);
+ await page.keyboard.press('Escape');assert.equal(await report.evaluate(el=>el===document.activeElement),true);
+ await choose('Receiver category',/^Hide others$/);
+ const familyURL=path(page);
+ await choose('Deliberation',/^Hide$/);
+ const familyCopy=await open(t,{api,url:path(page),ready:'.conversation-panel.show-labels'});
+ assert.equal(await familyCopy.page.locator('.transcript-highlights').getByRole('button',{name:'Deliberation',exact:true}).getAttribute('aria-pressed'),'false');
+ await page.locator('.thinking-card').hover();assert.equal(await page.getByRole('tooltip').isVisible(),false);
+ await app.shot('reader-key-filters-hidden');
+ // In-document history restoration updates the mounted keys as well.
+ await page.evaluate(url=>window.pharosNavigate(url),familyURL);await app.settled();
+ assert.equal(await page.locator('.transcript-highlights').getByRole('button',{name:'Deliberation',exact:true}).getAttribute('aria-pressed'),'true');
+ await choose('Agent events category',/^Show$/);
+ await choose('Friction',/^(?:Hide others|Show and Hide Others)$/);
+ await choose('Friction',/^Hide$/);
+ assert.equal(new URL(page.url()).searchParams.get('reader_events'),'0');
+ await choose('Friction',/^Show All$/);
+ const key=page.getByRole('region',{name:'Conversation key',exact:true}).getByRole('button',{name:'Key',exact:true});
+ const defaults=async name=>{await key.click();await page.getByRole('menuitemradio',{name}).click();await app.settled();};
+ await key.focus();await page.keyboard.press('ArrowDown');
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Default/}).evaluate(el=>el===document.activeElement),true);
+ await page.keyboard.press('End');
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Plain transcript/}).evaluate(el=>el===document.activeElement),true);
+ await page.keyboard.press('Enter');await app.settled();
+ assert.equal(await key.evaluate(el=>el===document.activeElement),true);
+ assert.equal(await page.locator('.conversation-panel').evaluate(el=>el.classList.contains('show-labels')||el.classList.contains('show-events')),false);
+ await defaults(/^Follow reasoning/);
+ const presetCopy=await open(t,{api,url:path(page),preferences:{'pharos-reader-writing':true,'pharos-reader-events':false,'pharos-reader-labels':false,'pharos-reader-highlight-hidden':['events:event-friction','labels:C.deliberation']},ready:'.conversation-panel.show-labels.show-events'});
+ await presetCopy.page.getByRole('button',{name:'Key',exact:true}).click();
+ assert.equal(await presetCopy.page.getByRole('menuitemradio',{name:/^Follow reasoning/}).getAttribute('aria-checked'),'true');
+ await choose('Report',/^(?:Hide others|Show and Hide Others)$/);
+ assert.match(await key.textContent(),/Custom/);
+ await defaults(/^Review/);
+ await app.shot('reader-key-filters-desktop');
+ await key.click();await page.getByRole('menu',{name:'Key defaults',exact:true}).waitFor();
+ assert.equal(await page.getByRole('menuitemradio',{name:/^Review/}).getAttribute('aria-checked'),'true');
+ await app.shot('reader-key-defaults-menu');await page.keyboard.press('Escape');
+ await page.evaluate(()=>document.documentElement.dataset.theme='light');
+ await app.shot('message-card-tints-light');
+ await page.setViewportSize({width:390,height:844});
+ await key.scrollIntoViewIfNeeded();
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await report.click();
+ const menu=page.getByRole('menu',{name:'Filter Report',exact:true});
+ await menu.waitFor();
+ assert.equal(await menu.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight}),true);
+ await app.shot('reader-key-filters-phone');
+ await page.keyboard.press('Escape');await key.click();
+ await page.getByRole('menu',{name:'Key defaults',exact:true}).waitFor();
+ await app.shot('reader-key-defaults-phone');
+ await page.keyboard.press('Escape');
+ await page.locator('.thinking-card').scrollIntoViewIfNeeded();
+ await app.shot('message-card-tints-phone');
+});
+
+test('People message-label breakdowns keep their dashboard and saved URL',{skip},async t=>{
+ const dashboard=topic=>'/analyze?'+new URLSearchParams({analyze_topic:topic,analyze_window:'30d',analyze_filters:encodeQuery({...EMPTY_QUERY,where:[{field:'repository_name',op:'is_not_null',value:''}]}),analyze_chart:JSON.stringify({metric:'messages',split:'message_family',period:'day',share:true})});
+ const app=await open(t,{url:dashboard('human'),ready:'.usage-human-dashboard .usage-chart'}),{page}=app;
+ await app.shot('people-message-label-breakdown');
+ for(const topic of ['human','activity','work_hours']){
+  if(topic!=='human')await page.goto(new URL(dashboard(topic),page.url()).href);
+  await page.locator('.usage-'+topic.replaceAll('_','-')+'-dashboard .usage-chart').waitFor();await app.settled();
+  await page.getByRole('combobox',{name:'Breakdown',exact:true}).selectOption('message_label');await app.settled();
+  assert.equal(JSON.parse(new URL(page.url()).searchParams.get('analyze_chart')).split,'message_label');
+  assert.ok(app.calls.some(call=>call.path.includes('/api/query/people_message_labels/')));
+  await page.locator('.usage-query-destination').first().click();
+  const back=page.getByRole('link',{name:'Back to dashboard',exact:true});await back.waitFor();await back.click();
+  await page.locator('.usage-'+topic.replaceAll('_','-')+'-dashboard .usage-chart').waitFor();await app.settled();
+  assert.equal(new URL(page.url()).searchParams.get('analyze_window'),'30d');
+  assert.equal(await page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'message_label');
+ }
+ await page.reload();await page.locator('.usage-work-hours-dashboard .usage-chart').waitFor();await app.settled();
+ assert.equal(await page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'message_label');
+});
+
+
+test('component share charts restore their controls across reloads and view switches',{skip},async t=>{
+ const words=Object.fromEntries(Object.entries({typed:40,pasted:22,quoted:12,resent:8,template:6,attachment:2,harness:7,automated:3}).map(([key,value])=>[key+'_words',value]));
+ const rows=queryFixtureDatasets.writing_messages.map(row=>({...row,...words,words:100,copied_words:20,prompt_words:8,machine_words:10}));
+ const api={'POST /api/query/writing_messages/query-v3':({body})=>answerQuery('query-v3',body,rows,loadSchema(writingMessagesDocument))};
+ const app=await open(t,{api,url:'/analyze?analyze_topic=human',viewport:{width:1920,height:1050},ready:'.usage-human-dashboard .usage-chart'}),{page}=app;
+ const control=name=>page.locator('.usage-human-dashboard').getByRole('combobox',{name,exact:true});
+ await control('Analysis').selectOption('compare');
+ await control('Metric').selectOption('words');
+ await control('Breakdown').selectOption('category');
+ await page.locator('.usage-human-dashboard .dashboard-controls-view > summary').click();
+ await control('Show as').selectOption('share');
+ await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await app.settled();
+ const saved=path(page);
+ await page.getByRole('button',{name:/^Typed:/}).waitFor();
+ await app.shot('human-text-category-shares');
+ const fresh=await open(t,{api,url:saved,ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
+ for(const [name,value] of [['Analysis','compare'],['Metric','words'],['Breakdown','category'],['Show as','share']])assert.equal(await fresh.page.getByRole('combobox',{name,exact:true}).inputValue(),value);
+ await fresh.page.getByRole('combobox',{name:'Analysis',exact:true}).selectOption('trend');
+ await fresh.page.locator('.usage-chart-bars:not(.loading) > button').first().waitFor();await fresh.settled();
+ await fresh.page.getByRole('combobox',{name:'Analysis',exact:true}).selectOption('compare');
+ await fresh.page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await fresh.settled();
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'category');
+ // The data returns; the view starts from its defaults in each analysis.
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Show as',exact:true}).inputValue(),'bars');
+ await fresh.page.getByRole('combobox',{name:'Show as',exact:true}).selectOption('share');
+ await fresh.page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await fresh.settled();
+ await fresh.page.getByRole('button',{name:/^Typed:/}).click();
+ await fresh.page.waitForURL(url=>url.searchParams.get('analyze_mode')==='query');await fresh.settled();
+ const tokenAPI={'POST /api/query/usage/query-v3':({body})=>answerQuery('query-v3',body,queryFixtureDatasets.usage.map(row=>({...row,input_tokens:100,uncached_input_tokens:20,cache_read_input_tokens:70,cache_creation_input_tokens:10})),loadSchema(usageDocument))};
+ const tokens=await open(t,{api:tokenAPI,url:'/analyze?analyze_topic=tokens&analyze_chart='+encodeURIComponent(JSON.stringify({view:'compare',metric:'input',split:'input_type',compareAs:'share'})),viewport:{width:1920,height:1050},ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
+ await tokens.page.getByRole('button',{name:/^Cache reads:/}).waitFor();
+ await tokens.shot('input-token-shares');
+});
+
+
+test('dataset query ideas restore their query and disclosure, and All records clears the population',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_mode=query&analyze_data=tool_calls',ready:'.usage-workspace-table .qt-row'});
+ const {page}=app;
+ const idea=page.getByRole('button',{name:/^Command families/,includeHidden:true});
+ const section=page.locator('.usage-ideas-section').filter({has:idea});
+ if(await section.getAttribute('open')===null)await section.locator('summary').click();
+ await idea.click();
+ const selected=await page.waitForFunction(()=>{
+  const token=new URLSearchParams(location.search).get('q_tool_calls');
+  return token&&document.querySelector('.usage-idea[aria-pressed="true"]')?token:null;
+ });
+ const query=decodeQueryStrict(await selected.jsonValue());
+ assert.ok(query.grouping);
+ assert.deepEqual(query.grouping.keys,['operation_key','operation_name']);
+ await section.locator('summary').click();
+ const disclosureKey=(await section.getAttribute('data-pharos-target')).slice('section:'.length);
+ await page.waitForFunction(key=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')[key]===false,disclosureKey);
+ const saved=path(page);
+ await page.reload();
+ await page.waitForSelector('.usage-workspace-table .qt-row');
+ assert.equal(await section.getAttribute('open'),null);
+ assert.equal(decodeQueryStrict(new URL(page.url()).searchParams.get('q_tool_calls')).grouping.keys[0],'operation_key');
+ const groupedToken=new URL(page.url()).searchParams.get('q_tool_calls');
+ await page.getByRole('button',{name:'All records',exact:true}).click();
+ await page.waitForFunction(token=>new URLSearchParams(location.search).get('q_tool_calls')!==token,groupedToken);
+ const reset=decodeQueryStrict(new URL(page.url()).searchParams.get('q_tool_calls'));
+ assert.equal(reset.grouping,undefined);
+ assert.deepEqual(reset.where,[]);
+ assert.deepEqual(reset.hostState?.params??{},{});
+ assert.notEqual(path(page),saved);
+ const record=page.getByRole('button',{name:/^Failed calls/,includeHidden:true});
+ const recordsSection=page.locator('.usage-ideas-section').filter({has:record});
+ if(await recordsSection.getAttribute('open')===null)await recordsSection.locator('summary').click();
+ await record.click();
+ await page.waitForFunction(()=>[...document.querySelectorAll('.usage-idea')].some(button=>button.querySelector('strong')?.textContent==='Failed calls'&&button.getAttribute('aria-pressed')==='true'));
+ await app.settled();
+ await page.reload();
+ await page.waitForSelector('.usage-workspace-table .qt-row');
+ assert.equal(await record.getAttribute('aria-pressed'),'true','a record idea stays selected after native evidence and Detail columns are restored');
+});
+
+test('scatter axes search by dashboard, retain keyboard focus and restore their committed choices',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_topic=scatter&analyze_data=scatter',ready:'.usage-scatter-dashboard'}),{page}=app;
+ const x=page.getByRole('combobox',{name:'X axis',exact:true});
+ await x.fill('cache write');
+ await page.getByRole('listbox',{name:'X axis metrics'}).getByRole('option').first().waitFor();
+ await x.press('Enter');
+ assert.equal(await x.evaluate(node=>node===document.activeElement),true);
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).metric==='usage_cache_creation_input_tokens');
+ const saved=path(page);
+ await page.reload();
+ await page.getByRole('combobox',{name:'X axis',exact:true}).waitFor();
+ assert.equal(await page.getByRole('combobox',{name:'X axis',exact:true}).inputValue(),'Cache write tokens');
+ const y=page.getByRole('combobox',{name:'Y axis',exact:true});
+ await y.fill('session shape');
+ await page.getByRole('listbox',{name:'Y axis metrics'}).getByRole('group',{name:'Session Shape',exact:true}).waitFor();
+ await y.press('Escape');
+ assert.equal(path(page),saved,'typing and cancelling a search leaves the chart URL alone');
+ await page.getByLabel('Count each',{exact:true}).selectOption('agent_session');
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).unit==='agent_session');
+ const fresh=await open(t,{url:path(page),ready:'.usage-scatter-dashboard'});
+ assert.equal(await fresh.page.getByLabel('Count each',{exact:true}).inputValue(),'agent_session');
+ await fresh.page.getByLabel('Count each',{exact:true}).selectOption('message');
+ await fresh.page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).unit==='message');
+ await app.settled();await fresh.settled();
 });

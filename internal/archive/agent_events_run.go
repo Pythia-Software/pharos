@@ -19,6 +19,7 @@ import (
 	"time"
 
 	labelrt "github.com/gbdubs/pharos/internal/labeler"
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // The agent events pass runs the JAYHAWK verifier on this Mac
@@ -37,7 +38,8 @@ CREATE TABLE IF NOT EXISTS agent_events_conversations (
   conversation_id TEXT PRIMARY KEY,
   structure TEXT NOT NULL,
   built_at TEXT NOT NULL,
-  since TEXT NOT NULL DEFAULT ''
+  since TEXT NOT NULL DEFAULT '',
+  execution_digest TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS agent_events_dirty (
   conversation_id TEXT PRIMARY KEY,
@@ -46,8 +48,12 @@ CREATE TABLE IF NOT EXISTS agent_events_dirty (
 `
 
 // agentEventsLedgerVersion 2 records each conversation's horizon (since:
-// the earliest time it was read from, ” for all of it).
-const agentEventsLedgerVersion = "2"
+// the earliest time it was read from, ” for all of it); 3 the execution
+// dependency digest it was built against, so a read can tell rows built on
+// superseded execution evidence (agentEventsExecutionCurrent); 4 the members
+// of each component built at (ensureExecutionDependencyMembers); 5 stamp
+// triggers that advance the events cache domain.
+const agentEventsLedgerVersion = "5"
 
 // agentEventStoreFloor is the lowest probability stored: rows between it and
 // agentEventThreshold are not events, but let a later threshold be studied
@@ -76,10 +82,20 @@ func (c *Catalog) ensureAgentEventsLedger(ctx context.Context) error {
 				return err
 			}
 		}
+		if err := addColumnIfMissing(ctx, tx, "agent_events_conversations", "execution_digest", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+		if err := ensureExecutionDependencyMembers(ctx, tx); err != nil {
+			return err
+		}
 		for _, statement := range itemDirtyTriggers("agent_events_dirty", "agent_events_dirty_") {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("%s: %w", statement[:60], err)
 			}
+		}
+		// The ledger's tables are image sources (fingerprint_cache.go).
+		if err := fingerprintSourceTriggers(ctx, tx); err != nil {
+			return err
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('agent_events_ledger_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, agentEventsLedgerVersion)
 		return err
@@ -257,20 +273,29 @@ type AgentEventsRunOptions struct {
 	// and conversations that ended before it are not looked at.
 	Since    time.Time
 	Progress io.Writer
+	// progressBase carries committed counts across the inline/backlog handoff.
+	progressBase agentEventsCounts
 }
 
 // AgentEventsRunStats describe a run.
 type AgentEventsRunStats struct {
 	Conversations, ConversationsBuilt, ConversationsRemoved, ConversationsFailed int
-	MessagesScored, MessagesUnchanged, MessagesRemoved, MessagesBefore           int
-	Candidates, Stored, Events                                                   int
-	Cut, Complete                                                                bool
-	Prepare, Infer, Write, Total                                                 time.Duration
+	// ConversationsStale were built against execution evidence that changed
+	// before they could be stored; they stay pending.
+	ConversationsStale                                                 int
+	MessagesScored, MessagesUnchanged, MessagesRemoved, MessagesBefore int
+	Candidates, Stored, Events                                         int
+	Cut, Complete                                                      bool
+	Prepare, Infer, Write, Total                                       time.Duration
+	progress                                                           agentEventsCounts
 }
 
 // agentEventsConversation is one conversation's pending work.
 type agentEventsConversation struct {
 	id, token, structure string
+	// dependency is the execution dependency digest it was built against;
+	// storeAgentEvents stores it only while that is current.
+	dependency string
 	// since is the horizon the conversation is read from ('' for all of it).
 	since    string
 	messages []*agentEventsMessage
@@ -294,8 +319,10 @@ type agentEventsMessage struct {
 }
 
 // agentEventsChunkRows bounds a scoring window. Preparation and persistence
-// overlap inference, with at most three windows retained plus the conversation
-// currently being built. A conversation is kept whole even if it exceeds this.
+// overlap inference, with at most three unscored windows plus the conversation
+// being built. The writer separately retains at most three scored windows
+// (active, queued, and awaiting handoff), without their token arrays. A whole
+// conversation may exceed a window in either stage.
 var agentEventsChunkRows = 512
 
 // RunAgentEvents brings agent events up to date: it rebuilds the units of
@@ -326,34 +353,62 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 	if labels.Worker == "" && !opts.DryRun {
 		return stats, fmt.Errorf("%w: set labels_worker (or PHAROS_LABELS_WORKER)", labelrt.ErrModelUnavailable)
 	}
-	if !c.agentEventsRun.TryLock() {
-		return stats, errAgentEventsRunning
+	discovery, err := acquireWorkCPU(ctx, c, 1, 1)
+	if err != nil {
+		return stats, err
 	}
-	defer c.agentEventsRun.Unlock()
-	if c.Path != "" {
-		lease, err := fileLease(canonical(c.Path)+".agent-events.lock", true)
-		if err != nil {
-			return stats, fmt.Errorf("%w: %v", errAgentEventsRunning, err)
-		}
-		defer lease.Close()
+	defer discovery.Release()
+	dctx := discovery.Ctx
+	unlock, err := c.agentEventsInvocation()
+	if err != nil {
+		return stats, err
 	}
+	defer unlock()
 	verifier, err := loadAgentEventVerifier(settings.ModelDir, settings.Variant)
 	if err != nil {
 		return stats, err
 	}
-	if err := c.ensureAgentEventsLedger(ctx); err != nil {
+	if err := c.ensureAgentEventsLedger(dctx); err != nil {
 		return stats, err
 	}
-	builder, err := newLabelsItemBuilder(ctx, c.reader())
+	if !opts.DryRun {
+		// Execution evidence another writer changed reaches this ledger's
+		// dirty marks before planning reads them.
+		if err := c.propagateExecutionChanges(dctx); err != nil {
+			return stats, err
+		}
+	}
+	builder, err := newLabelsItemBuilder(dctx, c.reader())
 	if err != nil {
 		return stats, err
 	}
-	jobs, err := c.agentEventsWork(ctx, builder, verifier.identity, opts, stats)
+	jobs, err := c.agentEventsWork(dctx, builder, verifier.identity, opts, stats)
 	if err != nil {
 		return stats, err
 	}
+	discovery.Release()
 	progress("agent events: %d conversations to look at of %d", len(jobs), stats.Conversations)
-	reportWork(ctx, "finding agent events", "conversation", 0, len(jobs))
+	// Discovery is serial; only the scoring pipeline takes its wider grant.
+	// The invocation locks are tried by contenders, never waited on.
+	gpuOnly := labelsGPUOnly(verifier.model, labels)
+	grant, err := acquireLabelerCPU(ctx, c, labels.Threads, gpuOnly)
+	if err != nil {
+		return stats, err
+	}
+	defer grant.Release() // runner cleanup below happens before this release
+	ctx = grant.Ctx
+	prep := 0
+	gate := &labelsRun{}
+	if _, admitted := workAllocationFrom(ctx); admitted {
+		var serial bool
+		labels = admittedLabeler(ctx, labels)
+		prep, labels.Threads, serial = labelsSplit(grant.Allocation.CPUs, labels.Threads, gpuOnly)
+		labels.Workers, opts.ThreadTarget = 1, nil
+		if serial {
+			gate.serial = make(chan struct{}, 1)
+		}
+	}
+	status := newAgentEventsProgress(ctx, opts.progressBase, started, len(jobs), opts.DryRun)
 
 	var runner *labelrt.Runner
 	target := labelerThreadTarget{read: opts.ThreadTarget}
@@ -374,32 +429,33 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 		release()
 	}()
 	infer := func(pending []*agentEventsConversation) error {
-		framed := []labelrt.Framed{}
-		for _, conversation := range pending {
-			for _, message := range conversation.messages {
-				framed = append(framed, message.rows...)
-			}
+		end, err := gate.hold(ctx)
+		if err != nil {
+			return err
 		}
-		if len(framed) > 0 {
+		defer end()
+		if framed := agentEventFramed(pending); len(framed) > 0 {
+			status.stage("scoring", true)
+			defer status.stage("scoring", false)
 			next := target.settings(labels)
-			if runner != nil && next.Threads != labels.Threads {
+			if runner != nil && runner.UsesCPUThreads() && next.Threads != runner.Threads() {
 				// The preceding chunk has finished, so no request is lost.
 				stopPool()
-				progress("agent events: changing cores per worker to %d", next.Threads)
+				progress("agent events: changing CPU threads per worker to %d", next.Threads)
 			}
 			labels = next
 			if runner == nil {
-				cfg := labelrt.RunnerConfig{GPU: verifier.model.MayUseGPU(labels.Backend), Worker: labels.Worker, Args: runtimeArgs(labels), Workers: max(1, labels.Workers), Threads: labels.Threads,
-					MaxBatch: max(1, labels.MaxBatch), Backoff: labelsWorkerBackoff,
-					OnRestart: func(slot int, cause error) { progress("agent events: restarting worker %d after: %v", slot, cause) }}
 				var err error
-				if runner, release, err = c.labelerManager(labels).Runner(ctx, verifier.model, cfg); err != nil {
+				if runner, release, err = c.labelerRunner(ctx, labels, verifier.model, agentEventsRunnerConfig(verifier, labels, progress)); err != nil {
 					runner, release = nil, func() {}
 					return err
 				}
 			}
+			status.setDevice(runner.Pool().Ready().Worker.Device)
 			inferStarted := time.Now()
-			outputs, err := runner.Run(ctx, framed, agentEventRunOutputs, labels.BatchTokens)
+			outputs, err := runner.RunWithProgress(ctx, framed, agentEventRunOutputs, labels.BatchTokens, func(n int) {
+				status.scored(n, runner.Pool().Ready().Worker.Device)
+			})
 			stats.Infer += time.Since(inferStarted)
 			if err != nil {
 				// Do not leave canceled requests computing while preparation
@@ -407,21 +463,31 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 				stopPool()
 				return err
 			}
-			for _, conversation := range pending {
-				for _, message := range conversation.messages {
-					message.outputs, outputs = outputs[:len(message.rows)], outputs[len(message.rows):]
-				}
-			}
+			assignAgentEventOutputs(pending, outputs)
 		}
 		return nil
 	}
+	workers := labelerPreparationWorkers(labels, opts.Limit, false)
+	if prep > 0 {
+		workers = prep
+	}
+	builders := make([]*labelsItemBuilder, workers)
 	pipeline := agentEventsPipeline{
-		opts: opts, stats: stats, progress: progress,
-		build: func(job *agentEventsConversation) (conversation *agentEventsConversation, err error) {
+		workers: workers,
+		opts:    opts, stats: stats, progress: progress, status: status,
+		build: func(ctx context.Context, worker int, job *agentEventsConversation) (conversation *agentEventsConversation, err error) {
+			end, err := gate.hold(ctx)
+			if err != nil {
+				return nil, err
+			}
+			defer end()
+			if builders[worker] == nil {
+				builders[worker] = builder.fork(ctx)
+			}
 			// IO priority is per thread, so each pipeline goroutine applies
 			// the operation's policy to its own database work.
 			opFrom(ctx).RunIO(func() {
-				conversation, err = c.agentEventsConversation(ctx, builder, verifier, job, opts.Since)
+				conversation, err = c.agentEventsConversation(ctx, builders[worker], verifier, job, opts.Since)
 			})
 			return conversation, err
 		},
@@ -449,6 +515,56 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 		stats.MessagesScored, stats.MessagesUnchanged, stats.Candidates, stats.Events,
 		stats.Prepare.Round(time.Millisecond), stats.Infer.Round(time.Millisecond), stats.Write.Round(time.Millisecond))
 	return stats, nil
+}
+
+// agentEventsInvocation takes the pass's locks: one run at a time in this
+// process, and across processes through a lease the OS releases if the
+// holder exits. Either held elsewhere is errAgentEventsRunning.
+func (c *Catalog) agentEventsInvocation() (release func(), err error) {
+	if !c.agentEventsRun.TryLock() {
+		return nil, errAgentEventsRunning
+	}
+	if c.Path == "" {
+		return c.agentEventsRun.Unlock, nil
+	}
+	lease, err := fileLease(canonical(c.Path)+".agent-events.lock", true)
+	if err != nil {
+		c.agentEventsRun.Unlock()
+		if errors.Is(err, filelock.ErrContended) {
+			return nil, fmt.Errorf("%w: %w", errAgentEventsRunning, err)
+		}
+		return nil, fmt.Errorf("lock the agent events pass: %w", err)
+	}
+	return func() { lease.Close(); c.agentEventsRun.Unlock() }, nil
+}
+
+// agentEventsRunnerConfig is how the verifier's workers run with labels'
+// worker, threads and batching.
+func agentEventsRunnerConfig(verifier *agentEventVerifier, labels LabelerSettings, progress func(string, ...any)) labelrt.RunnerConfig {
+	return labelrt.RunnerConfig{GPU: verifier.model.MayUseGPU(labels.Backend), Worker: labels.Worker, Args: runtimeArgs(labels), Workers: max(1, labels.Workers), Threads: labels.Threads,
+		MaxBatch: max(1, labels.MaxBatch), Backoff: labelsWorkerBackoff,
+		OnRestart: func(slot int, cause error) { progress("agent events: restarting worker %d after: %v", slot, cause) }}
+}
+
+// agentEventFramed is the rows of pending conversations' messages, in order.
+func agentEventFramed(pending []*agentEventsConversation) []labelrt.Framed {
+	framed := []labelrt.Framed{}
+	for _, conversation := range pending {
+		for _, message := range conversation.messages {
+			framed = append(framed, message.rows...)
+		}
+	}
+	return framed
+}
+
+// assignAgentEventOutputs gives each message its rows' outputs, in
+// agentEventFramed's order.
+func assignAgentEventOutputs(pending []*agentEventsConversation, outputs []labelrt.RowOutputs) {
+	for _, conversation := range pending {
+		for _, message := range conversation.messages {
+			message.outputs, outputs = outputs[:len(message.rows)], outputs[len(message.rows):]
+		}
+	}
 }
 
 // agentEventsWork chooses the conversations to look at, newest first: dirty
@@ -564,7 +680,7 @@ func (c *Catalog) agentEventsWork(ctx context.Context, builder *labelsItemBuilde
 		// were left unread ('~' is a version 1 row, horizon unknown).
 		widened := built && horizons[id] != since && (horizons[id] == "~" || since == "" || horizons[id] != "" && since < horizons[id])
 		if all || !built || previous != structure || tokens[id] != "" || otherModel || widened {
-			jobs = append(jobs, &agentEventsConversation{id: id, token: tokens[id], structure: structure, since: since})
+			jobs = append(jobs, &agentEventsConversation{id: id, token: tokens[id], structure: structure, since: since, dependency: p.executionDigests[id]})
 		}
 	}
 	gone := []string{}
@@ -580,7 +696,7 @@ func (c *Catalog) agentEventsWork(ctx context.Context, builder *labelsItemBuilde
 		if err := c.writeTransaction(ctx, "remove agent events of deleted conversations", func(tx *sql.Tx) error {
 			for _, id := range gone {
 				for _, statement := range []string{`DELETE FROM agent_events WHERE conversation_id=?`, `DELETE FROM agent_event_messages WHERE conversation_id=?`,
-					`DELETE FROM agent_events_conversations WHERE conversation_id=?`} {
+					`DELETE FROM agent_events_conversations WHERE conversation_id=?`, `DELETE FROM agent_events_execution_stale WHERE conversation_id=?`} {
 					if _, err := tx.ExecContext(ctx, statement, id); err != nil {
 						return err
 					}
@@ -682,9 +798,32 @@ func (c *Catalog) storeAgentEvents(ctx context.Context, identity string, convers
 	lexicon, _ := agentEventLexicon()
 	at := now()
 	var removed, stored, eventsTotal int
+	stale := 0
+	if beforeDerivedPublication != nil {
+		beforeDerivedPublication()
+	}
 	err := c.writeTransaction(ctx, "store agent events", func(tx *sql.Tx) error {
-		removed, stored, eventsTotal = 0, 0, 0
+		removed, stored, eventsTotal, stale = 0, 0, 0, 0
+		captured := make(map[string]string, len(conversations))
 		for _, conversation := range conversations {
+			captured[conversation.id] = conversation.dependency
+		}
+		publication, err := publishExecutionDependents(ctx, tx, "agent_events_conversations", captured)
+		if err != nil {
+			return err
+		}
+		current := publication.current
+		for _, conversation := range conversations {
+			if !current[conversation.id] {
+				// Built against execution evidence that changed since; keep it
+				// pending rather than store an obsolete attribution.
+				if _, err := tx.ExecContext(ctx, `INSERT INTO agent_events_dirty(conversation_id,token) VALUES(?,hex(randomblob(8)))
+					ON CONFLICT(conversation_id) DO NOTHING`, conversation.id); err != nil {
+					return err
+				}
+				stale++
+				continue
+			}
 			for _, id := range conversation.stale {
 				for _, statement := range []string{`DELETE FROM agent_events WHERE message_id=?`, `DELETE FROM agent_event_messages WHERE message_id=?`} {
 					if _, err := tx.ExecContext(ctx, statement, id); err != nil {
@@ -753,21 +892,28 @@ func (c *Catalog) storeAgentEvents(ctx context.Context, identity string, convers
 					return err
 				}
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO agent_events_conversations(conversation_id,structure,built_at,since) VALUES(?,?,?,?)
-				ON CONFLICT(conversation_id) DO UPDATE SET structure=excluded.structure, built_at=excluded.built_at, since=excluded.since`, conversation.id, conversation.structure, at, conversation.since); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO agent_events_conversations(conversation_id,structure,built_at,since,execution_digest) VALUES(?,?,?,?,?)
+				ON CONFLICT(conversation_id) DO UPDATE SET structure=excluded.structure, built_at=excluded.built_at, since=excluded.since,
+				execution_digest=excluded.execution_digest`, conversation.id, conversation.structure, at, conversation.since, conversation.dependency); err != nil {
 				return err
 			}
 			// Only the mark this run read: one written since stays for the next run.
 			if _, err := tx.ExecContext(ctx, `DELETE FROM agent_events_dirty WHERE conversation_id=? AND token=?`, conversation.id, conversation.token); err != nil {
 				return err
 			}
+			// Published against current evidence (checked above, in this
+			// transaction): its rows are shown again.
+			if _, err := tx.ExecContext(ctx, `DELETE FROM agent_events_execution_stale WHERE conversation_id=?`, conversation.id); err != nil {
+				return err
+			}
 		}
-		return nil
+		return publication.finish(ctx, tx)
 	})
 	if err == nil {
 		stats.MessagesRemoved += removed
 		stats.Stored += stored
 		stats.Events += eventsTotal
+		stats.ConversationsStale += stale
 	}
 	return err
 }
@@ -809,7 +955,16 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 		}
 	}
 	labels, bulk := labelsForPower(settings.labeler(labels), s.cachedPower(ctx))
-	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true)})
+	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true), Progress: os.Stderr})
+	if err == nil {
+		// Fixes group these events (fixes.go); a rebuild is a no-op when
+		// nothing changed, and spaced out while events keep arriving.
+		if err := s.Catalog.refreshFixesSoon(ctx); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Fixes: %v\n", err)
+		}
+		// The Agent events dashboard's facts (agent_event_facts.go).
+		s.Catalog.refreshAgentEventFactsLogged(ctx, true)
+	}
 	switch {
 	case errors.Is(err, errAgentEventsRunning):
 		return errStageContinues
@@ -845,7 +1000,13 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 				}
 			}
 		}()
-		_, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true)})
+		_, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true), Progress: os.Stderr, progressBase: stats.progress})
+		if err == nil {
+			if err := s.Catalog.refreshFixes(ctx, false); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "Fixes: %v\n", err)
+			}
+			s.Catalog.refreshAgentEventFactsLogged(ctx, false)
+		}
 		switch {
 		case errors.Is(err, labelrt.ErrWorkersUnavailable), unplugged.Load():
 			op.legacyOutcome("interrupted", nil)
@@ -889,10 +1050,19 @@ func (c *Catalog) agentEventsStatus(ctx context.Context, config Config) (map[str
 	var tables int
 	if err := c.DB.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('agent_events_conversations','agent_events_dirty')`).Scan(&tables); err == nil && tables == 2 {
 		var built, dirty int
-		if err := c.DB.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM agent_events_conversations), (SELECT count(*) FROM agent_events_dirty)`).Scan(&built, &dirty); err != nil {
+		// Changed: dirty, or resting on an execution change not marked yet.
+		if err := c.DB.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM agent_events_conversations), (SELECT count(*) FROM (SELECT conversation_id FROM agent_events_dirty UNION `+
+			executionUnmarkedSQL(ctx, c.DB, "agent_events_conversations")+`))`).Scan(&built, &dirty); err != nil {
 			return nil, err
 		}
 		status["conversations_built"], status["conversations_changed"] = built, dirty
+		// Built against execution evidence that has changed since: their rows
+		// stand until the next run rebuilds them, and say so.
+		stale, err := agentEventsExecutionStale(ctx, c.DB)
+		if err != nil {
+			return nil, err
+		}
+		status["conversations_stale"] = stale
 	}
 	return status, nil
 }

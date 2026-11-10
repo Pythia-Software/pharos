@@ -69,19 +69,14 @@ test("conversation distributions sum delegated models and repeated facts into on
   assert.equal(table.reduce((sum, row) => sum + row.mc_cost, 0), 40, "delegated cost is counted once across model cohorts");
 });
 
-test("session scatters show whole conversations and match grouped destinations", () => {
-  const rows = [fact("root", { total_tokens: 100, input_tokens: 80, output_tokens: 20, cost_usd: 2 }), fact("child", { provider: "two", model_family: "beta", conversation_id: "child", agent_session_id: "child", total_tokens: 50, input_tokens: 40, output_tokens: 10, cost_usd: 1 }), fact("other", { root_conversation_id: "second", agent_session_id: "second", total_tokens: 25, input_tokens: 10, output_tokens: 15, cost_usd: .5 }), fact("unpriced", { total_tokens: 1000, input_tokens: 900, output_tokens: 100, price_status: "unpriced", cost_usd: 100 }), fact("orphan", { root_conversation_id: null, total_tokens: 9999, cost_usd: 100 })];
-  for (const [id, x, y] of [["session-token-cost", "mc_tokens", "mc_cost"], ["session-input-output", "mc_input", "mc_output"]]) {
-    const scatter = metrics(id, rows), table = destination(id, rows), { recipe } = card(id);
-    for (const bucket of scatter.buckets) {
-      const row = table.find(row => JSON.stringify(recipe.exploration.keys.map(key => row[key])) === JSON.stringify(bucket.keys));
-      assert.equal(bucket.value, row[x], id);
-      assert.equal(bucket.y, row[y], id);
-    }
-    assert.equal(scatter.buckets.length, 2);
-    assert.equal(scatter.buckets[0].value, id === "session-token-cost" ? 150 : 1020);
-    assert.equal(scatter.buckets[0].y, id === "session-token-cost" ? 3 : 130);
-    assert.deepEqual(scatter.buckets[0].keys, ["one", "alpha", "conversation"]);
+test("conversation scatter covers match the same entity values in their source tables", () => {
+  const common={provider:"one",point_kind:"conversation",first_at:now-1000,last_at:now-1000};
+  const rows=[{...common,id:"conversation:a",entity_id:"a",tokens_tokens:150,tokens_input:120,tokens_output:30,tokens_cost:3},
+    {...common,id:"conversation:b",entity_id:"b",tokens_tokens:25,tokens_input:10,tokens_output:15,tokens_cost:.5}];
+  for (const [id,x,y] of [["session-token-cost","tokens_tokens","tokens_cost"],["session-input-output","tokens_input","tokens_output"]]) {
+    const scatter=metrics(id,rows),table=destination(id,rows);
+    assert.equal(scatter.buckets.length,2);
+    for(const bucket of scatter.buckets){const row=table.find(row=>row.entity_id===bucket.keys.at(-1));assert.equal(bucket.value,row[x]);assert.equal(bucket.y,row[y]);}
   }
 });
 
@@ -114,17 +109,15 @@ test("delegation boxes exclude zeros, count nested executions once, and preserve
   assert.ok(!tooltip.includes("$"));
 });
 
-test("relationship scatters declare log–log axes without transforming their metrics", () => {
+test("relationship scatter axes use their declared scales without transforming values", () => {
   for (const id of ["session-token-cost", "session-input-output"]) {
     const { recipe, query } = card(id), cover = cardCoverQuery(query, recipe);
-    const metric = cover.query.aggregations.find(metric => metric.id === id);
-    assert.equal(metric.display.xScale.mode, "log", id);
-    assert.equal(metric.display.yScale.mode, "log", id);
-    assert.match(metric.display.xLabel, /\(log\)$/);
-    assert.match(metric.display.yLabel, /\(log\)$/);
+    const metric = cover.query.aggregations.find(metric => metric.id === recipe.cover.metricId);
+    assert.equal(metric.display.xScale.mode,"log",id);
+    assert.equal(metric.display.yScale.mode,"log",id);
     assert.ok(!metric.expression.includes("LOG"));
     assert.ok(!metric.expressionY.includes("LOG"));
-    assert.deepEqual(recipe.where, query.grouping.source.where.filter(term => term.field !== "first_usage_at"));
+    assert.deepEqual(recipe.where,(query.grouping?.source ?? query).where.filter(term=>!["first_at","last_at"].includes(term.field)));
   }
 });
 
@@ -166,17 +159,29 @@ test("tree metric headlines surface rare outliers and open ranked conversation d
   assert.equal(recipe.cover.minSamples,undefined);
 });
 
-test("messages and output scatter sums separate human and output events without context duplication", () => {
-  const common={root_provider:"one",root_model_family:"alpha",root_conversation_id:"root",event_at:now-1000};
-  const rows=[{...common,id:"human-a",human_messages:1,output_tokens:0},{...common,id:"human-b",human_messages:1,output_tokens:0},{...common,id:"output-a",human_messages:0,output_tokens:30},{...common,id:"output-child",human_messages:0,output_tokens:20},{...common,id:"old-human",event_at:now-8*86400000,human_messages:1,output_tokens:0}];
+test("messages and output scatter uses matched entity measurements and exposes both axis scales", () => {
+  const common={provider:"one",point_kind:"conversation",first_at:now-1000,last_at:now-1000};
+  const rows=[{...common,id:"conversation:root",entity_id:"root",activity_messages:2,tokens_output:50},{...common,id:"conversation:old",entity_id:"old",last_at:now-8*86400000,activity_messages:1,tokens_output:10}];
   const metric=metrics("session-human-output",rows),table=destination("session-human-output",rows);
   assert.equal(metric.buckets[0].value,2);
   assert.equal(metric.buckets[0].y,50);
-  assert.equal(table[0].mc_human_messages,2);
-  assert.equal(table[0].mc_output,50);
+  assert.equal(table[0].activity_messages,2);
+  assert.equal(table[0].tokens_output,50);
   const clause=card("session-human-output").recipe.measures[0];
   assert.equal(clause.display.xScale.mode,"log");
   assert.equal(clause.display.yScale.mode,"log");
+});
+
+test("recommended scatter cards use their standalone source and the same axes as their destinations", () => {
+  for (const id of ["session-human-output","session-token-cost","session-input-output","work-volume-cost","human-words-api-cost"]) {
+    const {recipe}=card(id),clause=recipe.measures[0],target=recipe.destination;
+    assert.equal(recipe.dataset,"scatter",id);
+    assert.equal(target.topic,"scatter",id);
+    assert.equal(target.dataset,"scatter",id);
+    assert.equal(clause.field,target.chart.metric,id);
+    assert.equal(clause.expressionY,`MAX([${target.chart.metricY}])`,id);
+    assert.ok(recipe.where.some(term=>term.field==="point_kind"&&term.value===target.chart.unit),id);
+  }
 });
 
 test("three role shares count distinct sessions per model, include parent roots, and retain pure roles", () => {

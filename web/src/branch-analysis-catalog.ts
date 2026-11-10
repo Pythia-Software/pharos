@@ -1,4 +1,4 @@
-import type { WhereTerm } from "@pythia-software/query-table-core";
+import type { AggregationClause, WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 import { projectBreakdown, projectLegacy } from "./project-analysis";
 
@@ -20,7 +20,10 @@ const measures: Record<string, AnalysisMeasure> = {
 export const branchCoverageLabels: Record<string, string> = { on_branch: "On a branch", unknown: "Unknown branch", no_branch_data: "No branch data" };
 
 const breakdowns: AnalysisCatalog["breakdowns"] = {
-  branch: { label: "Branch", fields: ["branch"], where: onBranch, empty: "No branch", note: "Usage on a recorded branch only; Coverage shows the rest." },
+  project_branch: { label: "Project and branch", fields: ["project_branch"], where: onBranch, empty: "No branch",
+    note: "Usage on a recorded branch only; Coverage shows the rest. A branch name used in several projects is a separate branch in each." },
+  branch: { label: "Branch name", fields: ["branch"], where: onBranch, empty: "No branch",
+    note: "Usage on a recorded branch only; Coverage shows the rest. Branches with the same name in different projects are added together." },
   coverage: { label: "Coverage", fields: ["coverage"], order: Object.keys(branchCoverageLabels), values: branchCoverageLabels,
     note: "Unknown branch: in a session that recorded a branch, but before its first, on a detached HEAD, or not placed on a turn. No branch data: a session that recorded none." },
   project_name: projectBreakdown(),
@@ -37,6 +40,13 @@ export const branchAnalysisCatalog: AnalysisCatalog = {
   cycle: { hour: { kind: "timestamp", field: "usage_at" }, weekday: { kind: "timestamp", field: "usage_at" } },
   trend: { metric: "cost", split: "coverage" }, scatter: ["cost", "tokens"], legacy: projectLegacy(),
 };
+
+// The dashboard's summary: spend per coverage, and how many branches had
+// spend, each within its project (main in ten repositories is ten branches).
+export const branchSummaryMetrics: AggregationClause[] = [
+  { id: "cost", op: "sum", field: "cost_usd", groupBy: ["coverage"] },
+  { id: "branches", op: "count_distinct", field: "project_branch", groupBy: [] },
+];
 
 // The coverage split: spend on each coverage, every coverage listed.
 export function branchCoverage(buckets: { keys: unknown[]; value: unknown }[]): { coverage: string; label: string; cost: number; share: number }[] {

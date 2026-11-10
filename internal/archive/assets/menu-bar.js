@@ -87,8 +87,7 @@ function editMenuBarSettings(saved, id, destination) {
   const active = get('menuBarActive'), toolbox = get('menuBarToolbox'), menu = get('menuBarToolMenu');
   let settings = normalizeMenuBarSettings(window.pharosPrefs.get(MENU_BAR_KEY, {})), dragId = null;
   let snapshot = null, usage = null, loading = false, lastUsage = 0, previewError = false;
-  const native = () => window.webkit?.messageHandlers?.pharosMenuBar;
-  const notify = () => { try { native()?.postMessage({...settings}); } catch {} };
+  const notify = () => { try { window.pharosHost.capabilities.menu.available && window.pharosHost.menu.applyPreferences({...settings}); } catch {} };
   const element = (tag, className = '', text = '') => {
     const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
   };
@@ -299,7 +298,7 @@ function editMenuBarSettings(saved, id, destination) {
     if (event.detail?.set?.[MENU_BAR_KEY]) { notify(); refreshPreview(); }
     if (event.detail?.set?.['pharos-carbon-v1']) {
       lastUsage = 0; refreshPreview();
-      try { native()?.postMessage({refreshUsage: true}); } catch {}
+      try { window.pharosHost.capabilities.menu.available && window.pharosHost.menu.refreshUsage(); } catch {}
     }
   });
   new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) refreshPreview(); }).observe(root);

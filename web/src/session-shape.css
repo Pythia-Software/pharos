@@ -1,0 +1,19 @@
+/* Session Shape's panels: neutral marks only; a value outside your own range
+   is set in bold, never coloured as good or bad. */
+.session-shape-heading{margin:28px 0 0;font-size:var(--fs-xl,18px)}
+.session-shape-panel{margin:18px 0 0;padding:18px 20px;border:1px solid var(--line);border-radius:10px;background:var(--panel);min-width:0}
+.session-shape-panel h3{margin:0 0 4px;font-size:var(--fs-lg)}
+.session-shape-panel header p{margin:0 0 12px;font-size:var(--fs-sm);line-height:1.5}
+.session-shape-panel-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0 0;font-size:var(--fs-sm)}
+/* The signal and sessions tables scroll within their panel on narrow screens. */
+.session-shape-table-scroll{overflow-x:auto;max-width:100%}
+.session-shape-panel table{width:100%;border-collapse:collapse;font-size:var(--fs-sm)}
+.session-shape-panel th,.session-shape-panel td{padding:6px 10px 6px 0;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+.session-shape-panel thead th{font-weight:600;color:var(--muted)}
+.session-shape-panel td small{display:block}
+.session-shape-signals tr.is-outside td:nth-child(4){font-weight:700}
+.session-shape-signal-select{display:inline-flex;align-items:center;gap:8px;font-size:var(--fs-sm)}
+.session-shape-definitions dl{display:grid;grid-template-columns:minmax(0,14rem) minmax(0,1fr);gap:6px 16px;margin:0;font-size:var(--fs-sm);line-height:1.5}
+.session-shape-definitions dt{font-weight:600}
+.session-shape-definitions dd{margin:0}
+@media (max-width:640px){.session-shape-definitions dl{grid-template-columns:minmax(0,1fr)}.session-shape-definitions dd{margin-bottom:8px}}

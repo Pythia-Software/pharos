@@ -29,7 +29,8 @@ type Catalog struct {
 	reads              *sql.DB
 	RepositoryAliases  map[string]string
 	RepositorySeparate []string
-	// ReworkDays is the library's outcome_rework_days (outcomes.go).
+	// ReworkDays is the library's outcome_rework_days (outcomes.go); 0, for
+	// a catalog opened without the configuration, keeps the stored window.
 	ReworkDays    int
 	captureRootMu sync.RWMutex
 	captureRoot   string
@@ -41,6 +42,12 @@ type Catalog struct {
 	find         libraryFindCache
 	transcripts  transcriptFindCache
 	derived      derivedCache
+	// resultStore is the side-file cache of responses (result_cache.go).
+	resultsOnce sync.Once
+	resultStore *resultCache
+	// execution caches execution resolution per source generation (execution_revision.go).
+	execution    executionCache
+	fingerprints fingerprintWorker
 	// Initialized under derived.mu; caps simultaneous workload fits.
 	thinkingFitSlots chan struct{}
 	// quietVersion and warmVersion are the catalog versions warmCaches last
@@ -50,6 +57,7 @@ type Catalog struct {
 	originsMu                 sync.Mutex
 	gitMainMu                 sync.Mutex
 	parallelismMu             sync.Mutex // serializes storing parallelism activity
+	sessionShapeMu            sync.Mutex // serializes storing session shape facts
 	// authorship tracks the human-authorship rebuild.
 	authorship authorshipState
 	// findings tracks the findings pass (see findings.go).
@@ -61,11 +69,18 @@ type Catalog struct {
 	agentEventsRun sync.Mutex
 	labelers       *labelrt.Manager
 	labelersOnce   sync.Once
+	labelerWorkers sync.Map // model path -> labelerWorkerObservation
+	labelerUsesMu  sync.Mutex
+	labelerUses    map[*labelrt.Runner][]*labelerUse
 	mcpHistory     mcpHistory
 	wal            walBound
 	writers        catalogWriteTracker
+	contention     contentionReports
 	queries        queryActivity
-	now            func() time.Time
+	// queryCounts reuses Query Table population counts within a data
+	// generation (see query_count_cache.go).
+	queryCounts queryCountCache
+	now         func() time.Time
 	// background runs the catalog's own background work (the authorship
 	// rebuild) as an operation. The service sets it to its start, so a
 	// release cancels the work and waits for it before closing the catalog;
@@ -76,34 +91,44 @@ type Catalog struct {
 	initialized *initializeRecord
 	// ops is the registry Catalog-level work registers with (the service's,
 	// or a CLI command's); nil registers nothing.
-	ops               *opRegistry
+	ops  *opRegistry
+	work *workService
+	// commandCPUs is a Terminal command's CPU authority under the scheduled
+	// engine (cliWorkAuthority), for the background work it starts; a
+	// service's catalog answers to work instead.
+	commandCPUs       atomic.Pointer[workAuthority]
 	unowned           sync.WaitGroup
 	projectionBatches atomic.Int32
 	// ingestRuns counts this process's running ingests (see cacheVersion).
 	ingestRuns atomic.Int32
 	// flags caches feature flags read from ui_preferences (feature_flags.go).
 	flags featureFlagCache
+	// sessionPreferences buffers disposable UI state while the writer is busy.
+	sessionPreferences sessionPreferenceBuffer
 }
 
 func OpenCatalog(path string) (*Catalog, error) {
 	return openCatalog(path, func(c *Catalog) error { return c.initializeLocked(true) })
 }
 
-// newCatalog opens a new library's catalog, or an audit's reference catalog,
-// which normally do not exist yet. Tests replace it to copy one they
-// initialized.
+// newCatalog opens a new library's catalog. Tests replace it to copy one
+// they initialized. Disposable audit catalogs have their own factory.
 var newCatalog = OpenCatalog
 
 // openCatalog opens path's pools, running prepare (Initialize, in
 // OpenCatalog) before the read pool.
 func openCatalog(path string, prepare func(*Catalog) error) (*Catalog, error) {
+	return openCatalogWithDSN(path, catalogDSN(path), prepare)
+}
+
+func openCatalogWithDSN(path, dsn string, prepare func(*Catalog) error) (*Catalog, error) {
 	if err := os.MkdirAll(filepathDir(path), 0o755); err != nil {
 		return nil, err
 	}
 	// SQLite PRAGMAs are connection-local. The DSN applies them to every pooled
-	// connection, so deleting a session always cascades its message links and
-	// every commit is durable (see catalogDSN).
-	db := openCatalogDB(path, catalogDSN(path), "catalog")
+	// connection. Library pools use catalogDSN's durable settings; disposable
+	// audit copies supply their own settings without changing the defaults.
+	db := openCatalogDB(path, dsn, "catalog")
 	// SQLite serializes writes. A small pool still allows UI reads while a source
 	// snapshot is being parsed without creating unbounded lock contention.
 	db.SetMaxOpenConns(4)
@@ -145,6 +170,9 @@ func filepathDir(path string) string {
 
 func (c *Catalog) Close() error {
 	cliWriteCheck("close")
+	c.closeSessionPreferences()
+	c.closeDerivedCache()
+	c.closeResults()
 	if c.labelers != nil {
 		c.labelers.Close()
 	}
@@ -152,9 +180,6 @@ func (c *Catalog) Close() error {
 	c.library.mu.Lock()
 	c.library.close()
 	c.library.mu.Unlock()
-	c.derived.mu.Lock()
-	c.derived.close()
-	c.derived.mu.Unlock()
 	// Readers' snapshots would keep the checkpoint below from truncating.
 	if c.reads != nil {
 		_ = c.reads.Close()
@@ -211,7 +236,11 @@ func (c *Catalog) Close() error {
 // and can recreate history explicitly moved out of a source library.
 // 22: provisional authorship and the durable estimates queue. Older full
 // writers do not maintain per-message completion state.
-const catalogSchemaVersion = 22
+// 23: explicit writing outcomes and timestamped live/history queue lanes.
+// Older writers cannot preserve these dispositions or the queue timestamps.
+// 24: scoped token evidence and aggregate ledger attribution. Older writers
+// cannot replace these observations or preserve their consuming-layer scope.
+const catalogSchemaVersion = 24
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -247,6 +276,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureOriginSchema(); err != nil {
 		return err
 	}
+	if err := c.dropRetiredWorkRevisionTriggers(); err != nil {
+		return err
+	}
 	// The analysis triggers read the project columns.
 	if err := c.migrateProjects(); err != nil {
 		return fmt.Errorf("initialize projects: %w", err)
@@ -266,11 +298,17 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureParallelismActivity(); err != nil {
 		return fmt.Errorf("initialize parallelism activity: %w", err)
 	}
+	if err := c.ensureSessionShape(); err != nil {
+		return fmt.Errorf("initialize session shape: %w", err)
+	}
 	if err := c.ensureTL1Schema(); err != nil {
 		return fmt.Errorf("initialize TL1 tables: %w", err)
 	}
 	if err := c.ensureAgentEventsSchema(); err != nil {
 		return fmt.Errorf("initialize agent events: %w", err)
+	}
+	if err := c.ensureAgentEventFactsSchema(); err != nil {
+		return fmt.Errorf("initialize agent event facts: %w", err)
 	}
 	if err := c.ensureFindingsSchema(); err != nil {
 		return fmt.Errorf("initialize findings tables: %w", err)
@@ -284,18 +322,28 @@ func (c *Catalog) Initialize() error {
 		return err
 	}
 	for _, migration := range []struct{ table, column, statement string }{
+		{"conversation_derivation_inputs", "child_usage", "ALTER TABLE conversation_derivation_inputs ADD COLUMN child_usage TEXT NOT NULL DEFAULT ''"},
 		{"tool_query_facts", "day", "ALTER TABLE tool_query_facts ADD COLUMN day TEXT"},
 		{"git_repository_scans", "history_since", "ALTER TABLE git_repository_scans ADD COLUMN history_since TEXT"},
 		{"sync_deferred", "pending_since", "ALTER TABLE sync_deferred ADD COLUMN pending_since TEXT"},
 		{"source_item_states", "indexed_by", "ALTER TABLE source_item_states ADD COLUMN indexed_by TEXT NOT NULL DEFAULT 'intentional'"},
 		{"source_states", "index_version", "ALTER TABLE source_states ADD COLUMN index_version TEXT"},
 		{"messages", "raw_text", "ALTER TABLE messages ADD COLUMN raw_text TEXT"},
+		{"execution_claims", "authority", "ALTER TABLE execution_claims ADD COLUMN authority TEXT NOT NULL DEFAULT ''"},
 		{"messages", "source_order", "ALTER TABLE messages ADD COLUMN source_order INTEGER"},
 		{"messages", "model", "ALTER TABLE messages ADD COLUMN model TEXT"},
 		{"messages", "effort", "ALTER TABLE messages ADD COLUMN effort TEXT"},
+		{"messages", "speed", "ALTER TABLE messages ADD COLUMN speed TEXT NOT NULL DEFAULT 'standard'"},
+		{"messages", "service_tier", "ALTER TABLE messages ADD COLUMN service_tier TEXT"},
+		{"messages", "speed_source", "ALTER TABLE messages ADD COLUMN speed_source TEXT NOT NULL DEFAULT 'assumed_standard'"},
 		{"conversations", "effort", "ALTER TABLE conversations ADD COLUMN effort TEXT"},
 		{"agent_sessions", "effort", "ALTER TABLE agent_sessions ADD COLUMN effort TEXT"},
 		{"model_requests", "effort", "ALTER TABLE model_requests ADD COLUMN effort TEXT"},
+		{"model_requests", "speed", "ALTER TABLE model_requests ADD COLUMN speed TEXT NOT NULL DEFAULT 'standard'; DROP INDEX IF EXISTS model_requests_timing_idx"},
+		{"model_requests", "service_tier", "ALTER TABLE model_requests ADD COLUMN service_tier TEXT; DROP INDEX IF EXISTS model_requests_timing_idx"},
+		{"model_requests", "speed_source", "ALTER TABLE model_requests ADD COLUMN speed_source TEXT NOT NULL DEFAULT 'assumed_standard'; DROP INDEX IF EXISTS model_requests_timing_idx"},
+		{"model_requests", "source_message_id", "ALTER TABLE model_requests ADD COLUMN source_message_id TEXT"},
+		{"model_requests", "final_message_id", "ALTER TABLE model_requests ADD COLUMN final_message_id TEXT"},
 		{"tool_calls", "effort", "ALTER TABLE tool_calls ADD COLUMN effort TEXT"},
 		{"tool_usage_daily", "effort", "ALTER TABLE tool_usage_daily ADD COLUMN effort TEXT"},
 		{"messages", "previous_native_id", "ALTER TABLE messages ADD COLUMN previous_native_id TEXT"},
@@ -320,6 +368,7 @@ func (c *Catalog) Initialize() error {
 		{"conversations", "harness_version_first", "ALTER TABLE conversations ADD COLUMN harness_version_first TEXT"},
 		{"conversations", "harness_version_last", "ALTER TABLE conversations ADD COLUMN harness_version_last TEXT"},
 		{"conversations", "harness_version_source", "ALTER TABLE conversations ADD COLUMN harness_version_source TEXT"},
+		{"conversations", "extractor", "ALTER TABLE conversations ADD COLUMN extractor TEXT"},
 		{"workspaces", "reclamation_authority", "ALTER TABLE workspaces ADD COLUMN reclamation_authority INTEGER NOT NULL DEFAULT 0"},
 		{"workspaces", "main_merge_commit", "ALTER TABLE workspaces ADD COLUMN main_merge_commit TEXT"},
 		{"workspaces", "main_merge_title", "ALTER TABLE workspaces ADD COLUMN main_merge_title TEXT"},
@@ -357,6 +406,13 @@ func (c *Catalog) Initialize() error {
 			}
 		}
 	}
+	// Conductor stored its extractor as its conversations' coverage before
+	// they had an extractor of their own.
+	if _, err := c.DB.Exec(`UPDATE conversations SET extractor=coverage,coverage='complete'
+		WHERE coverage LIKE ? AND NOT EXISTS(SELECT 1 FROM meta WHERE key='conversation_extractor_version');
+		INSERT OR IGNORE INTO meta(key,value) VALUES('conversation_extractor_version','1')`, legacyCoveragePrefix+"%"); err != nil {
+		return err
+	}
 	if err := c.ensureQueryFactTriggers(); err != nil {
 		return err
 	}
@@ -372,7 +428,8 @@ func (c *Catalog) Initialize() error {
 		// Cover the timing projection so request reads never visit large
 		// conversation bodies or sort the entire ledger's window partitions.
 		"CREATE INDEX IF NOT EXISTS conversations_timing_idx ON conversations(id,workspace_id,provider,harness,agent_depth)",
-		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
+		"CREATE INDEX IF NOT EXISTS model_requests_source_message_idx ON model_requests(source_message_id) WHERE source_message_id IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,speed,service_tier,speed_source,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
 		"CREATE INDEX IF NOT EXISTS messages_timing_metadata_idx ON messages(conversation_id,source_order) WHERE kind='metadata'",
 		// Ask Pharos's compaction signal reads only requests after a
 		// compaction, a few in a thousand.
@@ -409,8 +466,14 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureRequestTimings(); err != nil {
 		return fmt.Errorf("initialize request timings: %w", err)
 	}
+	if err := c.ensureFastTiers(); err != nil {
+		return fmt.Errorf("apply fast service tiers: %w", err)
+	}
 	if err := c.ensureRequestEvidence(); err != nil {
 		return fmt.Errorf("initialize request evidence: %w", err)
+	}
+	if err := c.ensureCompactionBoundaries(); err != nil {
+		return fmt.Errorf("initialize compaction boundaries: %w", err)
 	}
 	// Columns such as effort are added above when opening a legacy catalog.
 	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_analytics_time_idx
@@ -564,6 +627,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.backfillChildSessionKinds(); err != nil {
 		return err
 	}
+	if err := c.ensureConversationNames(); err != nil {
+		return err
+	}
 	if err := c.ensureWorkspaceNames(); err != nil {
 		return err
 	}
@@ -595,8 +661,14 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureMessageLabelFacts(context.Background()); err != nil {
 		return err
 	}
+	if err := c.ensureFingerprintImages(context.Background()); err != nil {
+		return fmt.Errorf("initialize fingerprint images: %w", err)
+	}
 	if err := c.ensureQueryCacheGeneration(); err != nil {
 		return fmt.Errorf("initialize query cache invalidation: %w", err)
+	}
+	if err := c.ensureExecutionSourceGeneration(); err != nil {
+		return fmt.Errorf("initialize execution source generation: %w", err)
 	}
 	if err := c.ensureQueryPlannerStatistics(context.Background()); err != nil {
 		return fmt.Errorf("initialize query planner statistics: %w", err)
@@ -786,7 +858,7 @@ func (c *Catalog) seedSessionUsage() error {
 
 // RefineUsageTimeline re-derives the hourly ledger from retained messages for
 // conversations whose usage is only placed at session start. It is bounded to
-// those conversations and commits each one separately.
+// those conversations and commits each workspace separately.
 func (c *Catalog) RefineUsageTimeline(progress func(done, total int)) (int, error) {
 	conversations, err := queryMaps(c.DB, `SELECT c.id,c.workspace_id,c.provider,c.model,c.effort,c.started_at,c.agent_depth FROM conversations c
 		WHERE c.id IN (SELECT a.conversation_id FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id
@@ -795,33 +867,77 @@ func (c *Catalog) RefineUsageTimeline(progress func(done, total int)) (int, erro
 	if err != nil {
 		return 0, err
 	}
-	for index, row := range conversations {
-		if err := c.rebuildAgentSessions(row); err != nil {
-			return index, err
+	groups := map[string][]map[string]any{}
+	order := []string{}
+	for _, row := range conversations {
+		workspace := firstString(row["workspace_id"])
+		if groups[workspace] == nil {
+			order = append(order, workspace)
 		}
+		groups[workspace] = append(groups[workspace], row)
+	}
+	done := 0
+	for _, workspace := range order {
+		if err := c.rebuildAgentSessionBatch(groups[workspace]); err != nil {
+			return done, err
+		}
+		done += len(groups[workspace])
 		c.boundWAL(context.Background(), walSizeLimit)
 		if progress != nil {
-			progress(index+1, len(conversations))
+			progress(done, len(conversations))
 		}
 	}
-	return len(conversations), nil
+	return done, nil
 }
 
 func (c *Catalog) rebuildAgentSessions(row map[string]any) error {
-	records, err := storedMessages(context.Background(), c.DB, row["id"])
-	if err != nil {
-		return err
-	}
-	tx, err := c.DB.Begin()
-	if err != nil {
-		return err
-	}
-	conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Effort: firstString(row["effort"]), StartedAt: firstString(row["started_at"]), AgentDepth: int(integer(row["agent_depth"])), Messages: records}
-	if err := replaceAgentSessions(tx, firstString(row["workspace_id"]), firstString(row["id"]), conversation); err != nil {
-		tx.Rollback()
-		return err
-	}
-	return tx.Commit()
+	return c.rebuildAgentSessionBatch([]map[string]any{row})
+}
+
+// Resolve Claude ownership once for the workspace, then reuse the annotated
+// messages for every selected conversation and the group remainder pass.
+func (c *Catalog) rebuildAgentSessionBatch(rows []map[string]any) error {
+	workspace := firstString(rows[0]["workspace_id"])
+	return c.writeTransaction(context.Background(), "usage-refine workspace="+workspace, func(tx *sql.Tx) error {
+		var hasClaude bool
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM conversations WHERE workspace_id=? AND provider='claude')", workspace).Scan(&hasClaude); err != nil {
+			return err
+		}
+		var conversations []ConversationRecord
+		var ids []string
+		if hasClaude {
+			var err error
+			conversations, ids, err = storedWorkspaceConversations(context.Background(), tx, workspace)
+			if err != nil {
+				return err
+			}
+			conversations, err = conversationsWithStoredChildUsage(tx, workspace, conversations, ids)
+			if err != nil {
+				return err
+			}
+		} else {
+			for _, row := range rows {
+				messages, err := storedMessages(context.Background(), tx, row["id"])
+				if err != nil {
+					return err
+				}
+				ids = append(ids, firstString(row["id"]))
+				conversations = append(conversations, ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Effort: firstString(row["effort"]), StartedAt: firstString(row["started_at"]), AgentDepth: int(integer(row["agent_depth"])), Messages: messages})
+			}
+		}
+		selected := map[string]bool{}
+		for _, row := range rows {
+			selected[firstString(row["id"])] = true
+		}
+		for i, conversation := range conversations {
+			if selected[ids[i]] {
+				if err := writeResolvedAgentSessions(tx, workspace, ids[i], conversation, false, false, true); err != nil {
+					return err
+				}
+			}
+		}
+		return applyClaudeGroupUsage(tx, workspace, conversations, ids, nil)
+	})
 }
 
 func (c *Catalog) hasColumn(table, column string) (bool, error) {
@@ -1140,7 +1256,10 @@ func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields)
 	if len(evidence) > 0 {
 		sort.SliceStable(rows, func(i, j int) bool { return rows[i]["score"].(float64) > rows[j]["score"].(float64) })
 	}
-	rows = c.suppressMirrors(rows)
+	rows, err = c.suppressMirrorsContext(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
 	// Costs take a ledger scan; a page without them gets them in libraryPage.
 	if fields.hasAny(libraryCostFields) {
 		if err := c.attachWorkspaceCosts(ctx, rows); err != nil {
@@ -1185,6 +1304,15 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 		if e != nil {
 			return nil, e
 		}
+		childCalls, e := storedChildUsageCalls(c.reader(), firstString(conversation["id"]))
+		if e != nil {
+			return nil, e
+		}
+		for _, message := range messages {
+			if firstString(message["kind"]) == "delegation_result" && childCalls[firstString(message["call_id"])] {
+				message["usage_in_child_conversation"] = true
+			}
+		}
 		if err := c.attachAuthorship(conversation["id"], messages); err != nil {
 			return nil, err
 		}
@@ -1192,7 +1320,7 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 		records := make([]MessageRecord, 0, len(messages))
 		for _, m := range messages {
 			records = append(records, MessageRecord{
-				NativeID: firstString(m["native_id"]), Role: firstString(m["role"]), Kind: firstString(m["kind"]),
+				usageInChild: m["usage_in_child_conversation"] == true, NativeID: firstString(m["native_id"]), Role: firstString(m["role"]), Kind: firstString(m["kind"]),
 				Text: firstString(m["text"]), RawText: firstString(m["raw_text"]), CreatedAt: firstString(m["created_at"]),
 				ParentNativeID: firstString(m["parent_native_id"]), CallID: firstString(m["call_id"]),
 			})
@@ -1203,6 +1331,7 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 	queries := []struct{ key, sql string }{
 		{"agent_sessions", `SELECT a.*,(SELECT COUNT(*) FROM agent_session_messages am WHERE am.agent_session_id=a.id) message_count
 			FROM agent_sessions a WHERE a.workspace_id=? AND a.usage_status<>'in-child-conversation' ORDER BY a.depth,a.started_at,a.id`},
+		{"token_evidence", `SELECT e.*,m.conversation_id FROM agent_session_token_evidence e JOIN agent_sessions a ON a.id=e.agent_session_id JOIN messages m ON m.id=e.message_id WHERE a.workspace_id=? ORDER BY e.agent_session_id,e.message_id`},
 		{"changes", `SELECT cs.id,cs.classification,cs.base_id,cs.head_id,cs.complete,cf.path,cf.old_path,cf.status,cf.tracked,cf.bytes,cf.evidence_locator FROM change_sets cs LEFT JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=? ORDER BY cf.path`},
 		{"metrics", "SELECT * FROM metrics WHERE workspace_id=? ORDER BY name"},
 		{"metric_ledger", "SELECT * FROM metric_ledger WHERE workspace_id=? ORDER BY sequence LIMIT 10000"},
@@ -1215,7 +1344,7 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 	for _, query := range queries {
 		// The reader overview does not use these potentially large ledgers.
 		// Skip their queries rather than loading and then discarding the rows.
-		if !includeMessages && (query.key == "agent_sessions" || query.key == "metric_ledger" || query.key == "sightings") {
+		if !includeMessages && (query.key == "agent_sessions" || query.key == "token_evidence" || query.key == "metric_ledger" || query.key == "sightings") {
 			continue
 		}
 		values, e := queryMaps(c.reader(), query.sql, id)
@@ -1267,10 +1396,21 @@ const identityLinkWorkspacesSQL = `SELECT a.workspace_id left_workspace,b.worksp
 	JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id`
 
 func (c *Catalog) suppressMirrors(rows []map[string]any) []map[string]any {
-	links, _ := cachedValue(context.Background(), c, "identity-links", func(context.Context) ([]map[string]any, error) {
-		return queryMaps(c.reader(), identityLinkWorkspacesSQL)
+	result, err := c.suppressMirrorsContext(context.Background(), rows)
+	if err != nil {
+		return suppressMirrorRows(rows, nil)
+	}
+	return result
+}
+
+func (c *Catalog) suppressMirrorsContext(ctx context.Context, rows []map[string]any) ([]map[string]any, error) {
+	links, err := cachedValue(ctx, c, "identity-links", func(ctx context.Context) ([]map[string]any, error) {
+		return queryMapsContext(ctx, c.reader(), identityLinkWorkspacesSQL)
 	})
-	return suppressMirrorRows(rows, links)
+	if err != nil {
+		return nil, err
+	}
+	return suppressMirrorRows(rows, links), nil
 }
 
 func suppressMirrorRows(rows, links []map[string]any) []map[string]any {
@@ -1314,20 +1454,12 @@ func suppressMirrorRows(rows, links []map[string]any) []map[string]any {
 		}
 		groups[root] = append(groups[root], byID[id])
 	}
-	priority := map[string]int{"tl1": 0, "tl1-export": 0, "codex": 1, "claude": 1, "chatgpt": 1, "antigravity": 1, "conductor": 9}
 	output := []map[string]any{}
 	for _, root := range roots {
 		group := groups[root]
 		chosen := group[0]
 		for _, candidate := range group[1:] {
-			cp, ok := priority[firstString(candidate["source_kind"])]
-			if !ok {
-				cp = 5
-			}
-			bp, ok := priority[firstString(chosen["source_kind"])]
-			if !ok {
-				bp = 5
-			}
+			cp, bp := mirrorRank(firstString(candidate["source_kind"])), mirrorRank(firstString(chosen["source_kind"]))
 			if cp < bp || cp == bp && firstString(candidate["activity_at"]) > firstString(chosen["activity_at"]) {
 				chosen = candidate
 			}

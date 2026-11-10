@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime/debug"
+	"runtime/pprof"
 	"time"
 )
 
@@ -44,7 +45,12 @@ func runOperation(op *Op, work func(ctx context.Context, op *Op) error) {
 		}
 	}()
 	var err error
-	op.RunIO(func() { err = work(op.Context(), op) })
+	invoke := func(ctx context.Context) { op.RunIO(func() { err = work(ctx, op) }) }
+	if op != nil && op.resources != nil {
+		pprof.Do(op.Context(), taskProfileLabels(op.resources.identity), invoke)
+	} else {
+		invoke(op.Context())
+	}
 	op.Finish(err)
 }
 
@@ -57,8 +63,8 @@ func (s *Server) begin(ctx context.Context, spec OperationSpec) (context.Context
 // daemonNames lists the service's loops that are daemons, not operations
 // (§3.4): they hold nothing and are never shown, and each pass that does real
 // work starts an operation. The unregistered-work test accounts for them.
-var daemonNames = []string{"maintainLibrary", "maintainSubstringIndex", "maintainToolOutputIndex", "maintainTextSearch", "maintainToolSearch", "maintainQueryTextIndexes", "maintainMessageLabelFacts",
-	"keepWALSmall", "automaticLoop", "backgroundLoop", "cloudScheduleLoop", "journalWriter", "leaseReconciler", "watchFeatureFlags", "compressCaptures"}
+var daemonNames = []string{"workExecutor", "resourceHistory", "maintainLibrary", "maintainSubstringIndex", "maintainToolOutputIndex", "maintainTextSearch", "maintainToolSearch", "maintainQueryTextIndexes", "maintainMessageLabelFacts", "maintainFingerprintImages", "maintainFingerprintImagesSecondary",
+	"keepWALSmall", "automaticLoop", "backgroundLoop", "cloudScheduleLoop", "journalWriter", "leaseReconciler", "watchFeatureFlags", "compressCaptures", "refreshResults", "claudeDownloads"}
 
 // daemon runs a registered daemon loop in the background.
 func (s *Server) daemon(name string, loop func(ctx context.Context)) bool {
@@ -112,12 +118,13 @@ func (c *Catalog) beginOp(ctx context.Context, spec OperationSpec) (context.Cont
 
 // startBackground starts Catalog-level background work as an operation:
 // with the service's start when the catalog has a service, or in a goroutine
-// counted in unowned otherwise. It reports false if the service is stopping.
+// counted in unowned otherwise, under a Terminal command's CPU authority if
+// it has one. It reports false if the service is stopping.
 func (c *Catalog) startBackground(spec OperationSpec, work func(ctx context.Context, op *Op) error) bool {
 	if c.background != nil {
 		return c.background(spec, work)
 	}
-	ctx, op := c.beginOp(context.Background(), spec)
+	ctx, op := c.beginOp(withWorkAuthority(context.Background(), c.commandCPUs.Load()), spec)
 	c.unowned.Go(func() { runOperation(op, func(context.Context, *Op) error { return work(ctx, op) }) })
 	return true
 }
@@ -209,6 +216,23 @@ func (p *daemonPass) context(ctx context.Context) context.Context {
 
 // active reports a pass with an operation open.
 func (p *daemonPass) active() bool { return p != nil && p.op != nil }
+
+// waitForDaemonPasses records a shared gate for every pass it pauses. The
+// scoped waits preserve their counts, leave tentative probes invisible and
+// restore only the blocked states they own.
+func waitForDaemonPasses(reason, detail string, passes ...*daemonPass) func() {
+	resumes := make([]func(), 0, len(passes))
+	for _, pass := range passes {
+		if pass.active() {
+			resumes = append(resumes, pass.op.waitFor(reason, detail))
+		}
+	}
+	return func() {
+		for _, resume := range resumes {
+			resume()
+		}
+	}
+}
 
 // defaultError is err, or fallback when err is nil.
 func defaultError(err, fallback error) error {

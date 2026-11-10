@@ -1,18 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
 import { PageLink, useLocationRevision } from "./nested-pages";
 import { outcomeDisplay } from "./outcomes";
-import { useViewState } from "./view-state";
-import { commitState, fileHistoryRoute, fileHistoryURL, gitText, linesText, linkText, type FileHistory, type FileHistoryFile } from "./file-history-model";
+import { useViewState, writeViewStates } from "./view-state";
+import { commitState, fileHistoryNotice, fileHistoryRoute, fileHistoryURL, gitText, linesText, linkText, type FileHistory, type FileHistoryFile } from "./file-history-model";
 import "./file-history.css";
 
 const day = (value?: string) => value ? new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
 
-// FileHistoryPage answers "why is this file like this?": each session that
-// edited a file, newest first, and the commits local Git found for it.
+// FileHistoryPage answers "why is this file like this?": each workspace
+// whose agents edited a file, newest first, and the commits local Git found
+// for it.
 export function FileHistoryPage() {
   useLocationRevision();
   const active = location.pathname === fileHistoryRoute;
-  const [path, setPath] = useViewState<string>("file_history_path", "", active);
+  const [path] = useViewState<string>("file_history_path", "", active);
   const [project] = useViewState<string>("file_history_project", "", active);
   const [draft, setDraft] = useState(path);
   useEffect(() => setDraft(path), [path]);
@@ -32,8 +33,14 @@ export function FileHistoryPage() {
   }, [active, key]);
   const current = loaded?.key === key ? loaded : null;
   return <div className="file-history-page">
-    <div className="view-heading"><div><h1>File history</h1><p className="muted">Every session that edited a file, what it did and what became of it. In a Git repository, the commits that changed it too.</p></div></div>
-    <form className="file-history-form" onSubmit={event => { event.preventDefault(); setPath(draft.trim()); }}>
+    <div className="view-heading"><div><h1>File history</h1><p className="muted">Every workspace whose agents edited a file, what they did and what became of it. In a Git repository, the commits that changed it too.</p></div></div>
+    <form className="file-history-form" onSubmit={event => {
+      event.preventDefault();
+      // A new path is looked up in every project: the project named a
+      // narrower match for the previous one.
+      const next = draft.trim();
+      writeViewStates(next === path ? { file_history_path: next } : { file_history_path: next, file_history_project: "" });
+    }}>
       <label htmlFor="fileHistoryPath">File</label>
       <input id="fileHistoryPath" type="text" value={draft} spellCheck={false} placeholder="src/main.go, ~/notes/plan.md or an absolute path" onChange={event => setDraft(event.target.value)} />
       <button type="submit" disabled={!draft.trim()}>Show history</button>
@@ -43,7 +50,7 @@ export function FileHistoryPage() {
       : !current ? <p className="muted" role="status">Loading…</p>
       : current.error ? <p className="file-history-error" role="alert">{current.error}</p>
       : <>
-        {current.value!.files.length ? null : <p className="muted">{current.value!.note}</p>}
+        {fileHistoryNotice(current.value!) ? <p className="muted">{fileHistoryNotice(current.value!)}</p> : null}
         {current.value!.files.map(file => <FileTimeline key={file.file_key} file={file} />)}
       </>}
   </div>;
@@ -52,7 +59,7 @@ export function FileHistoryPage() {
 function FileTimeline({ file }: { file: FileHistoryFile }) {
   return <section className="file-history-file" aria-label={file.path}>
     <h2><code>{file.path}</code>{file.project ? <span className="muted"> · {file.project}</span> : null}</h2>
-    <h3>Sessions</h3>
+    <h3>Workspaces</h3>
     <ol className="file-history-list">
       {file.sessions.map(session => {
         const outcome = outcomeDisplay(session.outcome_label);
@@ -64,7 +71,7 @@ function FileTimeline({ file }: { file: FileHistoryFile }) {
         </li>;
       })}
     </ol>
-    {file.sessions_truncated ? <p className="muted">Older sessions are not shown.</p> : null}
+    {file.sessions_truncated ? <p className="muted">Older workspaces are not shown.</p> : null}
     <h3>Commits</h3>
     <p className="muted">{gitText(file.git, file.commits.length)}</p>
     {file.commits.length ? <ol className="file-history-list">
@@ -72,8 +79,8 @@ function FileTimeline({ file }: { file: FileHistoryFile }) {
         <span className="file-history-when">{day(commit.author_at)}</span>
         <code title={commit.hash}>{commit.hash.slice(0, 7)}</code>
         <span className="muted">{linesText(commit.lines_added, commit.lines_removed)}{commitState(commit) ? ` · ${commitState(commit)}` : ""}</span>
-        <span>{commit.sessions.length ? commit.sessions.map((link, index) => <React.Fragment key={link.workspace_id}>{index ? ", " : ""}<PageLink href={`/work/${encodeURIComponent(link.workspace_id)}`} title={linkText(link)}>{link.counted ? "Session" : "Candidate session"}</PageLink></React.Fragment>)
-          : <span className="muted">No linked session</span>}</span>
+        <span>{commit.sessions.length ? commit.sessions.map((link, index) => <React.Fragment key={link.workspace_id}>{index ? ", " : ""}<PageLink href={`/work/${encodeURIComponent(link.workspace_id)}`} title={linkText(link)}>{link.counted ? "Workspace" : "Candidate workspace"}</PageLink></React.Fragment>)
+          : <span className="muted">No linked workspace</span>}</span>
       </li>)}
     </ol> : null}
     {file.git.commits_truncated ? <p className="muted">Older commits are not shown.</p> : null}

@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +27,89 @@ func groupRequest(key string, summaries ...qt.SummaryColumn) qt.QueryRequestV3 {
 		Source:   qt.WireQuery{Limit: 1, Offset: 100},
 		Grouping: &qt.GroupingDefinition{Keys: []string{key}, Summaries: summaries},
 		Result:   qt.WireQuery{Select: selects, Limit: 50}}
+}
+
+func TestQueryV3LibraryDefersDisplayFieldsUntilAfterPaging(t *testing.T) {
+	c, config := libraryFixture(t)
+	s := testServer(t, config, c)
+	q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true,
+		Result: qt.WireQuery{Select: []string{"id", "title", "tool_error_count", "compaction_count"}, OrderBy: []qt.OrderBy{{Field: "id", Dir: "desc"}}, Limit: 1}}
+	read := func() qt.QueryResultV3 {
+		t.Helper()
+		got, _, err := s.executeQueryV3(t.Context(), "library", url.Values{}, PharosLibrarySchema(), q)
+		if err != nil || len(got.Rows) != 1 || got.Rows[0]["id"] != "c" {
+			t.Fatalf("paged Library: %+v %v", got, err)
+		}
+		return got
+	}
+	got := read()
+	if got.Total != 2 || got.Rows[0]["title"] != "Charlie" || integer(got.Rows[0]["tool_error_count"]) != 1 || integer(got.Rows[0]["compaction_count"]) != 2 {
+		t.Fatalf("display fields were not filled for the page: %+v", got)
+	}
+	for _, row := range c.library.rows {
+		for _, field := range []string{"title", "tool_error_count", "compaction_count"} {
+			if _, ok := row[field]; ok {
+				t.Fatalf("display-only %s was derived for every workspace", field)
+			}
+		}
+	}
+	// Host keyword restrictions still need their native source field before
+	// paging, even if it is otherwise used only for display.
+	record, _ := json.Marshal(recordSearchSpec{Field: "title", Query: "Charlie"})
+	matched, _, err := s.executeQueryV3(t.Context(), "library", url.Values{"record_search": {string(record)}}, PharosLibrarySchema(), q)
+	if err != nil || matched.Total != 1 || len(matched.Rows) != 1 || matched.Rows[0]["id"] != "c" {
+		t.Fatalf("record keyword lost its source field: %+v %v", matched, err)
+	}
+	// A displayed formula still needs its base inputs before execution.
+	column, err := (qt.SQLiteComputedColumnStore{DB: c.DB}).Save(t.Context(), queryTableScope, "pharos_library", qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{
+		ID: "tokens", Label: "Tokens", Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: "[token_count]"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Result.Select = []string{"id", "@computed/tokens"}
+	q.ExpectedRevisions = map[string]string{column.ID: column.Revision}
+	if row := read().Rows[0]; integer(row["@computed/tokens"]) != 500 {
+		t.Fatalf("displayed formula lost its dependency: %+v", row)
+	}
+	// Native filters, sorts and metrics also need their complete population.
+	q.Result.Where = []qt.WhereTerm{{Field: "tool_error_count", Op: ">", Value: "0"}}
+	q.Result.OrderBy = []qt.OrderBy{{Field: "compaction_count", Dir: "desc"}}
+	q.Metrics = []qt.AggSpec{{ID: "errors", Op: "sum", Field: "tool_error_count"}}
+	got = read()
+	if got.Total != 1 || integer(got.Metrics[0].Buckets[0].Value) != 1 {
+		t.Fatalf("deferring display fields changed query membership or totals: %+v", got)
+	}
+}
+
+func TestQueryV3ReleasesAdmissionAfterExecutionError(t *testing.T) {
+	gate := &queryAdmission{limit: 1}
+	override(t, &heavyQueries, gate)
+	override(t, &queryV3MaxGroups, 1)
+	catalog, config := testCatalog(t)
+	seedToolCalls(t, catalog, 3)
+	publishProjections(t, catalog)
+	server := testServer(t, config, catalog)
+	q := groupRequest("id", qt.SummaryColumn{ID: "calls", Op: "count"})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, _, err := server.executeQueryV3(ctx, "tool_calls", nil, PharosToolCallsSchema(), q); err == nil || !strings.Contains(err.Error(), "tool_calls query:") {
+		t.Fatalf("expected an execution-time group budget error: %v", err)
+	}
+	gate.mu.Lock()
+	active, queued := gate.active, gate.wait.Len()
+	gate.mu.Unlock()
+	if active != 0 || queued != 0 || catalog.reader().Stats().InUse != 0 {
+		t.Fatalf("failed execution retained a slot or connection: active=%d queued=%d readers=%d", active, queued, catalog.reader().Stats().InUse)
+	}
+	queryV3MaxGroups = 3
+	if result, _, err := server.executeQueryV3(ctx, "tool_calls", nil, PharosToolCallsSchema(), q); err != nil || result.Total != 3 {
+		t.Fatalf("all groups within the budget: %+v, %v", result, err)
+	}
+	q.Source.Where = []qt.WhereTerm{{Field: "id", Op: "=", Value: "call-0"}}
+	if _, _, err := server.executeQueryV3(ctx, "tool_calls", nil, PharosToolCallsSchema(), q); err != nil {
+		t.Fatalf("query after a failed execution could not use admission: %v", err)
+	}
 }
 
 func TestQueryV3LargeSourceHavingMetricsAndPaging(t *testing.T) {
@@ -141,6 +226,30 @@ func TestQueryV3UsageFiltersSessionsAndCalendar(t *testing.T) {
 	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Rows[0]["tokens"] != float64(3050) {
 		t.Fatal("hour query mutated the cached daily population", w.Code, w.Body.String())
+	}
+	// A bound on first_usage_at pre-selects the days staged; the answer and
+	// the cached population stay the same.
+	for _, c := range []struct {
+		op     string
+		tokens float64
+	}{{">=", 2030}, {"<", 1020}} {
+		q.Source.Where = []qt.WhereTerm{{Field: "first_usage_at", Op: c.op, Value: "2026-09-21T00:00:00Z"}}
+		w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || len(result.Rows) != 1 || result.Rows[0]["tokens"] != c.tokens {
+			t.Fatal(c.op, w.Code, w.Body.String())
+		}
+	}
+	q.Source.Where = nil
+	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Rows[0]["tokens"] != float64(3050) {
+		t.Fatal("a windowed query mutated the cached daily population", w.Code, w.Body.String())
+	}
+	days := []map[string]any{{"first_usage_at": "2026-06-01T00:00:00Z"}, {"first_usage_at": "2026-09-20T23:00:00Z"}, {"first_usage_at": "2026-09-21T05:00:00Z"}, {"first_usage_at": nil}}
+	if kept := usageRowsWithin(days, [][]qt.WhereTerm{{{Field: "first_usage_at", Op: ">=", Value: "2026-09-21T00:00:00Z"}}}); len(kept) != 3 {
+		t.Fatal("want the days near or inside the window, and the one without a time", kept)
+	}
+	if kept := usageRowsWithin(days, [][]qt.WhereTerm{{{Field: "first_usage_at", Op: ">=", Value: "2026-09-21T00:00:00Z", Negated: true}}}); len(kept) != 4 {
+		t.Fatal("a negated bound narrows nothing", kept)
 	}
 	calendar := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Result: qt.WireQuery{Select: []string{"id"}, Limit: 50},
 		Metrics: []qt.AggSpec{{ID: "days", Op: "sum", Field: "total_tokens", GroupBy: []string{"first_usage_at"}, DateGrouping: &qt.MetricDateGrouping{Field: "first_usage_at", Interval: "day", TimeZone: "UTC", Range: "observed"}}}}
@@ -552,6 +661,9 @@ func TestQueryV3RecordKeywordsOnMapRowsAndMatchingOptions(t *testing.T) {
 // cycles, calendar grouping keys, distinct and summed minimums, and OR-of-AND
 // source filters, over a SQL dataset and over staged map rows.
 func TestQueryV3RunsEveryAdvertisedShape(t *testing.T) {
+	// Even one slot must handle cold staged sources and hour-dependent Usage
+	// metrics: their cache dependencies cannot wait inside an admitted query.
+	override(t, &heavyQueries, &queryAdmission{limit: 1})
 	previous := time.Local
 	time.Local = time.UTC
 	t.Cleanup(func() { time.Local = previous })
@@ -679,5 +791,261 @@ func TestQueryV3DistinctAndIdentityHTTP(t *testing.T) {
 	response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
 	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &out) != nil || out.Total != 1 || len(out.Rows) != 1 || out.Rows[0]["id"] != "call-0" {
 		t.Fatal(response.Code, response.Body.String())
+	}
+}
+
+func ungroupedRowsRequest(now time.Time, where ...qt.WhereTerm) qt.QueryRequestV3 {
+	return qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: now.UnixMilli(), Rows: true,
+		Source: qt.WireQuery{Limit: 1}, Result: qt.WireQuery{Select: []string{"id"}, Where: where, Limit: 3}}
+}
+
+// rememberedCounts returns the cached counts, and with set replaces each
+// with set(count), as a stale or wrong count would look.
+func rememberedCounts(c *Catalog, set func(int64) int64) map[queryCountKey]int64 {
+	c.queryCounts.mu.Lock()
+	defer c.queryCounts.mu.Unlock()
+	if set != nil {
+		for key, n := range c.queryCounts.counts {
+			c.queryCounts.counts[key] = set(n)
+		}
+	}
+	return maps.Clone(c.queryCounts.counts)
+}
+
+func TestQueryV3ReusesPopulationCountsWithinAGeneration(t *testing.T) {
+	c, config := testCatalog(t)
+	seedToolCalls(t, c, 80)
+	c.maintainQueryTextIndexes(t.Context())
+	if err := c.ensureToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, c)
+	noon := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	run := func(dataset string, q qt.QueryRequestV3) int64 {
+		t.Helper()
+		schema, _ := sqliteQuerySchema(dataset)
+		result, _, err := server.executeQueryV3(t.Context(), dataset, nil, schema, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.SourceTotal != result.Total {
+			t.Fatal("ungrouped totals differ", result.Total, result.SourceTotal)
+		}
+		return result.Total
+	}
+	// The cube cannot answer a duration filter: it is counted, then reused.
+	slow := ungroupedRowsRequest(noon, qt.WhereTerm{Field: "duration_ms", Op: ">", Value: "100"})
+	total := run("tool_calls", slow)
+	if total == 0 || total == 80 || len(rememberedCounts(c, nil)) != 1 {
+		t.Fatalf("total %d, remembered %v", total, rememberedCounts(c, nil))
+	}
+	// A reused count is answered, not recounted, while the generation holds.
+	// Other pages of the population share its count.
+	rememberedCounts(c, func(n int64) int64 { return n + 1000 })
+	reshaped := slow
+	reshaped.Result.Limit, reshaped.Result.Offset = 10, 5
+	if got := run("tool_calls", reshaped); got != total+1000 || len(rememberedCounts(c, nil)) != 1 {
+		t.Fatalf("reshaped page counted %d, want the remembered %d", got, total+1000)
+	}
+	if stats := c.queryCounts.snapshot(); stats.Counted != 1 || stats.Reused != 1 || stats.Fast != 0 || stats.Remembered != 1 {
+		t.Fatalf("tallies after one count and one reuse: %+v", stats)
+	}
+	// Datasets, filters and relative clocks keep their own counts.
+	before := len(rememberedCounts(c, nil))
+	run("skill_usages", ungroupedRowsRequest(noon))
+	run("tool_calls", ungroupedRowsRequest(noon, qt.WhereTerm{Field: "duration_ms", Op: ">", Value: "200"}))
+	recent := ungroupedRowsRequest(noon, qt.WhereTerm{Field: "started_at", Op: ">=", Value: "-20d"})
+	run("tool_calls", recent)
+	run("tool_calls", recent)
+	if got := len(rememberedCounts(c, nil)); got != before+3 {
+		t.Fatalf("remembered %d counts, want %d", got, before+3)
+	}
+	later := recent
+	later.Now = noon.Add(time.Hour).UnixMilli()
+	run("tool_calls", later)
+	if got := len(rememberedCounts(c, nil)); got != before+4 {
+		t.Fatalf("a later clock reused a relative count: %d counts", got)
+	}
+	// Tool calls read no label or agent-event table, so the passes that write
+	// those leave its counts in place; a source that may read them recounts.
+	if err := c.ensureLabelsSchema(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	run("agent_events", ungroupedRowsRequest(noon))
+	held := len(rememberedCounts(c, nil))
+	execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('labelled','t')`)
+	if got := run("tool_calls", slow); got != total+1000 {
+		t.Fatalf("a label write recounted tool calls: %d, want the remembered %d", got, total+1000)
+	}
+	run("agent_events", ungroupedRowsRequest(noon))
+	if got := len(rememberedCounts(c, nil)); got != held {
+		t.Fatalf("after a label write: %d counts, want %d (tool calls kept, agent events replaced)", got, held)
+	}
+	if stats := c.queryCounts.snapshot(); stats.Generations != 1 {
+		t.Fatalf("a label write should move only the whole generation's counts: %+v", stats)
+	}
+	// A write advances the generation inside the next request's transaction.
+	if _, err := c.DB.Exec("DELETE FROM tool_calls WHERE id=(SELECT id FROM tool_calls WHERE duration_ms>100 LIMIT 1)"); err != nil {
+		t.Fatal(err)
+	}
+	if got := run("tool_calls", slow); got != total-1 {
+		t.Fatalf("after a write counted %d, want %d", got, total-1)
+	}
+	if c.queryCounts.snapshot().Generations == 0 {
+		t.Fatal("a newer generation did not clear the remembered counts")
+	}
+	total--
+	// Local days are not in the statement's text: a timezone change counts again.
+	rememberedCounts(c, func(n int64) int64 { return n + 1000 })
+	override(t, &time.Local, time.FixedZone("ahead", 14*3600))
+	if got := run("tool_calls", slow); got != total {
+		t.Fatalf("another timezone reused %d, want %d", got, total)
+	}
+	// Parity with uncached execution, after a write and with a cold cache.
+	for _, q := range []qt.QueryRequestV3{slow, recent, later, ungroupedRowsRequest(noon)} {
+		cached := run("tool_calls", q)
+		c.queryCounts = queryCountCache{}
+		if cold := run("tool_calls", q); cold != cached {
+			t.Fatalf("%v: cached %d, cold %d", q.Result.Where, cached, cold)
+		}
+	}
+	override(t, &queryCountLimit, 2)
+	for _, value := range []string{"10", "20", "30"} {
+		run("tool_calls", ungroupedRowsRequest(noon, qt.WhereTerm{Field: "duration_ms", Op: ">", Value: value}))
+	}
+	if got := len(rememberedCounts(c, nil)); got > 2 {
+		t.Fatalf("remembered %d counts over a limit of 2", got)
+	}
+	w := apiCall(t, server, config.APIToken, http.MethodGet, "/api/diagnostics/query-counts", nil)
+	var stats queryCountStats
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &stats) != nil || stats != c.queryCounts.snapshot() || stats.Counted == 0 || stats.Generation == 0 {
+		t.Fatalf("query count diagnostics: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A Tool calls page sorted newest first reads the time index and counts
+// over a source narrowed to its filter (newestFirstScan, narrowCount): the
+// same rows and total as the page in any other order.
+func TestQueryV3NewestFirstToolCallsMatchOldestFirst(t *testing.T) {
+	c, config := testCatalog(t)
+	seedToolCalls(t, c, 40)
+	c.maintainQueryTextIndexes(t.Context())
+	if err := c.ensureToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, c)
+	noon := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	page := func(dir string, where ...qt.WhereTerm) ([]string, int64) {
+		t.Helper()
+		q := ungroupedRowsRequest(noon, where...)
+		q.Result.Select, q.Result.Limit = []string{"id", "started_at", "conversation_id"}, 100
+		q.Result.OrderBy = []qt.OrderBy{{Field: "started_at", Dir: dir}}
+		schema, _ := sqliteQuerySchema("tool_calls")
+		result, _, err := server.executeQueryV3(t.Context(), "tool_calls", nil, schema, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []string{}
+		for i, row := range result.Rows {
+			if i > 0 && firstString(row["started_at"]) != firstString(result.Rows[i-1]["started_at"]) &&
+				(firstString(row["started_at"]) > firstString(result.Rows[i-1]["started_at"])) == (dir == "desc") {
+				t.Fatalf("%s page out of order at row %d", dir, i)
+			}
+			ids = append(ids, firstString(row["id"]))
+		}
+		slices.Sort(ids)
+		return ids, result.Total
+	}
+	for _, where := range [][]qt.WhereTerm{nil, {{Field: "started_at", Op: ">=", Value: "-30d"}}} {
+		c.queryCounts = queryCountCache{}
+		newest, total := page("desc", where...)
+		c.queryCounts = queryCountCache{}
+		oldest, plain := page("asc", where...)
+		if len(newest) == 0 || total != plain || !slices.Equal(newest, oldest) {
+			t.Fatalf("newest first %d rows of %d, oldest first %d of %d, for %v", len(newest), total, len(oldest), plain, where)
+		}
+	}
+}
+
+func TestQueryV3ToolCubeCountsMatchTheCalls(t *testing.T) {
+	slowTest(t)
+	c, config := testCatalog(t)
+	seedToolCalls(t, c, 200)
+	c.maintainQueryTextIndexes(t.Context())
+	if err := c.ensureToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, c)
+	schema, _ := sqliteQuerySchema("tool_calls")
+	cube := toolCubeCount(schema)
+	answer := func(where []qt.WhereTerm) (int64, bool) {
+		t.Helper()
+		tx, err := c.reader().BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		n, ok, err := cube(t.Context(), tx, qt.PopulationCount{Where: where})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n, ok
+	}
+	count := func(where []qt.WhereTerm) int64 {
+		t.Helper()
+		result, _, err := server.executeQueryV3(t.Context(), "tool_calls", nil, schema, ungroupedRowsRequest(time.Now(), where...))
+		if err != nil {
+			t.Fatal(where, err)
+		}
+		return result.Total
+	}
+	// Every identity is present, so this term keeps the population while
+	// declining the cube: the executor counts the calls themselves.
+	counted := qt.WhereTerm{Field: "id", Op: "is_not_null"}
+	answered := [][]qt.WhereTerm{
+		nil,
+		{{Field: "tool_name", Op: "=", Value: "Bash"}},
+		{{Field: "model", Op: "=", Value: "claude-opus-5-5"}, {Field: "effort", Op: "=", Value: "high"}},
+		{{Field: "model_effort", Op: "=", Value: "claude-opus-5-5 · low"}},
+		{{Field: "status", Op: "=", Value: "error"}, {Field: "repository_name", Op: "is_not_null"}},
+		{{Field: "host", Op: "is_not_null"}},
+		{{Field: "search_query", Op: "is_not_null"}},
+		{{Field: "hosts", Op: "is_null"}},
+		{{Field: "model", Op: "is_null"}},
+		{{Field: "day", Op: "=", Value: "2026-09-01"}, {Field: "provider", Op: "=", Value: "codex"}},
+		{{Field: "week", Op: "=", Value: "2026-08-31"}, {Field: "session_kind", Op: "=", Value: "subagent"}},
+		{{Field: "command_name", Op: "=", Value: "git status"}},
+	}
+	for _, where := range answered {
+		n, ok := answer(where)
+		want := count(append(slices.Clone(where), counted))
+		if !ok || n != want {
+			t.Fatalf("cube answered %d (%v) where %v; the calls count %d", n, ok, where, want)
+		}
+		if got := count(where); got != want {
+			t.Fatalf("query counted %d where %v, want %d", got, where, want)
+		}
+	}
+	for _, where := range [][]qt.WhereTerm{
+		{{Field: "command", Op: "contains", Value: "test"}},
+		{{Field: "duration_ms", Op: ">", Value: "100"}},
+		{{Field: "program", Op: "=", Value: "git", Negated: true}},
+		{{Field: "tool_name", Op: "=", Value: ""}},
+		{{Any: []qt.WhereClause{{Field: "tool_name", Op: "=", Value: "Bash"}, {Field: "tool_name", Op: "=", Value: "Read"}}}},
+		{counted},
+	} {
+		if _, ok := answer(where); ok {
+			t.Fatalf("cube answered a filter it does not keep: %v", where)
+		}
+	}
+	// A ledger write leaves the cube stale until the rollup catches up.
+	if _, err := c.DB.Exec("DELETE FROM tool_calls WHERE id='call-5'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := answer(nil); ok {
+		t.Fatal("a stale cube answered")
+	}
+	if got := count(nil); got != 199 {
+		t.Fatalf("stale cube: counted %d calls, want 199", got)
 	}
 }

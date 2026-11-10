@@ -339,6 +339,8 @@ func TestProbeOffersAntigravityToMacsAlreadySetUp(t *testing.T) {
 	}
 	// Not an Antigravity app directory: no brain folder.
 	probePut(t, filepath.Join(home, ".gemini", "antigravity-updater", "state"), "")
+	// A copy of the app's conversations, which would be read twice.
+	antigravityTranscript(t, filepath.Join(home, ".gemini", "antigravity-backup"), probeID2, "transcript_full.jsonl", "{}\n")
 	report := probeSources(home, Config{}, nil)
 	for _, name := range []string{"antigravity", "antigravity-cli"} {
 		candidate := candidateNamed(t, report, name)
@@ -347,7 +349,7 @@ func TestProbeOffersAntigravityToMacsAlreadySetUp(t *testing.T) {
 		}
 	}
 	for _, candidate := range report.Candidates {
-		if strings.Contains(candidate.Path, "updater") {
+		if strings.Contains(candidate.Path, "updater") || strings.Contains(candidate.Path, "backup") {
 			t.Fatalf("probe offered %+v", candidate)
 		}
 	}
@@ -379,7 +381,7 @@ func TestProbeOffersAntigravityToMacsAlreadySetUp(t *testing.T) {
 func TestAntigravityCapturePlanListsWhatTheAdapterReads(t *testing.T) {
 	dir := antigravityFixture(t)
 	probePut(t, filepath.Join(dir, "brain", antigravityRoot, "scratch", "notes.txt"), "not a transcript")
-	plan, err := planCapture(SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: dir})
+	plan, err := planCapture(context.Background(), SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +440,7 @@ func TestAntigravityPrintModeRunsAreHeadless(t *testing.T) {
 	if root, child, other := sender(catalog, antigravityRoot), sender(catalog, antigravityChild), sender(catalog, antigravityOther); root != "automation:agy-print" || child != "" || other != "" {
 		t.Fatalf("senders = %q %q %q", root, child, other)
 	}
-	plan, err := planCapture(source)
+	plan, err := planCapture(context.Background(), source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -714,13 +716,13 @@ func TestAntigravityLogReaderHandlesChunkBoundariesAndLongLines(t *testing.T) {
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		log, err := readAntigravityRunLog(t.Context(), path, make([]byte, 64*1024))
+		log, err := readAntigravityRunLog(sourceFiles{ctx: t.Context()}, path, make([]byte, 64*1024))
 		if err != nil || !log.print || !slices.Equal(log.ids, []string{antigravityRoot, antigravityChild}) {
 			t.Fatalf("offset %d: streaming print-mode IDs=%v error=%v", offset, log.ids, err)
 		}
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		if _, err := readAntigravityRunLog(ctx, path, make([]byte, 64*1024)); !errors.Is(err, context.Canceled) {
+		if _, err := readAntigravityRunLog(sourceFiles{ctx: ctx}, path, make([]byte, 64*1024)); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled log read did not stop: %v", err)
 		}
 	}

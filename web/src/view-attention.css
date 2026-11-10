@@ -1,7 +1,13 @@
-/* Linked attention uses the reserved attention colours (see page-find.css). */
-.pharos-highlight { outline: 3px solid var(--attention-ring, #e0a800); outline-offset: 4px; box-shadow: 0 0 0 8px color-mix(in srgb, var(--attention-mark, #fff176) 22%, transparent); scroll-margin: 80px; }
+/* Linked targets and Data Guide explanations share one attention treatment. */
+.pharos-highlight, .pharos-guide-highlight::after { outline: 3px solid var(--attention-ring, #e0a800); outline-offset: 4px; box-shadow: 0 0 0 8px color-mix(in srgb, var(--attention-mark, #fff176) 22%, transparent); scroll-margin: 80px; }
+/* The guide owns these declarative marks. A separate layer preserves native
+   illustration borders and leaves keyboard focus independently visible. */
+.pharos-guide-highlight { position: relative; }
+.pharos-guide-highlight::after { content: ""; position: absolute; inset: 0; z-index: 1; border-radius: inherit; pointer-events: none; }
 .pharos-reveal { outline: 4px double var(--attention-current, #ff9f43); outline-offset: 5px; box-shadow: 0 0 0 10px color-mix(in srgb, var(--attention-mark, #fff176) 25%, transparent); scroll-margin: 80px; }
 :root[data-pharos-native-reveal="true"] .qt-attention-target { outline: 4px double var(--attention-current, #ff9f43); outline-offset: -2px; scroll-margin: 80px; }
 :root:not([data-pharos-native-reveal="true"]) .qt-attention-target { outline: none; }
 
 .pharos-attention-status { position:fixed; inset:auto auto 12px 12px; z-index:9000; display:flex; gap:12px; align-items:center; max-width:calc(100vw - 24px); padding:8px 12px; border:1px solid var(--border); background:var(--panel); border-radius:6px; font-size:12px; }
+.pharos-attention-menu { position:fixed; inset:auto; margin:0; padding:4px; border:1px solid var(--line); border-radius:6px; background:var(--panel); box-shadow:0 8px 24px #0004; }
+.pharos-attention-menu button { display:block; width:100%; text-align:left; white-space:nowrap; }

@@ -40,6 +40,7 @@
     }
   ],
   "fields": [
+    {"name":"agent_session_id","label":"Agent session ID","type":"text","group":"Context","select":{"default":false},"aggregate":{"groupable":true},"bindings":{"sqlite":{"expr":"r.\"agent_session_id\""}},"description":"Recorded owner of this message or ledger record; ambiguous ownership is missing."},
     {
       "name": "id",
       "label": "Message ID (row)",
@@ -300,7 +301,7 @@
           "expr": "r.\"project_name\""
         }
       },
-      "description": "The repository, else the working folder (home as ~); empty for a session with no working directory (No project)."
+      "description": "The repository, else the working folder (home as ~); empty for a workspace with no working directory (No project)."
     },
     {
       "name": "provider",
@@ -347,7 +348,7 @@
             },
             {
               "value": "canonical",
-              "label": "Canonical"
+              "label": "Canonical export"
             }
           ]
         }

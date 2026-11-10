@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -24,7 +25,7 @@ func queryExplorationCall(server *Server, token, method, path, body string) *htt
 	return w
 }
 
-var queryDatasets = []string{"model_requests", "library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "safety", "parallelism", "agent_events", "agent_event_messages", "message_labels"}
+var queryDatasets = []string{"compactions", "model_requests", "library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "safety", "fixes", "parallelism", "agent_events", "agent_event_messages", "message_labels"}
 
 // TestQueryDatasetsHTTP calls each query endpoint for every dataset, on one
 // catalog: capabilities and V3 budgets, typed rows, an item, metrics over
@@ -54,11 +55,7 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 				t.Fatal("capabilities", w.Code, w.Body.String())
 			}
 			limits := handshake.QueryCapabilities
-			groups := 10_000
-			if dataset == "usage" || dataset == "message_labels" {
-				groups = 100_000
-			}
-			if limits.MaxRows != 10_000 || limits.MaxGroups != groups || limits.MaxPopulation != 10_000_000 {
+			if limits.MaxRows != 10_000 || limits.MaxGroups != 100_000 || limits.MaxPopulation != 10_000_000 {
 				t.Fatalf("incorrect advertised V3 budgets: %+v", limits)
 			}
 
@@ -226,6 +223,79 @@ func TestUsageQueryItemsRetainSourceAndLoadPayloadOnDemand(t *testing.T) {
 	row = item.Row
 	if !strings.Contains(firstString(row["input_text"]), "go test") || row["result_text_truncated"] != true || len([]rune(firstString(row["result_text"]))) > 20001 || row["commands"] == nil || row["urls"] == nil || row["call_message_id"] != "call-message" {
 		t.Fatalf("incomplete on-demand properties: truncated=%v commands=%T urls=%T input=%q", row["result_text_truncated"], row["commands"], row["urls"], row["input_text"])
+	}
+}
+
+// A saved agent-event item whose conversation is withheld until its events
+// are rebuilt answers pending with the coverage, not as gone; once the
+// ordinary run republishes, an item that still exists reads again.
+func TestAgentEventQueryItemsReadPendingWhileWithheld(t *testing.T) {
+	ctx := t.Context()
+	c := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	config := testConfig(t)
+	config.CatalogPath = c.Path
+	server := testServer(t, config, c)
+	run := func() {
+		t.Helper()
+		if stats, err := c.RunLabels(ctx, labels, LabelsRunOptions{}); err != nil || !stats.Complete {
+			t.Fatalf("labels: %+v %v", stats, err)
+		}
+		if stats, err := c.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{}); err != nil || !stats.Complete {
+			t.Fatalf("agent events: %+v %v", stats, err)
+		}
+		if _, err := c.refreshAgentEventFacts(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	item := func(dataset, id string) map[string]any {
+		t.Helper()
+		w := queryExplorationCall(server, config.APIToken, http.MethodGet, "/api/query/"+dataset+"/item?id="+url.QueryEscape(id), "")
+		var body map[string]any
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+			t.Fatal(dataset, w.Code, w.Body.String())
+		}
+		return body
+	}
+	run()
+	var event int64
+	var family string
+	if err := c.DB.QueryRow(`SELECT id,family FROM agent_events WHERE conversation_id='c-events' AND probability>=? ORDER BY id LIMIT 1`, agentEventThreshold).Scan(&event, &family); err != nil {
+		t.Fatal(err)
+	}
+	// A rate row is a message crossed with a kind.
+	saved := map[string]string{"agent_events": fmt.Sprintf("e%d", event), "agent_event_messages": "m-ev-reply", "agent_event_rates": "m-ev-reply:" + family}
+	for dataset, id := range saved {
+		if body := item(dataset, id); body["row"] == nil {
+			t.Fatalf("%s current item: %v", dataset, body)
+		}
+	}
+	if body := item("agent_events", "e999999"); body["row"] != nil || body["pending"] != false {
+		t.Fatalf("an item that never existed reads pending: %v", body)
+	}
+	// A writer that marks nothing moves c-child under c-events.
+	if err := c.writeTransaction(ctx, "repair", func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE conversations SET parent_id='c-events',agent_depth=1 WHERE id='c-child'`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for dataset, id := range saved {
+		body := item(dataset, id)
+		coverage, _ := body["coverage"].(map[string]any)
+		if body["row"] != nil || body["pending"] != true || coverage["state"] != "pending" {
+			t.Fatalf("%s withheld item reads as gone or current: %v", dataset, body)
+		}
+	}
+	run()
+	for _, dataset := range []string{"agent_event_messages", "agent_event_rates"} {
+		if body := item(dataset, saved[dataset]); body["row"] == nil {
+			t.Fatalf("%s republished item: %v", dataset, body)
+		}
+	}
+	// Event rows are rebuilt under new IDs; the old one is then truly gone.
+	if body := item("agent_events", saved["agent_events"]); body["row"] == nil && body["pending"] != false {
+		t.Fatalf("a rebuilt event still reads pending: %v", body)
 	}
 }
 

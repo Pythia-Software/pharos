@@ -11,7 +11,7 @@ trap 'rm -rf "$WORK"' EXIT
 SPARKLE=$("$ROOT/macos/fetch-sparkle.sh")
 swiftc -parse-as-library -D PHAROS_NATIVE_TEST -F "$SPARKLE" -framework Sparkle \
     -Xlinker -rpath -Xlinker "$SPARKLE" -framework DiskArbitration -framework WebKit \
-    "$ROOT/macos/PharosApp.swift" "$ROOT/macos/MenuBar.swift" "$ROOT/macos/UpdateNotice.swift" \
+    "$ROOT/macos/PharosApp.swift" "$ROOT/macos/MenuBar.swift" "$ROOT/macos/Dictation.swift" "$ROOT/macos/UpdateNotice.swift" \
     "$ROOT/macos/LibraryVolume.swift" "$ROOT/macos/UpdateLifecycle.swift" "$ROOT/macos/Launch.swift" "$ROOT/macos/UpdateSignature.swift" \
     "$ROOT/macos/test/UpdateCheckHarness.swift" -o "$WORK/UpdateCheckHarness"
 "$WORK/UpdateCheckHarness" "$ROOT/testdata/sparkle-signed-appcast.xml"

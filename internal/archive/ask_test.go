@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -68,6 +69,99 @@ func askReply(ids ...string) []byte {
 		choices = append(choices, map[string]string{"id": id, "description": "Explore the recorded evidence."})
 	}
 	return []byte(jsonText(map[string]any{"message": "Here are useful places to look.", "destinations": choices, "lookup": askLookup{Kind: "none"}, "clarification": nil}))
+}
+
+func TestAskFeedbackDraftConversation(t *testing.T) {
+	s := askTestServer(t)
+	askEnable(t, s)
+	var sends atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sends.Add(1)
+		t.Error("Ask must not submit feedback")
+	}))
+	defer upstream.Close()
+	t.Setenv("PHAROS_FEEDBACK_URL", upstream.URL)
+	proposal := &askFeedback{Kind: "feature", Comment: "Add export of selected conversations to Markdown so I can share a review."}
+	calls := 0
+	override(t, &askRunCLI, func(ctx context.Context, provider askProvider, selection askSelection, prompt string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return []byte(jsonText(askAgentResponse{Feedback: proposal, Lookup: askLookup{Kind: "none"}})), nil
+		}
+		_, raw, _ := strings.Cut(prompt, "Context JSON:\n")
+		var data struct {
+			Conversation []struct {
+				Feedback *askFeedback `json:"feedbackDraft"`
+			} `json:"conversation"`
+		}
+		if err := json.Unmarshal([]byte(raw), &data); err != nil || len(data.Conversation) != 2 || data.Conversation[0].Feedback == nil || *data.Conversation[0].Feedback != *proposal {
+			t.Fatalf("draft missing from follow-up context: %s %v", raw, err)
+		}
+		// Even affirmative chat text only returns another draft for review.
+		return []byte(jsonText(askAgentResponse{Feedback: proposal, Lookup: askLookup{Kind: "none"}})), nil
+	})
+	input := askInput()
+	input["prompt"] = "Please request Markdown export"
+	askOK(t, s, "send", input)
+	restarted := testServer(t, s.Config(), s.Catalog)
+	session, err := restarted.askSession(t.Context(), "chat-1")
+	if err != nil || len(session.Conversation) != 1 || session.Conversation[0].Status != "feedback" || session.Conversation[0].Feedback == nil || *session.Conversation[0].Feedback != *proposal || len(s.ask.active) != 0 {
+		t.Fatalf("draft not saved while waiting for consent: %+v %v", session, err)
+	}
+	input["turnID"], input["prompt"] = "turn-2", "yes, send it"
+	askOK(t, s, "send", input)
+	if sends.Load() != 0 {
+		t.Fatal("draft or affirmative chat text sent feedback")
+	}
+	var count int
+	if err := s.Catalog.reader().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH ?", `"Markdown"`).Scan(&count); err != nil || count < 1 {
+		t.Fatalf("visible feedback draft was not indexed: %d %v", count, err)
+	}
+}
+
+func TestAskFeedbackValidation(t *testing.T) {
+	s := askTestServer(t)
+	for _, tc := range []struct {
+		name, kind, comment, lookup string
+		clarification, destination  bool
+	}{
+		{name: "empty", kind: "feature", comment: " "},
+		{name: "unsupported kind", kind: "prompt", comment: "Build it"},
+		{name: "oversize", kind: "bug", comment: strings.Repeat("x", 16001)},
+		{name: "lookup", kind: "feature", comment: "Add export", lookup: "visits"},
+		{name: "clarification", kind: "feature", comment: "Add export", clarification: true},
+		{name: "destination", kind: "feature", comment: "Add export", destination: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+				var response askAgentResponse
+				reply := askReply()
+				if tc.destination {
+					reply = askReply("analyze")
+				}
+				_ = json.Unmarshal(reply, &response)
+				response.Feedback = &askFeedback{Kind: tc.kind, Comment: tc.comment}
+				if tc.lookup != "" {
+					response.Lookup.Kind = tc.lookup
+				}
+				if tc.clarification {
+					response.Clarification = &askClarification{Question: "Which export?", Options: []string{"Markdown"}}
+				}
+				return []byte(jsonText(response)), nil
+			})
+			if _, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil {
+				t.Fatal("invalid or mixed feedback proposal accepted")
+			}
+		})
+	}
+	for _, kind := range []string{"feature", "bug", "feedback"} {
+		override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+			return []byte(jsonText(askAgentResponse{Feedback: &askFeedback{Kind: kind, Comment: "Reviewed report"}, Lookup: askLookup{Kind: "none"}})), nil
+		})
+		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err != nil || answer.Feedback == nil || answer.Feedback.Kind != kind {
+			t.Fatalf("valid feedback: %+v %v", answer, err)
+		}
+	}
 }
 
 func TestAskClarificationConversation(t *testing.T) {
@@ -301,6 +395,22 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	if err != nil || len(summaries) != 1 || summaries[0].QuestionCount != 2 || len(summaries[0].Conversation) != 1 {
 		t.Fatalf("history summaries: %+v %v", summaries, err)
 	}
+	if want := []askModelUse{{CLI: "Codex", Model: "test-model", Label: "Test Model"}}; !reflect.DeepEqual(summaries[0].Models, want) {
+		t.Fatalf("history summary models = %+v, want %+v", summaries[0].Models, want)
+	}
+	// A chat that changed models lists each once, most recently used first,
+	// with the label from its latest turn.
+	mixed := askSession{ID: "chat-mixed", CreatedAt: 1, UpdatedAt: 2, Selection: askSelection{Provider: "Claude", Model: "opus"}, Conversation: []askTurn{
+		{ID: "a", Prompt: "Mixed models", CLI: "Claude", Model: "opus", ModelLabel: "Opus (old label)"},
+		{ID: "b", Prompt: "Next", CLI: "Codex", Model: "gpt", ModelLabel: "GPT"},
+		{ID: "c", Prompt: "Last", CLI: "Claude", Model: "opus", ModelLabel: "Opus"},
+	}}
+	if err = s.saveAskSession(t.Context(), mixed, false); err != nil {
+		t.Fatal(err)
+	}
+	if mixedSummaries, err := s.askSessions(t.Context(), "Mixed models", 0); err != nil || len(mixedSummaries) != 1 || !reflect.DeepEqual(mixedSummaries[0].Models, []askModelUse{{CLI: "Claude", Model: "opus", Label: "Opus"}, {CLI: "Codex", Model: "gpt", Label: "GPT"}}) {
+		t.Fatalf("mixed-model summary: %+v %v", mixedSummaries, err)
+	}
 	for _, query := range []string{"retries", "Navigation reply 2", "Explore the recorded evidence", "Review recorded model usage"} {
 		matches, err := s.askSessions(t.Context(), query, 0)
 		if err != nil || len(matches) != 1 || matches[0].ID != session.ID {
@@ -489,6 +599,83 @@ func TestAskCancelAndDisable(t *testing.T) {
 // must not lose it, make a reload report the request stopped, or hold up the
 // rest of Ask; a stop meanwhile replaces it.
 func TestAskSavesAnswerPastABusyCatalog(t *testing.T) {
+	// Visits are saved independently of the chat state. A background writer
+	// holding the catalog must not stop Ask status reads or cancellation.
+	for _, action := range []string{"visits", "remove-visit", "clear-visits"} {
+		t.Run(action+" waiting for writer", func(t *testing.T) {
+			s := askTestServer(t)
+			// Join discovery before t.Cleanup restores the provider overrides.
+			defer settleServer(t, s)
+			askEnable(t, s)
+			override(t, &askWriteTimeout, time.Minute)
+			release, err := s.Catalog.acquireWriteGate(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { release() }()
+			finished := make(chan *httptest.ResponseRecorder, 1)
+			go func() { finished <- askCall(t, s, http.MethodPost, action, map[string]any{}) }()
+			if !waitFor(time.Second, func() {
+				for s.Catalog.writers.waiting.Load() == 0 {
+					runtime.Gosched()
+				}
+			}) {
+				t.Fatal("visit write did not wait for the catalog")
+			}
+			for _, request := range []struct{ method, path string }{{http.MethodGet, "status"}, {http.MethodPost, "cancel"}} {
+				response := make(chan *httptest.ResponseRecorder, 1)
+				go func() { response <- askCall(t, s, request.method, request.path, map[string]any{}) }()
+				select {
+				case result := <-response:
+					if result.Code != http.StatusOK {
+						t.Fatalf("%s: %s", request.path, result.Body.String())
+					}
+				case <-time.After(time.Second):
+					t.Fatalf("%s waited for visit persistence", request.path)
+				}
+			}
+			// Let the queued write finish before the catalog closes.
+			release()
+			release = func() {}
+			if result := <-finished; result.Code != http.StatusOK {
+				t.Fatalf("%s: %s", action, result.Body.String())
+			}
+		})
+	}
+
+	// Both the draft queue and startAsk save before launching a CLI. Their
+	// deadline must cover writer acquisition, with no inference after failure.
+	for _, action := range []string{"session", "send", "visits", "settings"} {
+		t.Run(action+" writer deadline", func(t *testing.T) {
+			s := askTestServer(t)
+			defer settleServer(t, s)
+			askEnable(t, s)
+			override(t, &askWriteTimeout, 50*time.Millisecond)
+			override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+				t.Error("CLI launched before the question was saved")
+				return askReply("home"), nil
+			})
+			release, err := s.Catalog.acquireWriteGate(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			response := make(chan *httptest.ResponseRecorder, 1)
+			go func() { response <- askCall(t, s, http.MethodPost, action, askInput()) }()
+			select {
+			case result := <-response:
+				if result.Code != http.StatusServiceUnavailable || !strings.Contains(result.Body.String(), "Pharos is busy saving library changes") || strings.Contains(result.Body.String(), "deadline") {
+					t.Fatalf("unhelpful persistence failure: %d %s", result.Code, result.Body.String())
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("pre-launch save ignored its deadline")
+			}
+			if len(s.ask.active) != 0 {
+				t.Fatal("failed question was reserved as an active request")
+			}
+		})
+	}
+
 	busy := func(t *testing.T, s *Server) (release func()) {
 		held, done, written := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 		calls := 0
@@ -536,14 +723,15 @@ func TestAskSavesAnswerPastABusyCatalog(t *testing.T) {
 			session, err := s.askSession(t.Context(), "chat-1")
 			if err == nil && session.Conversation[0].Status == status {
 				s.ask.mu.Lock()
-				defer s.ask.mu.Unlock()
-				if len(s.ask.active) != 0 || len(s.ask.saving) != 0 {
-					t.Fatalf("a saved chat is still held: %v %v", s.ask.active, s.ask.saving)
+				// The saved row becomes visible before the saver releases ownership.
+				released := len(s.ask.active) == 0 && len(s.ask.saving) == 0
+				s.ask.mu.Unlock()
+				if released {
+					return session
 				}
-				return session
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("the chat was never saved as %s: %+v %v", status, session, err)
+				t.Fatalf("the chat was not saved and released as %s: %+v %v", status, session, err)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -915,9 +1103,20 @@ func TestAskDisableInterruptsModelDiscovery(t *testing.T) {
 	}
 }
 func TestAskCLIProcessCancellation(t *testing.T) {
+	// The shell and its background child both inherit the write end of held;
+	// the read end reaches EOF only once every holder has exited.
+	held, holder, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	cmd := askCommand(ctx, "/bin/sh", t.TempDir(), "-c", "printf ready; sleep 30 & wait")
+	cmd, err := askCommand(ctx, "/bin/sh", t.TempDir(), "-c", "sleep 30 & printf ready; wait")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.ExtraFiles = []*os.File{holder}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -925,6 +1124,8 @@ func TestAskCLIProcessCancellation(t *testing.T) {
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	holder.Close()
+	defer func() { _ = cmd.Cancel(); _ = cmd.Wait() }()
 	ready := make([]byte, 5)
 	if _, err = io.ReadFull(stdout, ready); err != nil {
 		t.Fatal(err)
@@ -939,6 +1140,76 @@ func TestAskCLIProcessCancellation(t *testing.T) {
 		}
 	case <-time.After(4 * time.Second):
 		t.Fatal("descendant kept canceled request alive")
+	}
+	if !waitFor(4*time.Second, func() { _, _ = io.Copy(io.Discard, held) }) {
+		t.Fatal("the background child outlived the canceled request")
+	}
+
+	// A command that never starts leaves no process to cancel.
+	marker := filepath.Join(t.TempDir(), "launched")
+	launch := []string{"-c", "touch " + marker}
+	t.Run("pre-canceled context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		cmd, err := askCommand(ctx, "/bin/sh", t.TempDir(), launch...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); !errors.Is(err, context.Canceled) || cmd.Process != nil {
+			t.Fatalf("Start = %v, process %v", err, cmd.Process)
+		}
+		if err := cmd.Cancel(); err != nil {
+			t.Fatalf("Cancel without a process = %v", err)
+		}
+	})
+	t.Run("start failure", func(t *testing.T) {
+		cmd, err := askCommand(t.Context(), filepath.Join(t.TempDir(), "missing"), t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); err == nil || cmd.Process != nil {
+			t.Fatalf("Start = %v, process %v", err, cmd.Process)
+		}
+		if err := cmd.Cancel(); err != nil {
+			t.Fatalf("Cancel without a process = %v", err)
+		}
+	})
+	t.Run("configuration refusal", func(t *testing.T) {
+		override(t, &askProcessConfig, func(*exec.Cmd) error { return errProcessIsolationUnsupported })
+		cmd, err := askCommand(t.Context(), "/bin/sh", t.TempDir(), launch...)
+		if cmd != nil || !errors.Is(err, errProcessIsolationUnsupported) {
+			t.Fatalf("askCommand = %v, %v", cmd, err)
+		}
+		// Each caller returns the refusal itself, before pipes or a start:
+		// not authentication advice, and not a missing CLI.
+		cli := filepath.Join(t.TempDir(), "cli")
+		if err := os.WriteFile(cli, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("HOME", t.TempDir())
+		settings := filepath.Join(os.Getenv("HOME"), ".gemini", "antigravity-cli", "settings.json")
+		if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(settings, []byte(`{"permissions":{"allow":["mcp(pharos-ask/*)"]}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"Codex", "Claude", "Antigravity"} {
+			provider := askProvider{ID: name, path: cli, mcp: askMCPServer{Command: "/test/pharos", Args: []string{"mcp"}}, Models: []askModel{{ID: "test-model", Efforts: []string{"Default"}}}}
+			models, err := askDiscoverModels(t.Context(), provider)
+			if models != nil || !errors.Is(err, errProcessIsolationUnsupported) || strings.Contains(err.Error(), "authenticate") {
+				t.Fatalf("%s model discovery = %v, %v", name, models, err)
+			}
+			if _, err := askRunCLI(t.Context(), provider, askSelection{Provider: name, Model: "test-model", Effort: "Default"}, "prompt"); !errors.Is(err, errProcessIsolationUnsupported) {
+				t.Fatalf("%s request = %v", name, err)
+			}
+		}
+		if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a refused command ran: %v", err)
+		}
+	})
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a command that never started ran: %v", err)
 	}
 }
 
@@ -1257,7 +1528,7 @@ func TestAskSiteLinkDestinations(t *testing.T) {
 		"malformed URL":      {"id": "", "url": "/analyze?analyze_mode=%zz"},
 		"control separators": {"id": "", "url": strings.ReplaceAll(canonical, "&", "\x1f")},
 		"unknown parameter":  {"id": "", "url": with(func(v url.Values) { v.Set("colour", "red") })},
-		"coercible state":    {"id": "", "url": with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"cost","split":"type"}`) })},
+		"coercible state":    {"id": "", "url": with(func(v url.Values) { v.Set("analyze_chart", `{"v":3,"view":"trend","metric":"cost","split":"type"}`) })},
 		"Ask chat":           {"id": "", "url": "/?ask_chat=chat-1"},
 		"other site":         {"id": "", "url": "https://example.com/analyze"},
 		"both":               {"id": "analyze", "url": canonical},
@@ -1727,5 +1998,144 @@ func TestAskSiteLinksRespectCancellation(t *testing.T) {
 	p := askProvider{ID: "Codex", progress: func(string) { cancel() }}
 	if _, err := s.answerAsk(ctx, p, askSession{}, "UTC"); !errors.Is(err, context.Canceled) || calls != 1 {
 		t.Fatalf("cancelled correction: %d CLI calls, %v", calls, err)
+	}
+}
+
+func TestAskAnswerReceipts(t *testing.T) {
+	s := askTestServer(t)
+	askEnable(t, s)
+	session := askSession{ID: "receipts", CreatedAt: 1, UpdatedAt: 2, Selection: askSelection{Provider: "Codex", Model: "test-model", Effort: "Low"}, Draft: "Keep my draft", Conversation: []askTurn{
+		{ID: "answer", StartedAt: 10, Status: "multiple", Prompt: "First", Reply: "An answer"},
+		{ID: "running", StartedAt: 20, Status: "loading", Prompt: "Second"},
+	}}
+	if err := s.saveAskSession(t.Context(), session, false); err != nil {
+		t.Fatal(err)
+	}
+	read := func(id string, started int64) {
+		askOK(t, s, "read", map[string]any{"id": session.ID, "turnID": id, "startedAt": started})
+	}
+	read("answer", 9)
+	read("running", 20)
+	got, err := s.askSession(t.Context(), session.ID)
+	if err != nil || got.Conversation[0].SeenAt != 0 || got.Conversation[1].SeenAt != 0 {
+		t.Fatalf("stale or running receipt: %+v %v", got, err)
+	}
+	read("answer", 10)
+	got, err = s.askSession(t.Context(), session.ID)
+	if err != nil || got.Conversation[0].SeenAt == 0 || got.UpdatedAt != session.UpdatedAt || got.Draft != session.Draft {
+		t.Fatalf("saved receipt changed chat: %+v %v", got, err)
+	}
+	seen := got.Conversation[0].SeenAt
+	read("answer", 10)
+	restarted := testServer(t, s.Config(), s.Catalog)
+	got, err = restarted.askSession(t.Context(), session.ID)
+	if err != nil || got.Conversation[0].SeenAt != seen {
+		t.Fatalf("receipt did not persist idempotently: %+v %v", got, err)
+	}
+	summaries, err := s.askSessions(t.Context(), "First", 0)
+	if err != nil || len(summaries) != 1 || summaries[0].UnreadCount != 0 || summaries[0].LastStatus != "loading" {
+		t.Fatalf("inbox summary: %+v %v", summaries, err)
+	}
+
+	// A finished answer can still be waiting for the catalog writer.
+	got.Conversation[1].Status = "clarification"
+	s.ask.saving = map[string]*askSaving{session.ID: {session: got}}
+	read("running", 20)
+	if s.ask.saving[session.ID].version != 1 || s.ask.saving[session.ID].session.Conversation[1].SeenAt == 0 {
+		t.Fatal("receipt lost while saving answer")
+	}
+	if pending, err := s.saveFinishedAsk(session.ID); pending || err != nil {
+		t.Fatalf("save receipt: %v %v", pending, err)
+	}
+
+	// Reading an earlier answer during inference survives the final answer save.
+	got.Conversation = got.Conversation[:1]
+	got.Conversation[0].SeenAt = 0
+	if err := s.saveAskSession(t.Context(), got, false); err != nil {
+		t.Fatal(err)
+	}
+	started, finish := make(chan struct{}), make(chan struct{})
+	override(t, &askRunCLI, func(ctx context.Context, _ askProvider, _ askSelection, _ string) ([]byte, error) {
+		close(started)
+		select {
+		case <-finish:
+			return askReply("home"), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	defer close(finish)
+	input := askInput()
+	input["id"] = session.ID
+	input["turnID"] = "follow-up"
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- askCall(t, s, http.MethodPost, "send", input) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("follow-up did not start")
+	}
+	read("answer", 10)
+	askOK(t, s, "cancel", map[string]any{"id": session.ID})
+	select {
+	case response := <-done:
+		if response.Code != 200 {
+			t.Fatal(response.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("follow-up did not stop")
+	}
+	got, err = s.askSession(t.Context(), session.ID)
+	if err != nil || got.Conversation[0].SeenAt == 0 {
+		t.Fatalf("final save overwrote receipt: %+v %v", got, err)
+	}
+}
+
+func TestAskConcurrentChats(t *testing.T) {
+	s := askTestServer(t)
+	askEnable(t, s)
+	started, finish := make(chan struct{}, 2), make(chan struct{})
+	override(t, &askRunCLI, func(ctx context.Context, _ askProvider, _ askSelection, _ string) ([]byte, error) {
+		started <- struct{}{}
+		select {
+		case <-finish:
+			return askReply("home"), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	defer close(finish)
+	results := []chan *httptest.ResponseRecorder{make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)}
+	for i, id := range []string{"first", "second"} {
+		input := askInput()
+		input["id"] = id
+		go func() { results[i] <- askCall(t, s, http.MethodPost, "send", input) }()
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("question did not start")
+		}
+	}
+	third := askInput()
+	third["id"] = "third"
+	if response := askCall(t, s, http.MethodPost, "send", third); response.Code != 400 {
+		t.Fatalf("third request: %d", response.Code)
+	}
+	askOK(t, s, "cancel", map[string]any{"id": "first"})
+	select {
+	case <-results[0]:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first question did not cancel")
+	}
+	select {
+	case <-results[1]:
+		t.Fatal("canceling first also stopped second")
+	default:
+	}
+	askOK(t, s, "cancel", map[string]any{"id": "second"})
+	select {
+	case <-results[1]:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second question did not cancel")
 	}
 }
