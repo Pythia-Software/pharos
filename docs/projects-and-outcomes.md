@@ -267,7 +267,9 @@ Mac recorded that still exist.
   abort. The diff's added lines are fingerprinted and compared in memory,
   never stored. Every diff is read with `--no-textconv --no-ext-diff`: a
   repository's attributes can name a converter or diff program, which
-  would run, and a converter with a cache writes notes.
+  would run, and a converter with a cache writes notes. Every command sets
+  `log.showSignature=false`, since with it set a log runs the repository's
+  `gpg.program` (or SSH signing program) for each signed commit.
 - **Commits linked to the session.** A link comes either from a hash the
   session's own `git commit` printed (direct, confidence 1.0) or by
   inference: the commit is not a merge, its author time falls in the
@@ -291,7 +293,9 @@ Mac recorded that still exist.
   the two (a printed hash still counts when only inference linked the
   copy). Another session's link to the original stays. In a shallow clone a commit
   mainline does not reach is unknown, not "not landed", and so is a commit
-  whose patch could not be read.
+  whose patch could not be read or is empty (an empty commit or a merge).
+  Patches are read with `--no-color`, which a repository can force on, and
+  listed commits are passed on standard input.
 - **Reverts.** A later commit reverts a linked one when its message says
   `This reverts commit <hash>`, or when it changes the same files with the
   added and removed counts swapped and its patch-id equals the linked
@@ -519,8 +523,9 @@ first and rework judged once per marked session (`session_rework_dirty`).
 
 - It never runs `git fetch` or `git pull`, writes notes, installs hooks, or
   changes config, refs or the working tree. Every command is read-only and
-  sets `GIT_NO_LAZY_FETCH=1`, and no diff runs a program the repository
-  names (`--no-textconv --no-ext-diff`).
+  sets `GIT_NO_LAZY_FETCH=1`; no diff runs a program the repository
+  names (`--no-textconv --no-ext-diff`), and no log verifies a signature
+  (`log.showSignature=false`).
 - It never runs git in a path another Mac recorded
   (`workspace_sightings.host_id`), because that path may be an unrelated
   checkout here.

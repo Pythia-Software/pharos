@@ -159,11 +159,13 @@ var gitRawDiff = []string{"--no-textconv", "--no-ext-diff"}
 // remote, no optional locks, no prompts, at low priority when nice is there.
 // Every diff it reads passes gitRawDiff, since a repository's attributes can
 // name a text converter or diff program, which would run (and a converter
-// with a cache writes notes refs).
+// with a cache writes notes refs). Nor does a log verify signatures: with
+// log.showSignature set, it would run the repository's gpg.program (or ssh
+// signing program) for every signed commit.
 var outcomeGitCommand = func(ctx context.Context, dir string, timeout time.Duration, stdin []byte, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	name, full := "git", append([]string{"-C", dir}, args...)
+	name, full := "git", append([]string{"-C", dir, "-c", "log.showSignature=false"}, args...)
 	if nice, err := exec.LookPath("nice"); err == nil {
 		name, full = nice, append([]string{"-n", "10", "git"}, full...)
 	}
@@ -727,7 +729,9 @@ func mainlineTip(ctx context.Context, dir string) (tip, ref string, err error) {
 // markMainline records whether each linked commit reached mainline: it is
 // in mainline's history, or a commit there has the same change (a rebase or
 // cherry-pick, by patch-id). A squash of several commits is not recognized.
-// Without a mainline, or in a shallow clone that lacks it, it stays unknown.
+// Without a mainline, in a shallow clone that lacks it, or when its change
+// cannot be read (an empty commit or a merge has no patch-id), it stays
+// unknown.
 func markMainline(ctx context.Context, dir, after string, linked map[string]*gitCommit, shallow bool) error {
 	tip, ref, err := mainlineTip(ctx, dir)
 	if err != nil || tip == "" {
@@ -755,11 +759,11 @@ func markMainline(ctx context.Context, dir, after string, linked map[string]*git
 	slices.Sort(missing)
 	// Comparing changes is a further check: when it cannot run, the rest
 	// stay unknown rather than off mainline.
-	mine, err := patchIDs(ctx, dir, false, append([]string{"--no-walk=unsorted"}, missing...)...)
+	mine, err := patchIDs(ctx, dir, false, missing)
 	if err != nil {
 		return nil
 	}
-	theirs, err := patchIDs(ctx, dir, false, "--no-merges", after, tip)
+	theirs, err := patchIDs(ctx, dir, false, nil, "--no-merges", after, tip)
 	if err != nil {
 		return nil
 	}
@@ -769,23 +773,33 @@ func markMainline(ctx context.Context, dir, after string, linked map[string]*git
 	}
 	for _, hash := range missing {
 		commit := linked[hash]
-		if match := byPatch[mine[hash]]; mine[hash] != "" && match != "" {
+		switch match := byPatch[mine[hash]]; {
+		case mine[hash] != "" && match != "":
 			commit.OnMainline, commit.MainlineEvidence, commit.SameAs = new(true), "same change as "+match[:12]+" on "+strings.TrimPrefix(ref, "refs/"), match
-		} else if !shallow {
+		case mine[hash] != "" && !shallow:
 			commit.OnMainline = new(false)
 		}
 	}
 	return nil
 }
 
-// patchIDs gives each commit's patch-id, of its change or of its inverse.
-func patchIDs(ctx context.Context, dir string, reverse bool, revisions ...string) (map[string]string, error) {
-	// Without a/ and b/ prefixes, which an inverse diff swaps.
-	args := append([]string{"log", "-p", "--no-prefix", "--format=commit %H"}, gitRawDiff...)
+// patchIDs gives each commit's patch-id, of its change or of its inverse:
+// of the commits listed, read on stdin since there can be more than a
+// command line holds, or else of the revisions given. A commit with no
+// change to compare has none.
+func patchIDs(ctx context.Context, dir string, reverse bool, listed []string, revisions ...string) (map[string]string, error) {
+	// Without a/ and b/ prefixes, which an inverse diff swaps, and without
+	// colour, which a repository can force on and patch-id cannot read.
+	args := append([]string{"log", "-p", "--no-prefix", "--no-color", "--format=commit %H"}, gitRawDiff...)
 	if reverse {
 		args = append(args, "-R")
 	}
-	patches, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, append(args, revisions...)...)
+	var stdin []byte
+	if listed != nil {
+		stdin = []byte(strings.Join(listed, "\n") + "\n")
+		args = append(args, "--no-walk=unsorted", "--stdin")
+	}
+	patches, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, stdin, append(args, revisions...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -860,11 +874,11 @@ func markReverts(ctx context.Context, dir, after string, commits, linked map[str
 	slices.Sort(targets)
 	slices.Sort(reverters)
 	// As for mainline, a comparison that cannot run finds nothing.
-	forward, err := patchIDs(ctx, dir, false, append([]string{"--no-walk=unsorted"}, targets...)...)
+	forward, err := patchIDs(ctx, dir, false, targets)
 	if err != nil {
 		return nil
 	}
-	backward, err := patchIDs(ctx, dir, true, append([]string{"--no-walk=unsorted"}, reverters...)...)
+	backward, err := patchIDs(ctx, dir, true, reverters)
 	if err != nil {
 		return nil
 	}

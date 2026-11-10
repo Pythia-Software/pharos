@@ -64,6 +64,22 @@ func (r *gitRepository) commit(days float64, message string, files map[string]st
 	return r.git(at, "rev-parse", "HEAD")
 }
 
+// signHead rewrites the commit HEAD names as signed, with a signature that
+// only running gpg.program could check.
+func (r *gitRepository) signHead() string {
+	r.t.Helper()
+	body := r.git(time.Now(), "cat-file", "commit", "HEAD") + "\n"
+	at := strings.Index(body, "\n\n")
+	command := exec.Command("git", "-C", r.dir, "hash-object", "-t", "commit", "-w", "--stdin")
+	command.Stdin = strings.NewReader(body[:at] + "\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n iQ==\n -----END PGP SIGNATURE-----" + body[at:])
+	signed, err := command.Output()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.git(time.Now(), "update-ref", "HEAD", strings.TrimSpace(string(signed)))
+	return strings.TrimSpace(string(signed))
+}
+
 // gitFixture is an outcome fixture whose sessions work in one repository
 // this Mac recorded.
 type gitFixture struct {
@@ -133,7 +149,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	f := newGitFixture(t)
 	repo := f.repo
 	for _, id := range []string{"direct", "inferred", "stale", "wide", "narrow", "branch", "picked", "squashed", "reverted", "undone", "late",
-		"early", "printer", "printer-too", "detached"} {
+		"early", "printer", "printer-too", "detached", "empty"} {
 		f.session(id, "")
 	}
 	// A session that only committed, before every other session's edits.
@@ -146,6 +162,17 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo.dir, ".git", "info", "attributes"), []byte("*.txt diff=custom\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Nor is its signature program, which a log would run for each signed
+	// commit with log.showSignature set; and colour it forces on does not
+	// hide a change from patch-id.
+	ran := filepath.Join(t.TempDir(), "gpg-ran")
+	program := filepath.Join(t.TempDir(), "gpg")
+	if err := os.WriteFile(program, []byte("#!/bin/sh\ntouch '"+ran+"'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo.git(time.Now(), "config", "log.showSignature", "true")
+	repo.git(time.Now(), "config", "gpg.program", program)
+	repo.git(time.Now(), "config", "color.ui", "always")
 	// Its own git commit printed the hash: linked directly, and on mainline.
 	f.edit("direct", "main.go", 30)
 	direct := repo.commit(29.99, "Direct", map[string]string{"main.go": "package main\n"})
@@ -155,6 +182,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	f.edit("inferred", "util.go", 25)
 	inferred := repo.commit(24.99, "Inferred", map[string]string{"util.go": "package util\n"})
 	repo.commit(24.98, "Elsewhere", map[string]string{"other.go": "package other\n"})
+	repo.signHead()
 	// Two sessions were editing a file a commit changed: the tightest
 	// window gets the link, as a candidate that does not count. A session that edited it once, earlier, has a tighter
 	// window still but stopped long before the commit, so it does not.
@@ -181,6 +209,10 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	repo.git(time.Now(), "checkout", "-q", "-b", "feature")
 	f.edit("branch", "branch.go", 8)
 	branch := repo.commit(7.99, "Branch", map[string]string{"branch.go": "package branch\n", "notes.txt": "converted\n"})
+	// A commit with no change has no patch-id: whether it landed is unknown.
+	repo.git(time.Now().Add(-7*24*time.Hour), "commit", "-q", "--allow-empty", "-m", "Empty")
+	empty := repo.git(time.Now(), "rev-parse", "HEAD")
+	f.printed("empty", empty, 7)
 	// Two sessions printed one commit, which one of them also has as its
 	// copy on mainline: each keeps its link, and the copy keeps the
 	// printed hash's evidence.
@@ -214,6 +246,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 		"direct": direct[:7] + " transcript 1", "inferred": inferred[:7] + " inferred 0.7", "narrow": narrow[:7] + " inferred 0.5",
 		"reverted": reverted[:7] + " inferred 0.7", "undone": undone[:7] + " inferred 0.7", "branch": branch[:7] + " inferred 0.7", "picked": copied[:7] + " inferred 0.7", "squashed": squashed[:7] + " inferred 0.7",
 		"early": early[:7] + " transcript 1", "printer": printedCopy[:7] + " transcript 1", "printer-too": printed[:7] + " transcript 1", "detached": detached[:7] + " transcript 1",
+		"empty": empty[:7] + " transcript 1",
 	} {
 		if strings.Join(links[id], ", ") != want {
 			t.Errorf("%s links: %v, want %s", id, links[id], want)
@@ -227,6 +260,9 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	if notes := repo.git(time.Now(), "for-each-ref", "refs/notes"); notes != "" {
 		t.Fatalf("a scan wrote notes: %s", notes)
 	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Fatal("a scan ran the repository's signature program")
+	}
 	// A candidate link is kept but counts toward nothing.
 	if linked := countRows(t, f.catalog, `SELECT linked_commits FROM session_git WHERE workspace_id='narrow'`); linked != 0 {
 		t.Fatalf("narrow counts %d linked commits", linked)
@@ -235,6 +271,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	for id, want := range map[string]string{
 		"direct": "landed", "inferred": "landed", "narrow": "changed_kept", "picked": "landed", "squashed": "landed", "branch": "committed",
 		"reverted": "reworked", "undone": "reworked", "stale": "changed_kept", "wide": "changed_kept", "late": "changed_recent",
+		"empty": "committed",
 	} {
 		if labels[id][0] != want {
 			t.Errorf("%s: %s, want %s (%s)", id, labels[id][0], want, labels[id][1])
@@ -244,6 +281,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 		"direct":   "1 of its 1 linked commit reached mainline (local Git).",
 		"branch":   "1 linked commit, not on mainline (local Git).",
 		"reverted": "A later commit reverted 1 of its 1 linked commit (local Git).",
+		"empty":    "1 linked commit; mainline could not be checked (local Git).",
 	} {
 		if labels[id][1] != want {
 			t.Errorf("%s evidence: %q, want %q", id, labels[id][1], want)
