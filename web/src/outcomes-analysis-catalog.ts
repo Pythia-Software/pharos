@@ -11,7 +11,7 @@ import { formatUSD } from "./currency";
 // judged workspaces, and the rework rate only lines whose window has closed,
 // so a recent change is never counted as not kept.
 
-const count = { kind: "number", decimals: 0 } as const, usd = { kind: "number", decimals: 2 } as const, percent = { kind: "percent", decimals: 1 } as const;
+const count = { kind: "number", decimals: 0 } as const, usd = { kind: "currency", currency: "USD" } as const, percent = { kind: "percent", decimals: 1 } as const;
 const repository: WhereTerm[] = [{ field: "project_kind", op: "=", value: "repository" }];
 
 const measures: Record<string, AnalysisMeasure> = {

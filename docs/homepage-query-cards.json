@@ -11609,8 +11609,8 @@
               "decimals": 0
             },
             "yFormat": {
-              "kind": "number",
-              "decimals": 2
+              "kind": "currency",
+              "currency": "USD"
             }
           }
         }
@@ -15313,8 +15313,8 @@
               "decimals": 0
             },
             "yFormat": {
-              "kind": "number",
-              "decimals": 2
+              "kind": "currency",
+              "currency": "USD"
             }
           }
         }
@@ -22797,8 +22797,8 @@
               "decimals": 0
             },
             "yFormat": {
-              "kind": "number",
-              "decimals": 2
+              "kind": "currency",
+              "currency": "USD"
             }
           }
         }

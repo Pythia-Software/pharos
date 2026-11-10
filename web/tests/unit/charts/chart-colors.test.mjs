@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import catalog from '../../../../pricing/model_colors.json';
 import prices from '../../../../pricing/cost_changes.json';
-import { chartSeriesStyle, colorFields, hourOfDayColors, metricSeriesColor, modelColorKey, otherSeriesColor } from '../../../src/chart-colors';
+import { chartSeriesStyle, colorFields, hourOfDayColors, keyColorTheme, metricSeriesColor, modelColorKey, otherSeriesColor } from '../../../src/chart-colors';
 import { orderedValues } from '../../../src/session-shape-bands';
 import { foldSeries } from '../../../src/chart-series';
 const bucketKey = '2026-10-01';
@@ -115,6 +115,18 @@ test('compound model groups keep catalog model colors regardless of label or key
   assert.equal(metricSeriesColor(['provider', 'model_family', 'agent_session_id'], ['claude', 'opus-5-5', 'session']), expected);
   assert.equal(metricSeriesColor(['root_provider', 'root_model_family', 'root_effort'], ['claude', 'opus-5-5', 'high']), expected);
   assert.equal(metricSeriesColor(['effort'], ['high']), chartSeriesStyle('effort', 'high').color);
+});
+
+test('a grouping by several keys colours each bar by its palette key, an event kind before a repository', () => {
+  const buckets = [{ keys: ['alpha', 'env_friction'] }, { keys: ['beta', 'env_friction'] }, { keys: ['beta', 'stale_guidance'] }];
+  const theme = keyColorTheme(['repository_name', 'family'], buckets);
+  assert.equal(theme.colorBy, 'family');
+  assert.deepEqual(theme.dimensions.family.overrides, ['env_friction', 'stale_guidance'].map(value => ({ value, color: chartSeriesStyle('family', value).color })));
+  // The compact covers pick the same key.
+  assert.equal(metricSeriesColor(['repository_name', 'family'], ['beta', 'env_friction']), chartSeriesStyle('family', 'env_friction').color);
+  assert.equal(keyColorTheme(['repository_name', 'model_family'], [{ keys: ['repo', 'opus-5-5'] }]).colorBy, 'model_family');
+  assert.equal(keyColorTheme(['family'], buckets), undefined, 'one key keeps its own colours');
+  assert.equal(keyColorTheme(['tool_name', 'agent_session_id'], buckets), undefined, 'no palette key keeps whole-group colours');
 });
 
 test('effort levels use a sequential palette that darkens with effort and keeps unknown neutral', () => {

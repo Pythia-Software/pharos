@@ -200,9 +200,20 @@ func TestAgentEventRatesKeepTheirDenominators(t *testing.T) {
 		}
 		return math.NaN()
 	}
-	rate := qt.AggSpec{ID: "rate", Expression: "SUM([events])/NULLIF(COUNT_DISTINCT([message_id])/1000,0)"}
-	turns := qt.AggSpec{ID: "turns", Expression: "COUNT_DISTINCT(IF([events]>0,[turn_id],NULL))/NULLIF(COUNT_DISTINCT([turn_id]),0)"}
+	// The dashboard's rates carry confidence intervals (Poisson for a rate,
+	// Wilson for a share), computed from the same parts.
+	rate := qt.AggSpec{ID: "rate", Expression: "SUM([events])/NULLIF(COUNT_DISTINCT([message_id])/1000,0)", Interval: &qt.MetricInterval{Kind: "rate"}}
+	turns := qt.AggSpec{ID: "turns", Expression: "COUNT_DISTINCT(IF([events]>0,[turn_id],NULL))/NULLIF(COUNT_DISTINCT([turn_id]),0)", Interval: &qt.MetricInterval{Kind: "proportion"}}
 	read := qt.AggSpec{ID: "read", Op: "count_distinct", Field: "message_id"}
+	bounded := func(metric qt.MetricResult) {
+		t.Helper()
+		for _, bucket := range metric.Buckets {
+			v := floatOr(bucket.Value)
+			if bucket.IntervalError != "" || bucket.Lower == nil || bucket.Upper == nil || *bucket.Lower > v || v > *bucket.Upper || *bucket.Lower == *bucket.Upper {
+				t.Fatalf("%s %v: value %v, interval %v–%v %q", metric.ID, bucket.Keys, v, bucket.Lower, bucket.Upper, bucket.IntervalError)
+			}
+		}
+	}
 
 	all := metrics(nil, nil, rate, turns, read)
 	// Four events of reported kinds over four messages, in all three turns.
@@ -212,6 +223,12 @@ func TestAgentEventRatesKeepTheirDenominators(t *testing.T) {
 	obstacles := metrics([]qt.WhereTerm{{Field: "family", Op: "=", Value: "obstacle"}}, nil, rate, turns, read)
 	if value(obstacles[0]) != 500 || value(obstacles[1]) != 1.0/3 || value(obstacles[2]) != 4 {
 		t.Fatalf("obstacles: rate %v, turns %v, read %v", value(obstacles[0]), value(obstacles[1]), value(obstacles[2]))
+	}
+	bounded(obstacles[0])
+	bounded(obstacles[1])
+	// Wilson's 95% interval for one turn of three.
+	if lower, upper := *obstacles[1].Buckets[0].Lower, *obstacles[1].Buckets[0].Upper; math.Abs(lower-0.0615) > 0.001 || math.Abs(upper-0.7923) > 0.001 {
+		t.Fatalf("one turn of three: %v–%v", lower, upper)
 	}
 	byKind := metrics(nil, []string{"family"}, rate, read)
 	if value(byKind[0], "obstacle") != 500 || value(byKind[0], "stuck") != 250 || value(byKind[0], "discovery") != 0 || value(byKind[1], "discovery") != 4 {
