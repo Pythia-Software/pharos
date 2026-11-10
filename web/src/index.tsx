@@ -939,9 +939,9 @@ function FindMatchCell({ row }: { row: Row }) {
   if (!hit) return null;
   const count = Number(row.find_match_count) || 1;
   const open = <button type="button" className="library-find-cell" title={`${findHitText(hit)}\n\n${count.toLocaleString()} match${count === 1 ? "" : "es"} · ${findHitLabel(hit)}`} onClick={event => { event.stopPropagation(); openFindHit(hit); }}>Open match{count > 1 ? ` (${count.toLocaleString()})` : ""}</button>;
-  // A file sessions edited opens its history: every session and commit.
+  // A file agents edited opens its history: every workspace and commit.
   if (!hit.path || !hit.project) return open;
-  return <>{open} <PageLink className="library-find-cell" href={fileHistoryURL(hit.path, hit.project)} title={`Every session that edited ${hit.path}`} onClick={event => event.stopPropagation()}>File history</PageLink></>;
+  return <>{open} <PageLink className="library-find-cell" href={fileHistoryURL(hit.path, hit.project)} title={`Every workspace whose agents edited ${hit.path}`} onClick={event => event.stopPropagation()}>File history</PageLink></>;
 }
 
 // Search's content search (messages, files or URLs) and its result view are

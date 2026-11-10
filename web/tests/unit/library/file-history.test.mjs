@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { commitState, fileHistoryURL, gitText, linesText, linkText, readFileHistoryRoute } from "../../../src/file-history-model";
+import { commitState, fileHistoryNotice, fileHistoryURL, gitText, linesText, linkText, readFileHistoryRoute } from "../../../src/file-history-model";
 
 test("a file history link reads back, with or without its project", () => {
   for (const [path, project] of [["src/main.go", "pharos"], ["~/notes/plan & ideas.md", ""]]) {
@@ -15,6 +15,8 @@ test("missing Git facts read as not applicable or not checked, never as none", (
   assert.equal(gitText({ status: "not_checked", reason: "Local Git has not checked this repository on this Mac yet." }, 0), "Local Git has not checked this repository on this Mac yet.");
   assert.match(gitText({ status: "checked" }, 0), /no commit/);
   assert.match(gitText({ status: "checked" }, 2), /^2 commits/);
+  // A list cut at its bound counts only the commits shown.
+  assert.match(gitText({ status: "checked", commits_since: "2026-09-01T10:00:00Z", commits_truncated: true }, 200), /^The 200 commits that most recently changed this file/);
   // Git is read from the first session edit: an empty list says since when.
   assert.match(gitText({ status: "checked", commits_since: "2026-09-01T10:00:00Z" }, 0), /no commit of this file since 2026-09-01\. Earlier commits are not read/);
   // A tool that recorded no counts is not a change of zero lines.
@@ -27,5 +29,12 @@ test("a commit's state and its session links", () => {
   assert.equal(commitState({ hash: "a", on_mainline: false, sessions: [] }), "not on mainline");
   assert.equal(commitState({ hash: "a", on_mainline: null, sessions: [] }), "");
   assert.equal(linkText({ workspace_id: "w", method: "inferred", confidence: 0.5, counted: false }), "candidate, inferred from its edits");
-  assert.equal(linkText({ workspace_id: "w", method: "transcript", confidence: 1, counted: true }), "printed by the session");
+  assert.equal(linkText({ workspace_id: "w", method: "transcript", confidence: 1, counted: true }), "printed in its transcript");
+});
+
+test("the service's note shows when no file matched or more matched than are listed", () => {
+  const file = { file_key: "k", path: "a.go", sessions: [], commits: [], git: { status: "not_applicable" } };
+  assert.equal(fileHistoryNotice({ path: "a.go", files: [], note: "none" }), "none");
+  assert.equal(fileHistoryNotice({ path: "a.go", files: [file], note: "listed" }), "");
+  assert.equal(fileHistoryNotice({ path: "a.go", files: [file], files_truncated: true, note: "more" }), "more");
 });
