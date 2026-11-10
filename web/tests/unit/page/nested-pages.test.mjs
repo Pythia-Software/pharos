@@ -141,6 +141,14 @@ test("navigation groups preserve each section's choices independently of their d
   const opened = toggleNavigationSection({}, 'analyze', 'dashboard-group:people', false);
   assert.equal(isNavigationSectionExpanded(opened.analyze, 'dashboard-group:people', false), true);
   assert.equal(isNavigationSectionExpanded(nested.analyze, 'dashboard-group:people', true), false, 'explicit choices override the current-page default');
+  // Links from before the groups were renamed (dashboards:<group>) keep their
+  // choices; a new choice is recorded under the group's id and wins.
+  const legacy = { 'dashboards:people': false, 'dashboards:agents': false, 'dashboards:outcomes': false };
+  for (const group of ['people', 'agents', 'outcomes']) assert.equal(isNavigationSectionExpanded(legacy, `dashboard-group:${group}`), false, group);
+  const reopenedLegacy = toggleNavigationSection({ analyze: legacy }, 'analyze', 'dashboard-group:outcomes');
+  assert.equal(isNavigationSectionExpanded(reopenedLegacy.analyze, 'dashboard-group:outcomes'), true);
+  assert.equal(isNavigationSectionExpanded(reopenedLegacy.analyze, 'dashboard-group:people'), false);
+  assert.equal(isNavigationSectionExpanded(legacy, 'dashboards'), true, 'only the renamed groups read an old key');
 });
 
 test("local page navigation preserves the complete destination and browser link semantics", () => {

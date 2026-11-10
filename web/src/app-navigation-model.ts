@@ -87,9 +87,17 @@ export function analyzePages(params: URLSearchParams, previews = agentEventsEnab
 export type AppSection = { id: string; label: string; href: string; pages: readonly NestedPage[] };
 export type NavigationExpansion = Readonly<Record<string, Readonly<Record<string, boolean>>>>;
 
+// Dashboard groups were keyed dashboards:<group> until the Outcomes dashboard
+// took dashboards:outcomes. An old nav_expanded link still keeps its choice: a
+// dashboard is a page without children, so it never reads its own key.
+const legacyNavigationIds: Readonly<Record<string, string>> = {
+  "dashboard-group:people": "dashboards:people", "dashboard-group:agents": "dashboards:agents", "dashboard-group:outcomes": "dashboards:outcomes",
+};
+
 /** Keep explicit choices; deeper groups can default to the current page's path. */
 export function isNavigationSectionExpanded(expansion: NavigationExpansion[string], page: string, defaultOpen = true): boolean {
-  return expansion[page] ?? defaultOpen;
+  const legacy = Object.hasOwn(legacyNavigationIds, page) ? legacyNavigationIds[page]! : undefined;
+  return expansion[page] ?? (legacy === undefined ? undefined : expansion[legacy]) ?? defaultOpen;
 }
 
 export function toggleNavigationSection(expansion: NavigationExpansion, section: string, page: string, defaultOpen = true): NavigationExpansion {
