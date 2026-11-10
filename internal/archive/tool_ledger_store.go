@@ -16,6 +16,11 @@ import (
 // and their derivation.
 const toolRollupVersion = "rollup-v7-projects"
 
+// toolQueryFactsVersion names the tool_query_facts layout. It once followed
+// toolRollupVersion; the facts hold no workspace or project columns, so the
+// rollup's later versions leave it, and its complete index, alone.
+const toolQueryFactsVersion = "rollup-v6-origins"
+
 // toolLedgerState tracks the in-process ledger backfill and rollup rebuilds.
 type toolLedgerState struct {
 	backfill    sync.Mutex

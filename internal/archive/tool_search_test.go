@@ -254,7 +254,7 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 			if dataset == "tool_calls" {
 				// Upgrade a previous facts version in bounded batches, retaining
 				// scalar availability until the local calendar is complete.
-				if _, err := c.DB.Exec("UPDATE tool_query_facts SET day=NULL; UPDATE meta SET value=? WHERE key='tool_query_facts_ready'", toolRollupVersion); err != nil {
+				if _, err := c.DB.Exec("UPDATE tool_query_facts SET day=NULL; UPDATE meta SET value=? WHERE key='tool_query_facts_ready'", toolQueryFactsVersion); err != nil {
 					t.Fatal(err)
 				}
 				prior, err := c.queryTextDataset(t.Context(), dataset, table)
