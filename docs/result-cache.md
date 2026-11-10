@@ -111,7 +111,7 @@ A domain is one kind of response. Today there is one:
 
 | Domain | What it stores | Stamp | Maximum age for clock-relative requests |
 |---|---|---|---|
-| `query-v3` | `POST /api/query/{dataset}/query-v3` responses | the dataset's cached-view generation (core, events or all; see `queryDatasetGeneration`), the service's time zone and the running build (an update can change an answer without changing a row) and the saved settings the service applies itself (`queryResultSettings`: the Parallelism and Habits settings) | 10 minutes |
+| `query-v3` | `POST /api/query/{dataset}/query-v3` responses | the dataset's cached-view generation (core, events or all; see `queryDatasetGeneration`), the service's time zone and the running build (an update can change an answer without changing a row) the saved settings the service applies itself (`queryResultSettings`: the Parallelism and Habits settings), and for MCP calls the newest logged call (`queryResultLedgers`: the call log is outside the generation, so an agent's calls do not make other views stale) | 10 minutes |
 
 Query requests are made independent of the clock in two ways. `now` is left
 out of the key. A filter value that is an instant a whole number of hours

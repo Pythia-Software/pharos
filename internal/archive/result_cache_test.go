@@ -304,6 +304,29 @@ func TestQueryResultsAreCached(t *testing.T) {
 			t.Fatalf("after a saved setting, %s answered %s, want %s", want[0], w.Header().Get(resultCacheHeader), want[1])
 		}
 	}
+	// A dataset read from a log outside the generation is stale once the
+	// log gains a row, and nothing else is.
+	calls := func() *httptest.ResponseRecorder {
+		return cachedCall(t, server, config.APIToken, "/api/query/mcp_calls/query-v3", resultCached, ungroupedRowsRequest(time.Now()))
+	}
+	logCall := func() {
+		if _, err := catalog.DB.Exec(`INSERT INTO mcp_calls(called_at,tool_name,arguments_json,status,duration_ms,response_bytes,estimated_output_tokens,truncated) VALUES(?,'search_conversations','{}','ok',1,1,1,0)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logCall()
+	for _, want := range []string{"live", "fresh"} {
+		if w := calls(); w.Code != 200 || w.Header().Get(resultCacheHeader) != want {
+			t.Fatalf("MCP calls: %d %v %s, want %s", w.Code, w.Header(), w.Body.String(), want)
+		}
+	}
+	logCall()
+	if w := calls(); w.Header().Get(resultCacheHeader) != "stale" {
+		t.Fatalf("after an MCP call, the stored answer is %s", w.Header().Get(resultCacheHeader))
+	}
+	if w := cachedCall(t, server, config.APIToken, path, resultCached, request(time.Now())); w.Header().Get(resultCacheHeader) != "fresh" {
+		t.Fatalf("an MCP call made Library answers %s", w.Header().Get(resultCacheHeader))
+	}
 	// A window relative to now is the same entry at any clock, and says so.
 	for i, want := range []string{"live", "fresh"} {
 		rolling := request(time.Now().Add(time.Duration(i) * time.Minute))

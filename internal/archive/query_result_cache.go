@@ -54,6 +54,14 @@ var buildIdentity = sync.OnceValue(func() string {
 // starts reading another saved setting this way must add its key here.
 var queryResultSettings = []any{parallelismSettingsKey, habitsSettingsKey}
 
+// queryResultLedgers name the state of append-only logs outside the
+// cached-view generation, by scope (queryDatasetGeneration). The MCP call
+// log only gains rows, and trims its oldest in the same transaction, so its
+// newest id changes whenever its contents do.
+var queryResultLedgers = map[string]string{
+	generationMCPCalls: "SELECT COALESCE(MAX(id),0) FROM mcp_calls",
+}
+
 // queryResults caches query-v3 responses: a card's or a dashboard's request,
 // keyed by its dataset, URL parameters and body without the client's clock.
 // Its scope is the dataset's cache generation (queryDatasetGeneration), so a
@@ -79,7 +87,13 @@ var queryResults = registerResultDomain(&resultDomain{
 		err = s.Catalog.reader().QueryRowContext(ctx, `SELECT COALESCE(group_concat(key||'='||value, char(10)),'') FROM (SELECT key,value FROM ui_preferences WHERE key IN (`+
 			strings.TrimSuffix(strings.Repeat("?,", len(queryResultSettings)), ",")+`) ORDER BY key)`, queryResultSettings...).Scan(&settings)
 		saved := sha256.Sum256([]byte(settings))
-		return strconv.FormatInt(generation, 10) + " " + localZoneIdentity(time.Now()) + " " + buildIdentity() + " " + hex.EncodeToString(saved[:6]), err
+		stamp := strconv.FormatInt(generation, 10) + " " + localZoneIdentity(time.Now()) + " " + buildIdentity() + " " + hex.EncodeToString(saved[:6])
+		if ledger := queryResultLedgers[scope]; ledger != "" && err == nil {
+			var latest int64
+			err = s.Catalog.reader().QueryRowContext(ctx, ledger).Scan(&latest)
+			stamp += " " + scope + "=" + strconv.FormatInt(latest, 10)
+		}
+		return stamp, err
 	},
 	build: func(ctx context.Context, s *Server, replay []byte, now time.Time) ([]byte, error) {
 		var stored queryReplay
