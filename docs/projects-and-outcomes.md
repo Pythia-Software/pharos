@@ -78,11 +78,15 @@ These columns are derived and are written only by ingest and maintenance,
 never by a request:
 
 - Ingest sets them for each workspace it writes.
-- When a repository gains checkout locations, workspaces in those folders
-  are resolved again.
+- When a repository gains checkout locations, the workspaces without a
+  repository whose folders are at or under them are resolved again (all of
+  `/tmp` when a checkout is in a temporary directory). Other folders cannot
+  change, so ingest's write transaction reads only these, by an index on
+  `project_folder`.
 - A repository merge moves `folder_repository_id` to the survivor.
 - Capture recovery, which restores repositories without that writer,
-  resolves folder workspaces again when it changes any checkout.
+  resolves again the folder workspaces under each checkout it adds or
+  removes.
 - A build from before projects can still write to the catalog (the schema
   version is unchanged), leaving the columns missing or stale. Each build's
   first open derives them for every workspace, and the identities stage of

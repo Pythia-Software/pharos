@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -151,22 +152,56 @@ func resolveProjects(ctx context.Context, tx *sql.Tx, predicate string, args ...
 }
 
 // resolveFolderProjects resolves again the workspaces without a repository
-// once repositories gained checkouts, since a folder may now be one of them.
-func resolveFolderProjects(ctx context.Context, tx *sql.Tx, added []string) error {
-	if len(added) == 0 {
+// whose folders are at or under the given checkout paths, since a folder may
+// now be in one of those checkouts. A folder elsewhere keeps its nearest
+// checkout, so only these can change. It runs inside ingest's writer, so it
+// reads only those workspaces (by workspaces_project_folder_idx).
+func resolveFolderProjects(ctx context.Context, tx *sql.Tx, paths []string) error {
+	keys := []string{}
+	for _, path := range paths {
+		if key := folderKey(path); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	temporary := false
+	for index, key := range keys {
+		if index > 0 && key == keys[index-1] {
+			continue
+		}
+		// A checkout at the home directory or at / claims only itself.
+		predicate, args := `w.project_folder=?`, []any{key}
+		if key != "~" && key != "/" {
+			predicate, args = `(w.project_folder=? OR w.project_folder>=? AND w.project_folder<?)`, []any{key, key + "/", key + "0"}
+		}
+		if err := resolveProjects(ctx, tx, `w.repository_id IS NULL AND w.location IS NOT NULL AND `+predicate, args...); err != nil {
+			return err
+		}
+		// Every temporary directory is the one /tmp project, which these
+		// ranges cannot see into.
+		for _, folder := range temporaryFolders {
+			temporary = temporary || folder == key || strings.HasPrefix(folder, strings.TrimSuffix(key, "/")+"/") || strings.HasPrefix(key, folder+"/")
+		}
+	}
+	if !temporary {
 		return nil
 	}
-	return resolveProjects(ctx, tx, `w.repository_id IS NULL AND w.location IS NOT NULL`)
+	return resolveProjects(ctx, tx, `w.repository_id IS NULL AND w.location IS NOT NULL AND w.project_folder='/tmp'`)
 }
 
-// repositoryCheckouts is every repository's checkouts, to tell whether a
-// write that bypasses upsertRepositoryChanges added any.
-func repositoryCheckouts(ctx context.Context, q queryer) (string, error) {
-	rows, err := queryMapsContext(ctx, q, `SELECT COALESCE(group_concat(id||'='||COALESCE(local_locations_json,''),char(10)),'') checkouts FROM (SELECT id,local_locations_json FROM repositories ORDER BY id)`)
-	if err != nil || len(rows) == 0 {
-		return "", err
+// changedRoots is the folders of the checkouts in one list of roots and not
+// the other, to tell which folders a write that bypasses
+// upsertRepositoryChanges may have moved into or out of a repository.
+func changedRoots(before, after []projectRoot) []string {
+	changed := []string{}
+	for _, pair := range [][2][]projectRoot{{before, after}, {after, before}} {
+		for _, root := range pair[0] {
+			if !slices.Contains(pair[1], root) {
+				changed = append(changed, root.folder)
+			}
+		}
 	}
-	return firstString(rows[0]["checkouts"]), nil
+	return changed
 }
 
 // migrateProjects adds the project columns and derives them for every
@@ -184,6 +219,10 @@ func (c *Catalog) migrateProjects() error {
 				return err
 			}
 		}
+	}
+	// resolveFolderProjects reads folders of one checkout by this index.
+	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS workspaces_project_folder_idx ON workspaces(project_folder) WHERE repository_id IS NULL`); err != nil {
+		return err
 	}
 	tx, err := c.DB.Begin()
 	if err != nil {

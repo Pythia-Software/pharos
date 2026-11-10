@@ -399,7 +399,7 @@ func (c *Catalog) applyHistoryRecovery(ctx context.Context, e historyRecovery) (
 			outcome = "unresolved-original-host"
 			return nil
 		}
-		checkouts, err := repositoryCheckouts(ctx, tx)
+		checkouts, err := projectRoots(ctx, tx)
 		if err != nil {
 			return err
 		}
@@ -440,14 +440,12 @@ func (c *Catalog) applyHistoryRecovery(ctx context.Context, e historyRecovery) (
 		}
 		// Restored repositories bypass the writer that reports new checkouts,
 		// so folder sessions recovered earlier may now be inside one.
-		restored, err := repositoryCheckouts(ctx, tx)
+		restored, err := projectRoots(ctx, tx)
 		if err != nil {
 			return err
 		}
-		if restored != checkouts {
-			if err = resolveFolderProjects(ctx, tx, []string{restored}); err != nil {
-				return err
-			}
+		if err = resolveFolderProjects(ctx, tx, changedRoots(checkouts, restored)); err != nil {
+			return err
 		}
 		// The ordinary writer necessarily observes this whole core under one
 		// host. Replace those generated observations with the exact original

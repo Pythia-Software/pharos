@@ -99,10 +99,18 @@ func TestProjectsFolderBecomesRepository(t *testing.T) {
 		t.Fatalf("plain folder: %#v", notes)
 	}
 
+	// The new checkout resolves again only the folders inside it: a stale
+	// row elsewhere is left for the repair pass, not read under the writer.
+	execTx(t, library.catalog.DB, `UPDATE workspaces SET folder_repository_id='stale' WHERE source_id='s-notes'`)
 	later := library.folders["later"]
 	gitInit(t, later)
 	writeClaudeSession(t, library.claude, "s-later-git", claudeSession("s-later-git", later, "main", "Keep drafting", 20))
 	library.ingestClaude(t)
+	var stale string
+	if err := library.catalog.DB.QueryRow(`SELECT COALESCE(folder_repository_id,'') FROM workspaces WHERE source_id='s-notes'`).Scan(&stale); err != nil || stale != "stale" {
+		t.Fatalf("a folder outside the new checkout was resolved again: %q %v", stale, err)
+	}
+	execTx(t, library.catalog.DB, `UPDATE workspaces SET folder_repository_id=NULL WHERE source_id='s-notes'`)
 	projects = library.projects(t)
 	repository := projects["s-later-git"]
 	if repository["project_kind"] != "repository" || repository["project_name"] != "later" {
@@ -185,5 +193,30 @@ func TestProjectsRecoveredInAnyOrder(t *testing.T) {
 	got := projectLibrary{catalog: fresh}.projects(t)
 	if got["s-later"]["project_id"] != want["s-later-git"]["project_id"] || got["s-later"]["project_kind"] != "repository" {
 		t.Fatalf("recovered folder session: %#v", got["s-later"])
+	}
+}
+
+// A new checkout resolves again the folders at or under it, including the
+// temporary directories that are all one /tmp project, and no others.
+func TestResolveFolderProjectsBounds(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	execTx(t, catalog.DB,
+		`INSERT INTO repositories(id,display_name,local_locations_json,created_at,updated_at) VALUES
+			('r-tmp','build','["/tmp/build/app"]','x','x'),('r-app','app','["/Users/someone/app"]','x','x')`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,location,project_folder,folder_repository_id,indexed_at) VALUES
+			('w-tmp','claude','local','s-tmp','T','/tmp/build/app/sub','/tmp',NULL,'x'),
+			('w-app','claude','local','s-app','A','/Users/other/app/docs','~/app/docs',NULL,'x'),
+			('w-near','claude','local','s-near','N','/Users/other/application','~/application','stale','x'),
+			('w-else','claude','local','s-else','E','/srv/else','/srv/else','stale','x')`)
+	tx := seedTx(t, catalog.DB)
+	defer tx.Rollback()
+	if err := resolveFolderProjects(t.Context(), tx, changedRoots(nil, []projectRoot{{"/tmp/build/app", "r-tmp"}, {"~/app", "r-app"}})); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"w-tmp": "r-tmp", "w-app": "r-app", "w-near": "stale", "w-else": "stale"} {
+		var got string
+		if err := tx.QueryRow(`SELECT COALESCE(folder_repository_id,'') FROM workspaces WHERE id=?`, id).Scan(&got); err != nil || got != want {
+			t.Errorf("%s: %q %v, want %q", id, got, err, want)
+		}
 	}
 }
