@@ -36,7 +36,11 @@ type sqlDataset struct {
 	timestamps map[string]string
 	// lookups are fields with an index that finds their few rows directly,
 	// such as IDs; filters on other fields are marked likely() (see where).
-	lookups           map[string]bool
+	lookups map[string]bool
+	// exact are fields whose column is plain text compared byte for byte
+	// (BINARY collation), so the source can apply an equality or inequality
+	// with a non-empty value itself, before its joins.
+	exact             map[string]bool
 	toolSearchIndexed bool            // the command trigram index is complete
 	queryText         *queryTextIndex // complete, normalized exact substring membership
 	scalarFacts       bool            // complete compact per-call time/activity projection

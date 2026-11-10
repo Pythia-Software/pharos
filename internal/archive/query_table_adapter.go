@@ -166,6 +166,16 @@ func (d sqlDataset) candidateQuerySource(schema qt.Schema, terms []qt.WhereTerm,
 					(schema.Fields[clause.Field].Kind == qt.FieldText || schema.Fields[clause.Field].Kind == qt.FieldEnum) {
 					predicate = d.columns[clause.Field] + "=" + bind(clause.Value)
 				}
+				if !clause.Negated && (clause.Op == "=" || clause.Op == "!=") && clause.Value != "" && d.exact[clause.Field] && d.columns[clause.Field] != "" &&
+					(schema.Fields[clause.Field].Kind == qt.FieldText || schema.Fields[clause.Field].Kind == qt.FieldEnum) {
+					// Query Table compares COALESCE(field,''), so a missing
+					// value differs from every non-empty one.
+					operator := "="
+					if clause.Op == "!=" {
+						operator = " IS NOT "
+					}
+					predicate = d.columns[clause.Field] + operator + bind(clause.Value)
+				}
 				if clock != nil && !clause.Negated && d.timestamps[clause.Field] != "" && schema.Fields[clause.Field].Kind == qt.FieldDatetime {
 					if from, to, ok := indexedDatetimeBounds(clause, *clock); ok {
 						column := d.timestamps[clause.Field]

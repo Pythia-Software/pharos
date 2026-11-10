@@ -344,7 +344,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		// query generation (or stay in step with ones that do), so its
 		// counts are reusable within one. Staged rows are read outside the
 		// transaction, and record search gives each request its own plan.
-		d.PopulationCounter = s.Catalog.populationCounter(queryPopulationFastCounts(dataset, schema)...)
+		d.PopulationCounter = s.Catalog.populationCounter(queryPopulationFastCounts(dataset, schema, table)...)
 	}
 	var result qt.QueryResultV3
 	if dataset == "usage" && q.Grouping == nil && len(q.Metrics) > 0 {
