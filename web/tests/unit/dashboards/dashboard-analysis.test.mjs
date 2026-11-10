@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { core, schemas, recipeById, instantiateRecipe, cardCoverQuery } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { viewKeys, scatterUnitChange, viewChosen, changeState, aggregate, analysisResult, analysisLabels, analysisFields, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, availableViews, catalogProblems, cycleResult, normalizeAnalysis, switchView, trendUnavailable, validAnalysisState, viewOptions } from "../../../src/dashboard-analysis-model";
+import { viewKeys, chosenView, scatterUnitChange, viewChosen, changeState, aggregate, analysisResult, analysisLabels, analysisFields, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, availableViews, catalogProblems, cycleResult, normalizeAnalysis, switchView, trendUnavailable, validAnalysisState, viewOptions } from "../../../src/dashboard-analysis-model";
 import { humanAnalysisCatalog as human } from "../../../src/human-analysis-catalog";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { runAnalysisQuery } from "../../../src/analysis-request";
@@ -433,9 +433,17 @@ test('standalone scatter plots pair dashboard metrics and keep point-type change
   // Count each changes the data the chart holds and no view setting: the
   // reader has still chosen none, so Reset view stays hidden.
   const asked = {v:3,view:'scatter',unit:'conversation',metric:'human_typed',metricY:'tokens_cost',split:'provider'};
-  const counted = changeState(scatter, asked, scatterUnitChange(scatter, normalizeAnalysis(scatter, asked), 'work'));
+  const counted = changeState(scatter, asked, scatterUnitChange(scatter, asked, 'work'));
   assert.deepEqual(JSON.parse(JSON.stringify(counted)), {...asked, unit:'work', split:'none'});
   assert.equal(viewChosen(counted), false);
+  // Workspaces force the provider colour off; that is no breakdown the
+  // reader chose, so the scales they chose stay.
+  const scaled = {...asked, scale:'logarithmic', scaleY:'linear'};
+  const kept = changeState(scatter, scaled, scatterUnitChange(scatter, scaled, 'work'));
+  assert.deepEqual(JSON.parse(JSON.stringify(kept)), {...scaled, unit:'work', split:'none'});
+  assert.deepEqual(chosenView(kept), {scale:'logarithmic', scaleY:'linear'});
+  // Choosing a breakdown still returns the view to its defaults.
+  assert.equal(viewChosen(changeState(scatter, kept, {split:'provider'})), false);
   const session = normalizeAnalysis(scatter,{...state,unit:'agent_session',metricY:'session_shape_autonomy'});
   assert.equal(session.metric,'human_typed');
   assert.equal(session.metricY,'session_shape_autonomy');

@@ -4632,15 +4632,6 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "14b9a3c1acf649de:0",
-      "file": "web/src/dashboard-analysis.tsx",
-      "owner": "AnalysisControls",
-      "tag": "ChartSelect",
-      "control": "value={view.unit} onChange={next => set(catalog.dataset === \"scatter\" ? scatterUnitChange(catalog, view, next) : { unit: next })}",
-      "contract": "dashboard",
-      "reason": "The shared dashboard state writes committed point and axis choices into analyze_chart, restored by useUsageDashboardState. Metric suggestions filter by point type."
-    },
-    {
       "key": "1c41071e0b6e2887:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",
@@ -4810,6 +4801,15 @@
       "control": "value={view.scale!} onChange={scale => set({ scale })}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+    },
+    {
+      "key": "f7ca9a4ce5da25a0:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "AnalysisControls",
+      "tag": "ChartSelect",
+      "control": "value={view.unit} onChange={next => set(catalog.dataset === \"scatter\" ? scatterUnitChange(catalog, asked, next) : { unit: next })}",
+      "contract": "dashboard",
+      "reason": "The shared dashboard state writes committed point and axis choices into analyze_chart, restored by useUsageDashboardState. Metric suggestions filter by point type."
     },
     {
       "key": "4725800412da7d36:0",

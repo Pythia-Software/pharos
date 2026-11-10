@@ -62,8 +62,10 @@ export function AnalysisViewControl({ catalog, state, onChange }: { catalog: Ana
 // The population control, where the catalog has one, sits before Range.
 // chosen says whether the state asked for any view setting (viewChosen); the
 // View section then offers to return them to the chart's defaults.
-export function AnalysisControls({ catalog, view, chosen = false, set, onView, bounds, onRange, population }: {
-  catalog: AnalysisCatalog; view: ResolvedAnalysis; chosen?: boolean; set: (change: Partial<AnalysisState>) => void; onView?: (view: AnalysisView) => void;
+// view is the chart as drawn (normalized); asked is the state as asked for,
+// whose view settings are the reader's own choices.
+export function AnalysisControls({ catalog, view, asked, chosen = false, set, onView, bounds, onRange, population }: {
+  catalog: AnalysisCatalog; view: ResolvedAnalysis; asked: AnalysisState; chosen?: boolean; set: (change: Partial<AnalysisState>) => void; onView?: (view: AnalysisView) => void;
   bounds: TimeBounds; onRange: (from?: Date, to?: Date, preset?: ChartRange | "all") => void; population?: React.ReactNode;
 }) {
   const unit = view.unit === records ? undefined : catalog.units[view.unit];
@@ -81,7 +83,7 @@ export function AnalysisControls({ catalog, view, chosen = false, set, onView, b
   // and periods it covers.
   const data = <>
     {onView && catalog.views?.length !== 1 ? <AnalysisViewControl catalog={catalog} state={view} onChange={onView} /> : null}
-    {grouped ? <ChartSelect label="Count each" value={view.unit} options={view.view === "scatter" ? unitOptions.filter(([id]) => id !== records) : unitOptions} title="What one observation is" onChange={next => set(catalog.dataset === "scatter" ? scatterUnitChange(catalog, view, next) : { unit: next })} /> : null}
+    {grouped ? <ChartSelect label="Count each" value={view.unit} options={view.view === "scatter" ? unitOptions.filter(([id]) => id !== records) : unitOptions} title="What one observation is" onChange={next => set(catalog.dataset === "scatter" ? scatterUnitChange(catalog, asked, next) : { unit: next })} /> : null}
     {view.view === "scatter" && catalog.dataset === "scatter" ? <>
       <ScatterMetricPicker label="X axis" value={view.metric} other={view.metricY} unit={view.unit} catalog={catalog} onChange={metric => set({ metric })} />
       <ScatterMetricPicker label="Y axis" value={view.metricY} other={view.metric} unit={view.unit} catalog={catalog} onChange={metricY => set({ metricY })} />
@@ -193,7 +195,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   // Box and bar rows have a fixed pitch; give a full day of hours its rows.
   const tall = (clause.display?.kind === "box" || clause.display?.kind === "bar-horizontal") && (entry?.buckets.length ?? 0) > 16;
   const population = usePopulation(catalog, schema, where);
-  const controls = <AnalysisControls catalog={catalog} view={view} chosen={viewChosen(canonicalState(catalog, state))} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)}
+  const controls = <AnalysisControls catalog={catalog} view={view} asked={state} chosen={viewChosen(canonicalState(catalog, state))} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)}
     population={catalog.population ? <PopulationControl catalog={catalog} schema={schema} where={where} terms={population.terms} subjects={subjects} onFilter={onFilter} /> : undefined} />;
 
   return <section className="usage-analysis-dashboard" aria-label="Dashboard analysis" aria-busy={result.loading}>

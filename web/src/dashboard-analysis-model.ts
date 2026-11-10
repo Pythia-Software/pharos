@@ -472,10 +472,13 @@ export function readAnalysisLink<T extends AnalysisState>(catalog: AnalysisCatal
 
 // Scatter's Count each: a new unit may not offer either measure or the
 // colour, so the change takes the data fields a normalized state settles on,
-// and only those; the view stays as the reader left it, chosen or not.
+// and only those; the view stays as the reader left it, chosen or not. A
+// colour the unit forces off is no new breakdown the reader chose, so the
+// view settings they chose (in state as asked) come along rather than being
+// reset by changeState.
 export function scatterUnitChange(catalog: AnalysisCatalog, state: AnalysisState, unit: string): Partial<AnalysisState> {
   const { metric, metricY, split } = normalizeAnalysis(catalog, { ...state, unit });
-  return { unit, metric, metricY, split };
+  return { ...chosenView(state), unit, metric, metricY, split };
 }
 
 // A control's change, applied to the state as asked for rather than as drawn.
