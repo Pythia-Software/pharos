@@ -484,10 +484,14 @@ each branch. It follows CodeBurn's by-branch lens (see References).
   | Unknown branch | In a session that recorded a branch: usage before its first branch, on a detached HEAD, or not placed on a turn. Never relabelled as `main`. |
   | No branch data | A session that recorded no branch. |
 
+  Usage not placed on a turn is usage the transcript reports for a run or
+  the whole session rather than a request (a Claude Code cost-state, say),
+  usage without a timestamp, which the ledger places at the session's
+  start, and usage in an hour and model in which no turn recorded tokens.
+
   "Unknown branch" is wider than CodeBurn's "unknown, before first branch".
-  It also covers a detached HEAD and usage the transcript reports for the
-  whole session rather than a turn, such as a Claude Code cost-state
-  remainder. Neither can honestly be given a branch.
+  It also covers a detached HEAD and usage not placed on a turn. Neither
+  can honestly be given a branch.
 - **Git sessions only.** Sessions in folders, or without a project, are not
   in the dataset. A library without Git shows a note on the page instead of
   an empty chart.

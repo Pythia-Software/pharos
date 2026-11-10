@@ -1550,7 +1550,7 @@ function BranchesSummary({ where }: { where: WhereTerm[] }) {
   const result = useMetrics("branch_usage", where, branchSummaryMetrics);
   const coverage = branchCoverage(metricBuckets(result, "cost"));
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
-  const detail: Record<string, string> = { on_branch: "on a recorded branch", unknown: "before a session's first branch, or on a detached HEAD", no_branch_data: "in sessions that recorded no branch" };
+  const detail: Record<string, string> = { on_branch: "on a recorded branch", unknown: "before a session's first branch, on a detached HEAD, or not placed on a turn", no_branch_data: "in sessions that recorded no branch" };
   return <div className="mcp-metrics dashboard-stats" aria-label="Spend by branch coverage" aria-busy={result.loading}>
     {coverage.map(item => card(item.label, formatUSD(item.cost), `${outcomePercent(item.share)} of spend ${detail[item.coverage]}`))}
     {card("Branches", (Number(metricBuckets(result, "branches")[0]?.value) || 0).toLocaleString(), "with recorded spend, counted per project")}
