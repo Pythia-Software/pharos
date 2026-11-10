@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -134,26 +133,24 @@ func (b *askOutput) Write(p []byte) (int, error) {
 	}
 	return b.Buffer.Write(p)
 }
-func askCommand(ctx context.Context, path, dir string, args ...string) *exec.Cmd {
+
+// askCommand configures an Ask CLI to run in its own process group; it fails,
+// before anything starts, where that isolation is unavailable.
+func askCommand(ctx context.Context, path, dir string, args ...string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = dir
 	cmd.Env = cliEnvironment(path)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
+	if err := askProcessConfig(cmd); err != nil {
+		return nil, fmt.Errorf("cannot run %s: %w", filepath.Base(path), err)
 	}
 	cmd.WaitDelay = 2 * time.Second
-	return cmd
+	return cmd, nil
 }
 func askReadProtocol(ctx context.Context, path, dir string, args []string, messages []any, match func(map[string]json.RawMessage) bool) (map[string]json.RawMessage, error) {
-	cmd := askCommand(ctx, path, dir, args...)
+	cmd, err := askCommand(ctx, path, dir, args...)
+	if err != nil {
+		return nil, err
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -237,7 +234,10 @@ var askDiscoverModels = func(ctx context.Context, p askProvider) ([]askModel, er
 		}
 		return result, nil
 	case "Antigravity":
-		cmd := askCommand(ctx, p.path, dir, "models")
+		cmd, err := askCommand(ctx, p.path, dir, "models")
+		if err != nil {
+			return nil, err
+		}
 		var out askOutput
 		cmd.Stdout = &out
 		cmd.Stderr = io.Discard
@@ -509,7 +509,7 @@ Use only the pharos-ask MCP server, for archived work and for site links (browse
 			args = append(args, "--effort", strings.ToLower(s.Effort))
 		}
 	}
-	return askCommand(ctx, p.path, dir, args...), nil
+	return askCommand(ctx, p.path, dir, args...)
 }
 
 func askCheckAGYMCPPermissions() error {

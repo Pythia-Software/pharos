@@ -22,9 +22,9 @@ var metricDefinitions = []metricDefinition{
 	{"input_tokens", "tokens", "Reconciled input including cached input; aggregate-only breakdowns remain partial."},
 	{"output_tokens", "tokens", "Reconciled output including reported reasoning; reasoning is not added twice."},
 	{"cache_read_input_tokens", "tokens", "Cache-read portion of input; absence of reported usage is unknown."},
-	{"user_turn_count", "count", "Retained user messages of kind message, including harness-generated prompts."},
-	{"tool_call_count", "count", "Classified ledger calls including delegations; compound commands count once."},
-	{"tool_error_count", "count", "Classified ledger status error, not textual mentions or overall task outcome."},
+	{"user_turn_count", "count", "Retained user messages of kind message, including prompts supplied by the agent app."},
+	{"tool_call_count", "count", "Recorded tool calls including delegations; compound commands count once."},
+	{"tool_error_count", "count", "Calls recorded with error status, rather than mentions of errors in text or the overall task outcome."},
 	{"compaction_count", "count", "Attributed Claude boundaries and Codex triggers, excluding replayed events."},
 	{"wall_clock_span_seconds", "seconds", "Recorded start-to-end span including idle time; unfinished intervals are unknown."},
 }
@@ -320,7 +320,7 @@ func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, er
 			continue
 		}
 		switch field {
-		case "execution_machine_status", "channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind", "channel_status", "machine_status", "origin_conversation_id", "origin_evidence", "channels", "machines", "execution_machines", "workspace_id", "conversation_id", "conversation_ids", "conversation_count", "linked_conversation_ids", "mirrored_workspace_ids", "repository", "source", "model", "provider", "effort", "started_at", "activity_at", "coverage":
+		case "execution_machine_status", "channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind", "channel_status", "machine_status", "origin_conversation_id", "origin_evidence", "channels", "machines", "execution_machines", "workspace_id", "conversation_id", "conversation_ids", "conversation_count", "linked_conversation_ids", "mirrored_workspace_ids", "project", "repository", "source", "model", "provider", "effort", "started_at", "activity_at", "coverage":
 			if r.Entity == "workspace" && slices.Contains(originFields, field) {
 				return r, fmt.Errorf("field %s requires conversation entities; workspace membership is available as channels/machines", field)
 			}

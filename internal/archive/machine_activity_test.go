@@ -161,6 +161,7 @@ func TestMachineTimeMetricsBeyondTheGenericGroupBudget(t *testing.T) {
 		t.Fatalf("accelerated cube stopped at the generic budget: %d groups, %d calls, %q", len(cube.Buckets), calls(cube), cube.Error)
 	}
 	// Every metric uses the library group budget.
+	defaultMaxGroups := queryV3MaxGroups
 	override(t, &queryV3MaxGroups, 5)
 	limited := crossed
 	limited.GroupLimit = 1000
@@ -171,7 +172,7 @@ func TestMachineTimeMetricsBeyondTheGenericGroupBudget(t *testing.T) {
 	if over := metrics(nil, crossed)[0]; !strings.Contains(over.Error, "group population exceeds host budget") || len(over.Buckets) != 0 {
 		t.Fatalf("accelerated cube past its budget: %+v", over)
 	}
-	queryV3MaxGroups = 10_000
+	queryV3MaxGroups = defaultMaxGroups
 	midnight := func(month time.Month, day int) string {
 		return time.Date(2026, month, day, 0, 0, 0, 0, time.Local).Format(time.RFC3339)
 	}

@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // stringList is a repeatable flag.
@@ -258,8 +260,11 @@ func prepareLabelingDataset(ctx context.Context, opts labelingPrepareOptions, re
 		return nil, err
 	}
 	lock, err := fileLease(filepath.Join(opts.Dir, labelingLockFile), true)
-	if err != nil {
+	if errors.Is(err, filelock.ErrContended) {
 		return nil, fmt.Errorf("another labeling command is using %s", opts.Dir)
+	}
+	if err != nil {
+		return nil, err
 	}
 	defer lock.Close()
 	entries, err := os.ReadDir(opts.Dir)

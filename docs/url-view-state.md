@@ -53,8 +53,8 @@ The audit reviewed 178 disclosure/expansion source sites, including 41 previousl
 | Surface | Portable state |
 |---|---|
 | Layout settings | `menuBarPreferences`, `headerSettings`, `quickStatsSettings` |
-| Capture/index settings | `sync:separate`, `sync:repairs`, `sync:diagnostics`, `sync:forecast:<run ID>` |
-| Background schedule items | `background:<item ID>`; several rows may open together |
+| Capture/index settings | `sync:history`, `sync:sources`, `sync:repairs`, `sync:diagnostics`, `sync:forecast:<run ID>` |
+| Background schedule items | `background:<item ID>`; several rows may open together. The Work card's finished requests and export use `background:work:details` |
 | Connected cloud schedules | `cloud:schedule:<destination ID>`; IDs survive renaming and reordering |
 | Library health and app location | `library:drive-health`, `library:application` |
 | Drive-status sections | `overlay=drive` plus `status:cadence:<cadence ID>`, `status:support`, or `library:activity:<activity ID>:<started_at>:details` |
@@ -68,7 +68,66 @@ Draft controls are explicitly classified as editing: source/library onboarding; 
 
 `check-view-controls` now rejects native accordions, summaries, and `aria-expanded` controls classified only as `settings`. JSX expansion attributes and classic `setAttribute("aria-expanded", ...)` sites are included in the inventory. Static HTML `data-view-field` bindings are discovered directly, so settings values cannot accidentally hide a missing view binding in the review ledger. New controls still require individual review.
 
+## Timeline Key
+
+The **Key** button switches between the labeled, nested Key and a compact
+icon-only strip. Compact keeps every swatch and event symbol, including the
+arc and hollow no-target marker. Hovering an icon immediately names it;
+clicking opens the same visibility menu. Arc/no-target explanation icons open
+the Agent events section menu. `disclosures["timeline-key"]` stores the
+presentation (`true` for labeled, the default; `false` for compact), so copied
+links, reloads and browser history restore it alongside visibility selections.
+
+Beside a conversation, the sidebar timeline uses a read-only icon-only Key,
+regardless of the full Timeline's `timeline-key` disclosure. The preview does
+not write that disclosure. Hover names remain available above the preview's
+activation surface; clicking Key or an icon opens the full Timeline without
+changing visibility. `timeline_visibility` remains shared when entering a
+conversation, returning to the workspace, reloading or following history.
+
+The shared legend menu shows **Hide** and **Hide others** for a visible value,
+and **Show** and **Show and Hide Others** for a hidden value. A mixed category
+shows **Show N values** and **Hide M values**, using its hidden and visible
+child counts. **Show All** follows a separator whenever values are hidden.
+Hide/Show retain unrelated choices; Hide others isolates that value or group.
+On the timeline, Show All restores the whole Key. Hidden values keep their
+muted swatches in both presentations so they can be shown again.
+
+`timeline_visibility` stores independent `modes`, `events`, `tools` and `origins`
+selections. The optional `sections` selection controls whole layers by those
+same IDs. Section headings can show only that layer, add or remove it, exclude
+it, or reset the whole Key. Showing or adding a whole section includes all its
+values; individual menus still control values within a section. Each selection
+has `{values: string[], excluded: boolean}`;
+an absent section or empty values shows everything in that section, unless
+`allHidden:true` explicitly hides everything (with empty values and
+`excluded:false`). This keeps hiding the last visible value from resetting
+the selection. Values use
+stable message-label IDs (`?` for uncategorized), event-group keys, tool-category
+IDs (`error` for failed calls), or caller-source IDs. The selection filters
+ribbon spans, event arcs and markers, counts and inspection targets together.
+Original timing, zoom, idle compression and retained records remain unchanged.
+Caller-source filtering preserves each run's original portion of the message.
+
 ## Agent interface
+
+Workspace navigation scopes native `conversation`, `message`, `call`, and `at`
+references to their source workspace. Opening a different workspace or leaving
+the reader drops those selections, local event IDs, session selections, timeline
+bounds, and pagination. Presentation preferences and maps keyed by stable content
+identities can survive navigation; Back/Forward restores the original URL.
+Explicit copied links retain their own selections. A mismatched saved link
+resolves the conversation's current workspace before mounting the reader, and
+an unavailable conversation or message is reported visibly.
+
+Conversation-only `/conversation/{id}` links use the service's current-workspace
+redirect. Source-message links use the source message's recorded workspace;
+when only its conversation identity is known, they use that redirect rather
+than borrowing a containing conversation's workspace. Pending workspace reads
+are cancelled when another page or workspace takes ownership of the view, so
+late overview, resolution and transcript responses cannot replace it.
+
+On work pages, **Hierarchy & usage** uses `delegation_scope=self|all` for both its visible metrics and sorting (`all`, or **Self + children**, is the default). The selection survives returning from a ranking to the hierarchy. Each session's **Timeline** button sets `explorer=timeline`, `delegation_session`, `delegation_start`/`delegation_end` to that session's own evidence span, and `delegation_page` to its hierarchy page. It opens `disclosures["delegation-labels:<session ID>:session"]` and resets deeper event disclosures for that session, showing one event level. Session names continue to open the conversation reader.
 
 Ask Pharos uses the existing MCP CLI-style interface:
 
@@ -93,15 +152,25 @@ A native `query` includes its filters/time predicates; give it without `filters`
 
 Home card links open full dashboards directly with `analyze_chart` and `analyze_filters`. Collected-card source queries and cover metadata remain in storage for previews and editing, and are removed from navigation links. There is no expanded-card page. Dashboard Today links may pin an IANA zone with `analyze_timezone`. **Create card** saves that canonical dashboard URL to the Home collection, including chart, filters, Today/timezone, Carbon assumptions and Parallelism counting/gap settings. Card names, descriptions, categories and calls to action, and the creation dialog, are authoring data/drafts; they do not add view parameters. One dashboard URL can hold several charts (Parallelism draws its ribbon above its catalog chart): each chart has its own **Create card** button, the dialog chooses among them, and the card stores its choice as `dashboardTarget` beside the URL rather than in it. Custom card previews resolve the saved URL and run the dashboard’s analysis/trend models again.
 
+A catalog dashboard's `analyze_filters` terms other than its range are its **population**: every view, breakdown and panel counts only those records. A catalog with `population` (Session Shape) shows them as removable chips in a Population control beside Range, edits them as a draft with the query filter editor, and applies population changes through that control. Legend menus only change visibility. A legend selection stays in `analyze_chart` and only chooses what is drawn; "Make this the population" moves it into the filters. The chart title names a partial population ("· excluding antigravity-cli"). There is no separate parameter: site_link's `filters` are these terms, as in `{"page": "analyze/session_shape", "filters": [{"field": "agent_kind", "op": "=", "value": "root"}]}`.
+
 Analyze query pages accept `options.return_topic` (`analyze_topic`) independently of their dataset so a supporting query returns to the dashboard that opened it.
 
 Analysis source-query links also retain the dashboard chart/population and opened-query baseline. These are documented view fields so returning to a dashboard can reconcile user edits without dropping relative time intent. Specialized time companions (`window_mode/days/field/until_field/dataset/timezone`) remain discoverable and portable.
 
 `<page>/query` also publishes `schema_name`, an inspection template, and a `properties_path` to the paginated property catalogue. Use that schema name (for example `pharos_mcp_calls`) in each inspection scope. `JsonInspectionState`, `JsonMatchIdentity` and related types are generated from the installed core declarations. Returning a native `JsonValueView` directly from a property renderer lets Query Table bind its controlled state and semantic registry; wrapping that element in a host div hides it from the supported integration.
 
+The session reader's `reader_navigator` stores any combination of `timeline`,
+`context` and `turns` (default `["timeline","context","turns"]`); `[]` hides the bars. All bars
+share the session clock and one visible-window indicator. Scroll progress and
+keyboard browsing positions are transient. Clicking a bar materializes, scrolls
+to and highlights its source without moving keyboard focus. Entirely untimed
+sessions explicitly use message order. Expanding/collapsing content refreshes
+cached geometry; scrolling does not remeasure transcript elements.
+
 ## Attention
 
-`highlight` is repeatable; `reveal` names one landing target. Reveal means **scroll and distinctive persistent highlighting**, without moving browser/keyboard focus. Ordinary tabbing and scrolling never change these parameters. Clear highlights removes the instructions.
+`highlight` is repeatable; `reveal` names one landing target. Reveal means **scroll and distinctive persistent highlighting**, without moving browser/keyboard focus. Ordinary tabbing and scrolling never change these parameters. Clear highlights removes the instructions. The right-click menu offers Clear Highlights anywhere on the page while highlights are present. Escape also clears them by default, after active dialogs and editors have handled it; the shortcut can be disabled in Settings → App preferences.
 
 Targets include the page, controls, named sections, card definition IDs, message/tool-call IDs, session IDs, records in the current result page, and literal text. IDs refer to data/semantic identity rather than DOM order. A row target highlights its actual rendered row through public table extension points. It does not open a modal or broaden a query.
 
@@ -125,7 +194,7 @@ Cmd/Ctrl+F opens one Find bar on every page, including the conversation reader (
 
 ## Attention colours
 
-Highlighter colours mean only "Find or a link is pointing here". `ui.py` defines them in `:root` (light and dark): `--attention-mark` (all matches, count badges), `--attention-current` (the current match, `reveal`, the Find trail), `--attention-ring` (`highlight` outlines, collapsed containers holding matches) and `--attention-ink`. Only `page-find.css`, `view-attention.css` and the reader's deep-link landing (`.authorship-target`) use them. `web/tests/unit/page/attention-colors.test.mjs` enforces this, and keeps the raw hex values out of every other source.
+Highlighter colours mean "Find, a link or a Data Guide explanation is pointing here". `ui.py` defines them in `:root` (light and dark): `--attention-mark` (all matches, count badges), `--attention-current` (the current match, `reveal`, the Find trail), `--attention-ring` (`highlight` outlines, collapsed containers holding matches) and `--attention-ink`. Only `page-find.css`, `view-attention.css` and the reader's deep-link landing (`.authorship-target`) use them. The guide's declarative `.pharos-guide-highlight` shares the linked-highlight style in `view-attention.css`; it marks the illustrated region described by the selected term, independently of keyboard focus and URL attention targets. `web/tests/unit/page/attention-colors.test.mjs` enforces colour ownership and keeps the raw hex values out of every other source.
 
 Other UI stays away from that look:
 
@@ -164,3 +233,25 @@ Bookmark identity and saved bookmark URLs exclude `overlay`, `history_search`, `
 6. Cover parsing/building/time transitions in node/Go. Use browser tests for real restoration, materialization, scrolling/focus and a fresh context without a local snapshot cache.
 
 `npm --prefix web run check` includes the source-control review gate, manifest freshness, type checks and unit tests. Do not run a frontend bundle build concurrently with Go compilation: Go embeds the generated bundles.
+
+The **Key** label opens whole-key defaults. Each choice sets content visibility
+and all three highlight switches together, clears individual hue exclusions,
+and saves the same choices as the fallback for unlinked readers. Default shows
+all content with human writing highlighted; Read replies shows prompts and final
+responses with human writing; Follow reasoning shows prompts, replies and thinking
+with agent events and message labels; Review shows everything except token usage
+with every highlight enabled; Plain transcript shows all content without marks.
+Individual highlight keys still use Timeline's grouped legend menus. Changing a
+key can produce a Custom setup; applying a default resets the whole key again.
+Ordinary key edits preserve exclusions for highlights absent from the current
+conversation. Opening an explicit `reader_event_link` enables agent events and
+clears only that pair's event-group and target exclusions in the URL, leaving
+saved preferences intact. Later manual hides are respected until another event
+link is opened. Sentence hover and click use only currently visible event pairs.
+
+These choices write existing canonical fields together: `reader_filter_level`,
+`reader_filter`, `reader_writing`, `reader_events`, `reader_labels`, and
+`reader_highlight_hidden`. The displayed default is derived from those fields,
+so old visibility links, custom categories, copied links and history still restore
+without a separate preset-name field. The standalone Show row is removed; Page
+Find can still reveal hidden content through its existing Show action.

@@ -27,7 +27,10 @@ import (
 // the tens of megabytes of purpose text out of memory and out of each rebuild.
 // Costs are also left out until a request filters, sorts, or groups on them.
 type libraryCache struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+	// build serializes rebuilds without keeping waiters behind a mutex that
+	// cannot observe their request cancellation.
+	build    chan struct{}
 	versions dataVersionMonitor
 	version  int64
 	day      string
@@ -59,28 +62,47 @@ func (c *Catalog) clock() time.Time {
 func (c *Catalog) cachedLibraryRows(ctx context.Context, fields libraryFields) ([]map[string]any, error) {
 	cache := &c.library
 	cache.mu.Lock()
-	defer cache.mu.Unlock()
+	if cache.build == nil {
+		cache.build = make(chan struct{}, 1)
+	}
+	build := cache.build
+	cache.mu.Unlock()
+	select {
+	case build <- struct{}{}:
+		defer func() { <-build }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cache.mu.Lock()
 	// Read the version before building: source changes during the build leave the
 	// rows tagged older than they are, which only costs an extra rebuild.
 	version, versionErr := cache.dataVersion(ctx, c)
 	day := c.clock().Format("2006-01-02")
 	current := versionErr == nil && cache.rows != nil && version == cache.version && day == cache.day
 	if current && cache.fields.covers(fields) {
-		return slices.Clone(cache.rows), nil
+		rows := slices.Clone(cache.rows)
+		cache.mu.Unlock()
+		return rows, nil
 	}
-	// Rebuild with the compact fields most requests need, adding long text and
-	// costs only once a request uses them; keep fields still-current rows had, so requests
-	// alternating between two long-text fields don't rebuild every time.
-	fields = libraryCompactFields.union(fields)
+	// Only derive fields a request needs. Even short output fields (tool error
+	// and compaction counts) can scan large message bodies on dirty workspaces.
+	// Keep fields already in this generation to avoid alternating rebuilds.
+	fields = libraryFieldsFor().union(fields)
 	if current {
 		fields = fields.union(cache.fields)
 	}
 	cache.rows, cache.fields = nil, fields
+	cache.mu.Unlock()
 	rows, err := c.computeSearchRows(SearchOptions{ctx: ctx}, fields)
 	if err != nil {
 		return nil, err
 	}
 	// Without a version the rows are still correct, just not reusable.
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
 	if versionErr == nil {
 		cache.rows, cache.version, cache.day, cache.fields = rows, version, day, fields
 	}
@@ -108,8 +130,13 @@ func (cache *libraryCache) close() {
 type dataVersionMonitor struct {
 	monitor *sql.DB
 	conn    *sql.Conn
-	// version is the last read, which cacheVersion repeats during a run.
-	version int64
+	// version is the last read, which cacheVersion repeats during a run;
+	// generations is that read by domain (see cacheGenerations).
+	version     int64
+	generations cacheGenerations
+	// counted is whether the last read was the stored generation count,
+	// which survives a restart, rather than a connection's data_version.
+	counted bool
 }
 
 // cacheVersion is the catalog version caches compare against. While this
@@ -145,16 +172,18 @@ func (m *dataVersionMonitor) read(ctx context.Context, path string) (int64, erro
 		}
 		m.monitor, m.conn = monitor, conn
 	}
-	var version int64
-	err := m.conn.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&version)
+	generations, err := readCacheGenerations(ctx, m.conn)
+	m.counted = err == nil
 	if err != nil && strings.Contains(err.Error(), "no such table") {
-		err = m.conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version)
+		generations = cacheGenerations{}
+		err = m.conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&generations.all)
 	}
 	if err != nil {
 		m.close()
 		return 0, err
 	}
-	return version, nil
+	m.generations = generations
+	return generations.all, nil
 }
 
 func (m *dataVersionMonitor) close() {
@@ -163,5 +192,5 @@ func (m *dataVersionMonitor) close() {
 		m.monitor.Close()
 	}
 	m.monitor, m.conn = nil, nil
-	m.version = 0
+	m.version, m.generations = 0, cacheGenerations{}
 }

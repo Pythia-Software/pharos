@@ -3,7 +3,9 @@
 // builders match tests/transcript-ui.test.cjs, so its cases port unchanged.
 import { loadClassicScript } from "./classic-script.mjs";
 
-export const reader = loadClassicScript("reader-model.js");
+// The page loads event-spans.js (the event merge rule) before it.
+export const spans = loadClassicScript("event-spans.js");
+export const reader = loadClassicScript("reader-model.js", { nearSameSpan: spans.nearSameSpan, eventSpanGroups: spans.eventSpanGroups, EVENT_MERGE_OVERLAP: spans.EVENT_MERGE_OVERLAP });
 
 export function event(id, kind, text, seconds = 0, extra = {}) {
   return { native_id: id, role: kind === "tool_result" ? "tool" : "assistant", kind,

@@ -3,7 +3,6 @@ package archive
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,7 +69,7 @@ func antigravityDataDir(dir string) bool {
 // one, or the possibly truncated one when that is all there is.
 func (a *antigravityAdapter) transcripts() (map[string]string, error) {
 	brain := filepath.Join(a.config.Path, "brain")
-	entries, err := os.ReadDir(brain)
+	entries, err := a.files().ReadDir(brain)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]string{}, nil
 	}
@@ -104,7 +103,7 @@ func (a *antigravityAdapter) captureFiles() ([]string, error) {
 	for _, path := range transcripts {
 		files = append(files, path)
 	}
-	annotations, _ := filepath.Glob(filepath.Join(a.config.Path, "annotations", "*.pbtxt"))
+	annotations, _ := a.files().Glob(filepath.Join(a.config.Path, "annotations", "*.pbtxt"))
 	files = append(files, annotations...)
 	files = append(files, a.runLogs()...)
 	sort.Strings(files)
@@ -114,7 +113,7 @@ func (a *antigravityAdapter) captureFiles() ([]string, error) {
 // runLogs lists the CLI's per-run logs. The CLI keeps only its latest runs'
 // (about 1,300), so a capture keeps the evidence of print mode for the rest.
 func (a *antigravityAdapter) runLogs() []string {
-	logs, _ := filepath.Glob(filepath.Join(a.config.Path, antigravityRunLogs, "cli-*.log"))
+	logs, _ := a.files().Glob(filepath.Join(a.config.Path, antigravityRunLogs, "cli-*.log"))
 	return logs
 }
 
@@ -197,13 +196,13 @@ func (a *antigravityAdapter) readRunLogs(paths []string) ([]antigravityRunLog, e
 		if err := a.context().Err(); err != nil {
 			return nil, err
 		}
-		info, err := os.Stat(path)
+		info, err := a.files().Stat(path)
 		if err != nil {
 			return nil, err
 		}
 		entry, cached := antigravityLogCache.Load(path)
 		if a.view != nil || !cached || entry.(antigravityLogEntry).size != info.Size() || entry.(antigravityLogEntry).modified != info.ModTime().UnixNano() {
-			log, err := readAntigravityRunLog(a.context(), path, buffer)
+			log, err := readAntigravityRunLog(a.files(), path, buffer)
 			if err != nil {
 				return nil, err
 			}
@@ -298,13 +297,6 @@ func launchingRunLog(logs []antigravityRunLog, started time.Time) *antigravityRu
 	return launching
 }
 
-// antigravityStarted returns when a transcript's first dated step was
-// created, or the zero time.
-func antigravityStarted(path string) time.Time {
-	started, _ := sourceFiles{}.antigravityStarted(path)
-	return started
-}
-
 // antigravityStarted reads through the capture view, so an encoded transcript
 // is read as its original bytes, and caches the time while the transcript is
 // unchanged: print-mode detection asks on every plan.
@@ -345,16 +337,17 @@ func (s sourceFiles) readAntigravityStarted(path string) (time.Time, error) {
 	return time.Time{}, nil
 }
 
-func readAntigravityRunLog(ctx context.Context, path string, buffer []byte) (antigravityRunLog, error) {
+func readAntigravityRunLog(source sourceFiles, path string, buffer []byte) (antigravityRunLog, error) {
 	log := antigravityRunLog{}
 	if match := antigravityRunLogName.FindStringSubmatch(filepath.Base(path)); match != nil {
 		// The CLI names logs by the local time the run started.
 		log.started, _ = time.ParseInLocation("20060102_150405", match[1], time.Local)
 	}
+	ctx := source.context()
 	if err := ctx.Err(); err != nil {
 		return log, err
 	}
-	file, err := os.Open(path)
+	file, err := source.Open(path)
 	if err != nil {
 		return log, err
 	}
@@ -448,7 +441,7 @@ func (a *antigravityAdapter) databases() ([]string, error) {
 	// Inventory DB-only conversations too: a deleted transcript must not hide
 	// the source's original protobuf request and step evidence.
 	candidates := []string{filepath.Join(a.config.Path, antigravitySummaries)}
-	entries, err := os.ReadDir(filepath.Join(a.config.Path, "conversations"))
+	entries, err := a.files().ReadDir(filepath.Join(a.config.Path, "conversations"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -459,7 +452,7 @@ func (a *antigravityAdapter) databases() ([]string, error) {
 	}
 	databases := []string{}
 	for _, path := range candidates {
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+		if info, err := a.files().Stat(path); err == nil && info.Mode().IsRegular() {
 			databases = append(databases, path)
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err
@@ -524,12 +517,8 @@ var antigravityTitle = regexp.MustCompile(`(?m)^\s*title:\s*"((?:[^"\\]|\\.)*)"`
 func (a *antigravityAdapter) summaries(ids map[string]string) (map[string]antigravitySummary, error) {
 	summaries := map[string]antigravitySummary{}
 	path := filepath.Join(a.config.Path, antigravitySummaries)
-	if _, err := os.Stat(path); err == nil {
-		readable, err := a.files().Database(path)
-		if err != nil {
-			return nil, err
-		}
-		if db, err := openReadOnlySQLite(readable); err == nil {
+	if _, err := a.files().Stat(path); err == nil {
+		if db, err := a.files().SQLite(path); err == nil {
 			rows, err := queryMapsContext(a.context(), db, "SELECT * FROM conversation_summaries")
 			db.Close()
 			if err != nil {
@@ -562,7 +551,7 @@ func (a *antigravityAdapter) summaries(ids map[string]string) (map[string]antigr
 		if summaries[id].Title != "" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(a.config.Path, "annotations", id+".pbtxt"))
+		data, err := a.files().ReadFile(filepath.Join(a.config.Path, "annotations", id+".pbtxt"))
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -783,7 +772,7 @@ func readJSONLines(r io.Reader, size int64) ([]map[string]any, error) {
 // before it is, so a later write is read again next time.
 func (a *antigravityAdapter) requestsPart(id string) (sourcePart, bool, error) {
 	path := a.requestsDatabase(id)
-	if _, err := os.Stat(path); err != nil {
+	if _, err := a.files().Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return sourcePart{}, false, nil
 		}

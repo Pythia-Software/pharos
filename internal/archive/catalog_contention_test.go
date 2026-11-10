@@ -51,6 +51,7 @@ func TestInteractiveReadDemand(t *testing.T) {
 		{http.MethodPost, "/api/query/library/query-v3", true},
 		{http.MethodGet, "/api/search", true},
 		{http.MethodGet, "/api/library/find", true},
+		{http.MethodGet, "/api/library/recent-conversations", true},
 		{http.MethodPost, "/api/search/text", true},
 		{http.MethodGet, "/api/work/id/conversations/id", true},
 		{http.MethodGet, "/api/usage/parallelism", true},
@@ -526,7 +527,7 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 		{"GET", "/api/menu-bar/usage", ""}, {"GET", "/api/tools/status", ""}, {"GET", "/api/sources", ""},
 		// The first shows the lost run as failed and stores that in the
 		// background, which waits for the writer; the next does not.
-		{"GET", "/api/cloud-backup", ""}, {"GET", "/api/cloud-backup", ""}, {"GET", "/api/mcp/calls", ""}, {"GET", "/api/search?q=parser", ""},
+		{"GET", "/api/cloud-backup", ""}, {"GET", "/api/cloud-backup", ""}, {"GET", "/api/search?q=parser", ""},
 		{"POST", "/api/search/text", `{"query":"parser"}`}, {"GET", "/api/work/" + workspace, ""}, {"GET", "/api/findings", ""},
 		{"GET", "/api/tl1", ""}, {"GET", "/api/preferences", ""}, {"GET", "/api/sync/status", ""},
 		// The operations snapshot reads the registry and the journal, which
@@ -602,7 +603,7 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 	stale.checked = time.Now().Add(-2 * driveFactsTTL)
 	drives.state = &stale
 	drives.mu.Unlock()
-	if _, refresh := drives.cached(config); refresh {
+	if _, refresh, err := drives.cached(config); err != nil || refresh {
 		t.Error("a second drive refresh started while the first still waited for the writer")
 	}
 
@@ -640,4 +641,96 @@ func mcpCalls(t *testing.T, catalog *Catalog) int {
 		t.Fatal(err)
 	}
 	return count
+}
+
+// A request whose write queues behind a long writer says who held it: in a
+// report written while it still waits, and in its entry in the request log.
+func TestQueuedRequestWriteNamesTheWriterItWaitedBehind(t *testing.T) {
+	catalog, config := testCatalog(t)
+	t.Setenv(diagnosticLogDirEnv, t.TempDir())
+	override(t, &slowRequest, time.Duration(0))
+	override(t, &contentionReportAfter, 10*time.Millisecond)
+	server := testServer(t, config, catalog)
+	reports := func() []string {
+		names, _ := filepath.Glob(filepath.Join(walPinReportDir(), contentionReportPrefix+"*"))
+		return names
+	}
+	before := reports()
+	tx, finish, err := catalog.beginTrackedWrite(t.Context(), "test-sync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := true
+	release := func() {
+		if held {
+			held = false
+			_ = tx.Rollback()
+			finish()
+		}
+	}
+	defer release()
+	status := make(chan int, 1)
+	go func() {
+		status <- apiCall(t, server, config.APIToken, "POST", "/api/preferences", `{"set":{"example-preference":"1"}}`).Code
+	}()
+	var report string
+	waitUntil(t, 10*time.Second, "a report of the queued write", func() bool {
+		for _, name := range reports() {
+			if !slices.Contains(before, name) {
+				report = name
+			}
+		}
+		return report != ""
+	})
+	t.Cleanup(func() { os.Remove(report) })
+	release()
+	if code := <-status; code != http.StatusOK {
+		t.Fatalf("the queued write returned %d", code)
+	}
+	body, err := os.ReadFile(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"POST /api/preferences", "writer_gate_holder=[test-sync", "ui-preferences for", "Requests in flight, oldest first: 1", "Goroutines:", "queueWriteGate"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("the report lacks %q:\n%s", want, clipText(string(body), 3000))
+		}
+	}
+	if strings.Contains(string(body), "example-preference") {
+		t.Error("the report holds a request's content")
+	}
+	if again := catalog.contentionReport("again", time.Now()); again != "" {
+		t.Errorf("a second report within contentionReportEvery: %s", again)
+	}
+	detail := func(path string) string {
+		for _, event := range server.diagnosticsState().requests.list() {
+			if event.Path == path {
+				return event.Detail
+			}
+		}
+		t.Fatalf("no request log entry for %s", path)
+		return ""
+	}
+	if got := detail("/api/preferences"); !strings.Contains(got, "writes=1 behind=[test-sync ") || strings.Contains(got, "writer_wait=0.00s") {
+		t.Errorf("the queued write's entry does not say who it waited behind: %s", got)
+	}
+	// A read's statements are its own whether or not its code passes the
+	// request's context to the catalog, and it waits for no writer.
+	if code := apiCall(t, server, config.APIToken, "GET", "/api/sources", nil).Code; code != http.StatusOK {
+		t.Fatalf("sources returned %d", code)
+	}
+	// The slowest statement is named by the code that ran it.
+	override(t, &slowStatement, time.Duration(0))
+	if code := apiCall(t, server, config.APIToken, "GET", "/api/receipt/none", nil).Code; code != http.StatusNotFound {
+		t.Fatalf("a missing receipt returned %d", code)
+	}
+	if got := detail("/api/receipt/none"); !strings.Contains(got, `slowest_statement=`) || !strings.Contains(got, `at "archive.`) {
+		t.Errorf("the entry does not name the slowest statement's caller: %s", got)
+	}
+	if got := detail("/api/sources"); strings.Contains(got, "statements=0") || !strings.Contains(got, "writer_wait=0.00s") || strings.Contains(got, "behind=") {
+		t.Errorf("the read's entry: %s", got)
+	}
+	if requestsTimed.active.Load() != 0 {
+		t.Error("a finished request is still listed as in flight")
+	}
 }

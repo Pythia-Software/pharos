@@ -2,7 +2,7 @@ import type { AggregationClause } from "@pythia-software/query-table-core";
 import type { QueryRecipe } from "./curiosity-data";
 
 const calendar = "Each box compares complete local days of the same weekday, Monday through Sunday. The first partial day and today are excluded. Uses the device timezone captured in the query. Boxes show the middle 50%, median, Tukey whiskers and outliers; hover includes the mean and number of days. Values describe recorded activity; capture coverage may be incomplete.";
-function weekday(id: string, title: string, description: string, unit: string, metric: AggregationClause, extra: Partial<QueryRecipe> = {}): QueryRecipe {
+export function weekday(id: string, title: string, description: string, unit: string, metric: AggregationClause, extra: Partial<QueryRecipe> = {}): QueryRecipe {
   const field = extra.field ?? "sent_at";
   return { id, title, description, dataset: "writing_messages", field, category: "human", idea: "rhythm-01", unit, days: [90], calendarTimezone: "local",
     where: [{ field: "typed_words", op: ">", value: "0" }],
@@ -12,7 +12,7 @@ function weekday(id: string, title: string, description: string, unit: string, m
     action: "Inspect daily totals", note: calendar, ...extra };
 }
 
-const timing = "Follows the saved Parallelism counting and gap settings. Timing is estimated from transcript turns, with delegated work folded into its root unit. Daily placement uses hourly fact starts without prorating.";
+const timing = "Follows the saved Parallelism counting and gap settings. Timing is estimated from transcript turns, with linked sub-agent activity counted with its initiating conversation. Daily placement uses hourly fact starts without prorating.";
 export const weekdayRecipes: QueryRecipe[] = [
   weekday("human-words-weekday", "Words by day of the week", "Daily human-written word totals by weekday over the last {days} days, including idle days.", "words / day", { id: "weekday_words", op: "sum", field: "typed_words", groupBy: [], label: "Daily human-written words" },
     { note: `${calendar} Only typed or dictated words contribute; pasted and automated text are excluded. Days without recorded writing count as zero.` }),

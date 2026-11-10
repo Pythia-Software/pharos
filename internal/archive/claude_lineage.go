@@ -11,43 +11,22 @@ import (
 // upgrade. Only delegation envelopes and the first assignment are needed; large tool
 // outputs and the rest of the prose are not read. IDs and reconciled usage remain untouched.
 func repairStoredClaudeLineage(ctx context.Context, tx *sql.Tx, workspace, root string) error {
-	rows, err := queryMapsContext(ctx, tx, `SELECT id,native_id,COALESCE(parent_id,'') parent_id,agent_depth FROM conversations
-	 WHERE workspace_id=? AND provider='claude' AND (native_id=? OR instr(native_id,?)=1)`, workspace, root, root+":subagent:")
-	if err != nil {
+	record, ids, found, err := storedClaudeGroup(ctx, tx, workspace, root)
+	if err != nil || !found {
 		return err
 	}
-	record := WorkspaceRecord{}
-	ids, prior := map[string]string{}, map[string]int{}
-	rootFound := false
-	for _, row := range rows {
-		native, id := firstString(row["native_id"]), firstString(row["id"])
-		messages, err := queryMapsContext(ctx, tx, `SELECT native_id,kind,call_id,text FROM messages WHERE conversation_id=?
-		 AND kind IN ('delegation','delegation_result') ORDER BY source_order,created_at,id`, id)
-		if err != nil {
-			return err
-		}
-		conversation := ConversationRecord{NativeID: native, Provider: "claude", AgentDepth: int(integer(row["agent_depth"]))}
-		if native == root {
-			rootFound, conversation.AgentDepth = true, 0
-		} else {
-			conversation.AgentDepth = max(1, conversation.AgentDepth)
-		}
-		for _, message := range messages {
-			conversation.Messages = append(conversation.Messages, MessageRecord{NativeID: firstString(message["native_id"]), Kind: firstString(message["kind"]), CallID: firstString(message["call_id"]), Text: firstString(message["text"])})
-		}
-		var assignment MessageRecord
-		assignment.Kind = "message"
-		if err := tx.QueryRowContext(ctx, `SELECT role,text FROM messages WHERE conversation_id=? AND kind='message' AND +role IN ('user','agent')
-		 ORDER BY source_order IS NULL,source_order,created_at,id LIMIT 1`, id).Scan(&assignment.Role, &assignment.Text); err == nil {
-			conversation.Messages = append(conversation.Messages, assignment)
-		} else if err != sql.ErrNoRows {
-			return err
-		}
-		record.Conversations = append(record.Conversations, conversation)
-		ids[native], prior[native] = id, int(integer(row["agent_depth"]))
+	prior := map[string]int{}
+	for _, conversation := range record.Conversations {
+		prior[conversation.NativeID] = conversation.AgentDepth
 	}
-	if !rootFound {
-		return nil
+	// storedClaudeGroup normalizes depth for reconciliation; the stored depth
+	// is what the session depths were written with.
+	for native, id := range ids {
+		var depth int
+		if err := tx.QueryRowContext(ctx, `SELECT agent_depth FROM conversations WHERE id=?`, id).Scan(&depth); err != nil {
+			return err
+		}
+		prior[native] = depth
 	}
 	reconcileClaudeLineage(&record)
 	orderedIDs := make([]string, len(record.Conversations))
@@ -71,16 +50,71 @@ func repairStoredClaudeLineage(ctx context.Context, tx *sql.Tx, workspace, root 
 	return linkClaudeGroupDelegations(tx, record.Conversations, orderedIDs)
 }
 
+// storedClaudeGroup rebuilds a retained Claude root group from stored rows:
+// only delegation envelopes and the first assignment, which lineage reads.
+// ids maps native IDs to conversation IDs; found is false without the root.
+func storedClaudeGroup(ctx context.Context, tx *sql.Tx, workspace, root string) (WorkspaceRecord, map[string]string, bool, error) {
+	rows, err := queryMapsContext(ctx, tx, `SELECT id,native_id,account,COALESCE(parent_id,'') parent_id,agent_depth FROM conversations
+	 WHERE workspace_id=? AND provider='claude' AND (native_id=? OR instr(native_id,?)=1)`, workspace, root, root+":subagent:")
+	if err != nil {
+		return WorkspaceRecord{}, nil, false, err
+	}
+	record := WorkspaceRecord{}
+	ids := map[string]string{}
+	rootFound := false
+	for _, row := range rows {
+		native, id := firstString(row["native_id"]), firstString(row["id"])
+		messages, err := queryMapsContext(ctx, tx, `SELECT native_id,kind,call_id,text FROM messages WHERE conversation_id=?
+		 AND kind IN ('delegation','delegation_result') ORDER BY source_order,created_at,id`, id)
+		if err != nil {
+			return WorkspaceRecord{}, nil, false, err
+		}
+		conversation := ConversationRecord{NativeID: native, Provider: "claude", Account: firstString(row["account"]), AgentDepth: int(integer(row["agent_depth"]))}
+		if native == root {
+			rootFound, conversation.AgentDepth = true, 0
+		} else {
+			conversation.AgentDepth = max(1, conversation.AgentDepth)
+		}
+		for _, message := range messages {
+			conversation.Messages = append(conversation.Messages, MessageRecord{NativeID: firstString(message["native_id"]), Kind: firstString(message["kind"]), CallID: firstString(message["call_id"]), Text: firstString(message["text"])})
+		}
+		var assignment MessageRecord
+		assignment.Kind = "message"
+		if err := tx.QueryRowContext(ctx, `SELECT role,text FROM messages WHERE conversation_id=? AND kind='message' AND +role IN ('user','agent')
+		 ORDER BY source_order IS NULL,source_order,created_at,id LIMIT 1`, id).Scan(&assignment.Role, &assignment.Text); err == nil {
+			conversation.Messages = append(conversation.Messages, assignment)
+		} else if err != sql.ErrNoRows {
+			return WorkspaceRecord{}, nil, false, err
+		}
+		record.Conversations = append(record.Conversations, conversation)
+		ids[native] = id
+	}
+	if !rootFound {
+		return WorkspaceRecord{}, nil, false, nil
+	}
+	return record, ids, true, nil
+}
+
 // A Claude subagent's filename identifies the execution, while the result of
 // its launch identifies the conversation that created it. All descendants
 // live in the root's subagents directory, so directory nesting is no proof of
 // parentage.
 type claudeLineageEdge struct {
-	parent int
-	callID string
+	parent  int
+	callID  string
+	textual bool // a text acknowledgement corroborated by the assignment
 }
 
 func claudeLineageEdges(conversations []ConversationRecord) map[int]claudeLineageEdge {
+	edges, _ := claudeLineageDecisions(conversations)
+	return edges
+}
+
+// claudeLineageDecisions also says why each child without an edge has none:
+// duplicate-child, competing-acknowledgements, cycle, or (absent from the
+// map) no acknowledgement at all.
+func claudeLineageDecisions(conversations []ConversationRecord) (map[int]claudeLineageEdge, map[int]string) {
+	reasons := map[int]string{}
 	children := map[string]int{}
 	duplicateChildren := map[string]bool{}
 	workflows := map[string][]int{}
@@ -109,8 +143,9 @@ func claudeLineageEdges(conversations []ConversationRecord) map[int]claudeLineag
 		children[agent] = index
 	}
 	type candidate struct {
-		parent int
-		call   string
+		parent  int
+		call    string
+		textual bool
 	}
 	claims := map[int][]candidate{}
 	for parent, conversation := range conversations {
@@ -147,7 +182,15 @@ func claudeLineageEdges(conversations []ConversationRecord) map[int]claudeLineag
 			}
 		}
 		for call, result := range results {
-			if resultCounts[call] != 1 || duplicateChildren[result.agent] {
+			if resultCounts[call] != 1 {
+				continue
+			}
+			if duplicateChildren[result.agent] {
+				for index, conversation := range conversations {
+					if conversation.AgentDepth != 0 && strings.HasSuffix(conversation.NativeID, "agent-"+result.agent) {
+						reasons[index] = "duplicate-child"
+					}
+				}
 				continue
 			}
 			child, exists := children[result.agent]
@@ -160,13 +203,15 @@ func claudeLineageEdges(conversations []ConversationRecord) map[int]claudeLineag
 			if result.textual && !claudeLaunchAssignmentMatches(launchMessages[call], conversations[child]) {
 				continue
 			}
-			claims[child] = append(claims[child], candidate{parent, call})
+			claims[child] = append(claims[child], candidate{parent, call, result.textual})
 		}
 	}
 	edges := map[int]claudeLineageEdge{}
 	for child, candidates := range claims {
 		if len(candidates) == 1 {
-			edges[child] = claudeLineageEdge{candidates[0].parent, candidates[0].call}
+			edges[child] = claudeLineageEdge{candidates[0].parent, candidates[0].call, candidates[0].textual}
+		} else {
+			reasons[child] = "competing-acknowledgements"
 		}
 	}
 	// A corrupt or conflicting transcript can describe a cycle. The whole
@@ -193,8 +238,9 @@ func claudeLineageEdges(conversations []ConversationRecord) map[int]claudeLineag
 	}
 	for member := range cycleMembers {
 		delete(edges, member)
+		reasons[member] = "cycle"
 	}
-	return edges
+	return edges, reasons
 }
 
 // Some Claude versions retain the native asynchronous launch acknowledgement
@@ -293,6 +339,11 @@ func reconcileClaudeLineage(record *WorkspaceRecord) {
 // The same unique acknowledgement proof used for conversation lineage binds
 // the launch session to the child execution.
 func linkClaudeGroupDelegations(tx *sql.Tx, conversations []ConversationRecord, ids []string) error {
+	// The typed lineage claims (accepted acknowledgement versus root
+	// fallback) are written wherever the group's links are.
+	if err := writeClaudeLineageEvidence(tx, conversations, ids); err != nil {
+		return err
+	}
 	type launch struct{ conversation, call string }
 	accepted := map[launch]string{}
 	groupIDs := []string{}

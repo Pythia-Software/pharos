@@ -4,7 +4,7 @@ import { boxCoverHeight } from "./compact-box-model";
 import type { QueryRecipe } from "./curiosity-data";
 import { usesWeekdayCover } from "./weekday-cover";
 
-export type CardLoadingKind = "value" | "columns" | "list" | "scatter" | "line" | "box" | "pie" | "donut" | "table" | "text";
+export type CardLoadingKind = "value" | "columns" | "list" | "scatter" | "line" | "box" | "pie" | "donut" | "heatmap" | "table" | "text";
 export type CardLoadingSpec = { kind: CardLoadingKind; count: number; headline?: boolean; belowLabels?: boolean; height?: number };
 
 // Read the same cover definition as the preview, before any requests finish.
@@ -26,7 +26,7 @@ export function cardLoadingPresentation(query: QueryState, options: { recipe?: Q
   const requested = options.cover?.maxGroups ?? metric.display?.maxGroups;
   const limit = typeof requested === "number" && Number.isSafeInteger(requested) && requested > 0 ? Math.min(100, requested) : undefined;
   const display = options.cover?.kind ?? metric.display?.kind ?? "auto";
-  const timeline = metric.groupBy[0] === "day" && display === "auto" && metric.op === "sum" && !metric.expression && !metric.distribution;
+  const timeline = metric.groupBy[0] === "day" && display === "auto" && (metric.op === "sum" || metric.op === "count" && !metric.field) && !metric.expression && !metric.distribution;
   const kind = timeline && cover?.timeline?.scale === "logarithmic" && !cover?.timeline?.percent ? "line" : loadingKind(metric, display, timeline);
   const count = kind === "value" ? 1 : kind === "columns" && metric.distribution?.kind === "histogram" ? metric.distribution.bins ?? 10
     : timeline ? Math.min(100, (options.days ?? 7) + 1)

@@ -178,6 +178,9 @@ function initAskPromptEditor(element){
     value:{get:()=>askPromptText(read()),set:value=>{write(askPromptReplaceText(read(),String(value)));history=[snapshot()];historyIndex=0;}},
     disabled:{get:()=>disabled,set:value=>{disabled=!!value;element.contentEditable=String(!disabled);element.setAttribute('aria-disabled',String(disabled));}},
     placeholder:{set:value=>element.dataset.placeholder=value},
+    // Prompt offsets, as setSelectionRange takes them, for dictation.
+    selectionStart:{get:()=>selection()[0]},
+    selectionEnd:{get:()=>selection()[1]},
   });
   element.setSelectionRange=(start,end=start)=>{caret(start);if(end!==start){const value=window.getSelection(),anchor=value.getRangeAt(0).cloneRange();caret(end);const focus=value.getRangeAt(0);anchor.setEnd(focus.endContainer,focus.endOffset);value.removeAllRanges();value.addRange(anchor);}};
   element.addEventListener('input',event=>{syncEmpty();if(!event.isComposing)remember();});
@@ -222,6 +225,8 @@ function initAskPromptEditor(element){
   write([]);remember();
   return {
     chips:()=>read().filter(part=>typeof part!=='string'),
+    // The character before a prompt offset; a chip reads as U+FFFC.
+    charBefore:offset=>{const last=askPromptSplit(read(),offset)[0].at(-1);return last===undefined?'':typeof last==='string'?last.slice(-1):'\uFFFC';},
     document:read,
     restore:parts=>{const restored=askPromptRestore(parts,element.value);if(!restored)return false;write(restored);history=[snapshot()];historyIndex=0;return true;},
     removeChip:id=>{if(read().some(part=>part?.id===id))removeChip(id);},

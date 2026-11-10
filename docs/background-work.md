@@ -246,7 +246,7 @@ index.changes.manual                          run, plan: discover, 3 sources, au
 ├─ step "Verify a sample"
 └─ analysis.chain                             stage
    ├─ analysis.github  analysis.identities  analysis.git
-   └─ analysis.tools   analysis.authorship  analysis.findings
+   └─ analysis.tools   analysis.authorship  analysis.peers  analysis.findings
 ```
 
 The same `analysis.findings` kind started by "Refresh findings now" is a
@@ -295,11 +295,12 @@ the words here are the words surfaces show (§8).
 | `background.update` (variants `frequent`, `hourly`, `daily`, `requested`) | Background update · Updating in the background | schedule (`backgroundLoop`, §11), user (Run now) | svc | D:w W:w I:w | capt:this/\*, conv:\*, an.\*, findings, upgrade | index | Stops after the record in progress; each item runs again at its next time. | batch | >10 s | bg |
 | `background.capture` (variants `sources`, `preserve`) | Capture & index · Capturing and indexing | step of `background.update` | svc | D:w W:w I:w C(this):w | capt:this/\*, conv:\* | index | Stops between files and records; what was captured stays valid, and the next run resumes it. | batch | step | bg |
 | `capture.this-mac` | Capture this Mac · Capturing | user, onboarding | svc | D:w I:w C(this):w | capt:this/\* | — (today) | Stops between files; the next capture resumes it, and what was captured stays valid. | record | always | fg |
+| `capture.import` (variant `claude-ai`) | Collect Claude export · Collecting | user, cli, schedule (`claudeDownloads` daemon, only while this Mac's Downloads watch is on; its capture and index run as a chained `background.capture`) | svc, cli | D:w I:w C(this):w | capt:this/\* | — | Stops between reads; verified files and import jobs remain available to resume. | record | always | fg |
 | `capture.cli` (variant `sqlite-records` for that command's writing subcommands) | Capture (Terminal) · Capturing | cli | cli (lease only; it never opens the catalog) | D:w C(this):w | capt:this/\* | — | Pharos cannot stop it; the drive stays busy until it ends. | none (to Pharos) | never (lease only) | fg |
 | `index.captures` | Index captures · Indexing captures | user, onboarding, cli | svc, cli | D:w W:w I:w X(c):w (`I` in the service only) | capt:\*, conv:\*, view, an.\*, findings | index | Stops between records; the next index resumes it. Waits for a running capture (`blocked(capture-running)`). | batch | always | fg |
 | `library.update` | Capture & index · Capturing and indexing | user | svc | D:w W:w I:w | capt:this/\*, conv:\*, an.\*, findings, upgrade | index | As `index.captures`; the browser then starts `library.upgrade`. | batch | always | fg |
 | `library.rebuild` (variants `full`, `retained`) | Full recapture & reindex / Reindex from stored messages · Rebuilding | user, resume | svc | D:w W:w I:w | conv:\*, view, an.\*, findings | index | Stops between workspaces; resuming the repair continues it (`sync_recovery_jobs`). | batch | always | fg |
-| `index.verify` (variants `sample`, `all`) | Verify retained inputs · Verifying | user; `sample` is a step of index runs | svc | D:w W:w I:w (reads retained inputs; writes `sync_verifications` and integrity issues) | — | index | Stops between inputs. | record | always (`all`); step only (`sample`) | fg |
+| `index.verify` (variants `sample`, `all`, `repair`) | Verify retained inputs · Verifying | user; `sample` is a step of index runs; `repair` explicitly affects `conv:*`, `view`, `an.*` | svc | D:w W:w I:w (reads retained inputs; writes `sync_verifications` and integrity issues) | — | index | Stops between inputs. | record | always (`all`, `repair`); step only (`sample`) | fg |
 | `index.sources.legacy` | Index sources (legacy API) · Indexing | user (API) | svc | D:w W:w I:w | conv:\* | — | Runs inside the request, with the service's lifetime merged into its context: a release stops it between workspaces. | batch | always | fg |
 | `ingest.cli` (variants `ingest`, `repair-existing`) | Index (Terminal) · Indexing | cli | cli | D:w W:w (no `I` today) | conv:\* | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
 | `host.add` | Add this Mac (Terminal) · Adding this Mac | cli | cli | D:w W:w | conv:\* | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
@@ -332,8 +333,9 @@ Scheduled indexing never runs it; it marks `sync_deferred` instead (§5).
 | `analysis.github` | Check GitHub for renamed repositories · Checking GitHub | chained | svc (+`gh`) | — (network only) | an.identities | — | Stops on release only. | record | step | parent's |
 | `analysis.identities` | Link identities · Linking identities | chained | svc | D:w W:w | an.identities | — | Stops on release only. | batch | step | parent's |
 | `analysis.git` | Look up merges in Git · Looking up merges in Git | chained, startup (one-time backfill), after a legacy sync | svc (+`git`) | D:w W:w | an.git | — | Stops; it runs again after the next index. Each `git` call has a 5 s limit (Conductor's git has none). | batch | >5 s when not a stage | bg |
-| `analysis.tools` | Update the Tools rollup · Updating the Tools rollup | chained, read (a Query Table request, or a Thinking read with request timings pending), version | svc | D:w W:w | an.tools | — | Stops; it runs again on the next index or Tools request. | batch | >5 s when not a stage | bg; fg when read-started |
+| `analysis.tools` | Update tool summaries · Updating tool summaries | chained, read (a Query Table request, or a Thinking read with request timings pending), version | svc | D:w W:w | an.tools | — | Stops; it runs again on the next index or Tools request. | batch | >5 s when not a stage | bg; fg when read-started |
 | `analysis.authorship` | Update writing estimates · Updating writing estimates | chained, read (`/api/authorship`, usage summary, native menu usage poll) | svc | D:w W:w | an.authorship | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
+| `analysis.peers` | Link related conversations · Linking related conversations | chained | svc | D:w W:w | an.peers | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
 | `analysis.authorship.refine` | Refine writing history · Refining writing history | daily, requested | svc | D:w W:w | an.authorship.refined | work | Stops; historical refinement runs again on its daily schedule. | batch | always | bg |
 | `analysis.labels` (variant `backlog`) | Label messages · Labeling messages | chained (the last stage, when `labels_enabled` is on; background item Message labels), cli (`pharos labels run`); `backlog` is chained after a stage that left more than its share, plugged in only, and stops if this Mac goes onto battery | svc, cli (+ worker process) | D:w W:w | an.labels | work | Stops between batches; the next run resumes it. | batch | >5 s when not a stage | bg |
 | `analysis.agent_events` (variant `backlog`) | Find agent events · Finding agent events | chained (after labels, when the Agent Experience switch or `agent_events_enabled` is on; background item Agent events; the first run downloads the verifier if the broker has not), user (turning the switch on runs the item), cli (`pharos agent-events run`); `backlog` as for `analysis.labels` | svc, cli (+ worker process) | D:w W:w | an.agent_events | work | Stops between chunks of conversations; the next run resumes it. | batch | >5 s when not a stage | bg |
@@ -354,7 +356,7 @@ Notes:
 
 The loops started in `Serve` (`maintainLibrary`, `maintainSubstringIndex`,
 `maintainToolOutputIndex`, `maintainTextSearch`, `maintainToolSearch`, `maintainQueryTextIndexes`,
-`keepWALSmall`, `automaticLoop`, `cloudScheduleLoop`, `compressCaptures`, and the broker's
+`maintainMessageLabelFacts`, `maintainFingerprintImages`, `maintainFingerprintImagesSecondary`, `keepWALSmall`, `automaticLoop`, `cloudScheduleLoop`, `compressCaptures`, `claudeDownloads`, and the broker's
 `maintain`) are **daemons**, not operations: they are registered by name so
 the unregistered-work test can account for them, but they have no state,
 hold nothing, and are never shown. Each pass that does real work starts an
@@ -362,9 +364,12 @@ operation.
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
+| `maintenance.fingerprints` | Render fingerprints · Rendering fingerprints | schedule, user, read | svc | D:w W:w | — | — | Stops during rendering; unfinished images stay queued and resume next time. | record | >10 s | bg |
 | `maintenance.library-view` | Index the Search view · Indexing the Search view | chained (dirty workspaces), version | svc | D:w W:w | view | view | Stops; the batch in progress is abandoned, and it carries on when Pharos next opens the library or on Resume. | record | >15 s (today's `libraryCatchUpShown`) | bg |
 | `maintenance.previews` | Fill in previews · Filling in previews | daemon pass | svc | D:w W:w | view | — | Stops; it carries on later. | record | never | bg |
+| `maintenance.conversation-names` | Name conversations · Naming conversations | daemon pass | svc | D:w W:w | view | — | Stops between batches; unfinished names carry on later. | record | never | bg |
 | `maintenance.parallelism` | Measure parallel work · Measuring parallel work | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
+| `maintenance.session-shape` | Measure session shape · Measuring session shape | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
 | `maintenance.cache-warm` | Warm page caches · Warming page caches | daemon pass | svc | D:r | — | — | Stops. | record | never | bg |
 | `maintenance.search.substring` | Build substring search · Building substring search | version, chained | svc | D:w W:w | search.substring | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |
 | `maintenance.search.tool-output` | Remove tool output from word search · Removing tool output from word search | version | svc | D:w W:w | search.words | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |
@@ -390,9 +395,13 @@ unit publishes it. Zero-work probes stay tentative. A stretch of passes that kee
 catching up, previews, parallelism, an index build) is one operation, from
 the first pass that works to the first that finds nothing. These kinds do
 not call `Wrote()`, so they are journaled only past their threshold.
+When source indexing pauses the Library maintenance loop, all its published
+passes become blocked until indexing and its follow-up analysis finish. Their
+committed counts remain visible; waiting does not publish zero-work probes.
+Stopping the Search view refresh likewise blocks its open passes until Resume.
 
 Maintenance batches report named phases and actual units: conversations for
-message-label query facts and parallelism, workspaces for Search projections,
+message-label query facts, parallelism and session shape, workspaces for Search projections,
 metrics and previews, messages/tool calls for search backfills, and files for
 capture compression. Counts advance after successful commits. Inventories are
 collected by the worker, never by a status request, and refreshed at most once
@@ -455,6 +464,22 @@ the catalog with its statement and stack, and every goroutine's stack. The
 service's stderr survives only as a tail in the app's memory. It cancels
 nothing.
 
+**Slow requests and contention.** A request (or an MCP tool call) that ran
+for a second or more, or that its client abandoned, leaves one `Slow
+request:` line on stderr with where its time went: waiting for the catalog
+writer and behind which operations, waiting for derived values, queued for
+one of the heavy-query slots, in its own
+statements (with the code that ran the slowest), and the rest, plus the read
+pool's use and the WAL's size. The same breakdown is the detail of the
+request's entry in Settings → Logs. The line names the route or tool, never a
+query string, an argument or SQL text. `Catalog writer acquisition:` lines
+name the holders a write waited behind (`behind=[…]`) and whether a request
+or a background operation was waiting. When a request's write has queued for
+5 s, or a data read or tool call has run for 5 s, the process writes
+`logs/catalog-contention-<time>-pid<pid>.txt` (at most one per 5 minutes; the
+last 20 are kept): requests in flight, the writer's holder and queue, pools,
+WAL, operations, open reads with their stacks, and every goroutine's stack.
+
 ### 3.5 E. Transitions
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
@@ -462,9 +487,10 @@ nothing.
 | `catalog.initialize` | Prepare the catalog · Preparing the catalog | every writable catalog open (skipped when `meta.initialized_build` matches this executable) | svc, cli, mcp | D:w W:w Z:w | all derived domains | — | Cannot be stopped; the service has no API until it ends. A kill rolls back the step in progress, and the next open re-runs from the last committed `meta` key. | none | >2 s | fg |
 | `library.upgrade` | Upgrade the library · Upgrading the library | chained (after an index finds pending steps, or the browser after Capture & index), user (`POST /api/upgrade`), cli | svc, cli | D:w W:w | upgrade, an.tools, an.ledger | — | Stops after the unit in progress; starting the upgrade again resumes it. | record | always | fg |
 | `catalog.repair` (variants `refine-usage`, `repair-usage-attribution`) | Repair usage (Terminal) · Repairing usage | cli | cli | D:w W:w | an.tools, an.authorship | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
+| `catalog.execution-evidence` | Derive execution evidence (Terminal) · Deriving execution evidence | cli (`execution-evidence run`) | cli | D:w W:w | an.labels, an.agent_events | — | Stops between batches; running it again resumes it. | record | always | fg |
 | `repositories.merge` | Merge repositories (Terminal) · Merging repositories | cli (`repositories --merge --apply`) | cli | D:w W:w | an.identities, an.git | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
 | `analysis.agent_events.import` | Import agent events (Terminal) · Importing agent events | cli (`agent-events import FILE`) | cli | D:w W:w | an.agent_events | — | Pharos cannot stop it; the import is one transaction, so a kill leaves the previous events. | none (to Pharos) | always | fg |
-| `tools.ledger.build` | Build the Tools ledger · Building the Tools ledger | user (`POST /api/tools/backfill`), version, step of `library.upgrade` | svc, cli (`build-tools`) | D:w W:w | an.ledger, an.tools | — | Stops between conversations; building the ledger again resumes it. | record | always | fg |
+| `tools.ledger.build` | Build the tool index · Building the tool index | user (`POST /api/tools/backfill`), version, step of `library.upgrade` | svc, cli (`build-tools`) | D:w W:w | an.ledger, an.tools | — | Stops between conversations; building the tool index again resumes it. | record | always | fg |
 
 Notes:
 
@@ -649,10 +675,26 @@ whose `D` hold is `:w`, is classified as read-only.
 ### 4.4 Broker operations and other libraries
 
 The broker's verdict for a library also considers broker operations naming
-it. The delivery cycle stops (SIGTERMs) the services of both libraries in
-the pair before it captures and transfers (`deliveryCycle`,
-`application_jobs.go`); while it runs, both libraries are `busy`, with the
-blocker "Delivering history".
+it. The delivery cycle (`deliveryCycle`, `application_jobs.go`) first checks
+pending history, retained evidence and destination-specific source fingerprints
+without stopping either service or registering a delivery operation. An idle
+cycle leaves both services running. Capture stops only the pending library's
+service; the archive service stops only once transferable history is established.
+Archive availability is rechecked under the broker lock after preflight, so a
+disconnect during source discovery prevents delivery while allowing local capture.
+Operations name the pending library during capture and both libraries during
+transfer, with the blocker "Delivering history". Fingerprint checks retain
+content verification, including same-size/same-timestamp rewrites; they can read
+source files at utility disk priority, but do not parse, capture or transfer
+unchanged inputs.
+
+A completed capture/index records the retained input fingerprints before
+indexing and acknowledges them only after every index succeeds. While an archive
+is disconnected, unchanged captures wait locally without repeating processing.
+This receipt is separate from verified delivery acceptance. A pending delivery
+journal takes precedence over an empty source catalog and resumes the existing
+verified cleanup protocol. Unknown inputs or unreadable receipts are reported
+and retried at the bounded delivery cadence; they are never accepted as current.
 
 ## 5. Freshness domains
 
@@ -797,7 +839,7 @@ additive index, `operation_journal_kind (host_id, kind, started_at DESC)`.
 | `an.identities` | the later of `sync_deferred[identities].completed_at` and its latest succeeded journal row | count unknown: `sync_deferred` generations count written records, not runs | `running`, `failed` / `blocked` (below), `scheduled-frequent` / `scheduled-hourly` / `scheduled-daily` (`scheduled`: work waits for its background item's cadence, §11), `late` (behind: it has waited longer than its cadence's window, 30 min, 3 h or 30 h, since `sync_deferred.pending_since`), `deferred-by-schedule` (behind: background updates are off or paused, or the item is set to only when you ask), `no-record` (unknown), `changed` (the inputs moved since its completion: a write outside the chain, such as a Terminal ingest) | `analysis.chain`, `analysis.identities`, `analysis.github` |
 | `an.git` | as above, for `git` | as above | as above (`git-unavailable` is not detected: the 6 h retry timers are in memory) | `analysis.git`, `analysis.chain`, `analysis.refresh` |
 | `an.tools` (Tools rollup) | as above, for `tools` | `COUNT(*)` of `tool_rollup_dirty` (capped), unit workspace, when that is why | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `version` (an older layout), `changed` (a newer ledger generation, dirty workspaces, another timezone: the `toolRollupStale` rule) | `analysis.tools`, `library.upgrade`, `tools.ledger.build` |
-| `an.authorship` | latest of `authorship_quick_at`, `authorship_built_at` | both visible and exact generations lag inputs, or queued messages remain | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `changed` | `analysis.authorship` |
+| `an.authorship` | `authorship_complete_at` | both visible and exact generations lag inputs, or queued messages remain | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `changed` | `analysis.authorship` |
 | `an.authorship.refined` | `authorship_refined_at` | exact `authorship_generation` lags inputs | scheduled daily / late / running | `analysis.authorship.refine` |
 | `an.ledger` (tool ledger) | when it was last counted | the upgrade's `tools` step count, from the last `UpgradeSteps` | `running`, `not-counted` (unknown: not counted by this build), `version` | `tools.ledger.build`, `library.upgrade` |
 | `findings` | `findings_built_at` | count unknown | `running`, `failed` / `blocked`, `never-built`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `scheduled-daily` (today's full pass waits for the daily time, or ran less than 12 h past it), `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown: today's pass ran on an older build), `changed` (`scheduled`: new data since today's full pass). Both say what runs the next full pass: "updates with Refresh findings now, or the first index tomorrow", or with scheduled indexing on (which defers findings) "…, or the next manual index", and the muted short "updates tomorrow" / "updates with manual index" | `analysis.findings`, `analysis.chain` |
@@ -1217,7 +1259,7 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   }],
   "attention": [{"id": "backup-failed", "severity": "error", "title": "The last backup failed",
                  "detail": "…", "action": {"label": "Open Backups", "path": "/settings/backups"}}],
-  "freshness": [{"domain": "an.tools", "group": "analyses", "label": "Tools rollup", "as_of": "…",
+  "freshness": [{"domain": "an.tools", "group": "analyses", "label": "Tool summaries", "as_of": "…",
                  "behind": {"state": "behind", "count": null, "unit": null}, "state_label": "Behind",
                  "reason": {"code": "deferred-by-schedule", "text": "Waits for Update everything now"},
                  "catching_up": null, "catching_up_label": null, "next": "updates with the next manual index"}],
@@ -1240,6 +1282,9 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   whole `eject` document and the journal rows.
 - `step.fraction` is present only when `unit` is real and `total` known.
   There is no overall percentage.
+- Optional `step.detail` describes concurrent stages or secondary counts without
+  starting another step. The panel shows it beside the phase; the journal retains
+  it as `detail_json.step_detail`, including for another process's operation.
 - `time` reuses the forecast states of
   [Progress and time estimates](progress-estimates.md). A range is shown
   only for `estimating`, or `provisional` marked as early ("about 3–6 min,
@@ -1429,7 +1474,8 @@ Scheduled (muted: "updates tomorrow"; never "stale"), `behind` Behind,
 ### 8.3 Reason codes
 
 Blocked: `capture-running`, `ingest-busy` (another run holds the
-coordinator), `catalog-busy` (the writer, with retries), `interactive-query`
+coordinator, including its follow-up analysis), `search-stopped` (the Search
+view refresh waits for Resume), `catalog-busy` (the writer, with retries), `interactive-query`
 (yielding to interactive reads when enabled), `destination-busy`,
 `waiting-for-drive`, `waiting-for-network`. Skipped: `already-running`,
 `nothing-to-do`, `disabled`, `capture-busy`, `deferred-to-<kind>`,
@@ -1480,6 +1526,20 @@ non-test files and fails on any `spawn(`, `runBackground(` or `go func`
 that is not inside `start`/`begin`, not a registered daemon, and not on an
 allowlist with a reason (request handling, subprocess pipes, timers).
 
+Shared query-cache builds are read-only preparation, not structural background
+work. Each requesting page can cancel its own wait. Builds retain their own
+budgets (Thinking allows two minutes); the cache adds no shorter deadline and
+keeps completed values. A build that no request waits for any more stops after
+a three-second grace period (`derivedIdleGrace`), which lets a reload reattach,
+and its result is discarded. Cancelling it ends its reader transaction, so an
+abandoned page holds no reader connection or WAL snapshot. A build for a
+superseded generation stops as soon as its last waiter leaves. Warm-up builds
+(`warmCaches`) run to completion. The catalog tracks these workers,
+cancels them on close, and joins them before closing SQLite connections. Each
+worker enables mapped-memory fault protection and uses the service's clean exit
+or direct MCP's disconnected-library recovery. Large session-statistics backfills
+belong to `maintenance.session-shape`, never to this cache preparation.
+
 ## 10. Resources
 
 Phase 4 measures, and the snapshots report, per process (`resources.go`):
@@ -1503,9 +1563,20 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   rate is measured once against this process's own `getrusage` (snapped
   to 1 GHz or 24 MHz within 5 %), not taken from `hw.tbfrequency`, which a
   process under Rosetta may be told differently; until the process has
-  used 20 ms of CPU, `hw.tbfrequency` stands in. No `ps` fork. Off macOS a process reads
-  only itself (getrusage and the Go runtime's memory), with `basis`
-  `self-reported` and `approximate: true`.
+  used 20 ms of CPU, `hw.tbfrequency` stands in. No `ps` fork. On Linux a
+  process reads only itself (getrusage CPU and the Go runtime's memory, which
+  is not a resident size), with `basis` `self-reported` and `approximate:
+  true`. No other platform has OS process counters implemented: a process
+  reads only the Go runtime's memory, with `basis` `go-runtime`, and its CPU
+  and disk are unavailable.
+- **Unavailable counters.** Each reading names the counters it has. One it
+  lacks (unsupported, or its read failed) is unavailable, not zero: a rate
+  needs the counter at both ends, a counter that goes backwards starts a new
+  baseline, and counters are independent (disk keeps its rate when CPU is
+  unavailable). A reading's `memory_bytes` is `null` when not read. A total
+  sums what was measured: `cpu_partial` also covers a process whose CPU
+  cannot be read (the label says so), `memory_partial` a process whose memory
+  cannot be read, and a total no process measured is `null`.
 - **When.** Only when a snapshot is computed, and at most once per process
   per 1.5 s (`resourceSampleInterval`): Pharos measures only while someone
   is looking. Nothing is sampled while no page is open, and with any
@@ -1557,7 +1628,9 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   per-machine and per-library answers.
 - **Index runs' telemetry** (`incremental_metrics.go`) reads its RSS from
   the same call's `ri_resident_size`, the figure `ps -o rss` reports, so
-  RSS history stays comparable; `ps` remains the fallback. Recorded CPU
+  RSS history stays comparable; `ps` remains the fallback (on Linux, the
+  source). A figure that could not be read is `null`, not zero
+  ([incremental-sync.md](incremental-sync.md)). Recorded CPU
   shifts a little lower: it includes `RUSAGE_CHILDREN`, which counted the
   once-a-second `ps` forks. This changes no behaviour and drops one fork
   per second of a run.
@@ -1611,13 +1684,16 @@ library entry's own as `libraries[].resources`):
 `role` is `service`, `broker` or the lease's process (`cli:ingest`).
 `label` and `text` are the server's words. The panel's Load row shows CPU
 (% of one core), GPU, RAM and Disk (per second) in one row, each with its icon,
-for the machine in the app and the library otherwise, with `label` and the
-processes' `text` in its tooltip. The panel's Load row is
+for the machine in the app and the library otherwise. The panel's Load row is
 CPU | GPU | RAM | I/O | Storage, with a WAL cell only when the known size
 exceeds 1,000,000,000 bytes (one decimal GB). GPU is a percentage from
-0–100 with a tooltip identifying its process scope and warming clients;
-an unavailable reading is a dash. Services without a GPU field omit that
-cell. All metrics remain on one line, including when WAL is shown.
+0–100; an unavailable reading is a dash. Services without a GPU field omit that
+cell. All metrics remain on one line, including when WAL is shown. The row has
+no summary tooltip; resource labels and values are already visible. Partial
+CPU, GPU and I/O rates carry a visible `≥` qualifier and a per-metric warning
+that processes or clients awaiting another sample may cause undercounting. An
+unmeasured rate remains a dash. Per-process
+`text` remains available in the status API.
 I/O is `disk_bytes_per_second`, and
 Storage is the library's `storage_bytes` in the status snapshot (what it
 keeps on its drive, from the last drive check, which Health refreshes;
@@ -1697,8 +1773,8 @@ the same schedule from one declaration (`backgroundItems`):
 | Preserve originals | capture this Mac, then index every Mac's captures | Daily | `background.capture/preserve` |
 | Repositories & merges | the chain's GitHub, identities and Git stages | Frequently, adaptive | the three stages |
 | Tools & usage | the chain's tools stage | Frequently, adaptive | `analysis.tools` |
-| Update writing estimates | bounded queued-message pass, with exact suffix reuse when cheap | Frequently | `analysis.authorship` |
-| Refine writing history | full historical classifier after the chain | Daily | `analysis.authorship.refine` |
+| Update writing estimates | bounded recent/history lanes with reserved capacity, durable per-message outcomes, and exact suffix reuse when cheap | Frequently | `analysis.authorship` |
+| Refine writing history | full historical classifier after the chain, when its input/version/calendar receipt is stale or work remains unfinished | Daily | `analysis.authorship.refine` |
 | Findings | the chain's findings stage, not forced | Hourly, adaptive | `analysis.findings` |
 | Message labels | the chain's labels stage, only where `labels_enabled` is on (docs/local-labeler.md) | Hourly, adaptive | `analysis.labels` (not its `backlog` runs) |
 | Agent events | the chain's agent events stage, only where the agent events switch (Settings → Background Processing) or `agent_events_enabled` is on (docs/agent-events.md) | Hourly, adaptive | `analysis.agent_events` (not its `backlog` runs) |
@@ -1806,6 +1882,10 @@ the same schedule from one declaration (`backgroundItems`):
   carries `typical`, the middle of its recent runs ("Typically 2–3 h",
   between the runs a quarter of the way in from each end), which leads its
   line in Settings.
+  For labels and agent events, `as_of` uses the newer of the last successful
+  background pass and deferred-stage completion. A bounded pass
+  updates Last run and starts the cadence's clock even while its backlog
+  remains pending; pending generations still determine whether work remains.
   `GET /api/background` adds the settings, the placement rule and the last
   24 hours' cost (measured for scheduled indexing and journaled passes,
   else projected from the items' costs; Frequently counts scheduled
@@ -1827,15 +1907,15 @@ the same schedule from one declaration (`backgroundItems`):
   task, shows its cadence beside it, and marks its place among the planned
   tasks. The marker is a task position, not an elapsed-time percentage; a
   measured step has a separate accessible progress bar. All active operations
-  are shown, foreground first, including concurrent maintenance. Each line
-  uses its active child's current phase and counts, without inheriting a
+  are shown in start order, oldest first, including concurrent maintenance.
+  Each line uses its active child's current phase and counts, without inheriting a
   previous stage's percentage. A wait or stop on any ancestor remains visible
   alongside those child counts; stopping takes precedence over waiting, and
   waiting suppresses the running countdown. Unknown totals keep completed counts and use
   an indeterminate bar; elapsed time and actual query/writer wait reasons
-  remain visible. Other running lines say who
-  started them (`trigger`); this describes provenance, not a wait. An alert's title and action share a line, its detail
-  below.
+  remain visible. Other running lines identify user or scheduled starts
+  (`trigger`); chained work adds no provenance label. An alert's title and
+  action share a line, its detail below.
 
 ## Known hazards this contract must not hide
 

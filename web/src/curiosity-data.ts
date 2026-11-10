@@ -14,15 +14,19 @@ import { toolFlowRecipes, refineToolFlowRecipe } from "./tool-flow-recipes";
 import { skillsInstructionsRecipes, refineSkillsInstructionsRecipe } from "./skills-instructions-recipes";
 import { researchRecipes, refineResearchRecipe } from "./research-recipes";
 import { tokenUsageRecipes, refineTokenUsageRecipe } from "./token-usage-recipes";
+import { qualifyLineage } from "./card-qualifier";
 import { delegationRecipes, refineDelegationRecipe } from "./delegation-recipes";
 import { steeringRecipes, refineSteeringRecipe } from "./steering-recipes";
 import { apiCostRecipes, refineApiCostRecipe } from "./api-cost-recipes";
 import type { HumanStudy } from "./human-study";
 import type { CardTrend } from "./card-trend";
 import { coverageRecipes } from "./coverage-recipes";
+import { sessionShapeCardRecipes } from "./session-shape-card-recipes";
 import type { ThinkingState } from "./thinking-model";
 import { thinkingCardRecipes } from "./thinking-card-recipes";
 import { dashboardCardRecipes } from "./dashboard-card-recipes";
+import { agentEventCardRecipes } from "./agent-event-card-recipes";
+import { digestCardRecipes } from "./digest-card-recipes";
 import { weekdayRecipes } from "./weekday-recipes";
 import { habitsCardRecipes } from "./habits-card-recipes";
 import type { HabitsCardTarget } from "./habits-card";
@@ -94,7 +98,7 @@ const baseRecipes: QueryRecipe[] = [
   { ...usage, id: "usage-repos", category: "usage", idea: "cost-01", title: "Where does my usage go?", description: "Daily tokens across your projects.", where: [positive("total_tokens")], measures: [sum("total_tokens", ["day", "project_name"], "Daily tokens by project")], scope: "project_name" },
   { ...usage, id: "cost-repos", category: "cost", idea: "cost-01", title: "What is the API equivalent?", description: "Recorded usage priced at standard API rates, by project.", where: [positive("cost_usd")], measures: [sum("cost_usd", ["day", "project_name"], "Daily API equivalent by project")], unit: "USD", scope: "project_name", note: "API equivalent; partial and assumed pricing can contribute" },
   { ...usage, id: "cache-reads", category: "context", idea: "cost-03", title: "Where is caching used?", description: "Recorded cache-read tokens by model; inspect usage details.", where: [positive("cache_read_input_tokens")], measures: [sum("cache_read_input_tokens", ["day", "model_family"], "Daily cache-read tokens by model")], scope: "model_family" },
-  { ...usage, id: "subagent-usage", category: "delegation", idea: "models-06", title: "What happens in subagents?", description: "Attributed subagent tokens across projects.", where: [equal("session_kind", "subagent"), positive("total_tokens")], measures: [sum("total_tokens", ["day", "project_name"], "Daily subagent tokens")], scope: "project_name" },
+  { ...usage, id: "subagent-usage", category: "delegation", idea: "models-06", title: "What happens in sub-agents?", description: "Attributed sub-agent tokens across projects.", where: [equal("session_kind", "subagent"), positive("total_tokens")], measures: [sum("total_tokens", ["day", "project_name"], "Daily sub-agent tokens")], scope: "project_name" },
   ...richerQueryRecipes,
   ...newCardRecipes,
   ...wishlistCardRecipes,
@@ -110,12 +114,15 @@ const baseRecipes: QueryRecipe[] = [
   ...delegationRecipes,
   ...steeringRecipes,
   ...coverageRecipes,
+  ...sessionShapeCardRecipes,
   ...dashboardCardRecipes,
+  ...agentEventCardRecipes,
+  ...digestCardRecipes,
   ...thinkingCardRecipes,
   ...weekdayRecipes,
   ...habitsCardRecipes,
 ];
-export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe).map(refineCardDestination);
+export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe).map(qualifyLineage).map(refineCardDestination);
 
 export const supportsToday = (recipe: QueryRecipe) => !recipe.period && !recipe.weekday && !recipe.trend?.completeDays && !recipe.humanStudy && !["tl1_attempts", "findings"].includes(recipe.dataset);
 export function describeRecipeText(text: string, days: WindowChoice | null): string {

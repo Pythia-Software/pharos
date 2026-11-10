@@ -58,7 +58,7 @@ var (
 	crashReportBytes int64 = 32 << 20
 )
 
-const diagnosticJournalLimit = 300
+var diagnosticJournalLimit = 300
 
 func diagnosticLogsRoot() string { return filepath.Join(pharosSupportDir(), "logs") }
 
@@ -246,12 +246,19 @@ type requestTrace struct {
 	stream atomic.Bool
 	body   []byte
 	panic  string
+	// timing is where the request's time went (request_timing.go); ctx
+	// carries it to the request's writes, statements and derived values.
+	timing *requestTiming
+	ctx    context.Context
 }
 
 func (t *requestTrace) WriteHeader(status int) {
 	if t.status == 0 {
 		t.status = status
 		t.stream.Store(strings.HasPrefix(t.Header().Get("Content-Type"), "text/event-stream"))
+		if t.timing != nil {
+			t.timing.stream.Store(t.stream.Load())
+		}
 	}
 	t.ResponseWriter.WriteHeader(status)
 }
@@ -274,7 +281,8 @@ func (t *requestTrace) Flush() {
 
 func (t *requestTrace) Unwrap() http.ResponseWriter { return t.ResponseWriter }
 
-// traceRequest starts timing r. The log pages' own reads are not traced.
+// traceRequest starts timing r on the goroutine that answers it. The log
+// pages' own reads are not traced.
 func (s *Server) traceRequest(w http.ResponseWriter, r *http.Request) (*requestTrace, func()) {
 	if strings.HasPrefix(r.URL.Path, "/api/logs/") {
 		return nil, func() {}
@@ -285,6 +293,9 @@ func (s *Server) traceRequest(w http.ResponseWriter, r *http.Request) (*requestT
 		path += "?" + truncateText(r.URL.RawQuery, 300)
 	}
 	trace := &requestTrace{ResponseWriter: w, method: r.Method, path: path, read: diagnosticRead(r), started: time.Now()}
+	// The line in the service's log names the route alone: a query string
+	// can hold what someone searched for.
+	trace.ctx, trace.timing = beginRequestTiming(r.Context(), s.Catalog, r.Method+" "+r.URL.Path, interactiveRead(r) || r.URL.Path == mcpRPCPath)
 	d.mu.Lock()
 	d.next++
 	trace.id = d.next
@@ -294,7 +305,13 @@ func (s *Server) traceRequest(w http.ResponseWriter, r *http.Request) (*requestT
 		d.mu.Lock()
 		delete(d.running, trace.id)
 		d.mu.Unlock()
-		if event, ok := requestEvent(trace, time.Since(trace.started)); ok {
+		trace.timing.finish()
+		elapsed := time.Since(trace.started)
+		trace.timing.logSlowRequest(elapsed, trace.status, r.Context().Err() != nil)
+		if event, ok := requestEvent(trace, elapsed); ok {
+			if event.Kind == "slow" {
+				event.Detail = trace.timing.breakdown(elapsed)
+			}
 			d.requests.add(event)
 		}
 	}

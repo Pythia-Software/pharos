@@ -11,7 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 const libraryDescriptorName = "pharos-library.json"
@@ -61,20 +62,28 @@ type installationRegistry struct {
 	DeliveryTarget string `json:"delivery_target,omitempty"`
 }
 
+// Tests replace only fileLease's lock calls to exercise adapter failures.
+var lockFileLease = filelock.Lock
+
 // fileLease is deliberately separate from SQLite's short transaction locks:
 // offline migrations must exclude services, captures and other CLI writers.
+// Only another holder is "busy"; any other failure keeps its own cause, so
+// callers test errors.Is(err, filelock.ErrContended) before saying busy.
 func fileLease(path string, exclusive bool) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	mode := syscall.LOCK_SH
+	mode := filelock.Shared
 	if exclusive {
-		mode = syscall.LOCK_EX
+		mode = filelock.Exclusive
 	}
-	if err = syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB); err != nil {
+	if err = lockFileLease(f, mode, filelock.Try); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("Pharos is using this library; close its active operation and retry: %w", err)
+		if errors.Is(err, filelock.ErrContended) {
+			return nil, fmt.Errorf("Pharos is using this library; close its active operation and retry: %w", err)
+		}
+		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
 	return f, nil
 }
@@ -95,7 +104,7 @@ func durableJSON(path string, value any) error {
 		return err
 	}
 	defer f.Close()
-	return f.Sync()
+	return syncToDrive(f)
 }
 
 func descriptorPath(config Config) string {
@@ -117,14 +126,41 @@ func readLibraryDescriptor(config Config) (LibraryDescriptor, error) {
 	if d.Version != libraryFormatVersion || d.ID == "" || d.Instance == "" {
 		return d, fmt.Errorf("this library needs a newer Pharos or a valid library descriptor")
 	}
-	info, err := os.Stat(filepath.Dir(descriptorPath(config)))
+	inode, err := observeLibraryDirectory(filepath.Dir(descriptorPath(config)))
 	if err != nil {
 		return d, err
 	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok && d.Inode != uint64(stat.Ino) {
+	if d.Inode != inode {
 		return d, fmt.Errorf("this is a copied library; use Recover library to create its independent writable identity")
 	}
 	return d, nil
+}
+
+// statLibraryDirectory is os.Stat outside tests.
+var statLibraryDirectory = os.Stat
+
+// errLibraryDirectoryUnobserved marks a library whose directory inode could
+// not be read. Its cause may itself be os.ErrNotExist, which must not read as
+// a missing descriptor: see libraryDescriptorMissing.
+var errLibraryDirectoryUnobserved = errors.New("cannot observe the identity of library directory")
+
+// observeLibraryDirectory reads the v1 directory_inode of dir. Platforms
+// without one cannot create or validate a v1 writable library.
+func observeLibraryDirectory(dir string) (uint64, error) {
+	info, err := statLibraryDirectory(dir)
+	if err == nil {
+		var inode uint64
+		if inode, err = libraryDirectoryInode(info); err == nil {
+			return inode, nil
+		}
+	}
+	return 0, fmt.Errorf("%w %s: %w", errLibraryDirectoryUnobserved, dir, err)
+}
+
+// libraryDescriptorMissing reports that readLibraryDescriptor found no
+// descriptor, as opposed to one it could not check.
+func libraryDescriptorMissing(err error) bool {
+	return errors.Is(err, os.ErrNotExist) && !errors.Is(err, errLibraryDirectoryUnobserved)
 }
 
 func ensureLibraryDescriptor(config Config, name string) (LibraryDescriptor, error) {
@@ -132,7 +168,7 @@ func ensureLibraryDescriptor(config Config, name string) (LibraryDescriptor, err
 	if err == nil {
 		return d, nil
 	}
-	if !errors.Is(err, os.ErrNotExist) {
+	if !libraryDescriptorMissing(err) {
 		return d, err
 	}
 	// Never create a descriptor (or a missing mount point) for absent data.
@@ -146,20 +182,17 @@ func ensureLibraryDescriptor(config Config, name string) (LibraryDescriptor, err
 	defer lock.Close()
 	if d, err = readLibraryDescriptor(config); err == nil {
 		return d, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if !libraryDescriptorMissing(err) {
 		return d, err
 	}
 	if name = strings.TrimSpace(name); name == "" {
 		name = filepath.Base(filepath.Dir(config.Path))
 	}
-	info, err := os.Stat(filepath.Dir(descriptorPath(config)))
+	inode, err := observeLibraryDirectory(filepath.Dir(descriptorPath(config)))
 	if err != nil {
 		return d, err
 	}
-	d = LibraryDescriptor{Version: libraryFormatVersion, ID: randomToken(), Instance: randomToken(), Name: name}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		d.Inode = uint64(stat.Ino)
-	}
+	d = LibraryDescriptor{Version: libraryFormatVersion, ID: randomToken(), Instance: randomToken(), Name: name, Inode: inode}
 	return d, durableJSON(descriptorPath(config), d)
 }
 
