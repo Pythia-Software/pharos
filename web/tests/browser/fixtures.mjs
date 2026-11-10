@@ -477,7 +477,6 @@ const carbon = { factors: carbonFactors, windows: [{ key: "all", tokens: carbonT
   series: Array.from({ length: 20 }, (_, index) => ({ day: new Date(now - index * day).toLocaleDateString("en-CA"), value: "", tokens: carbonTokens })), choices: { provider: ["codex", "claude"], repository_name: ["pythia-software/pharos"] },
   default_tier_models: [{ model: "mystery-model", tokens: 500000 }], default_tier_unknown_tokens: 250000, unclassified_tokens: 100000, undated_tokens: 0 };
 
-const mcpCall = { id: 1, called_at: iso(3600000), tool_name: "search_conversations", arguments_json: '{"query":"parser"}', status: "ok", error_text: null, duration_ms: 18, response_bytes: 900, estimated_output_tokens: 300, result_count: 3, truncated: 0 };
 const toolsStatus = { conversations: 10, current_conversations: 10, pending_conversations: 0, tool_calls: 400, backfill: { running: false, done: 0, total: 0, error: null } };
 const writingCounts = (typed, pasted, harness) => ({
   typed_words: typed, pasted_words: pasted, harness_words: harness, words: typed + pasted + harness,
@@ -951,7 +950,6 @@ export const defaultApi = {
   "GET /api/findings/:id": ({ params }) => { const card = findingCards.find(item => item.id === params.id); return card && findingDetail(card); },
   "GET /api/mcp": ({ state }) => ({ enabled: state.mcpEnabled ?? true, transport: "stdio", command: "/Applications/Pharos.app/Contents/MacOS/pharos", args: ["--config", "/Users/someone/Library/Application Support/Pharos/archive.toml", "mcp"], note: "Agent clients launch this local command when they connect.", skill: { name: "search-prior-coding-sessions", text: "Search prior coding sessions with Pharos.", paths: { codex: "~/.codex/skills/search-prior-coding-sessions/SKILL.md" } } }),
   "POST /api/mcp/enabled": ({ body, state }) => { state.mcpEnabled = body.enabled; return { enabled: body.enabled }; },
-  "GET /api/mcp/calls": { items: [mcpCall], filtered_total: 1, tool_stats: [{ tool_name: "search_conversations", calls: 1, errors: 0, average_output_tokens: 300, largest_output_tokens: 300, truncated_calls: 0, average_duration_ms: 18 }], stats: { total_calls: 1, failed_calls: 0, average_output_tokens: 300, largest_output_tokens: 300, truncated_calls: 0 } },
 
   // The workspace reader and delegation explorer.
   "GET /api/work/:id": ({ params }) => params.id === workID ? work : undefined,
