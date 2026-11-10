@@ -500,7 +500,7 @@ const ROUTES = [
     cycle: { view: "cycle", cycle: "hour", metric: "tokens", split: "none" },
   }).map(([view, chart]) => ({ name: `Tokens and Cost ${view} view`, url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify(chart))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations',
     check: async page => assert.equal(await page.locator(".usage-analysis-dashboard [role=alert]").count(), 0, "the analysis reports an error") })),
-  { name: "Tokens and Cost trend ratio", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "day", metric: "cache_read_share", split: "provider_model", rollingPeriods: 7 }))}`,
+  { name: "Tokens and Cost trend ratio", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "day", metric: "cache_read_share", split: "provider_model", rollingPeriods: 7 }))}&disclosures=${encodeURIComponent(JSON.stringify({ "dashboard:view": true }))}`,
     api: { 'GET /api/pricing': missingPrices },
     ready: '.usage-dashboard section[aria-label="Over time"][aria-busy="false"] .usage-query-destinations',
     check: async page => assert.equal(await page.locator('section[aria-label="Over time"] .query-table-error').count(), 0, "the trend reports an error") },

@@ -662,10 +662,13 @@ no sum, cumulative or share.
   holds: Analysis (Over time, Compare groups, Distribution, Scatter plot,
   cycle; the state's `view` key), Count each, Metric, Breakdown, Combine
   or Summarize, Minimum, Cycle, Population, Range, and for the trend Time
-  bucket and Periods (whole periods only). **View**, a labelled row of its
-  own, chooses how those same groups, records and periods are drawn:
-  Display, Show as (values, without zeroes or shares; Compare's bars or
-  share of total), Scale, Smoothing with its Window (average or total)
+  bucket and Periods (whole periods only). **View** chooses how those same
+  groups, records and periods are drawn. Since the chart draws its defaults
+  without help, View is a disclosure (`ViewDisclosure`, key
+  `dashboard:view` in `disclosures`) closed at the end of the controls,
+  marked "changed" when the reader has chosen a view setting; open, it
+  takes a row of its own. It holds Display, Show as (values, without
+  zeroes or shares; Compare's bars or share of total), Scale, Smoothing with its Window (average or total)
   and %ile, a multi-select of reference levels (`PercentileControl`; a
   level the chart cannot draw is disabled with its reason,
   `percentileLimit`). The test for View: the chart's underlying table

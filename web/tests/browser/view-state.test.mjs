@@ -1711,9 +1711,13 @@ test('native Message Labels dashboards and conversation cards share standard nav
  const plot=await page.locator('.usage-chart-bars').boundingBox();await page.mouse.move(plot.x+plot.width*.2,plot.y+plot.height/2);await page.mouse.down();await page.mouse.move(plot.x+plot.width*.7,plot.y+plot.height/2);await page.mouse.up();await app.settled();
  assert.ok(new URL(page.url()).searchParams.get('analyze_filters'));
  await page.getByRole('combobox',{name:'Breakdown',exact:true}).selectOption('label');
+ // View is closed until the reader opens it; the URL keeps it open.
+ assert.equal(await page.getByRole('combobox',{name:'Scale',exact:true}).count(),0);
+ await page.locator('.dashboard-controls-view > summary').click();
  await page.getByRole('combobox',{name:'Show as',exact:true}).selectOption('values');
  await page.getByRole('combobox',{name:'Scale',exact:true}).selectOption('logarithmic');await app.settled();
  const copy=await open(t,{api,url:path(page),ready:'.usage-labels-dashboard'});assert.equal(await copy.page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'label');
+ assert.equal(await copy.page.getByRole('combobox',{name:'Scale',exact:true}).inputValue(),'logarithmic');
  assert.equal(await copy.page.getByRole('combobox',{name:'Analysis',exact:true}).inputValue(),'trend_bar');
  await copy.page.getByRole('combobox',{name:'Analysis',exact:true}).selectOption({label:'Over time - line'});await copy.settled();
  const line=await open(t,{api,url:path(copy.page),ready:'.usage-labels-dashboard'});assert.equal(await line.page.getByRole('combobox',{name:'Analysis',exact:true}).inputValue(),'trend_line');
@@ -1980,6 +1984,7 @@ test('component share charts restore their controls across reloads and view swit
  await control('Analysis').selectOption('compare');
  await control('Metric').selectOption('words');
  await control('Breakdown').selectOption('category');
+ await page.locator('.usage-human-dashboard .dashboard-controls-view > summary').click();
  await control('Show as').selectOption('share');
  await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await app.settled();
  const saved=path(page);
