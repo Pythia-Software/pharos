@@ -94,6 +94,33 @@ function pharosCapabilityRows(providers,kinds) {
   })}));
 }
 
+// Counts describe the supplied export records. Collection and indexing have
+// separate completion states, and a set without a manifest has unknown coverage.
+function pharosClaudeImportSummary(job) {
+  // Excluded parts (account details, sign-in history) are never kept.
+  const parts=(job.parts||[]).filter(part=>part.state!=='excluded'),collected=parts.filter(part=>part.state==='collected');
+  return {expected:parts.length,collected:collected.length,
+    conversations:collected.reduce((sum,part)=>sum+(part.conversations||0),0),
+    messages:collected.reduce((sum,part)=>sum+(part.messages||0),0),
+    complete:parts.length>0&&collected.length===parts.length,
+    knownCoverage:job.completeness==='manifest'};
+}
+
+// One watched Claude export as Settings shows it: what Pharos is doing, why it
+// stopped, and which decisions are the person's. Retrying reopens a link, so
+// it is offered only after Pharos has stopped on its own or been stopped.
+function pharosClaudeWatchLine(item) {
+  const files=`${item.collected||0} of ${item.expected||0} files collected`;
+  const line={
+    fetching:{text:item.waiting_file?`Waiting for ${item.waiting_file} from ${item.browser_label||'your browser'} · ${files}`:`Collecting · ${files}`,actions:['stop'],attention:false},
+    paused:{text:`Paused · ${files}`,actions:['retry','stop'],attention:true},
+    stopped:{text:`Stopped · ${files}`,actions:['retry'],attention:false},
+    expired:{text:`Download links expired · ${files}`,actions:[],attention:true},
+    imported:{text:`Imported · ${files}`,actions:[],attention:false},
+  }[item.state]||{text:files,actions:[],attention:false};
+  return {...line,detail:item.message||''};
+}
+
 // Source setup UI.
 // Detect installed tools and familiar data folders before offering choices. The same
 // guide runs inside application setup and from Settings → Sources. Approval
@@ -188,6 +215,9 @@ function pharosCapabilityRows(providers,kinds) {
 .pharos-not-found{margin-top:4px;font-size:13px}
 .pharos-not-recorded{font-size:12px}
 .pharos-export-how{margin:12px 0 4px}
+.pharos-claude-downloads{display:grid;gap:12px;margin:16px 0}
+.pharos-claude-downloads a{overflow-wrap:anywhere}
+.pharos-claude-parts{max-width:100%;overflow-wrap:anywhere}
 .pharos-modes.pharos-pair{grid-template-columns:repeat(2,minmax(0,1fr))}
 .pharos-chips{display:flex;flex-wrap:wrap;gap:8px;border:0;margin:0;padding:0;min-width:0}
 .pharos-onboard .pharos-chip-option{display:inline-flex;align-items:center;gap:8px;margin:0;padding:8px 14px;border:1px solid var(--line);border-radius:20px;background:var(--bg);font:600 13px/1.3 var(--sans);cursor:pointer}
@@ -233,7 +263,14 @@ function pharosCapabilityRows(providers,kinds) {
 .pharos-working .pharos-meter>span{display:block;width:35%;height:100%;background:var(--accent,#315845);animation:pharos-onboard-slide 1.6s ease-in-out infinite}
 @keyframes pharos-onboard-slide{from{transform:translateX(-100%)}to{transform:translateX(286%)}}
 @media(max-width:600px){.pharos-onboard{padding:24px;width:calc(100% - 24px);max-height:calc(100dvh - 24px)}.pharos-onboard>h2,.application-setup .pharos-onboard>h2{font-size:27px}.pharos-onboard-intro,.application-setup .pharos-onboard-intro{font-size:14px}.pharos-modes.pharos-pair{grid-template-columns:1fr}.pharos-onboard-actions{gap:8px}.pharos-onboard .pharos-onboard-actions button{min-width:0;padding:7px 10px}.pharos-candidate-name{flex-wrap:wrap}.pharos-candidate-name input{max-width:100%;box-sizing:border-box}.pharos-onboard .pharos-places{margin:0 14px 14px}.pharos-path-row{flex-wrap:wrap}.pharos-path-row input{flex-basis:100%}}
-@media(prefers-reduced-motion:reduce){.pharos-working .pharos-meter>span{animation:none;width:100%;opacity:.5}}`;
+@media(prefers-reduced-motion:reduce){.pharos-working .pharos-meter>span{animation:none;width:100%;opacity:.5}}
+.claude-downloads-watch{margin-top:16px;padding:4px 20px 16px}.layout-preference-card.claude-downloads-watch>.optional-behavior{padding:16px 0;border-bottom:0}
+.claude-watch-how{margin:0 0 12px}.claude-watch-exports{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}.claude-watch-export{min-width:0}.claude-watch-exports:empty{display:none}
+.claude-watch-export h4{margin:0;font-size:var(--fs-base)}.claude-watch-export p{margin:4px 0 0;overflow-wrap:anywhere}
+.claude-watch-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
+.claude-watch-options{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:0 0 12px}.claude-watch-options>p{flex-basis:100%;margin:0}
+.claude-watch-browser{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;max-width:100%}.claude-watch-browser select{flex:1 1 12em;width:100%;max-width:100%;min-width:0}
+@media(max-width:560px){.claude-downloads-watch>.optional-behavior{flex-wrap:wrap;gap:12px}.claude-downloads-watch>.optional-behavior>div{flex-basis:100%}}`;
 
   const node = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -590,6 +627,64 @@ function pharosCapabilityRows(providers,kinds) {
       actions.replaceChildren(step(3),button('Back',false,renderFound),add);
     }
 
+    async function renderClaudeCollection(back, selectedJob=null, wait=false) {
+      const view=active;
+      heading('Collect your Claude export.','Download links use your signed-in browser. Pharos verifies completed files and keeps a resumable copy in your library.');
+      clear();active.back=back;
+      const progress=node('p','','Checking collected files…');progress.setAttribute('role','status');body.append(progress);
+      const current=()=>active===view&&progress.isConnected;
+      try {
+        let report=await call('/api/claude-imports');
+        // The buttons are made once, so keyboard focus survives polling.
+        let running=false;
+        while(current()&&report.run?.running){
+          progress.textContent='Collecting and verifying files. You can close this panel and return later.';
+          if(!running){running=true;actions.replaceChildren(button('Stop collecting',false,async()=>{try{await call('/api/claude-imports/cancel',{method:'POST',body:'{}'})}catch(e){fail(e)}}),button('Done',false,close))}
+          await new Promise(resolve=>setTimeout(resolve,700));
+          if(!current())return;
+          report=await call('/api/claude-imports');
+        }
+        if(!current())return;
+        if(wait&&report.run?.error)fail(Error(report.run.error));
+        const chosen=selectedJob||(report.run?.id?{id:report.run.id,name:report.run.name}:report.jobs?.[0]);
+        if(!chosen){progress.textContent='No Claude exports have been collected yet.';actions.replaceChildren(button('Back',false,back));return}
+        const job=await call('/api/claude-imports?id='+encodeURIComponent(chosen.id)+'&name='+encodeURIComponent(chosen.name));
+        if(!current())return;
+        const summary=pharosClaudeImportSummary(job);if(job.error)fail(Error(job.error));
+        progress.textContent=`Collected ${summary.collected} of ${summary.expected} files · ${plural(summary.conversations,'conversation')} · ${plural(summary.messages,'message')} in the supplied export.`;
+        body.append(node('p','pharos-muted',summary.knownCoverage?(summary.complete?'Every file listed by this manifest is collected. Conversation indexing is a separate step.':'This export is incomplete. Collected files are preserved while you obtain the missing parts.'):'No manifest was supplied, so Pharos cannot verify whether this is your full export.'));
+        for(const warning of [...new Set(job.warnings||[])])body.append(node('p','pharos-muted',warning));
+        const files=node('div','pharos-claude-parts');
+        for(const part of job.parts||[]){
+          const row=node('div','pharos-source-review');
+          row.append(node('code','',part.filename),node('span','',part.state==='collected'?'Verified and collected':part.error||'Waiting for this file'));
+          files.append(row);
+        }
+        body.append(files);
+        const links=node('div','pharos-claude-downloads');body.append(links);
+        if((job.parts||[]).some(part=>part.state!=='collected'&&part.download_available)){
+          body.append(button('Show missing download links',false,async()=>{
+            try{
+              const result=await call('/api/claude-imports/links',{method:'POST',body:JSON.stringify({id:job.id,name:job.name})});
+              if(!current())return;
+              links.replaceChildren(node('p','pharos-muted','Open these links in the browser where you are signed in to Claude. Keep the downloaded files beside the manifest, then check the folder again. Links may expire or work only once.'));
+              for(const part of job.parts||[]){if(!result.links?.[part.id])continue;const a=node('a','',`Download ${part.filename}`);a.href=result.links[part.id];a.target='_blank';a.rel='noopener noreferrer';links.append(a)}
+            }catch(e){fail(e)}
+          }));
+        }
+        let extra='';
+        const folder=pathField('Downloaded file or folder','','Optional: another folder or an exact file','export',value=>{extra=value},fail);
+        body.append(node('label','pharos-folder-label','Add a downloaded file or folder'),folder.row);
+        const resume=button('Check files again',false,async()=>{
+          try{await call('/api/claude-imports',{method:'POST',body:JSON.stringify({id:job.id,name:job.name,paths:extra.trim()?[extra.trim()]:[]})});if(current())renderClaudeCollection(back,{id:job.id,name:job.name},true)}catch(e){fail(e)}
+        });
+        const buttons=[button('Back',false,back),resume];
+        if(job.source)buttons.push(button('Capture and index conversations',true,()=>{active.back=()=>{};captureSources([job.name],status,body,actions)}));
+        buttons.push(button('Done',false,close));actions.replaceChildren(...buttons);
+        window.loadSources?.();
+      }catch(e){if(current()){fail(e);actions.replaceChildren(button('Back',false,back),button('Done',false,close))}}
+    }
+
     // A cloud history arrives as a downloaded export: name it, and Pharos
     // checks it holds conversations before adding it.
     function renderImport(back){
@@ -600,7 +695,10 @@ function pharosCapabilityRows(providers,kinds) {
       let chosen=exports[0]?.kind,path='';
       const kinds=node('fieldset','pharos-modes pharos-pair');kinds.append(node('legend','pharos-visually-hidden','Which export'));
       const how=node('p','pharos-muted pharos-export-how');
-      const describe=()=>{how.textContent=exports.find(item=>item.kind===chosen)?.how||''};
+      const recent=node('div');
+      const describe=()=>{how.textContent=exports.find(item=>item.kind===chosen)?.how||'';recent.replaceChildren();if(chosen==='claude-ai'){
+        call('/api/claude-imports').then(report=>{if(chosen!=='claude-ai'||!recent.isConnected)return;if(!report.watch?.enabled&&report.watch?.available)recent.append(node('p','pharos-muted','To import each new Claude export as it arrives, turn on Import Claude exports from Downloads in Settings → Sources.'));for(const job of (report.jobs||[]).slice(0,5))recent.append(button(`Resume export: ${job.collected}/${job.expected} files`,false,()=>renderClaudeCollection(()=>renderImport(back),job)))}).catch(failure=>{if(recent.isConnected)fail(failure)});
+      }};
       for(const item of exports){
         const label=node('label','pharos-mode'),radio=node('input'),copy=node('span');
         radio.type='radio';radio.name='pharos-export';radio.value=item.kind;radio.checked=item.kind===chosen;radio.onchange=()=>{chosen=item.kind;describe()};
@@ -608,14 +706,15 @@ function pharosCapabilityRows(providers,kinds) {
       }
       describe();
       const field=pathField('Export',path,'~/Downloads/export.zip','export',value=>{path=value},fail);
-      body.append(kinds,how,node('h3','','The export'),field.row,
-        node('p','pharos-muted','The ZIP you downloaded, the folder it unzips to, or its conversations.json. If it is in Downloads, macOS may ask to let Pharos read that folder.'));
+      body.append(kinds,how,recent,node('h3','','The export'),field.row,
+        node('p','pharos-muted','For Claude, choose the manifest or a folder containing its downloaded ZIPs. A legacy ZIP or conversations.json also works. macOS may ask to let Pharos read Downloads.'));
       const add=button('Import',true,async()=>{
+        const submittingView=active;
         const value=path.trim();
         if(!value.startsWith('/')&&!value.startsWith('~/')){fail(Error('Enter an absolute path, or one starting with ~/.'));field.input.focus();return}
         const buttons=[...actions.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);error.textContent='';
-        try{const result=await call('/api/sources/import',{method:'POST',body:JSON.stringify({kind:chosen,path:value})});window.loadSources?.();renderResult(result,body,actions,status)}
-        catch(failure){fail(failure);buttons.forEach(b=>b.disabled=false)}
+        try{if(chosen==='claude-ai'){await call('/api/claude-imports',{method:'POST',body:JSON.stringify({paths:[value]})});if(active!==submittingView||!field.input.isConnected)return;renderClaudeCollection(()=>renderImport(back),null,true)}else{const result=await call('/api/sources/import',{method:'POST',body:JSON.stringify({kind:chosen,path:value})});window.loadSources?.();renderResult(result,body,actions,status)}}
+        catch(failure){if(active!==submittingView||!field.input.isConnected)return;fail(failure);buttons.forEach(b=>b.disabled=false)}
       });
       actions.replaceChildren(button('Back',false,back),add);
     }
@@ -854,6 +953,100 @@ function pharosCapabilityRows(providers,kinds) {
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);
+  // Settings → Sources: the opt-in Downloads watch and its recent exports.
+  // Controls stay the same elements across refreshes so focus survives polling.
+  const claudeWatch={root:null,timer:0};
+  const watchPost=body=>call('/api/claude-imports/watch',{method:'POST',body:JSON.stringify(body)});
+  // Keep a picker's options and value in step without disturbing it while open.
+  function browserOptions(select,watch,value){
+    const choices=[{key:'',label:'Default browser'},...(watch.browsers||[])];
+    if(choices.some(choice=>choice.key===value)===false)choices.push({key:value,label:'Unavailable profile'});
+    const signature=choices.map(choice=>choice.key+'\u0000'+choice.label).join('\u0001');
+    if(select.dataset.signature!==signature){
+      select.replaceChildren(...choices.map(choice=>{const option=node('option','',choice.label);option.value=choice.key;return option}));
+      select.dataset.signature=signature;
+    }
+    if(document.activeElement!==select)select.value=value;
+  }
+  function renderClaudeWatch(root){
+    if(!root)return;
+    if(claudeWatch.root!==root){
+      claudeWatch.root=root;
+      const row=node('div','optional-behavior'),copy=node('div'),title=node('h3','','Import Claude exports from Downloads');title.id='claudeDownloadsWatchTitle';
+      const about=node('p','muted','Off by default. When a Claude export manifest arrives in Downloads, Pharos opens each of its download links in the browser you choose, one at a time, collects the ZIP files as they finish, and imports your conversations. Pharos opens only files named like a Claude export manifest (manifest-….json) and the files that manifest lists. It checks every 15 minutes while Pharos is running.');about.id='claudeDownloadsWatchDescription';
+      const toggle=node('button','toggle');toggle.id='claudeDownloadsWatch';toggle.type='button';toggle.setAttribute('role','switch');
+      toggle.setAttribute('aria-labelledby',title.id);toggle.setAttribute('aria-describedby',about.id);
+      toggle.onclick=async()=>{
+        const enabled=toggle.getAttribute('aria-checked')!=='true';toggle.disabled=true;
+        try{showClaudeWatch(await watchPost({enabled}))}catch(failure){toast(failure.message);toggle.disabled=false}
+      };
+      copy.append(title,about);row.append(copy,toggle);
+      const options=node('div','claude-watch-options'),label=node('label','claude-watch-browser','Open download links in '),select=node('select');
+      select.id='claudeDownloadsBrowser';
+      select.onchange=async()=>{select.disabled=true;try{showClaudeWatch(await watchPost({browser:select.value}))}catch(failure){toast(failure.message)}finally{select.disabled=false}};
+      const check=node('button','','Check Downloads now');check.type='button';check.id='claudeDownloadsCheck';
+      check.onclick=async()=>{check.disabled=true;try{showClaudeWatch(await watchPost({action:'check'}));clearTimeout(claudeWatch.timer);claudeWatch.timer=setTimeout(refreshClaudeWatch,3000)}catch(failure){toast(failure.message)}finally{check.disabled=false}};
+      label.append(select);
+      options.append(label,check,node('p','muted','Choose the browser profile that is signed in to your Claude account. When a download arrives, Pharos remembers that profile for the account’s later exports.'));
+      const how=node('p','muted claude-watch-how','To start an export, open Claude, then Settings → Privacy → Export data. When Claude emails you, download the manifest from its link into Downloads. The links work for 24 hours.');
+      const problem=node('p','sync-note badtext');problem.setAttribute('role','status');
+      const list=node('div','claude-watch-exports');
+      root.replaceChildren(row,options,how,problem,list);root.hidden=false;
+    }
+    refreshClaudeWatch();
+  }
+  async function refreshClaudeWatch(){
+    clearTimeout(claudeWatch.timer);
+    try{showClaudeWatch((await call('/api/claude-imports')).watch)}catch(failure){if(claudeWatch.root?.isConnected)toast(failure.message)}
+  }
+  function showClaudeWatch(watch){
+    const root=claudeWatch.root;if(!root?.isConnected||!watch)return;
+    clearTimeout(claudeWatch.timer);
+    const toggle=root.querySelector('#claudeDownloadsWatch'),problem=root.querySelector('.badtext'),list=root.querySelector('.claude-watch-exports');
+    toggle.classList.toggle('on',!!watch.enabled);toggle.setAttribute('aria-checked',String(!!watch.enabled));toggle.disabled=!watch.available&&!watch.enabled;
+    root.querySelector('.claude-watch-options').hidden=!watch.enabled;
+    if(watch.enabled)browserOptions(root.querySelector('#claudeDownloadsBrowser'),watch,watch.browser||'');
+    problem.textContent=!watch.available?'Opening download links automatically needs the Pharos Mac app on macOS.':watch.enabled?watch.problem||'':'';
+    problem.hidden=!problem.textContent;
+    const focusKey=list.contains(document.activeElement)?document.activeElement.dataset.focusKey:'';
+    // A row whose export did not change is kept as it is, so an open picker
+    // or an unsaved profile choice survives polling for another export.
+    const existing=new Map([...list.children].map(row=>[row.dataset.id,row]));
+    const browsersSignature=(watch.browsers||[]).map(choice=>choice.key+'\u0000'+choice.label).join('\u0001');
+    const rows=(watch.exports||[]).slice(0,5).map(item=>{
+      const signature=JSON.stringify([item.state,item.collected,item.expected,item.message,item.waiting_file,item.browser,item.browser_label,item.exported_at,!!watch.enabled,browsersSignature]);
+      const kept=existing.get(item.id);
+      if(kept&&kept.dataset.signature===signature)return kept;
+      const line=pharosClaudeWatchLine(item),row=node('div','source-card claude-watch-export'+(line.attention?' attention':''));
+      row.dataset.id=item.id;row.dataset.signature=signature;
+      const when=item.exported_at?new Date(item.exported_at).toLocaleString():'Claude export';
+      row.append(node('h4','',`Export from ${when}`),node('p','',line.text));
+      if(line.detail)row.append(node('p',line.attention?'sync-note badtext':'muted',line.detail));
+      if(line.actions.length){
+        const actions=node('div','claude-watch-actions');
+        let profile=null;
+        if(line.actions.includes('retry')&&watch.enabled){
+          const label=node('label','claude-watch-browser','Try again in ');profile=node('select');profile.dataset.focusKey=`${item.id}:browser`;
+          browserOptions(profile,watch,item.browser||'');label.append(profile);actions.append(label);
+        }
+        for(const action of line.actions){
+          const button=node('button','',action==='retry'?'Try again':'Stop');button.type='button';button.dataset.focusKey=`${item.id}:${action}`;
+          button.onclick=async()=>{button.disabled=true;try{showClaudeWatch(await watchPost({id:item.id,action,...(action==='retry'&&profile?{browser:profile.value}:{})}))}catch(failure){toast(failure.message);button.disabled=false}};
+          actions.append(button);
+        }
+        row.append(actions);
+      }
+      return row;
+    });
+    if(rows.length!==list.children.length||rows.some((row,index)=>list.children[index]!==row))list.replaceChildren(...rows);
+    if(focusKey&&!list.contains(document.activeElement))list.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
+    // Follow an export in progress while its section is on screen.
+    if(watch.enabled&&(watch.exports||[]).some(item=>item.state==='fetching'))claudeWatch.timer=setTimeout(()=>{if(root.isConnected&&!root.parentElement.closest('[hidden]'))refreshClaudeWatch()},3000);
+  }
+  window.pharosClaudeDownloads={render:renderClaudeWatch};
+  // This script is deferred: Settings → Sources may already be showing.
+  const claudeWatchSection=document.getElementById('claudeDownloadsWatchSection');
+  if(claudeWatchSection&&!claudeWatchSection.parentElement.closest('[hidden]'))renderClaudeWatch(claudeWatchSection);
   window.pharosOnboarding={
     // mode: start (the default), scan, manual or import; kind, a tool to
     // begin with when naming a folder.

@@ -217,6 +217,61 @@ func writeSourceFileAt(t *testing.T, content string) string {
 	return path
 }
 
+func TestClaudeAIExportValidatesAllShardsBeforePublishing(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "conversations-000.json")
+	second := filepath.Join(dir, "conversations-001.json")
+	writeSourceFile(t, first, claudeAIExport)
+	writeSourceFile(t, second, `[{"uuid":"bad","chat_messages":[]},`)
+	adapter, err := MakeAdapter(SourceConfig{Name: "export", Kind: "claude-ai", Path: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var emitted int
+	if err := adapter.Discover(func(WorkspaceRecord) error { emitted++; return nil }); err == nil || emitted != 0 {
+		t.Fatal("damaged late shard published records", emitted, err)
+	}
+	// Conflicting copies in one snapshot are different from old/new snapshots.
+	writeSourceFile(t, second, strings.Replace(claudeAIExport, "Trip", "Changed title", 1))
+	if err := adapter.Discover(func(WorkspaceRecord) error { emitted++; return nil }); err == nil || emitted != 0 {
+		t.Fatal("conflicting shards published records", emitted, err)
+	}
+	writeSourceFile(t, second, `[{"uuid":"empty","chat_messages":[]}]`)
+	if err := adapter.Discover(func(WorkspaceRecord) error { emitted++; return nil }); err != nil || emitted != 3 {
+		t.Fatal(emitted, err)
+	}
+	c, _ := testCatalog(t)
+	ingestSource(t, c, SourceConfig{Name: "export", Kind: "claude-ai", Path: dir})
+	writeSourceFile(t, first, `[{"uuid":"conv-1","name":"Damaged update","chat_messages":[]}]`)
+	writeSourceFile(t, second, `[{`)
+	result := c.Ingest(adapter, nil)
+	if result.Error == nil {
+		t.Fatal("damaged export appeared successful")
+	}
+	var messages int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&messages); err != nil || messages != 15 {
+		t.Fatal("previous messages changed", messages, err)
+	}
+}
+
+func TestClaudeAIExportStreamsLargeConversationAndKeepsUnknownBlocks(t *testing.T) {
+	content := strings.Repeat("long export content ", 10000)
+	export := jsonText([]any{map[string]any{"uuid": "large", "chat_messages": []any{map[string]any{"uuid": "m", "sender": "human", "text": content, "content": []any{map[string]any{"type": "future_block", "payload": "preserve this"}}}}}})
+	file := writeSourceFileAt(t, export)
+	records := discoverClaudeAI(t, file)
+	if len(records) != 1 {
+		t.Fatal(records)
+	}
+	var keptText, keptBlock bool
+	for _, message := range records[0].Conversations[0].Messages {
+		keptText = keptText || message.Text == content
+		keptBlock = keptBlock || strings.Contains(message.RawText, "future_block")
+	}
+	if !keptText || !keptBlock {
+		t.Fatal("lost large text or an unknown block")
+	}
+}
+
 func TestClaudeAIOlderExportLeavesNewerOneAlone(t *testing.T) {
 	older := func(change func(conversation map[string]any)) string {
 		var export []map[string]any

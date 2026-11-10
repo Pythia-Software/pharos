@@ -1,5 +1,5 @@
 {
-  "index_version": "claude-ai-v1",
+  "index_version": "claude-ai-v2",
   "records": [
     {
       "SourceID": "conv-1",
@@ -12,6 +12,7 @@
       "Location": "",
       "Repository": null,
       "Metadata": {
+        "claude_account_uuid": "acct",
         "summary": "Planning"
       },
       "Conversations": [
@@ -243,6 +244,7 @@
       "Location": "",
       "Repository": null,
       "Metadata": {
+        "claude_account_uuid": "acct",
         "summary": ""
       },
       "Conversations": [

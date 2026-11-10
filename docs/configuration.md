@@ -528,6 +528,130 @@ it to this Mac's host file as an enabled source named for its kind
 then captures it like any source. Importing the same file again adds nothing.
 An export in Downloads may make macOS ask to let Pharos read that folder.
 
+For **Claude.ai**, choose Claude.ai in **Import an export…** and supply the
+manifest JSON, a folder containing the downloaded category ZIPs, a legacy ZIP,
+or a conversation JSON file. Pharos opens a resumable collection report. Missing
+parts have browser download links; open them in the browser where you are signed
+in to Claude, keep the completed downloads beside the manifest, and choose
+**Check files again**. You can also name another folder or an exact downloaded
+file. **Import an export… → Claude.ai** lists recent jobs after a restart.
+
+Each file is verified before collection. ZIPs are checked to EOF, including CRCs;
+nested artifact file inventories are checked against their recorded sizes and
+SHA-256 values. Archive contents remain inside their ZIPs. Missing, corrupt,
+ambiguous and still-downloading files remain visible, and collected parts survive
+an interrupted run. Multiple matching browser downloads require choosing the
+intended file explicitly. A candidate older than the export timestamp is not
+selected automatically. Filename/date matches establish a candidate, not proof
+of account membership when Claude supplies no checksum.
+
+Pharos never downloads or keeps Claude's `light_metadata` category: the
+account's name, email address, phone number (`users.json`) and sign-in
+history (`login_history.json`). Those parts are listed as not kept and do not
+make an export incomplete. If another ZIP contains either file, as older
+single-ZIP exports do, the collected copy leaves it out; a ZIP with nothing
+else is not kept.
+
+**Capture and index conversations** uses the existing capture/index workflow.
+Projects, memory, artifact files and unknown ZIP categories are retained as raw
+export evidence; this importer currently indexes conversations. It preserves the
+existing account identity configuration and records native account UUIDs as
+metadata. It does not infer missing project associations or token usage. A set
+without a manifest has unknown completeness; an incomplete manifest remains
+incomplete even when its available conversations can be indexed. Later exports
+add snapshots to one stable source, and absent records do not delete history.
+Snapshots are ordered by the manifest's creation time, or without a manifest by
+the downloaded file's modification time, never by when Pharos collected it.
+
+**Importing Claude exports from Downloads.** The Settings → Sources switch
+**Import Claude exports from Downloads** is off by default
+and applies to this Mac and this library only. The setting and the watch's
+progress live in this Mac's private Application Support state beside the
+download links, so moving the library to another Mac never starts reading that
+Mac's Downloads. Turning it on needs macOS, where Pharos can open links.
+
+**Open download links in** chooses the default browser or one profile of an
+installed Chromium-family browser (Chrome, Brave, Edge, Vivaldi, Chromium).
+Pharos lists profiles from each browser's `Local State` file, and only after the
+watch is turned on. With several signed-in profiles, choose the one signed in to
+Claude: a link opened in another profile delivers nothing. Pharos remembers, per
+Claude account (the UUID in the export's links), the profile whose download
+actually arrived. That account's later exports open there, even if the general
+choice differs, so two Claude accounts in two profiles each keep their own.
+
+Request the export yourself: in Claude, open Settings → Privacy → Export data.
+When Claude emails you, download the manifest from its link into Downloads.
+While Pharos is running it then:
+
+1. lists the top level of `~/Downloads` every 15 minutes, 30 seconds after it
+   starts, and when you choose **Check Downloads now**. It opens only files
+   named like Claude's manifest (`manifest-<account-uuid>-….json`). A file counts
+   only if it parses as an export manifest with a creation time, every part is
+   named like `conversations-000.zip`, and every link has Claude's export shape
+   (`https://claude.ai/export/<account-uuid>/download/<token>`, nothing else).
+   Exports created more than 24 hours earlier are ignored, since their links
+   have expired. Other files in Downloads are never opened.
+2. starts an import job and collects any parts already downloaded.
+3. opens the next missing part's link in the chosen browser profile, in the
+   background (`open -g`), and checks every five seconds until that ZIP finishes
+   arriving in Downloads. Browser
+   copies such as `frames-000 (1).zip` match; files older than the export are
+   ignored, and among several matches the one downloaded within the links' 24
+   hours wins. Pharos records each link before opening it and never reopens one
+   on its own, because links may work only once.
+4. after the last part, captures and indexes the source (`claude-ai-imports`).
+
+The section lists recent exports with their state. If no file arrives within
+three minutes of opening a link (longer while a browser download is in
+progress), the export pauses and names the profile it used. **Try again in**
+reopens, one at a time, every link whose part has not been collected, in the
+profile you pick; this also resumes a stopped export. **Stop** ends the export
+at once, even mid-collection, keeping what was collected. Removing the manifest
+from Downloads stops its export too. An export whose links expire first is
+marked expired. The section keeps the 20 most recent finished exports. A busy library delays collection without
+pausing it. If macOS refuses access to Downloads, the section says so; allow it
+in System Settings → Privacy & Security → Files and Folders.
+
+The watch also appears through `GET /api/claude-imports` as `watch` (`enabled`,
+`available`, `folder`, `problem`, `browser`, `browsers`, `exports`).
+`POST /api/claude-imports/watch` takes `{"enabled": true|false}`, `{"browser": KEY}`
+(`""` is the default browser), `{"action": "check"}`, or
+`{"id": EXPORT_ID, "action": "retry"|"stop"}` with an optional `browser` for retry. The
+command-line `watch` below is separate and never opens links.
+
+The catalog-free command-line interface produces JSON:
+
+```sh
+pharos --config /path/to/library.toml claude-import collect /path/to/manifest.json
+pharos --config /path/to/library.toml claude-import status
+pharos --config /path/to/library.toml claude-import collect --job JOB_ID /path/to/downloaded/file.zip
+pharos --config /path/to/library.toml claude-import watch /path/to/claude-export-inbox
+```
+
+`collect` also accepts a folder or several ZIP/JSON paths. Put flags before paths;
+`--name NAME` chooses a different stable source collection. `collect` returns an
+error status when parts are missing while still printing the durable job. `watch`
+checks an explicitly selected folder every five seconds (`--interval 10s` changes
+this), collects new manifests and repairs their jobs when downloads arrive. Stop
+it with Ctrl-C. It requests no exports and performs no unattended authenticated
+website calls. Indexing continues through the normal enabled-source workflow.
+The authenticated local API exposes the same jobs through `POST /api/claude-imports`
+(`paths`, optional `id` and `name`), `GET /api/claude-imports`, and
+`GET /api/claude-imports?id=JOB_ID&name=NAME`. POST returns acceptance; poll the GET
+response's `run` and the saved job for completion. Closing the UI does not stop
+collection. `POST /api/claude-imports/cancel` requests cancellation.
+
+Collected snapshots and credential-free receipts live in
+`<capture_root>/.claude-imports/<host-id>/<source-name>/snapshots/`. Expiring download
+links and original URL-bearing manifests stay in the importing Mac's private
+Application Support state, outside captures and library backups. Moving the
+library to another Mac retains its data; download links may need the original
+manifest again. Default bounds are 10,000 input parts, 100,000 ZIP entries, 1 GiB
+per expanded member, 32 GiB expanded per ZIP, 16 GiB compressed per part, and
+64 GiB retained per named collection, with the normal free-space margin. Bounds
+fail visibly. Keep separate export snapshots in separate folders so identical
+provider filenames cannot silently select a different export.
+
 After adding sources the panel captures them onto the library straight away
 (see [Capture](#capture)), showing each source's files and bytes as they are
 copied, then says how much it captured, for example "Captured 4.3 GB from
@@ -832,7 +956,7 @@ upload permissions keep their existing behavior.
 | `tl1` | the registry, then for each installation the adapter reads a snapshot of its database (`files/installations/<id>/`), its `transcripts/**/*.jsonl`, and procedural attempts' script logs (`<attempt>-script.log`, `-script.stderr.log`, `-script.stdout.log`) |
 | `canonical`, `tl1-export` | the export file, or the directory's `*.json` |
 | `chatgpt`, `chatgpt-export` | the export's ZIP whole, or its conversation files: the numbered `conversations-NNN.json` newer exports are split into, else `conversations.json`. Not the account files or images beside them |
-| `claude-ai` | the export's ZIP or `conversations.json`, whole |
+| `claude-ai` | standalone conversation files/ZIPs, or every verified part and the credential-free inventories of a managed export collection, whole |
 | `copilot` | each session's `events.jsonl` and `workspace.yaml` under `session-state` (or an older release's flat `<id>.jsonl`); not `session-store.db`, Copilot's own index, nor its config, logs or file snapshots |
 | `opencode` | a snapshot of each `opencode*.db` holding only its session, message, part and project tables: OpenCode keeps credentials, accounts and settings in the same database, so a snapshot is a copy of those tables, row by row, and nothing else is ever written to the capture, even by one that stops part way. With `sqlite_record_capture`, the rows copied before indexing leave out the same tables. A session deleted in OpenCode before its last capture was indexed is indexed from an older snapshot that holds it |
 | `openclaw` | selective snapshots of native session and transcript tables, including embedded compressed payloads and canonical reset/deletion archive blobs before file publication; referenced cold archives and, for legacy JSONL, `sessions.json`. Authentication, configuration, workspace files and memory indexes are excluded |

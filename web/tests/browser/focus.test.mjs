@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
-import { defaultApi, workID, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
+import { claudeImportFixture, defaultApi, workID, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 test('the Lighthouse menu action shares its saved setting with App preferences', {skip}, async t => {
@@ -3379,4 +3379,39 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'narrow layout fits the window');
   await page.keyboard.press('Escape');await question.click();
   await shot('ask-inbox-phone');
+});
+
+test('Claude export inspection preserves the replacement form when an older request completes', {skip},async t=>{
+  const pending=Promise.withResolvers(),creation=Promise.withResolvers();
+  const {page}=await open(t,{url:'/settings/sources',ready:'#pharosAddSource',api:{
+    'POST /api/claude-imports':()=>creation.promise,
+    'GET /api/claude-imports':({query})=>query.get('id')?pending.promise:{jobs:[{...claudeImportFixture,collected:1,expected:2}],run:{running:false}},
+  }});
+  await page.evaluate(()=>window.pharosOnboarding.open({mode:'import'}));
+  const guide=page.locator('#pharosOnboarding');
+  await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+  const requested=page.waitForRequest(request=>request.url().includes('/api/claude-imports?id='));
+  await guide.getByRole('button',{name:/Resume export/}).click();
+  await requested;
+  await page.keyboard.press('Escape');
+  const replacement=guide.getByRole('textbox',{name:'Export',exact:true});
+  await replacement.fill('/replacement-export');
+  const response=page.waitForResponse(response=>response.url().includes('/api/claude-imports?id='));
+  pending.resolve(claudeImportFixture);
+  await response;
+  assert.equal(await replacement.inputValue(),'/replacement-export');
+  assert.ok(await replacement.evaluate(element=>document.activeElement===element));
+  await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+  const posted=page.waitForRequest(request=>request.method()==='POST'&&new URL(request.url()).pathname==='/api/claude-imports');
+  await guide.getByRole('button',{name:'Import',exact:true}).click();
+  await posted;
+  await page.keyboard.press('Escape');
+  await guide.getByRole('button',{name:'Import an export',exact:true}).click();
+  const newer=guide.getByRole('textbox',{name:'Export',exact:true});
+  await newer.fill('/new-export-draft');
+  const completed=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/claude-imports');
+  creation.resolve({started:true});
+  await completed;
+  assert.equal(await newer.inputValue(),'/new-export-draft');
+  assert.ok(await newer.evaluate(element=>document.activeElement===element));
 });
