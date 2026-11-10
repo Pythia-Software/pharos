@@ -369,6 +369,23 @@ func TestReadEditChanges(t *testing.T) {
 	same("between edges removed", change.Removed, "middle := originalValue")
 	change = one(map[string]any{"file_path": "/a.go", "old_string": "}\n\tfirst := originalValue\n", "new_string": "}\n\tfirst := replacementValue\n"}, "/a.go")
 	same("whole line added", change.Added, "first := replacementValue")
+	// A line the same on both sides is unchanged, also when it is a side's
+	// only line; a changed line at the very end may still be partial.
+	for _, edit := range [][2]string{
+		{`import "fmt"`, "import \"fmt\"\nimport \"strings\""},
+		{"func Anchor() {\n\tdeletedLine()", "func Anchor() {"},
+		{"first := originalValue\n\tsecond := originalValue", "inserted := replacementValue\n\tfirst := originalValue\n\tsecond := originalValue"},
+	} {
+		change = one(map[string]any{"file_path": "/a.go", "old_string": edit[0], "new_string": edit[1]}, "/a.go")
+		if !change.Partial || len(change.Added) != 0 || len(change.Removed) != 0 {
+			t.Errorf("an unchanged line counted, in %q -> %q: %+v", edit[0], edit[1], change)
+		}
+	}
+	change = one(map[string]any{"file_path": "/a.go", "old_string": "import \"fmt\"\n)", "new_string": "import \"fmt\"\nimport \"strings\"\n)"}, "/a.go")
+	if change.Partial || len(change.Removed) != 0 {
+		t.Errorf("a line between unchanged ones: %+v", change)
+	}
+	same("between unchanged lines added", change.Added, `import "strings"`)
 
 	change = one(map[string]any{"file_path": "/a.go", "edits": []any{map[string]any{"old_string": "first line here", "new_string": "first line there"}, map[string]any{"old_string": "", "new_string": "another line"}}}, "/a.go")
 	same("multi-edit added", change.Added, "another line")

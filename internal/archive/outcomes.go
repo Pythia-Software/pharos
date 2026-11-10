@@ -28,7 +28,7 @@ import (
 // since a change stops being too recent to judge without any write.
 
 // outcomesVersion derives every session again when its rules change.
-const outcomesVersion = "3"
+const outcomesVersion = "4"
 
 // defaultReworkDays is how long after a session's last edit a later session's
 // edits to the same files count as rework (outcome_rework_days).

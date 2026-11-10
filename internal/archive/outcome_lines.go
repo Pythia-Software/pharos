@@ -134,30 +134,46 @@ func readEditChanges(text, path string) []fileEdit {
 }
 
 // wholeLines is the text of a replacement's whole lines, removed and added.
-// A replacement can start or end inside a line, so a changed first or last
-// line may be only part of one, whose fingerprint would never match the whole
-// line another session adds or removes: it is left out (partial). An
-// unchanged one is the same on both sides, and settles. Nothing replaced is
-// a new file's content, all of it whole.
+// The lines the same on both sides, at its start and at its end, are not
+// changed and settle. A replacement can start or end inside a line, so a
+// changed line left at its very start or end may be only part of one, whose
+// fingerprint would never match the whole line another session adds or
+// removes: it is left out (partial). A changed line after an unchanged one
+// starts a line, and one before an unchanged one ends a line, so both are
+// whole. Nothing replaced is a new file's content, all of it whole.
 func wholeLines(old, replacement string) (removed, added string, partial bool) {
 	if old == "" {
 		return "", replacement, false
 	}
 	olds, news := strings.Split(old, "\n"), strings.Split(replacement, "\n")
-	oldFrom, newFrom, oldTo, newTo := 0, 0, len(olds), len(news)
-	if strings.TrimSpace(olds[0]) != strings.TrimSpace(news[0]) {
-		oldFrom, newFrom, partial = 1, 1, true
+	same := func(a, b string) bool { return strings.TrimSpace(a) == strings.TrimSpace(b) }
+	shorter := min(len(olds), len(news))
+	prefix := 0
+	for prefix < shorter && same(olds[prefix], news[prefix]) {
+		prefix++
 	}
-	if strings.TrimSpace(olds[len(olds)-1]) != strings.TrimSpace(news[len(news)-1]) {
-		oldTo, newTo, partial = len(olds)-1, len(news)-1, true
+	suffix := 0
+	for prefix+suffix < shorter && same(olds[len(olds)-1-suffix], news[len(news)-1-suffix]) {
+		suffix++
 	}
-	join := func(lines []string, from, to int) string {
-		if from >= to {
-			return ""
+	olds, news = olds[prefix:len(olds)-suffix], news[prefix:len(news)-suffix]
+	if prefix == 0 {
+		if len(olds) > 0 {
+			olds, partial = olds[1:], true
 		}
-		return strings.Join(lines[from:to], "\n")
+		if len(news) > 0 {
+			news, partial = news[1:], true
+		}
 	}
-	return join(olds, oldFrom, oldTo), join(news, newFrom, newTo), partial
+	if suffix == 0 {
+		if len(olds) > 0 {
+			olds, partial = olds[:len(olds)-1], true
+		}
+		if len(news) > 0 {
+			news, partial = news[:len(news)-1], true
+		}
+	}
+	return strings.Join(olds, "\n"), strings.Join(news, "\n"), partial
 }
 
 // settle drops the lines both removed and added: moved or reindented, not

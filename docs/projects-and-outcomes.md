@@ -176,9 +176,10 @@ a Conductor workspace. Its delegated agents' calls are its own.
     removes whatever of the session's lines the new file no longer has.
   - An Edit's text (and Antigravity's, batches included) can start or end
     inside a line, and part of a line never matches the whole line another
-    session adds or removes. So a changed first or last line of a
-    replacement is left out, unless a newline in the text shows where it
-    starts or ends; the lines between are whole. On the real library 2% of
+    session adds or removes. Lines the same on both sides at the start
+    and end of a replacement are unchanged. A changed line left at its
+    very start or end is left out; one after or before an unchanged line
+    is whole, as are the lines between. On the real library 2% of
     Claude Code's edits are a single line and 18% change their first or
     last line. A file only such edits changed is not judged.
   - A line removed and added again (moved or reindented) is unchanged, and
