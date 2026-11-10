@@ -58,7 +58,7 @@ calls, Message labels, Model requests); those were not measured separately.
 
 ## Request
 
-Any of these would remove most of the cost; the first two need no host
+Any of these would remove most of the cost; the first and last need no host
 change:
 
 1. **Validate in one pass.** Compute every field's `(value, error)` pair in
@@ -67,15 +67,25 @@ change:
    check runs once per row, a single stage that computes every field's
    error column, followed by one projection that reads them, does the same
    with one copy instead of four.
-2. **Skip validation the schema already proves.** A field whose declared
-   kind is `text` cannot fail `qt_v2_field_error(…,'text')` for a SQL source
-   column that is `TEXT` or `NULL`. A host hint on the dataset (per field:
-   "this binding is already of its declared kind") would let the compiler
-   bind `v = f, e = NULL` directly.
-3. **Native aggregates for safe domains.** `SUM` over an integer field the
-   host declares safe (no values beyond 2^53) could use SQLite's `SUM`
-   instead of `qt_v2_sum`, as the grouped-source reducer added in 0.9.4
-   already does for summaries.
+2. **Skip validation the host vouches for.** SQLite storage class does not
+   prove a field valid: a `TEXT` column can hold invalid UTF-8 or a value
+   over the 100,000-byte text limit, both of which `qt_v2_field_error`
+   rejects. So this cannot be inferred from the column. It needs an explicit
+   per-field host assertion of the whole contract ("every value of this
+   binding is valid UTF-8 within the text limit, or NULL"), which lets the
+   compiler bind `v = f, e = NULL` directly. Short of that, the length half
+   of the check is expressible in SQL (`length(CAST(f AS BLOB))`), leaving
+   the callback for UTF-8 validity alone.
+3. **Native aggregates where the bound can still be checked.** Values that
+   are each safe integers do not make SQLite's `SUM` equivalent to
+   `qt_v2_sum`: Query Table also bounds each group's absolute input total,
+   which values that cancel can exceed while their sum stays small. A native
+   path has to keep that check, for example by computing the group's
+   absolute total natively beside the sum and comparing it with the bound
+   (falling back to `qt_v2_sum` semantics, or the same error, when it is
+   exceeded), or by a host-declared bound on the field's magnitude that,
+   multiplied by the population limit, stays under it. The grouped-source
+   reducer added in 0.9.4 is the precedent for summaries.
 
 4. **Budget while staging.** Enforce the row and byte budget as the staging
    statement writes (or from the staged table afterwards, dropping it when
@@ -84,7 +94,9 @@ change:
 Semantics to preserve: error precedence (`MIN(e)` per group), NULL versus
 zero sums, unsafe-integer detection where the host has not declared the
 field safe, `COLLATE BINARY` group identity, `minCount`, `groupLimit`, and
-revision checks.
+revision checks; invalid UTF-8 and over-limit text still reported as field
+errors, and the per-group absolute-total bound on sums, wherever the host has
+not asserted them away.
 
 ## Reproduce
 
