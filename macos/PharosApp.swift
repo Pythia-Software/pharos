@@ -1357,10 +1357,11 @@ enum NativeBridgeSender {
         case clipboard = "pharosClipboard"
         case menuBar = "pharosMenuBar"
         case window = "pharosWindow"
+        case dictation = "pharosDictation"
 
         var replies: Bool {
             switch self {
-            case .library, .updates, .clipboard: return true
+            case .library, .updates, .clipboard, .dictation: return true
             case .menuBar, .window: return false
             }
         }
@@ -1407,6 +1408,7 @@ struct ArchiveWebView: NSViewRepresentable {
     /// how to eject in Finder.
     static let libraryHandler = NativeBridgeSender.Handler.library.rawValue
     static let updateHandler = NativeBridgeSender.Handler.updates.rawValue
+    static let dictationHandler = NativeBridgeSender.Handler.dictation.rawValue
 
     // WKWebView has no `-webkit-app-region`, so the page reports presses on
     // the app header's empty space and the window drags or zooms natively.
@@ -1533,6 +1535,8 @@ struct ArchiveWebView: NSViewRepresentable {
         }
         private let makeFolderPicker: (String) -> ArchiveFolderPicker
         private var pendingFolderPicker: PendingFolderPicker?
+        /// Microphone sessions for the page's dictation buttons; see Dictation.swift.
+        lazy var dictation = DictationSessions(emit: { [weak self] detail in self?.publishDictation(detail) })
 
         init(origin: URL, makeFolderPicker: @escaping (String) -> ArchiveFolderPicker = { NativeFolderPicker(purpose: $0) }) {
             self.origin = origin
@@ -1597,6 +1601,7 @@ struct ArchiveWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             cancelFolderPicker()
+            dictation.cancelAll()
             navigations += 1
         }
         static let loadRetries = 4
@@ -1720,6 +1725,14 @@ struct ArchiveWebView: NSViewRepresentable {
             webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('pharos:app-update', {detail: \(json)}))")
         }
 
+        func publishDictation(_ detail: [String: Any]) {
+            guard let webView, let page = webView.url,
+                  page.scheme == origin.scheme, page.host == origin.host, page.port == origin.port,
+                  let data = try? JSONSerialization.data(withJSONObject: detail),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('pharos:dictation', {detail: \(json)}))")
+        }
+
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             NativeBridgeSender.dispatch(
                 name: message.name, expectedOrigin: origin, senderURL: message.frameInfo.request.url,
@@ -1804,6 +1817,8 @@ struct ArchiveWebView: NSViewRepresentable {
                     }
                 case .library:
                     library(message.body, replyHandler: replyHandler)
+                case .dictation:
+                    dictation.handle(message.body, reply: replyHandler)
                 case .clipboard:
                     guard let text = message.body as? String else {
                         replyHandler(nil, "Clipboard content must be text.")
@@ -1971,6 +1986,11 @@ struct ArchiveWebView: NSViewRepresentable {
             contentWorld: .page,
             name: Self.updateHandler
         )
+        configuration.userContentController.addScriptMessageHandler(
+            context.coordinator,
+            contentWorld: .page,
+            name: Self.dictationHandler
+        )
         configuration.userContentController.add(context.coordinator, name: Self.windowMessageName)
         configuration.userContentController.add(context.coordinator, name: "pharosMenuBar")
         configuration.userContentController.addUserScript(
@@ -1999,7 +2019,9 @@ struct ArchiveWebView: NSViewRepresentable {
 
     static func dismantleNSView(_ view: ArchiveWKWebView, coordinator: Coordinator) {
         coordinator.cancelFolderPicker()
+        coordinator.dictation.cancelAll()
         view.configuration.userContentController.removeScriptMessageHandler(forName: updateHandler, contentWorld: .page)
+        view.configuration.userContentController.removeScriptMessageHandler(forName: dictationHandler, contentWorld: .page)
         view.configuration.userContentController.removeScriptMessageHandler(forName: windowMessageName)
         view.configuration.userContentController.removeScriptMessageHandler(forName: "pharosMenuBar")
         view.configuration.userContentController.removeScriptMessageHandler(
