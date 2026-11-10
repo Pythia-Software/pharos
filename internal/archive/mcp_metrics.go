@@ -320,7 +320,7 @@ func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, er
 			continue
 		}
 		switch field {
-		case "execution_machine_status", "channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind", "channel_status", "machine_status", "origin_conversation_id", "origin_evidence", "channels", "machines", "execution_machines", "workspace_id", "conversation_id", "conversation_ids", "conversation_count", "linked_conversation_ids", "mirrored_workspace_ids", "repository", "source", "model", "provider", "effort", "started_at", "activity_at", "coverage":
+		case "execution_machine_status", "channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind", "channel_status", "machine_status", "origin_conversation_id", "origin_evidence", "channels", "machines", "execution_machines", "workspace_id", "conversation_id", "conversation_ids", "conversation_count", "linked_conversation_ids", "mirrored_workspace_ids", "project", "repository", "source", "model", "provider", "effort", "started_at", "activity_at", "coverage":
 			if r.Entity == "workspace" && slices.Contains(originFields, field) {
 				return r, fmt.Errorf("field %s requires conversation entities; workspace membership is available as channels/machines", field)
 			}

@@ -185,6 +185,10 @@ func TestProjectParityWithoutGit(t *testing.T) {
 	if groups := grouped["groups"].([]any); len(groups) != 4 {
 		t.Fatalf("query_statistics by project, three folders and none: %#v", grouped)
 	}
+	rows := callProjectTool(t, library.catalog, "query_statistics", map[string]any{"entity": "conversation", "project": notes, "select": []any{"project"}})
+	if items := rows["items"].([]any); len(items) != 1 || items[0].(map[string]any)["project"] != notes {
+		t.Fatalf("query_statistics select project: %#v", rows)
+	}
 	if _, err := callMCP(library.catalog, "search_conversations", map[string]any{"project": "~/nowhere-at-all"}); err == nil || !strings.Contains(err.Error(), "list_projects") {
 		t.Fatalf("an unknown project should be an error naming list_projects: %v", err)
 	}
