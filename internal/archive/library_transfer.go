@@ -1212,7 +1212,7 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 // Only user state and small capture checkpoints survive a move. Building a
 // fresh catalog avoids leaving transcripts in FTS, rollups, derived findings,
 // query caches, free SQLite pages, or a retained WAL.
-var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots", "query_table_computed_columns", "sync_settings", "background_settings", "background_temporary_cadences", "automatic_source_states",
+var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots", "query_table_computed_columns", "sync_settings", "background_settings", "background_temporary_cadences", "repository_checkouts", "automatic_source_states",
 	"cloud_destinations", "cloud_backup_runs", "cloud_backup_schedules", "library_size_history",
 	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
 	"safety_state", "safety_cart", "safety_handoffs", "fix_state", "fix_cart", "fix_handoffs",

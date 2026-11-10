@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -36,14 +37,21 @@ import (
 // Another Mac's link to a commit this one cannot see stays, and a repository
 // is checked when any Mac checked it.
 //
-// Only facts are stored: hashes, times, counts, the files a link shares and
-// how a commit was reverted. No commit message, diff or file content: a
-// subject is compared as a fingerprint, and squash messages in memory. For
-// file history, every commit that changed a file some session edited or
-// committed keeps that file's path and line counts (git_commit_files).
+// Only facts are stored: hashes, times, counts, paths, the files a link
+// shares and how a commit was reverted. No commit message, diff or file
+// content: a subject is compared as a fingerprint, and squash messages in
+// memory. For file history and the file tree, every commit read keeps its
+// files' paths and line counts (git_commit_files), and the paths at the
+// mainline tip, else HEAD, are the repository's tree (git_tree_files).
 
-// outcomeGitVersion scans every repository again when the rules change.
-const outcomeGitVersion = "4"
+// outcomeGitVersion scans every repository again when the rules change. 5
+// keeps every commit read, with all its files, and the tree.
+const outcomeGitVersion = "5"
+
+// outcomeGitTreeLimit is the most paths a repository's tree keeps. A larger
+// tree is not stored: its files page lists the files sessions and commits
+// touched, as a folder's does.
+var outcomeGitTreeLimit = 100000
 
 // outcomeGitGrace is how long after a session's last edit a commit can still
 // be inferred to be its own: an agent or person commits soon after the work.
@@ -111,6 +119,11 @@ CREATE TABLE IF NOT EXISTS git_commit_files(
   PRIMARY KEY(repository_id,path,hash)) WITHOUT ROWID;
 -- File history finds a file by its path (findFileHistoryKeys).
 CREATE INDEX IF NOT EXISTS session_files_path_idx ON session_files(path);
+CREATE INDEX IF NOT EXISTS git_commit_files_commit_idx ON git_commit_files(repository_id,hash);
+CREATE TABLE IF NOT EXISTS git_tree_files(
+  repository_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  PRIMARY KEY(repository_id,path)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS git_repository_scans(
   repository_id TEXT NOT NULL,
   host_id TEXT NOT NULL,
@@ -199,12 +212,16 @@ type gitScan struct {
 	Status, Reason string
 	Commits        map[string]*gitCommit
 	Links          []gitLink
-	// Edited are the repository's files some session edited or committed:
-	// the commits that changed them are kept for file history.
-	Edited map[string]bool
 	// Since is how far back the scan read: commits before it are not
 	// stored, so file history says it covers only the time since.
 	Since time.Time
+	// Tree is the paths at TreeCommit, the mainline tip (TreeRef) or HEAD;
+	// empty when the tree was too large. TreeKept says the stored tree
+	// stands: it is of TreeCommit already, or, with no TreeCommit, Git
+	// could not read the tree.
+	Tree                []string
+	TreeRef, TreeCommit string
+	TreeKept            bool
 }
 
 var errGitTimeout = errors.New("git timed out")
@@ -270,6 +287,19 @@ func (c *Catalog) refreshSessionGit(ctx context.Context) error {
 	for _, row := range stored {
 		previous[firstString(row["repository_id"])] = row
 	}
+	// The commit of each repository's stored tree, when every Mac's scan
+	// agrees on it: the tree is the repository's, whichever Mac wrote it.
+	treeRows, err := queryMapsContext(ctx, c.DB, `SELECT repository_id,MIN(COALESCE(tree_commit,'')) low,MAX(COALESCE(tree_commit,'')) high
+		FROM git_repository_scans GROUP BY repository_id`)
+	if err != nil {
+		return err
+	}
+	trees := map[string]string{}
+	for _, row := range treeRows {
+		if low := firstString(row["low"]); low == firstString(row["high"]) {
+			trees[firstString(row["repository_id"])] = low
+		}
+	}
 	repositories := make([]string, 0, len(byRepository))
 	for repository := range byRepository {
 		repositories = append(repositories, repository)
@@ -314,6 +344,9 @@ func (c *Catalog) refreshSessionGit(ctx context.Context) error {
 		}
 		if scan.Reason == "" {
 			scan = scanRepository(ctx, clones, sessions, members, repository, forges[repository])
+			if scan.Status == "checked" {
+				scan.readTree(ctx, clones, trees[repository])
+			}
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -630,12 +663,7 @@ func scanRepository(ctx context.Context, clones []*gitClone, sessions map[string
 			}
 		}
 	}
-	scan := gitScan{Status: "checked", Commits: commits, Edited: map[string]bool{}, Since: since.Add(-24 * time.Hour)}
-	for _, id := range members {
-		for path := range sessions[id].Files[repository] {
-			scan.Edited[path] = true
-		}
-	}
+	scan := gitScan{Status: "checked", Commits: commits, Since: since.Add(-24 * time.Hour)}
 	scan.Links, _ = inferLinks(ctx, clones, sessions, members, repository, commits)
 	linked := map[string]*gitCommit{}
 	for _, link := range scan.Links {
@@ -652,27 +680,17 @@ func scanRepository(ctx context.Context, clones []*gitClone, sessions map[string
 		linked = map[string]*gitCommit{}
 		for _, link := range scan.Links {
 			linked[link.Hash] = commits[link.Hash]
-			// What a session committed has a file history, whatever tool wrote it.
-			for path := range commits[link.Hash].Files {
-				scan.Edited[path] = true
-			}
 		}
 	}
-	// Every commit stored is asked whether it was reverted: the linked ones
-	// and, for file history, those that changed an edited file, so a stored
-	// commit without reverted_by was checked and not found reverted. Only
-	// linked commits are asked about mainline. A replaced commit no session
-	// is linked to is a copy of another, and not stored.
+	// Every commit stored is asked whether it was reverted, so a stored
+	// commit without reverted_by was checked and not found reverted: the
+	// linked ones and, for file history and the tree, every other commit
+	// read. Only linked commits are asked about mainline. A replaced commit
+	// no session is linked to is a copy of another, and not stored.
 	stored := maps.Clone(linked)
 	for hash, commit := range commits {
-		if commit.Replaced {
-			continue
-		}
-		for path := range commit.Files {
-			if scan.Edited[path] {
-				stored[hash] = commit
-				break
-			}
+		if !commit.Replaced {
+			stored[hash] = commit
 		}
 	}
 	if len(stored) == 0 {
@@ -705,6 +723,104 @@ func (clone *gitClone) holding(commits map[string]*gitCommit) map[string]*gitCom
 		}
 	}
 	return held
+}
+
+// readTree reads the paths at the mainline tip, else HEAD, for the file
+// tree: from the first clone (most recently seen first) with a mainline,
+// else the first clone's HEAD; unless the stored tree is of that commit
+// already (stored). A tree larger than outcomeGitTreeLimit is left out: the
+// files page then lists what sessions and commits touched. A tree Git could
+// not read keeps the stored one, since failing to look is not evidence it
+// changed.
+func (scan *gitScan) readTree(ctx context.Context, clones []*gitClone, stored string) {
+	if len(clones) == 0 {
+		scan.TreeKept = true
+		return
+	}
+	dir, commit, ref, read := clones[0].Dir, "", "", false
+	for _, clone := range clones {
+		tip, tipRef, err := mainlineTip(ctx, clone.Dir)
+		if err != nil {
+			continue
+		}
+		read = true
+		if tip != "" {
+			dir, commit, ref = clone.Dir, tip, tipRef
+			break
+		}
+	}
+	if !read {
+		scan.TreeKept = true
+		return
+	}
+	if commit == "" {
+		head, err := outcomeGitCommand(ctx, dir, outcomeGitShortTimeout, nil, "rev-parse", "--verify", "-q", "HEAD^{commit}")
+		commit, ref = strings.TrimSpace(string(head)), "HEAD"
+		if errors.Is(err, errGitTimeout) {
+			scan.TreeKept = true
+			return
+		}
+		if err != nil || !gitCommitID.MatchString(commit) {
+			return
+		}
+	}
+	scan.TreeRef, scan.TreeCommit = strings.TrimPrefix(strings.TrimPrefix(ref, "refs/remotes/"), "refs/heads/"), commit
+	if commit == stored {
+		scan.TreeKept = true
+		return
+	}
+	paths, complete, err := listGitTree(ctx, dir, commit, outcomeGitTreeLimit)
+	switch {
+	case err != nil:
+		scan.TreeKept, scan.TreeRef, scan.TreeCommit = true, "", ""
+	case !complete:
+		scan.TreeRef, scan.TreeCommit = "", ""
+	default:
+		scan.Tree = paths
+	}
+}
+
+// listGitTree reads the paths of a commit's tree as Git lists them, read-only
+// and at low priority as outcomeGitCommand runs it, and stops past limit
+// paths: complete is false for a larger tree, which is never held whole.
+var listGitTree = func(ctx context.Context, dir, commit string, limit int) (paths []string, complete bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, outcomeGitLogTimeout)
+	defer cancel()
+	name, full := "git", []string{"-C", dir, "-c", "log.showSignature=false", "ls-tree", "-r", "-z", "--name-only", "--full-tree", commit}
+	if nice, err := exec.LookPath("nice"); err == nil {
+		name, full = nice, append([]string{"-n", "10", "git"}, full...)
+	}
+	command := exec.CommandContext(ctx, name, full...)
+	command.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0")
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, false, err
+	}
+	if err := command.Start(); err != nil {
+		return nil, false, err
+	}
+	reader := bufio.NewReader(stdout)
+	for {
+		path, readErr := reader.ReadString(0)
+		if path = strings.TrimSuffix(path, "\x00"); path != "" {
+			if len(paths) == limit {
+				cancel()
+				_ = command.Wait()
+				return nil, false, nil
+			}
+			paths = append(paths, path)
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	if err := command.Wait(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, false, errGitTimeout
+		}
+		return nil, false, err
+	}
+	return paths, true, nil
 }
 
 // stashSubject is the subject git stash gives the commits it makes, which
@@ -851,14 +967,14 @@ func linkCommits(sessions map[string]*gitSession, members []string, repository s
 			if printed.Branch != "" {
 				evidence["branch"] = printed.Branch
 			}
-			link(printed.Hash, evidence)
+			link(printed.Hash, printed.transcriptPlace.evidence(evidence))
 		}
 		// Its git commands' printed hashes, in the repository each ran in: a
 		// cherry-pick or revert prints one too, and so does a call a later
 		// step failed.
 		for _, op := range sessions[id].opsIn(repository) {
 			for _, printed := range op.Hashes {
-				link(printed, map[string]any{"printed": printed, "command": op.Kind})
+				link(printed, op.transcriptPlace.evidence(map[string]any{"printed": printed, "command": op.Kind}))
 			}
 		}
 	}
@@ -1116,7 +1232,7 @@ func commandLink(windows gitOpWindows, sessions map[string]*gitSession, reposito
 			chosen, confidence, by = candidates[0], 0.5, "shortest"
 		}
 	}
-	evidence := map[string]any{"command": chosen.op.Kind, "at": chosen.op.At, "committed_at": commit.Commit.Format(time.RFC3339), "candidates": len(candidates)}
+	evidence := chosen.op.transcriptPlace.evidence(map[string]any{"command": chosen.op.Kind, "at": chosen.op.At, "committed_at": commit.Commit.Format(time.RFC3339), "candidates": len(candidates)})
 	if by != "" {
 		evidence["chosen_by"] = by
 	}
@@ -1668,30 +1784,34 @@ func markReverts(ctx context.Context, dir, after string, commits, linked map[str
 			}
 		}
 	}
+	// Commits are indexed by their files' lines, so each is compared only
+	// with those whose lines are its own swapped: every commit read can be
+	// asked about.
+	bySignature := map[string][]string{}
+	for other, later := range commits {
+		if later.Parents <= 1 && !later.Replaced && len(later.Files) > 0 {
+			signature := fileLinesSignature(later.Files, false)
+			bySignature[signature] = append(bySignature[signature], other)
+		}
+	}
 	candidates := map[string][]string{}
 	reverters := []string{}
 	for hash, commit := range linked {
 		if commit.RevertedBy != "" || len(commit.Files) == 0 {
 			continue
 		}
-		for other, later := range commits {
-			if other == hash || later.Parents > 1 || later.Replaced || later.Commit.Before(commit.Commit) || len(later.Files) != len(commit.Files) {
+		for _, other := range bySignature[fileLinesSignature(commit.Files, true)] {
+			if other == hash || commits[other].Commit.Before(commit.Commit) {
 				continue
 			}
-			inverse := true
-			for path, lines := range commit.Files {
-				if counts, ok := later.Files[path]; !ok || counts != [2]int64{lines[1], lines[0]} {
-					inverse = false
-					break
-				}
-			}
-			if inverse {
-				candidates[hash] = append(candidates[hash], other)
-				if !slices.Contains(reverters, other) {
-					reverters = append(reverters, other)
-				}
+			candidates[hash] = append(candidates[hash], other)
+			if !slices.Contains(reverters, other) {
+				reverters = append(reverters, other)
 			}
 		}
+	}
+	for hash := range candidates {
+		slices.Sort(candidates[hash])
 	}
 	if len(candidates) == 0 {
 		return nil
@@ -1722,6 +1842,21 @@ func markReverts(ctx context.Context, dir, after string, commits, linked map[str
 	return nil
 }
 
+// fileLinesSignature is a commit's files with their lines added and
+// removed, swapped when inverse: equal for a commit and its exact inverse.
+func fileLinesSignature(files map[string][2]int64, inverse bool) string {
+	paths := slices.Sorted(maps.Keys(files))
+	var signature strings.Builder
+	for _, path := range paths {
+		lines := files[path]
+		if inverse {
+			lines[0], lines[1] = lines[1], lines[0]
+		}
+		fmt.Fprintf(&signature, "%s\x00%d\x00%d\x00", path, lines[0], lines[1])
+	}
+	return signature.String()
+}
+
 // writeGitScan stores one repository's scan: its links and their commits,
 // or, when it could not run, why. A failed scan keeps earlier links: failing
 // to look is not evidence. A scan replaces the links of commits it read and
@@ -1734,17 +1869,28 @@ func (c *Catalog) writeGitScan(ctx context.Context, repository, host, key string
 			if err := writeGitLinks(ctx, tx, repository, host, scan); err != nil {
 				return err
 			}
+			// The tree is written again only when it was read: a tree of the
+			// stored commit, or one Git could not read, stands.
+			if !scan.TreeKept {
+				if err := writeGitTreeFiles(ctx, tx, repository, scan.Tree); err != nil {
+					return err
+				}
+			}
 		}
 		var since any
 		if !scan.Since.IsZero() {
 			since = scan.Since.UTC().Format(time.RFC3339)
 		}
-		// A failed scan keeps the commits an earlier one stored, so it keeps
-		// how far back they were read too.
-		_, err := tx.ExecContext(ctx, `INSERT INTO git_repository_scans(repository_id,host_id,scan_key,status,reason,scanned_at,history_since) VALUES(?,?,?,?,?,?,?)
+		// A failed scan keeps the commits and tree an earlier one stored, so
+		// it keeps how far back they were read and the tree's commit too; so
+		// does a scan that could not read the tree.
+		keep := scan.Status != "checked" || scan.TreeKept && scan.TreeCommit == ""
+		_, err := tx.ExecContext(ctx, `INSERT INTO git_repository_scans(repository_id,host_id,scan_key,status,reason,scanned_at,history_since,tree_ref,tree_commit) VALUES(?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(repository_id,host_id) DO UPDATE SET scan_key=excluded.scan_key,status=excluded.status,reason=excluded.reason,scanned_at=excluded.scanned_at,
-			history_since=CASE WHEN excluded.status='checked' THEN excluded.history_since ELSE git_repository_scans.history_since END`,
-			repository, host, key, scan.Status, nilIfEmpty(scan.Reason), now(), since)
+			history_since=CASE WHEN excluded.status='checked' THEN excluded.history_since ELSE git_repository_scans.history_since END,
+			tree_ref=CASE WHEN ? THEN git_repository_scans.tree_ref ELSE excluded.tree_ref END,
+			tree_commit=CASE WHEN ? THEN git_repository_scans.tree_commit ELSE excluded.tree_commit END`,
+			repository, host, key, scan.Status, nilIfEmpty(scan.Reason), now(), since, nilIfEmpty(scan.TreeRef), nilIfEmpty(scan.TreeCommit), keep, keep)
 		return err
 	})
 }
@@ -1808,10 +1954,10 @@ func writeGitLinks(ctx context.Context, tx *sql.Tx, repository, host string, sca
 	}
 	// The commits of this scan's links, as it read them; another Mac's
 	// commits that a kept link still names stay as that Mac read them.
-	// Commits no session is linked to are kept too where they changed a file
-	// some session edited or committed, for file history, with each such
-	// file's lines and their revert state but without a mainline answer. A
-	// replaced one no session is linked to is a copy of another, and not kept.
+	// Commits no session is linked to are kept too, for file history and
+	// the tree, with all their files' lines and their revert state but
+	// without a mainline answer. A replaced one no session is linked to is a
+	// copy of another, and not kept.
 	linked := map[string]bool{}
 	for _, link := range scan.Links {
 		linked[link.Hash] = true
@@ -1821,11 +1967,9 @@ func writeGitLinks(ctx context.Context, tx *sql.Tx, repository, host string, sca
 		if commit.Replaced && !linked[hash] {
 			continue
 		}
+		linked[hash] = true
 		for path, lines := range commit.Files {
-			if scan.Edited[path] {
-				files[[2]string{hash, path}] = lines
-				linked[hash] = true
-			}
+			files[[2]string{hash, path}] = lines
 		}
 	}
 	if err := writeGitCommitFiles(ctx, tx, repository, files); err != nil {
@@ -1864,6 +2008,39 @@ func writeGitLinks(ctx context.Context, tx *sql.Tx, repository, host string, sca
 	for _, hash := range hashes {
 		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO git_commits(repository_id,hash,`+strings.Join(gitCommitColumns, ",")+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			append([]any{repository, hash}, gitCommitValues(scan.Commits[hash])...)...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeGitTreeFiles makes a repository's git_tree_files hold paths,
+// writing only the rows that changed.
+func writeGitTreeFiles(ctx context.Context, tx *sql.Tx, repository string, paths []string) error {
+	stored, err := queryMapsContext(ctx, tx, "SELECT path FROM git_tree_files WHERE repository_id=?", repository)
+	if err != nil {
+		return err
+	}
+	want := map[string]bool{}
+	for _, path := range paths {
+		want[path] = true
+	}
+	for _, row := range stored {
+		path := firstString(row["path"])
+		if want[path] {
+			delete(want, path)
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM git_tree_files WHERE repository_id=? AND path=?", repository, path); err != nil {
+			return err
+		}
+	}
+	for _, path := range paths {
+		if !want[path] {
+			continue
+		}
+		delete(want, path)
+		if _, err := tx.ExecContext(ctx, "INSERT INTO git_tree_files(repository_id,path) VALUES(?,?)", repository, path); err != nil {
 			return err
 		}
 	}

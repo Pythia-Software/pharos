@@ -1,4 +1,4 @@
-import { fileHistoryURL } from "./file-history-model";
+import { fileHistoryURL, filePageURL } from "./file-history-model";
 import { decodeQueryStrict, encodeQuery, EMPTY_QUERY, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
 import { topicChartKeys, chartVerdict, canonicalChart, judgeChart, readChart, viewChart, cardURL, compact, dashboardURL, dashboardWindows, datasetURL, enumerateView, siteSchemas, type SiteMap, type Verdict } from "./site-map";
@@ -185,6 +185,8 @@ function nodeCases(map: SiteMap) {
   add("home", "/");
   add("ask", "/ask");
   add("files", fileHistoryURL("internal/archive/api.go", "pharos"), { file: "internal/archive/api.go", file_project: "pharos" });
+  add("files", filePageURL({ project: "pharos", dir: "internal/archive" }), { file_dir: "internal/archive", file_project: "pharos" });
+  add("files", filePageURL({ project: "repository:repo-1", commit: "0fe5dfd6" }), { file_commit: "0fe5dfd6", file_project: "repository:repo-1" });
   const cardsParams = (values: Record<string, string>) => `/cards?${new URLSearchParams(cardLibraryParams.filter(key => values[key]).map(key => [key, values[key]]))}`;
   add("cards", "/cards");
   add("cards", cardsParams({ card_search: "tokens", card_topic: "usage", card_sort: "title" }), { card_search: "tokens", card_topic: "usage", card_sort: "title" });

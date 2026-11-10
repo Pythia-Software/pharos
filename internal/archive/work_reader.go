@@ -68,6 +68,13 @@ func (c *Catalog) workOverviewWithPeers(id string, includeUncertain bool) (map[s
 	if result["files"], err = c.workFileTargets(id); err != nil {
 		return nil, err
 	}
+	// A session that only committed, through a shell, has commits but no
+	// file targets; the page's Files and commits section shows them too.
+	var linked int
+	if err := c.reader().QueryRow(`SELECT COUNT(*) FROM session_commit_links WHERE workspace_id=?`, id).Scan(&linked); err != nil {
+		return nil, err
+	}
+	result["linked_commits"] = linked
 	// Related top-level work (peer_reader.go).
 	peers, err := c.workPeers(context.Background(), id)
 	if err != nil {
@@ -254,6 +261,12 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		}
 	}
 	conversation["messages"] = messages
+	// The files its calls edited and read, each linked to its history page.
+	links, err := c.conversationFileLinks(context.Background(), workspaceID, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	conversation["file_links"] = links
 	return conversation, nil
 }
 

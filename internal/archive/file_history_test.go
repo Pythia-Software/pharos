@@ -1,7 +1,12 @@
 package archive
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +51,7 @@ func TestFileHistoryWithGit(t *testing.T) {
 	f.edit("second", "main.go", 4.9)
 	second := repo.commit(4.89, "Second", map[string]string{"main.go": "package main\n\nfunc main() {}\n"})
 	// A commit long after any session's edit is the file's history too, with
-	// no session linked to it. A file no session edited is not kept.
+	// no session linked to it, as is a file no session edited.
 	byHand := repo.commit(2, "By hand", map[string]string{"main.go": "package main\n\nfunc main() { run() }\n"})
 	// A commit no session is linked to is still checked for a revert.
 	revertedAt := time.Now().Add(-36 * time.Hour)
@@ -81,7 +86,7 @@ func TestFileHistoryWithGit(t *testing.T) {
 	repo.git(time.Now(), "update-ref", "refs/remotes/origin/main", "HEAD")
 	f.refresh()
 
-	if stored := countRows(t, f.catalog, `SELECT COUNT(*) FROM git_commit_files WHERE path='other.go'`); stored != 0 {
+	if stored := countRows(t, f.catalog, `SELECT COUNT(*) FROM git_commit_files WHERE path='other.go'`); stored != 1 {
 		t.Fatalf("kept %d commits of a file no session edited", stored)
 	}
 	// A path in the home folder (~/…) and a path in any recorded checkout
@@ -100,6 +105,13 @@ func TestFileHistoryWithGit(t *testing.T) {
 		latest := file["sessions"].([]any)[0].(map[string]any)
 		if integer(latest["edits"]) != 2 || latest["outcome_label"] != "landed" || !strings.Contains(firstString(latest["url"]), "message=call-") || strings.Contains(firstString(latest["url"]), "failed") {
 			t.Fatalf("latest session: %#v", latest)
+		}
+		// Each edit is a place in the session's transcript; the session opens
+		// at its first. The file's page is in its project's tree.
+		places := latest["places"].([]any)
+		if len(places) != 2 || places[0].(map[string]any)["url"] != latest["url"] || places[0].(map[string]any)["url"] == places[1].(map[string]any)["url"] ||
+			file["url"] != "/files?file=main.go&file_project=app" || file["in_tree"] != true {
+			t.Fatalf("%s places: %#v", path, file)
 		}
 		// Git was read from a day before the first session edit, and says so.
 		git := file["git"].(map[string]any)
@@ -181,10 +193,116 @@ func TestFileHistoryWithGit(t *testing.T) {
 		strings.Join(fileHistoryHashes(files[0].(map[string]any)), "|") != scripted[:7]+" scripted" {
 		t.Fatalf("a committed file: %#v", history)
 	}
-	// A path in no session's edits says so instead of an empty list.
+	// A session that only committed through a shell has no file targets
+	// but its page still shows its files and commits.
+	if overview, err := f.catalog.WorkOverview("scripted"); err != nil || len(overview["files"].([]map[string]any)) != 0 || integer(overview["linked_commits"]) != 1 {
+		t.Fatalf("a committing session's overview: files %v, linked commits %v, %v", overview["files"], overview["linked_commits"], err)
+	}
+	// The commit's link opens where the session made it.
+	if link := history["files"].([]any)[0].(map[string]any)["commits"].([]any)[0].(map[string]any)["sessions"].([]any)[0].(map[string]any); link["url"] != "/work/scripted?conversation=scripted-c" {
+		t.Fatalf("a command's commit link: %#v", link)
+	}
+	// A path in no session's edits says so instead of an empty list, unless
+	// a project names it: then it is that project's file, from local Git.
 	none := callProjectTool(t, f.catalog, "get_file_history", map[string]any{"path": "other.go"})
 	if len(none["files"].([]any)) != 0 || !strings.Contains(firstString(none["note"]), "No workspace") {
 		t.Fatalf("unedited file: %#v", none)
+	}
+	other := callProjectTool(t, f.catalog, "get_file_history", map[string]any{"path": "other.go", "project": "app"})
+	if files := other["files"].([]any); len(files) != 1 || files[0].(map[string]any)["in_tree"] != true || len(fileHistorySessions(files[0].(map[string]any))) != 0 ||
+		len(fileHistoryHashes(files[0].(map[string]any))) != 1 {
+		t.Fatalf("a project's unedited file: %#v", other)
+	}
+
+	// Without a project, the projects with files to choose from.
+	if listed, err := f.catalog.FileTree(t.Context(), FileTreeOptions{}); err != nil || len(listed["projects"].([]map[string]any)) != 1 || listed["projects"].([]map[string]any)[0]["ref"] != "app" {
+		t.Fatalf("projects: %#v %v", listed, err)
+	}
+	// The project's tree: the files at the mainline tip, the files sessions
+	// edited that were never committed, and what touched each.
+	entries := func(tree map[string]any) string {
+		result := []string{}
+		for _, entry := range tree["entries"].([]map[string]any) {
+			result = append(result, fmt.Sprintf("%s:%s:%d:%d:%v", entry["name"], entry["kind"], entry["sessions"], entry["commits"], entry["in_tree"]))
+		}
+		return strings.Join(result, " ")
+	}
+	root, err := f.catalog.FileTree(t.Context(), FileTreeOptions{Project: "app", Activity: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := entries(root); got != "a:dir:1:0:false b:dir:1:0:false gen:dir:0:1:true README.md:file:0:0:true lib.go:file:1:0:false lib_test.go:file:1:0:false main.go:file:2:4:true other.go:file:0:1:true util.go:file:1:0:false" {
+		t.Fatalf("root: %s", got)
+	}
+	if git := root["git"].(map[string]any); git["status"] != "checked" || git["tree_ref"] != "origin/main" {
+		t.Fatalf("root git: %#v", git)
+	}
+	var active []string
+	for _, session := range root["sessions"].([]map[string]any) {
+		active = append(active, firstString(session["workspace_id"]))
+	}
+	if strings.Join(active, " ") != "elsewhere patcher second first" || len(root["commits"].([]map[string]any)) != 6 {
+		t.Fatalf("root activity: %v %#v", active, root["commits"])
+	}
+	gen, err := f.catalog.FileTree(t.Context(), FileTreeOptions{Project: "repository:repo-app", Dir: "gen/"})
+	if err != nil || entries(gen) != "script.go:file:0:1:true" || gen["dir"] != "gen" {
+		t.Fatalf("gen: %#v %v", gen, err)
+	}
+	// A directory's name of any characters lists its children by theirs.
+	execTx(t, f.catalog.DB, `INSERT INTO git_tree_files(repository_id,path) VALUES('repo-app','docs/café/x.go')`)
+	if accented, err := f.catalog.FileTree(t.Context(), FileTreeOptions{Project: "app", Dir: "docs/café"}); err != nil || entries(accented) != "x.go:file:0:0:true" ||
+		accented["entries"].([]map[string]any)[0]["path"] != "docs/café/x.go" {
+		t.Fatalf("an accented directory: %#v %v", accented, err)
+	}
+	// A commit: its files and the sessions linked to it.
+	commit, err := f.catalog.FileCommit(t.Context(), FileCommitOptions{Project: "app", Commit: second[:7]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := commit["commit"].(map[string]any)
+	if detail["hash"] != second || len(detail["files"].([]map[string]any)) != 1 || detail["files"].([]map[string]any)[0]["path"] != "main.go" ||
+		len(detail["sessions"].([]map[string]any)) != 1 || detail["sessions"].([]map[string]any)[0]["workspace_id"] != "second" {
+		t.Fatalf("commit: %#v", commit)
+	}
+	if none, err := f.catalog.FileCommit(t.Context(), FileCommitOptions{Commit: second[:7]}); err == nil {
+		t.Fatalf("an empty project chose a repository without a remote: %#v", none)
+	}
+	if missing, err := f.catalog.FileCommit(t.Context(), FileCommitOptions{Project: "app", Commit: "abcdef0"}); err != nil || missing["commit"] != nil || missing["note"] == nil {
+		t.Fatalf("an unread commit: %#v %v", missing, err)
+	}
+	// From a session down: its files, each edit's place and its commits.
+	work, err := f.catalog.WorkFiles(t.Context(), "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workFiles, workCommits := work["files"].([]map[string]any), work["commits"].([]map[string]any)
+	if len(workFiles) != 1 || workFiles[0]["url"] != "/files?file=main.go&file_project=app" || len(workFiles[0]["places"].([]map[string]any)) != 2 ||
+		integer(workFiles[0]["other_sessions"]) != 1 || len(workCommits) != 1 || workCommits[0]["hash"] != second || workCommits[0]["counted"] != true ||
+		work["outcome_label"] != "landed" {
+		t.Fatalf("second's files: %#v", work)
+	}
+	// The reader links each call's files to their pages, a patch's every file.
+	conversation, err := f.catalog.WorkConversation("patcher", "patcher-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var linked []string
+	for _, link := range conversation["file_links"].([]map[string]any) {
+		linked = append(linked, firstString(link["file"])+" "+firstString(link["url"]))
+	}
+	if slices.Sort(linked); strings.Join(linked, "|") != "lib.go /files?file=lib.go&file_project=app|lib_test.go /files?file=lib_test.go&file_project=app" {
+		t.Fatalf("reader links: %v", linked)
+	}
+	fileViewer(t, f, map[string]string{"first": first, "second": second, "byHand": byHand, "revert": revert})
+	fileTreeRescans(t, f)
+	// Two repositories of one name are addressed by ID, and the name asks
+	// which was meant.
+	execTx(t, f.catalog.DB, `INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('repo-fork','app','x','x')`)
+	if both, err := f.catalog.FileTree(t.Context(), FileTreeOptions{Project: "app"}); err != nil || len(both["choices"].([]map[string]any)) != 2 {
+		t.Fatalf("an ambiguous name: %#v %v", both, err)
+	}
+	if work, err := f.catalog.WorkFiles(t.Context(), "second"); err != nil || work["files"].([]map[string]any)[0]["url"] != "/files?file=main.go&file_project=repository%3Arepo-app" {
+		t.Fatalf("a shared name's link: %#v %v", work, err)
 	}
 	if _, err := callMCP(f.catalog, "get_file_history", map[string]any{}); err == nil {
 		t.Fatal("a history without a path should be an error")
@@ -208,13 +326,19 @@ func TestFileHistoryWithGit(t *testing.T) {
 }
 
 func TestFileHistoryWithoutGit(t *testing.T) {
+	// The test's folder is temporary, which is otherwise one /tmp project.
+	override(t, &temporaryFolders, nil)
 	f := newOutcomeFixture(t)
 	f.session("drafter", "claude")
 	f.session("editor", "claude")
 	folder := filepath.Join(t.TempDir(), "notes")
 	plan := filepath.Join(folder, "plan.md")
 	f.write("drafter", plan, 20, code("plan", 0, 6))
-	f.edit("editor", plan, "", "", 3, code("plan", 0, 2), code("plan", 100, 4))
+	f.edit("editor", plan, "", "", 10, code("plan", 0, 2), code("plan", 100, 4))
+	execTx(t, f.catalog.DB, `UPDATE workspaces SET project_folder='`+folderKey(folder)+`' WHERE id IN ('drafter','editor')`)
+	// A session in no project edits a file of no project.
+	f.session("loose", "claude")
+	f.write("loose", filepath.Join(t.TempDir(), "loose.md"), 5, code("loose", 0, 2))
 	f.refresh()
 
 	for _, path := range []string{plan, folderKey(plan), "plan.md", "notes/plan.md"} {
@@ -235,6 +359,77 @@ func TestFileHistoryWithoutGit(t *testing.T) {
 		if integer(drafter["lines_added"]) != 6 || drafter["outcome_label"] == nil {
 			t.Fatalf("drafter: %#v", drafter)
 		}
+		// The rework between them, from each side, opens at the other's edit.
+		editor := file["sessions"].([]any)[0].(map[string]any)
+		by, of := drafter["reworked_by"].([]any), editor["reworked"].([]any)
+		if len(by) != 1 || by[0].(map[string]any)["workspace_id"] != "editor" || integer(by[0].(map[string]any)["removed_lines"]) != 2 ||
+			by[0].(map[string]any)["url"] != editor["url"] || len(of) != 1 || of[0].(map[string]any)["workspace_id"] != "drafter" || len(editor["reworked_by"].([]any)) != 0 {
+			t.Fatalf("%s rework: %#v", path, file["sessions"])
+		}
+		if file["project_ref"] != folderKey(folder) || file["url"] != filePageURL(folderKey(folder), "plan.md", "", "") {
+			t.Fatalf("%s project: %#v", path, file)
+		}
+	}
+	// Without Git, the folder's tree is the files its sessions edited, and
+	// the project names the file exactly.
+	tree, err := f.catalog.FileTree(t.Context(), FileTreeOptions{Project: folderKey(folder), Activity: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries := tree["entries"].([]map[string]any); len(entries) != 1 || entries[0]["name"] != "plan.md" || integer(entries[0]["sessions"]) != 2 ||
+		tree["git"].(map[string]any)["status"] != "not_applicable" || len(tree["sessions"].([]map[string]any)) != 2 || len(tree["commits"].([]map[string]any)) != 0 {
+		t.Fatalf("folder tree: %#v", tree)
+	}
+	exact, err := f.catalog.FileHistory(t.Context(), FileHistoryOptions{Path: "plan.md", Project: folderKey(folder)})
+	if err != nil || len(exact["files"].([]map[string]any)) != 1 {
+		t.Fatalf("a folder's file: %#v %v", exact, err)
+	}
+	if _, err := f.catalog.FileCommit(t.Context(), FileCommitOptions{Project: folderKey(folder), Commit: "abcdef0"}); err == nil {
+		t.Fatal("a folder has no commits")
+	}
+	// A file outside the folder is under its own absolute directory, which
+	// opens to it and to the sessions that edited there.
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	f.session("wanderer", "claude")
+	execTx(t, f.catalog.DB, `UPDATE workspaces SET project_folder='`+folderKey(folder)+`' WHERE id='wanderer'`)
+	f.write("wanderer", outside, 4, code("outside", 0, 2))
+	f.refresh()
+	dir := path.Dir(folderKey(outside))
+	for path.Dir(dir) != "/" && path.Dir(dir) != "." {
+		dir = path.Dir(dir)
+	}
+	root, err := f.catalog.FileTree(t.Context(), FileTreeOptions{Project: folderKey(folder)})
+	if err != nil || !strings.Contains(fmt.Sprint(root["entries"]), "name:"+dir+" ") {
+		t.Fatalf("an absolute directory at the root (%s): %#v %v", dir, root, err)
+	}
+	for next := dir; ; {
+		opened, err := f.catalog.FileTree(t.Context(), FileTreeOptions{Project: folderKey(folder), Dir: next, Activity: true})
+		if listed := opened["entries"].([]map[string]any); err != nil || opened["dir"] != next || len(listed) != 1 ||
+			!strings.Contains(fmt.Sprint(opened["sessions"]), "workspace_id:wanderer") {
+			t.Fatalf("%s: %#v %v", next, opened, err)
+		}
+		entry := opened["entries"].([]map[string]any)[0]
+		if entry["kind"] == "file" {
+			if entry["path"] != folderKey(outside) {
+				t.Fatalf("the file outside: %#v", entry)
+			}
+			break
+		}
+		next = firstString(entry["path"])
+	}
+	// A file of no project links by its path, and its page's changes are
+	// its own edits; an empty project names none.
+	loose, err := f.catalog.WorkFiles(t.Context(), "loose")
+	if err != nil || len(loose["files"].([]map[string]any)) != 1 || loose["files"].([]map[string]any)[0]["project_ref"] != nil {
+		t.Fatalf("a file of no project: %#v %v", loose, err)
+	}
+	loosePath := firstString(loose["files"].([]map[string]any)[0]["path"])
+	if changes, err := f.catalog.FileChanges(t.Context(), FileChangesOptions{Path: loosePath}); err != nil || len(changes["changes"].([]map[string]any)) != 1 ||
+		changes["changes"].([]map[string]any)[0]["workspace_id"] != "loose" {
+		t.Fatalf("a file of no project's changes: %#v %v", changes, err)
+	}
+	if _, err := f.catalog.FileFind(t.Context(), "", "plan"); err == nil {
+		t.Fatal("an empty project should name none")
 	}
 	// Library file search finds the file the sessions edited, each at the
 	// conversation of its first edit, and names its project.
@@ -251,5 +446,263 @@ func TestFileHistoryWithoutGit(t *testing.T) {
 		if row["git_check"] != "not_applicable" || row["evidence_tier"] == "local_git" || firstString(row["outcome_why"]) == "" {
 			t.Fatalf("an outcome without Git: %#v", row)
 		}
+	}
+}
+
+// fileViewer checks the Files page's views of the repository in
+// TestFileHistoryWithGit: the tree's last commit and session, Go to file,
+// each edit's diff, and, once its checkout is chosen, the contents, blame,
+// diffs and history Git reads from it.
+func fileViewer(t *testing.T, f *gitFixture, commits map[string]string) {
+	t.Helper()
+	ctx := t.Context()
+	root, err := f.catalog.FileTree(ctx, FileTreeOptions{Project: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range root["entries"].([]map[string]any) {
+		if entry["name"] != "main.go" {
+			continue
+		}
+		session, commit := entry["last_session"].(map[string]any), entry["last_commit"].(map[string]any)
+		if session["workspace_id"] != "second" || session["title"] != "second" || commit["hash"] != commits["revert"] {
+			t.Fatalf("main.go's last session and commit: %#v", entry)
+		}
+	}
+	found, err := f.catalog.FileFind(ctx, "app", "LIB")
+	if paths := fmt.Sprint(found["files"]); err != nil || !strings.Contains(paths, "path:lib.go") || strings.Index(paths, "path:lib.go") > strings.Index(paths, "path:lib_test.go") {
+		t.Fatalf("go to file: %v %v", paths, err)
+	}
+	// Each edit is a diff read from its call, newest first, opening at it.
+	changes, err := f.catalog.FileChanges(ctx, FileChangesOptions{Project: "app", Path: "main.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var who []string
+	for _, change := range changes["changes"].([]map[string]any) {
+		hunks := change["hunks"].([]editHunk)
+		if change["kind"] != "replace" || len(hunks) != 1 || len(hunks[0].Lines) != 3 || hunks[0].Lines[0].Kind != '+' || !strings.Contains(firstString(change["url"]), "message=call-") {
+			t.Fatalf("an edit's diff: %#v", change)
+		}
+		who = append(who, firstString(change["workspace_id"]))
+	}
+	if strings.Join(who, " ") != "second second first" || changes["more"] != false {
+		t.Fatalf("main.go's edits: %v", who)
+	}
+
+	// Without a chosen checkout no Git runs: the views say how to choose one,
+	// from the checkouts the sessions ran in.
+	content, err := f.catalog.FileContent(ctx, FileGitOptions{Project: "app", Path: "main.go"})
+	if err != nil || content["text"] != nil || content["checkout"].(map[string]any)["status"] != "unset" {
+		t.Fatalf("content without a checkout: %#v %v", content, err)
+	}
+	checkout, err := f.catalog.RepositoryCheckout(ctx, "repo-app")
+	if err != nil || checkout["status"] != "unset" || !slices.Equal(checkout["candidates"].([]string), []string{f.repo.dir}) {
+		t.Fatalf("checkout choices: %#v %v", checkout, err)
+	}
+	// A repository of another history is refused; a clone of this one is
+	// recognised by its first commit.
+	other := newGitRepository(t)
+	if _, err := f.catalog.SetRepositoryCheckout(ctx, "repo-app", other.dir); err == nil || !strings.Contains(err.Error(), "does not look like") {
+		t.Fatalf("another repository as the checkout: %v", err)
+	}
+	clone := filepath.Join(t.TempDir(), "clone")
+	f.repo.git(time.Now(), "clone", "-q", f.repo.dir, clone)
+	execTx(t, f.catalog.DB, `UPDATE repositories SET root_commit='`+f.repo.git(time.Now(), "rev-list", "--max-parents=0", "HEAD")+`' WHERE id='repo-app'`)
+	if set, err := f.catalog.SetRepositoryCheckout(ctx, "repo-app", filepath.Join(clone, ".")); err != nil || set["status"] != "set" || set["path"] != clone {
+		t.Fatalf("a clone as the checkout: %#v %v", set, err)
+	}
+	if _, err := f.catalog.SetRepositoryCheckout(ctx, "repo-app", f.repo.dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// The file at the tree the scan read, and who last changed each line:
+	// the hand-made change was reverted.
+	content, err = f.catalog.FileContent(ctx, FileGitOptions{Project: "app", Path: "main.go"})
+	if err != nil || content["text"] != "package main\n\nfunc main() {}\n" || content["checkout"].(map[string]any)["status"] != "set" {
+		t.Fatalf("content: %#v %v", content, err)
+	}
+	if old, err := f.catalog.FileContent(ctx, FileGitOptions{Project: "app", Path: "main.go", Commit: commits["first"][:8]}); err != nil || old["text"] != "package main\n" {
+		t.Fatalf("content at a commit: %#v %v", old, err)
+	}
+	if gone, err := f.catalog.FileContent(ctx, FileGitOptions{Project: "app", Path: "lib.go"}); err != nil || gone["text"] != nil || !strings.Contains(firstString(gone["note"]), "not in commit") {
+		t.Fatalf("a file never committed: %#v %v", gone, err)
+	}
+	blame, err := f.catalog.FileBlame(ctx, FileGitOptions{Project: "app", Path: "main.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runs []string
+	for _, group := range blame["groups"].([]map[string]any) {
+		runs = append(runs, fmt.Sprintf("%s:%d+%d", firstString(group["hash"])[:7], group["start"], group["count"]))
+	}
+	firstCommit := blame["commits"].(map[string]any)[commits["first"]].(map[string]any)
+	if strings.Join(runs, " ") != commits["first"][:7]+":1+1 "+commits["second"][:7]+":2+1 "+commits["revert"][:7]+":3+1" ||
+		firstCommit["summary"] != "First" || firstCommit["sessions"].([]map[string]any)[0]["workspace_id"] != "first" {
+		t.Fatalf("blame: %v %#v", runs, blame)
+	}
+	// A commit's diff of the file, its detail and the file's history.
+	diff, err := f.catalog.FileDiff(ctx, FileGitOptions{Project: "app", Path: "main.go", Commit: commits["second"]})
+	if err != nil || !strings.Contains(firstString(diff["diff"]), "+func main() {}") {
+		t.Fatalf("diff: %#v %v", diff, err)
+	}
+	detail, err := f.catalog.CommitDetail(ctx, FileGitOptions{Project: "app", Commit: commits["first"][:7]})
+	if commit, _ := detail["commit"].(map[string]any); err != nil || commit["subject"] != "First" || fmt.Sprint(commit["files"]) != "[map[binary:false lines_added:1 lines_removed:0 path:main.go]]" ||
+		commit["read"] != true || len(commit["sessions"].([]map[string]any)) != 1 {
+		t.Fatalf("commit detail: %#v %v", detail, err)
+	}
+	start := f.repo.git(time.Now(), "rev-list", "--max-parents=0", "HEAD")
+	if detail, err := f.catalog.CommitDetail(ctx, FileGitOptions{Project: "app", Commit: start}); err != nil || !strings.Contains(fmt.Sprint(detail["commit"].(map[string]any)["files"]), "path:README.md") {
+		t.Fatalf("a first commit's files: %#v %v", detail, err)
+	}
+	history, err := f.catalog.FileLog(ctx, FileLogOptions{Project: "app", Path: "main.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var subjects []string
+	for _, commit := range history["commits"].([]map[string]any) {
+		subjects = append(subjects, fmt.Sprintf("%s:%d", commit["subject"], len(commit["sessions"].([]map[string]any))))
+	}
+	if strings.Join(subjects, " ") != `Revert "By hand":0 By hand:0 Second:1 First:1` || history["more"] != false {
+		t.Fatalf("history: %v", subjects)
+	}
+	// Each entry's last commit, read in one walk of history.
+	lastCommits, err := f.catalog.LastCommits(ctx, FileGitOptions{Project: "app"})
+	if last := lastCommits["entries"].(map[string]any); err != nil || last["main.go"].(map[string]any)["subject"] != `Revert "By hand"` || last["gen"].(map[string]any)["subject"] != "Generated by a script" ||
+		last["README.md"].(map[string]any)["subject"] != "Start" || last["lib.go"] != nil {
+		t.Fatalf("last commits: %#v %v", lastCommits, err)
+	}
+	if gen, err := f.catalog.LastCommits(ctx, FileGitOptions{Project: "app", Path: "gen"}); err != nil || len(gen["entries"].(map[string]any)) != 1 || gen["entries"].(map[string]any)["script.go"] == nil {
+		t.Fatalf("a directory's last commits: %#v %v", gen, err)
+	}
+	// A squash on mainline is linked to the sessions whose branch commits it
+	// took in, each opening where it made its own commit.
+	execTx(t, f.catalog.DB, `INSERT INTO git_commits(repository_id,hash,author_at,committed_at,parents,files,on_mainline,mainline_evidence)
+		VALUES('repo-app','`+strings.Repeat("ab", 20)+`','x','x',1,1,1,'squashed into `+commits["byHand"][:12]+` on remotes/origin/main')`,
+		`INSERT INTO session_commit_links(workspace_id,repository_id,hash,method,confidence,evidence_json) VALUES('elsewhere','repo-app','`+strings.Repeat("ab", 20)+`','transcript',1,'{"conversation":"elsewhere-c","message":"m-1"}')`)
+	landed, err := f.catalog.FileLog(ctx, FileLogOptions{Project: "app", Path: "main.go"})
+	// The newest commit is the hand-made change's revert; the squash took in
+	// the change itself.
+	if link := landed["commits"].([]map[string]any)[1]["sessions"].([]map[string]any); err != nil || len(link) != 1 || link[0]["workspace_id"] != "elsewhere" || link[0]["method"] != "landed" ||
+		link[0]["url"] != "/work/elsewhere?conversation=elsewhere-c&message=m-1" {
+		t.Fatalf("a squash's sessions: %#v %v", link, err)
+	}
+	// The squash was written by hand, as no Mac's scan: a rescan keeps such
+	// a link as another Mac's, so it goes before the rescans below.
+	execTx(t, f.catalog.DB, `DELETE FROM session_commit_links WHERE hash='`+strings.Repeat("ab", 20)+`'`, `DELETE FROM git_commits WHERE hash='`+strings.Repeat("ab", 20)+`'`)
+	override(t, &fileLogLimit, 2)
+	if all, err := f.catalog.FileLog(ctx, FileLogOptions{Project: "app", Offset: 6}); err != nil || len(all["commits"].([]map[string]any)) != 1 || all["more"] != false {
+		t.Fatalf("the repository's last page: %#v %v", all, err)
+	}
+	// A path of any characters reads as it is, and a repository that shows
+	// signatures in its log runs no signing program for the viewer.
+	verified := filepath.Join(t.TempDir(), "verified")
+	signer := filepath.Join(t.TempDir(), "gpg")
+	if err := os.WriteFile(signer, []byte("#!/bin/sh\ncase \"$*\" in *--verify*) echo run >> '"+verified+"'; echo 'gpg: Good signature' >&2; exit 0;; esac\n"+
+		"cat >/dev/null; printf '\\n[GNUPG:] SIG_CREATED D 1 8 00 0 0\\n' >&2; printf -- '-----BEGIN PGP SIGNATURE-----\\n\\nx\\n-----END PGP SIGNATURE-----\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.repo.git(time.Now(), "config", "gpg.program", signer)
+	f.repo.commitAt(time.Now(), "Accents", map[string]string{"café/a\"b.txt": "x\n"})
+	f.repo.git(time.Now(), "commit", "-q", "-S", "--amend", "--no-edit")
+	signed := f.repo.git(time.Now(), "rev-parse", "HEAD")
+	f.repo.git(time.Now(), "config", "log.showSignature", "true")
+	accented, err := f.catalog.CommitDetail(ctx, FileGitOptions{Project: "app", Commit: signed})
+	if commit, _ := accented["commit"].(map[string]any); err != nil || commit["subject"] != "Accents" || fmt.Sprint(commit["files"]) != `[map[binary:false lines_added:1 lines_removed:0 path:café/a"b.txt]]` {
+		t.Fatalf("a signed commit of an accented path: %#v %v", accented, err)
+	}
+	if last, err := f.catalog.LastCommits(ctx, FileGitOptions{Project: "app", Commit: signed}); err != nil || last["entries"].(map[string]any)["café"].(map[string]any)["subject"] != "Accents" {
+		t.Fatalf("an accented directory's last commit: %#v %v", last, err)
+	}
+	if last, err := f.catalog.LastCommits(ctx, FileGitOptions{Project: "app", Path: "café", Commit: signed}); err != nil || last["entries"].(map[string]any)[`a"b.txt`] == nil {
+		t.Fatalf("an accented directory's entries: %#v %v", last, err)
+	}
+	if log, err := f.catalog.FileLog(ctx, FileLogOptions{Project: "app", Commit: signed}); err != nil || log["commits"].([]map[string]any)[0]["subject"] != "Accents" {
+		t.Fatalf("a signed commit's history: %#v %v", log, err)
+	}
+	if _, err := os.Stat(verified); !os.IsNotExist(err) {
+		t.Fatalf("the viewer ran the signing program: %v", err)
+	}
+	f.repo.git(time.Now(), "config", "--unset", "log.showSignature")
+	// Paths and commits are checked before Git sees them, and a commit the
+	// checkout lacks says so.
+	for _, options := range []FileGitOptions{{Project: "app", Path: "../outside"}, {Project: "app", Path: "a/../../b"}, {Project: "app", Path: "main.go", Commit: "--output=x"}} {
+		if _, err := f.catalog.FileContent(ctx, options); err == nil {
+			t.Fatalf("%+v should be refused", options)
+		}
+	}
+	if missing, err := f.catalog.FileContent(ctx, FileGitOptions{Project: "app", Path: "main.go", Commit: "abcdef0"}); err != nil || !strings.Contains(firstString(missing["note"]), "does not hold") {
+		t.Fatalf("a commit the checkout lacks: %#v %v", missing, err)
+	}
+	// A file past the viewer's limit is not read.
+	override(t, &fileGitMaxBytes, 10)
+	if large, err := f.catalog.FileContent(ctx, FileGitOptions{Project: "app", Path: "main.go"}); err != nil || large["text"] != nil || !strings.Contains(firstString(large["note"]), "more than the viewer reads") {
+		t.Fatalf("a large file: %#v %v", large, err)
+	}
+	// Forgetting the checkout stops Git again.
+	if cleared, err := f.catalog.ClearRepositoryCheckout(ctx, "repo-app"); err != nil || cleared["status"] != "unset" {
+		t.Fatalf("cleared: %#v %v", cleared, err)
+	}
+}
+
+// fileTreeRescans checks how scans after TestFileHistoryWithGit's first
+// keep the repository's tree: an unchanged tip is not written again, a
+// failed scan or tree read keeps the tree, and a tree past the limit is
+// not kept.
+func fileTreeRescans(t *testing.T, f *gitFixture) {
+	t.Helper()
+	ctx := t.Context()
+	state := func() map[string]any {
+		git, err := f.catalog.fileGitState(ctx, "repo-app")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return git
+	}
+	treeCommit := func() any { return state()["tree_commit"] }
+	kept := treeCommit()
+	sentinel := func() int {
+		return countRows(t, f.catalog, `SELECT COUNT(*) FROM git_tree_files WHERE repository_id='repo-app' AND path='docs/café/x.go'`)
+	}
+	// The viewer's test committed on the branch, not mainline: the tree's
+	// commit is unchanged, so its rows (with one the test added) stand.
+	f.refresh()
+	if sentinel() != 1 || treeCommit() != kept {
+		t.Fatalf("an unchanged tree was written again: %v %v", sentinel(), treeCommit())
+	}
+	// A scan that fails keeps the tree it had.
+	f.repo.git(time.Now(), "update-ref", "refs/heads/elsewhere", "HEAD")
+	command := outcomeGitCommand
+	outcomeGitCommand = func(ctx context.Context, dir string, timeout time.Duration, stdin []byte, args ...string) ([]byte, error) {
+		if args[0] != "for-each-ref" && args[0] != "worktree" {
+			return nil, errGitTimeout
+		}
+		return command(ctx, dir, timeout, stdin, args...)
+	}
+	f.refresh()
+	outcomeGitCommand = command
+	if git := state(); git["status"] != "not_checked" || git["tree_commit"] != kept || sentinel() != 1 {
+		t.Fatalf("a failed scan's tree: %#v", git)
+	}
+	tree, err := f.catalog.FileTree(ctx, FileTreeOptions{Project: "app"})
+	if err != nil || !strings.Contains(fmt.Sprint(tree["entries"]), "in_tree:true") {
+		t.Fatalf("a failed scan's files: %#v %v", tree, err)
+	}
+	// A new tip whose tree Git cannot read keeps the tree too.
+	f.repo.git(time.Now(), "update-ref", "refs/remotes/origin/main", "HEAD")
+	list := listGitTree
+	override(t, &listGitTree, func(context.Context, string, string, int) ([]string, bool, error) { return nil, false, errGitTimeout })
+	f.refresh()
+	if git := state(); git["status"] != "checked" || git["tree_commit"] != kept || sentinel() != 1 {
+		t.Fatalf("an unread tree: %#v", git)
+	}
+	// A tree past the limit is not kept, and Git is not read past it.
+	listGitTree = list
+	override(t, &outcomeGitTreeLimit, 2)
+	f.repo.git(time.Now(), "update-ref", "refs/heads/elsewhere", "HEAD~1")
+	f.refresh()
+	if git := state(); git["status"] != "checked" || git["tree_commit"] != nil ||
+		countRows(t, f.catalog, `SELECT COUNT(*) FROM git_tree_files WHERE repository_id='repo-app'`) != 0 {
+		t.Fatalf("a tree past the limit: %#v", git)
 	}
 }

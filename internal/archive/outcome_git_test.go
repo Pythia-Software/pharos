@@ -575,7 +575,8 @@ func TestSessionGitScansOnlyWhatChanged(t *testing.T) {
 		t.Fatalf("an unchanged repository read its log %d times, generation %d to %d", logs, before, generation())
 	}
 	// A scan rewrites only the links and commits that changed: a commit
-	// that links to no session writes nothing, and the views stay.
+	// that links to no session writes only its own row, kept for file
+	// history and the tree, and the views stay.
 	execTx(t, f.catalog.DB, `CREATE TABLE link_writes(n INTEGER)`,
 		`CREATE TRIGGER links_inserted AFTER INSERT ON session_commit_links BEGIN INSERT INTO link_writes VALUES(1); END`,
 		`CREATE TRIGGER links_deleted AFTER DELETE ON session_commit_links BEGIN INSERT INTO link_writes VALUES(1); END`,
@@ -583,15 +584,16 @@ func TestSessionGitScansOnlyWhatChanged(t *testing.T) {
 		`CREATE TRIGGER commits_deleted AFTER DELETE ON git_commits BEGIN INSERT INTO link_writes VALUES(1); END`)
 	f.repo.commit(4.5, "Unrelated", map[string]string{"other.go": "package other\n"})
 	f.refresh()
-	if writes := countRows(t, f.catalog, `SELECT COUNT(*) FROM link_writes`); logs == 0 || writes != 0 || generation() != before {
+	if writes := countRows(t, f.catalog, `SELECT COUNT(*) FROM link_writes`); logs == 0 || writes != 1 || generation() != before {
 		t.Fatalf("a scan that linked nothing new: %d logs, %d writes, generation %d to %d", logs, writes, before, generation())
 	}
 	// New work writes its link and commit, and the first link again, since
-	// its evidence holds the session's window, now wider.
+	// its evidence holds the session's window, now wider (link_writes
+	// counts on from the unrelated commit's row).
 	f.edit("work", "util.go", 4)
 	f.repo.commit(3.99, "More", map[string]string{"util.go": "package util\n"})
 	f.refresh()
-	if writes := countRows(t, f.catalog, `SELECT COUNT(*) FROM link_writes`); logs == 0 || len(f.links()["work"]) != 2 || writes != 3 {
+	if writes := countRows(t, f.catalog, `SELECT COUNT(*) FROM link_writes`); logs == 0 || len(f.links()["work"]) != 2 || writes != 4 {
 		t.Fatalf("after new work: %d logs, %d writes, %v", logs, writes, f.links())
 	}
 	// Lines and edit times a session gained later scan again, and a

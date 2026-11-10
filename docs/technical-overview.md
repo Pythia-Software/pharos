@@ -284,11 +284,22 @@ another Mac's links to commits this Mac's clones lack; the Library reads
 `git_check`, `linked_commits` and `landed_commits`, and a repository Git
 could not check reads "Not checked" with the reason.
 
-File history (`file_history.go`, `/files`, `/api/file-history`) lists the
-sessions that edited a file from `session_files`, and in a checked
-repository the commits that changed it from `git_commit_files`, which the
-Tier 2 scan fills for session-edited paths only. Library file search reads
-`session_files` beside `change_files`.
+The Files page (`file_history.go`, `file_tree.go`, `work_files.go`;
+`/files`, `/api/file-history`, `/api/file-tree`, `/api/file-commit`,
+`/api/work/{id}/files`) links files, sessions and commits both ways: the
+sessions that edited a file (`session_files`), each edit's call
+(`session_file_edits`) and the rework between them (`session_file_rework`),
+and in a checked repository its commits (`git_commit_files`) and the tree at
+the mainline tip (`git_tree_files`), both filled by the Tier 2 scan. Library
+file search reads `session_files` beside `change_files`. A file's Changes tab
+(`file_changes.go`, `/api/file-changes`) turns each edit's call input into a
+diff. Code, blame, history, commit diffs and a directory's last commits
+(`file_git.go`; `/api/file-content`, `/api/file-blame`, `/api/file-log`,
+`/api/file-diff`, `/api/file-commit-git`, `/api/file-last-commits`) are the
+only requests that run Git: read-only, bounded, two at a time, and only in
+the checkout the person chose for the repository on this Mac
+(`repository_checkout.go`, `repository_checkouts`,
+`/api/repositories/{id}/checkout`); nothing they read is stored.
 
 Analyze → Outcomes reads the `outcomes` dataset (`outcomes_table.go`): one
 row per Library session, with its label, evidence tier, branch, main model
