@@ -44,6 +44,14 @@ callbacks per row through the driver's function bridge), before the one
 `GROUP BY`. The
 aggregate itself (`qt_v2_sum`) is another callback per row.
 
+A grouped request pays for the pipeline twice. Before it stages the validated
+rows, the executor runs the same chain inside a budget probe
+(`SELECT COUNT(*),COALESCE(SUM(length(...)),0) FROM (WITH qt0 ... LIMIT 10000001) AS qt_source_budget`),
+then runs it again to fill the staging table. On the Home card "Tool calls
+by operation and activity, 30 days" (268,740 rows, four validated fields) the
+request takes 4.9 s: 2.0 s in the probe and 2.2 s in the staging statement
+that repeats it.
+
 The same shape appears in every metric over a SQL source, so the cost grows
 with the rows a metric reads on Pharos's other large sources as well (Tool
 calls, Message labels, Model requests); those were not measured separately.
@@ -68,6 +76,10 @@ change:
    host declares safe (no values beyond 2^53) could use SQLite's `SUM`
    instead of `qt_v2_sum`, as the grouped-source reducer added in 0.9.4
    already does for summaries.
+
+4. **Budget while staging.** Enforce the row and byte budget as the staging
+   statement writes (or from the staged table afterwards, dropping it when
+   over), so the chain runs once.
 
 Semantics to preserve: error precedence (`MIN(e)` per group), NULL versus
 zero sums, unsafe-integer detection where the host has not declared the
