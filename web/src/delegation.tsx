@@ -1906,27 +1906,29 @@ export function ParallelActivity({
             n.end != null &&
             n.start <= range[1] &&
             n.end >= range[0];
+          // What this lane leaves out: an error icon beside the model opens these.
+          const laneNotes=(()=>{
+            if(!lane)return [];
+            const notes:React.ReactNode[]=[];
+            if(lane.truncated)notes.push("Showing first 2,400 marks; zoom in for remaining events.");
+            if(lane.messages_truncated)notes.push("Message display is limited to 2,400 observations per session. Zoom in to see more.");
+            // Copies link to the session that owns the original when it is loaded.
+            const owners=(lane.inherited_owners??[]).map(id=>data.focus.find(row=>row.id===id)??rows.find(row=>row.id===id)).filter((row):row is Session=>!!row);
+            if(lane.inherited_messages)notes.push(<>{lane.inherited_messages.toLocaleString()} copied message{lane.inherited_messages===1?"":"s"} belong{lane.inherited_messages===1?"s":""} to {owners.length?owners.map((owner,i)=><React.Fragment key={owner.id}>{i?", ":""}<button type="button" className="delegation-inline-link" onClick={()=>openNode(owner)}>{owner.label}</button></React.Fragment>):lane.inherited_owners?.length?"another session":"a session whose original is not retained"}</>);
+            if(lane.repeated_messages)notes.push(`${lane.repeated_messages.toLocaleString()} message${lane.repeated_messages===1?" repeats":"s repeat"} this session's earlier segment`);
+            if(lane.occurrence_partial)notes.push((lane.occurrence_reasons??[]).map(occurrenceNote).find(Boolean)||"some messages may repeat copied history");
+            if(lane.omitted_segments?.length)notes.push(omittedSegmentsNote(lane.omitted_segments));
+            if(lane.events_pending)notes.push(eventsPendingNote);
+            return notes;
+          })();
           if(recursive&&labelData)return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
-            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${peerPrefix(n)}${n.provider} · ${n.model||"model not recorded"}${parentNote(n)?` · ${parentNote(n)}`:""}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
+            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${peerPrefix(n)}${n.provider} · ${n.model||"model not recorded"}${parentNote(n)?` · ${parentNote(n)}`:""}`} notes={laneNotes} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
               openSession={timeline?()=>openNode(n):undefined}
               sourceHref={timeline?item=>sourceHref(n,item):undefined}
               events={timeline?nativeLabels.events.get(n.id):undefined} eventCounts={eventCounts} eventHref={timeline?e=>eventHref(n,e):undefined}
               foldControl={!n.child_count?null:previewOnly?<span className="lt-preview-fold"><Icon name="tree"/></span>:<button type="button" className="delegation-chevron" aria-label={`${collapsed.has(n.id)?"Expand":"Collapse"} child sessions of ${n.label}`} aria-expanded={!collapsed.has(n.id)} title={collapsed.has(n.id) ? "Expand sessions" : "Collapse sessions"} onClick={()=>toggle(n)}><Icon name={collapsed.has(n.id)?"chevron-right":"chevron-down"}/></button>}
               restore={(item,anchor)=>{if(item.mark&&!mark&&eventID===JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category])){anchor.scrollIntoView({block:"nearest",inline:"nearest"});setMark({node:n,mark:item.mark,anchor});}}}
               select={(item,anchor)=>{if(item.message){setEventID("label:"+item.message.id);openNode(n,item.message.id,item.message.conversation_id);}else if(item.mark){setEventID(JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category]));setMark({node:n,mark:item.mark,anchor});}}}/>
-            {lane?.truncated?<small className="delegation-truncation">Showing first 2,400 marks; zoom in for remaining events.</small>:null}
-            {lane?.messages_truncated?<small className="delegation-truncation">Message display is limited to 2,400 observations per session. Zoom in to see more.</small>:null}
-            {lane?.inherited_messages||lane?.repeated_messages||lane?.occurrence_partial||lane?.omitted_segments?.length||lane?.events_pending?(()=>{
-              // Copies link to the session that owns the original when it is loaded.
-              const owners=(lane.inherited_owners??[]).map(id=>data.focus.find(row=>row.id===id)??rows.find(row=>row.id===id)).filter((row):row is Session=>!!row);
-              const parts:React.ReactNode[]=[];
-              if(lane.inherited_messages)parts.push(<React.Fragment key="inherited">{lane.inherited_messages.toLocaleString()} copied message{lane.inherited_messages===1?"":"s"} belong{lane.inherited_messages===1?"s":""} to {owners.length?owners.map((owner,i)=><React.Fragment key={owner.id}>{i?", ":""}<button type="button" className="delegation-inline-link" onClick={()=>openNode(owner)}>{owner.label}</button></React.Fragment>):lane.inherited_owners?.length?"another session":"a session whose original is not retained"}</React.Fragment>);
-              if(lane.repeated_messages)parts.push(`${lane.repeated_messages.toLocaleString()} message${lane.repeated_messages===1?" repeats":"s repeat"} this session's earlier segment`);
-              if(lane.occurrence_partial)parts.push((lane.occurrence_reasons??[]).map(occurrenceNote).find(Boolean)||"some messages may repeat copied history");
-              if(lane.omitted_segments?.length)parts.push(omittedSegmentsNote(lane.omitted_segments));
-              if(lane.events_pending)parts.push(eventsPendingNote);
-              return <small className="delegation-truncation">{parts.map((part,i)=><React.Fragment key={i}>{i?" · ":""}{part}</React.Fragment>)}</small>;
-            })():null}
           </div>;
           return (
             <div

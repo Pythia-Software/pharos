@@ -3778,6 +3778,26 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
+      "key": "33619209c2062df5:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "workSection",
+      "tag": "details",
+      "control": "'details', `work-section ${className}`",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Work page heading sections (Code activity, Related work) use stable work:<id>:<section> keys in the shared disclosures map; the remembered open/closed preference only supplies data-view-default."
+    },
+    {
+      "key": "6595bb79365a0acf:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "workSection",
+      "tag": "summary",
+      "control": "'summary', 'work-section-summary', label",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Summary of a keyed work heading section; a deliberate click also remembers the section open or closed as an interface preference for other work pages."
+    },
+    {
       "key": "0e18c887173fcc9b:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "xmlTreeView",
@@ -7831,13 +7851,31 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "ddd1928c7e12ab89:0",
+      "key": "25fcb341aea73913:0",
       "file": "web/src/session-identity.tsx",
       "owner": "SessionIdentity",
       "tag": "button",
-      "control": "aria-label={`Open session ${name}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}",
+      "control": "aria-label={`Open session ${name}`} onClick={open}",
       "contract": "delegation",
       "reason": "Session navigation writes the canonical conversation route and delegation_session through the shared explorer openNode handler; the current session has no navigation control."
+    },
+    {
+      "key": "25fcb341aea73913:1",
+      "file": "web/src/session-identity.tsx",
+      "owner": "SessionIdentity",
+      "tag": "button",
+      "control": "aria-label={`Open session ${name}`} onClick={open}",
+      "contract": "delegation",
+      "reason": "Session navigation beside a SessionNotice writes the canonical conversation route and delegation_session through the shared explorer openNode handler."
+    },
+    {
+      "key": "5dcce287268322d2:0",
+      "file": "web/src/session-identity.tsx",
+      "owner": "SessionNotice",
+      "tag": "button",
+      "control": "aria-label={`${notes.length === 1 ? \"Note\" : `${notes.length} notes`} about what ${name} does not show`} onPointerEnter={event => inspector.show(event.currentTarget, card)} onPointerLeave={inspector.leave} onClick={event => { event.preventDefault(); event.stopPropagation(); inspector.pin(event.currentTarget, card, undefined, event.detail === 0); }}",
+      "contract": "transient",
+      "reason": "Hover previews and a click pins the session notes popover without changing the URL; owner-session links inside it navigate through openNode."
     },
     {
       "key": "3c0938979a8182b4:0",
