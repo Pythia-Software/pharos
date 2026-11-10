@@ -42,7 +42,7 @@ import (
 // that file's path and line counts (git_commit_files).
 
 // outcomeGitVersion scans every repository again when the rules change.
-const outcomeGitVersion = "2"
+const outcomeGitVersion = "3"
 
 // outcomeGitGrace is how long after a session's last edit a commit can still
 // be inferred to be its own: an agent or person commits soon after the work.
@@ -591,22 +591,40 @@ func scanRepository(ctx context.Context, clones []*gitClone, sessions map[string
 	for _, link := range scan.Links {
 		linked[link.Hash] = commits[link.Hash]
 	}
-	if len(linked) == 0 {
+	if len(linked) > 0 {
+		for _, clone := range clones {
+			if err := markMainline(ctx, clone.Dir, after, clone.holding(linked), clone.Shallow); err != nil {
+				return gitScan{Status: "not_checked", Reason: gitFailure(err)}
+			}
+		}
+		scan.Links = linkCopiesOnce(scan.Links, linked)
+		linked = map[string]*gitCommit{}
+		for _, link := range scan.Links {
+			linked[link.Hash] = commits[link.Hash]
+		}
+	}
+	// Every commit stored is asked whether it was reverted: the linked ones
+	// and, for file history, those that changed an edited file, so a stored
+	// commit without reverted_by was checked and not found reverted. Only
+	// linked commits are asked about mainline.
+	stored := maps.Clone(linked)
+	for hash, commit := range commits {
+		for path := range commit.Files {
+			if scan.Edited[path] {
+				stored[hash] = commit
+				break
+			}
+		}
+	}
+	if len(stored) == 0 {
 		return scan
 	}
 	for _, clone := range clones {
-		if err := markMainline(ctx, clone.Dir, after, clone.holding(linked), clone.Shallow); err != nil {
+		if err := markReverts(ctx, clone.Dir, after, clone.holding(commits), clone.holding(stored)); err != nil {
 			return gitScan{Status: "not_checked", Reason: gitFailure(err)}
 		}
-	}
-	scan.Links = linkCopiesOnce(scan.Links, linked)
-	linked = map[string]*gitCommit{}
-	for _, link := range scan.Links {
-		linked[link.Hash] = commits[link.Hash]
-	}
-	for _, clone := range clones {
-		if err := markReverts(ctx, clone.Dir, after, clone.holding(commits), clone.holding(linked)); err != nil {
-			return gitScan{Status: "not_checked", Reason: gitFailure(err)}
+		if len(linked) == 0 {
+			continue
 		}
 		if notes, err := outcomeGitCommand(ctx, clone.Dir, outcomeGitShortTimeout, nil, "notes", "--ref=ai", "list"); err == nil {
 			for _, line := range strings.Split(string(notes), "\n") {
@@ -984,10 +1002,11 @@ func patchIDs(ctx context.Context, dir string, reverse bool, listed []string, re
 
 var revertLine = regexp.MustCompile(`(?m)^This reverts commit ([0-9a-f]{7,64})`)
 
-// markReverts records which linked commits a later commit reverted: by the
-// message git revert writes, or by a diff that is the exact inverse of the
-// commit's (same files, lines added and removed swapped, and the inverse
-// patch-id equal to the commit's).
+// markReverts records which of the given commits (scanRepository passes
+// every commit it stores) a later commit reverted: by the message git revert
+// writes, or by a diff that is the exact inverse of the commit's (same
+// files, lines added and removed swapped, and the inverse patch-id equal to
+// the commit's).
 func markReverts(ctx context.Context, dir, after string, commits, linked map[string]*gitCommit) error {
 	messages, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, "log", "--branches", "--remotes", "--tags", after,
 		"--grep=This reverts commit", "--format=%x1e%H%x1f%B")
@@ -1144,7 +1163,8 @@ func writeGitLinks(ctx context.Context, tx *sql.Tx, repository, host string, sca
 	// The commits of this scan's links, as it read them; another Mac's
 	// commits that a kept link still names stay as that Mac read them.
 	// Commits no session is linked to are kept too where they changed an
-	// edited file, for file history, with each such file's lines.
+	// edited file, for file history, with each such file's lines and their
+	// revert state but without a mainline answer.
 	linked := map[string]bool{}
 	for _, link := range scan.Links {
 		linked[link.Hash] = true

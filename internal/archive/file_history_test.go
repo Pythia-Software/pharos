@@ -48,6 +48,10 @@ func TestFileHistoryWithGit(t *testing.T) {
 	// A commit long after any session's edit is the file's history too, with
 	// no session linked to it. A file no session edited is not kept.
 	byHand := repo.commit(2, "By hand", map[string]string{"main.go": "package main\n\nfunc main() { run() }\n"})
+	// A commit no session is linked to is still checked for a revert.
+	revertedAt := time.Now().Add(-36 * time.Hour)
+	repo.git(revertedAt, "revert", "--no-edit", byHand)
+	revert := repo.git(revertedAt, "rev-parse", "HEAD")
 	repo.commit(1, "Unrelated", map[string]string{"other.go": "package other\n"})
 	f.edit("elsewhere", "util.go", 3)
 	// A path ending that sorts before the exact path, and two files that
@@ -98,9 +102,12 @@ func TestFileHistoryWithGit(t *testing.T) {
 		if git["status"] != "checked" || !since.Before(time.Now().Add(-10*24*time.Hour)) || since.Before(time.Now().Add(-12*24*time.Hour)) {
 			t.Fatalf("git: %#v", git)
 		}
-		want := []string{byHand[:7] + " ", second[:7] + " second", first[:7] + " first"}
+		want := []string{revert[:7] + " ", byHand[:7] + " ", second[:7] + " second", first[:7] + " first"}
 		if got := fileHistoryHashes(file); strings.Join(got, "|") != strings.Join(want, "|") {
 			t.Fatalf("%s commits: %v, want %v", path, got, want)
+		}
+		if commits := file["commits"].([]any); commits[1].(map[string]any)["reverted_by"] != revert || commits[2].(map[string]any)["reverted_by"] != nil {
+			t.Fatalf("%s revert state: %#v", path, commits)
 		}
 	}
 	for _, path := range []string{"lib_test.go", filepath.Join(repo.dir, "lib_test.go")} {

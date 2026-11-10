@@ -694,8 +694,10 @@ a file:
   evidence, and a link into the reader at its first edit of the file. This
   needs no Git: a file in a plain folder gets the same timeline.
 - **Commits:** in a repository local Git checked on this Mac, every commit
-  that changed the file, with its lines, mainline and revert state, and the
-  sessions linked to it. A link below the counting threshold (0.7) shows as a
+  that changed the file, with its lines, its revert state, and the sessions
+  linked to it. Mainline state is known only for a commit linked to a
+  session; for any other it is unknown (`on_mainline` null), not "not on
+  mainline". A link below the counting threshold (0.7) shows as a
   candidate. Outside a repository the page says Git does not apply; in a
   repository not checked here it gives the reason. Neither is an error or an
   empty list. The scan reads Git from a day before the repository's first
@@ -724,7 +726,11 @@ changed a file some session edited there, with lines added and removed. The
 Tier 2 scan already reads `git log --numstat`; it keeps rows for edited
 paths only, so the table grows with the paths agents touched, not with the
 repository. It stores hashes, paths and counts. A commit no session is
-linked to is written to `git_commits` with only its time and revert state.
+linked to is written to `git_commits` with only its time and revert state:
+the scan checks every commit it stores for a revert (by `git revert`'s
+message or an exact inverse diff), so a stored commit without `reverted_by`
+was checked and not found reverted. Only linked commits are asked about
+mainline.
 
 **Library file search** reads `session_files` as well as `change_files`, so
 Claude Code, Codex and Antigravity edits are found. Each hit opens the
