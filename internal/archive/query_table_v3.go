@@ -2,7 +2,10 @@ package archive
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -325,7 +328,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			return qt.QueryResultV3{}, nil, err
 		}
 	}
-	finish, err := heavyQueries.acquire(ctx)
+	finish, err := heavyQueries.acquireKind(ctx, queryKind(dataset, params, q))
 	if err != nil {
 		return qt.QueryResultV3{}, nil, err
 	}
@@ -481,4 +484,17 @@ func (s *Server) executeUsageQueryV3(ctx context.Context, tx *sql.Tx, d qt.Query
 		result.Metrics = append(result.Metrics, byID[spec.ID])
 	}
 	return result, nil
+}
+
+// queryKind names requests expected to cost about the same: one dataset and
+// query, whenever it is asked. The request's clock is left out, so a card
+// reloaded later is the same kind.
+func queryKind(dataset string, params url.Values, q qt.QueryRequestV3) string {
+	q.Now = 0
+	body, err := json.Marshal(q)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(append(body, params.Encode()...))
+	return dataset + ":" + hex.EncodeToString(sum[:8])
 }

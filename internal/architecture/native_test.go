@@ -38,6 +38,7 @@ var nativeLeaves = map[string]string{
 	"internal/archive/service_volume_unix.go":                 "Service volume watchdog identity.",
 	"internal/archive/input_open_unix.go":                     "Nonblocking path and rooted input opens.",
 	"internal/archive/finder_info_unix.go":                    "Finder metadata observation; no native launch authorization.",
+	"internal/archive/browser_open_darwin.go":                 "Opens a validated Claude https link in the default browser or a listed Chromium profile, and lists those profiles, for a person-enabled export download.",
 	"internal/archive/drive_darwin.go":                        "Darwin mount observation.",
 	"internal/archive/rename_exclusive_darwin.go":             "Atomic no-replace publication.",
 	"internal/archive/capture_export_io_unix.go":              "Confined descriptor-relative capture export I/O.",

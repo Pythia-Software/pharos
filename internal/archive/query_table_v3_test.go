@@ -227,6 +227,30 @@ func TestQueryV3UsageFiltersSessionsAndCalendar(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Rows[0]["tokens"] != float64(3050) {
 		t.Fatal("hour query mutated the cached daily population", w.Code, w.Body.String())
 	}
+	// A bound on first_usage_at pre-selects the days staged; the answer and
+	// the cached population stay the same.
+	for _, c := range []struct {
+		op     string
+		tokens float64
+	}{{">=", 2030}, {"<", 1020}} {
+		q.Source.Where = []qt.WhereTerm{{Field: "first_usage_at", Op: c.op, Value: "2026-09-21T00:00:00Z"}}
+		w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || len(result.Rows) != 1 || result.Rows[0]["tokens"] != c.tokens {
+			t.Fatal(c.op, w.Code, w.Body.String())
+		}
+	}
+	q.Source.Where = nil
+	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Rows[0]["tokens"] != float64(3050) {
+		t.Fatal("a windowed query mutated the cached daily population", w.Code, w.Body.String())
+	}
+	days := []map[string]any{{"first_usage_at": "2026-06-01T00:00:00Z"}, {"first_usage_at": "2026-09-20T23:00:00Z"}, {"first_usage_at": "2026-09-21T05:00:00Z"}, {"first_usage_at": nil}}
+	if kept := usageRowsWithin(days, [][]qt.WhereTerm{{{Field: "first_usage_at", Op: ">=", Value: "2026-09-21T00:00:00Z"}}}); len(kept) != 3 {
+		t.Fatal("want the days near or inside the window, and the one without a time", kept)
+	}
+	if kept := usageRowsWithin(days, [][]qt.WhereTerm{{{Field: "first_usage_at", Op: ">=", Value: "2026-09-21T00:00:00Z", Negated: true}}}); len(kept) != 4 {
+		t.Fatal("a negated bound narrows nothing", kept)
+	}
 	calendar := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Result: qt.WireQuery{Select: []string{"id"}, Limit: 50},
 		Metrics: []qt.AggSpec{{ID: "days", Op: "sum", Field: "total_tokens", GroupBy: []string{"first_usage_at"}, DateGrouping: &qt.MetricDateGrouping{Field: "first_usage_at", Interval: "day", TimeZone: "UTC", Range: "observed"}}}}
 	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", calendar)

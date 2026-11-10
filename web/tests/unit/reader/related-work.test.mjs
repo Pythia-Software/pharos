@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { plain } from "../helpers/classic-script.mjs";
 import { reader } from "../helpers/transcript.mjs";
 
-const { peerChip, peerReasonText, handoffMarkers, peerRoleLabel, conversationMessages } = reader;
+const { peerChip, peerReasonText, peersByAge, handoffMarkers, peerRoleLabel, conversationMessages } = reader;
 const now = Date.parse("2026-11-07T12:00:00Z");
 
 test("a chip names the peer's role, title, provider and age, and explains itself from the page's side", () => {
@@ -42,6 +42,18 @@ test("uncertain links say so, and roles and reasons fall back to generic related
   assert.equal(peerRoleLabel("unknown"), "Related work");
   assert.equal(peerReasonText({ kind: "tl1_candidate", confidence: "high", details: { candidate: "c" } }), "Both are TL1 tasks on the same candidate");
   assert.equal(peerReasonText({ kind: "new_kind", confidence: "low" }), "Related (uncertain)");
+});
+
+test("the strip lists related work most recently started first, certain or not, undated last", () => {
+  const peers = [
+    { workspace_id: "old", started_at: "2026-11-01T00:00:00Z", confidence: "high" },
+    { workspace_id: "undated", confidence: "high" },
+    { workspace_id: "new", started_at: "2026-11-07T00:00:00Z", confidence: "low" },
+    { workspace_id: "middle", started_at: "2026-11-04T00:00:00Z", confidence: "high" },
+  ];
+  assert.deepEqual(plain(peersByAge(peers).map(peer => peer.workspace_id)), ["new", "middle", "old", "undated"]);
+  assert.equal(peers[0].workspace_id, "old", "the input keeps its order");
+  assert.deepEqual(plain(peersByAge(undefined)), []);
 });
 
 test("a message's hand-offs become one marker per linked message, certain first, and survive normalization", () => {

@@ -295,6 +295,7 @@ the words here are the words surfaces show (§8).
 | `background.update` (variants `frequent`, `hourly`, `daily`, `requested`) | Background update · Updating in the background | schedule (`backgroundLoop`, §11), user (Run now) | svc | D:w W:w I:w | capt:this/\*, conv:\*, an.\*, findings, upgrade | index | Stops after the record in progress; each item runs again at its next time. | batch | >10 s | bg |
 | `background.capture` (variants `sources`, `preserve`) | Capture & index · Capturing and indexing | step of `background.update` | svc | D:w W:w I:w C(this):w | capt:this/\*, conv:\* | index | Stops between files and records; what was captured stays valid, and the next run resumes it. | batch | step | bg |
 | `capture.this-mac` | Capture this Mac · Capturing | user, onboarding | svc | D:w I:w C(this):w | capt:this/\* | — (today) | Stops between files; the next capture resumes it, and what was captured stays valid. | record | always | fg |
+| `capture.import` (variant `claude-ai`) | Collect Claude export · Collecting | user, cli, schedule (`claudeDownloads` daemon, only while this Mac's Downloads watch is on; its capture and index run as a chained `background.capture`) | svc, cli | D:w I:w C(this):w | capt:this/\* | — | Stops between reads; verified files and import jobs remain available to resume. | record | always | fg |
 | `capture.cli` (variant `sqlite-records` for that command's writing subcommands) | Capture (Terminal) · Capturing | cli | cli (lease only; it never opens the catalog) | D:w C(this):w | capt:this/\* | — | Pharos cannot stop it; the drive stays busy until it ends. | none (to Pharos) | never (lease only) | fg |
 | `index.captures` | Index captures · Indexing captures | user, onboarding, cli | svc, cli | D:w W:w I:w X(c):w (`I` in the service only) | capt:\*, conv:\*, view, an.\*, findings | index | Stops between records; the next index resumes it. Waits for a running capture (`blocked(capture-running)`). | batch | always | fg |
 | `library.update` | Capture & index · Capturing and indexing | user | svc | D:w W:w I:w | capt:this/\*, conv:\*, an.\*, findings, upgrade | index | As `index.captures`; the browser then starts `library.upgrade`. | batch | always | fg |
@@ -355,7 +356,7 @@ Notes:
 
 The loops started in `Serve` (`maintainLibrary`, `maintainSubstringIndex`,
 `maintainToolOutputIndex`, `maintainTextSearch`, `maintainToolSearch`, `maintainQueryTextIndexes`,
-`maintainMessageLabelFacts`, `maintainFingerprintImages`, `maintainFingerprintImagesSecondary`, `keepWALSmall`, `automaticLoop`, `cloudScheduleLoop`, `compressCaptures`, and the broker's
+`maintainMessageLabelFacts`, `maintainFingerprintImages`, `maintainFingerprintImagesSecondary`, `keepWALSmall`, `automaticLoop`, `cloudScheduleLoop`, `compressCaptures`, `claudeDownloads`, and the broker's
 `maintain`) are **daemons**, not operations: they are registered by name so
 the unregistered-work test can account for them, but they have no state,
 hold nothing, and are never shown. Each pass that does real work starts an
@@ -466,7 +467,8 @@ nothing.
 **Slow requests and contention.** A request (or an MCP tool call) that ran
 for a second or more, or that its client abandoned, leaves one `Slow
 request:` line on stderr with where its time went: waiting for the catalog
-writer and behind which operations, waiting for derived values, in its own
+writer and behind which operations, waiting for derived values, queued for
+one of the heavy-query slots, in its own
 statements (with the code that ran the slowest), and the rest, plus the read
 pool's use and the WAL's size. The same breakdown is the detail of the
 request's entry in Settings → Logs. The line names the route or tool, never a
