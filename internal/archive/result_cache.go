@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -53,6 +54,11 @@ var (
 	resultCacheUnused = 14 * 24 * time.Hour
 	// resultRefreshRecent bounds the idle sweep to entries asked for lately.
 	resultRefreshRecent = 3 * 24 * time.Hour
+	// resultReturnAfter is how long after an entry was first stored a
+	// request for it counts as coming back to it. Only entries someone came
+	// back to are swept: a filter tried once is stored, and refreshed if it
+	// is asked for again, but creates no standing background work.
+	resultReturnAfter = time.Hour
 	// resultRefreshPause is how long the refresher waits for the service to
 	// be idle again, and resultSweepEvery how often it looks for stale
 	// entries nobody has asked for since they went stale.
@@ -110,7 +116,8 @@ type resultEntry struct {
 	domain, key, version, scope, stamp string
 	clock                              bool
 	replay, body                       []byte
-	builtAt, usedAt                    time.Time
+	builtAt, usedAt, firstAt           time.Time
+	returned                           bool
 }
 
 // state is "fresh", "stale", or "" for an entry that cannot be served.
@@ -148,10 +155,15 @@ type resultCache struct {
 	refreshing atomic.Int32
 }
 
+// resultCacheLayout is the file's table layout; a file of another layout
+// has its entries dropped, since a cache is always safe to lose.
+const resultCacheLayout = 2
+
 const resultCacheSchema = `CREATE TABLE IF NOT EXISTS entries (
  domain TEXT NOT NULL, key TEXT NOT NULL, version TEXT NOT NULL, scope TEXT NOT NULL, stamp TEXT NOT NULL,
  clock INTEGER NOT NULL, replay BLOB NOT NULL, body BLOB NOT NULL,
  built_at INTEGER NOT NULL, used_at INTEGER NOT NULL, bytes INTEGER NOT NULL,
+ first_at INTEGER NOT NULL, returned INTEGER NOT NULL DEFAULT 0,
  UNIQUE(domain,key));
 CREATE INDEX IF NOT EXISTS entries_used_idx ON entries(used_at);
 CREATE TABLE IF NOT EXISTS library (id INTEGER PRIMARY KEY CHECK(id=1), identity TEXT NOT NULL)`
@@ -202,7 +214,12 @@ func (s *Server) results() *resultCache {
 		db, err := sql.Open("sqlite", dsn)
 		if err == nil {
 			db.SetMaxOpenConns(4)
-			if _, err = db.Exec(resultCacheSchema); err == nil {
+			var layout int
+			if err = db.QueryRow(`PRAGMA user_version`).Scan(&layout); err == nil && layout != resultCacheLayout {
+				_, err = db.Exec(fmt.Sprintf(`DROP TABLE IF EXISTS entries; PRAGMA user_version=%d`, resultCacheLayout))
+			}
+			if err != nil {
+			} else if _, err = db.Exec(resultCacheSchema); err == nil {
 				_, err = db.Exec(`DELETE FROM entries WHERE NOT EXISTS(SELECT 1 FROM library WHERE identity=?);
  INSERT INTO library(id,identity) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET identity=excluded.identity`, cache.identity, cache.identity)
 			}
@@ -226,13 +243,13 @@ func (c *Catalog) closeResults() {
 
 func (cache *resultCache) get(ctx context.Context, domain, key string) *resultEntry {
 	e := &resultEntry{domain: domain, key: key}
-	var built, used int64
-	err := cache.db.QueryRowContext(ctx, `SELECT version,scope,stamp,clock,replay,body,built_at,used_at FROM entries WHERE domain=? AND key=?`, domain, key).
-		Scan(&e.version, &e.scope, &e.stamp, &e.clock, &e.replay, &e.body, &built, &used)
+	var built, used, first int64
+	err := cache.db.QueryRowContext(ctx, `SELECT version,scope,stamp,clock,replay,body,built_at,used_at,first_at,returned FROM entries WHERE domain=? AND key=?`, domain, key).
+		Scan(&e.version, &e.scope, &e.stamp, &e.clock, &e.replay, &e.body, &built, &used, &first, &e.returned)
 	if err != nil {
 		return nil
 	}
-	e.builtAt, e.usedAt = time.UnixMilli(built), time.UnixMilli(used)
+	e.builtAt, e.usedAt, e.firstAt = time.UnixMilli(built), time.UnixMilli(used), time.UnixMilli(first)
 	return e
 }
 
@@ -242,10 +259,10 @@ func (cache *resultCache) put(e *resultEntry) {
 		return
 	}
 	now := time.Now().UnixMilli()
-	_, err := cache.db.Exec(`INSERT INTO entries(domain,key,version,scope,stamp,clock,replay,body,built_at,used_at,bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+	_, err := cache.db.Exec(`INSERT INTO entries(domain,key,version,scope,stamp,clock,replay,body,built_at,used_at,bytes,first_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
  ON CONFLICT(domain,key) DO UPDATE SET version=excluded.version,scope=excluded.scope,stamp=excluded.stamp,clock=excluded.clock,
  replay=excluded.replay,body=excluded.body,built_at=excluded.built_at,bytes=excluded.bytes`,
-		e.domain, e.key, e.version, e.scope, e.stamp, e.clock, e.replay, e.body, e.builtAt.UnixMilli(), now, len(e.body)+len(e.replay))
+		e.domain, e.key, e.version, e.scope, e.stamp, e.clock, e.replay, e.body, e.builtAt.UnixMilli(), now, len(e.body)+len(e.replay), now)
 	if err != nil {
 		return
 	}
@@ -258,10 +275,13 @@ func (cache *resultCache) put(e *resultEntry) {
 	}
 }
 
-// used records that e was asked for, at most once a minute.
+// used records that e was asked for, at most once a minute, and whether
+// someone has come back to it (resultReturnAfter).
 func (cache *resultCache) used(e *resultEntry) {
-	if now := time.Now(); now.Sub(e.usedAt) > time.Minute {
-		_, _ = cache.db.Exec(`UPDATE entries SET used_at=? WHERE domain=? AND key=?`, now.UnixMilli(), e.domain, e.key)
+	now := time.Now()
+	returned := e.returned || now.Sub(e.firstAt) >= resultReturnAfter
+	if now.Sub(e.usedAt) > time.Minute || returned != e.returned {
+		_, _ = cache.db.Exec(`UPDATE entries SET used_at=?, returned=? WHERE domain=? AND key=?`, now.UnixMilli(), returned, e.domain, e.key)
 	}
 }
 
@@ -439,7 +459,7 @@ func (s *Server) sweepResults(ctx context.Context) {
 	if cache == nil {
 		return
 	}
-	rows, err := cache.db.QueryContext(ctx, `SELECT domain,key,version,scope,stamp,clock,built_at FROM entries WHERE used_at>=? ORDER BY used_at DESC LIMIT 1000`,
+	rows, err := cache.db.QueryContext(ctx, `SELECT domain,key,version,scope,stamp,clock,built_at FROM entries WHERE returned AND used_at>=? ORDER BY used_at DESC LIMIT 1000`,
 		time.Now().Add(-resultRefreshRecent).UnixMilli())
 	if err != nil {
 		return

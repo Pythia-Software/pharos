@@ -9,7 +9,8 @@ import { orderedValues } from "./session-shape-bands";
 import { isTrendView, changeState, cycleUnavailable, notTrended, sampleSubject, analysisResult, analysisLabels, analysisFields, comparisonComponentUnavailable, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, percentileLimit, distributionBins, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery } from "./analysis-request";
 import type { RequestParams } from "./metric-request";
-import { onDatasetRefresh } from "./dataset-refresh";
+import { useDatasetRefresh } from "./use-dataset-refresh";
+import { loadFollowing } from "./result-cache";
 import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, ScaleControl, presetPeriod, timeBounds, withTimeRange, type ChartRange, type FilterChange, type TimeBounds } from "./usage-chart";
 import { trendPeriodCount } from "./dashboard-trend-model";
 import { UsageDashboardLinks } from "./usage-workspace";
@@ -31,20 +32,21 @@ export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, que
   const key = JSON.stringify([query, params ?? {}]);
   // A result belongs to its query and to the refresh it was fetched for, so
   // results from before a refresh read as loading, never as current.
-  const [state, setState] = useState<{ key: string; refresh: number; results: AggregationResultEntry[]; error: string; loading: boolean; updatedAt?: number }>({ key: "", refresh: 0, results: [], error: "", loading: true });
-  const [refresh, setRefresh] = useState(0);
-  useEffect(() => onDatasetRefresh(dataset, () => setRefresh(value => value + 1)), [dataset]);
+  const [state, setState] = useState<{ key: string; refresh: number; results: AggregationResultEntry[]; error: string; loading: boolean; updatedAt?: number; refreshing?: boolean }>({ key: "", refresh: 0, results: [], error: "", loading: true });
+  const [refresh, takePolicy] = useDatasetRefresh(dataset);
   useEffect(() => {
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
     const [request, parameters] = JSON.parse(key) as [QueryState, RequestParams];
-    runAnalysisQuery(dataset, schema, request, { signal: controller.signal, params: parameters })
-      .then(results => setState({ key, refresh, results, error: "", loading: false, updatedAt: Date.now() }))
+    // A stored answer is shown at once with the time it was computed, and
+    // replaced in place when the service has refreshed it.
+    loadFollowing(signal => runAnalysisQuery(dataset, schema, request, { signal, params: parameters }),
+      (results, served) => setState({ key, refresh, results, error: "", loading: false, updatedAt: served?.built ?? Date.now(), refreshing: served?.state === "stale" }), controller.signal, takePolicy())
       .catch(failure => { if (!controller.signal.aborted) setState({ key, refresh, results: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
   }, [dataset, key, refresh]);
   const current = state.key === key;
-  return { updatedAt: current ? state.updatedAt : undefined, results: current ? state.results : [], loading: !current || state.refresh !== refresh || state.loading, error: current && state.refresh === refresh && !state.loading ? state.error : "" };
+  return { updatedAt: current ? state.updatedAt : undefined, refreshing: current && Boolean(state.refreshing), results: current ? state.results : [], loading: !current || state.refresh !== refresh || state.loading, error: current && state.refresh === refresh && !state.loading ? state.error : "" };
 }
 
 export function AnalysisViewControl({ catalog, state, onChange }: { catalog: AnalysisCatalog; state: AnalysisState; onChange: (view: AnalysisView) => void }) {
@@ -189,7 +191,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
     population={catalog.population ? <PopulationControl catalog={catalog} schema={schema} where={where} terms={population.terms} subjects={subjects} onFilter={onFilter} /> : undefined} />;
 
   return <section className="usage-analysis-dashboard" aria-label="Dashboard analysis" aria-busy={result.loading}>
-    <div className="data-readiness-chart-controls">{controls}<DataReadinessIndicator id={`chart:${dataset}`} title={analysisCardCopy(catalog, view, where, schema).title} dataset={dataset} query={analysis.query} empty={outputEmpty} updatedAt={result.updatedAt} /></div>
+    <div className="data-readiness-chart-controls">{controls}<DataReadinessIndicator id={`chart:${dataset}`} title={analysisCardCopy(catalog, view, where, schema).title} dataset={dataset} query={analysis.query} empty={outputEmpty} updatedAt={result.updatedAt} refreshing={result.refreshing} /></div>
     <DataReadinessEmpty id={`chart:${dataset}`} title={analysisCardCopy(catalog, view, where, schema).title} dataset={dataset} query={analysis.query} empty={outputEmpty}>{error ? <p className="query-table-error" role="alert">{error}</p>
       : result.loading ? <DashboardLoading spec={loadingSpec} />
       : empty ? <p className="usage-analysis-empty" role="status">{analysisEmptyLabel(catalog, view)}</p>

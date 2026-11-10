@@ -109,16 +109,21 @@ func TestResultCachePolicies(t *testing.T) {
 		t.Fatalf("a failure with nothing stored answered %s %s", state, code)
 	}
 	broken = false
-	// The sweep finds stale entries no request has queued since.
+	// The sweep finds stale entries no request has queued since, but only
+	// those someone came back to: "b" was asked for only when first stored.
 	for server.refreshResult(t.Context()) {
+	}
+	override(t, &resultReturnAfter, 0)
+	if state, _ := ask(resultCached, "a", false); state != "fresh" {
+		t.Fatal(state)
 	}
 	stamp = "4"
 	server.sweepResults(t.Context())
 	before := builds
 	for server.refreshResult(t.Context()) {
 	}
-	if builds != before+2 {
-		t.Fatalf("sweep refreshed %d entries, want both", builds-before)
+	if builds != before+1 {
+		t.Fatalf("sweep refreshed %d entries, want the one returned to", builds-before)
 	}
 	// A request that reads the clock goes stale by age alone.
 	if state, _ := ask(resultCached, "clock", true); state != "live" {
@@ -130,10 +135,10 @@ func TestResultCachePolicies(t *testing.T) {
 	}
 	expect("no clock", resultCached, "a", "fresh", fmt.Sprint(builds-1))
 	// The file outlives the process, and another version's entries are not served.
-	_, stored := ask(resultCached, "b", false)
+	_, stored := ask(resultCached, "a", false)
 	catalog.closeResults()
 	catalog.resultsOnce, catalog.resultStore = sync.Once{}, nil
-	expect("reopened", resultCached, "b", "fresh", stored)
+	expect("reopened", resultCached, "a", "fresh", stored)
 	override(t, &domain.version, "2")
 	expect("new version", resultCached, "b", "live", fmt.Sprint(builds+1))
 	// The file belongs to one library: each has its own, and a file found
@@ -196,6 +201,16 @@ func TestQueryResultsAreCached(t *testing.T) {
 	fresh := cachedCall(t, server, config.APIToken, path, resultCached, request(time.Now()))
 	if fresh.Header().Get(resultCacheHeader) != "fresh" || !bytes.Contains(fresh.Body.Bytes(), []byte("Renamed")) {
 		t.Fatalf("after the refresh: %v %s", fresh.Header(), titlesOf(fresh.Body.Bytes()))
+	}
+	// A table's pages are never stored: a long page, or one further in.
+	for _, page := range [][2]int{{int(queryResultRows) + 1, 0}, {3, 3}} {
+		table := request(time.Now())
+		table.Result.Limit, table.Result.Offset = page[0], page[1]
+		for range 2 {
+			if w := cachedCall(t, server, config.APIToken, path, resultCached, table); w.Code != 200 || w.Header().Get(resultCacheHeader) != "live" {
+				t.Fatalf("table page %v: %d %v", page, w.Code, w.Header())
+			}
+		}
 	}
 	// Errors are reported as before and never stored.
 	bad := request(time.Now())

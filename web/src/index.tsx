@@ -149,7 +149,9 @@ import { PricingNotice } from "./pricing-notice";
 import { describeTerm, humanAnalysisCatalog, readHumanLink } from "./human-analysis-catalog";
 import { parallelismCatalogShape, parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
 import { useCarbonCatalog, useParallelismCatalog } from "./analysis-catalog-hooks";
-import { datasetsForSavedPreferences, onDatasetRefresh } from "./dataset-refresh";
+import { datasetsForSavedPreferences } from "./dataset-refresh";
+import { useDatasetRefresh } from "./use-dataset-refresh";
+import { loadFollowing } from "./result-cache";
 
 type Row = Record<string, any>;
 const relationships: RelationshipAdapter = {
@@ -981,16 +983,14 @@ function compactNumber(value: number): string {
 function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationClause[]) {
   const key = JSON.stringify({ where, clauses });
   const [state, setState] = useState<{ key: string; refresh: number; metrics: MetricResult[]; error: string; loading: boolean }>({ key: "", refresh: 0, metrics: [], error: "", loading: true });
-  const [refresh, setRefresh] = useState(0);
-  useEffect(() => onDatasetRefresh(dataset, () => setRefresh(value => value + 1)), [dataset]);
+  const [refresh, takePolicy] = useDatasetRefresh(dataset);
   useEffect(() => {
     const request = JSON.parse(key) as { where: WhereTerm[]; clauses: AggregationClause[] };
     if (!request.clauses.length) { setState({ key, refresh, metrics: [], error: "", loading: false }); return; }
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
-    postMetrics(dataset, schemas[dataset], request.where, request.clauses, controller.signal)
-
-      .then(metrics => setState({ key, refresh, metrics, error: "", loading: false }))
+    loadFollowing(signal => postMetrics(dataset, schemas[dataset], request.where, request.clauses, signal),
+      metrics => setState({ key, refresh, metrics, error: "", loading: false }), controller.signal, takePolicy())
       .catch(failure => { if (!controller.signal.aborted) setState({ key, refresh, metrics: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
   }, [dataset, key, refresh]);

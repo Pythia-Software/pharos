@@ -146,6 +146,10 @@ test('cached results cannot become current merely because a new analysis finishe
  const data=snapshot([row('an.authorship')]);
  assert.equal(readinessModel(data,[scope('writing_messages',{updatedAt:now-3600000})],now).kind,'saved');
  assert.equal(readinessModel(data,[scope('writing_messages',{refreshError:'offline'})],now).kind,'saved');
+ // A stored answer being recomputed says how old it is, and that it will change.
+ const stored=readinessModel(data,[scope('writing_messages',{updatedAt:now-60000,refreshing:true})],now);
+ assert.equal(stored.kind,'saved');assert.match(stored.label,/from .+ ago/);assert.match(stored.sentence,/updating/);
+ assert.equal(readinessModel(data,[scope('writing_messages',{updatedAt:now-60000})],now).kind,'current');
 });
 test('first-build output absence survives real queued and running reason changes',()=>{
  const data=snapshot([row('an.authorship',{as_of:null,output_missing:true,behind:{state:'behind',count:128,unit:'message'},reason:{code:'never-built',text:'Not built'}})]);

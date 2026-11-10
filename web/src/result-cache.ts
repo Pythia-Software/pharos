@@ -85,6 +85,22 @@ export async function followStale(ask: (attempt: number) => Promise<boolean>, si
   }
 }
 
+// Runs load under a policy and publishes its value with what it was served.
+// While the answer is stale it is loaded again (followStale) and published
+// in place, so a view catches up without anyone asking. Only the first
+// load's failure is the caller's: a failed follow-up leaves the stale
+// answer showing.
+export async function loadFollowing<T>(load: (signal: AbortSignal) => Promise<T>, publish: (value: T, served?: ResultServed) => void, signal: AbortSignal, policy: ResultPolicy,
+  follow: typeof followStale = followStale): Promise<void> {
+  const once = async (asked: ResultPolicy) => {
+    const scope = resultScope(signal, asked), value = await load(scope.signal), served = scope.served();
+    if (signal.aborted) return false;
+    publish(value, served);
+    return served?.state === "stale";
+  };
+  if (await once(policy)) await follow(() => once("cached").catch(() => !signal.aborted), signal);
+}
+
 function pause(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise(resolve => {
     const done = () => { clearTimeout(timer); signal?.removeEventListener("abort", done); resolve(); };

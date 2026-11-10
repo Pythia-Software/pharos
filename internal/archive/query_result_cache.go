@@ -23,6 +23,10 @@ var queryResultMaxAge = 10 * time.Minute
 // keyed by its dataset, URL parameters and body without the client's clock.
 // Its scope is the dataset's cache generation (queryDatasetGeneration), so a
 // labeling commit leaves a Usage card fresh.
+// queryResultRows is the longest list of rows stored: a first page of at
+// most this many. Anything longer, or further in, is a table.
+var queryResultRows int64 = 50
+
 var queryResults = registerResultDomain(&resultDomain{
 	name: "query-v3", version: "1", maxAge: queryResultMaxAge,
 	stamp: func(ctx context.Context, s *Server, scope string) (string, error) {
@@ -135,6 +139,17 @@ func queryResultRequest(dataset string, params url.Values, body []byte) (resultR
 	var fields map[string]any
 	if err := decoder.Decode(&fields); err != nil || fields == nil {
 		return resultRequest{}, errors.New("query body is not a JSON object")
+	}
+	if rows, _ := fields["rows"].(bool); rows {
+		// A table is read live: its pages are large, each is read once, and
+		// together they must agree. A short list (a card's few rows) is one
+		// self-contained answer, and is stored like any other.
+		result, _ := fields["result"].(map[string]any)
+		limit, _ := result["limit"].(json.Number)
+		offset, _ := result["offset"].(json.Number)
+		if n, err := limit.Int64(); err != nil || n > queryResultRows || offset != "" && offset != "0" {
+			return resultRequest{}, errors.New("a page of table rows is not stored")
+		}
 	}
 	request := resultRequest{scope: queryDatasetGeneration(dataset)}
 	number, _ := fields["now"].(json.Number)

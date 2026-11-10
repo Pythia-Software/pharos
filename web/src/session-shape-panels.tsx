@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import type { AggregationClause, FieldSchema, QueryRequestV3, WhereTerm } from "@pythia-software/query-table-core";
 import { postMetrics, type MetricResult } from "./metric-request";
 import { postQueryRows } from "./query-transport";
-import { onDatasetRefresh } from "./dataset-refresh";
+import { useDatasetRefresh } from "./use-dataset-refresh";
+import { loadFollowing } from "./result-cache";
 import { conversationRowURL } from "./usage-row-model";
 import { useViewState } from "./view-state";
 import { sessionShapeAnalysisCatalog as catalog } from "./session-shape-analysis-catalog";
@@ -17,29 +18,27 @@ const dataset = "session_shape";
 const seconds = formatSeconds;
 
 // Rows from the session_shape query table, again on Refresh.
-function useRefresh() {
-  const [refresh, setRefresh] = useState(0);
-  useEffect(() => onDatasetRefresh(dataset, () => setRefresh(value => value + 1)), []);
-  return refresh;
-}
 async function postRows(result: QueryRequestV3["result"], signal: AbortSignal): Promise<{ rows: Array<Record<string, unknown>>; total: number }> {
   return postQueryRows<Record<string, unknown>>(dataset, result, signal);
 }
 type Loaded<T> = { value: T | null; error: string; loading: boolean };
-function useLoad<T>(key: string, load: (signal: AbortSignal) => Promise<T>): Loaded<T> {
-  const refresh = useRefresh();
+// stored: whether the load may be answered from the result cache. The
+// aggregations are; the list of sessions is read live, as tables are.
+function useLoad<T>(key: string, load: (signal: AbortSignal) => Promise<T>, stored = false): Loaded<T> {
+  const [refresh, takePolicy] = useDatasetRefresh(dataset);
   const [state, setState] = useState<{ key: string; value: T | null; error: string; loading: boolean }>({ key: "", value: null, error: "", loading: true });
   useEffect(() => {
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
-    load(controller.signal).then(value => setState({ key, value, error: "", loading: false }))
+    const publish = (value: T) => setState({ key, value, error: "", loading: false }), policy = takePolicy();
+    (stored ? loadFollowing(load, publish, controller.signal, policy) : load(controller.signal).then(publish))
       .catch(failure => { if (!controller.signal.aborted) setState({ key, value: null, error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
   }, [key, refresh]);
   return state.key === key ? state : { value: null, error: "", loading: true };
 }
 function useSessionMetrics(where: WhereTerm[], schema: FieldSchema<any>, requests: AggregationClause[][]): Loaded<MetricResult[]> {
-  return useLoad(JSON.stringify([where, requests]), async signal => (await Promise.all(requests.map(clauses => postMetrics(dataset, schema, where, clauses, signal)))).flat());
+  return useLoad(JSON.stringify([where, requests]), async signal => (await Promise.all(requests.map(clauses => postMetrics(dataset, schema, where, clauses, signal)))).flat(), true);
 }
 
 // The signal table: the last seven days against your eight weeks before

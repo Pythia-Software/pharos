@@ -223,7 +223,9 @@ function readinessDoneSteps(stages:ReadinessStage[]):string[] {
     return `${step} (${hosts.has('')||hosts.size<2?sources:`${sources} on ${hosts.size} Macs`})`;
   });
 }
-function readinessCopy(kind:ReadinessModel['kind'],checkedAt:number|null,lag:number|null,now:number) {
+// refreshingFrom is when a stored answer now being recomputed was computed.
+function readinessCopy(kind:ReadinessModel['kind'],checkedAt:number|null,lag:number|null,now:number,refreshingFrom:number|null=null) {
+  if(kind==='saved'&&refreshingFrom!==null)return {label:`Showing results from ${readinessAge(Math.max(0,now-refreshingFrom))} ago`,sentence:'Pharos is updating these results; they will change here when it finishes.'};
   const label=kind==='unknown'?'Update status unavailable':kind==='missing'?'No results yet':kind==='saved'?'Showing saved results':kind==='scheduled'?'Update scheduled':kind==='current'?checkedAt===null?'No updates waiting':`Up to date as of ${readinessAge(Math.max(0,now-checkedAt))} ago`:lag===null?'Update needed':`${readinessAge(lag)} behind`;
   const sentence=kind==='unknown'?'Pharos can’t tell whether all the data shown here is up to date.':kind==='missing'?'Pharos needs to finish these steps before it can show results.':kind==='saved'?'Refresh this view to check for newer results.':kind==='scheduled'?'Some changes are waiting for the next scheduled update.':kind==='current'?checkedAt===null?'The last check time is unavailable.':'Activity since then may not appear here yet.':'Some changes are not included in these results yet.';
   return {label,sentence};
@@ -280,8 +282,10 @@ export function readinessModel(snapshot: ReadinessSnapshot | null, scopes: Readi
   const lag=since.length?Math.max(0,now-Math.min(...since)):null;
   const tone=readinessTone(lag);
   const saved=scopes.some(scope=>scope.refreshError||scope.updatedAt!==undefined&&stagesFor(scope).some(stage=>{if(stage.id.startsWith('conv:')||stage.id.startsWith('capt:'))return false;const at=timeValue(stage.row?.as_of);return at!==null&&at>scope.updatedAt!;}));
-  const kind=unavailable||!snapshot?'unknown':missing?'missing':behind?'behind':unknown?'unknown':saved?'saved':scheduled?'scheduled':'current';
-  const {label,sentence}=readinessCopy(kind,checkedAt,lag,now);
+  // A stored answer that is being recomputed is saved, whatever the stages say.
+  const refreshing=scopes.flatMap(scope=>scope.refreshing&&scope.updatedAt!==undefined?[scope.updatedAt]:[]);
+  const kind=unavailable||!snapshot?'unknown':missing?'missing':behind?'behind':unknown?'unknown':saved||refreshing.length?'saved':scheduled?'scheduled':'current';
+  const {label,sentence}=readinessCopy(kind,checkedAt,lag,now,refreshing.length?Math.min(...refreshing):null);
   return {kind,tone:kind==='unknown'?'unknown':kind==='current'?'current':kind==='scheduled'?'current':tone,lagMs:kind==='current'?0:kind==='behind'?lag:null,label,sentence,checkedAt,nextAt,stages,scopes,preview:false};
 }
 

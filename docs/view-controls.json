@@ -9045,11 +9045,11 @@
       "reason": "Native item properties and source navigation; retained payload disclosures use stable dataset/row/field keys."
     },
     {
-      "key": "1ec13b514454e60a:0",
+      "key": "1ad56c88977ac9a4:0",
       "file": "web/src/usage-workspace.tsx",
       "owner": "UsageWorkspace",
       "tag": "button",
-      "control": "onClick={() => window.dispatchEvent(new Event(\"pharos:usage-refresh\"))}",
+      "control": "onClick={() => window.dispatchEvent(askedRefresh())}",
       "contract": "action",
       "reason": "Refresh reruns the open dashboard's queries; it changes no view state."
     },
