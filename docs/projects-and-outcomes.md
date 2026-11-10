@@ -381,14 +381,17 @@ A "Not checked" state is never negative evidence.
 ### Analyze → Outcomes
 
 The Outcomes dashboard reads the `outcomes` dataset (`outcomes_table.go`):
-one row per session the Library lists, with mirrors folded the same way.
-A row has the session's outcome label, its evidence tier, project, branch,
-priced usage, main model and Tier 1 facts.
+one row per workspace the Library lists (its session), with mirrors folded
+the same way. The dashboard counts workspaces. A row has the session's
+outcome label, its evidence tier, project, branch, priced usage, main model
+and Tier 1 facts.
 
 - **When a session counts.** At its start: its first usage hour, else its
   first edit, else its last activity. Its whole cost counts then.
 - **Cost** is priced as the Library prices it, from the same usage ledger.
-  So a session's cost here equals its Library cost.
+  So a session's cost here equals its Library cost. A session with usage but
+  no price reads "Unpriced"; one that recorded no usage at all (`has_usage`
+  0) reads "No usage".
 - **Main model.** The model that took most of the session's cost, or of its
   tokens if none was priced. Its provider is the main provider.
 - **Evidence tier.** The strongest evidence the label rests on:
@@ -402,21 +405,29 @@ priced usage, main model and Tier 1 facts.
 
 The measures:
 
-- sessions, cost and tokens;
+- workspaces, cost and tokens;
 - files changed, and lines added and removed;
 - rework rate: lines later sessions removed over lines kept, pooled over
-  every session's lines rather than averaged per session;
-- cost per kept change: all the sessions' cost over the sessions labelled
-  Landed, Committed, or Changed and kept. Sessions that changed nothing and
-  reworked ones count in the cost, because they are part of what a kept
-  change cost;
-- kept share: kept sessions over all sessions.
+  every session's lines rather than averaged per session. A session's
+  `kept_lines` and `rework_removed_lines` are empty while its rework window
+  is open, so the rate counts only rework that has had time to happen;
+- kept share: kept sessions (Landed, Committed, or Changed and kept) over
+  judged ones (`judged`: those plus Reworked). Changed, too recent cannot be
+  judged yet, and No changes and Unknown have nothing to judge, so they
+  count on neither side. Counting them as not kept would make the last two
+  weeks look like half the work was lost, and make "No changes" a penalty;
+- cost per kept change: the cost of judged sessions (`judged_cost_usd`),
+  reworked ones included because they are part of what a kept change cost,
+  over the kept sessions that have a price (`kept_priced`). A kept session
+  without a price adds nothing to the cost, so it does not add to the count
+  either.
 
 The page opens on spend by outcome label over time. Below the chart are
 three panels:
 
 - rework rate by project;
-- cost per kept change by main model;
+- cost per kept change by main model, with how many kept changes have no
+  price;
 - evidence coverage: how many sessions reached each tier.
 
 The tiers a library reached are read over the whole library, not the

@@ -134,7 +134,7 @@ import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
-import { outcomeCatalogFor, outcomeGroupLabel, outcomeRatioRows, outcomeTierCoverage, outcomeTiersReached, outcomesAnalysisCatalog } from "./outcomes-analysis-catalog";
+import { outcomeCatalogFor, outcomeCostText, outcomeGroupLabel, outcomeKeptCostCell, outcomeRatioRows, outcomeTierCoverage, outcomeTiersReached, outcomesAnalysisCatalog } from "./outcomes-analysis-catalog";
 import { agentEventFixLinks, agentEventRatesCatalog } from "./agent-event-rates-catalog";
 import { agentEventReadWhere } from "./agent-event-rates-model";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
@@ -448,7 +448,7 @@ const emptyMessages: Record<Dataset, string> = {
   agent_event_messages: "No messages checked for agent events match this query.",
   agent_event_rates: "No messages checked for agent events match this query.",
   session_shape: "No sessions match this query.",
-  outcomes: "No sessions match this query.",
+  outcomes: "No workspaces match this query.",
 };
 
 // Query Table 1.0.0 still formats numeric metrics with a field renderer only for
@@ -1452,14 +1452,17 @@ function SessionShapeDashboard() {
     </>} />;
 }
 
-// Outcomes: sessions by what became of their changes (outcomes), counted at
-// their start. A breakdown needing local Git evidence is offered disabled with
+// Outcomes: Library workspaces by what became of their changes (outcomes),
+// counted at their start. Kept share and cost per kept change read judged
+// workspaces only, and the rework rate lines whose window has closed. A breakdown needing local Git evidence is offered disabled with
 // its reason when no session in the library reached that tier, so a library
 // without Git draws every panel from its transcripts.
 const outcomeSummaryMetrics: AggregationClause[] = [
   { id: "sessions", op: "count", groupBy: [] },
   { id: "cost", op: "sum", field: "cost_usd", groupBy: [] },
   { id: "kept", op: "sum", field: "kept_change", groupBy: [] },
+  { id: "judged", op: "sum", field: "judged", groupBy: [] },
+  { id: "usage", op: "sum", field: "has_usage", groupBy: [] },
   { id: "rework", op: "sum", field: "rework_removed_lines", groupBy: [] },
   { id: "kept_lines", op: "sum", field: "kept_lines", groupBy: [] },
 ];
@@ -1469,7 +1472,8 @@ const outcomeReworkMetrics: AggregationClause[] = [
   { id: "kept", op: "sum", field: "kept_lines", groupBy: ["project_name"] },
 ];
 const outcomeKeptCostMetrics: AggregationClause[] = [
-  { id: "cost", op: "sum", field: "cost_usd", groupBy: ["model_family"] },
+  { id: "cost", op: "sum", field: "judged_cost_usd", groupBy: ["model_family"] },
+  { id: "priced", op: "sum", field: "kept_priced", groupBy: ["model_family"] },
   { id: "kept", op: "sum", field: "kept_change", groupBy: ["model_family"] },
 ];
 const outcomePercent = (value: number | null) => value == null ? "—" : `${(100 * value).toFixed(1)}%`;
@@ -1477,20 +1481,20 @@ const metricBuckets = (result: { metrics: MetricResult[] }, id: string) => resul
 function OutcomesSummary({ where }: { where: WhereTerm[] }) {
   const result = useMetrics("outcomes", where, outcomeSummaryMetrics);
   const value = (id: string) => Number(metricBuckets(result, id)[0]?.value) || 0;
-  const sessions = value("sessions"), kept = value("kept"), keptLines = value("kept_lines");
+  const workspaces = value("sessions"), kept = value("kept"), judged = value("judged"), keptLines = value("kept_lines");
   // A sum of no priced usage is unknown, not $0.
   const cost = metricBuckets(result, "cost")[0]?.value;
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Outcomes summary" aria-busy={result.loading}>
-    {card("Sessions", sessions.toLocaleString(), "counted at their start")}
-    {card("API cost", cost == null && sessions ? "Unpriced" : formatUSD(Number(cost) || 0), "list-price equivalent; unpriced usage excluded")}
-    {card("Kept changes", sessions ? outcomePercent(kept / sessions) : "—", `${kept.toLocaleString()} sessions landed, committed, or changed and kept`)}
-    {card("Rework rate", keptLines ? outcomePercent(value("rework") / keptLines) : "—", keptLines ? `of ${compactNumber(keptLines)} kept lines, removed by later sessions` : "no kept lines recorded")}
+    {card("Workspaces", workspaces.toLocaleString(), "counted at their start")}
+    {card("API cost", workspaces ? outcomeCostText(cost, value("usage")) : formatUSD(0), "list-price equivalent; unpriced usage excluded")}
+    {card("Kept changes", judged ? outcomePercent(kept / judged) : "—", judged ? `${kept.toLocaleString()} of ${judged.toLocaleString()} judged workspaces landed, committed, or changed and kept` : "no outcome judged yet")}
+    {card("Rework rate", keptLines ? outcomePercent(value("rework") / keptLines) : "—", keptLines ? `of ${compactNumber(keptLines)} kept lines past the rework window, removed by later sessions` : "no kept lines past the rework window")}
   </div>;
 }
 function OutcomeRatioPanel({ title, note, where, clauses, breakdown, format, empty }: { title: string; note: string; where: WhereTerm[]; clauses: AggregationClause[]; breakdown: string; format: (row: ReturnType<typeof outcomeRatioRows>[number]) => [string, string]; empty: string }) {
   const result = useMetrics("outcomes", where, clauses);
-  const rows = outcomeRatioRows(metricBuckets(result, clauses[0]!.id), metricBuckets(result, clauses[1]!.id), key => outcomeGroupLabel(breakdown, key));
+  const rows = outcomeRatioRows(metricBuckets(result, clauses[0]!.id), metricBuckets(result, clauses[1]!.id), key => outcomeGroupLabel(breakdown, key), clauses[2] ? metricBuckets(result, clauses[2].id) : []);
   return <section className="outcome-panel" aria-label={title} aria-busy={result.loading}>
     <h3>{title}</h3>
     <p className="muted">{note}</p>
@@ -1504,27 +1508,26 @@ function OutcomeCoveragePanel({ where }: { where: WhereTerm[] }) {
   const tiers = outcomeTierCoverage(metricBuckets(result, "sessions"));
   return <section className="outcome-panel" aria-label="Evidence coverage" aria-busy={result.loading}>
     <h3>Evidence coverage</h3>
-    <p className="muted">The strongest evidence each session's outcome rests on: local Git where it checked a repository on this Mac, otherwise the session's own tool calls.</p>
+    <p className="muted">The strongest evidence each workspace's outcome rests on: local Git where it checked a repository on this Mac, otherwise the workspace's own tool calls.</p>
     {result.loading ? <p className="muted" role="status">Loading…</p> : result.error ? <p className="query-table-error" role="alert">{result.error}</p>
       : <table><tbody>{tiers.map(tier => <tr key={tier.tier}><th scope="row">{tier.label}</th><td>{tier.sessions.toLocaleString()}</td><td className="muted">{outcomePercent(tier.share)}</td></tr>)}</tbody></table>}
   </section>;
 }
 function OutcomesDashboard() {
-  // Tiers are read over the whole library, so a filter never hides a breakdown.
+  // Tiers are read over the whole library, so a filter never hides a
+  // breakdown. Until that read succeeds the full catalog stands, so a link to
+  // a Git breakdown neither redraws nor reads as a library without Git.
   const reached = useMetrics("outcomes", [], outcomeTierMetrics);
-  const catalog = outcomeCatalogFor(outcomeTiersReached(metricBuckets(reached, "sessions")));
+  const catalog = outcomeCatalogFor(reached.error || !reached.metrics.length ? undefined : outcomeTiersReached(metricBuckets(reached, "sessions")));
   return <CatalogDashboard catalog={catalog} linkCatalog={outcomesAnalysisCatalog} dataset="outcomes" name="outcomes" defaults={dashboardDefaults.outcomes}
     summary={where => <OutcomesSummary where={where} />}
     panels={where => <div className="outcome-panels">
-      <OutcomeRatioPanel title="Rework rate by project" where={where} clauses={outcomeReworkMetrics} breakdown="project_name" empty="No session recorded kept lines."
-        note="Of the lines each project's sessions added and kept, the share later sessions removed, pooled over the project's lines."
-        format={row => [outcomePercent(row.ratio), row.denominator ? `of ${compactNumber(row.denominator)} kept lines` : "no kept lines"]} />
-      <OutcomeRatioPanel title="Cost per kept change by model" where={where} clauses={outcomeKeptCostMetrics} breakdown="model_family" empty="No session recorded usage."
-        note="Each main model's sessions' whole cost, over those whose changes were kept."
-        format={row => {
-          const total = row.numerator == null ? "unpriced" : `${formatUSD(row.numerator)} total`;
-          return [row.ratio != null ? formatUSD(row.ratio) : row.numerator == null && row.denominator ? "Unpriced" : "—", row.denominator ? `${row.denominator.toLocaleString()} kept · ${total}` : `no kept change · ${total}`];
-        }} />
+      <OutcomeRatioPanel title="Rework rate by project" where={where} clauses={outcomeReworkMetrics} breakdown="project_name" empty="No workspace recorded kept lines."
+        note="Of the lines each project's workspaces added and kept, the share later sessions removed, pooled over the project's lines whose rework window has closed."
+        format={row => [outcomePercent(row.ratio), row.denominator ? `of ${compactNumber(row.denominator)} kept lines` : "no kept lines past the rework window"]} />
+      <OutcomeRatioPanel title="Cost per kept change by model" where={where} clauses={outcomeKeptCostMetrics} breakdown="model_family" empty="No workspace recorded usage."
+        note="Each main model's judged workspaces' cost (kept or reworked), over its kept changes that have a price."
+        format={outcomeKeptCostCell} />
       <OutcomeCoveragePanel where={where} />
     </div>} />;
 }

@@ -57,9 +57,12 @@ const agentEventRates: SummaryColumn[] = [distinct("message_id", "Messages read"
 const sessionShape: SummaryColumn[] = [count("idea_sessions", "Sessions"), sum("forensic_events", "Forensic events"), ratio("idea_failure_rate", "SUM([failed_calls])/NULLIF(SUM([tool_calls]),0)", "Failure rate", true), ratio("idea_steering", "SUM([corrections])/NULLIF(SUM([typed_human_messages]),0)", "Steering load", true)];
 const agentEventMessages: SummaryColumn[] = [sum("message_count", "Messages read"), sum("candidates", "Keyword hits"), sum("events", "Events"), ratio("idea_events_per_message", "SUM([events])/NULLIF(SUM([message_count]),0)", "Events per message")];
 
-// Outcomes: one row per session; rates pooled over the group's lines and sessions.
-const outcomes: SummaryColumn[] = [count("idea_sessions", "Sessions"), sum("cost_usd", "API equivalent"), sum("kept_change", "Kept changes"),
-  ratio("idea_cost_per_kept", "SUM([cost_usd])/NULLIF(SUM([kept_change]),0)", "Cost per kept change"), ratio("idea_rework_rate", "SUM([rework_removed_lines])/NULLIF(SUM([kept_lines]),0)", "Rework rate", true)];
+// Outcomes: one row per Library workspace; rates pooled over the group's lines
+// and workspaces. Kept share and cost per kept change read judged workspaces
+// only, and cost per kept change only priced ones (outcomes_table.go).
+const outcomes: SummaryColumn[] = [count("idea_sessions", "Workspaces"), sum("cost_usd", "API equivalent"), sum("kept_change", "Kept changes"),
+  ratio("idea_kept_share", "SUM([kept_change])/NULLIF(SUM([judged]),0)", "Kept share", true),
+  ratio("idea_cost_per_kept", "SUM([judged_cost_usd])/NULLIF(SUM([kept_priced]),0)", "Cost per kept change"), ratio("idea_rework_rate", "SUM([rework_removed_lines])/NULLIF(SUM([kept_lines]),0)", "Rework rate", true)];
 
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
   scatter: [],
@@ -150,10 +153,10 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("agent_event_messages", "sources", "Compare", "Replies and thinking", "Compare events per message in visible replies and thinking", ["source"], agentEventMessages),
   ],
   outcomes: [
-    idea("outcomes", "labels", "Compare", "By outcome", "Compare sessions and cost by what became of their changes", ["outcome_label"], outcomes),
+    idea("outcomes", "labels", "Compare", "By outcome", "Compare workspaces and cost by what became of their changes", ["outcome_label"], outcomes),
     idea("outcomes", "repos", "Compare", "By project", "Compare cost per kept change and rework rate across projects", ["project_name"], outcomes),
-    idea("outcomes", "models", "Compare", "By main model", "Compare cost per kept change and rework rate across sessions' main models", ["model_family"], outcomes),
-    idea("outcomes", "tiers", "Compare", "By evidence tier", "Count sessions by the strongest evidence their outcome rests on", ["evidence_tier"], outcomes),
+    idea("outcomes", "models", "Compare", "By main model", "Compare cost per kept change and rework rate across workspaces' main models", ["model_family"], outcomes),
+    idea("outcomes", "tiers", "Compare", "By evidence tier", "Count workspaces by the strongest evidence their outcome rests on", ["evidence_tier"], outcomes),
   ],
 };
 
