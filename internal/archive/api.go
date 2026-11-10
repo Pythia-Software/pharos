@@ -256,7 +256,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	trace, traced := s.traceRequest(w, r)
 	defer traced()
 	if trace != nil {
-		w = trace
+		w, r = trace, r.WithContext(trace.ctx)
 	}
 	debug.SetPanicOnFault(true) // see exitOnFault
 	defer func() {
@@ -903,7 +903,7 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 			s.ops.markKindStopping("backup.local")
 		}
 		writeJSON(w, map[string]any{"cancelled": cancelled}, http.StatusOK)
-	case path == "/api/mcp/rpc":
+	case path == mcpRPCPath:
 		s.mcpRPC(w, r, body)
 	case path == "/api/mcp/enabled":
 		enabled, ok := body["enabled"].(bool)

@@ -95,6 +95,14 @@ func handleMCPContext(ctx context.Context, catalog *Catalog, request map[string]
 		started := time.Now()
 		params := mapValueDefault(request["params"])
 		name := firstString(params["name"])
+		// The service times the request that forwarded this call; a call
+		// answered by an agent's own MCP process is timed here.
+		timing := timingFrom(ctx)
+		if timing == nil {
+			ctx, timing = beginRequestTiming(ctx, catalog, "mcp", true)
+			defer func() { timing.logSlowRequest(timing.finish(), 0, ctx.Err() != nil) }()
+		}
+		timing.setTool(name)
 		arguments := mapValueDefault(params["arguments"])
 		enabled, err := catalog.MCPEnabled()
 		var value any
