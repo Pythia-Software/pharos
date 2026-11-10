@@ -73,9 +73,9 @@ func fileHistoryNote(files []map[string]any, found fileHistoryKeys, project stri
 		return fmt.Sprintf("No workspace in %s edited a file at this path, but workspaces in other projects did. Clear the project to see them.", project)
 	}
 	if len(files) == 0 {
-		return "No workspace in this library edited a file at this path. File history lists files that agents edited through their tool calls; try a repository-relative path, a folder path, or Library file search."
+		return "No workspace in this library edited or committed a file at this path. File history lists files that agents edited through their tool calls or changed in their linked commits; try a repository-relative path, a folder path, or Library file search."
 	}
-	note := "Workspaces are those whose agents edited the file through their tool calls, newest first. Commits are listed where local Git checked the repository, from git.commits_since: Git is read from the repository's first recorded edit, so earlier commits are not listed."
+	note := "Workspaces are those whose agents edited the file through their tool calls, newest first. Commits are listed where local Git checked the repository, each with the workspaces linked to it, which may have changed the file another way. They start at git.commits_since: Git is read from the repository's first recorded edit, so earlier commits are not listed."
 	if found.Truncated {
 		note = fmt.Sprintf("More than %d files match this path; the first %d by path are shown. Give a longer path or a project to narrow it. ", fileHistoryFiles, fileHistoryFiles) + note
 	}
@@ -130,7 +130,9 @@ func fileFilterArgs(file string, roots []projectRoot) []any {
 	return []any{pattern, pattern, pattern, jsonText(checkouts)}
 }
 
-// findFileHistoryKeys finds the session_files keys a query names. An exact
+// findFileHistoryKeys finds the file keys a query names, of the files
+// sessions edited (session_files) and of those a session's counted commit
+// changed, though no edit call named them. An exact
 // match wins: the path itself, a folder path (~/… or absolute), or an
 // absolute path in a checkout this Mac recorded, which maps to its
 // repository file. Only when nothing matches exactly does a path ending
@@ -158,7 +160,12 @@ func (c *Catalog) findFileHistoryKeys(ctx context.Context, query, project string
 	exact := `(sf.file_key IN (SELECT value FROM json_each(?)) OR sf.path IN (SELECT value FROM json_each(?)))`
 	ending := `substr(sf.path,-length(?)-1)='/'||?`
 	match := func(where string, project string, args ...any) (fileHistoryKeys, error) {
-		statement := `SELECT DISTINCT sf.file_key FROM session_files sf`
+		// The files sessions edited, and those a session's counted commit
+		// changed though no edit call named them.
+		statement := `SELECT DISTINCT sf.file_key FROM (SELECT file_key,path,workspace_id FROM session_files
+			UNION ALL SELECT 'repository:'||f.repository_id||':'||f.path,f.path,l.workspace_id FROM git_commit_files f
+				JOIN session_commit_links l ON l.repository_id=f.repository_id AND l.hash=f.hash AND l.confidence>=?) sf`
+		args = append([]any{outcomeGitCounted}, args...)
 		if project != "" {
 			statement += ` JOIN workspaces w ON w.id=sf.workspace_id`
 			where += ` AND ` + projectPredicate("w")
@@ -235,6 +242,14 @@ func firstEditCallSQL(sf, fields string) string {
 			ORDER BY t.sequence LIMIT 1))`
 }
 
+// repositoryFileKey reads a repository file's key (outcomeFileKey).
+func repositoryFileKey(key string) (repository, path string, ok bool) {
+	if rest, found := strings.CutPrefix(key, "repository:"); found {
+		return strings.Cut(rest, ":")
+	}
+	return "", "", false
+}
+
 // fileTimeline is one file's sessions and commits.
 func (c *Catalog) fileTimeline(ctx context.Context, key string, limit int) (map[string]any, error) {
 	sessions, err := queryMapsContext(ctx, c.reader(), `SELECT sf.workspace_id,sf.path,sf.repository_id,sf.first_edit_at,sf.last_edit_at,sf.edits,sf.lines_added,sf.lines_removed,sf.rewrote,
@@ -248,7 +263,7 @@ func (c *Catalog) fileTimeline(ctx context.Context, key string, limit int) (map[
 		return nil, err
 	}
 	file := map[string]any{"file_key": key}
-	if repository, path, ok := strings.Cut(strings.TrimPrefix(key, "repository:"), ":"); ok && strings.HasPrefix(key, "repository:") {
+	if repository, path, ok := repositoryFileKey(key); ok {
 		file["repository_id"], file["path"] = repository, path
 	} else {
 		file["path"] = folderKey(strings.TrimPrefix(key, "path:"))

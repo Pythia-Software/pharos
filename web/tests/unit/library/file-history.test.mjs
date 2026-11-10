@@ -30,6 +30,7 @@ test("a commit's state and its session links", () => {
   assert.equal(commitState({ hash: "a", on_mainline: null, sessions: [] }), "");
   assert.equal(linkText({ workspace_id: "w", method: "inferred", confidence: 0.5, counted: false }), "candidate, inferred from its edits");
   assert.equal(linkText({ workspace_id: "w", method: "transcript", confidence: 1, counted: true }), "printed in its transcript");
+  assert.equal(linkText({ workspace_id: "w", method: "window", confidence: 0.5, counted: false }), "candidate, its git command ran then");
 });
 
 test("the service's note shows when no file matched or more matched than are listed", () => {

@@ -28,7 +28,7 @@ import (
 // since a change stops being too recent to judge without any write.
 
 // outcomesVersion derives every session again when its rules change.
-const outcomesVersion = "4"
+const outcomesVersion = "5"
 
 // defaultReworkDays is how long after a session's last edit a later session's
 // edits to the same files count as rework (outcome_rework_days).
@@ -95,7 +95,8 @@ CREATE TABLE IF NOT EXISTS session_outcomes(
   reworked_files INTEGER NOT NULL DEFAULT 0,
   rework_removed_lines INTEGER,
   reworked_by_json TEXT NOT NULL DEFAULT '[]',
-  heavily_reworked INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+  heavily_reworked INTEGER NOT NULL DEFAULT 0,
+  git_ops_json TEXT NOT NULL DEFAULT '[]') WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS session_outcome_dirty(workspace_id TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS session_rework_dirty(workspace_id TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS session_outcome_mirrors(workspace_id TEXT PRIMARY KEY) WITHOUT ROWID;
@@ -106,6 +107,13 @@ CREATE TABLE IF NOT EXISTS session_outcome_mirrors(workspace_id TEXT PRIMARY KEY
 func (c *Catalog) ensureOutcomes() error {
 	if _, err := c.DB.Exec(outcomesSQL); err != nil {
 		return err
+	}
+	if has, err := c.hasColumn("session_outcomes", "git_ops_json"); err != nil {
+		return err
+	} else if !has {
+		if _, err := c.DB.Exec(`ALTER TABLE session_outcomes ADD COLUMN git_ops_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
+			return err
+		}
 	}
 	// An upsert, not INSERT OR IGNORE: the statement that fires a trigger
 	// overrides an OR clause inside it, but not an ON CONFLICT clause.
@@ -149,7 +157,7 @@ func (c *Catalog) reworkDays(stored string) int {
 // outcomeCall is one tool call as outcomes read it.
 type outcomeCall struct {
 	Category, Status, CommandCategory, Command string
-	StartedAt                                  string
+	StartedAt, EndedAt                         string
 	Path, RepoPath, RepositoryID, Scope        string
 	LinesAdded, LinesRemoved                   *int64
 	Input, Result                              string
@@ -176,6 +184,7 @@ type sessionFacts struct {
 	FirstEdit, LastEdit      string
 	Verification, VerifiedBy string
 	Commits                  []outcomeCommit
+	GitOps                   []gitOp
 	Pushed                   bool
 	PullRequests             []string
 }
@@ -233,8 +242,8 @@ type fileResolver func(path string) (repoPath, repositoryID, scope string)
 // Each file an edit call changed counts on its own, so a patch's work files
 // count when its first file is scratch, and a patch whose call has no file (a
 // ledger before tools-v14 found none in a code-mode script) counts by the
-// files it names. A
-// patch's other files than the call's own are placed by resolve.
+// files it names. A patch's other files than the call's own, and the
+// directory a git command names, are placed by resolve.
 func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts {
 	facts := sessionFacts{}
 	files := map[string]*sessionFile{}
@@ -306,6 +315,15 @@ func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts 
 				facts.Verification = "unknown"
 			}
 		}
+		if call.Command != "" {
+			facts.GitOps = append(facts.GitOps, readGitOps(call, func(directory string) string {
+				if resolve == nil {
+					return ""
+				}
+				_, repository, _ := resolve(directory)
+				return repository
+			})...)
+		}
 		if call.Result == "" || call.Status != "ok" && !(call.Status == "error" && commitChained(call.Command)) {
 			continue
 		}
@@ -354,10 +372,10 @@ func commitChained(command string) bool {
 // and pull request lines, and of a failed command that commits, whose failure
 // may be a later command's (commitChained).
 const outcomeCallsSQL = `SELECT t.tool_category,t.status,COALESCE(t.command_category,'') command_category,COALESCE(t.command,'') command,
-	COALESCE(t.started_at,'') started_at,COALESCE(t.path_absolute,'') path_absolute,COALESCE(t.repo_path,'') repo_path,
+	COALESCE(t.started_at,'') started_at,COALESCE(t.ended_at,'') ended_at,COALESCE(t.path_absolute,'') path_absolute,COALESCE(t.repo_path,'') repo_path,
 	COALESCE(t.path_repository_id,'') path_repository_id,COALESCE(t.path_scope,'') path_scope,t.lines_added,t.lines_removed,
-	CASE WHEN t.status='ok' AND (t.command LIKE '%git%commit%' OR t.command LIKE '%git%push%' OR t.command LIKE '%gh pr create%')
-		OR t.status='error' AND t.command LIKE '%git%commit%' THEN (SELECT r.text FROM messages r WHERE r.id=t.result_message_id) END result,
+	CASE WHEN t.command LIKE '%git%commit%' OR t.command LIKE '%cherry-pick%' OR t.command LIKE '%git%revert%' OR t.command LIKE '%git%push%' OR t.command LIKE '%gh pr create%'
+		THEN (SELECT r.text FROM messages r WHERE r.id=t.result_message_id) END result,
 	CASE WHEN t.tool_category='edit' AND t.status='ok' THEN (SELECT m.text FROM messages m WHERE m.id=t.call_message_id) END input
 	FROM tool_calls t WHERE t.workspace_id=? ORDER BY COALESCE(t.started_at,''),t.conversation_id,t.sequence`
 
@@ -388,7 +406,7 @@ func readOutcomeCalls(ctx context.Context, tx *sql.Tx, workspace string) ([]outc
 	calls := make([]outcomeCall, len(rows))
 	for index, row := range rows {
 		calls[index] = outcomeCall{Category: firstString(row["tool_category"]), Status: firstString(row["status"]), CommandCategory: firstString(row["command_category"]),
-			Command: firstString(row["command"]), StartedAt: firstString(row["started_at"]), Path: firstString(row["path_absolute"]), RepoPath: firstString(row["repo_path"]),
+			Command: firstString(row["command"]), StartedAt: firstString(row["started_at"]), EndedAt: firstString(row["ended_at"]), Path: firstString(row["path_absolute"]), RepoPath: firstString(row["repo_path"]),
 			RepositoryID: firstString(row["path_repository_id"]), Scope: firstString(row["path_scope"]), LinesAdded: nullableInt64(row["lines_added"]),
 			LinesRemoved: nullableInt64(row["lines_removed"]), Input: firstString(row["input"]), Result: toolResultContent(firstString(row["result"]))}
 	}
@@ -590,9 +608,9 @@ func deriveSessionOutcome(ctx context.Context, tx *sql.Tx, workspace string, day
 		first, last = nilIfEmpty(defaultString(facts.FirstEdit, activity)), nilIfEmpty(defaultString(facts.LastEdit, activity))
 	}
 	_, err = tx.ExecContext(ctx, `INSERT OR REPLACE INTO session_outcomes(workspace_id,tool_calls_recorded,files_changed,lines_added,lines_removed,first_edit_at,last_edit_at,
-		verification,verification_category,commits_json,pushed,pull_requests_json,rework_days,kept_lines) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		verification,verification_category,commits_json,pushed,pull_requests_json,rework_days,kept_lines,git_ops_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		workspace, boolInt(recorded), len(facts.Files), facts.Added, facts.Removed, first, last, nilIfEmpty(facts.Verification), nilIfEmpty(facts.VerifiedBy),
-		jsonText(defaultSlice(facts.Commits)), boolInt(facts.Pushed), jsonText(defaultSlice(facts.PullRequests)), days, kept)
+		jsonText(defaultSlice(facts.Commits)), boolInt(facts.Pushed), jsonText(defaultSlice(facts.PullRequests)), days, kept, jsonText(defaultSlice(facts.GitOps)))
 	return err
 }
 
@@ -710,11 +728,12 @@ func gitCheckReasonSQL(w string) string {
 }
 
 // gitAwaitedSQL is true for a repository session local Git has yet to ask
-// about. Local Git applies only to a session that changed files or printed a
-// commit, outside the mirrors that repeat another session.
+// about. Local Git applies only to a session that changed files, printed a
+// commit or ran a git command that makes one, outside the mirrors that repeat
+// another session.
 func gitAwaitedSQL(w string) string {
 	return projectKindSQL(w) + `='repository' AND ` + w + `.id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
-		AND NOT EXISTS(SELECT 1 FROM session_outcomes so WHERE so.workspace_id=` + w + `.id AND so.files_changed=0 AND so.commits_json='[]')`
+		AND NOT EXISTS(SELECT 1 FROM session_outcomes so WHERE so.workspace_id=` + w + `.id AND so.files_changed=0 AND so.commits_json='[]' AND so.git_ops_json='[]')`
 }
 
 // gitFactSQL reads one Tier 2 count of workspace w's session, empty unless
