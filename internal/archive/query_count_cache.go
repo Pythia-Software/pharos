@@ -3,6 +3,8 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -143,10 +145,10 @@ func queryDatasetGeneration(dataset string) string {
 type queryPopulationCount func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount) (total int64, ok bool, err error)
 
 // populationCounter reuses exact counts within a data generation, trying
-// fast before running the executor's statement. Use it only for a source
+// fast before running the executor's statement (over narrow, when it applies). Use it only for a source
 // whose rows are a function of its SQL, its arguments, the local timezone
 // and tables that advance the generation (see queryCacheTables).
-func (c *Catalog) populationCounter(scope string, fast ...queryPopulationCount) qt.PopulationCounter {
+func (c *Catalog) populationCounter(scope string, narrow queryPopulationCount, fast ...queryPopulationCount) qt.PopulationCounter {
 	return qt.PopulationCounterFunc(func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount, count func(context.Context) (int64, error)) (int64, error) {
 		generations, err := readCacheGenerations(ctx, tx)
 		if err != nil {
@@ -167,7 +169,13 @@ func (c *Catalog) populationCounter(scope string, fast ...queryPopulationCount) 
 				return total, nil
 			}
 		}
-		total, err := count(ctx)
+		total, counted := int64(0), false
+		if narrow != nil {
+			total, counted, err = narrow(ctx, tx, p)
+		}
+		if err == nil && !counted {
+			total, err = count(ctx)
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -255,17 +263,31 @@ func queryPopulationFastCounts(dataset string, schema qt.Schema, table sqlDatase
 	return nil
 }
 
-// unorderedCount runs the executor's count over the source as it was before
-// newestFirstScan fixed its read order: the same rows, with the planner free
-// to count them from whichever table is cheapest.
-func unorderedCount(ordered, unordered string) queryPopulationCount {
+// countedField is a source column the executor's count statement reads.
+var countedField = regexp.MustCompile(`\br\."([^"]+)" AS f\d+`)
+
+// narrowCount runs the executor's count over narrow, the request's source
+// projected to fields (its identity and what its filter reads) with no read
+// order fixed. SQLite keeps every LEFT JOIN of a plain COUNT(*), so the page's
+// own source pays for joins that only fill columns the count never reads. It
+// stands aside when the statement reads any other column.
+func narrowCount(source, narrow string, fields []string) queryPopulationCount {
 	return func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount) (int64, bool, error) {
-		statement := strings.Replace(p.SQL, ordered, unordered, 1)
-		if statement == p.SQL {
+		at := strings.Index(p.SQL, source)
+		if at < 0 || source == narrow {
+			return 0, false, nil
+		}
+		read := countedField.FindAllStringSubmatch(p.SQL[:at], -1)
+		for _, match := range read {
+			if !slices.Contains(fields, match[1]) {
+				return 0, false, nil
+			}
+		}
+		if len(read) == 0 || strings.Contains(p.SQL[at+len(source):], source) {
 			return 0, false, nil
 		}
 		var total int64
-		err := tx.QueryRowContext(ctx, statement, p.Args...).Scan(&total)
+		err := tx.QueryRowContext(ctx, p.SQL[:at]+narrow+p.SQL[at+len(source):], p.Args...).Scan(&total)
 		return total, err == nil, err
 	}
 }

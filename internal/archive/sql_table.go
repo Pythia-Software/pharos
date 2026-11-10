@@ -115,7 +115,7 @@ var innerJoin = regexp.MustCompile(`(\s)(LEFT |CROSS )?JOIN `)
 // when the request is anything else, where the planner's choice stands.
 //
 // A count over this source would visit every row in index order, so the
-// caller counts over the unordered source (unorderedCount).
+// caller counts over a source with no order fixed (narrowCount).
 func (d sqlDataset) newestFirstScan(q qt.QueryRequestV3, where []qt.WhereTerm) (ordered sqlDataset, ok bool) {
 	if !q.Rows || q.Grouping != nil || q.Distinct != nil || len(q.Metrics) > 0 || len(q.Result.OrderBy) == 0 {
 		return d, false

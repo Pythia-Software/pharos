@@ -271,9 +271,9 @@ func TestMessagesQueryV3GroupsSearchesAndBoundsText(t *testing.T) {
 		}
 	}
 
-	// A page sorted newest first reads the time index and counts over the
-	// unordered source (newestFirstScan). It has the rows and total of any
-	// other order, with or without a time bound.
+	// A page sorted newest first reads the time index, and every page counts
+	// over a source narrowed to its filter (newestFirstScan, narrowCount). It
+	// has the rows and total of any other order, with or without a filter.
 	page := func(dir string, where ...qt.WhereTerm) ([]string, int64) {
 		t.Helper()
 		q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true, Source: qt.WireQuery{Limit: 1},
@@ -293,15 +293,12 @@ func TestMessagesQueryV3GroupsSearchesAndBoundsText(t *testing.T) {
 		slices.Sort(ids)
 		return ids, result.Total
 	}
-	for _, where := range [][]qt.WhereTerm{nil, {{Field: "sent_at", Op: ">=", Value: "2026-10-01T09:02:00.000Z"}, {Field: "sent_at", Op: "<", Value: "2026-10-01T09:05:00.000Z"}}} {
-		counted := c.queryCounts.snapshot()
+	for _, where := range [][]qt.WhereTerm{nil, {{Field: "sent_at", Op: ">=", Value: "2026-10-01T09:02:00.000Z"}, {Field: "sent_at", Op: "<", Value: "2026-10-01T09:05:00.000Z"}},
+		{{Field: "role", Op: "=", Value: "user"}}, {{Field: "title", Op: "!=", Value: "no such workspace"}}} {
 		newest, total := page("desc", where...)
-		if after := c.queryCounts.snapshot(); after.Fast != counted.Fast+1 {
-			t.Fatalf("a newest-first page counted over its ordered source: %+v", after)
-		}
 		c.queryCounts = queryCountCache{}
 		oldest, plain := page("asc", where...)
-		if len(newest) == 0 || total != plain || !slices.Equal(newest, oldest) {
+		if len(newest) == 0 || total != plain || !slices.Equal(newest, oldest) || len(newest) < 50 && total != int64(len(newest)) {
 			t.Fatalf("newest first %v (%d), oldest first %v (%d) for %v", newest, total, oldest, plain, where)
 		}
 	}

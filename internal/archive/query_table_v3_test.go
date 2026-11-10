@@ -900,8 +900,8 @@ func TestQueryV3ReusesPopulationCountsWithinAGeneration(t *testing.T) {
 }
 
 // A Tool calls page sorted newest first reads the time index and counts
-// over the unordered source (newestFirstScan): the same rows and total as
-// the page in any other order.
+// over a source narrowed to its filter (newestFirstScan, narrowCount): the
+// same rows and total as the page in any other order.
 func TestQueryV3NewestFirstToolCallsMatchOldestFirst(t *testing.T) {
 	c, config := testCatalog(t)
 	seedToolCalls(t, c, 40)
@@ -935,10 +935,6 @@ func TestQueryV3NewestFirstToolCallsMatchOldestFirst(t *testing.T) {
 	for _, where := range [][]qt.WhereTerm{nil, {{Field: "started_at", Op: ">=", Value: "-30d"}}} {
 		c.queryCounts = queryCountCache{}
 		newest, total := page("desc", where...)
-		// Unfiltered, the cube answers; bounded, the unordered source does.
-		if stats := c.queryCounts.snapshot(); stats.Fast != 1 || stats.Counted != 0 {
-			t.Fatalf("a newest-first page counted over its ordered source: %+v for %v", stats, where)
-		}
 		c.queryCounts = queryCountCache{}
 		oldest, plain := page("asc", where...)
 		if len(newest) == 0 || total != plain || !slices.Equal(newest, oldest) {

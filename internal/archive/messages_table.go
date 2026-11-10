@@ -53,12 +53,13 @@ var messagesDataset = func() sqlDataset {
 		columns[category+"_words"] = "ma." + category + "_words"
 	}
 	return sqlDataset{
-		from: `FROM messages m JOIN conversations c ON c.id=m.conversation_id
-			JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
-			LEFT JOIN message_authorship ma ON ma.message_id=m.id
-			LEFT JOIN workspaces aw ON aw.id=COALESCE(ma.work_id,ma.workspace_id)
-			LEFT JOIN repositories ar ON ar.id=aw.repository_id
-			LEFT JOIN conversation_origins o ON o.conversation_id=m.conversation_id`,
+		// One space before each optional join: project removes them by their text.
+		from: "FROM messages m JOIN conversations c ON c.id=m.conversation_id" +
+			" JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id" +
+			" LEFT JOIN message_authorship ma ON ma.message_id=m.id" +
+			" LEFT JOIN workspaces aw ON aw.id=COALESCE(ma.work_id,ma.workspace_id)" +
+			" LEFT JOIN repositories ar ON ar.id=aw.repository_id" +
+			" LEFT JOIN conversation_origins o ON o.conversation_id=m.conversation_id",
 		base:       "c.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)",
 		columns:    columns,
 		lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true},
