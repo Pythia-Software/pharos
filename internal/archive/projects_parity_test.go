@@ -30,6 +30,10 @@ var projectDatasets = []string{"library", "usage", "agent_events", "agent_event_
 // sessions leave empty: they need skills, or the agent event pass.
 var projectDatasetsWithoutRows = []string{"agent_events", "agent_event_messages", "agent_event_rates", "skill_usages"}
 
+// projectDatasetsOfRepositories have rows only for repository sessions, so a
+// library without Git leaves them empty.
+var projectDatasetsOfRepositories = []string{"branch_usage"}
+
 // projectServer serves a fixture library with its tool summaries and writing
 // classification built and local Git asked, as the background builds leave
 // them.
@@ -101,7 +105,8 @@ func checkDatasetProjects(t *testing.T, server *Server, library projectLibrary, 
 	for _, dataset := range projectDatasets {
 		rows := queryProjects(t, server, dataset)
 		if len(rows) == 0 {
-			if !slices.Contains(projectDatasetsWithoutRows, dataset) {
+			_, repositories := library.folders["app"]
+			if !slices.Contains(projectDatasetsWithoutRows, dataset) && (repositories || !slices.Contains(projectDatasetsOfRepositories, dataset)) {
 				t.Errorf("%s: no rows from the fixture library", dataset)
 			}
 			continue
