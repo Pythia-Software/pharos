@@ -26,7 +26,9 @@ var queryCacheTables = []string{
 	"model_requests", "tool_calls", "tool_ledger_state", "tool_commands", "tool_urls",
 	// Views read local Git's commit links (session_commit_links, git_commits)
 	// only through the counts in session_git, written when they change.
+	// Library search finds the files sessions edited in session_files.
 	"skill_usages", "conversation_instructions", "tool_usage_daily", "tool_mirror_workspaces", "session_outcomes", "session_git", "agent_session_branch_shares",
+	"session_files",
 	"cost_changes", "model_aliases", "summaries", "semantic_documents",
 	"change_sets", "change_files", "pull_requests", "work_pr_links",
 	"metrics", "metric_ledger", "text_search_documents", "reasoning_extraction_state",
