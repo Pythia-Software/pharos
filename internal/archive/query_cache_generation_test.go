@@ -106,7 +106,8 @@ func TestQueryCachesSurviveMaintenanceAndAuditCommits(t *testing.T) {
 	// A catalog whose stamp triggers predate domains gets them replaced.
 	if _, err := other.DB.Exec(`DROP TRIGGER agent_events_conversations_stamp_insert;
  CREATE TRIGGER agent_events_conversations_stamp_insert AFTER INSERT ON agent_events_conversations
- BEGIN UPDATE query_cache_generation SET value=value+1 WHERE id=1; END`); err != nil {
+ BEGIN UPDATE query_cache_generation SET value=value+1 WHERE id=1; END;
+ UPDATE meta SET value='4' WHERE key='agent_events_ledger_version'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := other.ensureAgentEventsLedger(ctx); err != nil {
