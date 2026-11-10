@@ -178,3 +178,26 @@ test('source and export picker completions belong to their connected field and c
     }
   }
 });
+
+const summarizeClaude=vm.runInNewContext(source+';pharosClaudeImportSummary');
+test('Claude collection counts only verified export records and keeps full coverage distinct',()=>{
+  const parts=[{state:'collected',conversations:2,messages:7},{state:'missing',conversations:90,messages:900}];
+  assert.deepEqual(plain(summarizeClaude({parts,completeness:'manifest'})),{expected:2,collected:1,conversations:2,messages:7,complete:false,knownCoverage:true});
+  assert.equal(summarizeClaude({parts:[parts[0]],completeness:'unknown'}).knownCoverage,false);
+  assert.equal(summarizeClaude({parts:[parts[0]],completeness:'unknown'}).complete,true);
+  assert.equal(summarizeClaude({parts:[],completeness:'manifest'}).complete,false);
+  const excluded={state:'excluded',error:'Not kept'};
+  assert.deepEqual(plain(summarizeClaude({parts:[parts[0],excluded],completeness:'manifest'})),{expected:1,collected:1,conversations:2,messages:7,complete:true,knownCoverage:true});
+});
+
+const watchLine=vm.runInNewContext(source+';pharosClaudeWatchLine');
+test('a watched Claude export offers retrying only once Pharos has stopped opening links',()=>{
+  const waiting=watchLine({state:'fetching',waiting_file:'frames-000.zip',browser_label:'Google Chrome — Work',collected:3,expected:7});
+  assert.match(waiting.text,/frames-000\.zip/);assert.match(waiting.text,/Google Chrome — Work/);assert.match(waiting.text,/3 of 7 files/);
+  assert.deepEqual(plain(waiting.actions),['stop']);assert.equal(waiting.attention,false);
+  const paused=watchLine({state:'paused',message:'No file arrived.',collected:3,expected:7});
+  assert.deepEqual(plain(paused.actions),['retry','stop']);assert.equal(paused.attention,true);assert.equal(paused.detail,'No file arrived.');
+  assert.deepEqual(plain(watchLine({state:'stopped'}).actions),['retry']);
+  assert.deepEqual(plain(watchLine({state:'expired'}).actions),[]);
+  assert.deepEqual(plain(watchLine({state:'imported',collected:7,expected:7}).actions),[]);
+});

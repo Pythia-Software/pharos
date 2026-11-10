@@ -56,6 +56,9 @@ func (c *Catalog) recentConversations(ctx context.Context, labels, events bool) 
 		eventsSQL = `EXISTS(SELECT 1 FROM agent_events_conversations e WHERE e.conversation_id=c.id)
 			AND NOT EXISTS(SELECT 1 FROM agent_events_dirty ed WHERE ed.conversation_id=c.id)`
 	}
+	// The launch step is written family-first (CROSS JOIN): left to choose, the
+	// planner starts it from every conversation without a parent, on each
+	// step of the recursion.
 	// Match usageConversationRoots' distinction between delegated runs and
 	// Codex filename continuations. Session depths include agent_depth at
 	// ingestion, so subtract that base before adding the family's depth.
@@ -73,9 +76,9 @@ func (c *Catalog) recentConversations(ctx context.Context, labels, events bool) 
 		JOIN conversations child ON child.parent_id=f.id WHERE `+currentGroupConversation("child")+`
 		UNION ALL
 		SELECT f.root_id,child.id,f.depth+1+MAX(0,COALESCE(owner.depth,0)-parent.agent_depth)
-		FROM family f JOIN conversations parent ON parent.id=f.id
-		JOIN conversation_launches l ON l.parent_id=f.id
-		JOIN conversations child ON child.id=l.child_id
+		FROM family f CROSS JOIN conversations parent ON parent.id=f.id
+		CROSS JOIN conversation_launches l ON l.parent_id=f.id
+		CROSS JOIN conversations child ON child.id=l.child_id
 		LEFT JOIN tool_calls t ON t.id=l.tool_call_id
 		LEFT JOIN agent_sessions owner ON owner.id=t.agent_session_id
 		WHERE child.parent_id IS NULL AND `+currentGroupConversation("child")+` LIMIT ?

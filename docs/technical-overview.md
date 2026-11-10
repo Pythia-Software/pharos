@@ -190,6 +190,16 @@ A conversation's `coverage` is a completeness word (`complete`, or `partial` whe
 | `claude-ai` | User-provided Claude.ai export: the ZIP, its `conversations.json`, or the folder holding it. Each chat message's blocks become messages (text, thinking summaries as reasoning, tool calls and results, attachments); the date, memory and tool notes Claude.ai adds to a person's turn are context, not human text. Only the branch ending at the current leaf (or, when the export names none, the newest leaf) is selected. The export names no model and records no token usage | None |
 | `canonical` | Documented interchange JSON | None |
 
+Claude.ai export collection is shared by the onboarding UI, authenticated local
+API and `claude-import` CLI. `claude_import.go` journals verified parts and
+credential-free snapshot inventories; browser download capabilities stay in
+host-local state. `claude_export.go` resolves captured inventories, validates ZIP
+layouts and nested artifact checksums. The existing adapter streams conversation
+shards, validates a snapshot before publishing its records, and preserves account
+UUID metadata without changing persisted identities. Capture retains every
+collected category for offline reindexing. See [Claude export collection](configuration.md)
+for intake, repair and watched-folder usage.
+
 ### Provider conformance
 
 `TestProviderConformance` (`conformance_test.go`) reads each provider as production does. For each provider, it:
@@ -329,7 +339,7 @@ GET  /api/query/{library|activity|usage|…}/field-stats?fields=a,b
 POST /api/query/{library|activity|usage|…}/query-v3
 ```
 
-The query endpoints implement the published Query Table **1.0.3** V3 wire
+The query endpoints implement the published Query Table **1.0.4** V3 wire
 contract. Their allowlisted field definitions live in [`schemas`](../schemas),
 and the same documents drive the React frontend and generated Go SQLite schemas.
 Tables, charts, metrics, filter suggestions, field statistics and identity

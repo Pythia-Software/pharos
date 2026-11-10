@@ -971,6 +971,12 @@ function peerChip(peer,{page='',titles={}}={},now=Date.now()){
     title:[certain?'Related work':'Possibly related work · uncertain',...reasons].join('\n'),
   };
 }
+// The strip's order: most recently started first, whatever the certainty
+// (uncertain chips stay dashed); work with no start time goes last.
+function peersByAge(peers){
+  const started=peer=>{const time=new Date(peer?.started_at??NaN).getTime();return Number.isFinite(time)?time:-Infinity};
+  return[...peers||[]].sort((a,b)=>started(b)-started(a)||0);
+}
 const HANDOFF_VERBS={'copied_into:in':'Quotes','copied_into:out':'Quoted in','read_written_by:in':'Shows lines from','read_written_by:out':'Read in'};
 // The markers a message carries, one per linked message, certain first.
 function handoffMarkers(message){

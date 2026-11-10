@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"slices"
 	"strings"
@@ -137,7 +138,10 @@ func TestScatterMatchesIndependentSources(t *testing.T) {
 	// populations. Lower the limit to keep the fixture tiny.
 	override(t, &scatterMaxEntities, 1)
 	_, err = server.scatterRows(context.Background(), fields, window)
-	if err == nil || !strings.Contains(err.Error(), "shorter range") {
+	// The page shows a diagnostic's message; any other error reads as a
+	// failed query.
+	var limit *qt.PlanDiagnostic
+	if !errors.As(err, &limit) || limit.Code != qt.ErrorCodeResourceLimit || !strings.Contains(limit.Message, "shorter range") {
 		t.Fatal(err)
 	}
 }

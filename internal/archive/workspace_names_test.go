@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -487,6 +488,21 @@ func TestConversationNamesScopeChangesInvalidateWarmNames(t *testing.T) {
 		if got := conversationDisplayName(t, c, id); got.Text == record.Title {
 			t.Fatalf("shared workspace title named a different conversation: %+v", got)
 		}
+	}
+	// Further roots cannot change the others' names, so they are not reloaded
+	// for each one; leaving a single root still restores its name.
+	fixtureExec(t, c, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('third',?,'codex','local','third')`, workspace)
+	before, _, err := executionSourceGeneration(t.Context(), c.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureExec(t, c, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('fourth',?,'codex','local','fourth')`, workspace)
+	if changed, err := executionChangedSince(t.Context(), c.DB, before); err != nil || !slices.Equal(changed, []string{"fourth"}) {
+		t.Fatalf("a root added beside several others changed %v, %v", changed, err)
+	}
+	fixtureExec(t, c, `DELETE FROM conversations WHERE id IN ('third','fourth')`)
+	if got := conversationDisplayName(t, c, cid); got.Text == record.Title {
+		t.Fatalf("two roots still share the workspace title: %+v", got)
 	}
 	fixtureExec(t, c, `DELETE FROM conversations WHERE id='another'`)
 	for _, id := range []string{cid, mirrorID} {
