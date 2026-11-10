@@ -105,7 +105,12 @@ Readers use `projectJoin`/`projectNameSQL` (`projects.go`). They join
 - **Analyze:** a "Project" breakdown in every catalog that had
   "Repository". Links that name `repository_name` read as the project
   breakdown (the catalog's `legacy` mapping), so saved links and card
-  destinations keep working.
+  destinations keep working. File paths stay Git-only: "Repository path",
+  "Repository + path", the "Path in a conversation" unit and the read-path
+  and edit-path cards pair `repo_path` with the repository holding the file
+  (`path_repository`), which can differ from the session's project. Files
+  outside a Git checkout have no repository path, so a library without Git
+  has none.
 - **Storage:** a By project tab.
 - **MCP:** `list_projects` lists repositories and folders alike, with the
   count of conversations without a project; `list_repositories` is kept

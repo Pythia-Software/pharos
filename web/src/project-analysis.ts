@@ -15,7 +15,7 @@ export const projectsReached = (subject: string): AnalysisMeasure => ({ label: `
 // same groups for repositories and adds the folders that had none.
 const legacyIds: Record<string, string> = {
   repository_name: "project_name", root_repository_name: "root_project_name", repository_provider_model: "project_provider_model",
-  repository_path: "project_path", repository_error: "project_error", repository_command: "project_command", family_repository: "family_project",
+  repository_error: "project_error", repository_command: "project_command", family_repository: "family_project",
   repository: "project", repositories: "projects",
 };
 

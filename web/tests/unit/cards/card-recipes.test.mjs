@@ -349,20 +349,20 @@ test("failure-rate cover and destination agree, include successful calls and exp
 
 test("repeated-path HAVING excludes singleton reads and keeps repositories separate", () => {
   const recipe = queryRecipes.find(r => r.id === "repeated-reads"), { query } = instantiateRecipe(recipe, 7, clock);
-  const rows = ["one", "one", "two"].map((project_name, i) => ({ id: String(i), project_name, conversation_id: "conversation", repo_path: "src/main.go", tool_category: "read", started_at: clock.getTime() - 1000 }));
+  const rows = ["one", "one", "two"].map((path_repository, i) => ({ id: String(i), path_repository, conversation_id: "conversation", repo_path: "src/main.go", tool_category: "read", started_at: clock.getTime() - 1000 }));
   const result = core.applyQuery(rows, query, schemas.tool_calls, { now: clock.getTime() });
   assert.equal(result.total, 1);
-  assert.equal(result.rows[0].project_name, "one");
+  assert.equal(result.rows[0].path_repository, "one");
   assert.equal(result.rows[0].cc_calls, 2);
 });
 
 test("group drilldown preserves source predicates and metrics, handles null keys and drops HAVING", () => {
   const recipe = queryRecipes.find(r => r.id === "repeated-reads"), { query } = instantiateRecipe(recipe, 7, clock);
-  const records = core.groupSourceQuery(query, { project_name: null, repo_path: "src/main.go", conversation_id: "conversation" }, schemas.tool_calls);
+  const records = core.groupSourceQuery(query, { path_repository: null, repo_path: "src/main.go", conversation_id: "conversation" }, schemas.tool_calls);
   assert.equal(records.grouping, undefined);
   assert.equal(records.offset, 0);
   assert.deepEqual(records.aggregations, recipe.measures);
-  assert.deepEqual(records.where, [...query.grouping.source.where, { field: "project_name", op: "is_null", value: "" }, { field: "repo_path", op: "=", value: "src/main.go" }, { field: "conversation_id", op: "=", value: "conversation" }]);
+  assert.deepEqual(records.where, [...query.grouping.source.where, { field: "path_repository", op: "is_null", value: "" }, { field: "repo_path", op: "=", value: "src/main.go" }, { field: "conversation_id", op: "=", value: "conversation" }]);
   // Keys that cannot be matched exactly (unknown fields) have no record query.
   assert.equal(core.groupSourceQuery({ ...query, grouping: { ...query.grouping, keys: ["unknown"] } }, { unknown: "x" }, schemas.tool_calls), null);
 });
