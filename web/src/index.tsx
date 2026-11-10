@@ -151,7 +151,7 @@ import { parallelismCatalogShape, parallelismSettingsNote, type ParallelismSetti
 import { useCarbonCatalog, useParallelismCatalog } from "./analysis-catalog-hooks";
 import { datasetsForSavedPreferences } from "./dataset-refresh";
 import { useDatasetRefresh } from "./use-dataset-refresh";
-import { loadFollowing } from "./result-cache";
+import { loadFollowing, type ServedReadiness } from "./result-cache";
 
 type Row = Record<string, any>;
 const relationships: RelationshipAdapter = {
@@ -982,19 +982,21 @@ function compactNumber(value: number): string {
 // tagged so a stale response never renders under new chart settings.
 function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationClause[]) {
   const key = JSON.stringify({ where, clauses });
-  const [state, setState] = useState<{ key: string; refresh: number; metrics: MetricResult[]; error: string; loading: boolean }>({ key: "", refresh: 0, metrics: [], error: "", loading: true });
+  const [state, setState] = useState<{ key: string; refresh: number; metrics: MetricResult[]; error: string; loading: boolean; readiness?: ServedReadiness }>({ key: "", refresh: 0, metrics: [], error: "", loading: true });
   const [refresh, takePolicy] = useDatasetRefresh(dataset);
   useEffect(() => {
     const request = JSON.parse(key) as { where: WhereTerm[]; clauses: AggregationClause[] };
+    // Taken even when nothing is loaded: a Refresh is for this load only.
+    const policy = takePolicy();
     if (!request.clauses.length) { setState({ key, refresh, metrics: [], error: "", loading: false }); return; }
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
     loadFollowing(signal => postMetrics(dataset, schemas[dataset], request.where, request.clauses, signal),
-      metrics => setState({ key, refresh, metrics, error: "", loading: false }), controller.signal, takePolicy())
+      (metrics, readiness) => setState({ key, refresh, metrics, error: "", loading: false, readiness }), controller.signal, policy)
       .catch(failure => { if (!controller.signal.aborted) setState({ key, refresh, metrics: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
   }, [dataset, key, refresh]);
-  return { ...state, metrics: state.key === key ? state.metrics : [], loading: state.key !== key || state.refresh !== refresh || state.loading, error: state.key === key ? state.error : "" };
+  return { ...state, readiness: state.key === key ? state.readiness : undefined, metrics: state.key === key ? state.metrics : [], loading: state.key !== key || state.refresh !== refresh || state.loading, error: state.key === key ? state.error : "" };
 }
 
 const costTick = formatUSD;
@@ -1010,7 +1012,7 @@ function TokenSummary({ where }: { where: WhereTerm[] }) {
   const hasCost = result.metrics.find(metric => metric.id === "cost_usd:")?.buckets[0]?.value != null;
   const reads = value("cache_read_input_tokens"), output = value("output_tokens"), sessions = values.get("agent_sessions") ?? 0;
   const cacheHit = uncached + reads > 0 ? `${Math.round(reads / (uncached + reads) * 100)}%` : "—";
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:usage:${label}`} title={label} dataset="usage" query={{where}} /></span><strong>{amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:usage:${label}`} title={label} dataset="usage" query={{where}} {...result.readiness} /></span><strong>{amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics usage-cards token-summary" aria-label="Machine token summary" aria-busy={result.loading}>
     {card("Total tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(tokens), "all reported input and output")}
     {card("API price equivalent", result.loading ? "Loading…" : result.error ? "Unavailable" : tokens && !hasCost ? "Unpriced" : formatUSD(cost), "list prices · may include assumed/partial prices; unpriced usage excluded")}
@@ -1031,7 +1033,7 @@ function ToolTimeSummary({ where, selected = false }: { where: WhereTerm[]; sele
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const duration = value("duration"), calls = value("calls"), timed = value("timed");
   const time = (ms: number) => ms >= 3600000 ? `${(ms / 3600000).toLocaleString(undefined, { maximumFractionDigits: 1 })} h` : ms >= 60000 ? `${(ms / 60000).toLocaleString(undefined, { maximumFractionDigits: 1 })} min` : `${(ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} s`;
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:tool_calls:${label}`} title={label} dataset="tool_calls" query={{where}} /></span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:tool_calls:${label}`} title={label} dataset="tool_calls" query={{where}} {...result.readiness} /></span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Tool Time summary" aria-busy={result.loading}>
     {card("Total recorded tool time", timed ? time(duration) : "—", `all activities in range${selected ? ", not only the legend selection" : ""} · concurrent calls can overlap`)}
     {card("Call volume", calls.toLocaleString(), "all matching calls, including those without timing")}
@@ -1222,7 +1224,7 @@ function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: Auth
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const typed = value("typed"), words = value("words"), typedMessages = value("typed_messages");
   const building = status !== null && !status.built_at;
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:writing_messages:${label}`} title={label} dataset="writing_messages" query={{where}} /></span><strong>{building ? "Building…" : result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:writing_messages:${label}`} title={label} dataset="writing_messages" query={{where}} {...result.readiness} /></span><strong>{building ? "Building…" : result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <>
     <div className="mcp-metrics dashboard-stats" aria-label="Human Words summary" aria-busy={result.loading}>
       {card("Words you wrote", compactNumber(typed), "typed or dictated in the selected period")}
@@ -1246,7 +1248,7 @@ function ConversationsSummary({ where }: { where: WhereTerm[] }) {
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const conversations = value("conversations"), messages = value("messages"), output = value("output");
   const per = (amount: number) => { const mean = amount / conversations; return conversations ? `${mean < 10 ? mean.toLocaleString(undefined, { maximumFractionDigits: 1 }) : compactNumber(mean)} per conversation` : "none in this range"; };
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:conversation_activity:${label}`} title={label} dataset="conversation_activity" query={{where}} /></span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:conversation_activity:${label}`} title={label} dataset="conversation_activity" query={{where}} {...result.readiness} /></span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Conversations summary" aria-busy={result.loading}>
     {card("Conversations", conversations.toLocaleString(), "top-level, with their delegated work")}
     {card("Your messages", messages.toLocaleString(), per(messages))}
@@ -1340,7 +1342,7 @@ function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
   const messages = value(events, "messages"), scanned = value(read, "read"), total = value(events, "events");
   // Withheld or rebuilding events make every count here provisional.
   const coverage = useAgentEventsCoverage(), mark = agentEventsFreshnessMark(coverage), note = agentEventsFreshnessNote(coverage);
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:agent_events:${label}`} title={label} dataset="agent_events" query={{where}} /></span><strong>{loading ? "Loading…" : error ? "Unavailable" : `${amount === "—" ? "" : mark}${amount}`}</strong><small>{detail}</small></div>;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:agent_events:${label}`} title={label} dataset="agent_events" query={{where}} {...events.readiness} /></span><strong>{loading ? "Loading…" : error ? "Unavailable" : `${amount === "—" ? "" : mark}${amount}`}</strong><small>{detail}</small></div>;
   if (!loading && !error && agentEventsNeverRead(scanned, coverage)) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. They are read in the background once agent events are turned on in Settings → Background Processing; the first run downloads a small model.</p>;
   return <>{note ? <p className="usage-dashboard-note" role="status">{note}</p> : null}<div className="mcp-metrics dashboard-stats" aria-label="Agent Experience summary" aria-busy={loading}>
     {card("Events", total.toLocaleString(), "matching sentences in agents' replies and thinking")}

@@ -46,13 +46,14 @@ test('scatter plots refresh when an underlying metric source changes',()=>{
  stop();target.dispatchEvent(new Event('pharos:usage-refresh'));assert.equal(calls,3);
 });
 
-test("only a person's Refresh asks for current answers; every other refresh takes what is stored", () => {
+test("a person's Refresh and a refreshed dataset ask for current answers; a focused tab takes what is stored", () => {
   const target = new EventTarget(), policies = [];
   const stop = onDatasetRefresh("parallelism", policy => policies.push(policy), target);
   target.dispatchEvent(new Event("pharos:usage-refresh"));
   target.dispatchEvent(askedRefresh());
+  // A saved Parallelism setting rebuilt the dataset: stored answers under the old one must not be drawn as current.
   target.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: "parallelism" }));
-  target.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: "fresh" }));
+  target.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: "usage" }));
   stop();
-  assert.deepEqual(policies, ["cached", "fresh", "cached"]);
+  assert.deepEqual(policies, ["cached", "fresh", "fresh"]);
 });

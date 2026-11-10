@@ -3,7 +3,7 @@ import type { AggregationClause, FieldSchema, QueryRequestV3, WhereTerm } from "
 import { postMetrics, type MetricResult } from "./metric-request";
 import { postQueryRows } from "./query-transport";
 import { useDatasetRefresh } from "./use-dataset-refresh";
-import { loadFollowing } from "./result-cache";
+import { loadFollowing, type ServedReadiness } from "./result-cache";
 import { conversationRowURL } from "./usage-row-model";
 import { useViewState } from "./view-state";
 import { sessionShapeAnalysisCatalog as catalog } from "./session-shape-analysis-catalog";
@@ -21,17 +21,17 @@ const seconds = formatSeconds;
 async function postRows(result: QueryRequestV3["result"], signal: AbortSignal): Promise<{ rows: Array<Record<string, unknown>>; total: number }> {
   return postQueryRows<Record<string, unknown>>(dataset, result, signal);
 }
-type Loaded<T> = { value: T | null; error: string; loading: boolean };
+type Loaded<T> = { value: T | null; error: string; loading: boolean; readiness?: ServedReadiness };
 // stored: whether the load may be answered from the result cache. The
 // aggregations are; the list of sessions is read live, as tables are.
 function useLoad<T>(key: string, load: (signal: AbortSignal) => Promise<T>, stored = false): Loaded<T> {
   const [refresh, takePolicy] = useDatasetRefresh(dataset);
-  const [state, setState] = useState<{ key: string; value: T | null; error: string; loading: boolean }>({ key: "", value: null, error: "", loading: true });
+  const [state, setState] = useState<{ key: string; value: T | null; error: string; loading: boolean; readiness?: ServedReadiness }>({ key: "", value: null, error: "", loading: true });
   useEffect(() => {
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
-    const publish = (value: T) => setState({ key, value, error: "", loading: false }), policy = takePolicy();
-    (stored ? loadFollowing(load, publish, controller.signal, policy) : load(controller.signal).then(publish))
+    const publish = (value: T, readiness?: ServedReadiness) => setState({ key, value, error: "", loading: false, readiness }), policy = takePolicy();
+    (stored ? loadFollowing(load, publish, controller.signal, policy) : load(controller.signal).then(value => publish(value)))
       .catch(failure => { if (!controller.signal.aborted) setState({ key, value: null, error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
   }, [key, refresh]);
@@ -57,6 +57,7 @@ export function SignalTable({ where, schema, end = localDay(Date.now()) }: { whe
     <header>
       <h3>Signals against your own range</h3>
       <p className="muted">The seven days to {new Date(`${end}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })} against the lowest and highest of the eight weeks before them, under the dashboard's filters but not its dates. A value inside that range is no detectable change. Each rate counts only sessions with the evidence it needs.</p>
+      {result.readiness?.refreshing || result.readiness?.refreshError ? <p className="muted" role="status">Showing results from {new Date(result.readiness.updatedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}. {result.readiness.refreshing ? "Pharos is updating them." : "Refresh to check for newer results."}</p> : null}
     </header>
     {result.error ? <p className="query-table-error" role="alert">{result.error}</p> : <div className="session-shape-table-scroll"><table className="session-shape-signals">
       <thead><tr><th scope="col">Signal</th><th scope="col">Last 7 days</th><th scope="col">Your range, 8 weeks before</th><th scope="col">Change</th><th scope="col">Sessions with evidence</th></tr></thead>

@@ -293,6 +293,17 @@ func TestQueryResultsAreCached(t *testing.T) {
 			t.Fatalf("invalid query: %d %v", w.Code, w.Header())
 		}
 	}
+	// A saved setting the service applies itself is part of what an answer
+	// was computed from: changing it leaves stored answers stale, and a
+	// request for current ones computes.
+	if _, err := catalog.DB.Exec(`INSERT INTO ui_preferences(key,value) VALUES(?,'{"gap":15,"counting":"agent"}')`, parallelismSettingsKey); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range [][2]string{{resultCached, "stale"}, {resultFresh, "live"}, {resultCached, "fresh"}} {
+		if w := cachedCall(t, server, config.APIToken, path, want[0], request(time.Now())); w.Header().Get(resultCacheHeader) != want[1] {
+			t.Fatalf("after a saved setting, %s answered %s, want %s", want[0], w.Header().Get(resultCacheHeader), want[1])
+		}
+	}
 	// A window relative to now is the same entry at any clock, and says so.
 	for i, want := range []string{"live", "fresh"} {
 		rolling := request(time.Now().Add(time.Duration(i) * time.Minute))

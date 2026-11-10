@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { combineServed, followStale, loadFollowing, resultPolicyHeaders, resultScope, resultServed, scopedRequest, staleRetryDelays } from "../../../src/result-cache";
+import { combineServed, followStale, loadFollowing, resultPolicyHeaders, stillStale, resultScope, resultServed, scopedRequest, staleRetryDelays } from "../../../src/result-cache";
 
 test("a response says what the result cache served and when it was computed", () => {
   const headers = values => ({ get: name => values[name] ?? null });
@@ -48,17 +48,19 @@ test("a scope carries its policy to query requests made with its signal and coll
 
 test("a view loads under its policy, shows a stale answer at once and replaces it in place until it is fresh", async () => {
   const header = signal => new Headers(scopedRequest("/api/query/usage/query-v3", { method: "POST", signal }).init.headers).get("X-Pharos-Cache");
+  const built = Date.parse("2026-11-10T10:00:00Z");
   const serve = (signal, state) => scopedRequest("/api/query/usage/query-v3", { method: "POST", signal }).note({ get: name => ({ "X-Pharos-Cache": state, "X-Pharos-Cache-Built": "2026-11-10T10:00:00Z" })[name] ?? null });
-  const run = async (states, policy, { failAt } = {}) => {
+  const run = async (states, policy, { failAt = [] } = {}) => {
     const asked = [], shown = [], controller = new AbortController();
     let load = 0;
-    await loadFollowing(async signal => { const at = load++; asked.push(header(signal)); if (at === failAt) throw new Error("offline"); serve(signal, states[at]); return at; },
-      (value, served) => shown.push([value, served?.state]), controller.signal, policy,
-      async ask => { for (let attempt = 0; attempt < 3; attempt++) if (!await ask(attempt)) return; });
+    await loadFollowing(async signal => { const at = load++; asked.push(header(signal)); if (failAt.includes(at)) throw new Error("offline"); serve(signal, states[at]); return at; },
+      (value, readiness) => shown.push([value, readiness.refreshing ? "refreshing" : readiness.refreshError ?? "current", readiness.updatedAt === built]), controller.signal, policy,
+      async ask => { for (let attempt = 0; attempt < 2; attempt++) if (!await ask(attempt)) return; });
     return { asked, shown };
   };
-  assert.deepEqual(await run(["fresh"], "cached"), { asked: ["cached"], shown: [[0, "fresh"]] }, "a current answer is not asked for again");
-  assert.deepEqual(await run(["stale", "stale", "fresh"], "fresh"), { asked: ["fresh", "cached", "cached"], shown: [[0, "stale"], [1, "stale"], [2, "fresh"]] }, "follow-ups take what is stored");
-  assert.deepEqual((await run(["stale", "", "fresh"], "cached", { failAt: 1 })).shown, [[0, "stale"], [2, "fresh"]], "a failed follow-up leaves the stale answer showing");
-  await assert.rejects(run([], "cached", { failAt: 0 }), /offline/, "the first load's failure is the view's");
+  assert.deepEqual(await run(["fresh"], "cached"), { asked: ["cached"], shown: [[0, "current", false]] }, "a current answer was checked now, and is not asked for again");
+  assert.deepEqual(await run(["stale", "stale", "fresh"], "fresh"), { asked: ["fresh", "cached", "cached"], shown: [[0, "refreshing", true], [1, "refreshing", true], [2, "current", false]] }, "follow-ups take what is stored");
+  assert.deepEqual((await run(["stale", "stale", "stale"], "cached")).shown.at(-1), [2, stillStale, true], "out of tries, the answer stops saying it is being updated");
+  assert.deepEqual((await run(["stale", "", ""], "cached", { failAt: [1, 2] })).shown, [[0, "refreshing", true], [0, "offline", true]], "failed follow-ups leave the stale answer showing, and say why nothing replaced it");
+  await assert.rejects(run([], "cached", { failAt: [0] }), /offline/, "the first load's failure is the view's");
 });

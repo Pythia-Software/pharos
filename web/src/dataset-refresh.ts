@@ -5,10 +5,12 @@ const scatterSources = new Set(scatterMetrics.map(metric => metric.dataset));
 // a refresh of the dataset they read (pharos:data-refresh with the dataset),
 // such as parallelism records rebuilt after saved Parallelism settings.
 export const refreshesDataset = (event: Event, dataset: string) => event.type === "pharos:usage-refresh" || event.type === "pharos:data-refresh" && ((event as CustomEvent<unknown>).detail === dataset || dataset === "people_message_labels" && ["writing_messages","conversation_activity","rhythm","message_labels"].includes(String((event as CustomEvent<unknown>).detail)) || dataset === "scatter" && scatterSources.has(String((event as CustomEvent<unknown>).detail)));
-// A person pressing a page's Refresh asks for current answers; every other
-// refresh (a focused tab, a new day, rebuilt data) takes what is stored.
+// A person pressing a page's Refresh asks for current answers, and so does
+// a refresh of one dataset: something they did (a saved setting, a finished
+// backfill) changed what it holds. A focused tab or a new day takes what is
+// stored.
 export const askedRefresh = () => new CustomEvent("pharos:usage-refresh", { detail: "fresh" });
-export const refreshPolicy = (event: Event): ResultPolicy => event.type === "pharos:usage-refresh" && (event as CustomEvent<unknown>).detail === "fresh" ? "fresh" : "cached";
+export const refreshPolicy = (event: Event): ResultPolicy => event.type === "pharos:data-refresh" || (event as CustomEvent<unknown>).detail === "fresh" ? "fresh" : "cached";
 export function onDatasetRefresh(dataset: string, callback: (policy: ResultPolicy) => void, target: Pick<EventTarget, "addEventListener" | "removeEventListener"> = window): () => void {
   const listener = (event: Event) => { if (refreshesDataset(event, dataset)) callback(refreshPolicy(event)); };
   for (const type of ["pharos:usage-refresh", "pharos:data-refresh"]) target.addEventListener(type, listener);

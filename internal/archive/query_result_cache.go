@@ -3,6 +3,8 @@ package archive
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/url"
@@ -45,6 +47,13 @@ var buildIdentity = sync.OnceValue(func() string {
 	return "unknown"
 })
 
+// queryResultSettings are the saved settings a query dataset reads on the
+// service rather than from its request: Scatter and Parallelism read the
+// Parallelism gap and counting, People message labels the Habits engaged
+// gap. A change to one makes every stored answer stale. A dataset that
+// starts reading another saved setting this way must add its key here.
+var queryResultSettings = []any{parallelismSettingsKey, habitsSettingsKey}
+
 // queryResults caches query-v3 responses: a card's or a dashboard's request,
 // keyed by its dataset, URL parameters and body without the client's clock.
 // Its scope is the dataset's cache generation (queryDatasetGeneration), so a
@@ -61,7 +70,16 @@ var queryResults = registerResultDomain(&resultDomain{
 		// another build may answer the same request differently (a fixed
 		// query, new pricing, a migration's backfill) without any row
 		// changing afterwards.
-		return strconv.FormatInt(generation, 10) + " " + localZoneIdentity(time.Now()) + " " + buildIdentity(), err
+		if err != nil {
+			return "", err
+		}
+		// Saved settings the service applies itself are in neither the
+		// request nor the generation, so they are named here.
+		var settings string
+		err = s.Catalog.reader().QueryRowContext(ctx, `SELECT COALESCE(group_concat(key||'='||value, char(10)),'') FROM (SELECT key,value FROM ui_preferences WHERE key IN (`+
+			strings.TrimSuffix(strings.Repeat("?,", len(queryResultSettings)), ",")+`) ORDER BY key)`, queryResultSettings...).Scan(&settings)
+		saved := sha256.Sum256([]byte(settings))
+		return strconv.FormatInt(generation, 10) + " " + localZoneIdentity(time.Now()) + " " + buildIdentity() + " " + hex.EncodeToString(saved[:6]), err
 	},
 	build: func(ctx context.Context, s *Server, replay []byte, now time.Time) ([]byte, error) {
 		var stored queryReplay
