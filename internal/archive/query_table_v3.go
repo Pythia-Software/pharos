@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,58 +42,66 @@ func authorizeQueryV3Computed(ctx context.Context, tx *sql.Tx, d *qt.QueryDatase
 }
 
 func (s *Server) postQueryV3(w http.ResponseWriter, r *http.Request, dataset string) {
-	schema, err := sqliteQuerySchema(dataset)
-	if err != nil {
-		qt.WriteQueryError(w, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidRequest, Message: err.Error()})
-		return
-	}
 	w.Header().Set("Cache-Control", "no-store")
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1_000_000))
 	if err != nil {
 		qt.WriteQueryError(w, err)
 		return
 	}
+	request, err := queryResultRequest(dataset, r.URL.Query(), body)
+	if err != nil {
+		// No object or no clock: answered as it is, outside the cache.
+		payload, err := s.queryV3Response(r.Context(), dataset, r.URL.Query(), body)
+		if err != nil {
+			qt.WriteQueryError(w, err)
+			return
+		}
+		writeCachedResult(w, payload, resultLive, time.Now())
+		return
+	}
+	s.serveResult(w, r, queryResults, request)
+}
+
+// queryV3Response computes the response body of one query-v3 request.
+func (s *Server) queryV3Response(parent context.Context, dataset string, params url.Values, body []byte) ([]byte, error) {
+	schema, err := sqliteQuerySchema(dataset)
+	if err != nil {
+		return nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidRequest, Message: err.Error()}
+	}
 	request, err := qt.DecodeQueryRequestV3(body)
 	if err != nil {
-		qt.WriteQueryError(w, err)
-		return
+		return nil, err
 	}
 	if dataset == "messages" && request.Distinct != nil && (request.Distinct.Field == "text" || request.Distinct.Field == "content" || request.Distinct.Field == "prompt") {
-		qt.WriteQueryError(w, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidQuery, Message: "message text has no distinct-value list"})
-		return
+		return nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidQuery, Message: "message text has no distinct-value list"}
 	}
-	parent := r.Context()
 	if request.Distinct != nil {
 		var release func()
 		parent, release, err = s.beginQueryMetadata(parent)
 		if err != nil {
-			qt.WriteQueryError(w, err)
-			return
+			return nil, err
 		}
 		defer release()
 	}
 	ctx, cancel := context.WithTimeout(parent, queryTableDeadline)
 	defer cancel()
-	result, find, err := s.executeQueryV3(ctx, dataset, r.URL.Query(), schema, request)
+	result, find, err := s.executeQueryV3(ctx, dataset, params, schema, request)
 	if err != nil {
-		qt.WriteQueryError(w, err)
-		return
+		return nil, err
 	}
 	// Agent-event rows resting on superseded execution evidence are left out
 	// (withheldAgentEvents); say how many, so absent rows read as pending.
 	var coverage map[string]any
 	if dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "agent_event_rates" {
 		if coverage, err = agentEventsCoverage(ctx, s.Catalog.reader()); err != nil {
-			qt.WriteQueryError(w, err)
-			return
+			return nil, err
 		}
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, struct {
+	return json.Marshal(struct {
 		qt.QueryResultV3
 		Find     *libraryFindSummary `json:"find,omitempty"`
 		Coverage map[string]any      `json:"coverage,omitempty"`
-	}{result, find, coverage}, http.StatusOK)
+	}{result, find, coverage})
 }
 
 // Dependency discovery uses the same canonical definitions/revisions as execution.

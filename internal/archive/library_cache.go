@@ -134,6 +134,9 @@ type dataVersionMonitor struct {
 	// generations is that read by domain (see cacheGenerations).
 	version     int64
 	generations cacheGenerations
+	// counted is whether the last read was the stored generation count,
+	// which survives a restart, rather than a connection's data_version.
+	counted bool
 }
 
 // cacheVersion is the catalog version caches compare against. While this
@@ -170,6 +173,7 @@ func (m *dataVersionMonitor) read(ctx context.Context, path string) (int64, erro
 		m.monitor, m.conn = monitor, conn
 	}
 	generations, err := readCacheGenerations(ctx, m.conn)
+	m.counted = err == nil
 	if err != nil && strings.Contains(err.Error(), "no such table") {
 		generations = cacheGenerations{}
 		err = m.conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&generations.all)

@@ -1,4 +1,5 @@
 import { dashboardQuerySettings } from "./dashboard-query-settings";
+import { scopedRequest } from "./result-cache";
 import { QueryError, errorCodeForStatus, queryErrorFromBody, type QueryErrorOptions } from "@pythia-software/query-table-core";
 import { reportQueryCoverage } from "./agent-events-freshness";
 import { normalizeConcurrencySettings } from "./concurrency-settings";
@@ -65,8 +66,10 @@ export const queryFetch: typeof fetch = (input, init = {}) => {
 export async function queryRequest<T>(url: string, init: RequestInit = {}, timeoutMs = queryRequestTimeoutMs): Promise<T> {
   const deadline = AbortSignal.timeout(timeoutMs);
   const signal = requestSignal(init.signal, deadline);
+  const scoped = scopedRequest(url, init);
   try {
-    const response = await fetch(viewRequestURL(url), { ...init, signal });
+    const response = await fetch(viewRequestURL(url), { ...scoped.init, signal });
+    scoped.note(response.headers);
     const body = await response.json().catch(error => {
       signal.throwIfAborted();
       if (response.ok) throw error;

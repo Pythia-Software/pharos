@@ -78,6 +78,23 @@ func (a *queryAdmission) releaseLocked() {
 	}
 }
 
+// busy reports whether work is waiting for a slot or none is free: a request
+// that can be answered without computing should be.
+func (a *queryAdmission) busy() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.wait.Len() > 0 || a.active >= a.limit
+}
+
+// runningBeyond is how much work is running or waiting besides own
+// executions the caller accounts for: zero means that background work which
+// only improves later answers competes with nothing.
+func (a *queryAdmission) runningBeyond(own int) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return max(0, a.active-own) + a.wait.Len()
+}
+
 type derivedAdmissionKey struct{}
 
 // A derived builder owns its lease on its goroutine. When it asks for another

@@ -207,6 +207,9 @@ func (s *Server) Serve() error {
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
 	s.daemon("compressCaptures", s.compressCapturesLoop)
+	for i := range resultRefreshers {
+		s.daemon("refreshResults", func(ctx context.Context) { s.refreshResults(ctx, i == 0) })
+	}
 	s.refreshGitInBackground(true)
 	s.countUpgradeInBackground()
 	s.warmAskModelsOnStart()
