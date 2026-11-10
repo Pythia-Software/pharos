@@ -5,10 +5,11 @@
 import * as core from "@pythia-software/query-table-core";
 
 export const execution = { profile: "qt-sqlite-v1", planToken: "", fields: {}, resolvedRevisions: {} };
-// As the service advertises them: calendar cycles and group keys, and
-// minimums over distinct values and sums.
-export const queryCapabilities = { version: 3, profile: execution.profile, groupedRows: true, calendarGrouping: true, calendarCycles: true, calendarGroupKeys: true, computedSourceFilters: true, regex: false, regexSourceFilters: true, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000,
-  metricFilters: true, metricMinCount: true, metricMinCountMeasures: true };
+// As the service advertises them: calendar cycles, group keys and buckets of
+// several intervals, minimums over distinct values and sums, percentiles,
+// quantile curves and confidence intervals.
+export const queryCapabilities = { version: 3, profile: execution.profile, groupedRows: true, calendarGrouping: true, calendarCycles: true, calendarGroupKeys: true, calendarEvery: true, computedSourceFilters: true, regex: false, regexSourceFilters: true, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000,
+  metricFilters: true, metricMinCount: true, metricMinCountMeasures: true, metricIntervals: true, metricPercentiles: true, boxPercentileWhiskers: true, quantileDistributions: true };
 export const metricCapabilities = { version: 2, expressions: true, distributions: true, filters: true, minCount: true, minCountMeasures: true };
 export const capabilities = () => ({ metricCapabilities, computedExecution: execution, queryCapabilities });
 

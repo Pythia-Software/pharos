@@ -1,8 +1,6 @@
 # Query Table: remove tooltips that repeat visible content
 
-Status: blocked on an upstream published release. Pharos currently pins the
-four Query Table npm packages and Go module to 1.0.0. The host-owned UI has
-been audited and cleaned up separately.
+**Resolved in Query Table 1.0.5**: table cells, chips, JSON previews, grouped column labels and compact metric labels offer their full text only while clipped or relabelled.
 
 ## Requested behavior
 

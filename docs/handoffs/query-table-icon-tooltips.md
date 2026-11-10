@@ -1,5 +1,7 @@
 # Query Table: icon-button tooltips
 
+**Resolved in Query Table 1.0.5**: icon-only buttons whose purpose is not obvious have native hover tooltips.
+
 Pharos audited the published `@pythia-software/query-table-ui` 1.0.1. Some
 icon-only controls have accessible names but no visible hover explanation.
 The host cannot fix these in the package or its generated bundle under its

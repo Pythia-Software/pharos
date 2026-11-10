@@ -939,12 +939,14 @@ test('semantic JSON-path reveal materializes exact details, reports missing path
  // A record outside the result page loads without broadening the page.
  const outside='detail:'+JSON.stringify({rowId:'inspect-2',field:'arguments_json',path:'$["other"]'});
  const narrow={...fixture.query,limit:1,itemDetails:{modes:['expand','modal']}};
+ // Focus stays where it was (here Run Now, clicked above): a reveal never takes it.
+ await page.evaluate(()=>{window.__focusBefore=document.activeElement});
  await page.evaluate(url=>window.pharosNavigate(url),fixture.route(narrow,outside));
  await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
  await page.locator('.qt-attention-target').first().waitFor();
  const restored=fixture.read(page);
  assert.equal(restored.itemDetails.active.id,'inspect-2');assert.equal(restored.limit,1);assert.equal(restored.offset,0);assert.deepEqual(restored.where,narrow.where);
- assert.equal(await page.evaluate(()=>document.activeElement===document.body),true);
+ assert.equal(await page.evaluate(()=>document.activeElement===window.__focusBefore&&!document.activeElement.closest('.qt-attention-target')),true);
  await page.evaluate(()=>window.pharosNavigate('/cards'));
  await page.locator('.card-library-page').waitFor();assert.equal(await page.locator('.qt-attention-target:visible').count(),0);
 });

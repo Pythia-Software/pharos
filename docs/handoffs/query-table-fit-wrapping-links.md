@@ -1,5 +1,7 @@
 # Query Table: fitting treats a wrapping host link as an unshrinkable control
 
+**Resolved in Query Table 1.0.5**: screen fitting floors a control cell at its min-content width under the cell's own CSS, so a wrapping host link needs only its longest word.
+
 For the Query Table team. A self-contained report against **0.9.7** (`main`
 at `6849399d`, "prepare 0.9.7"), dated **2026-10-28**. It is a regression
 from 0.9.6 introduced by the fit-to-screen control minimums (after-0.9.6

@@ -575,7 +575,7 @@ const ROUTES = [
       await page.getByRole("region", { name: "Parallelism chart", exact: true }).getByRole("combobox", { name: "Range", exact: true }).selectOption("custom");
       await page.getByLabel("From date", { exact: true }).waitFor();
     }, shown: ".usage-dashboard .concurrency-chart svg" },
-  // Tables the KNOWN fit bug applies to, and one it does not.
+  // Fitted tables with wrapping host links, and one without.
   ...["usage", "writing_messages", "agent_events", "mcp_calls"].map(dataset => ({
     name: `Analyze workspace query ${dataset}`, url: `/analyze?analyze_mode=query&analyze_data=${dataset}`, ready: ".usage-workspace-table .qt-row", fitTable: true,
   })),
@@ -764,11 +764,7 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 320, height: 640 }];
 // Layout bugs found by this sweep and not fixed yet. A case whose only
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
-const KNOWN = [{
-  bug: "Query Table 1.0.0 screen fitting still floors a column at its wrapping host link measured on one line, so Analyze's fitted tables scroll at desktop widths; docs/handoffs/query-table-fit-wrapping-links.md",
-  when: (route, viewport) => /^Analyze workspace query (usage|writing_messages|agent_events)$/.test(route.name) && viewport.width >= 1024,
-  match: /^fitted table still scrolls sideways: \d+px wide in \d+px$/,
-}];
+const KNOWN = [];
 
 for (const width of [1440, 320]) test(`Search filter suggestions stay readable and keep input focus @ ${width}`, { skip }, async t => {
   const values = ["exploration", "exploration-service", "exploration-service-v2", "gbw-utilities", "general-purpose-repository",

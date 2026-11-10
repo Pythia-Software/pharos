@@ -408,7 +408,7 @@ GET  /api/query/{library|activity|usage|…}/field-stats?fields=a,b
 POST /api/query/{library|activity|usage|…}/query-v3
 ```
 
-The query endpoints implement the published Query Table **1.0.4** V3 wire
+The query endpoints implement the published Query Table **1.0.5** V3 wire
 contract. Their allowlisted field definitions live in [`schemas`](../schemas),
 and the same documents drive the React frontend and generated Go SQLite schemas.
 Tables, charts, metrics, filter suggestions, field statistics and identity
