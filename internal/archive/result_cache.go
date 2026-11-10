@@ -15,9 +15,9 @@ import (
 	"time"
 )
 
-// The result cache is a small SQLite file beside nothing: it lives in this
-// Mac's support directory, apart from the catalog, and holds responses in the
-// form the frontend receives them. A request that names a policy is answered
+// The result cache is a small SQLite file per library, in this Mac's support
+// directory rather than beside the catalog, holding responses in the form
+// the frontend receives them. A request that names a policy is answered
 // from it, or computed and stored in it; requests that name none never touch
 // it. docs/result-cache.md states the rules; this file is all of them.
 //
@@ -128,11 +128,13 @@ type resultKey struct{ domain, key string }
 
 // resultCache is the store and the queue of entries to refresh.
 type resultCache struct {
-	path string
-	open sync.Once
-	db   *sql.DB
-	err  error
-	shut atomic.Bool
+	// identity is the library the file's entries belong to.
+	identity string
+	path     string
+	open     sync.Once
+	db       *sql.DB
+	err      error
+	shut     atomic.Bool
 
 	mu sync.Mutex
 	// asked and swept are the stale entries to refresh, next first: those a
@@ -151,26 +153,47 @@ const resultCacheSchema = `CREATE TABLE IF NOT EXISTS entries (
  clock INTEGER NOT NULL, replay BLOB NOT NULL, body BLOB NOT NULL,
  built_at INTEGER NOT NULL, used_at INTEGER NOT NULL, bytes INTEGER NOT NULL,
  UNIQUE(domain,key));
-CREATE INDEX IF NOT EXISTS entries_used_idx ON entries(used_at)`
+CREATE INDEX IF NOT EXISTS entries_used_idx ON entries(used_at);
+CREATE TABLE IF NOT EXISTS library (id INTEGER PRIMARY KEY CHECK(id=1), identity TEXT NOT NULL)`
 
-// resultCachePath is the cache for the catalog at catalogPath: one file per
-// catalog, on this Mac rather than the library's drive, so an ejected,
-// read-only or slow drive is none of its concern.
-func resultCachePath(catalogPath string) string {
-	sum := sha256.Sum256([]byte(canonical(catalogPath)))
+// resultCacheIdentity names the library whose responses a cache file holds:
+// the library's id and instance (a restore makes a new instance), which
+// follow the library wherever its drive is mounted and tell apart two
+// libraries opened at one path. A catalog that is no library (a development
+// or test catalog) is known by its path. An empty identity means the library
+// cannot be identified now, and nothing is cached.
+func resultCacheIdentity(config Config) string {
+	switch d, err := readLibraryDescriptor(config); {
+	case err == nil:
+		return "library:" + d.ID + ":" + d.Instance
+	case libraryDescriptorMissing(err):
+		return "catalog:" + canonical(config.CatalogPath)
+	}
+	return ""
+}
+
+// resultCachePath is the file for one identity, on this Mac rather than the
+// library's drive, so an ejected, read-only or slow drive is none of its
+// concern. The file also records the identity (see results).
+func resultCachePath(identity string) string {
+	sum := sha256.Sum256([]byte(identity))
 	return filepath.Join(pharosSupportDir(), "result-cache", hex.EncodeToString(sum[:8])+".sqlite3")
 }
 
-// results is the catalog's result cache, or nil when its file cannot be
-// opened: every caller then answers as if no policy had been named.
-func (c *Catalog) results() *resultCache {
-	if c.Path == "" {
-		return nil
-	}
+// results is the result cache of the library this service serves, or nil
+// when it cannot be identified or its file cannot be opened: every caller
+// then answers as if no policy had been named. A file that turns out to
+// belong to another library is emptied before use.
+func (s *Server) results() *resultCache {
+	c := s.Catalog
 	c.resultsOnce.Do(func() {
-		c.resultStore = &resultCache{path: resultCachePath(c.Path), queued: map[resultKey]bool{}, wake: make(chan struct{}, 1)}
+		identity := resultCacheIdentity(s.config)
+		c.resultStore = &resultCache{identity: identity, path: resultCachePath(identity), queued: map[resultKey]bool{}, wake: make(chan struct{}, 1)}
 	})
 	cache := c.resultStore
+	if cache.identity == "" {
+		return nil
+	}
 	cache.open.Do(func() {
 		if cache.err = os.MkdirAll(filepath.Dir(cache.path), 0o700); cache.err != nil {
 			return
@@ -179,7 +202,11 @@ func (c *Catalog) results() *resultCache {
 		db, err := sql.Open("sqlite", dsn)
 		if err == nil {
 			db.SetMaxOpenConns(4)
-			if _, err = db.Exec(resultCacheSchema); err != nil {
+			if _, err = db.Exec(resultCacheSchema); err == nil {
+				_, err = db.Exec(`DELETE FROM entries WHERE NOT EXISTS(SELECT 1 FROM library WHERE identity=?);
+ INSERT INTO library(id,identity) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET identity=excluded.identity`, cache.identity, cache.identity)
+			}
+			if err != nil {
 				db.Close()
 			}
 		}
@@ -323,7 +350,7 @@ func (s *Server) serveResult(w http.ResponseWriter, r *http.Request, d *resultDo
 	var cache *resultCache
 	var stamp string
 	if policy == resultCached || policy == resultFresh || policy == resultLive {
-		if cache = s.Catalog.results(); cache != nil {
+		if cache = s.results(); cache != nil {
 			// Read before computing: a change during the build leaves the
 			// entry stale rather than stamped with data it did not read.
 			var err error
@@ -376,7 +403,7 @@ func (s *Server) serveResult(w http.ResponseWriter, r *http.Request, d *resultDo
 // refreshResult recomputes one queued entry if it is still stale, and
 // reports whether there was one to look at.
 func (s *Server) refreshResult(ctx context.Context) bool {
-	cache := s.Catalog.results()
+	cache := s.results()
 	if cache == nil {
 		return false
 	}
@@ -408,7 +435,7 @@ func (s *Server) refreshResult(ctx context.Context) bool {
 // sweepResults queues the stale entries asked for lately that no request
 // has queued: what a page will want the next time it is opened.
 func (s *Server) sweepResults(ctx context.Context) {
-	cache := s.Catalog.results()
+	cache := s.results()
 	if cache == nil {
 		return
 	}
@@ -455,7 +482,7 @@ const resultRefreshers = 2
 // catches up when there is capacity and never competes with a page. The
 // first of the resultRefreshers also sweeps.
 func (s *Server) refreshResults(ctx context.Context, sweeps bool) {
-	cache := s.Catalog.results()
+	cache := s.results()
 	if cache == nil {
 		return
 	}

@@ -12,8 +12,27 @@ connection, which is the resource that runs out under load.
 - Code: `internal/archive/result_cache.go` (the mechanism, all of it),
   `internal/archive/query_result_cache.go` (the first domain),
   `web/src/result-cache.ts` (the frontend's rules).
-- File: `<support dir>/result-cache/<hash of the catalog path>.sqlite3`, on
-  this Mac rather than the library's drive. Deleting it is always safe.
+- File: `<support dir>/result-cache/<hash of the library's identity>.sqlite3`,
+  on this Mac rather than the library's drive. Deleting it is always safe.
+
+## One file per library
+
+The cache is part of a library, even though it is not stored with it. Each
+library has its own file, named for the library's id and instance from its
+descriptor (`resultCacheIdentity`):
+
+- Two libraries never share a file, including two that are opened at the
+  same path at different times (one drive name, different drives).
+- A library keeps its file when its drive is mounted somewhere else.
+- A restored library is a new instance, so it starts with an empty cache
+  rather than answers computed from the catalog it replaced.
+- The file records whose it is. If a file is ever found holding another
+  library's entries, they are deleted before anything is served.
+- A library that cannot be identified (its descriptor is unreadable or says
+  it is a copy) gets no cache at all: every request is computed.
+
+A catalog that is not a library, as in development and tests, is known by
+its path instead.
 
 ## The rules
 
@@ -136,10 +155,10 @@ Keep per-person or per-session state out of a domain unless it is part of
 ## What it does not do
 
 - It does not make a first-ever request faster: nothing is stored yet.
-- It does not notice a catalog replaced by an older copy whose generation
-  later reaches a number seen before. Delete the file after restoring a
-  backup by hand; a restored catalog otherwise shows as stale and is
-  refreshed like any other change.
+- A development catalog (no library descriptor) is known only by its path:
+  replace one with an older copy and its generation can later reach a number
+  seen before. Delete the file after doing that. Libraries are not affected,
+  because a restore changes their instance.
 - The refresher does not make the work cheaper. After a change that touches
   every card, Home's entries take a few minutes to catch up, in the
   background and only while the service is otherwise idle.

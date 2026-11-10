@@ -136,11 +136,23 @@ func TestResultCachePolicies(t *testing.T) {
 	expect("reopened", resultCached, "b", "fresh", stored)
 	override(t, &domain.version, "2")
 	expect("new version", resultCached, "b", "live", fmt.Sprint(builds+1))
+	// The file belongs to one library: each has its own, and a file found
+	// holding another library's entries is emptied rather than served.
+	if own, other := resultCachePath(resultCacheIdentity(config)), resultCachePath("library:other:instance"); own == other || own != server.results().path {
+		t.Fatalf("cache files: %s for this catalog, %s for another library", own, other)
+	}
+	if _, err := server.results().db.Exec(`UPDATE library SET identity='library:other:instance'`); err != nil {
+		t.Fatal(err)
+	}
+	catalog.closeResults()
+	catalog.resultsOnce, catalog.resultStore = sync.Once{}, nil
+	expect("another library's file", resultCached, "b", "live", fmt.Sprint(builds+1))
+	expect("stored again", resultCached, "b", "fresh", fmt.Sprint(builds))
 	// Entries are dropped least recently used first once over the size limit.
 	override(t, &resultCacheBytes, 1)
-	catalog.results().trim()
+	server.results().trim()
 	var left int
-	if err := catalog.results().db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&left); err != nil || left != 0 {
+	if err := server.results().db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&left); err != nil || left != 0 {
 		t.Fatalf("%d entries left over the size limit, %v", left, err)
 	}
 }
