@@ -87,6 +87,14 @@ lifecycle. Browser file handles are not service-machine filesystem paths. A
 release acknowledgement is not confirmation of physical ejection. One-way menu
 dispatch is not a native acknowledgement.
 
+Dictation (`pharosHost.dictation`, owned natively by
+[`Dictation.swift`](../macos/Dictation.swift)) records only between a page's
+start and its stop or cancel, ends every session exactly once, and is cancelled
+by navigation and window teardown. It transcribes on the Mac with
+SpeechAnalyzer (macOS 26 and later) and never depends on the system Dictation
+setting. A browser, an older macOS or an unsupported language reports it as
+unavailable, and `dictation.js` hides the microphone buttons.
+
 The JavaScript adapter is not an authorization boundary. Native handlers validate
 the actual sender's main frame and exact application origin, including port,
 before dispatching effects. The Mac owner is `NativeBridgeSender` in

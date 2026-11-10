@@ -874,6 +874,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:841e50cf34726ac4:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-icon-control pharos-dictate dictation-button cursor-interaction\" aria-label=\"Dictate\" data-tooltip=\"Dictate\" aria-pressed=\"false\" hidden>",
+      "contract": "editing",
+      "reason": "Dictation microphone: types into a draft text box (Ask prompt, annotation note or feedback comment); the recording is a transient native session, not view state."
+    },
+    {
       "key": "fragment:88f6647bf9ef792e:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -2952,6 +2961,15 @@
       "control": "<button id=\"headerSyncOnly\" class=\"header-icon header-sync\" type=\"button\" aria-label=\"Index changes\" title=\"Index changes\" hidden>",
       "contract": "action",
       "reason": "Navigation, clipboard, refresh or bookmark/history mutation action; no applied content view state."
+    },
+    {
+      "key": "html:afc84e136df68b2f:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button type=\"button\" id=\"feedbackDictate\" class=\"dictation-button\" aria-label=\"Dictate\" title=\"Dictate\" aria-pressed=\"false\" hidden>",
+      "contract": "editing",
+      "reason": "Dictation microphone: types into a draft text box (Ask prompt, annotation note or feedback comment); the recording is a transient native session, not view state."
     },
     {
       "key": "html:b6c013b3868b842d:0",
@@ -5520,6 +5538,15 @@
       "binding": "timeline_idle",
       "contract": "view.timeline_idle",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "827f1bc3fe820bf8:0",
+      "file": "web/src/dictation-button.tsx",
+      "owner": "DictationButton",
+      "tag": "button",
+      "control": "aria-label=\"Dictate\"",
+      "contract": "editing",
+      "reason": "Dictation microphone: types into a draft text box (Ask prompt, annotation note or feedback comment); the recording is a transient native session, not view state."
     },
     {
       "key": "5be3bc0bf7116573:0",

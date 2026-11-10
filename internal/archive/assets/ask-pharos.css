@@ -157,6 +157,7 @@
 #pharos-ask .pharos-send{background:var(--pharos-sea);color:var(--pharos-panel)!important}
 #pharos-ask .pharos-icon-control{background:transparent;color:var(--pharos-muted)!important}
 #pharos-ask .pharos-icon-control:hover{background:color-mix(in srgb,var(--pharos-sea) 8%,var(--pharos-panel));color:var(--pharos-sea)!important}
+#pharos-ask .pharos-dictate:is([data-state=listening],[data-state=stopping]),#pharos-ask .pharos-dictate:is([data-state=listening],[data-state=stopping]):hover{color:var(--bad)!important}
 #pharos-ask .pharos-send svg,#pharos-ask .pharos-icon-control svg{width:17px;height:17px}
 #pharos-ask .pharos-send .pharos-stop-icon{display:none}
 #pharos-ask .pharos-send[data-action="stop"] .pharos-send-icon{display:none}
