@@ -322,6 +322,14 @@ func TestSessionOutcomesJudgeAgainWhenSessionsChange(t *testing.T) {
 	if label := f.labels()["first"]; label[0] != "changed_kept" || label[2] != "0" {
 		t.Fatalf("with a 1-day window: %v", label)
 	}
+	// A catalog opened without the configuration keeps the stored window,
+	// judging nothing again.
+	f.catalog.ReworkDays = 0
+	f.refresh()
+	var window int
+	if err := f.catalog.DB.QueryRow("SELECT rework_days FROM session_outcomes WHERE workspace_id='first'").Scan(&window); err != nil || window != 1 {
+		t.Fatalf("without the configuration: a %d-day window, %v", window, err)
+	}
 }
 
 func TestReadEditChanges(t *testing.T) {

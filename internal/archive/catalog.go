@@ -29,7 +29,8 @@ type Catalog struct {
 	reads              *sql.DB
 	RepositoryAliases  map[string]string
 	RepositorySeparate []string
-	// ReworkDays is the library's outcome_rework_days (outcomes.go).
+	// ReworkDays is the library's outcome_rework_days (outcomes.go); 0, for
+	// a catalog opened without the configuration, keeps the stored window.
 	ReworkDays    int
 	captureRootMu sync.RWMutex
 	captureRoot   string

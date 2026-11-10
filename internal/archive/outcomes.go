@@ -128,10 +128,20 @@ func (c *Catalog) ensureOutcomes() error {
 	return nil
 }
 
-// reworkDays is the library's rework window.
-func (c *Catalog) reworkDays() int {
+// reworkDays is the library's rework window: the catalog's, set from the
+// configuration, else the window stored with the last derivation (stored,
+// "version:days"), else the default. A catalog opened without the
+// configuration so keeps the window its service set, rather than deriving
+// every session again with the default and the service then deriving them
+// back.
+func (c *Catalog) reworkDays(stored string) int {
 	if c.ReworkDays > 0 {
 		return c.ReworkDays
+	}
+	if _, window, ok := strings.Cut(stored, ":"); ok {
+		if days, err := strconv.Atoi(window); err == nil && days > 0 {
+			return days
+		}
 	}
 	return defaultReworkDays
 }
@@ -377,8 +387,7 @@ func readOutcomeCalls(ctx context.Context, tx *sql.Tx, workspace string) ([]outc
 // last pass, and judges rework again for every session that edited one of
 // their files. A new rule version or rework window derives every session.
 func (c *Catalog) refreshSessionOutcomes(ctx context.Context) error {
-	days := c.reworkDays()
-	setting := outcomesVersion + ":" + strconv.Itoa(days)
+	days := 0
 	if err := c.writeTransaction(ctx, "session-outcomes-version", func(tx *sql.Tx) error {
 		// The tool rollup publishes mirrors (tool_mirror_workspaces) whole,
 		// so the workspaces whose membership changed since the last pass
@@ -396,8 +405,13 @@ func (c *Catalog) refreshSessionOutcomes(ctx context.Context) error {
 			}
 		}
 		var stored string
-		if err := tx.QueryRowContext(ctx, "SELECT COALESCE((SELECT value FROM meta WHERE key='session_outcomes_version'),'')").Scan(&stored); err != nil || stored == setting {
+		if err := tx.QueryRowContext(ctx, "SELECT COALESCE((SELECT value FROM meta WHERE key='session_outcomes_version'),'')").Scan(&stored); err != nil {
 			return err
+		}
+		days = c.reworkDays(stored)
+		setting := outcomesVersion + ":" + strconv.Itoa(days)
+		if stored == setting {
+			return nil
 		}
 		for _, statement := range []string{"INSERT OR IGNORE INTO session_outcome_dirty SELECT id FROM workspaces",
 			"INSERT OR IGNORE INTO session_outcome_dirty SELECT workspace_id FROM session_outcomes"} {
