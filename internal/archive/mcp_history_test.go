@@ -111,32 +111,6 @@ func TestMCPControlAndCallHistory(t *testing.T) {
 	if err := catalog.flushMCPHistory(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	history := get("/api/mcp/calls?limit=10")
-	if history.Code != 200 {
-		t.Fatalf("MCP calls: %d %s", history.Code, history.Body.String())
-	}
-	if strings.Contains(history.Body.String(), "must not be logged") {
-		t.Fatalf("history exposed unapproved arguments or response text: %s", history.Body.String())
-	}
-	var data map[string]any
-	if err := json.Unmarshal(history.Body.Bytes(), &data); err != nil {
-		t.Fatal(err)
-	}
-	items := data["items"].([]any)
-	if len(items) != 3 || items[0].(map[string]any)["status"] != "disabled" || data["stats"].(map[string]any)["failed_calls"] != float64(2) {
-		t.Fatalf("unexpected call history: %#v", data)
-	}
-	if len(data["tool_stats"].([]any)) != 2 {
-		t.Fatalf("missing per-tool history: %#v", data)
-	}
-	filtered := get("/api/mcp/calls?tool=search_conversations&status=disabled")
-	var filteredData map[string]any
-	if err := json.Unmarshal(filtered.Body.Bytes(), &filteredData); err != nil {
-		t.Fatal(err)
-	}
-	if filteredData["filtered_total"] != float64(1) || len(filteredData["items"].([]any)) != 1 {
-		t.Fatalf("MCP history filters did not narrow results: %#v", filteredData)
-	}
 	query := func(path, body string) map[string]any {
 		t.Helper()
 		request := queryFixtureHTTPRequest(http.MethodPost, path, strings.NewReader(body))
@@ -152,6 +126,18 @@ func TestMCPControlAndCallHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 		return result
+	}
+	history := query("/api/query/mcp_calls", `{"select":["id","tool_name","status","arguments_json","error_count"],"where":[],"orderBy":[{"field":"id","dir":"desc"}],"limit":10}`)
+	if encoded, _ := json.Marshal(history); strings.Contains(string(encoded), "must not be logged") {
+		t.Fatalf("history exposed unapproved arguments or response text: %s", encoded)
+	}
+	items, failed, tools := history["rows"].([]any), 0.0, map[string]bool{}
+	for _, item := range items {
+		failed += item.(map[string]any)["error_count"].(float64)
+		tools[item.(map[string]any)["tool_name"].(string)] = true
+	}
+	if history["total"] != float64(3) || len(items) != 3 || items[0].(map[string]any)["status"] != "disabled" || failed != 2 || len(tools) != 2 {
+		t.Fatalf("unexpected call history: %#v", history)
 	}
 	rows := query("/api/query/mcp_calls", `{"select":["id","tool_name","status","arguments_json","day","error_count","truncated"],"where":[{"field":"status","op":"=","value":"disabled"}],"orderBy":[{"field":"called_at","dir":"desc"}],"limit":10}`)
 	if rows["total"] != float64(1) || len(rows["rows"].([]any)) != 1 {

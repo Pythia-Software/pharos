@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -215,22 +216,133 @@ func TestDriveGoneNoticesMissingDirectory(t *testing.T) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	gone := driveGone(ctx, dir, 5*time.Millisecond)
-	select {
-	case <-gone:
-		t.Fatal("present directory reported gone")
-	case <-time.After(50 * time.Millisecond):
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gone := driveGone(ctx, dir, 5*time.Millisecond)
+		synctest.Wait()
+		select {
+		case <-gone:
+			t.Fatal("present directory reported gone")
+		default:
+		}
+		if err := os.Remove(dir); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-gone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("missing directory not noticed")
+		}
+	})
+}
+
+func TestDriveGoneVolumeObservations(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   directoryVolumeID
+		err  error
+	}{
+		{name: "changed identity", id: directoryVolumeID{device: 1}},
+		{name: "read failure", err: os.ErrNotExist},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const dir = "watched-directory"
+				polls := make(chan struct{})
+				calls := 0
+				override(t, &driveVolumeIdentity, func(path string) (directoryVolumeID, error) {
+					if path != dir {
+						t.Errorf("read path = %q; want %q", path, dir)
+					}
+					calls++
+					if calls == 1 {
+						return directoryVolumeID{}, nil
+					}
+					polls <- struct{}{}
+					if calls == 2 {
+						return directoryVolumeID{}, nil
+					}
+					return tc.id, tc.err
+				})
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				gone := driveGone(ctx, dir, time.Second)
+				waitPoll := func() {
+					t.Helper()
+					select {
+					case <-polls:
+					case <-time.After(2 * time.Second):
+						t.Fatal("watcher did not poll")
+					}
+					synctest.Wait()
+				}
+				waitPoll()
+				select {
+				case <-gone:
+					t.Fatal("equal identity reported gone")
+				default:
+				}
+				waitPoll()
+				select {
+				case <-gone:
+				default:
+					t.Fatal("changed identity or failed read not reported gone")
+				}
+				if calls != 3 {
+					t.Fatalf("identity reads = %d; want initial read and two polls", calls)
+				}
+			})
+		})
 	}
-	if err := os.Remove(dir); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-gone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("missing directory not noticed")
-	}
+}
+
+func TestDriveGoneInitialReadFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		override(t, &driveVolumeIdentity, func(string) (directoryVolumeID, error) {
+			calls++
+			return directoryVolumeID{}, errors.ErrUnsupported
+		})
+		// A zero interval would panic if a watcher were started after failure.
+		gone := driveGone(context.Background(), "unsupported-directory", 0)
+		synctest.Wait()
+		if gone == nil {
+			t.Fatal("initial failure returned a nil channel")
+		}
+		select {
+		case <-gone:
+			t.Fatal("initial failure reported disappearance")
+		default:
+		}
+		if calls != 1 {
+			t.Fatalf("identity reads = %d; want only initial read", calls)
+		}
+	})
+}
+
+func TestDriveGoneCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		override(t, &driveVolumeIdentity, func(string) (directoryVolumeID, error) {
+			calls++
+			return directoryVolumeID{}, nil
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gone := driveGone(ctx, "watched-directory", time.Second)
+		synctest.Wait()
+		cancel()
+		synctest.Wait()
+		select {
+		case <-gone:
+			t.Fatal("cancellation reported disappearance")
+		default:
+		}
+		if calls != 1 {
+			t.Fatalf("identity reads = %d; want only initial read", calls)
+		}
+	})
 }
 
 func TestParentGoneNoticesAnotherParent(t *testing.T) {

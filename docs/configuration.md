@@ -289,7 +289,8 @@ What it does, in order:
    matching index entries to rows, is something a page-for-page copy cannot
    break.
 4. **Copies `archive_root`** into `preserved/`, from where it points if it is
-   a symlink, keeping hard links (packages link their blobs) and verifying
+   a symlink, keeping hard links (packages link their blobs; where the
+   platform reports no link identity each file is copied) and verifying
    each file's size. Files already there with the same size are kept and
    linked like the rest. If `archive_root` is missing (its drive not mounted),
    nothing is copied and the summary says so; if it already is the library's
@@ -407,25 +408,49 @@ want the library brought up to date: it adds sources that appeared since, and
 captures and indexes only what changed.
 
 The app offers a guided setup after library configuration, and the first time
-a library is opened on another Mac. It first detects tools using application
-bundles and familiar data folders, then shows those tools selected as options.
-Undetected tools are under **Other tools**. Continuing checks the selected
-tools' conversation locations below. It never searches the
-rest of the home folder and never enters a folder that macOS guards with a
-permission prompt: Desktop, Documents, Downloads, iCloud Drive and other cloud
+a library is opened on another Mac. It first asks how to find the history:
+
+- **Look in the usual places** (recommended) checks the folders below for every
+  tool found here and lists what each holds. **Which places?** lists those
+  folders, from the provider registry.
+- **I'll tell Pharos where to look** asks which tools you use (**More tools**
+  holds TL1 and Conductor, which most people don't use), with each tool's usual
+  folder filled in to keep or change, and then checks only the folders named
+  there: not the usual places, not the variables that move them, and not the
+  count of new history in the usual places (`"only_locations": true`). A
+  folder chosen because it holds the history (Claude's `projects`, Zed's
+  `threads`, Cursor CLI's `chats`) is read as the folder above it. TL1's
+  registry names each project's `tl1.json`, which is read too.
+- **Import an export** adds a ChatGPT or Claude.ai export (below).
+
+Setup lists the tools in the registry's `Setup` order, Cursor and Cursor CLI as
+one tool. A tool marked `OfferWhenFound` (TL1, Conductor) is listed only when it
+is found on this Mac. Either way, Pharos never searches the rest of the home
+folder and never enters a folder that macOS guards with a permission prompt
+unless you name it: Desktop, Documents, Downloads, iCloud Drive and other cloud
 storage, other apps' containers, Mail, Messages, and other volumes.
 
 | Kind | Where Pharos looks |
 | --- | --- |
 | Claude Code | `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects`, `~/.config/claude/projects`, and any `~/.claude*/projects` (for example `~/.claude-work`) that holds transcripts |
 | Codex | `$CODEX_HOME` and `~/.codex`, when they have `sessions/` or `archived_sessions/` |
-| Antigravity | `~/.gemini/antigravity` (the app), `~/.gemini/antigravity-cli` (`agy`), `~/.gemini/antigravity-ide`, and any other `~/.gemini/antigravity*` folder with a `brain/` of conversations; each is its own source of kind `antigravity` |
+| Antigravity | `~/.gemini/antigravity` (the app), `~/.gemini/antigravity-cli` (`agy`), `~/.gemini/antigravity-ide`, and any other `~/.gemini/antigravity*` folder with a `brain/` of conversations except `~/.gemini/antigravity-backup`, a copy of an app's conversations; each is its own source of kind `antigravity` |
 | Conductor | `~/Library/Application Support/com.conductor.app`, when a database at its top level has session and message tables (only table names are read) |
 | TL1 | `~/.tl1/registry.json`, or for TL1 releases before it `~/.tl1/workspaces.json`; installations in a temporary directory or with missing files are skipped, as the TL1 adapter does |
-| ChatGPT | nothing on disk: export your data from ChatGPT and add a source for the folder holding `conversations.json` |
+| Copilot CLI | `~/.copilot`, or `COPILOT_HOME`, when it has a `session-state` folder; each `session-state/<id>/events.jsonl` (or an older release's `session-state/<id>.jsonl`) is a session |
+| OpenCode | `~/.local/share/opencode`, or `$XDG_DATA_HOME/opencode`; each session in its `opencode*.db` databases is a session |
+| OpenClaw | `~/.openclaw` or `$OPENCLAW_STATE_DIR`; native `agents/<agent>/agent/openclaw-agent.sqlite` databases and legacy `agents/<agent>/sessions/*.jsonl` transcripts |
+| Hermes Agent | `~/.hermes` or `$HERMES_HOME`; `state.db` and named `profiles/<name>/state.db` databases |
+| Cline | `~/.cline/data`, `CLINE_DATA_DIR`, or `$CLINE_DIR/data`, when it has a `sessions` folder; each `sessions/<id>/<id>.messages.json` is a session |
+| VS Code Copilot | the `User` folder of VS Code, VS Code Insiders, VSCodium or Positron under `~/Library/Application Support`; each chat session (`workspaceStorage/<hash>/chatSessions/<id>.jsonl`, an older release's `.json`, or a window without a folder's in `globalStorage/emptyWindowChatSessions`) is a session |
+| Cursor | `~/Library/Application Support/Cursor/User`; each composer with a message in `globalStorage/state.vscdb` is a session |
+| Cursor CLI | `~/.cursor`, when it has a chat (`chats/<hash>/<chat>/store.db`); each chat is a session |
+| Zed | `~/Library/Application Support/Zed`, when `threads/threads.db` holds a thread; each thread of Zed's agent is a session |
+| ChatGPT | nothing on disk: export your data from ChatGPT, then **Import an export** (or add a `chatgpt` source) for the downloaded ZIP, the folder it unzips to, or one of its conversation files |
+| Claude.ai | nothing on disk: export your data from Claude.ai, then **Import an export** (or add a `claude-ai` source) for the downloaded ZIP, its `conversations.json`, or the folder holding it |
 
 The app and its service do not inherit the shell's environment, so Pharos also
-reads `CLAUDE_CONFIG_DIR` and `CODEX_HOME` from the login shell (`$SHELL -l -i -c`,
+reads `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `XDG_DATA_HOME`, `CLINE_DATA_DIR`, `CLINE_DIR`, `OPENCLAW_STATE_DIR` and `HERMES_HOME` from the login shell (`$SHELL -l -i -c`,
 two-second limit, cached for ten minutes). This runs the shell's startup files;
 set `PHAROS_PROBE_SHELL=0` in the service's environment to skip it.
 
@@ -442,16 +467,16 @@ Conductor, installations for TL1), their size and date range, and:
 - Whether it is already configured, and as which source.
 
 The setup guide initially checks only tool presence, without parsing history,
-opening databases, or launching a shell. Detected tools are selected by default;
-you can exclude them or add undetected tools under **Other tools**. The next
-step checks only the selected tools and their relevant environment overrides. You can
-review discovered folders, exclude profiles, and check an additional folder.
-The review shows locations and estimated source-file size before **Add and
-capture** saves access and copies history. Checked locations become enabled
-sources and unchecked found locations become paused sources; enable those
-later in Settings → Sources. New tool support is available through the guide
-without automatically selecting it. The choice
-is written, atomically, to `hosts/<host-id>.toml` in the library:
+opening databases, or launching a shell. Looking in the usual places then
+checks the found tools and their relevant environment overrides, and lists
+their folders under **Found on this Mac**, with the tools not found named in
+one line. You can exclude folders, and **Add a folder Pharos didn't find**
+checks one more for any tool. The review shows locations, estimated
+source-file size and what each tool doesn't record (**What each tool records**
+has the whole table) before **Add and capture** saves access and copies
+history. Checked locations become enabled sources and unchecked found
+locations become paused sources; enable those later in Settings → Sources.
+The choice is written, atomically, to `hosts/<host-id>.toml` in the library:
 
 ```toml
 # Pharos sources for MacBook Air (user gbw).
@@ -486,8 +511,146 @@ service restarts; accepting in the panel reloads sources immediately.
 
 **Set up later** saves an empty host choice without discovering or capturing
 sources, so the guide does not interrupt the next launch. Settings → Sources
-names the Mac its sources belong to and offers **Configure sources on this Mac…**
-to revisit the guide, for example after installing another agent.
+lists each source with its tool and whether it is this Mac's or every Mac's,
+and offers **Look for sources…** (the usual places), **Add a folder…** (only
+folders you name) and **Import an export…**. Settings does not look in the
+usual places on its own. A source in this Mac's host file has **Remove…**,
+which deletes its block (`POST /api/sources/<name>/remove`); what was captured
+and indexed from it stays in the library. When the host source replaces a
+same-named one in `library.toml` (`replaces` in `GET /api/sources`), removing
+it brings that one back, as `library.toml` sets it up, and the confirmation
+says so. Sources in `library.toml` are removed there.
+
+**Import an export** checks that the ZIP, folder or file holds the export's
+conversations (a ZIP's listing or a folder's names; nothing is parsed) and adds
+it to this Mac's host file as an enabled source named for its kind
+(`POST /api/sources/import` with `{"kind":"chatgpt","path":"~/Downloads/….zip"}`),
+then captures it like any source. Importing the same file again adds nothing.
+An export in Downloads may make macOS ask to let Pharos read that folder.
+
+For **Claude.ai**, choose Claude.ai in **Import an export…** and supply the
+manifest JSON, a folder containing the downloaded category ZIPs, a legacy ZIP,
+or a conversation JSON file. Pharos opens a resumable collection report. Missing
+parts have browser download links; open them in the browser where you are signed
+in to Claude, keep the completed downloads beside the manifest, and choose
+**Check files again**. You can also name another folder or an exact downloaded
+file. **Import an export… → Claude.ai** lists recent jobs after a restart.
+
+Each file is verified before collection. ZIPs are checked to EOF, including CRCs;
+nested artifact file inventories are checked against their recorded sizes and
+SHA-256 values. Archive contents remain inside their ZIPs. Missing, corrupt,
+ambiguous and still-downloading files remain visible, and collected parts survive
+an interrupted run. Multiple matching browser downloads require choosing the
+intended file explicitly. A candidate older than the export timestamp is not
+selected automatically. Filename/date matches establish a candidate, not proof
+of account membership when Claude supplies no checksum.
+
+Pharos never downloads or keeps Claude's `light_metadata` category: the
+account's name, email address, phone number (`users.json`) and sign-in
+history (`login_history.json`). Those parts are listed as not kept and do not
+make an export incomplete. If another ZIP contains either file, as older
+single-ZIP exports do, the collected copy leaves it out; a ZIP with nothing
+else is not kept.
+
+**Capture and index conversations** uses the existing capture/index workflow.
+Projects, memory, artifact files and unknown ZIP categories are retained as raw
+export evidence; this importer currently indexes conversations. It preserves the
+existing account identity configuration and records native account UUIDs as
+metadata. It does not infer missing project associations or token usage. A set
+without a manifest has unknown completeness; an incomplete manifest remains
+incomplete even when its available conversations can be indexed. Later exports
+add snapshots to one stable source, and absent records do not delete history.
+Snapshots are ordered by the manifest's creation time, or without a manifest by
+the downloaded file's modification time, never by when Pharos collected it.
+
+**Importing Claude exports from Downloads.** The Settings → Sources switch
+**Import Claude exports from Downloads** is off by default
+and applies to this Mac and this library only. The setting and the watch's
+progress live in this Mac's private Application Support state beside the
+download links, so moving the library to another Mac never starts reading that
+Mac's Downloads. Turning it on needs macOS, where Pharos can open links.
+
+**Open download links in** chooses the default browser or one profile of an
+installed Chromium-family browser (Chrome, Brave, Edge, Vivaldi, Chromium).
+Pharos lists profiles from each browser's `Local State` file, and only after the
+watch is turned on. With several signed-in profiles, choose the one signed in to
+Claude: a link opened in another profile delivers nothing. Pharos remembers, per
+Claude account (the UUID in the export's links), the profile whose download
+actually arrived. That account's later exports open there, even if the general
+choice differs, so two Claude accounts in two profiles each keep their own.
+
+Request the export yourself: in Claude, open Settings → Privacy → Export data.
+When Claude emails you, download the manifest from its link into Downloads.
+While Pharos is running it then:
+
+1. lists the top level of `~/Downloads` every 15 minutes, 30 seconds after it
+   starts, and when you choose **Check Downloads now**. It opens only files
+   named like Claude's manifest (`manifest-<account-uuid>-….json`). A file counts
+   only if it parses as an export manifest with a creation time, every part is
+   named like `conversations-000.zip`, and every link has Claude's export shape
+   (`https://claude.ai/export/<account-uuid>/download/<token>`, nothing else).
+   Exports created more than 24 hours earlier are ignored, since their links
+   have expired. Other files in Downloads are never opened.
+2. starts an import job and collects any parts already downloaded.
+3. opens the next missing part's link in the chosen browser profile, in the
+   background (`open -g`), and checks every five seconds until that ZIP finishes
+   arriving in Downloads. Browser
+   copies such as `frames-000 (1).zip` match; files older than the export are
+   ignored, and among several matches the one downloaded within the links' 24
+   hours wins. Pharos records each link before opening it and never reopens one
+   on its own, because links may work only once.
+4. after the last part, captures and indexes the source (`claude-ai-imports`).
+
+The section lists recent exports with their state. If no file arrives within
+three minutes of opening a link (longer while a browser download is in
+progress), the export pauses and names the profile it used. **Try again in**
+reopens, one at a time, every link whose part has not been collected, in the
+profile you pick; this also resumes a stopped export. **Stop** ends the export
+at once, even mid-collection, keeping what was collected. Removing the manifest
+from Downloads stops its export too. An export whose links expire first is
+marked expired. The section keeps the 20 most recent finished exports. A busy library delays collection without
+pausing it. If macOS refuses access to Downloads, the section says so; allow it
+in System Settings → Privacy & Security → Files and Folders.
+
+The watch also appears through `GET /api/claude-imports` as `watch` (`enabled`,
+`available`, `folder`, `problem`, `browser`, `browsers`, `exports`).
+`POST /api/claude-imports/watch` takes `{"enabled": true|false}`, `{"browser": KEY}`
+(`""` is the default browser), `{"action": "check"}`, or
+`{"id": EXPORT_ID, "action": "retry"|"stop"}` with an optional `browser` for retry. The
+command-line `watch` below is separate and never opens links.
+
+The catalog-free command-line interface produces JSON:
+
+```sh
+pharos --config /path/to/library.toml claude-import collect /path/to/manifest.json
+pharos --config /path/to/library.toml claude-import status
+pharos --config /path/to/library.toml claude-import collect --job JOB_ID /path/to/downloaded/file.zip
+pharos --config /path/to/library.toml claude-import watch /path/to/claude-export-inbox
+```
+
+`collect` also accepts a folder or several ZIP/JSON paths. Put flags before paths;
+`--name NAME` chooses a different stable source collection. `collect` returns an
+error status when parts are missing while still printing the durable job. `watch`
+checks an explicitly selected folder every five seconds (`--interval 10s` changes
+this), collects new manifests and repairs their jobs when downloads arrive. Stop
+it with Ctrl-C. It requests no exports and performs no unattended authenticated
+website calls. Indexing continues through the normal enabled-source workflow.
+The authenticated local API exposes the same jobs through `POST /api/claude-imports`
+(`paths`, optional `id` and `name`), `GET /api/claude-imports`, and
+`GET /api/claude-imports?id=JOB_ID&name=NAME`. POST returns acceptance; poll the GET
+response's `run` and the saved job for completion. Closing the UI does not stop
+collection. `POST /api/claude-imports/cancel` requests cancellation.
+
+Collected snapshots and credential-free receipts live in
+`<capture_root>/.claude-imports/<host-id>/<source-name>/snapshots/`. Expiring download
+links and original URL-bearing manifests stay in the importing Mac's private
+Application Support state, outside captures and library backups. Moving the
+library to another Mac retains its data; download links may need the original
+manifest again. Default bounds are 10,000 input parts, 100,000 ZIP entries, 1 GiB
+per expanded member, 32 GiB expanded per ZIP, 16 GiB compressed per part, and
+64 GiB retained per named collection, with the normal free-space margin. Bounds
+fail visibly. Keep separate export snapshots in separate folders so identical
+provider filenames cannot silently select a different export.
 
 After adding sources the panel captures them onto the library straight away
 (see [Capture](#capture)), showing each source's files and bytes as they are
@@ -513,8 +676,10 @@ The API equivalents are `GET /api/probe/status` (cheap; includes
 `{"accept": ["claude"], "decline": ["codex"], "names": {"claude": "claude-mbp"}}`.
 The guided UI uses `GET /api/probe/status?discovery=none` and the lightweight
 `GET /api/probe/tools` presence check, then `POST /api/probe`
-with `{"kinds":["claude"],"locations":[]}`. The same `kinds` and `locations`
-are sent with approval, so revalidation stays within those choices. Empty
+with `{"kinds":["claude"],"locations":[]}`, or with `"only_locations": true`
+when you named the folders. The same request is sent with approval, so
+revalidation stays within those choices. `GET /api/providers` gives each
+tool's name, summary, folder hint, usual locations and variables. Empty
 `kinds` explicitly means no tools. Legacy requests and the CLI retain full
 discovery when that field is omitted.
 
@@ -524,7 +689,7 @@ copied into `archive.toml` by hand.
 
 Pharos has two verbs for keeping the library current: **capture** copies
 this Mac's source files into the library, and **index** makes conversations
-searchable. Settings → Sources keeps **Configure sources on this Mac**, source
+searchable. Settings → Sources keeps the ways to add sources, source
 configuration, and enable switches, with **Open Background Processing** linking to
 the controls. Settings → Background Processing shows what Pharos keeps current
 on its own, Frequently, Hourly and Daily, with each item's measured cost, and
@@ -614,7 +779,8 @@ All require macOS and Xcode Command Line Tools (`xcode-select --install`).
 
 | Command | Coverage and when to run | Other requirements |
 |---|---|---|
-| `macos/test/run-light.sh` | Native menu state, preferences, reopen/index/eject actions and update preference migration, skip/dismiss behavior, startup shutdown/recovery, process coordination and installation leases; after changing `MenuBar.swift`, `UpdateNotice.swift`, `PharosApp.swift` or `UpdateLifecycle.swift`. | A logged-in GUI session for AppKit. Disposable child processes and stubbed HTTP; no app build, production service, disk images or release keys. Downloads pinned Sparkle if uncached. |
+| `macos/test/run-light.sh` | Native menu state, preferences, reopen/index/eject actions and update preference migration, skip/dismiss behavior, startup shutdown/recovery, process coordination and installation leases; after changing `MenuBar.swift`, `UpdateNotice.swift`, `PharosApp.swift` or `UpdateLifecycle.swift`. |
+| `macos/test/dictation.sh` | Dictation session lifecycle (start, stop, cancel, replacement, time limit, denied microphone) with fake recorders, then a spoken file from `say` transcribed through the microphone's conversion and SpeechAnalyzer path; after changing `Dictation.swift`. | No microphone or GUI. Transcription needs macOS 26; the first run may download the speech model for the current language. | A logged-in GUI session for AppKit. Disposable child processes and stubbed HTTP; no app build, production service, disk images or release keys. Downloads pinned Sparkle if uncached. |
 | `macos/test/menu-bar.sh` | Just the native menu checks. | Same GUI requirement; optionally pass an output PNG path to save the menu icon. |
 | `macos/test/swift-harness.sh [PORT]` | App DiskArbitration handling, service logs, release, Quit/MCP cleanup, real update leases/reconnect refusal and the Eject flow; after changing `LibraryVolume.swift`, `Launch.swift` or eject behavior. | Go, Node.js/npm, Python 3 and rsync; dependency downloads for the app build. Builds from a temporary checkout copy, then creates a 300 MB APFS image. Default port: 18768. |
 | `macos/test/eject-release.sh [PORT]` | Service release during sync, forced detach, catalog integrity and sync recovery; after changing service shutdown or drive handling. | Go, Python 3, curl and sqlite3. Creates a 2 GB sparse APFS image. Default port: 18767. |
@@ -794,11 +960,22 @@ upload permissions keep their existing behavior.
 | Kind | Captured |
 | --- | --- |
 | `claude` | every `*.jsonl` under the path, including `<session>/subagents/**`, and project `sessions-index.json` title metadata |
-| `codex` | `*.jsonl` under `sessions/` and `archived_sessions/`, `rollout*` files, `session_index.jsonl` names, and snapshots of state databases with `threads.name` |
+| `codex` | `*.jsonl` and `*.jsonl.zst` under `sessions/` and `archived_sessions/`, `rollout*` files, `session_index.jsonl` names, and snapshots of state databases with `threads.name`. Codex compresses a rollout idle for a week to `.jsonl.zst` and deletes the plain file; capture copies the compressed file as it is, and while both forms exist only the one the index reads: the newer, or the plain one when they are as new. A compressed rollout keeps the plain file's identity (its path, the size its frame declares, and its mtime), so compression alone re-parses nothing |
 | `antigravity` | each conversation's `brain/<id>/.system_generated/logs/transcript_full.jsonl` (or `transcript.jsonl` when that is all there is), `annotations/*.pbtxt` titles, and snapshots of `conversation_summaries.db` and of each conversation's `conversations/<id>.db` (its model requests and token usage) |
 | `conductor` | a snapshot of each SQLite database that has session and message tables (not, for example, `cache.db`) |
 | `tl1` | the registry, then for each installation the adapter reads a snapshot of its database (`files/installations/<id>/`), its `transcripts/**/*.jsonl`, and procedural attempts' script logs (`<attempt>-script.log`, `-script.stderr.log`, `-script.stdout.log`) |
-| `canonical`, `tl1-export`, `chatgpt-export` | the export file, or the directory's `*.json` (`conversations.json` for ChatGPT) |
+| `canonical`, `tl1-export` | the export file, or the directory's `*.json` |
+| `chatgpt`, `chatgpt-export` | the export's ZIP whole, or its conversation files: the numbered `conversations-NNN.json` newer exports are split into, else `conversations.json`. Not the account files or images beside them |
+| `claude-ai` | a chosen ZIP or conversations file, a folder's top-level conversations files (never its other ZIPs), or every verified part and the credential-free inventories of a managed export collection, whole |
+| `copilot` | each session's `events.jsonl` and `workspace.yaml` under `session-state` (or an older release's flat `<id>.jsonl`); not `session-store.db`, Copilot's own index, nor its config, logs or file snapshots |
+| `opencode` | a snapshot of each `opencode*.db` holding only its session, message, part and project tables: OpenCode keeps credentials, accounts and settings in the same database, so a snapshot is a copy of those tables, row by row, and nothing else is ever written to the capture, even by one that stops part way. With `sqlite_record_capture`, the rows copied before indexing leave out the same tables. A session deleted in OpenCode before its last capture was indexed is indexed from an older snapshot that holds it |
+| `openclaw` | selective snapshots of native session and transcript tables, including embedded compressed payloads and canonical reset/deletion archive blobs before file publication; referenced cold archives and, for legacy JSONL, `sessions.json`. Authentication, configuration, workspace files and memory indexes are excluded |
+| `hermes` | selective snapshots of `sessions`, `messages` and `session_model_usage`, including each named profile. Authentication, configuration, memory, trajectories and unrelated runtime tables are excluded |
+| `cline` | each session's `<id>.json` and `<id>.messages.json` under `sessions`; not its compacted context (`<id>.compaction.json`), nor Cline's settings (which hold provider credentials), index database or checkpoints |
+| `vscode-copilot` | each chat session's file under `workspaceStorage/<hash>/chatSessions` or `globalStorage/emptyWindowChatSessions`, and its window's `workspace.json`; not a session's older `.json` beside its journal, nor the rest of the user folder: settings, `state.vscdb` databases and extension storage, which can hold other extensions' secrets |
+| `cursor` | a snapshot of `globalStorage/state.vscdb` and of each window's `state.vscdb`, and each window's `workspace.json`. A snapshot is a copy, row by row, of only the composers, their messages and headers, and a window's list of its composers, with each composer's encryption keys and encrypted state left out: Cursor's sign-in tokens (`cursorAuth/*`), settings and every other row are never written to the capture, even by one that stops part way. No rows are copied before indexing, even with `sqlite_record_capture`, since only a snapshot leaves them out; rows that option exports come from the snapshot. A composer deleted in Cursor before its last capture was indexed is indexed from an older snapshot that holds it |
+| `cursor-cli` | a snapshot of each chat's `store.db` under `chats`, and its `meta.json`. A snapshot is a copy, row by row, of the chat's blobs and of only the metadata Pharos reads (its ID, latest root, name, start, mode and model), so never its encryption key (`blobEncryptionKey`); nothing else is ever written to the capture, even by one that stops part way, and no rows are copied before indexing. Not the rest of `~/.cursor`: the CLI's sign-in (`cli-config.json`), settings, projects and extensions. A chat deleted before its last capture was indexed is indexed from the capture that holds it |
+| `zed` | a snapshot of `threads/threads.db` holding only its `threads` table, copied row by row, so tables a later release adds are left out; not the rest of Zed's data folder: its settings, extensions and other databases. With `sqlite_record_capture`, rows are also exported from the threads table before indexing. A thread deleted in Zed before its last capture was indexed is indexed from an older snapshot, with the rest of its group |
 
 **Incremental and interruption-safe.** A file whose size and mtime match the
 manifest, and whose captured copy is still intact, is skipped. Anything else is
@@ -933,7 +1110,7 @@ conversations (a session with its subagents) that changed since they were last
 indexed; `total_conversations` is that count and `done_conversations` how many
 the run has handled. `progress` (0 to 1, `null` while counting or with nothing
 to measure) is what the progress bar shows: conversations handled, with each
-source that cannot be counted (a whole-file kind such as TL1, ChatGPT or a
+source that cannot be counted (a whole-file kind such as TL1, ChatGPT, Claude.ai or a
 canonical export, or a capture that will not open) as one step of its own, so
 it does not take the count from the others. `hosts` follows: each
 captured host's `id`, `label`, `user`, `current` (this Mac), and `sources[]` with
@@ -1025,7 +1202,7 @@ a freshly captured 8.7 GB database with 1.7 million messages, against 7 minutes
 to parse every session (15 with the Git lookups a live sync makes). The
 per-record digest still decides whether anything is written, and a capture
 older than what that Mac already indexed is not even parsed where its part state
-says so. Canonical, ChatGPT and TL1 sources are still parsed whole when their
+says so. Canonical, ChatGPT, Claude.ai and TL1 sources are still parsed whole when their
 fingerprint changes. Part and copy versions raised the catalog schema version to
 6: a build without them would sync around that state, so older builds refuse
 the catalog. The tool ledger, message senders, human authorship, the TL1
@@ -1200,7 +1377,11 @@ were).
   just copied or checked (matched by device and inode, not by name, because
   HFS+ and exFAT store accented and Korean names decomposed) or if the library
   still has a file at the name DEST lists it under; macOS's `._` files beside
-  kept files on exFAT are kept too. A part that could not be read completely,
+  kept files on exFAT are kept too. An entry in DEST whose identity cannot be
+  read is kept, a folder with everything in it, and a part with a file the run
+  accounts for but could not identify is not pruned at all (with a warning).
+  Where the platform reports no file identities, hard-linked files are copied
+  separately and nothing is pruned. A part that could not be read completely,
   whose source is missing, or that lists no files at all is never pruned (the
   last is reported as a warning); nor is anything where the library now has a
   symbolic link.

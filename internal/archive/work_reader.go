@@ -40,6 +40,10 @@ const readerMessageColumns = "id,native_id,role,kind,model,effort,text,raw_text,
 // WorkOverview is the workspace detail page's first request: everything but
 // the messages, plus what the page used to derive by scanning all of them.
 func (c *Catalog) WorkOverview(id string) (map[string]any, error) {
+	return c.workOverviewWithPeers(id, false)
+}
+
+func (c *Catalog) workOverviewWithPeers(id string, includeUncertain bool) (map[string]any, error) {
 	result, err := c.workDetail(id, false)
 	if err != nil || result == nil {
 		return result, err
@@ -62,6 +66,22 @@ func (c *Catalog) WorkOverview(id string) (map[string]any, error) {
 		return nil, err
 	}
 	if result["files"], err = c.workFileTargets(id); err != nil {
+		return nil, err
+	}
+	// A session that only committed, through a shell, has commits but no
+	// file targets; the page's Files and commits section shows them too.
+	var linked int
+	if err := c.reader().QueryRow(`SELECT COUNT(*) FROM session_commit_links WHERE workspace_id=?`, id).Scan(&linked); err != nil {
+		return nil, err
+	}
+	result["linked_commits"] = linked
+	// Related top-level work (peer_reader.go).
+	peers, err := c.workPeers(context.Background(), id)
+	if err != nil {
+		return nil, err
+	}
+	result["peers"] = peers
+	if result["peer_conversations"], err = c.peerConversations(context.Background(), peers, includeUncertain); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -125,6 +145,12 @@ func (c *Catalog) workFileTargets(workspaceID string) ([]map[string]any, error) 
 // such messages carry text_clipped/raw_clipped and are fetched whole with
 // MessageOriginal when the reader expands them.
 func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[string]any, error) {
+	return c.WorkConversationContext(context.Background(), workspaceID, conversationID)
+}
+
+// WorkConversationContext is WorkConversation stopping with ctx (the
+// request), including the freshness reads of its labels and events.
+func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conversationID string) (map[string]any, error) {
 	rows, err := queryMaps(c.reader(), "SELECT * FROM conversations WHERE id=? AND workspace_id=?", conversationID, workspaceID)
 	if err != nil || len(rows) == 0 {
 		return nil, err
@@ -138,12 +164,17 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	attachLabels, labelsSummary, err := c.messageLabelsAttacher(conversationID)
+	attachLabels, labelsSummary, err := c.messageLabelsAttacherContext(ctx, conversationID, nil)
 	if err != nil {
 		return nil, err
 	}
 	// Agent events (agent_events.go).
-	attachEvents, eventsSummary, err := c.agentEventsAttacher(conversationID)
+	attachEvents, eventsSummary, linkEvents, err := c.agentEventsAttacherContext(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	// Hand-offs to and from related work (peer_reader.go).
+	attachPeers, err := c.messagePeerAttacher(conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -151,15 +182,23 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 	// and clipping a row. Do that before retaining it, rather than keeping every
 	// original output alive until the entire conversation has been read.
 	previewRows := len(sessions) > 0
+	childCalls, err := storedChildUsageCalls(c.reader(), conversationID)
+	if err != nil {
+		return nil, err
+	}
 	prepare := func(message map[string]any) {
+		if firstString(message["kind"]) == "delegation_result" && childCalls[firstString(message["call_id"])] {
+			message["usage_in_child_conversation"] = true
+		}
 		attach(message)
 		attachLabels(message)
 		attachEvents(message)
+		attachPeers(message)
 		if previewRows {
 			clipReaderMessage(message)
 		}
 	}
-	messages, err := queryMapsTransformContext(context.Background(), c.reader(), "SELECT "+readerMessageColumns+",source_order FROM messages WHERE conversation_id=?", prepare, conversationID)
+	messages, err := queryMapsTransformContext(ctx, c.reader(), "SELECT "+readerMessageColumns+",source_order FROM messages WHERE conversation_id=?", prepare, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +223,7 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 	for _, message := range messages {
 		delete(message, "source_order")
 	}
+	linkEvents(messages)
 	if labels, err := labelsSummary(); err != nil {
 		return nil, err
 	} else if labels != nil {

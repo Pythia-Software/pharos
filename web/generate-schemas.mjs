@@ -1,3 +1,4 @@
+import { generateScatterMetrics } from "./generate-scatter-metrics.mjs";
 import { readdirSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const check = process.argv.includes('--check');
 const temp = mkdtempSync(join(tmpdir(), 'pharos-schemas-'));
 try {
+  await generateScatterMetrics(check);
   for (const name of readdirSync(resolve(root, 'schemas')).filter(name => name.endsWith('.schema.json')).sort()) {
     const source = resolve(root, 'schemas', name);
     const destination = resolve(root, 'internal/archive', `${name.replace('.schema.json', '')}_schema_generated.go`);

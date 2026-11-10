@@ -23,10 +23,13 @@ import (
 // transfer catalog also preserves conflicting revisions as evidence.
 var transferHistoryTables = []string{
 	"repositories", "hosts", "machines", "host_machines", "pull_requests", "workspaces", "workspace_delivery_inputs", "work_items", "conversations", "origin_observations", "messages",
-	"agent_sessions", "agent_session_usage", "agent_session_messages", "message_authorship", "message_authorship_spans", "reasoning_extraction_state", "conversation_launches", "conversation_identity_links", "model_requests", "tool_calls", "tool_commands", "tool_urls",
+	"agent_sessions", "agent_session_usage", "agent_session_token_evidence", "agent_session_messages", "message_authorship", "message_authorship_spans", "reasoning_extraction_state", "conversation_launches", "conversation_identity_links", "model_requests", "tool_calls", "tool_commands", "tool_urls",
 	"skill_usages", "conversation_instructions", "task_attempts", "handoffs", "change_sets", "change_files",
 	"work_pr_links", "metrics", "metric_ledger", "workspace_sightings", "conversation_sightings", "copy_versions", "copy_evidence", "source_evidence",
 	"declared_native_aliases", "conversation_group_membership", "conversation_parent_refs", "ask_native_sessions", "protections", "activity_events", "receipts", "mcp_calls",
+	// Typed execution evidence: an adapter's claims (Cursor copies and echoes)
+	// were retained before it filtered and cannot be derived from the rows.
+	"execution_claims", "execution_evidence_state",
 }
 
 type transferFile struct {
@@ -158,6 +161,8 @@ func historyDigest(ctx context.Context, db sqlReader) (string, error) {
 // History tables without rowids use their declared compound primary key.
 func historyOrder(table string) string {
 	switch table {
+	case "agent_session_token_evidence":
+		return "agent_session_id,message_id,scope"
 	case "agent_session_usage":
 		return "agent_session_id,usage_hour,model,effort,attribution"
 	case "work_pr_links":
@@ -278,7 +283,7 @@ func copyVerified(ctx context.Context, source, target string) (transferFile, err
 		}
 	}
 	if err == nil {
-		err = out.Sync()
+		err = syncToDrive(out)
 	}
 	if e := out.Close(); err == nil {
 		err = e
@@ -308,13 +313,20 @@ func copyVerified(ctx context.Context, source, target string) (transferFile, err
 	return transferFile{SHA256: digest, Size: size}, nil
 }
 
-func retainedTree(ctx context.Context, source, target, label string, skipImports bool) ([]transferFile, error) {
-	files := []transferFile{}
-	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
-		return files, nil
+// Discovery and copying share the evidence boundary. A preflight must never
+// overlook a file that transfer would preserve, or mistake locks for history.
+func walkRetainedTree(ctx context.Context, source string, skipImports bool, visit func(string, fs.DirEntry) error) error {
+	if source == "" {
+		return nil
 	}
-	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
+	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
@@ -338,6 +350,13 @@ func retainedTree(ctx context.Context, source, target, label string, skipImports
 		if entry.Name() == ".delivered.json" || entry.Name() == "indexed.json" || strings.HasSuffix(entry.Name(), ".lock") || strings.HasSuffix(entry.Name(), ".partial") || strings.HasSuffix(entry.Name(), captureTempSuffix) {
 			return nil
 		}
+		return visit(path, entry)
+	})
+}
+
+func retainedTree(ctx context.Context, source, target, label string, skipImports bool) ([]transferFile, error) {
+	files := []transferFile{}
+	err := walkRetainedTree(ctx, source, skipImports, func(path string, _ fs.DirEntry) error {
 		rel, err := filepath.Rel(source, path)
 		if err != nil {
 			return err
@@ -382,36 +401,52 @@ func sanitizeHistory(ctx context.Context, path string) error {
 	if _, err = db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
 		return err
 	}
+	// A snapshot carries hundreds of derived schema objects. Drop them in
+	// one transaction instead of creating and committing a rollback journal
+	// for each object, including when the retained history is only a few rows.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for _, row := range rows {
 		kind, name := firstString(row["type"]), firstString(row["name"])
 		if kind == "table" {
 			continue
 		}
-		if _, err = db.Exec("DROP " + strings.ToUpper(kind) + " IF EXISTS " + quotedIdentifier(name)); err != nil {
+		if _, err = tx.ExecContext(ctx, "DROP "+strings.ToUpper(kind)+" IF EXISTS "+quotedIdentifier(name)); err != nil {
 			return err
 		}
 	}
 	// Drop virtual tables before their automatically managed shadow tables.
 	for _, row := range rows {
 		if strings.HasPrefix(strings.ToUpper(firstString(row["sql"])), "CREATE VIRTUAL TABLE") {
-			if _, err = db.Exec("DROP TABLE IF EXISTS " + quotedIdentifier(firstString(row["name"]))); err != nil {
+			if _, err = tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+quotedIdentifier(firstString(row["name"]))); err != nil {
 				return err
 			}
 		}
 	}
-	remaining, err := queryMaps(db, `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+	remaining, err := queryMapsContext(ctx, tx, `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
 	if err != nil {
 		return err
 	}
 	for _, row := range remaining {
 		name := firstString(row["name"])
 		if !keep[name] {
-			if _, err = db.Exec("DROP TABLE " + quotedIdentifier(name)); err != nil {
+			if _, err = tx.ExecContext(ctx, "DROP TABLE "+quotedIdentifier(name)); err != nil {
 				return err
 			}
 		}
 	}
-	if _, err = db.Exec(`DELETE FROM meta WHERE key<>'schema_version'; VACUUM`); err != nil {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM meta WHERE key<>'schema_version'`); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	// VACUUM cannot run inside the transaction. It removes freed pages that
+	// may still contain the private state removed above.
+	if _, err = db.ExecContext(ctx, "VACUUM"); err != nil {
 		return err
 	}
 	return syncFile(path)
@@ -486,6 +521,10 @@ var transferReferences = map[string]string{
 	"result_message_id": "messages", "child_conversation_id": "conversations",
 	"left_id": "conversations", "right_id": "conversations",
 	"source_conversation_id": "conversations", "source_message_id": "messages", "work_id": "workspaces", "child_id": "conversations",
+	// A model request's last usage event (its first is source_message_id).
+	"final_message_id": "messages",
+	// A skill usage's evidence and the message holding its body.
+	"evidence_message_id": "messages", "body_message_id": "messages",
 }
 
 func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
@@ -609,13 +648,27 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	// usage buckets. Replace its membership/usage and prune obsolete derived
 	// entities before importing; divergent unions keep their existing facts.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM agent_session_messages WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id IN (SELECT id FROM delivered_conversations));
- DELETE FROM agent_session_usage WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id IN (SELECT id FROM delivered_conversations));`); err != nil {
+ DELETE FROM agent_session_usage WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id IN (SELECT id FROM delivered_conversations));
+ DELETE FROM agent_session_token_evidence WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id IN (SELECT id FROM delivered_conversations));`); err != nil {
 		return err
 	}
 	for _, table := range []string{"agent_sessions", "skill_usages", "tool_calls", "model_requests"} {
 		if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE conversation_id IN (SELECT id FROM delivered_conversations) AND id NOT IN (SELECT id FROM incoming_"+table+")"); err != nil {
 			return err
 		}
+	}
+	// An accepted copy's execution claims are its writer's: claims it no
+	// longer holds go, as its other derived entities do. Divergent unions
+	// keep both sides' claims (a non-writer never retracts).
+	if _, err = tx.ExecContext(ctx, `DELETE FROM execution_claims WHERE conversation_id IN (SELECT id FROM delivered_conversations)
+ AND EXISTS(SELECT 1 FROM incoming_execution_evidence_state s WHERE s.conversation_id=execution_claims.conversation_id)
+ AND NOT EXISTS(SELECT 1 FROM incoming_execution_claims s WHERE s.conversation_id=execution_claims.conversation_id AND s.claim_key=execution_claims.claim_key)`); err != nil {
+		return err
+	}
+	// The imported tool ledger rows replace this library's, whose fingerprints
+	// no longer describe them.
+	if _, err = tx.ExecContext(ctx, "DELETE FROM tool_ledger_inputs WHERE conversation_id IN (SELECT id FROM delivered_conversations)"); err != nil {
+		return err
 	}
 	// Integer row IDs are destination-local. Replace per-workspace metrics only
 	// when the source owns that revision; union-derived totals are rebuilt below.
@@ -760,6 +813,43 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	for _, row := range rows {
 		if err = rederiveWorkspace(tx, firstString(row["id"]), merged); err != nil {
 			return fmt.Errorf("rebuild imported workspace: %w", err)
+		}
+	}
+	// Replies the other library counted may be copies of this one's, and the
+	// reverse (claude_usage_copies.go).
+	for _, row := range rows {
+		workspaceID := firstString(row["id"])
+		var kind string
+		if err = tx.QueryRowContext(ctx, "SELECT source_kind FROM workspaces WHERE id=?", workspaceID).Scan(&kind); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		var claude bool
+		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM conversations WHERE workspace_id=? AND provider='claude')", workspaceID).Scan(&claude); err != nil {
+			return err
+		}
+		if !claude {
+			continue
+		}
+		conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspaceID)
+		if err != nil {
+			return err
+		}
+		if kind == "claude" {
+			if err = repairClaudeUsageCopies(ctx, tx, workspaceID, conversations, ids); err != nil {
+				return fmt.Errorf("settle imported Claude usage: %w", err)
+			}
+			continue
+		}
+		// Another library's TL1 runs may be stored without the advisor
+		// records their replies hold.
+		changed, err := backfillClaudeAdvisorUsage(tx, conversations, ids)
+		if err != nil {
+			return err
+		}
+		if len(changed) > 0 {
+			if err = rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, changed); err != nil {
+				return err
+			}
 		}
 	}
 	messages, err := queryMaps(tx, "SELECT id FROM incoming_messages")
@@ -1125,7 +1215,7 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots", "query_table_computed_columns", "sync_settings", "background_settings", "background_temporary_cadences", "repository_checkouts", "automatic_source_states",
 	"cloud_destinations", "cloud_backup_runs", "cloud_backup_schedules", "library_size_history",
 	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
-	"safety_state", "safety_cart", "safety_handoffs",
+	"safety_state", "safety_cart", "safety_handoffs", "fix_state", "fix_cart", "fix_handoffs",
 	"source_states", "source_record_states", "source_item_states", "source_terminal_states", "sync_generations", "hosts", "protections", "repository_retirements", "library_delivery_checkpoints", "library_workspace_delivery_checkpoints"}
 
 func cleanupDeliveredHistory(ctx context.Context, source Config, receipt libraryTransferReceipt) error {

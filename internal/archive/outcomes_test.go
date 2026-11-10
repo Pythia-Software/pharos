@@ -206,6 +206,10 @@ func TestSessionOutcomeLabels(t *testing.T) {
 		f.session(id, "claude")
 	}
 	f.session("chat", "chatgpt-export")
+	f.session("web-chat", "claude-ai")
+	// Any provider that records tool calls in a working folder, by its
+	// declared capabilities.
+	f.session("quiet", "zed")
 	execTx(t, f.catalog.DB, `INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status,started_at)
 		VALUES('read','research','research-c',1,'claude','tool','Read','read','ok','`+daysAgo(30)+`')`)
 	f.edit("kept", "/notes/kept.md", "", "", 60, "", code("kept", 0, 5))
@@ -250,9 +254,9 @@ func TestSessionOutcomeLabels(t *testing.T) {
 	f.refresh()
 	labels := f.labels()
 	for id, want := range map[string]string{
-		"chat": "unknown", "research": "no_changes", "kept": "changed_kept", "recent": "changed_recent", "reworked": "reworked", "reworker": "changed_kept",
+		"chat": "unknown", "web-chat": "unknown", "quiet": "no_changes", "research": "no_changes", "kept": "changed_kept", "recent": "changed_recent", "reworked": "reworked", "reworker": "changed_kept",
 		"light": "changed_kept", "continued": "changed_kept", "slow": "changed_kept", "mirrored": "changed_kept", "tree-a": "reworked", "rewritten": "reworked",
-		"opaque": "changed_kept", "patched": "changed_kept", "deleted": "reworked",
+		"opaque": "unknown", "inline": "unknown", "patched": "changed_kept", "deleted": "reworked",
 	} {
 		if labels[id][0] != want {
 			t.Errorf("%s: %s, want %s (%s)", id, labels[id][0], want, labels[id][1])
@@ -261,10 +265,10 @@ func TestSessionOutcomeLabels(t *testing.T) {
 	for id, want := range map[string]string{
 		"chat":      "This source records no tool calls, so its changes are unknown.",
 		"research":  "No files edited (transcript).",
-		"reworked":  "Later sessions removed 8 of the 12 lines it added within 14 days (transcript).",
-		"light":     "3 files changed; later sessions removed 5 of the 300 lines it added within 14 days (transcript).",
-		"continued": "1 file changed; no later session removed its lines within 14 days (transcript).",
-		"rewritten": "Later sessions removed 8 of the 10 lines it added within 14 days (transcript).",
+		"reworked":  "Later workspaces removed 8 of the 12 lines it added within 14 days (transcript).",
+		"light":     "3 files changed; later workspaces removed 5 of the 300 lines it added within 14 days (transcript).",
+		"continued": "1 file changed; no later workspace removed its lines within 14 days (transcript).",
+		"rewritten": "Later workspaces removed 8 of the 10 lines it added within 14 days (transcript).",
 		"opaque":    "1 file changed; its edits could not be read line by line, so rework was not judged (transcript).",
 		"inline":    "1 file changed; its edits could not be read line by line, so rework was not judged (transcript).",
 		"recent":    "1 file changed; rework can be judged after " + time.Now().UTC().Add(13*24*time.Hour).Format("2006-01-02") + " (transcript).",
@@ -333,6 +337,14 @@ func TestSessionOutcomesJudgeAgainWhenSessionsChange(t *testing.T) {
 	if label := f.labels()["first"]; label[0] != "changed_kept" || label[2] != "0" {
 		t.Fatalf("with a 1-day window: %v", label)
 	}
+	// A catalog opened without the configuration keeps the stored window,
+	// judging nothing again.
+	f.catalog.ReworkDays = 0
+	f.refresh()
+	var window int
+	if err := f.catalog.DB.QueryRow("SELECT rework_days FROM session_outcomes WHERE workspace_id='first'").Scan(&window); err != nil || window != 1 {
+		t.Fatalf("without the configuration: a %d-day window, %v", window, err)
+	}
 }
 
 func TestReadEditChanges(t *testing.T) {
@@ -384,6 +396,23 @@ func TestReadEditChanges(t *testing.T) {
 	same("between edges removed", change.Removed, "middle := originalValue")
 	change = one(map[string]any{"file_path": "/a.go", "old_string": "}\n\tfirst := originalValue\n", "new_string": "}\n\tfirst := replacementValue\n"}, "/a.go")
 	same("whole line added", change.Added, "first := replacementValue")
+	// A line the same on both sides is unchanged, also when it is a side's
+	// only line; a changed line at the very end may still be partial.
+	for _, edit := range [][2]string{
+		{`import "fmt"`, "import \"fmt\"\nimport \"strings\""},
+		{"func Anchor() {\n\tdeletedLine()", "func Anchor() {"},
+		{"first := originalValue\n\tsecond := originalValue", "inserted := replacementValue\n\tfirst := originalValue\n\tsecond := originalValue"},
+	} {
+		change = one(map[string]any{"file_path": "/a.go", "old_string": edit[0], "new_string": edit[1]}, "/a.go")
+		if !change.Partial || len(change.Added) != 0 || len(change.Removed) != 0 {
+			t.Errorf("an unchanged line counted, in %q -> %q: %+v", edit[0], edit[1], change)
+		}
+	}
+	change = one(map[string]any{"file_path": "/a.go", "old_string": "import \"fmt\"\n)", "new_string": "import \"fmt\"\nimport \"strings\"\n)"}, "/a.go")
+	if change.Partial || len(change.Removed) != 0 {
+		t.Errorf("a line between unchanged ones: %+v", change)
+	}
+	same("between unchanged lines added", change.Added, `import "strings"`)
 
 	change = one(map[string]any{"file_path": "/a.go", "edits": []any{map[string]any{"old_string": "first line here", "new_string": "first line there"}, map[string]any{"old_string": "", "new_string": "another line"}}}, "/a.go")
 	same("multi-edit added", change.Added, "another line")
@@ -419,6 +448,15 @@ func TestReadEditChanges(t *testing.T) {
 		if *edits[0].Added != 2 || *edits[0].Removed != 1 || *edits[1].Added != 1 || !edits[3].Change.Rewrite || len(edits[3].Change.Added) != 0 {
 			t.Fatalf("%s counts and deletion: %+v", name, edits)
 		}
+	}
+	// A script may apply several patches, and a file's lines go on past its
+	// end-of-file mark.
+	script := "text(await tools.apply_patch(" + fmt.Sprintf("%q", "*** Begin Patch\n*** Update File: /repo/f.go\n@@\n+first line of f\n*** End of File\n@@\n+second line of f\n*** End Patch") +
+		"));\ntext(await tools.apply_patch(" + fmt.Sprintf("%q", "*** Begin Patch\n*** Add File: /repo/g.go\n+a line of file g\n*** End Patch") + "))"
+	if edits := read(script, "/repo/f.go"); len(edits) != 2 || edits[0].Path != "/repo/f.go" || edits[1].Path != "/repo/g.go" || *edits[0].Added != 2 {
+		t.Fatalf("two patches in a script: %+v", edits)
+	} else {
+		same("two patches added", edits[0].Change.Added, "first line of f\nsecond line of f")
 	}
 	// Without the call's own file, a relative name cannot be placed.
 	if edits := read(patch, "/elsewhere/x.go"); len(edits) != 1 || edits[0].Path != "/repo/src/b.go" {
@@ -491,10 +529,12 @@ func TestSessionOutcomesReadCommitsFromToolOutput(t *testing.T) {
 	execTx(t, f.catalog.DB,
 		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES
 			('result','work-c','result','tool','tool_result','{"content":"[main 0123abc] Fix the parser\n 1 file changed","is_error":false}','x','h'),
-			('pushed','work-c','pushed','tool','tool_result','{"content":[{"type":"text","text":"To github.com:acme/app.git\n   0123abc..4567def  main -> main\n"}]}','x','h')`,
+			('pushed','work-c','pushed','tool','tool_result','{"content":[{"type":"text","text":"To github.com:acme/app.git\n   0123abc..4567def  main -> main\n"}]}','x','h'),
+			('rejected','work-c','rejected','tool','tool_result','{"content":"[main 89abcde] Tidy\n ! [rejected]        main -> main (fetch first)","is_error":true}','x','h')`,
 		`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,command,command_category,status,started_at,result_message_id)
 			VALUES('commit','work','work-c',99,'claude','tool','Bash','command','git commit -am "Fix the parser"','vcs','ok','`+at+`','result'),
-			('push','work','work-c',100,'claude','tool','Bash','command','git push','vcs','ok','`+at+`','pushed')`)
+			('push','work','work-c',100,'claude','tool','Bash','command','git push','vcs','ok','`+at+`','pushed'),
+			('chained','work','work-c',101,'claude','tool','Bash','command','git commit -am Tidy && git push','vcs','error','`+at+`','rejected')`)
 	f.refresh()
 	var commits string
 	var verification sql.NullString
@@ -502,8 +542,9 @@ func TestSessionOutcomesReadCommitsFromToolOutput(t *testing.T) {
 	if err := f.catalog.DB.QueryRow("SELECT commits_json,verification,pushed FROM session_outcomes WHERE workspace_id='work'").Scan(&commits, &verification, &pushed); err != nil {
 		t.Fatal(err)
 	}
-	// The commit keeps the place of the call that printed it.
-	if commits != `[{"hash":"0123abc","branch":"main","at":"`+at+`","conversation":"work-c"}]` || verification.String != "not_run" || pushed != 1 {
+	// A chained push that failed leaves the commit before it made; each
+	// commit keeps the place of the call that printed it.
+	if commits != `[{"hash":"0123abc","branch":"main","at":"`+at+`","conversation":"work-c"},{"hash":"89abcde","branch":"main","at":"`+at+`","conversation":"work-c"}]` || verification.String != "not_run" || pushed != 1 {
 		t.Fatalf("facts: %s %v %d", commits, verification, pushed)
 	}
 	// A commit recorded only in the transcript is a Tier 1 fact; the label

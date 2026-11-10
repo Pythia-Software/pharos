@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import {messageLabelFingerprintCache} from '../../../src/message-label-results-model';
+import {messageLabelFingerprintCache,messageLabelRibbonNotes} from '../../../src/message-label-results-model';
 import {test} from 'node:test';
-import {EMPTY_QUERY,loadSchema,readFieldValue,toServerQuery,toQueryRequestV3,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
+import {EMPTY_QUERY,loadSchema,readFieldValue,selectedFields,toServerQuery,toQueryRequestV3,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
 import {withFingerprintColumn} from '../../../src/fingerprint-columns';
 import {schemaDocuments} from '../../../src/schema-documents';
 
@@ -19,7 +19,12 @@ test('fingerprint columns request stable entity identities even as the only sele
   assert.deepEqual(request.diagnostics??[],[],dataset);
   assert.deepEqual(decodeQueryStrict(encodeQuery(query)).select,query.select);
   assert.equal(withFingerprintColumn(schema,dataset),schema);
-  assert.deepEqual(schema.defaultSelect,original.defaultSelect);
+  assert.deepEqual(schema.defaultSelect,dataset==='library'?[...original.defaultSelect,{field:'fingerprint',width:352}]:original.defaultSelect);
+  assert.equal(field.select.default,dataset==='library');
+  if(dataset==='library'){
+   assert.equal(selectedFields(schema,EMPTY_QUERY).at(-1).name,'fingerprint');
+   assert.deepEqual(selectedFields(schema,{...EMPTY_QUERY,select:[{field:'title'}]}).map(field=>field.name),['title']);
+  }
   const workspace=schema.fields.find(field=>field.name==='workspace_fingerprint');
   if(identity==='conversation_id'&&original.fields.some(field=>field.name==='workspace_id')){
    assert.equal(readFieldValue(workspace,{id:'event',workspace_id:'work'}),'work');
@@ -63,17 +68,19 @@ test('a pre-refresh fingerprint failure leaves the replacement request cached',a
  assert.equal(cache.read('same'),current);assert.equal(requests,2);
 });
 
-import {timelinePreviewText} from '../../../src/timeline-preview.ts';
+import {timelinePreviewText,trimTimelineSnippet} from '../../../src/timeline-preview.ts';
 
 import {nativeTimelineLabels} from '../../../src/label-timeline-overlay.tsx';
 
 import {timelineModeGroups,timelineLegendWindow} from '../../../src/timeline-legend.tsx';
+import {timelineValueVisible,timelineSectionVisible,timelineEventVisible,updateTimelineVisibility,visibleTimelineTree} from '../../../src/timeline-visibility';
 
 import {workflowSessions} from '../../../src/conversation-labels.ts';
 
-import {conversationRibbon} from '../../../src/conversation-fingerprint-model.ts';
+import {conversationRibbon,fingerprintMessageAt} from '../../../src/conversation-fingerprint-model.ts';
 
-import {sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolTracks,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
+import {agentEventClock,textTime,sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
+import {overlapping} from '../../../src/ribbon-marks';
 
 import {labelIntervals,recordedToolMarks,activityCategory} from '../../../src/label-session-ribbon-model.ts';
 
@@ -82,6 +89,8 @@ import {stateColor} from '../../../src/conversation-labels.ts';
 import {ribbonSegment} from '../../../src/conversation-fingerprint-model.ts';
 
 import {ribbonMessageTitle,parallelEnvelopes,messageAllocation} from '../../../src/conversation-fingerprint-model.ts';
+import {eventLinkURL} from '../../../src/event-link-url';
+import {ribbonInspectorPlacement} from '../../../src/label-ribbon-inspector';
 
 import {splitTimelineCallers,authorshipMix,authorshipSegments,authorshipExcerpt} from '../../../src/timeline-caller-model.ts';
 
@@ -108,6 +117,24 @@ const message=(id,family,extra={})=>({id,role:'assistant',kind:'message',segment
 
 const conversation=(id,messages)=>({id,work_id:'workspace-test',title:'Test fixture',repository:'fixture',provider:'codex',started_at:null,messages});
 
+test('workspace fingerprint event links open the source conversation and preserve the event selection',()=>{
+ const event={id:'e7',message_id:'reply'},workspace=conversation('workspace-test',[message('reply','C.report',{conversation_id:'source-conversation'})]);
+ const url=new URL(eventLinkURL(workspace,event),'http://pharos.invalid');
+ assert.equal(url.pathname,'/work/workspace-test');
+ assert.equal(url.searchParams.get('conversation'),'source-conversation');
+ assert.equal(url.searchParams.get('message'),'reply');
+ assert.equal(url.searchParams.get('reader_events'),'1');
+ assert.equal(url.searchParams.get('reader_event_link'),'e7');
+ const direct=new URL(eventLinkURL({id:'direct-conversation',work_id:'workspace-test'},event),'http://pharos.invalid');
+ assert.equal(direct.pathname,'/work/workspace-test');
+ assert.equal(direct.searchParams.get('conversation'),'direct-conversation');
+ const inherited=conversation('container',[message('reply','C.report',{conversation_id:'elsewhere'})]);
+ const resolved=new URL(eventLinkURL(inherited,event),'http://pharos.invalid');
+ assert.equal(resolved.pathname,'/conversation/elsewhere');assert.equal(resolved.searchParams.get('message'),'reply');
+ inherited.messages[0].work_id='source-work';
+ assert.equal(new URL(eventLinkURL(inherited,event),'http://pharos.invalid').pathname,'/work/source-work');
+});
+
 test('timeline legend keeps specific labels with their parent modes without duplicating ancestors',()=>{
  const messages=[message('a','C.report.finding',{labels:[['C',1],['C.report',.95],['C.report.finding',.9]]}),message('b','C.report.progress'),message('duplicate','C.report.finding'),message('request','P.request.work.implement'),message('parent','P.request'),message('generic','C'),message('future','P.custom.detail')];
  const groups=timelineModeGroups(messages,[{id:'P.custom',name:'Custom',definition:'A future mode'}]),byID=id=>groups.find(group=>group.id===id);
@@ -122,6 +149,110 @@ test('timeline legend keeps specific labels with their parent modes without dupl
  assert.equal(byID('P.request').direct,true);assert.equal(byID('C.report').direct,false);
 });
 
+test('timeline Show and Hide preserve independent hidden values and Show All restores the Key',()=>{
+ let state=updateTimelineVisibility({},'events',['choices'],'hide');
+ state=updateTimelineVisibility(state,'tools',['error'],'hide');
+ assert.equal(timelineValueVisible(state,'events','choices'),false);
+ assert.equal(timelineValueVisible(state,'tools','error'),false);
+ state=updateTimelineVisibility(state,'events',['choices'],'show');
+ assert.equal(timelineValueVisible(state,'events','choices'),true);
+ assert.equal(timelineValueVisible(state,'tools','error'),false);
+ state=updateTimelineVisibility(state,'events',['learning'],'only');
+ assert.equal(timelineSectionVisible(state,'tools'),false);
+ assert.equal(timelineValueVisible(state,'events','learning'),true);
+ state=updateTimelineVisibility(state,'events',['learning'],'hide');
+ assert.equal(timelineValueVisible(state,'events','learning'),false);
+ assert.equal(timelineValueVisible(state,'events','future'),false);
+ state=updateTimelineVisibility(state,'tools',['read'],'show');
+ assert.equal(timelineSectionVisible(state,'tools'),true);
+ assert.equal(timelineValueVisible(state,'tools','read'),true);
+ assert.equal(timelineValueVisible(state,'tools','error'),false,'showing one value in a hidden section leaves its siblings hidden');
+ assert.deepEqual(updateTimelineVisibility(state,'tools',[],'clear'),{});
+});
+
+test('timeline section headings isolate whole layers, fill partial selections and restore hidden values',()=>{
+ let state={tools:{values:['error'],excluded:true},origins:{values:['typed'],excluded:false}};
+ state=updateTimelineVisibility(state,'sections',['tools'],'only');
+ assert.deepEqual(state.sections,{values:['tools'],excluded:false});
+ assert.equal(state.tools,undefined,'showing a whole section clears its value filter');
+ assert.equal(timelineSectionVisible(state,'modes'),false);
+ assert.equal(timelineValueVisible(state,'tools','future-tool'),true);
+ state=updateTimelineVisibility(state,'sections',['events'],'toggle');
+ assert.equal(timelineSectionVisible(state,'tools'),true);
+ assert.equal(timelineSectionVisible(state,'events'),true);
+ state=updateTimelineVisibility(state,'sections',['events'],'toggle');
+ assert.equal(timelineSectionVisible(state,'events'),false);
+ state=updateTimelineVisibility(state,'events',['learning'],'show');
+ assert.equal(timelineSectionVisible(state,'events'),true,'a hidden label can be selected directly');
+ state=updateTimelineVisibility(state,'sections',['events'],'toggle');
+ assert.equal(state.events,undefined,'adding a mixed section fills all values');
+ assert.equal(timelineSectionVisible(state,'tools'),true,'filling a section retains other selected layers');
+ state=updateTimelineVisibility(state,'sections',['events'],'exclude');
+ assert.equal(timelineSectionVisible(state,'events'),false);
+ assert.equal(timelineSectionVisible(state,'modes'),true);
+ state=updateTimelineVisibility(state,'tools',['error'],'only');
+ assert.equal(timelineValueVisible(state,'tools','read'),false);
+ assert.deepEqual(updateTimelineVisibility(state,'sections',['events'],'clear'),{});
+});
+
+test('whole timeline layers filter counts, inspection items and descendants while preserving their clock',()=>{
+ const at=n=>new Date(n).toISOString(),messages=[message('caller','P.request',{role:'user',at:at(100),authorship:[{category:'typed',bytes:5,text:'typed'},{category:'pasted',bytes:3,text:'123'}]})];
+ const marks=[{start:300,end:450,end_known:true,category:'read',tool_id:'ok',name:'Read',error:false}];
+ const events=[{id:'event',message_id:'caller',group:'Friction',label:'Obstacle',source:'reply',target:null}];
+ const tree=sessionRibbonTree(messages,marks,[{start:600,end:700}],[],[0,1000],true,true,messages,marks,events),original=structuredClone(tree),walk=node=>[node,...node.children.flatMap(walk)];
+ for(const section of ['modes','origins','events','tools']){
+  const only=updateTimelineVisibility({},'sections',[section],'only'),shown=visibleTimelineTree(tree,only,true);
+  assert.ok(shown.items.length,section);
+  const belongs=item=>section==='events'?!!item.event:section==='tools'?!!(item.mark||item.inferred):section==='origins'?!!item.authorship:!!item.label&&!item.authorship;
+  for(const node of walk(shown))for(const item of node.items){
+   assert.ok(belongs(item),`${section}: ${item.id}`);
+   const original=tree.items.find(before=>before.id===item.id);
+   assert.equal(item.start,original.start);assert.equal(item.end,original.end);
+  }
+  const excluded=visibleTimelineTree(tree,updateTimelineVisibility({},'sections',[section],'exclude'),true);
+  assert.ok(excluded.items.length);
+  for(const node of walk(excluded))assert.ok(node.items.every(item=>!belongs(item)));
+  assert.equal(timelineEventVisible(only,events[0]),section==='events','overlay and tree use the same layer selection');
+ }
+ assert.deepEqual(tree,original,'original observations remain intact');
+});
+
+test('timeline visibility filters every ribbon level and event type without reallocating time',()=>{
+ const at=n=>new Date(n).toISOString(),messages=[message('a','C.report.finding',{at:at(100)}),message('b','C.report.progress',{at:at(500)}),message('unlabeled',null,{at:at(900)})];
+ const marks=[{start:300,end:450,end_known:true,category:'read',tool_id:'ok',name:'Read',error:false},{start:600,end:700,end_known:true,category:'read',tool_id:'failed',name:'Read',error:true}];
+ const events=[{id:'choice',message_id:'a',group:'Choices you may not see',label:'Assumption',source:'reply',target:{message_id:'b',method:'quote'}},{id:'friction',message_id:'a',group:'Friction',label:'Obstacle',source:'reply',target:null}];
+ const tree=sessionRibbonTree(messages,marks,[],[],[0,1000],true,false,messages,marks,events);
+ assert.equal(visibleTimelineTree(tree,{}),tree);
+ const state={modes:{values:['C.report.finding'],excluded:true},tools:{values:['error'],excluded:true},events:{values:['friction'],excluded:true}};
+ const shown=visibleTimelineTree(tree,state),walk=node=>[node,...node.children.flatMap(walk)];
+ for(const node of walk(shown))for(const item of node.items){
+  assert.notEqual(item.label,'C.report.finding');assert.notEqual(item.mark?.tool_id,'failed');assert.notEqual(item.event?.id,'friction');
+  const original=tree.items.find(before=>before.id===item.id);assert.equal(item.start,original.start);assert.equal(item.end,original.end);
+ }
+ assert.ok(shown.items.some(item=>item.label==='?'));
+ assert.ok(shown.items.some(item=>item.mark?.tool_id==='ok'),'error visibility does not hide successful calls of the same category');
+ assert.ok(shown.items.some(item=>item.event?.id==='choice'),'events remain independent of hidden message modes');
+ assert.ok(!walk(shown).some(node=>node!==shown&&!node.items.length));
+ assert.ok(tree.items.some(item=>item.event?.id==='friction'),'source data remains intact');
+ const none=visibleTimelineTree(tree,{modes:{values:['missing'],excluded:false},events:{values:['missing'],excluded:false},tools:{values:['missing'],excluded:false}});
+ assert.equal(none.items.length,0);assert.equal(none.children.length,0);
+});
+
+test('caller visibility cuts original text runs and intersects mode selections at every level',()=>{
+ const caller=message('caller','P.request',{at:new Date(0).toISOString(),authorship:[{category:'typed',bytes:5,text:'typed'},{category:'pasted',bytes:3,text:'123'},{category:'harness',bytes:2,text:'ab'}]});
+ const boundary={start:1000,end:1000,end_known:false,category:'other',name:'Boundary',error:false};
+ const tree=sessionRibbonTree([caller],[],[],[],[0,1000],true,true,[caller],[boundary]);
+ const state={origins:{values:['pasted'],excluded:false}},shown=visibleTimelineTree(tree,state,true),walk=node=>[node,...node.children.flatMap(walk)];
+ for(const node of walk(shown)){
+  assert.equal(new Set(node.items.map(item=>item.id)).size,node.items.length,'caller tracks are not duplicated');
+  for(const item of node.items){assert.equal(item.authorship,'pasted');assert.equal(item.start,500);assert.equal(item.end,800);assert.equal(item.excerpt.text,'123');}
+ }
+ assert.ok(shown.items.length>0);
+ assert.equal(visibleTimelineTree(tree,{...state,modes:{values:['P.request'],excluded:true}},true).items.length,0);
+ const agent=sessionRibbonTree([caller],[],[],[],[0,1000],true,false,[caller],[boundary]);
+ assert.deepEqual(visibleTimelineTree(agent,state).items,agent.items,'caller source selections leave agent text unchanged');
+});
+
 test('recorded descendants stay beside their parent while independent and unresolved branches survive',()=>{
  const c=conversation('tree',[]);c.main_session='main';
  c.sessions=[{id:'main',parent_id:null},{id:'child',parent_id:'main'},{id:'sibling',parent_id:'main'},{id:'grandchild',parent_id:'child'},{id:'orphan',parent_id:'unavailable'},{id:'cycle',parent_id:'cycle'}];
@@ -133,7 +264,7 @@ const discoveryTaxonomy=['P','P.request','P.request.work','P.request.work.review
 test('session ribbons partition thinking before function roles and keep every coexisting label down to a single observation',()=>{
  const at=n=>new Date(n).toISOString(),normal=message('plain','C.report.product',{at:at(10)}),thinking=message('thought','C.report',{kind:'reasoning',at:at(20),labels:[['C.report.progress',.9],['P.request.work.review',.8]]}),unknown=message('unknown',null,{at:at(30)}),untimed=message('untimed','C.report');
  const tree=sessionRibbonTree([normal,thinking,unknown,untimed],[],[],discoveryTaxonomy,[0,40]);
- assert.deepEqual(ribbonCounts(tree.items),{messages:3,thinking:1,activity:0,inferred:0});
+ assert.deepEqual(ribbonCounts(tree.items),{events:0,messages:3,thinking:1,activity:0,inferred:0});
  assert.equal(ribbonEventCount(tree.items),3);
  const sharedTool={...tree.items[0],id:'shared-tool',message:undefined,mark:{message_id:'plain',count:1}};
  const distinctTool={...sharedTool,id:'new-tool',mark:{message_id:'tool-message',count:1}};
@@ -156,23 +287,24 @@ test('ribbon hit testing includes smaller covered symbols and activity observati
  assert.equal(sessionRibbonTree([],marks,[],[],[101,200]).items.length,0);
 });
 
-test('tool tracks separate overlapping calls, reuse ended tracks and preserve point observations',()=>{
+test('tool dots take free lanes for overlapping calls, hit-test by position and preserve point observations',()=>{
  const marks=[{start:0,end:10,end_known:true,name:'long',category:'run',count:1,error:false,tool_id:'long',preview:'npm test'},{start:1,end:4,end_known:true,name:'first',category:'read',count:1,error:false,tool_id:'first'},{start:2,end:3,end_known:true,name:'second',category:'read',count:1,error:false,tool_id:'second'},{start:4,end:7,end_known:true,name:'reuse',category:'read',count:1,error:false,tool_id:'reuse'},{start:11,end:12,end_known:true,name:'solo',category:'read',count:1,error:false,tool_id:'solo'}];
- const items=sessionRibbonTree([],marks,[],[],[0,20]).items,tracks=ribbonToolTracks(items),byName=name=>items.find(item=>item.title===name);
- for(const name of ['long','first','second'])assert.equal(tracks.get(byName(name).id).total,3);
- assert.equal(new Set(['long','first','second'].map(name=>tracks.get(byName(name).id).slot)).size,3);
- assert.equal(tracks.get(byName('first').id).slot,tracks.get(byName('reuse').id).slot);
- assert.equal(tracks.get(byName('solo').id).total,1);
- assert.deepEqual(ribbonToolTracks([...items].reverse()),tracks);
- const layers=ribbonLayers(items);
- for(const name of ['long','first','second']){
-  const layer=layers.find(layer=>layer.item.title===name),hits=ribbonPointerHits(items,2.5,.01,layer.y+layer.height/2,1);
-  assert.deepEqual(hits.map(item=>item.title),[name]);
+ const items=sessionRibbonTree([],marks,[],[],[0,20]).items,px=at=>at*50,placed=ribbonToolPlacement(items,px,32),byName=name=>placed.get(items.find(item=>item.title===name).id);
+ assert.equal(new Set(['long','first','second'].map(name=>byName(name).y)).size,3,'simultaneous calls sit in separate lanes');
+ assert.notEqual(byName('reuse').y,byName('long').y);
+ assert.equal(byName('solo').y,16,'a call with room stays on the axis');
+ assert.deepEqual(overlapping([...placed.values()]),[]);
+ assert.deepEqual(ribbonToolPlacement([...items].reverse(),px,32),placed);
+ const targets=[...placed.values()].map(m=>({...m,ids:[m.id]}));
+ for(const name of ['long','first','second','reuse','solo']){
+  const m=byName(name),{items:hits,target}=ribbonPointerHits(items,m.x/50,.01,{x:m.x+1,y:m.y+1},targets);
+  assert.deepEqual(hits.map(item=>item.title),[name]);assert.equal(target.id,m.id);
  }
- const long=layers.find(layer=>layer.item.title==='long');assert.equal(ribbonPointerHits(items,2.5,.01,long.y+long.height/2,1)[0].mark.preview,'npm test');
+ const long=byName('long');assert.equal(ribbonPointerHits(items,8,.01,{x:400,y:long.y},targets).items[0].mark.preview,'npm test','the duration is part of the dot');
+ assert.deepEqual(ribbonPointerHits(items,15,.01,{x:750,y:16},targets).items,[],'nothing under the pointer');
  const points=sessionRibbonTree([],['a','b','c'].map(tool_id=>({...marks[0],tool_id,start:5,end:99,end_known:false})),[],[],[0,10]).items;
  assert.ok(points.every(item=>item.end===item.start));
- assert.equal(new Set([...ribbonToolTracks(points).values()].map(track=>track.slot)).size,3);
+ assert.equal(new Set([...ribbonToolPlacement(points,at=>at*100,32).values()].map(m=>m.y)).size,3);
  assert.equal(ribbonHits(points,6,.01).length,0);
  assert.equal(sessionRibbonTree([],points.map(item=>item.mark),[],[],[6,10]).items.length,0);
 });
@@ -182,6 +314,31 @@ test('compressed fingerprint segments preserve every original message for inform
  const tokens=conversationRibbon(c,4);
  assert.deepEqual(tokens.flatMap(t=>t.messages),events);assert.ok(tokens.every(t=>t.count===t.messages.length));
  assert.equal(tokens.flatMap(t=>t.messages).filter(m=>m.kind==='reasoning').length,10);
+});
+
+test('fingerprint source selection follows the clicked message within a compressed column',()=>{
+ const messages=[message('first','P.request',{conversation_id:'earlier-conversation'}),message('second','C.report',{conversation_id:'source /conversation',session_id:'source /session'}),message('third','P.request')];
+ const [token]=conversationRibbon(conversation('workspace-ribbon',messages),1);
+ assert.equal(fingerprintMessageAt(token,.05),messages[0]);
+ assert.equal(fingerprintMessageAt(token,.5),messages[1]);
+ assert.equal(fingerprintMessageAt(token,.95),messages[2]);
+ assert.equal(fingerprintMessageAt(token,0),messages[0]);assert.equal(fingerprintMessageAt(token,1),messages[2]);
+ assert.equal(fingerprintMessageAt({messages:[]},.5),undefined);
+ const selected=fingerprintMessageAt(token,.5),url=new URL(ribbonSourceURL({message:selected,start:0},{workspace:'work /space',conversation:'workspace-ribbon',session:'main'},'/analyze?analyze_data=message_labels'),'http://pharos.invalid');
+ assert.equal(url.pathname,'/conversation/source%20%2Fconversation','the source workspace is not recorded on this message');
+ assert.equal(url.searchParams.get('conversation'),'source /conversation');
+ assert.equal(url.searchParams.get('delegation_session'),'source /session');
+ assert.equal(url.searchParams.get('message'),'second');assert.equal(url.searchParams.get('reveal'),'message:second');
+ assert.equal(url.searchParams.get('reader_view'),'conversation');assert.equal(url.searchParams.has('analyze_data'),false);
+});
+
+test('ribbon keys fit on screen without covering their inspected bar',()=>{
+ for(const [anchor,height,viewport] of [[{top:400,bottom:440},320,480],[{top:10,bottom:54},200,480],[{top:210,bottom:254},600,480],[{top:100,bottom:144},300,900]]){
+  const position=ribbonInspectorPlacement(anchor,height,viewport),bottom=position.top+Math.min(height,position.maxHeight);
+  assert.ok(position.top>=0&&bottom<=viewport);
+  assert.ok(bottom<=anchor.top||position.top>=anchor.bottom,'a tall key must leave the ribbon clickable');
+  assert.ok(position.maxHeight>0);
+ }
 });
 
 test('label intervals reach between observations, clip at tool boundaries and leave idle gaps blank',()=>{
@@ -279,6 +436,8 @@ test('Caller span inspection uses the actual run excerpt even after the message 
  assert.deepEqual(authorshipSegments(full).map(part=>authorshipExcerpt(full,part)),[{text:'é😎',truncated:false},{text:'done',truncated:false}]);
  const missing={...full,text:'é',truncated:true};
  assert.equal(authorshipExcerpt(missing,authorshipSegments(missing)[1]),null);
+ const paddedText='\n'.repeat(300)+'Review this\n  Keep indentation\n\n',padded=message('padded','P.request',{text:paddedText,authorship:[{category:'template',bytes:Buffer.byteLength(paddedText)}]});
+ assert.deepEqual(authorshipExcerpt(padded,authorshipSegments(padded)[0]),{text:'Review this\n  Keep indentation',truncated:false});
 });
 
 test('timeline column widths are bounded, portable and preserve automatic chart width',()=>{
@@ -306,6 +465,9 @@ test('ribbon source links retain aliases and timeline settings while revealing t
  const deep=new URL(ribbonSourceURL(item,source,current.replace('/work/work%20%2Fone?','/work/work%20%2Fone/conversation/original?')),'http://localhost');assert.equal(deep.searchParams.get('delegation_start'),'4');
  assert.equal(ribbonSourceURL({id:'inferred',start:0,end:10},source,current),null);
  const external=new URL(ribbonSourceURL({...item,message:{...item.message,work_id:'elsewhere'}},source,current),'http://localhost');assert.equal(external.pathname,'/work/elsewhere');assert.equal(external.searchParams.has('delegation_start'),false);
+ const inherited=new URL(ribbonSourceURL({...item,message:{...item.message,work_id:undefined,session_id:undefined}},source,current),'http://localhost');
+ assert.equal(inherited.pathname,'/conversation/original');assert.equal(inherited.searchParams.get('message'),'m:&=1');
+ assert.equal(inherited.searchParams.has('delegation_start'),false);assert.equal(inherited.searchParams.has('delegation_session'),false);
 });
 
 test('timeline legends follow drawn intervals, errors and the visible portion of caller composition',()=>{
@@ -324,6 +486,7 @@ test('timeline legends follow drawn intervals, errors and the visible portion of
 });
 
 test('timeline previews unwrap content and nested arguments without losing domain JSON or literal caller text',()=>{
+ assert.equal(trimTimelineSnippet('\n  Review this\n  Keep indentation\n\n'),'Review this\n  Keep indentation');
  for(const [body,expected,options] of [
   [JSON.stringify({content:[{text:'Async agent launched successfully.\nWorking in the background.'}],details:{agentId:'opaque'},tool:'Task'}),'Async agent launched successfully.\nWorking in the background.'],
   [JSON.stringify({message:{content:[{type:'output_text',text:'First'},{type:'text',text:'Second'}]},usage:{tokens:9}}),'First\n\nSecond'],
@@ -352,8 +515,25 @@ test('fingerprint allocations conserve message weight across roots, leaves, pare
  const segment=ribbonSegment([mixed,message('parent','C.report'),message('unlabeled',null),message('no-match',null,{chunks:1})],taxonomy),rows=new Map(segment.rows.map(row=>[row.id,row]));
  assert.equal(rows.get('all').share,1);assert.equal(rows.get('P').share,.125);assert.equal(rows.get('C').share,.375);assert.equal(rows.get('uncategorized').share,.5);assert.equal(rows.get('C.report~other').share,.25);assert.equal(rows.get('C.report~other').colorID,'C.report');
  assert.equal(rows.get('C.report.finding').parent,'C.report');assert.equal(rows.get('P.request.work.review').parent,'P.request.work');
+ assert.equal(stateColor(rows.get('no-match').colorID),'transparent');
+ assert.equal(stateColor(rows.get('unlabeled').colorID),stateColor('?'));
+ assert.notEqual(stateColor(rows.get('unlabeled').colorID),'transparent');
  for(const row of segment.rows){const children=segment.rows.filter(child=>child.parent===row.id);if(children.length)assert.ok(Math.abs(children.reduce((sum,child)=>sum+child.weight,0)-row.weight)<1e-12);}
  assert.deepEqual(ribbonSegment([],taxonomy),{rows:[],slices:[]});
+});
+
+test('fingerprints keep no-match runs separate from unprocessed messages, including after compression',()=>{
+ const messages=[message('pending',null),message('no-match-a',null,{chunks:1}),message('no-match-b',null,{chunks:2}),message('missing',null,{chunks:null}),message('matched','C.report')];
+ const tokens=conversationRibbon(conversation('coverage',messages));
+ assert.deepEqual(tokens.map(token=>token.messages.map(m=>m.id)),[['pending'],['no-match-a','no-match-b'],['missing'],['matched']]);
+ assert.deepEqual(tokens.map(token=>ribbonSegment(token.messages).slices.map(slice=>[slice.id,slice.share])),[[['unlabeled',1]],[['no-match',1]],[['unlabeled',1]],[['C.report',1]]]);
+ const compressed=conversationRibbon(conversation('coverage',messages),1);
+ assert.deepEqual(compressed.flatMap(token=>token.messages),messages);
+ const slices=new Map(ribbonSegment(compressed[0].messages).slices.map(slice=>[slice.id,slice]));
+ assert.equal(slices.get('no-match').share,2/5);
+ assert.equal(slices.get('unlabeled').share,2/5);
+ assert.equal(stateColor(slices.get('no-match').colorID),'transparent');
+ assert.notEqual(stateColor(slices.get('unlabeled').colorID),'transparent');
 });
 
 test('compact fingerprints bound their size while preserving message volume and recorded nesting',()=>{
@@ -367,4 +547,68 @@ test('overlap envelopes remain symmetric, grow beyond three branches and stop at
  const shapes=parallelEnvelopes(segments([0,1,3,16,0,64]));assert.deepEqual(shapes.map(s=>s.peak),[16,64]);
  const heights=shapes[0].points.map(p=>p.lower-p.upper);assert.ok(heights[0]<heights[1]&&heights[1]<heights[2]);assert.ok(shapes[1].points[0].lower-shapes[1].points[0].upper>heights[2]);
  for(const envelope of shapes){assert.ok(envelope.path.endsWith('Z')&&!envelope.path.includes('NaN'));for(const point of envelope.points){assert.ok(point.upper>0&&point.lower<38);assert.ok(Math.abs((point.upper+point.lower)/2-19)<1e-12);}}
+});
+
+test('session ribbons decompose agent events by group and kind beside tool actions, counting them once',()=>{
+ const at=n=>new Date(n).toISOString(),reply=message('reply','C.report',{at:at(10)}),later=message('later','C.report',{at:at(30)});
+ const event=(id,kind,label,group,messageID)=>({id,message_id:messageID,kind,label,group,probability:.9,source:'reply',sentence:`${label} sentence`,target:null});
+ const events=[event('e1','obstacle','Obstacle','Friction','reply'),event('e2','obstacle','Obstacle','Friction','later'),event('e3','discovery','Discovery','Reactions and learning','reply'),event('gone','obstacle','Obstacle','Friction','elsewhere')];
+ const tree=sessionRibbonTree([reply,later],[],[],discoveryTaxonomy,[0,40],true,false,undefined,undefined,events);
+ const node=tree.children.find(child=>child.id==='events');
+ assert.equal(node.title,'Agent events');
+ const ordered=sessionRibbonTree([reply,later],[{start:12,end:13,end_known:true,name:'Read',category:'read',count:1,error:false}],[],discoveryTaxonomy,[0,40],true,false,undefined,undefined,events).children.map(child=>child.title);
+ assert.deepEqual(ordered,['Message modes','Agent events','Tool actions'],'Agent events come before Tool actions');
+ assert.deepEqual(node.children.map(child=>[child.title,ribbonEventCount(child.items,'events')]),[['Friction',2],['Learning',1]]);
+ assert.deepEqual(node.children[0].children.map(child=>[child.title,child.children.length]),[['Obstacle',2]]);
+ // The whole session still counts its two messages, not the events said in them.
+ assert.equal(ribbonEventCount(tree.items),2);
+ assert.equal(ribbonCounts(node.items).events,3);
+ assert.equal(ribbonEventCount(node.items),2,'event-only session summaries still count distinct source messages');
+ assert.equal(ribbonEventCount(node.items,'events'),3,'classification rows retain individual event counts');
+ const marks=[{start:12,end:13,end_known:true,name:'Read',category:'read',count:1,error:false,tool_id:'read',message_id:'tool'},
+  ...['one','two'].map(tool_id=>({start:14,end:15,end_known:true,name:'Run',category:'run',count:1,error:false,tool_id,message_id:'reply'}))];
+ const withTools=sessionRibbonTree([reply,later],marks,[],discoveryTaxonomy,[0,40],true,false,undefined,undefined,events);
+ const hiddenModes={modes:{values:['missing'],excluded:false}};
+ const mixed=visibleTimelineTree(withTools,hiddenModes);
+ assert.equal(ribbonEventCount(withTools.items),3);
+ assert.equal(ribbonEventCount(mixed.items),3,'surviving events count when their message modes are hidden; tools on the same message deduplicate');
+ const withoutRead=visibleTimelineTree(withTools,{...hiddenModes,tools:{values:['read'],excluded:true}});
+ assert.equal(ribbonEventCount(withoutRead.items),2,'hiding an independent tool decreases the summary');
+ const onlyEvents=visibleTimelineTree(withTools,{...hiddenModes,tools:{values:['missing'],excluded:false}});
+ assert.equal(ribbonEventCount(onlyEvents.items),2,'removing the last tool does not change how events are counted');
+ assert.equal(ribbonEventCount(onlyEvents.children.find(child=>child.id==='events').items,'events'),3);
+ const onlyLearning=visibleTimelineTree(withTools,{...hiddenModes,tools:{values:['missing'],excluded:false},events:{values:['learning'],excluded:false}});
+ assert.equal(ribbonEventCount(onlyLearning.items),1,'hiding events also removes their unrepresented source messages');
+ const aggregated={id:'aggregate',start:12,end:13,title:'Read',color:'',thinking:false,mark:{...marks[0],count:3}};
+ assert.equal(ribbonEventCount([...node.items,aggregated]),5,'aggregated tool counts retain their additional observations');
+ // Outside the window an event is not shown.
+ assert.equal(sessionRibbonTree([reply,later],[],[],discoveryTaxonomy,[20,40],true,false,undefined,undefined,events).children.find(child=>child.id==='events').items.length,1);
+});
+
+test('agent events sit at their sentence\'s share of the message span, as message-mode text parts do',()=>{
+ const at=n=>new Date(n).toISOString();
+ // Thinking takes the time before it ([0, 100]); a reply the time after it ([100, 300]).
+ const prompt=message('prompt','P.request',{role:'user',at:at(0)}),thinking=message('think','C.deliberation',{kind:'thinking',at:at(100)}),reply=message('reply','C.report',{at:at(100)}),next=message('next','P.request',{role:'user',at:at(300)});
+ const event=(id,messageID,position,target=null)=>({id,message_id:messageID,kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:.9,source:'thinking',sentence:'s',target,position});
+ const clock=agentEventClock([prompt,thinking,reply,next],[]);
+ assert.equal(clock.at(event('a','think',.25)),25,'a quarter into the thinking');
+ assert.equal(clock.at(event('b','think',1)),100);
+ assert.equal(clock.at(event('c','reply',.5)),200,'half way through the reply');
+ assert.equal(clock.at(event('d','think')),100,'no recorded share stays at the message time');
+ assert.equal(clock.at(event('e','next',.9)),300,'a message with no duration stays at its time');
+ assert.equal(clock.at(event('f','elsewhere',.5)),null);
+ assert.equal(clock.targetAt(event('g','reply',.5,{method:'quote',message_id:'think',position:.5})),50,'the arc target uses the quoted text\'s share too');
+ assert.equal(clock.targetAt(event('h','reply',.5,{method:'quote',message_id:'other-session',at:at(42)})),42,'a target in another session uses its own time');
+ assert.equal(textTime({start:0,end:100,at:100},2),100,'shares clamp to the span');
+ // The tree's event rows and the overlay share the clock.
+ const tree=sessionRibbonTree([prompt,thinking,reply,next],[],[],discoveryTaxonomy,[0,400],true,false,undefined,undefined,[event('a','think',.25),event('c','reply',.5)]);
+ assert.deepEqual(tree.children.find(child=>child.id==='events').items.map(item=>item.start).sort((x,y)=>x-y),[25,200]);
+});
+
+test('a ribbon reports events left out for changed evidence apart from labels still being produced',()=>{
+ assert.deepEqual(messageLabelRibbonNotes({truncated:false,pending:false,events_pending:0}),[]);
+ assert.deepEqual(messageLabelRibbonNotes({events_pending:2}).map(n=>n.badge),['Events pending']);
+ assert.match(messageLabelRibbonNotes({events_pending:1})[0].note,/^Events for 1 conversation are left out until they are rebuilt/);
+ assert.deepEqual(messageLabelRibbonNotes({pending:true}).map(n=>n.badge),['Labeling']);
+ assert.deepEqual(messageLabelRibbonNotes({truncated:true,pending:true,events_pending:3}).map(n=>n.badge),['Sample','Labeling','Events pending']);
 });

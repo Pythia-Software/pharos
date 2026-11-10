@@ -1,5 +1,5 @@
 import { EMPTY_QUERY, type FieldSchema, type WhereTerm } from "@pythia-software/query-table-core";
-import { isTrendView, noSplit, normalizeAnalysis, records, reductionLabel, sampleSubject, thresholded, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
+import { heatmapAxis, isTrendView, noSplit, normalizeAnalysis, records, reductionLabel, sampleSubject, thresholded, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
 import { trendPeriodCount, trendTitle } from "./dashboard-trend-model";
 import { chartPeriods, periodLabel } from "./chart-period";
 import { dashboardFilterDescriptions } from "./dashboard-query-links";
@@ -15,8 +15,8 @@ export const fitCardCopy = (text: string, limit: number) => text.length <= limit
 export function analysisCardTitle(catalog: AnalysisCatalog, input: AnalysisState): string {
   const state = normalizeAnalysis(catalog, input), measure = catalog.measures[state.metric];
   const unit = catalog.units[state.unit], subject = unit?.label.toLowerCase() ?? catalog.records.label.toLowerCase();
-  const split = catalog.breakdowns[state.split]?.label, by = split ? ` by ${split.toLowerCase()}` : "";
-  if (isTrendView(state.view)) return `${state.display !== "cumulative" && state.rollingPeriods > 1 ? `${state.rollingPeriods * trendPeriodCount(state)}-${chartPeriods[state.period].unit} ${state.rollingOp === "sum" ? "total" : measure.ratio ? "pooled average" : "average"}: ` : ""}${trendTitle(catalog, state)}`;
+  const split = (catalog.breakdowns[state.split] ?? catalog.components?.[state.split])?.label, by = split ? ` by ${split.toLowerCase()}` : "";
+  if (isTrendView(state.view)) return `${state.display !== "cumulative" && state.rollingPeriods > 1 ? `${state.rollingPeriods * trendPeriodCount(state)}-${chartPeriods[state.period].unit} ${state.rollingOp === "sum" && !(state.display === "heatmap" && heatmapAxis(catalog, state)?.unit) ? "total" : measure.ratio ? "pooled average" : "average"}: ` : ""}${trendTitle(catalog, state)}`;
   switch (state.view) {
     case "scatter": return `${measure.label} vs ${lower(catalog.measures[state.metricY].label)} per ${subject}${by}`;
     case "distribution": return `${measure.label} distribution per ${subject}${by}`;
@@ -32,35 +32,41 @@ export function analysisCardTitle(catalog: AnalysisCatalog, input: AnalysisState
 export function analysisCardSelection(catalog: AnalysisCatalog, input: AnalysisState): string {
   const state = normalizeAnalysis(catalog, input), split = catalog.breakdowns[state.split];
   // A selection survives visits to views without a selectable breakdown.
-  // Component trends select parts; other views select the breakdown's fields.
-  const components = isTrendView(state.view) && catalog.components?.[state.split];
-  if (state.view === "cycle" || !split?.fields.length && !components || !state.selection?.values.length) return "";
+  // Component trends and comparisons select parts; other breakdowns select groups.
+  const components = (isTrendView(state.view) || state.view === "compare") && catalog.components?.[state.split];
+  if (state.view === "cycle" || !split?.fields.length && !components) return "";
+  if(state.selection?.allHidden)return "No series shown";
+  if(!state.selection?.values.length)return "";
   return `${state.selection.excluded ? "Exclude" : "Only"} ${split?.label.toLowerCase() ?? "series"}: ${state.selection.values.map(value => {
     if (split?.values?.[value]) return split.values[value];
     if (split && split.fields.length > 1) {
       try { return (JSON.parse(value) as unknown[]).map((part, i) => catalog.labels?.[split.fields[i]]?.(String(part)) ?? String(part ?? "Unspecified")).join(" / "); } catch { /* Retain a legacy key. */ }
     }
+    if (components) return components.parts.find(part => part.key === value)?.label ?? value;
     return split?.fields.length === 1 ? catalog.labels?.[split.fields[0]]?.(value) ?? value : value;
   }).join(", ")}`;
 }
 
 export function analysisCardContext(catalog: AnalysisCatalog, input: AnalysisState, groups?: number): string[] {
   const state = normalizeAnalysis(catalog, input), measure = catalog.measures[state.metric], trend = isTrendView(state.view);
+  const heatmapUnit = trend && state.display === "heatmap" ? heatmapAxis(catalog, state)?.unit : undefined;
   // Share trends force a linear percentage axis; pies and scalar comparisons
   // have no axis. Their retained scale still applies when switching back.
-  const usesScale = trend ? !state.share : state.view !== "compare" || state.split !== noSplit && state.compareAs !== "share";
+  const usesScale = trend ? state.display !== "heatmap" && !state.share : state.view !== "compare" || state.split !== noSplit && state.compareAs !== "share";
   return [
     analysisCardSelection(catalog, state),
-    thresholded(state) ? `Minimum ${state.minSamples} ${sampleSubject(catalog, state)} per group` : "",
-    trend ? `${state.display === "cumulative" ? "Cumulative" : "Interval"} values per ${periodLabel(state.period, trendPeriodCount(state))}`
+    thresholded(state, catalog) ? `Minimum ${state.minSamples} ${sampleSubject(catalog, state)} per group` : "",
+    trend ? `${state.display === "heatmap" ? "Heatmap" : state.display === "cumulative" ? "Cumulative" : "Interval"} values per ${periodLabel(state.period, trendPeriodCount(state))}`
       : state.view === "cycle" ? "Whole calendar periods, including idle periods" : `One observation per ${state.unit === records ? catalog.records.label.toLowerCase() : catalog.units[state.unit].label.toLowerCase()}`,
+    heatmapUnit ? `Each ${catalog.units[heatmapUnit].label.toLowerCase()} is counted by its ${measure.label.toLowerCase()} total in each period` : "",
     trend && state.completePeriods ? "Whole periods only" : "",
-    trend && state.nonzero && !state.share ? "Zero values omitted" : "",
+    trend && state.display !== "heatmap" && state.nonzero && !state.share ? "Zero values omitted" : "",
     trend && state.norm ? `Reference: mean of ${state.normPeriods} earlier periods` : "",
     usesScale && state.scale === "logarithmic" ? "Logarithmic scale" : "",
     state.view === "scatter" && state.scaleY === "logarithmic" ? "Logarithmic Y scale" : "",
     groups ? `Show up to ${groups} groups` : "",
     measure.note,
+    state.view === "scatter" ? catalog.measures[state.metricY].note : "",
     catalog.breakdowns[state.split]?.note ?? "",
     catalog.request?.note ?? "",
   ].filter(Boolean);

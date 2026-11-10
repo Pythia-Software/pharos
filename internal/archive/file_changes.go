@@ -205,30 +205,45 @@ type FileChangesOptions struct {
 
 // FileChanges are a file's edits, newest first, each with its session, its
 // place in the transcript and the diff its call made, a page at a time.
+// Without a project, the file is one outside any repository or folder
+// project, named by the path its sessions recorded.
 func (c *Catalog) FileChanges(ctx context.Context, options FileChangesOptions) (map[string]any, error) {
-	projects, err := c.fileProjects(ctx)
-	if err != nil {
-		return nil, err
+	result := map[string]any{"path": options.Path, "changes": []map[string]any{}, "offset": max(options.Offset, 0)}
+	keys := []string{}
+	if strings.TrimSpace(options.Project) == "" {
+		found, err := c.unprojectedFileKeys(ctx, options.Path)
+		if err != nil {
+			return nil, err
+		}
+		keys = found
+	} else {
+		projects, err := c.fileProjects(ctx)
+		if err != nil {
+			return nil, err
+		}
+		project, choices, err := projects.choose(ctx, options.Project)
+		if err != nil || choices != nil {
+			return map[string]any{"choices": choices}, err
+		}
+		result["project"] = project.value()
+		key, err := c.projectFileKey(ctx, project, options.Path)
+		if err != nil {
+			return nil, err
+		}
+		if key != "" {
+			keys = append(keys, key)
+		}
 	}
-	project, choices, err := projects.choose(ctx, options.Project)
-	if err != nil || choices != nil {
-		return map[string]any{"choices": choices}, err
-	}
-	key, err := c.projectFileKey(ctx, project, options.Path)
-	if err != nil {
-		return nil, err
-	}
-	result := map[string]any{"project": project.value(), "path": options.Path, "changes": []map[string]any{}, "offset": max(options.Offset, 0)}
-	if key == "" {
-		result["note"] = "No session edited " + options.Path + " with an edit tool."
+	if len(keys) == 0 {
+		result["note"] = "No agent edited " + options.Path + " with an edit tool."
 		return result, nil
 	}
 	rows, err := queryMapsContext(ctx, c.reader(), `SELECT e.workspace_id,e.conversation_id,e.message_id,e.call_id,e.edited_at,e.lines_added,e.lines_removed,e.path,
 		w.title,`+outcomeLabelSQL("w")+` outcome_label,
 		(SELECT t.tool_name FROM tool_calls t WHERE t.workspace_id=e.workspace_id AND t.call_message_id=e.message_id AND t.call_id=e.call_id LIMIT 1) tool_name
 		FROM session_file_edits e JOIN workspaces w ON w.id=e.workspace_id
-		WHERE e.file_key=? AND e.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
-		ORDER BY COALESCE(e.edited_at,'') DESC,e.workspace_id,e.seq DESC LIMIT ? OFFSET ?`, key, fileChangesLimit+1, max(options.Offset, 0))
+		WHERE e.file_key IN (`+placeholders(len(keys))+`) AND e.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
+		ORDER BY COALESCE(e.edited_at,'') DESC,e.workspace_id,e.seq DESC LIMIT ? OFFSET ?`, append(anySlice(keys), fileChangesLimit+1, max(options.Offset, 0))...)
 	if err != nil {
 		return nil, err
 	}
@@ -275,4 +290,25 @@ func clipHunks(hunks []editHunk, limit int) ([]editHunk, bool) {
 		limit -= len(hunk.Lines)
 	}
 	return kept, false
+}
+
+// unprojectedFileKeys are the keys of a file outside every repository, by
+// the path its sessions recorded (file_history.go's fileTimeline names such
+// a file by it): one file may have several keys, from the ways its sessions
+// wrote its path.
+func (c *Catalog) unprojectedFileKeys(ctx context.Context, path string) ([]string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT DISTINCT file_key FROM session_files WHERE repository_id IS NULL AND path IN (?,?) ORDER BY file_key LIMIT 50`,
+		path, defaultString(folderKey(path), path))
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, firstString(row["file_key"]))
+	}
+	return keys, nil
 }

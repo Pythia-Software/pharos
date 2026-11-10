@@ -37,7 +37,9 @@ var fileGitHash = regexp.MustCompile(`^[0-9a-f]{4,64}$`)
 
 // fileGitCommand runs git read-only in dir, as outcomeGitCommand does, and
 // keeps at most limit bytes of its output: past it, the command is stopped
-// and the output is truncated.
+// and the output is truncated. Paths print as they are, not quoted, and no
+// log verifies signatures: log.showSignature would run the configured
+// signing program once per signed commit and print its words before ours.
 var fileGitCommand = func(ctx context.Context, dir string, limit int, args ...string) ([]byte, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, fileGitTimeout)
 	defer cancel()
@@ -47,7 +49,7 @@ var fileGitCommand = func(ctx context.Context, dir string, limit int, args ...st
 		return nil, false, errGitTimeout
 	}
 	defer func() { <-fileGitSlots }()
-	name, full := "git", append([]string{"-C", dir, "-c", "core.fsmonitor=false"}, args...)
+	name, full := "git", append([]string{"-C", dir, "-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "-c", "log.showSignature=false"}, args...)
 	if nice, err := exec.LookPath("nice"); err == nil {
 		name, full = nice, append([]string{"-n", "10", "git"}, full...)
 	}
@@ -485,7 +487,7 @@ func (c *Catalog) CommitDetail(ctx context.Context, options FileGitOptions) (map
 	if fields := strings.SplitN(string(output), "\x1f", 7); len(fields) == 7 {
 		commit["body"] = strings.TrimSpace(fields[6])
 	}
-	args, err := firstParentDiff(ctx, target, "--numstat", "--no-renames")
+	args, err := firstParentDiff(ctx, target, "--numstat", "--no-renames", "-z")
 	if err != nil {
 		return nil, err
 	}
@@ -493,8 +495,10 @@ func (c *Catalog) CommitDetail(ctx context.Context, options FileGitOptions) (map
 	if err != nil {
 		return nil, fileGitError(err)
 	}
+	// With -z each file is "added<TAB>removed<TAB>path<NUL>", its path as
+	// it is, whatever characters it holds.
 	files := []map[string]any{}
-	for _, line := range strings.Split(string(stat), "\n") {
+	for _, line := range strings.Split(string(stat), "\x00") {
 		fields := strings.SplitN(line, "\t", 3)
 		if len(fields) != 3 {
 			continue
@@ -528,7 +532,7 @@ func (c *Catalog) LastCommits(ctx context.Context, options FileGitOptions) (map[
 	if err != nil || target.Dir == "" {
 		return result, err
 	}
-	args := []string{"log", "--no-color", "--no-renames", "--name-only", "--format=%x1e" + gitLogFormat, "-n", strconv.Itoa(fileLastCommitDepth), target.Commit}
+	args := []string{"log", "--no-color", "--no-renames", "--name-only", "-z", "--format=%x1e" + gitLogFormat, "-n", strconv.Itoa(fileLastCommitDepth), target.Commit}
 	prefix := ""
 	if target.Path != "" {
 		args, prefix = append(args, "--", target.Path), target.Path+"/"
@@ -538,15 +542,17 @@ func (c *Catalog) LastCommits(ctx context.Context, options FileGitOptions) (map[
 		return nil, fileGitError(err)
 	}
 	entries := map[string]any{}
+	// With -z, each commit is its header and then its paths, as they are,
+	// each ended by a NUL.
 	for _, record := range strings.Split(string(output), "\x1e") {
-		header, names, _ := strings.Cut(record, "\n")
+		header, names, _ := strings.Cut(record, "\x00")
 		commit := gitLogCommit(header)
 		if commit == nil {
 			continue
 		}
 		delete(commit, "parents")
 		delete(commit, "committed_at")
-		for _, name := range strings.Split(names, "\n") {
+		for _, name := range strings.Split(strings.TrimPrefix(names, "\n"), "\x00") {
 			inside, ok := strings.CutPrefix(name, prefix)
 			if !ok || inside == "" {
 				continue

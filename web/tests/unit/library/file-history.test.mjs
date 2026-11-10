@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  age, blameRows, changeText, checkoutText, commitState, commitsByDay, directoryTab, entryText, fileBreadcrumbs, fileHistoryURL, filePageURL, fileTab, fileTabs, fileTreeKey,
+  age, blameRows, changeText, checkoutText, commitState, commitsByDay, directoryTab, entryText, fileBreadcrumbs, fileHistoryNotice, fileHistoryURL, filePageURL, fileTab, fileTabs, fileTreeKey,
   gitText, keepFilesView, linesText, linkText, notInTreeText, parentDir, parseUnifiedDiff, placeText, readFilePageRoute, reworkText, sessionCommits, treeAncestors, treeText,
 } from "../../../src/file-history-model";
 import { workFilesSummary } from "../../../src/work-files";
@@ -20,6 +20,8 @@ test("missing Git facts read as not applicable or not checked, never as none", (
   assert.equal(gitText({ status: "not_checked", reason: "Local Git has not checked this repository on this Mac yet." }, 0), "Local Git has not checked this repository on this Mac yet.");
   assert.match(gitText({ status: "checked" }, 0), /no commit/);
   assert.match(gitText({ status: "checked" }, 2), /^2 commits/);
+  // A list cut at its bound counts only the commits shown.
+  assert.match(gitText({ status: "checked", commits_since: "2026-09-01T10:00:00Z", commits_truncated: true }, 200), /^The 200 commits that most recently changed this file/);
   // Git is read from the first session edit: an empty list says since when.
   assert.match(gitText({ status: "checked", commits_since: "2026-09-01T10:00:00Z" }, 0), /no commit of this file since 2026-09-01\. Earlier commits are not read/);
   // A tool that recorded no counts is not a change of zero lines.
@@ -32,8 +34,15 @@ test("a commit's state and its session links", () => {
   assert.equal(commitState({ hash: "a", on_mainline: false, sessions: [] }), "not on mainline");
   assert.equal(commitState({ hash: "a", on_mainline: null, sessions: [] }), "");
   assert.equal(linkText({ workspace_id: "w", method: "inferred", confidence: 0.5, counted: false }), "candidate, inferred from its edits");
-  assert.equal(linkText({ workspace_id: "w", method: "transcript", confidence: 1, counted: true }), "printed by the session");
+  assert.equal(linkText({ workspace_id: "w", method: "transcript", confidence: 1, counted: true }), "printed in its transcript");
   assert.equal(linkText({ workspace_id: "w", method: "window", confidence: 0.5, counted: false }), "candidate, its git command ran then");
+});
+
+test("the service's note shows when no file matched or more matched than are listed", () => {
+  const file = { file_key: "k", path: "a.go", sessions: [], commits: [], git: { status: "not_applicable" } };
+  assert.equal(fileHistoryNotice({ path: "a.go", files: [], note: "none" }), "none");
+  assert.equal(fileHistoryNotice({ path: "a.go", files: [file], note: "listed" }), "");
+  assert.equal(fileHistoryNotice({ path: "a.go", files: [file], files_truncated: true, note: "more" }), "more");
 });
 
 test("a Files page address reads back, and moving keeps the open directories", () => {
@@ -119,25 +128,25 @@ test("a path's directories open the tree and lead back to the root", () => {
 });
 
 test("tree entries, edits and rework say what touched them", () => {
-  assert.equal(entryText({ sessions: 2, commits: 1 }, true), "2 sessions · 1 commit");
-  assert.equal(entryText({ sessions: 1, commits: 0 }, true), "1 session");
+  assert.equal(entryText({ sessions: 2, commits: 1 }, true), "2 workspaces · 1 commit");
+  assert.equal(entryText({ sessions: 1, commits: 0 }, true), "1 workspace");
   // Without Git a folder has no commits to count.
-  assert.equal(entryText({ sessions: 3, commits: 0 }, false), "3 sessions");
+  assert.equal(entryText({ sessions: 3, commits: 0 }, false), "3 workspaces");
   assert.match(treeText({ status: "checked", tree_ref: "origin/main", tree_commit: "0123456789" }), /^The tree at origin\/main \(0123456\)/);
   assert.match(treeText({ status: "not_applicable" }), /folder/);
-  assert.match(treeText({ status: "not_checked", reason: "The checkout is gone." }), /^The checkout is gone\. These are the files its sessions edited/);
+  assert.match(treeText({ status: "not_checked", reason: "The checkout is gone." }), /^The checkout is gone\. These are the files agents edited in it/);
   assert.match(notInTreeText({ status: "checked", tree_ref: "origin/main" }), /^Not in the tree at origin\/main/);
   assert.match(placeText({ at: "2026-11-01T10:00:00Z", lines_added: 3, lines_removed: 1, url: "/work/w" }, 1), /^Edit 2 · .+ · \+3 −1$/);
   assert.equal(placeText({ url: "/work/w" }, 0), "Edit 1");
   assert.equal(reworkText({ workspace_id: "w", removed_lines: 8, url: "" }, "by"), "removed 8 lines it added");
-  assert.equal(reworkText({ workspace_id: "w", removed_lines: 1, url: "" }, "of"), "had 1 line removed by this session");
+  assert.equal(reworkText({ workspace_id: "w", removed_lines: 1, url: "" }, "of"), "had 1 line removed by this workspace");
   const link = { workspace_id: "w-1", method: "transcript", confidence: 1, counted: true };
   const commits = [{ hash: "a", sessions: [link] }, { hash: "b", sessions: [] }];
   assert.deepEqual(sessionCommits({ commits }, "w-1").map(item => item.commit.hash), ["a"]);
   assert.deepEqual(sessionCommits({ commits }, "w-2"), []);
 });
 
-test("a session's files and commits summarize what they hold", () => {
+test("a workspace's files and commits summarize what they hold", () => {
   const file = { places: [], reworked_by: [], reworked: [] };
   assert.equal(workFilesSummary({ files: [file, file], commits: [] }), "2 files edited");
   assert.equal(workFilesSummary({ files: [file], files_truncated: true, commits: [{ counted: true }, { counted: false }] }), "1+ file edited · 1 linked commit and 1 candidate");

@@ -15,6 +15,10 @@ export type ConcurrencyCounting = "workspace" | "agent";
 export type Segment = { start: number; end: number; unit: string; workspace: string; bottom: number; conversation: string; running: boolean };
 export type ConcurrencyMetrics = { average: number; parallel: number; peak: number; working: number };
 export const minute = 60_000;
+// A thread's place, as the hover and selection detail name it: its project
+// (a repository or folder; "No project" for neither) and its workspace.
+export const concurrencyThreadPlace = (thread: Pick<ConcurrencyThread, "project" | "workspace_name">) => `${thread.project || "No project"} / ${thread.workspace_name}`;
+
 // Ribbon colors, by project: the chart and its Home card share them.
 export const concurrencyPalette = ["var(--sea)", "var(--gold)", "var(--heat-0)", "var(--heat-1)", "var(--heat-2)", "var(--heat-3)",
   "color-mix(in srgb,var(--sea) 45%,var(--gold))", "color-mix(in srgb,var(--heat-1) 55%,var(--heat-3))",

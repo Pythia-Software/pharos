@@ -41,6 +41,17 @@ func TestReadGitOps(t *testing.T) {
 		{"git revert --no-edit -m 1 abc", "", "revert  [] [] 0 ; "},
 		{"gh pr create --fill", "https://github.com/Acme/App/pull/7\n", "pull_request  [] [] 7 acme/app; "},
 		{`echo "git commit -m x"`, "", ""},
+		// Only a git or gh that starts a command runs: not one in a here
+		// document's body or in quoted text, nor in a comment.
+		{"git commit -q -F - <<'EOF'\nA subject nobody used\n\nExplain why `git revert` is wrong here.\nEOF", "[main 1234567] A subject nobody used\n",
+			"commit  [" + subject("A subject nobody used") + "] [1234567] 0 ; "},
+		{"gh pr create --title T --body \"Run \\`git commit -m x\\` first\"", "https://github.com/acme/app/pull/8\n", "pull_request  [] [] 8 acme/app; "},
+		{`echo "gh pr create" # then git commit -m x`, "https://github.com/acme/app/pull/8\n", ""},
+		// After a line continuation, assignments, env and a compound
+		// command's keywords, a command still starts.
+		{"git add -A && \\\n  GIT_AUTHOR_NAME=\"A B\" env FOO=1 git commit -qm Joined", "", "commit  [" + subject("Joined") + "] [] 0 ; "},
+		{"if true; then git commit -qm Then; fi", "", "commit  [" + subject("Then") + "] [] 0 ; "},
+		{`echo "$(git commit -qm Inside)"`, "", "commit  [" + subject("Inside") + "] [] 0 ; "},
 		// A cd in a subshell moved only the subshell; one in the subshell the
 		// command runs in counts. Unbalanced quotes leave the directory unknown.
 		{`cd /src/app && (cd /src/lib && git status); git commit -qm App`, "", "commit repo-app [" + subject("App") + "] [] 0 ; "},

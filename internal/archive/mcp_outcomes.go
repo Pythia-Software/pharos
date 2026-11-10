@@ -26,18 +26,18 @@ var outcomeMCPTools = []map[string]any{
 			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
 			"offset":            map[string]any{"type": "integer", "minimum": 0},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
-	{"name": "get_file_history", "description": "Why is this file like this? Every session that edited a file, newest first: its edits, each a reader link to the call that made it (places), lines added and removed, outcome label with its evidence, and the sessions whose lines it removed (reworked) or that removed its lines (reworked_by). In a repository local Git checked, also the commits that changed the file, each with the sessions linked to it and a reader link to where each printed or made it. Works for files in plain folders from transcripts alone. path is repository-relative (src/main.go), a folder path (~/notes/plan.md) or an absolute path; with project, a repository-relative path is that repository's file even when no session touched it. Each file has url, its page on the Files page with its project's tree.",
+	{"name": "get_file_history", "description": "Why is this file like this? Every workspace whose agents edited a file (sessions), newest first: its edits, each a reader link to the call that made it (places), lines added and removed, outcome label with its evidence, and the workspaces whose lines it removed (reworked) or that removed its lines (reworked_by). In a repository local Git checked, also the commits that changed the file, each with the workspaces linked to it and a reader link to where each printed or made it. Works for files in plain folders from transcripts alone. path is repository-relative (src/main.go), a folder path (~/notes/plan.md) or an absolute path; a path that matches exactly wins, and only otherwise does a path ending match. files_truncated means more files matched than were returned: give a longer path or a project. With project, a repository-relative path is that repository's file even when no agent touched it. Each file has url, its page on the Files page with its project's tree.",
 		"inputSchema": map[string]any{"type": "object", "required": []string{"path"}, "properties": map[string]any{
 			"path":              map[string]any{"type": "string"},
 			"project":           map[string]any{"type": "string", "description": "Only the file in this project, when several projects hold the path: a name or folder as list_projects gives it, or repository:<id>."},
-			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "description": "Sessions and commits per file; default 20."},
+			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "description": "Workspaces and commits per file; default 20."},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 	{"name": "get_branch_spend", "description": "What agents spent on each branch of your repositories: cost (API-price equivalent, as the Library prices it), tokens and sessions per branch, most spent first, and the coverage split (on a branch per turn or per session, unknown branch, no branch data) that adds up to the repository sessions' whole spend. A session that switched branches is split turn by turn. Sessions in folders have no branches and are not counted; for them use query_statistics. Same numbers as Analyze → Spend by Branch.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"project":           map[string]any{"type": "string", "description": "A repository from list_projects."},
 			"branch":            map[string]any{"type": "string", "description": "Only branches whose name contains this text."},
-			"from":              map[string]any{"type": "string", "description": "Usage in UTC hours starting at or after this time: an RFC 3339 timestamp or a UTC date. Spend is placed in the hour it was used."},
-			"to":                map[string]any{"type": "string", "description": "Usage in UTC hours starting before this time; a date includes its whole day."},
+			"from":              map[string]any{"type": "string", "description": "Usage in hours starting at or after this time: an RFC 3339 timestamp, or a date, which starts at midnight in this Mac's time zone as the Spend by Branch page counts days. Spend is placed in the hour it was used."},
+			"to":                map[string]any{"type": "string", "description": "Usage in hours starting before this time; a date includes its whole local day."},
 			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "description": "Branches listed; default 20."},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 }
@@ -51,16 +51,20 @@ func (c *Catalog) getBranchSpend(ctx context.Context, args map[string]any) (map[
 	budget := mcpBudget(args, 1500)
 	project, branchText := firstString(args["project"]), strings.ToLower(firstString(args["branch"]))
 	// Rows are hourly: the bounds select the hours starting in [from, to),
-	// compared as instants, so a bound's offset counts.
+	// compared as instants, so a bound's offset counts. A date is a day in
+	// this Mac's time zone, as Spend by Branch counts days (localMidnight).
 	var from, to time.Time
 	for key, bound := range map[string]*time.Time{"from": &from, "to": &to} {
 		if value := strings.TrimSpace(firstString(args[key])); value != "" {
 			parsed, ok := parseTime(value)
+			if day, err := time.ParseInLocation("2006-01-02", value, time.Local); err == nil {
+				parsed, ok = day, true
+				if key == "to" {
+					parsed = day.AddDate(0, 0, 1)
+				}
+			}
 			if !ok {
 				return nil, fmt.Errorf("%s must be a valid timestamp or date", key)
-			}
-			if key == "to" && len(value) == len("2006-01-02") {
-				parsed = parsed.Add(24 * time.Hour)
 			}
 			*bound = parsed
 		}

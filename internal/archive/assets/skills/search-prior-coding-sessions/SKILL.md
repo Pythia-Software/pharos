@@ -42,7 +42,8 @@ works the same for both.
    returns the project that directory is in, from a repository checkout or a
    folder, even below where any past session ran. If the user named a project,
    call `list_projects` with `query` set to that name instead. If nothing comes
-   back in a Git checkout, a new worktree may not be known yet: run
+   back, or only a folder while you are in a Git checkout, a new worktree may
+   not be known yet: run
    `git remote get-url origin` and call `list_projects` with `query` set to
    the repository's name from the remote. The directory name isn't reliable,
    since tools like Conductor name worktrees after cities.
@@ -117,7 +118,9 @@ For the work rather than the conversation: `trace` finds work by changed file,
 PR number, or task; `search_work` (which also takes `project`) and
 `get_work_detail` give a workspace's changes, PRs, and metrics;
 `get_change_set` gives a patch locator. A `file` filter matches files a
-session edited through its tool calls, for every agent that has file tools.
+session edited through its tool calls, for every agent that has file tools:
+pass a repository-relative path (`internal/app.go`) or a part of one; an
+absolute path works where Pharos knows the checkout.
 `get_work_detail` defaults to identity metadata. Request the needed `section`
 from `available_sections` and follow `next_offset` to page it. Read any
 `truncated_fields` losslessly with `field`, the row's `item_offset` as `offset`,
@@ -144,7 +147,8 @@ read before advancing to the next window.
   `commit_links` give the same for one workspace.
 - **Counts and cost by outcome:** `query_statistics` takes `outcome_label`
   as a filter and in `group_by`, with `project`; for example
-  `group_by: ["outcome_label"]` with a `cost_usd` sum. The `outcome` filter
+  `group_by: ["outcome_label"]` with a `cost_usd` sum. The search tools take
+  it as a filter too, and then answer with `query_statistics` cards. The `outcome` filter
   is different: text a source reported about the work.
 - **Spend by branch:** `get_branch_spend` with `project` gives cost, tokens
   and sessions per branch, and how much spend has no recorded branch.

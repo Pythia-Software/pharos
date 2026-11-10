@@ -2,15 +2,34 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { core, schemas, recipeById, instantiateRecipe, cardCoverQuery } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, availableViews, catalogProblems, cycleResult, normalizeAnalysis, switchView, trendUnavailable, validAnalysisState, viewOptions } from "../../../src/dashboard-analysis-model";
+import { viewKeys, chosenView, scatterUnitChange, viewChosen, changeState, aggregate, analysisResult, analysisLabels, analysisFields, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, availableViews, catalogProblems, cycleResult, normalizeAnalysis, switchView, trendUnavailable, validAnalysisState, viewOptions } from "../../../src/dashboard-analysis-model";
+import { humanAnalysisCatalog as human } from "../../../src/human-analysis-catalog";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { runAnalysisQuery } from "../../../src/analysis-request";
 import { answerQuery } from "../../support/query-server.mjs";
 import { cycleSamples, hoursOfDay, weekdayMetric, weekdays } from "../../../src/weekday-cover";
+import { analysisLoadingPresentation } from "../../../src/dashboard-loading-model";
 
 const { rows, hourly } = usageLedger(), schema = schemas.usage;
 const trend = { metric: "percent_cost", split: "type", period: "day", hours: 6, days: 3, rollingPeriods: 7, scale: "half", display: "interval" };
 const evaluate = query => core.evaluateMetrics(rows, query, schema, { now }).metrics[0];
+
+test("analysis loading follows the selected chart, including folded cycles", () => {
+  for (const [input, kind] of [
+    [{ view: "compare", metric: "tokens", split: "provider" }, "list"],
+    [{ view: "compare", metric: "tokens", split: "provider", compareAs: "share" }, "pie"],
+    [{ view: "distribution", metric: "tokens", split: "provider" }, "box"],
+    [{ view: "distribution", metric: "output", split: "none" }, "columns"],
+    [{ view: "scatter", unit: "conversation", metric: "cost", metricY: "tokens" }, "scatter"],
+    [{ view: "cycle", cycle: "hour", metric: "tokens", reduce: "median" }, "box"],
+    [{ view: "cycle", cycle: "weekday", metric: "tokens", reduce: "mean" }, "columns"],
+  ]) {
+    const view = normalizeAnalysis(catalog, input), { clause } = analysisQuery(catalog, view, []);
+    assert.equal(analysisLoadingPresentation(clause, view, false).kind, kind, JSON.stringify(input));
+  }
+  const view = normalizeAnalysis(catalog, { view: "distribution", metric: "tokens" });
+  assert.equal(analysisLoadingPresentation(analysisQuery(catalog, view, []).clause, view, true).kind, "columns");
+});
 
 test("a trend link without a view stays the trend; an old share metric reads as its measure shown as shares", () => {
   assert.ok(validAnalysisState(catalog, trend));
@@ -31,14 +50,16 @@ test("field validation rejects unknown measures, units and thresholds but not co
   }
 });
 
-test("switching views keeps what both views share and coerces the rest", () => {
+test("switching views keeps the data both views share, coerces the rest and returns the view to its defaults", () => {
   const share = switchView(catalog, { ...trend, split: "provider" }, "compare");
-  assert.deepEqual([share.metric, share.compareAs, share.split, share.rollingPeriods], ["cost", "share", "provider", 7], "percent cost becomes a cost share");
-  assert.deepEqual(["metric", "share", "split"].map(key => switchView(catalog, share, "trend")[key]), ["cost", true, "provider"]);
+  assert.deepEqual([share.metric, share.split], ["cost", "provider"], "percent cost becomes cost");
+  assert.deepEqual(viewKeys.filter(key => share[key] !== undefined), [], "the trend's shares, smoothing and scale are no choice about Compare");
+  assert.equal(normalizeAnalysis(catalog, share).compareAs, "bars");
+  assert.deepEqual(["metric", "share", "split"].map(key => normalizeAnalysis(catalog, switchView(catalog, { ...share, compareAs: "share" }, "trend"))[key]), ["cost", false, "provider"], "nor are Compare's shares about the trend");
   const typed = switchView(catalog, { ...trend, metric: "percent" }, "compare");
-  assert.deepEqual([typed.metric, typed.compareAs, typed.split], ["tokens", "bars", "none"], "token type is no breakdown, and one group has no shares");
-  assert.deepEqual(["metric", "share", "split"].map(key => switchView(catalog, typed, "trend")[key]), ["tokens", false, "none"], "no breakdown is the trend's total line");
-  const ratio = switchView(catalog, { ...share, metric: "cache_read_share", split: "provider" }, "compare");
+  assert.deepEqual([typed.metric, typed.split], ["tokens", "type"], "token type remains a component breakdown");
+  assert.deepEqual(["metric", "split"].map(key => switchView(catalog, typed, "trend")[key]), ["tokens", "type"], "and returns to the trend");
+  const ratio = normalizeAnalysis(catalog, switchView(catalog, { ...share, metric: "cache_read_share", split: "provider", compareAs: "share" }, "compare"));
   assert.equal(ratio.compareAs, "bars", "a ratio cannot be shown as shares");
   const scatter = switchView(catalog, { view: "compare", metric: "cost", split: "model_effort" }, "scatter");
   assert.deepEqual([scatter.unit, scatter.metricY, scatter.split], ["conversation", "tokens", "none"], "scatter pairs two measures of a unit; model + effort is not constant within a conversation");
@@ -47,7 +68,7 @@ test("switching views keeps what both views share and coerces the rest", () => {
   assert.equal(switchView(catalog, { view: "compare", metric: "cache_read_share", split: "none" }, "distribution").unit, "conversation", "a ratio has no per-record value");
   assert.equal(switchView(catalog, { view: "compare", metric: "tokens", split: "none" }, "distribution").unit, "records");
   assert.equal(switchView(catalog, { view: "compare", unit: "agent_session", metric: "tokens", split: "provider", reduce: "count", compareAs: "share" }, "compare").compareAs, "share", "unit counts partition the units");
-  assert.equal(switchView(catalog, { view: "compare", unit: "agent_session", metric: "tokens", split: "provider", reduce: "mean", compareAs: "share" }, "compare").compareAs, "bars");
+  assert.equal(normalizeAnalysis(catalog, switchView(catalog, { view: "compare", unit: "agent_session", metric: "tokens", split: "provider", reduce: "mean", compareAs: "share" }, "compare")).compareAs, "bars");
   assert.equal(switchView(catalog, { view: "scatter", unit: "conversation", metric: "tokens", metricY: "tokens", split: "none" }, "scatter").metricY, "cost");
 });
 
@@ -113,7 +134,9 @@ test("a bucket opens its records, or its units' grouped rows", () => {
   const units = analysisQuery(catalog, { view: "distribution", unit: "conversation", metric: "cost", split: "model_family" }, []);
   const group = analysisInspectQuery(units, { keys: ["opus"], value: 1, count: 6 }, units.clause, schema, "distribution");
   assert.deepEqual(group.grouping.keys, units.query.grouping.keys);
-  assert.deepEqual(group.where, [{ field: "analysis_value", op: "is_not_null", value: "" }, { field: "root_model_family", op: "=", value: "opus" }], "the plotted conversations of that group");
+  // Cost per conversation is long-tailed, so its default axis is log, which
+  // plots only conversations with a cost.
+  assert.deepEqual(group.where, [{ field: "analysis_value", op: ">", value: "0" }, { field: "root_model_family", op: "=", value: "opus" }], "the plotted conversations of that group");
   assert.equal(group.aggregations?.length ?? 0, 0);
   assert.equal(core.applyQuery(rows, group, schema, { now }).total, 8, "eight Opus conversations, from both providers");
   assert.equal(analysisInspectQuery(units, { keys: ["Monday"], value: 1, count: 1 }, units.clause, schema, "cycle"), null);
@@ -225,25 +248,25 @@ test("Over time draws every measure and population; only unit reductions stay un
     assert.equal(trendUnavailable(catalog, state), undefined, metric);
     assert.equal(viewOptions(catalog, state).find(([view]) => view === "trend")[2], undefined, `${metric}: the option is enabled`);
     const there = switchView(catalog, state, "trend");
-    assert.deepEqual([there.view, there.metric, there.split, there.share], ["trend", metric, split, false], `${metric} by ${split}: nothing is substituted`);
-    assert.deepEqual(["metric", "split", "compareAs"].map(key => switchView(catalog, there, "compare")[key]), [metric, split, "bars"], `${metric} by ${split}: and back`);
+    assert.deepEqual([there.view, there.metric, there.split, normalizeAnalysis(catalog, there).share], ["trend", metric, split, false], `${metric} by ${split}: nothing is substituted`);
+    assert.deepEqual(["metric", "split", "compareAs"].map(key => normalizeAnalysis(catalog, switchView(catalog, there, "compare"))[key]), [metric, split, "bars"], `${metric} by ${split}: and back`);
   }
   const share = { ...trend, view: "compare", metric: "cost", split: "provider", compareAs: "share" };
   assert.equal(trendUnavailable(catalog, share), undefined);
   const there = switchView(catalog, share, "trend"), back = switchView(catalog, there, "compare");
-  assert.deepEqual([there.metric, there.share, there.split, back.metric, back.compareAs, back.split], ["cost", true, "provider", "cost", "share", "provider"]);
+  assert.deepEqual([there.metric, there.share, there.split, back.metric, back.compareAs, back.split], ["cost", undefined, "provider", "cost", undefined, "provider"], "the data moves; the shares return to the default");
   // Unit counts, means, medians and maxima are not record totals.
   for (const reduce of ["count", "mean", "median", "max"]) {
     const units = { ...share, unit: "conversation", reduce };
     assert.match(trendUnavailable(catalog, units), /over records/, reduce);
     assert.deepEqual(switchView(catalog, units, "trend").view, "compare", reduce);
   }
-  assert.deepEqual(["metric", "share"].map(key => switchView(catalog, { ...share, unit: "conversation", reduce: "total" }, "trend")[key]), ["cost", true], "a unit total adds up the same records");
+  assert.deepEqual(["metric", "view"].map(key => switchView(catalog, { ...share, unit: "conversation", reduce: "total" }, "trend")[key]), ["cost", "trend"], "a unit total adds up the same records");
   // A share needs groups to divide.
   assert.equal(normalizeAnalysis(catalog, { ...share, split: "none" }).compareAs, "bars");
-  assert.equal(switchView(catalog, { ...trend, metric: "percent", split: "type" }, "compare").compareAs, "bars", "token type is no breakdown, so no share");
+  assert.equal(normalizeAnalysis(catalog, { ...switchView(catalog, { ...trend, metric: "percent", split: "type" }, "compare"), compareAs: "share" }).compareAs, "share", "token components partition the total");
   // Values return as bars, whatever display came before.
-  assert.equal(switchView(catalog, { ...there, share: false }, "compare").compareAs, "bars");
+  assert.equal(normalizeAnalysis(catalog, switchView(catalog, { ...there, share: true }, "compare")).compareAs, "bars");
 });
 
 test("minimums count plotted observations, and shares ignore them", () => {
@@ -350,4 +373,104 @@ test("a shared snapshot filtered to an hour groups the days holding that hour, a
   const records = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "none" }, where);
   const [total] = await runAnalysisQuery("usage", schema, records.query, { local: { rows, hourly } });
   assert.equal(total.buckets[0].value, Object.values(expected).reduce((n, value) => n + value, 0));
+});
+
+
+test("component comparisons partition every matching word or input token, with full shares and record drill-downs", async () => {
+  const wordRows = [
+    { id: "one", provider: "codex", words: 100, typed_words: 20, pasted_words: 30, quoted_words: 10, resent_words: 10, template_words: 10, attachment_words: 5, harness_words: 10, automated_words: 5 },
+    { id: "two", provider: "claude", words: 900, typed_words: 900 },
+  ];
+  const tokenRows = [{ provider: "codex", input_tokens: 100, uncached_input_tokens: 20, cache_read_input_tokens: 70, cache_creation_input_tokens: 10, output_tokens: 500 }];
+  for (const [source, metric, split, records, total] of [[human, "words", "category", wordRows, 100], [catalog, "input", "input_type", tokenRows, 100]]) {
+    const sourceSchema = schemas[source.dataset], where = [{ field: "provider", op: "=", value: "codex" }];
+    const state = { view: "compare", metric, split, compareAs: "share", minSamples: 50 };
+    assert.ok(validAnalysisState(source, state));
+    assert.doesNotMatch(analysisNote(source, state), /hidden/, "a threshold cannot omit components from 100%");
+    const analysis = analysisQuery(source, state, where);
+    assert.equal(analysis.clause.display.kind, "pie");
+    assert.deepEqual(analysis.query.where, where);
+    const results = await runAnalysisQuery(source.dataset, sourceSchema, analysis.query, { local: { rows: records }, now });
+    const result = analysisResult(analysis, results);
+    assert.equal(result.error, undefined);
+    assert.equal(result.buckets.reduce((sum, bucket) => sum + bucket.value, 0), total, "parts sum to the full selected population");
+    assert.deepEqual(analysis.supporting.where, where);
+    assert.equal(analysisFields(source, state, sourceSchema).at(-1).label, source.components[split].label);
+    assert.equal(analysisLabels(source, state)[split](result.buckets[0].keys[0]), source.components[split].parts[0].label);
+    const drilled = analysisInspectQuery(analysis, result.buckets[0], analysis.clause, sourceSchema, "compare");
+    assert.deepEqual(core.evaluateMetrics(records, { ...drilled, aggregations: [{ id: "count", op: "count", groupBy: [] }] }, sourceSchema).metrics[0].buckets[0].value, 1);
+    const selected = analysisQuery(source, { ...state, selection: { values: [result.buckets[0].keys[0]], excluded: false } }, where);
+    const drawn = analysisResult(selected, results);
+    assert.equal(drawn.buckets.length, 1);
+    assert.equal(drawn.buckets[0].value + drawn.other.value, total, "a selected part keeps the rest in Other");
+    assert.deepEqual(analysisResult(analysis, results.slice(1)).buckets, []);
+    assert.match(analysisResult(analysis, results.map((entry, index) => index ? entry : { ...entry, coverage: "partial" })).error, /incomplete/);
+    const empty = analysisResult(analysis, await runAnalysisQuery(source.dataset, sourceSchema, analysis.query, { local: { rows: [] }, now }));
+    assert.ok(empty.buckets.every(bucket => bucket.value === 0));
+    assert.equal(normalizeAnalysis(source, { ...state, metric: metric === "words" ? "typed" : "cost" }).split, "none", "incompatible measures leave the component split");
+    assert.equal(switchView(source, state, "distribution").split, "none");
+    assert.equal(switchView(source, state, "trend").split, split);
+  }
+});
+
+test('standalone scatter plots pair dashboard metrics and keep point-type changes meaningful', async () => {
+  const { scatterAnalysisCatalog: scatter } = await import('../../../src/scatter-analysis-catalog');
+  const { scatterMetrics, scatterMetricOptions } = await import('../../../src/scatter-metrics');
+  assert.deepEqual(catalogProblems(scatter), []);
+  assert.equal(scatterMetricOptions(scatter,"conversation","tokens_cost","cache write")[0][0],"usage_cache_creation_input_tokens");
+  assert.ok(scatterMetricOptions(scatter,"message","human_typed","session shape").length === 0);
+  assert.deepEqual(viewOptions(scatter, {view:'scatter',metric:'human_typed',split:'none'}).map(([view])=>view), ['scatter']);
+  for (const source of [catalog, human]) assert.ok(!viewOptions(source, source.trend).some(([view]) => view === 'scatter'));
+  const state = normalizeAnalysis(scatter, {v:2,view:'scatter',unit:'conversation',metric:'human_typed',metricY:'tokens_cost',split:'provider'});
+  assert.equal(state.metricY,'tokens_cost');
+  const query = analysisQuery(scatter, state, []);
+  assert.ok(query.query.grouping.source.where.some(term=>term.field==='point_kind' && term.value==='conversation'));
+  const message = normalizeAnalysis(scatter, {...state,unit:'message'});
+  assert.equal(message.metric,'human_typed');
+  assert.notEqual(message.metricY,message.metric);
+  assert.ok(scatter.measures[message.metricY].units.includes('message'));
+  assert.equal(normalizeAnalysis(scatter,{...state,unit:'work'}).split,'none','a workspace may span providers');
+  // Count each changes the data the chart holds and no view setting: the
+  // reader has still chosen none, so Reset view stays hidden.
+  const asked = {v:3,view:'scatter',unit:'conversation',metric:'human_typed',metricY:'tokens_cost',split:'provider'};
+  const counted = changeState(scatter, asked, scatterUnitChange(scatter, asked, 'work'));
+  assert.deepEqual(JSON.parse(JSON.stringify(counted)), {...asked, unit:'work', split:'none'});
+  assert.equal(viewChosen(counted), false);
+  // Workspaces force the provider colour off; that is no breakdown the
+  // reader chose, so the scales they chose stay.
+  const scaled = {...asked, scale:'logarithmic', scaleY:'linear'};
+  const kept = changeState(scatter, scaled, scatterUnitChange(scatter, scaled, 'work'));
+  assert.deepEqual(JSON.parse(JSON.stringify(kept)), {...scaled, unit:'work', split:'none'});
+  assert.deepEqual(chosenView(kept), {scale:'logarithmic', scaleY:'linear'});
+  // Choosing a breakdown still returns the view to its defaults.
+  assert.equal(viewChosen(changeState(scatter, kept, {split:'provider'})), false);
+  const session = normalizeAnalysis(scatter,{...state,unit:'agent_session',metricY:'session_shape_autonomy'});
+  assert.equal(session.metric,'human_typed');
+  assert.equal(session.metricY,'session_shape_autonomy');
+  assert.ok(analysisQuery(scatter,session,[]).query.grouping.source.where.some(term=>term.field==='point_kind'&&term.value==='agent_session'));
+  for (const metric of ['tokens_cost','session_shape_wall_seconds','session_shape_context_peak_tokens','calls_calls']) assert.ok(scatter.measures[metric].units.includes('agent_session'),metric);
+  assert.equal(scatterMetricOptions(scatter,'agent_session','tokens_cost','work hours').length,0,'conversation activity is not assigned to a session');
+  assert.equal(scatterMetrics.length,new Set(scatterMetrics.map(item=>item.id)).size,'source and extra metrics never duplicate');
+  for (const item of scatterMetrics) assert.ok(item.group && item.measure.note && Object.keys(item.keys).length, item.id);
+  const rows = [
+    {id:'conversation:a',entity_id:'a',point_kind:'conversation',human_typed:8,tokens_cost:2},
+    {id:'conversation:b',entity_id:'b',point_kind:'conversation',human_typed:0,tokens_cost:0},
+    {id:'conversation:c',entity_id:'c',point_kind:'conversation',human_typed:5,tokens_cost:null},
+  ];
+  const chart = analysisQuery(scatter,{...state,split:'none'},[]);
+  const result = core.evaluateMetrics(rows,chart.query,schemas.scatter,{now}).metrics[0];
+  assert.deepEqual(result.buckets.filter(bucket=>bucket.value!==null&&bucket.y!==null).map(bucket=>[bucket.value,bucket.y]),[[8,2],[0,0]]);
+
+  // Human and agent wall time overlap. Pairing either with another metric
+  // must keep the two populations separate, including the concurrency ratio.
+  const hours = [
+    {id:'you',actor:'you',elapsed_hours:2,active_ms:2,elapsed_ms:2},
+    {id:'agent-a',actor:'with_you',elapsed_hours:1,active_ms:2,elapsed_ms:1},
+    {id:'agent-b',actor:'unattended',elapsed_hours:1,active_ms:4,elapsed_ms:1},
+  ];
+  for (const [id,expected] of [['work_hours_wall_hours',2],['work_hours_engaged_hours',2],['work_hours_at_once',3]]) {
+    const {measure} = scatterMetrics.find(item=>item.id===id);
+    const query = {...core.EMPTY_QUERY,where:measure.where,aggregations:[{id:'hours',...aggregate(measure),groupBy:[]}]};
+    assert.equal(core.evaluateMetrics(hours,query,schemas.rhythm,{now}).metrics[0].buckets[0].value,expected,id);
+  }
 });

@@ -58,6 +58,14 @@ func Run(arguments []string) error {
 	if command == "cloud-restore" {
 		return runCloudRestoreCLI(args)
 	}
+	// Capture export reads a capture root and writes an outbox it is given:
+	// it never loads a configuration or opens a library or catalog.
+	if command == "capture-export" {
+		return runCaptureExportCLI(args)
+	}
+	if command == "capture-export-verify" {
+		return runCaptureExportVerifyCLI(args)
+	}
 	// Labeling never opens the catalog through OpenCatalog: prepare reads a
 	// read-only snapshot, and plan and status read only a dataset.
 	if command == "labeling" {
@@ -142,6 +150,9 @@ func Run(arguments []string) error {
 	if command == "doctor" {
 		return runDoctor(config)
 	}
+	if command == "conversation-names" {
+		return runConversationNamesCLI(config, args, os.Stdout, os.Stderr)
+	}
 	// dev-ui only talks to the running service, so it skips the guards below
 	// and never opens the catalog.
 	if command == "dev-ui" {
@@ -184,6 +195,9 @@ func Run(arguments []string) error {
 	// Capturing and backing up only copy files; they never open the catalog
 	// for writing.
 	// Each holds a lease under the capture root while it writes (§6.5).
+	if command == "claude-import" {
+		return runClaudeImportCommand(config, args)
+	}
 	if command == "sqlite-records" {
 		if subcommand := firstOf(args); subcommand == "status" || subcommand == "verify" {
 			return runSQLiteRecordsCLI(config, args)
@@ -318,6 +332,8 @@ func Run(arguments []string) error {
 			return runFindingsCLI(catalog, args)
 		case "labels":
 			return runLabelsCLI(ctx, config, catalog, op, args, os.Stdout, os.Stderr)
+		case "execution-evidence":
+			return runExecutionEvidenceCLI(ctx, catalog, op, args, os.Stdout, os.Stderr)
 		case "health":
 			value := catalog.Health()
 			value["storage"] = storage(config)
@@ -372,6 +388,11 @@ func cliCatalogOperation(command string, args []string) OperationSpec {
 		return OperationSpec{Kind: "index.captures"}
 	case "labels":
 		return labelsCLIOperation(args)
+	case "execution-evidence":
+		// status only reads.
+		if firstOf(args) == "run" {
+			return OperationSpec{Kind: "catalog.execution-evidence"}
+		}
 	}
 	return OperationSpec{}
 }
@@ -388,7 +409,9 @@ func runIngestCLI(ctx context.Context, config Config, catalog *Catalog, op *Op) 
 			return err
 		}
 		op.Step(source.Name, "", -1)
-		results = append(results, catalog.Ingest(adapter, nil))
+		// Each source is one admitted CPU leaf of this command's authority;
+		// the ingest itself runs as it always has.
+		results = append(results, catalog.admittedIngest(ctx, source.Name, currentHost().ID, func(context.Context) IngestResult { return catalog.Ingest(adapter, nil) }))
 	}
 	op.Step("Link identities and refresh the Search view", "", -1)
 	links, err := catalog.ReconcileIdentities()
@@ -485,6 +508,9 @@ func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op 
 		if stats != nil {
 			_ = printJSON(stats)
 		}
+		if err == nil && !*dryRun {
+			catalog.refreshAgentEventFactsLogged(ctx, false)
+		}
 		return err
 	}
 	if len(args) == 2 && args[0] == "import" {
@@ -492,7 +518,17 @@ func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op 
 		if err != nil {
 			return err
 		}
+		catalog.refreshAgentEventFactsLogged(ctx, false)
 		return printJSON(result)
+	}
+	if len(args) == 1 && args[0] == "facts" {
+		// The Agent events dashboard's projection (agent_event_facts.go),
+		// which the background pass otherwise refreshes after it runs.
+		rebuilt, err := catalog.refreshAgentEventFacts(ctx)
+		if err != nil {
+			return err
+		}
+		return printJSON(map[string]int{"conversations_rebuilt": rebuilt})
 	}
 	if len(args) == 1 && args[0] == "fetch" {
 		// The verifier, and the runtime unless one is configured or bundled.
@@ -507,7 +543,7 @@ func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op 
 		}
 		return printJSON(status)
 	}
-	return fmt.Errorf("usage: pharos agent-events {run [flags] | fetch | status | import FILE}")
+	return fmt.Errorf("usage: pharos agent-events {run [flags] | fetch | status | facts | import FILE}")
 }
 
 // applyRepositoryMergesCLI: pharos repositories --merge --apply.
@@ -540,7 +576,7 @@ func firstOf(args []string) string {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,agent-events,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,claude-import,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,agent-events,execution-evidence,conversation-names,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
 
 }
 func urlQueryEscape(value string) string {

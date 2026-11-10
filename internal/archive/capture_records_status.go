@@ -155,7 +155,7 @@ func runSQLiteRecordsCLI(config Config, args []string) error {
 		if !isConductorSource(source.Kind) {
 			return errors.New("live logical reconciliation currently supports Conductor; use capture SOURCE for a verified database/file group")
 		}
-		plan, e := planCapture(source)
+		plan, e := planCapture(context.Background(), source)
 		if e != nil {
 			return e
 		}

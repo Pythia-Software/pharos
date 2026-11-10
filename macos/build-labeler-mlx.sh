@@ -4,6 +4,9 @@
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 OUT=${1:-"$ROOT/build/labeler-mlx"}
+# TODO: Shrink the bundled MLX runtime (~238 MB; metallib ~214 MB).
+# Revisit upstream JIT/MinSizeRel after compatibility and timing validation;
+# see the high-priority TODO in docs/local-labeler.md#apple-silicon-gpu.
 MLX=$(python3 "$ROOT/macos/fetch-mlx.py")
 mkdir -p "$OUT"
 # A worker may target macOS 14; it guards dlopen of this optional 26.2 engine.

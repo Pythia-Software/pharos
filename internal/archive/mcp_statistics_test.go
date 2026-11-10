@@ -347,9 +347,64 @@ func TestStatisticsIncrementalProjectionAndPriceInvalidation(t *testing.T) {
 	if statisticsItems(after)[0]["cost_usd"] == before {
 		t.Fatal("price update didn't invalidate projection")
 	}
-	// Reads compute the repriced metrics; maintenance stores them.
+	// Reads compute the repriced metrics; maintenance stores them. A price
+	// that changes while it computes makes what it computed obsolete: nothing
+	// is stored and the workspaces stay dirty for the next pass.
+	stored := func() (dirty int, projection string) {
+		t.Helper()
+		if err := c.DB.QueryRow("SELECT (SELECT COUNT(*) FROM mcp_metric_dirty),(SELECT COALESCE(group_concat(metrics_json,'|'),'') FROM (SELECT metrics_json FROM mcp_metric_projection ORDER BY entity,entity_id))").Scan(&dirty, &projection); err != nil {
+			t.Fatal(err)
+		}
+		return dirty, projection
+	}
+	pending, obsolete := stored()
+	override(t, &metricProjectionComputedHook, func() {
+		if _, err := c.DB.Exec("UPDATE cost_changes SET input_per_mtok=5 WHERE model_key='gpt-5.5'"); err != nil {
+			t.Error(err)
+		}
+	})
 	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
 		t.Fatal(err)
+	}
+	if dirty, projection := stored(); dirty != pending || projection != obsolete || pending == 0 {
+		t.Fatalf("a refresh overtaken by a price change stored its result: dirty %d → %d, changed %v", pending, dirty, projection != obsolete)
+	}
+	metricProjectionComputedHook = nil
+	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if dirty, projection := stored(); dirty != 0 || projection == obsolete {
+		t.Fatalf("the next refresh left %d dirty, stored anew %v", dirty, projection != obsolete)
+	}
+	// A refresh that overlaps another's leaves the other's claim alone, so
+	// the first still publishes; only an abandoned claim is taken over.
+	if _, err := c.DB.Exec("INSERT OR IGNORE INTO mcp_metric_dirty SELECT id FROM workspaces"); err != nil {
+		t.Fatal(err)
+	}
+	metricProjectionComputedHook = func() {
+		metricProjectionComputedHook = nil
+		if attempted, err := c.refreshMetricProjections(context.Background(), 10); err != nil || attempted != 0 {
+			t.Errorf("an overlapping refresh took %d claimed workspaces (%v)", attempted, err)
+		}
+	}
+	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if dirty, _ := stored(); dirty != 0 {
+		t.Fatalf("an overlapping refresh kept the first from publishing: %d dirty", dirty)
+	}
+	if _, err := c.DB.Exec(`INSERT OR IGNORE INTO mcp_metric_dirty SELECT id FROM workspaces;
+		INSERT INTO mcp_metric_claims SELECT id,'a refresh that never finished',? FROM workspaces`, time.Now().Add(-2*metricClaimAbandoned).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if dirty, _ := stored(); dirty != 0 {
+		t.Fatalf("an abandoned claim kept %d workspaces dirty", dirty)
+	}
+	if repriced := statisticsItems(statisticsCall(t, c, "query_statistics", args))[0]["cost_usd"]; repriced == statisticsItems(after)[0]["cost_usd"] {
+		t.Fatal("the stored projection kept the price it was overtaken at")
 	}
 	if _, err := c.DB.Exec("INSERT INTO mcp_calls(called_at,tool_name,status,duration_ms,response_bytes,estimated_output_tokens) VALUES('x','query_statistics','ok',0,0,0)"); err != nil {
 		t.Fatal(err)
@@ -765,4 +820,36 @@ func activeStatisticsSnapshots(c *Catalog) int {
 		}
 	}
 	return count
+}
+
+func TestStatisticsAggregateUsageKeepsConsumingLayerUnknown(t *testing.T) {
+	c := statisticsFixture(t)
+	if _, err := c.DB.Exec(`UPDATE agent_session_usage SET attribution='run-remainder' WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE native_id='main');
+ INSERT INTO metrics(workspace_id,conversation_id,name,value,unit,status,extractor_version) VALUES('w','c1','total_tokens',9999999,'tokens','complete','legacy')`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	fresh, err := c.currentMetrics(t.Context(), tx, []string{"w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := fresh["conversation"]["c1"]
+	if values == nil {
+		t.Fatal("conversation projection was not computed")
+	}
+	if got := values["total_tokens"]; got.Value != nil || got.Status != "unattributable" {
+		t.Fatalf("aggregate fallback became own usage: %+v", got)
+	}
+	leaf := fresh["conversation"]["c2"]
+	if got := leaf["total_tokens"]; got.Value == nil || *got.Value != 200000 || got.Status != "complete" {
+		t.Fatalf("leaf aggregate lost its own tokens: %+v", got)
+	}
+	if got := leaf["cost_usd"]; got.Value == nil || *got.Value <= 0 || got.Status == "unattributable" {
+		t.Fatalf("leaf aggregate lost its own cost: %+v", got)
+	}
+
 }

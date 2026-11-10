@@ -52,6 +52,18 @@ has requested the release.
 
 The default is a Developer ID signed and notarized release.
 
+App builds use `-trimpath -ldflags='-s -w'` for both Go executables, removing
+build-machine paths and debug metadata before signing. For a local build with
+Go symbols and DWARF, set `PHAROS_DEBUG_SYMBOLS=1` and use a separate output
+directory, for example `PHAROS_DEBUG_SYMBOLS=1 macos/build-app.sh dist/debug`.
+To investigate a release, use its source tag and compiler version. Release
+disk images use ULMO (LZMA) compression, supported on macOS 10.15 and later,
+below the app's macOS 14 minimum. Compression happens before final image
+signing, notarization and update-feed signing.
+
+The remaining installed-size work is tracked in the high-priority
+[MLX runtime size TODO](local-labeler.md#apple-silicon-gpu).
+
 Use `macos/release.sh X.Y.Z --adhoc` to explicitly publish an ad hoc signed release.
 GitHub will host an ad hoc release, but it cannot be notarized. macOS may block the downloaded
 app on first launch. A user who trusts the download can try opening it, then
@@ -520,9 +532,9 @@ full signed installation test.
 
 ## Upgrading an existing library
 
-This build upgrades catalogs to schema 22 and writes capture manifest version 5,
+This build upgrades catalogs to schema 23 and writes capture manifest version 5,
 combining durable preservation, managed-library delivery safeguards and separate
-provisional/refined writing state. Earlier
+provisional/refined writing state, explicit suppression outcomes, and timestamped writing queues. Earlier
 builds refuse these versions. Take and verify a backup of
 both the catalog and captures before upgrading: rollback requires restoring
 the pre-upgrade catalog and capture tree together, not just replacing the app.

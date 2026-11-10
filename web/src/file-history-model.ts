@@ -36,7 +36,13 @@ export type FileHistoryFile = {
   file_key: string; path: string; repository_id?: string; project?: string | null; project_kind?: string; project_ref?: string; relative_path?: string; url?: string; in_tree?: boolean;
   sessions: FileHistorySession[]; sessions_truncated?: boolean; commits: FileHistoryCommit[]; git: FileHistoryGit;
 };
-export type FileHistory = { path: string; files: FileHistoryFile[]; note: string };
+export type FileHistory = { path: string; files: FileHistoryFile[]; files_truncated?: boolean; note: string };
+
+// fileHistoryNotice is the service's note where the page needs it: no file
+// matched (or only in another project), or more matched than are listed.
+export function fileHistoryNotice(history: FileHistory): string {
+  return !history.files.length || history.files_truncated ? history.note : "";
+}
 
 export type FileProject = { ref: string; name: string; kind: "repository" | "folder" | string; repository_id?: string; folder?: string; sessions?: number; files?: number; last_at?: string };
 export type FileTreeEntry = {
@@ -93,7 +99,7 @@ export function readFilePageRoute(search: URLSearchParams): Required<FilePageTar
 // file has no Git, so only the last two.
 export const fileViews = ["code", "blame", "history", "changes", "sessions"] as const;
 export type FileView = typeof fileViews[number];
-export const fileViewLabels: Record<FileView, string> = { code: "Code", blame: "Blame", history: "History", changes: "Changes", sessions: "Sessions" };
+export const fileViewLabels: Record<FileView, string> = { code: "Code", blame: "Blame", history: "History", changes: "Changes", sessions: "Workspaces" };
 export function fileTabs(repository: boolean): FileView[] {
   return repository ? [...fileViews] : ["changes", "sessions"];
 }
@@ -108,7 +114,7 @@ export function fileTab(asked: string, repository: boolean, inTree = true): File
 // has none) and the sessions that edited files in it.
 export const directoryViews = ["files", "commits", "sessions"] as const;
 export type DirectoryView = typeof directoryViews[number];
-export const directoryViewLabels: Record<DirectoryView, string> = { files: "Files", commits: "Commits", sessions: "Sessions" };
+export const directoryViewLabels: Record<DirectoryView, string> = { files: "Files", commits: "Commits", sessions: "Workspaces" };
 export function directoryTabs(repository: boolean): DirectoryView[] {
   return repository ? [...directoryViews] : ["files", "sessions"];
 }
@@ -156,22 +162,22 @@ export function fileTreeKey(project: string, dir: string): string {
   return `files:${project}:${dir}`;
 }
 
-// entryText is what touched a tree entry: sessions that edited it and
+// entryText is what touched a tree entry: workspaces whose agents edited it and
 // commits that changed it; a folder's entries have no commits to count.
 export function entryText(entry: Pick<FileTreeEntry, "sessions" | "commits">, git: boolean): string {
   const parts = [];
-  if (entry.sessions) parts.push(`${entry.sessions.toLocaleString("en-US")} session${entry.sessions === 1 ? "" : "s"}`);
+  if (entry.sessions) parts.push(`${entry.sessions.toLocaleString("en-US")} workspace${entry.sessions === 1 ? "" : "s"}`);
   if (git && entry.commits) parts.push(`${entry.commits.toLocaleString("en-US")} commit${entry.commits === 1 ? "" : "s"}`);
   return parts.join(" · ");
 }
 
 // treeText says where a project's tree comes from: local Git's tree at the
-// mainline tip, or, without Git, the files its sessions edited.
+// mainline tip, or, without Git, the files agents edited in it.
 export function treeText(git: FileHistoryGit | undefined): string {
-  if (!git || git.status === "not_applicable") return "A folder, not a Git repository: these are the files its sessions edited.";
-  if (git.status === "checked" && git.tree_commit) return `The tree at ${git.tree_ref || "HEAD"} (${git.tree_commit.slice(0, 7)}), read by local Git, with files sessions edited that it does not hold.`;
-  if (git.status === "checked") return "Local Git did not read this repository's tree (too large or no commit), so these are the files sessions edited and commits changed.";
-  return `${git.reason || "Local Git has not checked this repository."} These are the files its sessions edited.`;
+  if (!git || git.status === "not_applicable") return "A folder, not a Git repository: these are the files agents edited in it.";
+  if (git.status === "checked" && git.tree_commit) return `The tree at ${git.tree_ref || "HEAD"} (${git.tree_commit.slice(0, 7)}), read by local Git, with files agents edited that it does not hold.`;
+  if (git.status === "checked") return "Local Git did not read this repository's tree (too large or no commit), so these are the files agents edited and commits changed.";
+  return `${git.reason || "Local Git has not checked this repository."} These are the files agents edited in it.`;
 }
 
 // notInTreeText marks a repository file the tree does not hold: deleted,
@@ -187,10 +193,10 @@ export function placeText(place: FilePlace, index: number): string {
   return [`Edit ${index + 1}`, when, lines].filter(Boolean).join(" · ");
 }
 
-// reworkText is one side of rework between sessions on a file.
+// reworkText is one side of rework between workspaces on a file.
 export function reworkText(rework: FileRework, direction: "by" | "of"): string {
   const lines = `${rework.removed_lines.toLocaleString("en-US")} line${rework.removed_lines === 1 ? "" : "s"}`;
-  return direction === "by" ? `removed ${lines} it added` : `had ${lines} removed by this session`;
+  return direction === "by" ? `removed ${lines} it added` : `had ${lines} removed by this workspace`;
 }
 
 // sessionCommits are the commits of a file a session is linked to.
@@ -215,12 +221,16 @@ export function linesText(added: number | null | undefined, removed: number | nu
 // gitText is what local Git contributes for a file: commits where it checked
 // the repository, and otherwise why there are none. It is never an error:
 // a folder's history comes from transcripts alone. Local Git is read from
-// the repository's first session edit, so commits are counted since then.
+// the repository's first recorded edit, so commits are counted since then.
+// A list cut at its bound names only the commits shown.
 export function gitText(git: FileHistoryGit, commits: number): string {
-  if (git.status === "not_applicable") return "A folder, not a Git repository: this history comes from the sessions' own edits.";
+  if (git.status === "not_applicable") return "A folder, not a Git repository: this history comes from the agents' recorded edits.";
   if (git.status === "checked") {
     const since = git.commits_since ? ` since ${git.commits_since.slice(0, 10)}` : "";
-    const found = commits ? `${commits.toLocaleString("en-US")} commit${commits === 1 ? "" : "s"} changed this file${since}, from local Git.` : `Local Git found no commit of this file${since}.`;
+    const count = `${commits.toLocaleString("en-US")} commit${commits === 1 ? "" : "s"}`;
+    const found = !commits ? `Local Git found no commit of this file${since}.`
+      : git.commits_truncated ? `The ${count} that most recently changed this file, from local Git; older ones are not shown.`
+      : `${count} changed this file${since}, from local Git.`;
     return since ? `${found} Earlier commits are not read.` : found;
   }
   return git.reason || "Local Git has not checked this repository.";
@@ -236,7 +246,7 @@ export function commitState(commit: FileHistoryCommit): string {
 }
 
 const linkMethods: Record<string, string> = {
-  transcript: "printed by the session",
+  transcript: "printed in its transcript",
   message: "its git command wrote the message",
   window: "its git command ran then",
   rewrite: "a rebase or amend of its commit",
@@ -244,8 +254,8 @@ const linkMethods: Record<string, string> = {
   inferred: "inferred from its edits",
 };
 
-// linkText is how a session is linked to a commit: counted links are the
-// session's own; below the counting threshold a link is a candidate.
+// linkText is how a workspace is linked to a commit: counted links are the
+// workspace's own; below the counting threshold a link is a candidate.
 export function linkText(link: FileHistoryLink): string {
   const method = linkMethods[link.method] ?? link.method;
   return link.counted ? method : `candidate, ${method}`;
@@ -283,7 +293,7 @@ export type FileChange = {
   lines_added?: number | null; lines_removed?: number | null; url: string; session_url: string;
   kind: string; hunks: { header?: string; lines: [string, string][] }[]; truncated?: boolean; note?: string;
 };
-export type FileChanges = { project?: FileProject; choices?: FileProject[]; path: string; changes: FileChange[]; more?: boolean; offset?: number; note?: string };
+export type FileChanges = { project?: FileProject; choices?: FileProject[]; path: string; changes?: FileChange[]; more?: boolean; offset?: number; note?: string };
 export type FileFind = { project?: FileProject; choices?: FileProject[]; files: { path: string; in_tree: boolean; url: string }[]; more?: boolean };
 
 // checkoutText says where Git views read from, or why they cannot yet.

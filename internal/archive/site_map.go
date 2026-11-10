@@ -126,13 +126,17 @@ type siteWindows struct {
 }
 
 type siteAnalyze struct {
-	Version      int            `json:"version"`
+	Version int `json:"version"`
+	// ReadableVersions are the chart versions the page opens; one before
+	// Version is an older link, which the page migrates.
+	ReadableVersions []int          `json:"readable_versions"`
 	FillDefaults map[string]any `json:"fill_defaults"`
 	Absent       string         `json:"absent"`
 	Fallback     string         `json:"fallback"`
 	Labels       struct {
-		View   map[string]string `json:"view"`
-		Reduce map[string]string `json:"reduce"`
+		View        map[string]string `json:"view"`
+		Reduce      map[string]string `json:"reduce"`
+		Percentiles map[string]string `json:"percentiles"`
 	} `json:"labels"`
 	Dashboards map[string]*siteDashboard `json:"dashboards"`
 }
@@ -187,6 +191,15 @@ type siteView struct {
 	Domains  map[string][]any       `json:"domains"`
 	Numeric  map[string]siteNumeric `json:"numeric"`
 	Rules    []siteRule             `json:"rules"`
+	// Kept lists view settings a chart may hold as the reader chose them,
+	// which the rules neither check nor fill; viewChart keeps them.
+	Kept []string `json:"kept"`
+	// The display a catalog that chooses its charts draws, by the given
+	// options' values (metric, then split).
+	ChosenDisplay *struct {
+		Given  []string `json:"given"`
+		Values any      `json:"values"`
+	} `json:"chosen_display"`
 }
 
 type siteNumeric struct {
@@ -196,8 +209,12 @@ type siteNumeric struct {
 	MaxValues *float64 `json:"max_values"`
 }
 
+// A list rule (List) holds a list of its domain's values, such as the %ile
+// control's levels: each value stays when every constraint allows it, in
+// the domain's order, and a missing list is left to the page.
 type siteRule struct {
 	Option      string `json:"option"`
+	List        bool   `json:"list"`
 	Fill        any    `json:"fill"`
 	Constraints []struct {
 		Given   []string `json:"given"`
@@ -592,7 +609,7 @@ func (site *siteMap) judge(d *siteDashboard, chart map[string]any) (string, *cha
 	if view == nil {
 		return verdictInvalid, &chartProblem{Key: "view", Reason: fmt.Sprintf("%q is not a view of this dashboard", viewName)}
 	}
-	if v, ok := merged["v"]; ok && v != nil && !sameValue(v, float64(site.Analyze.Version)) {
+	if v, ok := merged["v"]; ok && v != nil && !slices.ContainsFunc(site.Analyze.ReadableVersions, func(version int) bool { return sameValue(v, float64(version)) }) {
 		return verdictInvalid, &chartProblem{Key: "v", Reason: fmt.Sprintf("v must be %d", site.Analyze.Version)}
 	} else if ok && v == nil {
 		return verdictInvalid, &chartProblem{Key: "v", Reason: fmt.Sprintf("v must be %d", site.Analyze.Version)}
@@ -613,6 +630,9 @@ func (site *siteMap) judge(d *siteDashboard, chart map[string]any) (string, *cha
 	if _, hasV := merged["v"]; !hasV {
 		return verdictCoercible, &chartProblem{Key: "v", Reason: "a chart without v is an older link, which the page migrates"}
 	}
+	if !sameValue(merged["v"], float64(site.Analyze.Version)) {
+		return verdictCoercible, &chartProblem{Key: "v", Reason: fmt.Sprintf("a chart before version %d is an older link, which the page migrates", site.Analyze.Version)}
+	}
 	if renamed {
 		return verdictCoercible, &chartProblem{Key: "metric", Reason: "the chart uses an older name, which the page renames"}
 	}
@@ -631,6 +651,23 @@ func (site *siteMap) judge(d *siteDashboard, chart map[string]any) (string, *cha
 // the value is accepted.
 func (view *siteView) checkValue(name string, value any) string {
 	numeric, hasNumeric := view.Numeric[name]
+	if view.listRule(name) != nil {
+		items, ok := value.([]any)
+		if !ok {
+			return fmt.Sprintf("%s must be a list of %s", name, strings.Join(siteStrings(view.Domains[name]), ", "))
+		}
+		seen := map[string]bool{}
+		for _, item := range items {
+			if !listHolds(any(view.Domains[name]), item) {
+				return fmt.Sprintf("%s is not one of %s", compactJSON(item), strings.Join(siteStrings(view.Domains[name]), ", "))
+			}
+			if seen[siteString(item)] {
+				return fmt.Sprintf("%s holds %s twice", name, compactJSON(item))
+			}
+			seen[siteString(item)] = true
+		}
+		return ""
+	}
 	if name == "selection" {
 		limit := 0.0
 		if hasNumeric && numeric.MaxValues != nil {
@@ -655,7 +692,7 @@ func (view *siteView) checkValue(name string, value any) string {
 				return "selection.values must be strings"
 			}
 		}
-		return ""
+		return validateAllHiddenSelection(object, values)
 	}
 	if hasNumeric && numeric.Min != nil {
 		number, ok := scalar(value).(float64)
@@ -684,12 +721,30 @@ func (n siteNumeric) describe() string {
 	return kind
 }
 
+// listRule is the view's list rule for a key, if it has one.
+func (view *siteView) listRule(name string) *siteRule {
+	for index := range view.Rules {
+		if view.Rules[index].List && view.Rules[index].Option == name {
+			return &view.Rules[index]
+		}
+	}
+	return nil
+}
+
 // multiplePeriods: the merge over fill_defaults has period hours with
 // hours > 1, or days with days > 1.
 func (site *siteMap) multiplePeriods(merged map[string]any) bool {
 	state := mergeChart(site.Analyze.FillDefaults, merged)
 	period := siteString(state["period"])
 	return period == "hours" && jsNumber(state["hours"]) > 1 || period == "days" && jsNumber(state["days"]) > 1
+}
+
+// singleSelection: the legend selection draws one group alone, so a measure
+// without a total across groups has %ile levels (singleSeries).
+func singleSelection(merged map[string]any) bool {
+	selection, _ := merged["selection"].(map[string]any)
+	values, _ := selection["values"].([]any)
+	return len(values) == 1 && selection["excluded"] != true
 }
 
 // ruleContext evaluates given option names for a rule, as drawChart does.
@@ -712,6 +767,8 @@ func (c ruleContext) value(name string, self any, selfPresent bool) string {
 		return c.key(self, selfPresent)
 	case "multiple_periods":
 		return strconv.FormatBool(c.site.multiplePeriods(c.merged))
+	case "single_selection":
+		return strconv.FormatBool(singleSelection(c.merged))
 	}
 	if value, ok := c.drawn[name]; ok {
 		return c.key(value, value != nil)
@@ -734,6 +791,27 @@ func (site *siteMap) drawChart(view *siteView, merged map[string]any) map[string
 	drawn := map[string]any{}
 	context := ruleContext{site: site, merged: merged, drawn: drawn}
 	for _, rule := range view.Rules {
+		if rule.List {
+			asked, ok := merged[rule.Option].([]any)
+			if !ok {
+				continue
+			}
+			kept := []any{}
+			for _, item := range view.Domains[rule.Option] {
+				allowed := listHolds(any(asked), item)
+				for _, constraint := range rule.Constraints {
+					if !allowed {
+						break
+					}
+					allowed = listHolds(lookupTable(constraint.Allowed, context.values(constraint.Given, nil, false)), item)
+				}
+				if allowed {
+					kept = append(kept, item)
+				}
+			}
+			drawn[rule.Option] = kept
+			continue
+		}
 		own, present := merged[rule.Option]
 		present = present && own != nil
 		fallback := func() any {
@@ -788,6 +866,12 @@ func (site *siteMap) allowedHere(view *siteView, merged map[string]any, option s
 					} else {
 						givens = append(givens, "each period is one unit")
 					}
+				case "single_selection":
+					if singleSelection(merged) {
+						givens = append(givens, "the legend selects one group")
+					} else {
+						givens = append(givens, "the legend selects no single group")
+					}
 				default:
 					givens = append(givens, fmt.Sprintf("%s is %s", name, context.value(name, nil, false)))
 				}
@@ -812,8 +896,8 @@ func (site *siteMap) allowedHere(view *siteView, merged map[string]any, option s
 }
 
 // viewChart is the chart Go writes: older names read as current ones, then
-// only the keys its view draws, in the view's order, and a non-empty legend
-// selection (docs/site-map.md, "Go writes current names and only the view's
+// only the keys its view draws, in the view's order, the view settings it
+// leaves to the page (Kept), and a non-empty legend selection (docs/site-map.md, "Go writes current names and only the view's
 // keys").
 func (d *siteDashboard) viewChart(chart map[string]any) orderedObject {
 	merged := mergeChart(d.MergeDefaults, chart)
@@ -836,7 +920,7 @@ func (d *siteDashboard) viewChart(chart map[string]any) orderedObject {
 	if view == nil {
 		return out
 	}
-	for _, key := range view.Keys {
+	for _, key := range append(append([]string{}, view.Keys...), view.Kept...) {
 		if value, ok := current[key]; ok {
 			out.set(key, value)
 		}
@@ -1035,4 +1119,18 @@ func sameParamValue(key, a, b string) bool {
 		return sameJSONText(a, b)
 	}
 	return false
+}
+
+// An explicit empty drawing remains distinct from the default unfiltered Key.
+func validateAllHiddenSelection(selection map[string]any, values []any) string {
+	if raw, present := selection["allHidden"]; present {
+		hidden, ok := raw.(bool)
+		if !ok {
+			return "selection.allHidden must be true or false"
+		}
+		if hidden && (len(values) > 0 || selection["excluded"] == true) {
+			return "selection.allHidden needs empty values and excluded=false"
+		}
+	}
+	return ""
 }

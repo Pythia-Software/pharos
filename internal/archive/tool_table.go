@@ -71,6 +71,7 @@ var toolCallDataset = sqlDataset{
 		"a":  "LEFT JOIN agent_sessions a ON a.id=t.agent_session_id",
 	},
 	pageFrom:           "FROM tool_calls t",
+	newestFirst:        map[string]string{"started_at": "tool_calls_page_idx"},
 	pageIndexes:        map[string]string{"started_at": "tool_calls_page_idx", "duration_ms": "tool_calls_duration_page_idx", "result_tokens": "tool_calls_result_tokens_page_idx", "carried_tokens": "tool_calls_carried_page_idx"},
 	coveringIndex:      "tool_calls_analytics_idx",
 	rangeCoveringIndex: "tool_calls_analytics_time_idx",
@@ -130,7 +131,12 @@ var toolCallDataset = sqlDataset{
 	},
 }
 
-func sqlDatasetFor(dataset string) (sqlDataset, bool) {
+func sqlDatasetFor(dataset string) (table sqlDataset, ok bool) {
+	defer func() {
+		if ok {
+			table = withAgentSessionIdentity(dataset, table)
+		}
+	}()
 	switch dataset {
 	case "message_labels":
 		return messageLabelDataset, true
@@ -138,16 +144,22 @@ func sqlDatasetFor(dataset string) (sqlDataset, bool) {
 		return toolRollupDataset, true
 	case "tool_calls":
 		return toolCallDataset, true
+	case "compactions":
+		return compactionDataset, true
 	case "model_requests":
 		return thinkingRequestDataset, true
 	case "skill_usages":
 		return skillUsageDataset, true
 	case "writing_messages":
 		return writingMessageDataset, true
+	case "messages":
+		return messagesDataset, true
 	case "agent_events":
 		return agentEventDataset, true
 	case "agent_event_messages":
 		return agentEventMessageDataset, true
+	case "agent_event_rates":
+		return agentEventRateDataset, true
 	}
 	return sqlDataset{}, false
 }

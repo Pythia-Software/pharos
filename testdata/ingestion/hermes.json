@@ -1,0 +1,378 @@
+{
+  "index_version": "hermes-v4",
+  "records": [
+    {
+      "SourceID": "default:child",
+      "SourceKind": "hermes",
+      "Title": "Word count",
+      "Account": "local",
+      "Purpose": "Review the count",
+      "Outcome": "",
+      "ActivityAt": "2026-11-03T15:33:24.000Z",
+      "Location": "/work/app",
+      "Repository": null,
+      "Metadata": {
+        "agent_profile": "default",
+        "branch": "main",
+        "native_session_ids": [
+          "child"
+        ],
+        "source": "tool"
+      },
+      "Conversations": [
+        {
+          "NativeContext": {
+            "session_key": null,
+            "source": "cli"
+          },
+          "NativeID": "default:child",
+          "Provider": "hermes",
+          "Model": "claude-sonnet-4-5",
+          "Effort": "",
+          "Account": "local",
+          "ParentNativeID": "default:root",
+          "Origin": "$ROOT/002/state.db",
+          "Coverage": "complete",
+          "StartedAt": "2026-11-03T15:33:20.000Z",
+          "EndedAt": "2026-11-03T15:33:24.000Z",
+          "AgentDepth": 1,
+          "Harness": "hermes",
+          "Aliases": null,
+          "Messages": [
+            {
+              "NativeID": "child:6",
+              "Role": "agent",
+              "Kind": "message",
+              "Text": "Review the count",
+              "Model": "claude-sonnet-4-5",
+              "Effort": "",
+              "CreatedAt": "2026-11-03T15:33:22.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/state.db#messages:6",
+              "RawText": "{\"id\":6,\"type\":\"user\"}",
+              "SourceOrder": 0,
+              "Selected": true,
+              "Sender": "agent:default:root"
+            }
+          ],
+          "Extractor": "hermes-v4"
+        }
+      ],
+      "WorkItems": null,
+      "Attempts": null,
+      "Handoffs": null,
+      "Metrics": null,
+      "Changes": null,
+      "PRs": null
+    },
+    {
+      "SourceID": "default:fork",
+      "SourceKind": "hermes",
+      "Title": "Word count",
+      "Account": "local",
+      "Purpose": "",
+      "Outcome": "",
+      "ActivityAt": "2026-11-03T15:33:24.000Z",
+      "Location": "/work/app",
+      "Repository": null,
+      "Metadata": {
+        "agent_profile": "default",
+        "branch": "main",
+        "forked_from": "default:root",
+        "native_session_ids": [
+          "fork"
+        ],
+        "source": "cli"
+      },
+      "Conversations": [
+        {
+          "NativeContext": {
+            "session_key": null,
+            "source": "cli"
+          },
+          "NativeID": "default:fork",
+          "Provider": "hermes",
+          "Model": "claude-sonnet-4-5",
+          "Effort": "",
+          "Account": "local",
+          "ParentNativeID": "",
+          "Origin": "$ROOT/002/state.db",
+          "Coverage": "complete",
+          "StartedAt": "2026-11-03T15:33:20.000Z",
+          "EndedAt": "2026-11-03T15:33:24.000Z",
+          "Harness": "hermes",
+          "Aliases": null,
+          "Messages": null,
+          "Extractor": "hermes-v4"
+        }
+      ],
+      "WorkItems": null,
+      "Attempts": null,
+      "Handoffs": null,
+      "Metrics": null,
+      "Changes": null,
+      "PRs": null
+    },
+    {
+      "SourceID": "default:reset",
+      "SourceKind": "hermes",
+      "Title": "Word count",
+      "Account": "local",
+      "Purpose": "",
+      "Outcome": "",
+      "ActivityAt": "2026-11-03T15:33:24.000Z",
+      "Location": "/work/app",
+      "Repository": null,
+      "Metadata": {
+        "agent_profile": "default",
+        "branch": "main",
+        "native_session_ids": [
+          "reset"
+        ],
+        "source": "cli"
+      },
+      "Conversations": [
+        {
+          "NativeContext": {
+            "session_key": null,
+            "source": "cli"
+          },
+          "NativeID": "default:reset",
+          "Provider": "hermes",
+          "Model": "claude-sonnet-4-5",
+          "Effort": "",
+          "Account": "local",
+          "ParentNativeID": "",
+          "Origin": "$ROOT/002/state.db",
+          "Coverage": "complete",
+          "StartedAt": "2026-11-03T15:33:20.000Z",
+          "EndedAt": "2026-11-03T15:33:24.000Z",
+          "Harness": "hermes",
+          "Aliases": null,
+          "Messages": null,
+          "Extractor": "hermes-v4"
+        }
+      ],
+      "WorkItems": null,
+      "Attempts": null,
+      "Handoffs": null,
+      "Metrics": null,
+      "Changes": null,
+      "PRs": null
+    },
+    {
+      "SourceID": "default:root",
+      "SourceKind": "hermes",
+      "Title": "Word count",
+      "Account": "local",
+      "Purpose": "Count the words",
+      "Outcome": "There are 74 words.",
+      "ActivityAt": "2026-11-03T15:33:26.000Z",
+      "Location": "/work/app",
+      "Repository": null,
+      "Metadata": {
+        "agent_profile": "default",
+        "branch": "main",
+        "end_reason": "compression",
+        "native_session_ids": [
+          "root",
+          "continuation"
+        ],
+        "reported_cost_usd": 0.12,
+        "source": "cli"
+      },
+      "Conversations": [
+        {
+          "NativeContext": {
+            "session_key": null,
+            "source": "cli"
+          },
+          "NativeID": "default:root",
+          "Provider": "hermes",
+          "Model": "claude-sonnet-4-5",
+          "Effort": "high",
+          "Account": "local",
+          "ParentNativeID": "",
+          "Origin": "$ROOT/002/state.db",
+          "Coverage": "complete",
+          "StartedAt": "2026-11-03T15:33:20.000Z",
+          "EndedAt": "",
+          "Harness": "hermes",
+          "Aliases": null,
+          "Messages": [
+            {
+              "NativeID": "message:u1",
+              "Role": "user",
+              "Kind": "message",
+              "Text": "Count the words",
+              "Model": "claude-sonnet-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-11-03T15:33:20.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/state.db#messages:1",
+              "RawText": "{\"id\":1,\"type\":\"user\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "root:2:reasoning",
+              "Role": "assistant",
+              "Kind": "reasoning",
+              "Text": "Read the file first.",
+              "Model": "claude-sonnet-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-11-03T15:33:21.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/state.db#messages:2",
+              "RawText": "{\"id\":2,\"type\":\"assistant\"}",
+              "SourceOrder": 0,
+              "Selected": true,
+              "ReasoningFormat": "text"
+            },
+            {
+              "NativeID": "root:2",
+              "Role": "assistant",
+              "Kind": "message",
+              "Text": "Checking the file.",
+              "Model": "claude-sonnet-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-11-03T15:33:21.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/state.db#messages:2",
+              "RawText": "{\"id\":2,\"type\":\"assistant\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "root:2:tool:0",
+              "Role": "assistant",
+              "Kind": "tool_call",
+              "Text": "{\"input\":{\"command\":\"wc -w story.txt\"},\"provider_call_id\":\"call1\",\"tool\":\"terminal\"}",
+              "Model": "claude-sonnet-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-11-03T15:33:21.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "occurrence-one",
+              "EvidenceLocator": "$ROOT/002/state.db#messages:2",
+              "RawText": "{\"id\":2,\"type\":\"assistant\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "root:3",
+              "Role": "tool",
+              "Kind": "tool_result",
+              "Text": "{\"content\":\"74 story.txt\",\"provider_call_id\":\"call1\",\"tool\":\"terminal\"}",
+              "Model": "claude-sonnet-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-11-03T15:33:22.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "occurrence-one",
+              "EvidenceLocator": "$ROOT/002/state.db#messages:3",
+              "RawText": "{\"id\":3,\"type\":\"tool\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "continuation:5",
+              "Role": "assistant",
+              "Kind": "message",
+              "Text": "There are 74 words.",
+              "Model": "claude-sonnet-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-11-03T15:33:26.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/state.db#messages:5",
+              "RawText": "{\"id\":5,\"type\":\"assistant\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "root:model:1ce8cb19c97cc87ab62c2fb5b87ebcdc655e0479a33023d4c65c30fc5b2f4ed2:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"task\":\"\",\"type\":\"token_usage\",\"usage\":{\"cache_creation_input_tokens\":10,\"cache_read_input_tokens\":40,\"input_tokens\":100,\"output_tokens\":20,\"reasoning_output_tokens\":5},\"usage_scope\":\"aggregate\"}",
+              "Model": "claude-sonnet-4-5",
+              "Effort": "",
+              "CreatedAt": "2026-11-03T15:33:24.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/state.db#session_model_usage:root",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "root:model:ffb0119db256b43cfb9caa8c1f67a848a4c1b9b7361dc196178ce45352957b85:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"task\":\"compression\",\"type\":\"token_usage\",\"usage\":{\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"input_tokens\":30,\"output_tokens\":3,\"reasoning_output_tokens\":0},\"usage_scope\":\"aggregate\"}",
+              "Model": "gpt-5",
+              "Effort": "",
+              "CreatedAt": "2026-11-03T15:33:24.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/state.db#session_model_usage:root",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "root:model:434fe854fd5d1310ba4d5e63020c77790ff79589377b8ee842e348fbed627979:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"task\":\"voice_chat\",\"type\":\"token_usage\",\"usage\":{\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"input_tokens\":50,\"output_tokens\":2,\"reasoning_output_tokens\":0},\"usage_scope\":\"aggregate\"}",
+              "Model": "gpt-5",
+              "Effort": "",
+              "CreatedAt": "2026-11-03T15:33:24.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/state.db#session_model_usage:root",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "root:session:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"task\":null,\"type\":\"token_usage\",\"usage\":{\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"input_tokens\":30,\"output_tokens\":3,\"reasoning_output_tokens\":0},\"usage_scope\":\"aggregate\"}",
+              "Model": "unknown",
+              "Effort": "",
+              "CreatedAt": "2026-11-03T15:33:24.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/state.db#sessions:root",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            }
+          ],
+          "Extractor": "hermes-v4"
+        }
+      ],
+      "WorkItems": null,
+      "Attempts": null,
+      "Handoffs": null,
+      "Metrics": null,
+      "Changes": null,
+      "PRs": null
+    }
+  ]
+}

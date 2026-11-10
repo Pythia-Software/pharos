@@ -1,9 +1,9 @@
 import { fileHistoryURL, filePageURL } from "./file-history-model";
 import { decodeQueryStrict, encodeQuery, EMPTY_QUERY, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
-import { chartKeys, chartVerdict, canonicalChart, judgeChart, readChart, viewChart, cardURL, compact, dashboardURL, dashboardWindows, datasetURL, enumerateView, siteSchemas, type SiteMap, type Verdict } from "./site-map";
-import { isTrendView, normalizeAnalysis, switchView, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
-import { usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { topicChartKeys, chartVerdict, canonicalChart, judgeChart, readChart, viewChart, cardURL, compact, dashboardURL, dashboardWindows, datasetURL, enumerateView, siteSchemas, type SiteMap, type Verdict } from "./site-map";
+import { analysisVersion, isTrendView, normalizeAnalysis, switchView, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { analyzeQueryDatasets, usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { rollingWindowDays, type QueryDataset } from "./query-links";
 import { cardLibraryParams } from "./card-library-model";
 import { emptyTextSearch, newRule, chooseScope } from "./text-search-model";
@@ -57,7 +57,7 @@ function chartCases(map: SiteMap): ChartCase[] {
     const facts = map.analyze.dashboards[topic], sets = filterSets(facts.dataset as UsageDataset), windows = [...dashboardWindows, null];
     for (const [view, info] of Object.entries(facts.views)) {
       // A spread of every enumerated combination, valid and coercible.
-      const judged = enumerateView(topic, view as AnalysisView, info.defaults, info.domains).filter(item => chartKeys[view as AnalysisView].every(name => name in item.chart));
+      const judged = enumerateView(topic, view as AnalysisView, info.defaults, info.domains).filter(item => topicChartKeys(topic, view as AnalysisView).every(name => name in item.chart));
       const linked = (item: ChartCase) => {
         const filters = sets[turn % sets.length], days = windows[turn % windows.length];
           turn++;
@@ -67,6 +67,16 @@ function chartCases(map: SiteMap): ChartCase[] {
       for (const verdict of ["valid", "coercible"] as Verdict[]) for (const { chart } of spread(judged.filter(item => item.verdict === verdict), verdict === "valid" ? 2 : 2)) {
         const item: ChartCase = { topic, view, chart, verdict };
         cases.push(verdict === "valid" ? linked(item) : item);
+      }
+      // %ile levels of a measure without a total across groups, drawn only
+      // for one group the legend selects, and the same levels for several.
+      const levelled = judged.filter(item => item.verdict === "valid" && item.chart.split !== "none" && item.chart.share !== true && Array.isArray(item.chart.percentiles)).find(item => {
+        const measure = analysisCatalogs[topic]!.measures[String(item.chart.metric)];
+        return measure && !measure.additive;
+      });
+      if (levelled) for (const selection of [{ values: ["(one group)"], excluded: false }, { values: ["(one group)"], excluded: true }, { values: ["a", "b"], excluded: false }]) {
+        const chart = { ...levelled.chart, selection, percentiles: ["mean", "p50", "p90"] };
+        cases.push({ topic, view, chart, verdict: chartVerdict(topic, chart) });
       }
       // Partial charts, which the page merges over the topic's defaults: one
       // option at each of its values, and the view's defaults less one key.
@@ -81,9 +91,12 @@ function chartCases(map: SiteMap): ChartCase[] {
         const item: ChartCase = { topic, view, partial: true, chart, verdict: chartVerdict(topic, chart) };
         cases.push(item.verdict === "valid" && "view" in chart && partialLinks++ < 1 ? linked(item) : item);
       }
+      // A version 2 chart opens as an older link (coercible).
+      const older = { ...canonicalChart(info.defaults), v: 2 };
+      cases.push({ topic, view, chart: older, verdict: chartVerdict(topic, older) });
       // Charts the page rejects: an unknown or ill-typed value per option.
       const invalid: Record<string, unknown>[] = [
-        { v: 3 }, { metric: "no_such_measure" }, { split: "no_such_breakdown" }, { scale: "huge" }, { selection: { values: [1], excluded: false } },
+        { v: analysisVersion + 1 }, { metric: "no_such_measure" }, { split: "no_such_breakdown" }, { scale: "huge" }, { selection: { values: [1], excluded: false } },
         ...isTrendView(view) ? [{ period: "fortnight" }, { hours: 0 }, { rollingPeriods: -1 }, { normPeriods: 1001 }, { share: "yes" }]
           : [{ unit: "no_such_unit" }, { minSamples: -1 }, { reduce: "sum" }, { compareAs: "pie" }, { cycle: "month" }, { metricY: "no_such_measure" }],
       ];
@@ -100,7 +113,8 @@ function chartCases(map: SiteMap): ChartCase[] {
     const catalog = analysisCatalogs[topic]!, merge = facts.merge_defaults as Record<string, unknown>;
     for (const [from, info] of Object.entries(facts.views)) for (const to of Object.keys(facts.views)) {
       const current = { ...merge, ...info.defaults } as AnalysisState;
-      const chart = { ...current, ...switchView(catalog, current, to as AnalysisView) } as Record<string, unknown>;
+      // As the URL holds it: a setting the switch unset (clearView) is left out.
+      const chart = JSON.parse(json({ ...current, ...switchView(catalog, current, to as AnalysisView) })) as Record<string, unknown>;
       cases.push({ topic, view: to, written: `switchView ${from} to ${to}`, chart, verdict: chartVerdict(topic, chart) });
     }
     // (Habits section cards carry the page's selectors, not a chart.)
@@ -127,6 +141,18 @@ export function motivatingExample(map: SiteMap) {
   const filters = [where("provider", "=", "claude"), where("model_family", "contains", "opus")];
   const url = dashboardURL("tokens", chart, filters, 30);
   return { name: "Anthropic Opus-class tokens per day, 7-day trailing average, by model", page: "analyze/tokens", topic: "tokens" as const, view: "trend", chart, filters, days: 30, verdict: chartVerdict("tokens", chart), url, decoded: decoded(url) };
+}
+
+// A partial population, as the legend writes it: Session Shape's sessions
+// by length band, with Antigravity CLI sessions left out (an exclusion keeps
+// sessions with no harness) and only root agents counted. site_link takes the
+// same terms as filters; the dashboard shows them as Population chips.
+export function populationExample(map: SiteMap) {
+  const info = map.analyze.dashboards.session_shape.views.compare;
+  const chart = canonicalChart(info.defaults, { view: "compare", metric: "sessions", split: "length_band" });
+  const filters = [{ any: [where("harness", "!=", "antigravity-cli"), where("harness", "is_null")] as WhereClause[] }, where("agent_kind", "=", "root")];
+  const url = dashboardURL("session_shape", chart, filters, 30);
+  return { name: "Sessions by length band without Antigravity CLI, root agents only", page: "analyze/session_shape", topic: "session_shape" as const, view: "compare", chart, filters, days: 30, verdict: chartVerdict("session_shape", chart), url, decoded: decoded(url) };
 }
 
 // Every card at one window, and at every window the first card of each way
@@ -176,8 +202,8 @@ function nodeCases(map: SiteMap) {
   add("library", searchURL({ ...filtered, text: { ...text, root: { ...text.root, id: "group-1", children: [rule(1, "deploy", "words")] } }, window, query: { ...filtered.query, where: [where("repository_name", "contains", "pharos"), where(window.field, ">=", "-30d"), where(window.field, "<", "+0s")] } }), { kind: "text", window: 30 });
   // Query tables, with and without a window.
   let turn = 0;
-  for (const dataset of [...Object.keys(usageDatasets), "findings", "safety"] as QueryDataset[]) {
-    const path = dataset === "findings" ? "findings/table" : dataset === "safety" ? "findings/safety/table" : `analyze/query/${dataset}`;
+  for (const dataset of [...analyzeQueryDatasets, "findings", "safety", "fixes"] as QueryDataset[]) {
+    const path = dataset === "findings" ? "findings/table" : dataset === "safety" ? "findings/safety/table" : dataset === "fixes" ? "findings/fixes/table" : `analyze/query/${dataset}`;
     for (const filters of filterSets(dataset).slice(1, 4)) {
       const days = map.datasets[dataset].window_field ? rollingWindowDays[turn++ % rollingWindowDays.length] : null;
       add(path, datasetURL(dataset, filters, days), { filters, days });
@@ -190,6 +216,10 @@ function nodeCases(map: SiteMap) {
   add("findings/safety", "/findings?optimize_area=safety");
   for (const rank of ["danger", "recent", "calls", "evidence"]) add("findings/safety", `/findings?optimize_area=safety&safety_rank=${rank}&safety_place=repo%3Aexample`);
   add("findings/safety/settings", "/findings?optimize_area=safety&view=settings");
+  add("findings/fixes", "/findings?optimize_area=fixes");
+  add("findings/fixes", "/findings?optimize_area=fixes&fixes_list=handed_off&fixes_place=global&fixes_kind=env&fixes_rank=recent&fixes_hidden=1");
+  add("findings/fixes", "/findings?optimize_area=fixes&fixes_item=fix_example");
+  add("findings/fixes/settings", "/findings?optimize_area=fixes&view=settings");
   add("findings/safety", "/findings?optimize_area=safety&safety_list=handed_off&safety_place=repo%3Aexample&safety_case=safety_example");
   for (const path of Object.keys(map.nodes).filter(path => path.startsWith("settings"))) add(path, map.nodes[path].route);
   add("settings/sync", "/settings/sync?" + new URLSearchParams({
@@ -203,8 +233,14 @@ function nodeCases(map: SiteMap) {
   const route = { mode: "rank" as const, sort: "cost", scope: "self", direction: "asc", collapsed: ["session-b", "session-a"], selected: "session-c", range: [1767268800000, 1767272400000] as [number, number] };
   const reader = new URL(conversationRowURL({ workspace_id: "workspace-1", conversation_id: "conversation-2" })!, "http://localhost");
   for (const [key, value] of Object.entries(delegationRouteValues(route))) if (value) reader.searchParams.set(key, value);
+  reader.searchParams.set("reader_navigator", JSON.stringify(["timeline","context","turns"]));
   reader.searchParams.set("explorer", "timeline");
   add("work", reader.pathname + reader.search, { work_id: "workspace-1", conversation: "conversation-2", ...route, collapsed: [...route.collapsed].sort(), tab: "timeline" });
+  for (const scope of ["self", "all"]) {
+    const hierarchy = { ...route, mode: "hierarchy" as const, sort: "tokens", scope, direction: "desc", collapsed: [], selected: "", range: null };
+    const params = new URLSearchParams(Object.entries(delegationRouteValues(hierarchy)).filter(([, value]) => value));
+    add("work", `/work/workspace-1?${params}`, {work_id: "workspace-1", ...hierarchy, tab: "table"});
+  }
   return cases;
 }
 
@@ -216,7 +252,7 @@ export function buildSiteMapCases(map: SiteMap) {
     if (judgeChart(facts, map.analyze.version, item.chart) !== item.verdict) throw new Error(`site map cases: the rules misjudge ${item.topic} ${json(item.chart)}`);
     if (item.verdict === "invalid") continue;
     // Keeping only the view's keys changes neither the verdict nor the drawing.
-    const kept = viewChart(item.topic, item.chart), view = chartKeys[(item.chart.view ?? facts.merge_defaults.view ?? "trend") as AnalysisView];
+    const kept = viewChart(item.topic, item.chart), view = topicChartKeys(item.topic, (item.chart.view ?? facts.merge_defaults.view ?? "trend") as AnalysisView);
     const draw = (chart: Record<string, unknown>) => json(view.map(key => (normalizeAnalysis(analysisCatalogs[item.topic]!, { ...facts.merge_defaults, ...chart } as AnalysisState) as Record<string, unknown>)[key]));
     // A chart with an older name is written in current names, and opens.
     const renamed = readChart(facts, item.chart).renamed, verdict = chartVerdict(item.topic, kept);
@@ -224,7 +260,7 @@ export function buildSiteMapCases(map: SiteMap) {
     if (readChart(facts, kept).renamed) throw new Error(`site map cases: ${item.topic} ${json(kept)} keeps an older name`);
   }
   // Canonical charts are valid, never merely coercible.
-  const canonical = [...charts.filter(item => item.url).map(item => [item.topic, item.chart] as const), ["tokens", motivatingExample(map).chart] as const,
+  const canonical = [...charts.filter(item => item.url).map(item => [item.topic, item.chart] as const), ["tokens", motivatingExample(map).chart] as const, ["session_shape", populationExample(map).chart] as const,
     ...map.cards.items.filter(card => card.state).map(card => [card.page.split("/")[1], card.state!] as const),
     ...Object.entries(map.analyze.dashboards).flatMap(([topic, facts]) => Object.values(facts.views).map(view => [topic, view.defaults] as const))];
   for (const [topic, chart] of canonical) if (chartVerdict(topic as UsageTopic, chart) !== "valid") throw new Error(`site map cases: canonical ${topic} ${json(chart)} is not valid`);
@@ -232,6 +268,7 @@ export function buildSiteMapCases(map: SiteMap) {
     version: map.version,
     about: "Cases for the site map, from web/src/site-map-cases.ts. analyze: by topic, charts with the page's verdict (valid; coercible: opens but draws other settings; invalid: rejected). Partial charts are merged over the topic's merge_defaults, as the page does. Some valid charts carry their link. cards: every card at one window, and some at every window. nodes: a link per page with the state its reader reads. decoded: each query token's state.",
     example: motivatingExample(map),
+    population: populationExample(map),
     // By topic; a chart names its view, or takes the topic's.
     analyze: Object.fromEntries(Object.keys(analysisCatalogs).map(topic => [topic, charts.filter(item => item.topic === topic).map(({ topic: _topic, view: _view, partial: _partial, ...item }) => item)])),
     cards: cardCases(map),
