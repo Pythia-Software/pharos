@@ -5,6 +5,7 @@ import { authorshipCategories } from "./authorship-categories";
 import writing from "../../schemas/writing.schema.json";
 import writingMessages from "../../schemas/writing_messages.schema.json";
 import type { AnalysisCatalog, AnalysisMeasure, AnalysisState } from "./dashboard-analysis-model";
+import { projectBreakdown, projectLegacy } from "./project-analysis";
 
 // Human Words over writing_messages: one record is one classified user
 // message, with its words split by where the text came from. Messages carry
@@ -62,7 +63,7 @@ export const humanAnalysisCatalog: AnalysisCatalog = {
   dataset: "writing_messages", time: { first: "sent_at", last: "sent_at" }, measures,
   breakdowns: {
     ...peopleLabelBreakdowns("writing_messages"),
-    repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
+    project_name: projectBreakdown(),
     ...single([["source_kind", "Source"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["main_category", "Mostly"]]),
   },
   components: { kind: { label: "Text source", measures: ["words"], fallback: "none", parts: writingGroups.map(group => ({ key: group.key, label: group.label, field: group.field, color: group.color })) },
@@ -70,15 +71,15 @@ export const humanAnalysisCatalog: AnalysisCatalog = {
   records: { label: "Message", plural: "Messages", note: "A message is one classified user message, placed at the time it was sent." },
   units: {
     conversation: { label: "Conversation", plural: "Conversations", key: "conversation_id", where: present("conversation_id"),
-      breakdowns: { repository_name: ["repository_name"], source_kind: ["source_kind"], provider: ["provider"], ...origin },
+      breakdowns: { project_name: ["project_name"], source_kind: ["source_kind"], provider: ["provider"], ...origin },
       note: "A conversation is one recorded agent conversation; a delegated sub-agent's conversation is its own. Only its messages in the range count." },
-    work: { label: "Workspace", plural: "Workspaces", key: "work_id", where: present("work_id"), breakdowns: { repository_name: ["repository_name"], source_kind: ["source_kind"] },
+    work: { label: "Workspace", plural: "Workspaces", key: "work_id", where: present("work_id"), breakdowns: { project_name: ["project_name"], source_kind: ["source_kind"] },
       note: "Groups messages by workspace, including linked delegated activity, as Human words by workspace does. Only messages in the selected range count." },
   },
   cycle: { hour: { kind: "timestamp", field: "sent_at" }, weekday: { kind: "timestamp", field: "sent_at" } },
   periods: { day: "day", week: "week", month: "month" }, timestamp: "sent_at",
   trend: { metric: "typed", split: "none" },
-  legacy, legacySlices: true,
+  legacy: projectLegacy(legacy), legacySlices: true,
   scatter: ["typed", "words"],
 };
 humanAnalysisCatalog.breakdowns.provider.order = ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"];
@@ -92,7 +93,7 @@ for (const [split, label] of [["provider", "providers"], ["channel", "channels"]
 // row per work. Those that keep their meaning on messages are read as
 // message filters: the time bounds as sent_at, a work id as work_id, a
 // combined field's single value as the message's own field, and fields
-// both datasets hold with one meaning (repository, app, title, origin).
+// both datasets hold with one meaning (project, app, title, origin).
 // The rest are never rewritten: a work's totals (typed_words > 100 meant a
 // work's total), a combined value ("claude,codex" meant works holding
 // exactly both) and its inequalities, and fields messages lack. They are

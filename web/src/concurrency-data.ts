@@ -1,7 +1,7 @@
 export type Interval = [number, number];
 export type ConcurrencyThread = {
   id: string; conversation_id: string; work_id: string; workspace_id: string; workspace_name: string;
-  channel?: string; machine_id?: string; execution_machine_id?: string; repository: string; title: string; provider: string; model: string; agent_depth: number;
+  channel?: string; machine_id?: string; execution_machine_id?: string; repository: string; project: string; title: string; provider: string; model: string; agent_depth: number;
   turns: Interval[]; model_spans: Interval[]; root_conversation_id?: string;
   continuous_spans?: Interval[];
 };
@@ -15,7 +15,11 @@ export type ConcurrencyCounting = "workspace" | "agent";
 export type Segment = { start: number; end: number; unit: string; workspace: string; bottom: number; conversation: string; running: boolean };
 export type ConcurrencyMetrics = { average: number; parallel: number; peak: number; working: number };
 export const minute = 60_000;
-// Ribbon colors, by repository: the chart and its Home card share them.
+// A thread's place, as the hover and selection detail name it: its project
+// (a repository or folder; "No project" for neither) and its workspace.
+export const concurrencyThreadPlace = (thread: Pick<ConcurrencyThread, "project" | "workspace_name">) => `${thread.project || "No project"} / ${thread.workspace_name}`;
+
+// Ribbon colors, by project: the chart and its Home card share them.
 export const concurrencyPalette = ["var(--sea)", "var(--gold)", "var(--heat-0)", "var(--heat-1)", "var(--heat-2)", "var(--heat-3)",
   "color-mix(in srgb,var(--sea) 45%,var(--gold))", "color-mix(in srgb,var(--heat-1) 55%,var(--heat-3))",
   "color-mix(in srgb,var(--sea) 40%,var(--heat-0))", "color-mix(in srgb,var(--gold) 65%,var(--heat-2))",
@@ -119,22 +123,22 @@ export function stackSegments(threads: ConcurrencyThread[], mode: ConcurrencyMod
     }
   }
   events.sort((a, b) => a.at - b.at);
-  const repositories = new Map<string, string>();
+  const projects = new Map<string, string>();
   const byId = new Map(threads.map(thread => [thread.id, thread]));
   for (const thread of threads.slice().sort((a, b) => a.agent_depth - b.agent_depth)) {
     const unit = concurrencyUnit(thread, counting);
-    if (!repositories.has(unit)) repositories.set(unit, thread.repository || thread.workspace_id);
+    if (!projects.has(unit)) projects.set(unit, thread.project || thread.workspace_id);
   }
-  const repositoryOrder = new Map<string, number>();
+  const projectOrder = new Map<string, number>();
   for (const unit of order) {
-    const repo = repositories.get(unit)!;
-    if (!repositoryOrder.has(repo)) repositoryOrder.set(repo, repositoryOrder.size);
+    const project = projects.get(unit)!;
+    if (!projectOrder.has(project)) projectOrder.set(project, projectOrder.size);
   }
-  // Group simultaneous arrivals by repo; retain caller order within a repo.
-  const layoutOrder = order.slice().sort((a, b) => repositoryOrder.get(repositories.get(a)!)! - repositoryOrder.get(repositories.get(b)!)!);
+  // Group simultaneous arrivals by project; retain caller order within a project.
+  const layoutOrder = order.slice().sort((a, b) => projectOrder.get(projects.get(a)!)! - projectOrder.get(projects.get(b)!)!);
   const rank = new Map(layoutOrder.map((unit, index) => [unit, index]));
   let previousRows = new Map<string, number>();
-  const lastRows = new Map<string, number>(), rowRepositories = new Map<number, string>();
+  const lastRows = new Map<string, number>(), rowProjects = new Map<number, string>();
   const packRows = (units: string[]) => {
     const rows = new Map<string, number>(), free = new Set(units.map((_, row) => row));
     const place = (unit: string, row: number) => { rows.set(unit, row); free.delete(row); };
@@ -152,18 +156,18 @@ export function stackSegments(threads: ConcurrencyThread[], mode: ConcurrencyMod
     // its repo. Then other units can inherit the repo's vacated rows.
     for (const unit of pending) {
       const row = lastRows.get(unit);
-      if (row !== undefined && free.has(row) && rowRepositories.get(row) === repositories.get(unit)) place(unit, row);
+      if (row !== undefined && free.has(row) && rowProjects.get(row) === projects.get(unit)) place(unit, row);
     }
     for (const unit of pending) {
       if (rows.has(unit)) continue;
-      const matching = Array.from(free).filter(row => rowRepositories.get(row) === repositories.get(unit));
+      const matching = Array.from(free).filter(row => rowProjects.get(row) === projects.get(unit));
       if (matching.length) place(unit, nearest(unit, matching));
     }
     for (const unit of pending) {
       if (!rows.has(unit)) place(unit, nearest(unit, Array.from(free)));
     }
     for (const [unit, row] of rows) {
-      lastRows.set(unit, row); rowRepositories.set(row, repositories.get(unit)!);
+      lastRows.set(unit, row); rowProjects.set(row, projects.get(unit)!);
     }
     previousRows = rows;
     return rows;

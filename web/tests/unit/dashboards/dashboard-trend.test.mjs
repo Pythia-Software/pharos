@@ -144,7 +144,7 @@ test("distinct counts are per period: a rolling mean of daily counts, or a rolli
   }
   assert.ok(sum.buckets.some(bucket => bucket.values.total > 0));
   // Groups of distinct counts do not add up, so they draw as lines and Other draws nothing.
-  const folded = draw({ ...base, metric: "conversations", split: "repository_name", seriesLimit: 1 }).built;
+  const folded = draw({ ...base, metric: "conversations", split: "project_name", seriesLimit: 1 }).built;
   assert.equal(folded.lines, true);
   const other = folded.series.find(item => item.hiddenCount);
   assert.ok(other && /not drawn/.test(other.label));
@@ -440,9 +440,9 @@ test("while results load there is no error", () => {
 
 test("the drawn periods alone choose the series; history only follows them", () => {
   // Repository repo-9 is busy three weeks ago and idle in the last week.
-  const old = new Date(now - 20 * 86400000), busy = { ...rows[0], id: "busy", repository_name: "repo-9", day: localDay(old), first_usage_at: old.toISOString(), last_usage_at: old.toISOString(), total_tokens: 1e9 };
+  const old = new Date(now - 20 * 86400000), busy = { ...rows[0], id: "busy", project_name: "repo-9", day: localDay(old), first_usage_at: old.toISOString(), last_usage_at: old.toISOString(), total_tokens: 1e9 };
   const week = [{ field: "last_usage_at", op: ">=", value: "-7d" }, { field: "first_usage_at", op: "<", value: "+0s" }];
-  const series = norm => draw({ ...base, metric: "tokens", split: "repository_name", seriesLimit: 1, rollingPeriods: 3, norm }, { where: week, data: [...rows, busy] }).built.series.map(item => item.value ?? item.key);
+  const series = norm => draw({ ...base, metric: "tokens", split: "project_name", seriesLimit: 1, rollingPeriods: 3, norm }, { where: week, data: [...rows, busy] }).built.series.map(item => item.value ?? item.key);
   assert.deepEqual(series(true), series(false));
   assert.ok(!series(true).includes("repo-9"));
 });

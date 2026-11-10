@@ -24,9 +24,10 @@ var messagesDataset = func() sqlDataset {
 		"authorship_sent_at": "ma.sent_at", "authorship_day": "ma.day",
 		"authorship_week": "date(ma.day,'-6 days','weekday 1')", "authorship_month": "substr(ma.day,1,7)",
 		"text": "m.text", "message_count": "1",
-		"title": "w.title", "repository_name": "r.display_name", "source_kind": "w.source_kind",
+		"title": "w.title", "repository_name": "r.display_name", "project_name": projectNameSQL("w"), "source_kind": "w.source_kind",
 		"authorship_title": "aw.title", "authorship_repository_name": "ar.display_name", "authorship_source_kind": "aw.source_kind",
-		"provider": "c.provider", "subagent": "(c.parent_id IS NOT NULL)",
+		"authorship_project_name": "COALESCE(apj.display_name,aw.project_folder)",
+		"provider":                "c.provider", "subagent": "(c.parent_id IS NOT NULL)",
 		"has_authorship": "(ma.message_id IS NOT NULL)",
 		"work_id":        "COALESCE(ma.work_id,ma.workspace_id)",
 		"chars":          "ma.total_chars", "words": "ma.words",
@@ -58,7 +59,7 @@ var messagesDataset = func() sqlDataset {
 			" JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id" +
 			" LEFT JOIN message_authorship ma ON ma.message_id=m.id" +
 			" LEFT JOIN workspaces aw ON aw.id=COALESCE(ma.work_id,ma.workspace_id)" +
-			" LEFT JOIN repositories ar ON ar.id=aw.repository_id" +
+			" LEFT JOIN repositories ar ON ar.id=aw.repository_id" + projectJoin("w") + authorshipProjectJoin +
 			" LEFT JOIN conversation_origins o ON o.conversation_id=m.conversation_id",
 		base:       "c.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)",
 		columns:    columns,
@@ -66,11 +67,13 @@ var messagesDataset = func() sqlDataset {
 		timestamps: map[string]string{"sent_at": "m.created_at", "authorship_sent_at": "ma.sent_at"},
 		buckets:    map[string]string{"day": "m.created_at", "week": "m.created_at", "month": "m.created_at"},
 		optionalJoins: map[string]string{
-			"r":  " LEFT JOIN repositories r ON r.id=w.repository_id",
-			"ma": " LEFT JOIN message_authorship ma ON ma.message_id=m.id",
-			"aw": " LEFT JOIN workspaces aw ON aw.id=COALESCE(ma.work_id,ma.workspace_id)",
-			"ar": " LEFT JOIN repositories ar ON ar.id=aw.repository_id",
-			"o":  " LEFT JOIN conversation_origins o ON o.conversation_id=m.conversation_id",
+			"r":   " LEFT JOIN repositories r ON r.id=w.repository_id",
+			"ma":  " LEFT JOIN message_authorship ma ON ma.message_id=m.id",
+			"aw":  " LEFT JOIN workspaces aw ON aw.id=COALESCE(ma.work_id,ma.workspace_id)",
+			"ar":  " LEFT JOIN repositories ar ON ar.id=aw.repository_id",
+			"pj":  projectJoin("w"),
+			"apj": authorshipProjectJoin,
+			"o":   " LEFT JOIN conversation_origins o ON o.conversation_id=m.conversation_id",
 		},
 		pageFrom:    "FROM messages m",
 		newestFirst: map[string]string{"sent_at": "messages_page_idx"},
@@ -183,3 +186,7 @@ func messageBool(value any) bool {
 	}
 	return integer(value) != 0
 }
+
+// authorshipProjectJoin finds the project of the workspace a message counts
+// toward in Writing, as projectJoin does for its own workspace.
+const authorshipProjectJoin = " LEFT JOIN repositories apj ON apj.id=COALESCE(aw.repository_id,aw.folder_repository_id)"

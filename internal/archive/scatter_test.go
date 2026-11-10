@@ -16,7 +16,7 @@ func TestScatterMatchesIndependentSources(t *testing.T) {
 	catalog, config := testCatalog(t)
 	tx := seedTx(t, catalog.DB)
 	for _, sql := range []string{
-		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('work','claude','local','work','Work','2026-10-15')`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,location,project_folder,indexed_at) VALUES('work','claude','local','work','Work','/srv/work','/srv/work','2026-10-15')`,
 		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,model) VALUES('a','work','claude','local','a','claude-sonnet-4-5'),('b','work','claude','local','b','claude-sonnet-4-5')`,
 		`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,model,started_at) VALUES('s-a','work','a','main','root','claude','claude-sonnet-4-5','2026-10-15T12:00:00.000Z')`,
 		`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,attribution,input_tokens,uncached_input_tokens,total_tokens,output_tokens) VALUES('s-a','2026-10-15T12:00:00.000Z','claude-sonnet-4-5','request',100,100,110,10),('s-a','2026-10-15T13:00:00.000Z','claude-sonnet-4-5','request',200,200,220,20)`,
@@ -31,7 +31,7 @@ func TestScatterMatchesIndependentSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := testServer(t, config, catalog)
-	fields := fieldSet("human_typed", "tokens_tokens", "tokens_cost", "human_words_per_message")
+	fields := fieldSet("human_typed", "tokens_tokens", "tokens_cost", "human_words_per_message", "project_name")
 	window := []querytable.WhereTerm{{Field: "last_at", Op: ">=", Value: "2026-10-15T00:00:00.000Z"}, {Field: "first_at", Op: "<", Value: "2026-10-16T00:00:00.000Z"}}
 	for _, unit := range []string{"conversation", "work", "message"} {
 		rows, err := server.scatterRows(context.Background(), fields, append(window, querytable.WhereTerm{Field: "point_kind", Op: "=", Value: unit}))
@@ -55,7 +55,7 @@ func TestScatterMatchesIndependentSources(t *testing.T) {
 				t.Fatalf("missing usage was invented: %#v", b)
 			}
 		case "work":
-			if len(rows) != 1 || integer(rows[0]["human_typed"]) != 15 || integer(rows[0]["tokens_tokens"]) != 330 || integer(rows[0]["human_words_per_message"]) != 5 {
+			if len(rows) != 1 || integer(rows[0]["human_typed"]) != 15 || integer(rows[0]["tokens_tokens"]) != 330 || integer(rows[0]["human_words_per_message"]) != 5 || rows[0]["project_name"] != "/srv/work" {
 				t.Fatalf("workspace totals: %#v", rows)
 			}
 		case "message":

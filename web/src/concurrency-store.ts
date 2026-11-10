@@ -30,7 +30,7 @@ export function loadConcurrencyData(refresh = false): Promise<ConcurrencyData> {
 export function threadedSummaryWindow(data: ConcurrencyData, gap: number, repository: string, key: string, referenceTime: number, counting: ConcurrencyCounting = "workspace", fromTimestamp?: string): ConcurrencyMetrics | null {
   const bounds = quickStatsTimingBounds(data, key, referenceTime, fromTimestamp);
   if (!bounds) return null;
-  const threads = data.threads.filter(thread => !repository || thread.repository === repository);
+  const threads = data.threads.filter(thread => !repository || thread.project === repository);
   const sessions = clipIntervals(workSessions(threads), bounds);
   const spans = concurrencySpans(threads, "user", gap, counting);
   return concurrencyMetrics(spans, sessions, bounds);

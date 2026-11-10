@@ -31,7 +31,7 @@ export const thinkingBreakdowns = [
   ["provider", "Provider"],
   ["effort", "Effort"],
   ["harness", "Agent app"],
-  ["repository", "Repository"],
+  ["project", "Project"],
   ["machine", "Machine"],
   ["preceding_tool", "Preceding tool"],
   ["agent_depth", "Agent depth"],
@@ -92,6 +92,8 @@ export const defaultThinking: ThinkingState = {
   traceScale: "linear",
   timezone: "",
 };
+// Links from before projects grouped by repository, which reads as project.
+const legacyThinkingGroups: Record<string, ThinkingState["groupBy"]> = { repository: "project" };
 export function validateThinking(
   value: unknown,
 ): value is Partial<ThinkingState> {
@@ -99,7 +101,7 @@ export function validateThinking(
   const v = value as Record<string, unknown>,
     enums: Record<string, readonly string[]> = {
       view: thinkingViews.map((v) => v[0]),
-      groupBy: thinkingBreakdowns.map((v) => v[0]),
+      groupBy: [...thinkingBreakdowns.map((v) => v[0]), ...Object.keys(legacyThinkingGroups)],
       normalization: ["share", "count"],
       period: ["hour", "hours", "day", "days", "week", "month"],
       range: ["all", "today", "1d", "7d", "30d", "90d", "6m", "1y", "custom"],
@@ -167,6 +169,7 @@ export function initialThinking(params: URLSearchParams): ThinkingState {
     const v = JSON.parse(params.get("thinking")!);
     if (!validateThinking(v)) throw Error("Invalid Thinking view.");
     state = { ...state, ...v };
+    state.groupBy = legacyThinkingGroups[state.groupBy] ?? state.groupBy;
   }
   if (
     !params.has("thinking") ||
@@ -303,7 +306,7 @@ export const thinkingStyle = (group: ThinkingGroup, by: string) =>
         (
           {
             model: "model_family",
-            repository: "repository_name",
+            project: "project_name",
             machine: "machine_id",
           } as Record<string, string>
         )[by] ?? by,

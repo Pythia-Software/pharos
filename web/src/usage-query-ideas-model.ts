@@ -65,21 +65,21 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
   tl1_attempts: [],
   usage: [...usageGroupPresets.map(preset => ({ preset, section: "Group by" })), ...usageComparisonPresets.map(preset => ({ preset, section: "Compare" }))].map(({ preset, section }) => finish("usage", { ...preset, id: `usage:${preset.label}`, section })),
   writing: [
-    idea("writing", "repos", "Compare", "By repository", "Compare workspace writing totals and weighted words per written turn by repository", ["repository_name"], written),
+    idea("writing", "repos", "Compare", "By project", "Compare workspace writing totals and weighted words per written turn by project", ["project_name"], written),
     idea("writing", "apps", "Compare", "By source", "Compare writing and supplied text across sources", ["source_kind"], written),
     idea("writing", "providers", "Compare", "By provider set", "Keep recorded provider combinations separate when comparing workspace totals", ["providers"], written),
     idea("writing", "works", "Explore", "Workspaces with the most writing", "Rank workspaces by your writing and open their conversation history", ["id"], [{ id: "idea_title", op: "max", field: "title", label: "Workspace" }, ...written, work], "idea_typed_words"),
     idea("writing", "coverage", "Compare", "Price coverage", "Compare authored text, tokens and API-equivalent cost across pricing statuses", ["price_status"], [...written.slice(0, 4), sum("total_tokens", "Tokens"), sum("cost_usd", "API equivalent")]),
   ],
   writing_messages: [
-    idea("writing_messages", "repos", "Compare", "Writing by repository", "Compare message-date writing, message counts and weighted authorship shares", ["repository_name"], messages),
+    idea("writing_messages", "repos", "Compare", "Writing by project", "Compare message-date writing, message counts and weighted authorship shares", ["project_name"], messages),
     idea("writing_messages", "weeks", "Over time", "Weekly writing", "Typed, pasted and all supplied words by message week", ["week"], messages, "idea_typed_words", true),
     idea("writing_messages", "categories", "Compare", "Text sources", "Compare main authorship categories with their word totals and message counts", ["main_category"], messages),
     idea("writing_messages", "threads", "Explore", "Conversation writing", "Compare your words per conversation and open the exact matching messages", ["conversation_id"], [...messages, conversation]),
     idea("writing_messages", "apps", "Compare", "Source and provider", "Compare human writing by source and provider", ["source_kind", "provider"], messages),
   ],
   conversation_activity: [
-    idea("conversation_activity", "repos", "Compare", "Messages and output by repository", "Compare human messages and recorded output without treating the ratio as quality", ["repository_name"], activity),
+    idea("conversation_activity", "repos", "Compare", "Messages and output by project", "Compare human messages and recorded output without treating the ratio as quality", ["project_name"], activity),
     idea("conversation_activity", "models", "Compare", "Top-level model and effort", "Compare activity attributed to each top-level model and effort", ["root_provider", "root_model_family", "root_effort"], activity),
     idea("conversation_activity", "events", "Compare", "Event kinds", "Inspect where human-message and output observations enter the activity records", ["event_kind"], activity),
     idea("conversation_activity", "threads", "Explore", "By conversation", "Open conversations contributing human messages and output in the selected dates", ["conversation_id"], [...activity, conversation]),
@@ -96,14 +96,14 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("tools", "tools", "Compare", "Tools and failures", "Compare rollups using calls as the failure-rate denominator", ["tool_name"], toolTotals),
     idea("tools", "commands", "Compare", "Shell commands", "Compare programs and subcommands using weighted timed-run averages", ["program", "subcommand"], toolTotals, "idea_total_duration_ms"),
     idea("tools", "mcp", "Compare", "External MCP methods", "Compare captured external MCP servers and methods, including unknown values", ["mcp_server", "mcp_method"], toolTotals),
-    idea("tools", "context", "Context", "Context by repository", "Compare context volume added and carried alongside call counts", ["repository_name"], [...context, ...toolTotals]),
+    idea("tools", "context", "Context", "Context by project", "Compare context volume added and carried alongside call counts", ["project_name"], [...context, ...toolTotals]),
     idea("tools", "interruptions", "Compare", "Interruptions and truncation", "Compare timeouts, rejections, interruptions and truncated results by tool", ["tool_name"], [sum("timeout_count", "Timeouts"), sum("rejected_count", "Rejected calls"), sum("interrupted_count", "Interrupted calls"), sum("truncated_count", "Truncated results"), ...toolTotals]),
     idea("tools", "weeks", "Over time", "Weekly summaries", "Calls, failures and recorded time per week across retained rollups", ["week"], toolTotals, "idea_call_count", true),
   ],
   skill_usages: [
     idea("skill_usages", "skills", "Compare", "Skills and evidence", "Compare observed evidence volume, conversations and retained body sizes by skill", ["skill_name"], skills),
     idea("skill_usages", "types", "Compare", "Evidence types", "Distinguish invocations, file loads and app-reported loads for each skill", ["skill_name", "evidence_type"], skills),
-    idea("skill_usages", "repos", "Compare", "Skills by repository", "Compare skill evidence across repositories without treating a load as compliance", ["repository_name", "skill_name"], skills),
+    idea("skill_usages", "repos", "Compare", "Skills by project", "Compare skill evidence across projects without treating a load as compliance", ["project_name", "skill_name"], skills),
     idea("skill_usages", "status", "Compare", "Evidence status", "Compare retained skill observations by status and evidence type", ["status", "evidence_type"], skills),
     idea("skill_usages", "threads", "Explore", "Evidence by conversation", "Open matching evidence and its source messages or conversation", ["conversation_id"], [...skills, conversation]),
   ],
@@ -120,7 +120,7 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("rhythm", "automations", "Compare", "Automations", "Turns and agent hours each schedule, script or orchestration started", ["initiator", "automation"], rhythm, "idea_turns"),
   ],
   parallelism: [
-    idea("parallelism", "repos", "Compare", "Activity by repository", "Compare additive unit hours, keeping counting and gap assumptions separate", ["counting", "gap_minutes", "repository_name"], occupancy),
+    idea("parallelism", "repos", "Compare", "Activity by project", "Compare additive unit hours, keeping counting and gap assumptions separate", ["counting", "gap_minutes", "project_name"], occupancy),
     idea("parallelism", "weeks", "Over time", "Weekly activity", "Summed activity hours per week with each counting method and gap separate", ["week", "counting", "gap_minutes"], occupancy, "idea_unit_hours", true),
     idea("parallelism", "levels", "Compare", "Concurrency bands", "Compare unit-hours by concurrency band without summing repeated elapsed time", ["counting", "gap_minutes", "level_band"], occupancy),
     idea("parallelism", "threads", "Explore", "Conversation activity", "Inspect hourly occupancy records and open their source conversation when recorded", ["counting", "gap_minutes", "conversation_id"], [...occupancy, conversation]),
@@ -128,7 +128,7 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
   agent_events: [
     idea("agent_events", "kinds", "Compare", "Events by kind", "Compare how often each kind of event occurs, and in how many conversations", ["family"], agentEvents),
     idea("agent_events", "weeks", "Over time", "Weekly events", "Events per week by kind group", ["week", "family_group"], agentEvents, "idea_events", true),
-    idea("agent_events", "repos", "Compare", "Events by repository", "Compare events and affected conversations across repositories", ["repository_name"], agentEvents),
+    idea("agent_events", "repos", "Compare", "Events by project", "Compare events and affected conversations across projects", ["project_name"], agentEvents),
     idea("agent_events", "threads", "Explore", "Conversations with the most events", "Rank conversations by their events and open them in the reader", ["conversation_id"], [...agentEvents, conversation]),
   ],
   agent_event_rates: [
@@ -142,7 +142,7 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("session_shape", "threads", "Explore", "Sessions with the most forensic events", "Rank sessions by their forensic events and open them in the reader", ["conversation_id"], [...sessionShape, conversation], "idea_forensic_events"),
   ],
   agent_event_messages: [
-    idea("agent_event_messages", "repos", "Compare", "Messages read by repository", "Compare messages read, keyword hits and events across repositories", ["repository_name"], agentEventMessages),
+    idea("agent_event_messages", "repos", "Compare", "Messages read by project", "Compare messages read, keyword hits and events across projects", ["project_name"], agentEventMessages),
     idea("agent_event_messages", "sources", "Compare", "Replies and thinking", "Compare events per message in visible replies and thinking", ["source"], agentEventMessages),
   ],
 };
@@ -257,7 +257,7 @@ usageQueryIdeas.mcp_calls.push(
 );
 usageQueryIdeas.parallelism.push(
   idea("parallelism", "busy-units", "Explore", "Busiest units", "Explore units ranked by additive activity hours, keeping workspace/conversation counting and turn-gap assumptions separate", ["counting", "gap_minutes", "unit_id"], [{ id: "idea_unit_label", op: "max", field: "unit_label", label: "Unit" }, ...occupancy], "idea_unit_hours"),
-  idea("parallelism", "checkouts", "Explore", "Active checkouts", "Inspect activity at each repository and checkout directory; unit-hours count overlapping units separately", ["counting", "gap_minutes", "repository_name", "location"], occupancy, "idea_unit_hours"),
+  idea("parallelism", "checkouts", "Explore", "Active checkouts", "Inspect activity at each project and checkout directory; unit-hours count overlapping units separately", ["counting", "gap_minutes", "project_name", "location"], occupancy, "idea_unit_hours"),
 );
 
 // Record ideas show the source row directly. The source-action columns are

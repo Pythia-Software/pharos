@@ -47,7 +47,7 @@ func messageLabelLiveDatasetFor(conversations, unmarked string) sqlDataset {
 	}
 	source := `FROM messages m
  JOIN conversations c ON c.id=m.conversation_id
- LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories repo ON repo.id=w.repository_id
+ LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories repo ON repo.id=w.repository_id` + projectJoin("w") + `
  LEFT JOIN message_authorship ma ON ma.message_id=m.id
  LEFT JOIN message_labels l ON l.message_id=m.id AND EXISTS(SELECT 1 FROM message_labels_conversations complete WHERE complete.conversation_id=m.conversation_id) AND NOT EXISTS(SELECT 1 FROM message_labels_dirty dirty WHERE dirty.conversation_id=m.conversation_id)
  ` + unmarked + `
@@ -70,7 +70,8 @@ func messageLabelLiveDatasetFor(conversations, unmarked string) sqlDataset {
 	columns := map[string]string{
 		"id": "m.id||':'||" + label, "message_id": "m.id", "conversation_id": "c.id", "workspace_id": "c.workspace_id",
 		"fingerprint": "c.id", "title": "COALESCE(NULLIF(c.agent_nickname,''),w.title,c.id)", "repository_name": "repo.display_name",
-		"provider": "c.provider", "model": "CASE WHEN m.role IN ('assistant','agent') THEN COALESCE(NULLIF(m.model,''),c.model) ELSE NULL END",
+		"project_name": projectNameSQL("w"),
+		"provider":     "c.provider", "model": "CASE WHEN m.role IN ('assistant','agent') THEN COALESCE(NULLIF(m.model,''),c.model) ELSE NULL END",
 		"day": "date(m.created_at,'localtime')", "week": "date(m.created_at,'localtime','-6 days','weekday 1')", "month": "strftime('%Y-%m',m.created_at,'localtime')", "occurred_at": "m.created_at", "kind": "m.kind", "role": "m.role", "subagent": "c.parent_id IS NOT NULL",
 		"label": label, "family": family, "function_role": "CASE WHEN substr(tag.value,1,1)='P' THEN 'Sender' WHEN substr(tag.value,1,1)='C' THEN 'Receiver' ELSE 'Coverage' END",
 		"label_status": "CASE WHEN tag.value IS NOT NULL THEN 'matched' WHEN l.message_id IS NULL OR lm.model IS NULL THEN 'unlabeled' ELSE 'no_match' END",
@@ -94,6 +95,7 @@ func messageLabelLiveDatasetFor(conversations, unmarked string) sqlDataset {
 			"lm":   " LEFT JOIN message_labels_models lm ON lm.model=l.model",
 			"w":    " LEFT JOIN workspaces w ON w.id=c.workspace_id",
 			"repo": " LEFT JOIN repositories repo ON repo.id=w.repository_id",
+			"pj":   projectJoin("w"),
 		}, timestamps: map[string]string{"occurred_at": "m.created_at"}, lookups: map[string]bool{"message_id": true, "conversation_id": true, "workspace_id": true}}
 }
 

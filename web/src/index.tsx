@@ -347,6 +347,12 @@ const renderers: RenderRegistry<Row> = {
     }}>{id}</a>;
   },
   main_integration({ row }: CellContext<Row>) { return mainIntegrationLink(row); },
+  // A project is a repository or a folder; a workspace without a working
+  // directory has none, which is a state of its own, not a blank.
+  project({ value, row }: CellContext<Row>) {
+    if (value == null || value === "") return row.project_kind === "none" ? <span className="qt-muted">No project</span> : "";
+    return <span title={row.project_kind === "folder" ? `Folder ${value}` : `Repository ${value}`}>{String(value)}</span>;
+  },
   run_state({ value }: CellContext<Row>) {
     const state = String(value ?? "unknown");
     return <span className={`qt-state-pill ${state}`}>{state}</span>;
@@ -1256,7 +1262,7 @@ const conversationSummaryMetrics: AggregationClause[] = [
   { id: "conversations", op: "count_distinct", field: "root_conversation_id", groupBy: [] },
   { id: "messages", op: "sum", field: "human_messages", groupBy: [] },
   { id: "output", op: "sum", field: "output_tokens", groupBy: [] },
-  { id: "repositories", op: "count_distinct", field: "repository_name", groupBy: [] },
+  { id: "projects", op: "count_distinct", field: "project_name", groupBy: [] },
 ];
 function ConversationsSummary({ where }: { where: WhereTerm[] }) {
   const result = useMetrics("conversation_activity", where, conversationSummaryMetrics);
@@ -1268,7 +1274,7 @@ function ConversationsSummary({ where }: { where: WhereTerm[] }) {
     {card("Conversations", conversations.toLocaleString(), "top-level, with their delegated work")}
     {card("Your messages", messages.toLocaleString(), per(messages))}
     {card("Output tokens", compactNumber(output), per(output))}
-    {card("Repositories", value("repositories").toLocaleString(), "with conversation activity")}
+    {card("Projects", value("projects").toLocaleString(), "with conversation activity")}
   </div>;
 }
 

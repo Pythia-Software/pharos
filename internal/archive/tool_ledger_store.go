@@ -14,7 +14,12 @@ import (
 
 // toolRollupVersion names the tool_usage_daily and tool_call_cube layouts
 // and their derivation.
-const toolRollupVersion = "rollup-v6-origins"
+const toolRollupVersion = "rollup-v7-projects"
+
+// toolQueryFactsVersion names the tool_query_facts layout. It once followed
+// toolRollupVersion; the facts hold no workspace or project columns, so the
+// rollup's later versions leave it, and its complete index, alone.
+const toolQueryFactsVersion = "rollup-v6-origins"
 
 // toolLedgerState tracks the in-process ledger backfill and rollup rebuilds.
 type toolLedgerState struct {
@@ -641,7 +646,7 @@ func (c *Catalog) rebuildToolRollup(ctx context.Context, generation, day string)
 }
 
 // toolUsageColumns are tool_usage_daily's columns.
-var toolUsageColumns = []string{"id", "day", "week", "month", "repository_name", "source_kind", "provider", "model", "effort", "model_family", "session_kind",
+var toolUsageColumns = []string{"id", "day", "week", "month", "repository_name", "project_name", "source_kind", "provider", "model", "effort", "model_family", "session_kind",
 	"tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_name", "command_category", "call_count", "error_count", "error_rate",
 	"no_result_count", "rejected_count", "interrupted_count", "timeout_count", "nonzero_exit_count", "hook_blocked_count", "truncated_count",
 	"timed_count", "total_duration_ms", "avg_duration_ms", "max_duration_ms", "input_bytes", "result_bytes", "result_tokens", "measured_count",
@@ -680,9 +685,9 @@ func toolUsageRecord(book priceBook, row map[string]any) map[string]any {
 	outputCost := book.cost(defaultString(nilIfEmpty(model), "Unknown model"), dayValue, map[string]int64{"output_tokens": int64(outputTokens + 0.5)})
 	total := addCost(addCost(nil, contextCost.cost), outputCost.cost)
 	return map[string]any{
-		"id": stableID("tool-usage", dayValue, row["repository_name"], row["source_kind"], row["provider"], model, row["effort"], row["session_kind"], row["tool_name"],
+		"id": stableID("tool-usage", dayValue, row["repository_name"], row["project_name"], row["source_kind"], row["provider"], model, row["effort"], row["session_kind"], row["tool_name"],
 			row["tool_category"], row["mcp_server"], row["program"], row["subcommand"], row["command_category"], row["channel"], row["machine_id"], row["execution_machine_id"]),
-		"day": nilIfEmpty(dayValue), "week": week, "month": month, "repository_name": row["repository_name"], "source_kind": row["source_kind"],
+		"day": nilIfEmpty(dayValue), "week": week, "month": month, "repository_name": row["repository_name"], "project_name": row["project_name"], "source_kind": row["source_kind"],
 		"provider": row["provider"], "model": nilIfEmpty(model), "effort": row["effort"], "model_family": nilIfEmpty(modelFamily(model)), "session_kind": row["session_kind"],
 		"model_effort": modelEffort(model, firstString(row["effort"])),
 		"tool_name":    row["tool_name"], "tool_category": row["tool_category"], "mcp_server": row["mcp_server"], "mcp_method": mcpMethod(asString(row["tool_name"]), row["mcp_server"]), "program": row["program"],

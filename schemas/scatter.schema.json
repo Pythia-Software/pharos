@@ -115,6 +115,20 @@
       }
     },
     {
+      "name": "project_name",
+      "label": "Project",
+      "type": "text",
+      "group": "Point",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"project_name\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
       "name": "model",
       "label": "Model",
       "type": "text",
@@ -671,14 +685,14 @@
       }
     },
     {
-      "name": "calls_repositories",
-      "label": "Repositories reached",
+      "name": "calls_projects",
+      "label": "Projects reached",
       "type": "number",
       "group": "Tool Calls and Time",
-      "description": "Distinct repositories with matching calls; a repository can appear in several groups.",
+      "description": "Distinct projects (repositories or folders) with matching records; a project can appear in several groups.",
       "bindings": {
         "sqlite": {
-          "expr": "r.\"calls_repositories\"",
+          "expr": "r.\"calls_projects\"",
           "expressionNumeric": true
         }
       },
@@ -767,14 +781,14 @@
       }
     },
     {
-      "name": "skills_repositories",
-      "label": "Repositories reached",
+      "name": "skills_projects",
+      "label": "Projects holding matching skill evidence",
       "type": "number",
       "group": "Skills",
-      "description": "Distinct repositories holding matching skill evidence; a repository can appear under several skills.",
+      "description": "Distinct projects (repositories or folders) holding matching skill evidence; a project can appear in several groups.",
       "bindings": {
         "sqlite": {
-          "expr": "r.\"skills_repositories\"",
+          "expr": "r.\"skills_projects\"",
           "expressionNumeric": true
         }
       },
@@ -1327,14 +1341,14 @@
       }
     },
     {
-      "name": "agent_experience_repositories",
-      "label": "Repositories with events",
+      "name": "agent_experience_projects",
+      "label": "Projects with events",
       "type": "number",
       "group": "Agent Experience",
-      "description": "Distinct repositories with a matching event.",
+      "description": "Distinct projects (repositories or folders) with events; a project can appear in several groups.",
       "bindings": {
         "sqlite": {
-          "expr": "r.\"agent_experience_repositories\"",
+          "expr": "r.\"agent_experience_projects\"",
           "expressionNumeric": true
         }
       },

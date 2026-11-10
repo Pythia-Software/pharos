@@ -10,7 +10,7 @@ import { linkTargets } from "../../../src/query-link-targets";
 const baseRow = (schema, index) => ({
   ...Object.fromEntries(schema.fields.map(field => [field.name, field.type === "number" ? 2 + index : field.type === "bool" ? false : field.type === "datetime" ? `2026-10-${10 + index}T12:00:00Z` : field.type === "textarray" ? [] : "alpha"])),
   id: schema.fields.find(field => field.name === "id")?.type === "number" ? index + 1 : `record ${index} / &`,
-  repository_name: index === 2 ? null : "répo & one", conversation_id: "conversation / one", work_id: "work one",
+  repository_name: index === 2 ? null : "répo & one", project_name: index === 2 ? null : "répo & one", conversation_id: "conversation / one", work_id: "work one",
   duration_ms: index === 0 ? null : index === 1 ? 0 : 600, error_count: index === 0 ? 1 : 0,
   typed_words: index === 0 ? 0 : index * 10, typed_turns: index, words: 100, user_words: 100,
   cost_usd: index === 2 ? null : 2, cost_today_usd: index === 2 ? null : 3,

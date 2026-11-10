@@ -53,7 +53,7 @@ func readThinkingOptions(q url.Values, now time.Time) (thinkingOptions, error) {
 		values   []string
 	}{
 		{"view", "time", &o.View, []string{"time", "heatmap", "histogram", "reasoning", "wait-box", "calendar"}},
-		{"groupBy", "none", &o.GroupBy, []string{"none", "model", "model_effort", "speed", "model_speed", "model_effort_speed", "provider", "effort", "harness", "repository", "machine", "preceding_tool", "agent_depth"}},
+		{"groupBy", "none", &o.GroupBy, []string{"none", "model", "model_effort", "speed", "model_speed", "model_effort_speed", "provider", "effort", "harness", "project", "repository", "machine", "preceding_tool", "agent_depth"}},
 		{"period", "day", &o.Period, []string{"hour", "hours", "day", "days", "week", "month"}},
 		{"rows", "day", &o.Rows, []string{"day", "week", "month"}}, {"metric", "raw", &o.Metric, []string{"raw", "ratio"}},
 		{"sort", "median", &o.Sort, []string{"median", "p95", "volume"}}, {"direction", "desc", &o.Direction, []string{"asc", "desc"}},
@@ -209,13 +209,13 @@ func validateThinkingView(value map[string]any) error {
 }
 
 type thinkingRecord struct {
-	ID, Conversation, Stream, Workspace, Model, Effort, Speed, Provider, Harness, Repository, Machine, Preceding, Quality, Previous, Native string
-	ObservedMillis                                                                                                                          sql.NullInt64
-	At                                                                                                                                      time.Time
-	Sequence, Depth                                                                                                                         int
-	Input, Cache, Output, Reasoning                                                                                                         float64
-	Gap, Ratio                                                                                                                              *float64
-	Compaction                                                                                                                              bool
+	ID, Conversation, Stream, Workspace, Model, Effort, Speed, Provider, Harness, Repository, Project, Machine, Preceding, Quality, Previous, Native string
+	ObservedMillis                                                                                                                                   sql.NullInt64
+	At                                                                                                                                               time.Time
+	Sequence, Depth                                                                                                                                  int
+	Input, Cache, Output, Reasoning                                                                                                                  float64
+	Gap, Ratio                                                                                                                                       *float64
+	Compaction                                                                                                                                       bool
 }
 type thinkingStats struct {
 	N      int      `json:"n"`
@@ -353,7 +353,7 @@ func (c *Catalog) thinkingRecords(ctx context.Context, o thinkingOptions) ([]thi
 	// Fixed-size chunks are joined once at the end, which costs less than
 	// counting the ledger first or regrowing one slice.
 	rows, err := tx.QueryContext(ctx, `SELECT id,conversation_id,COALESCE(agent_session_id,''),workspace_id,model,effort,speed,
- COALESCE(provider,''),COALESCE(harness,''),COALESCE(repository_name,''),COALESCE(machine,''),preceding_tool,timing_quality,
+ COALESCE(provider,''),COALESCE(harness,''),COALESCE(repository_name,''),COALESCE(project_name,''),COALESCE(machine,''),preceding_tool,timing_quality,
  COALESCE(previous_request_id,''),COALESCE(native_id,''),COALESCE(requested_at,''),observed_millis,sequence,COALESCE(agent_depth,0),input_tokens,
  cache_read_input_tokens,output_tokens,reasoning_output_tokens,gap_seconds,compacted_before FROM (`+thinkingSource+`) d WHERE `+where, args...)
 	if err != nil {
@@ -368,7 +368,7 @@ func (c *Catalog) thinkingRecords(ctx context.Context, o thinkingOptions) ([]thi
 		var at string
 		var gap sql.NullFloat64
 		var compacted int
-		if err := rows.Scan(&r.ID, &r.Conversation, &r.Stream, &r.Workspace, &r.Model, &r.Effort, &r.Speed, &r.Provider, &r.Harness, &r.Repository, &r.Machine, &r.Preceding, &r.Quality, &r.Previous, &r.Native, &at, &r.ObservedMillis, &r.Sequence, &r.Depth, &r.Input, &r.Cache, &r.Output, &r.Reasoning, &gap, &compacted); err != nil {
+		if err := rows.Scan(&r.ID, &r.Conversation, &r.Stream, &r.Workspace, &r.Model, &r.Effort, &r.Speed, &r.Provider, &r.Harness, &r.Repository, &r.Project, &r.Machine, &r.Preceding, &r.Quality, &r.Previous, &r.Native, &at, &r.ObservedMillis, &r.Sequence, &r.Depth, &r.Input, &r.Cache, &r.Output, &r.Reasoning, &gap, &compacted); err != nil {
 			return nil, err
 		}
 		r.At, _ = time.Parse(time.RFC3339Nano, at)
@@ -378,6 +378,7 @@ func (c *Catalog) thinkingRecords(ctx context.Context, o thinkingOptions) ([]thi
 		r.Provider = thinkingLabel(r.Provider)
 		r.Harness = thinkingLabel(r.Harness)
 		r.Repository = thinkingLabel(r.Repository)
+		r.Project = defaultString(nilIfEmpty(r.Project), "No project")
 		r.Machine = thinkingLabel(r.Machine)
 		if gap.Valid {
 			r.Gap = &gap.Float64
@@ -534,8 +535,9 @@ func thinkingGroupKey(r thinkingRecord, by string) (string, string) {
 		s = r.Provider
 	case "harness":
 		s = r.Harness
-	case "repository":
-		s = r.Repository
+	// A link from before projects grouped by repository; it reads as project.
+	case "project", "repository":
+		s = r.Project
 	case "machine":
 		s = r.Machine
 	case "preceding_tool":

@@ -27,13 +27,13 @@ declare global {
 
 const providers: Record<string, string> = { claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", antigravity: "Antigravity", canonical: "Canonical export", tl1: "TL1" };
 
-function CarbonFilter({ field, choices, where, onFilter }: { field: "repository_name" | "provider" | "channel" | "machine_id" | "execution_machine_id"; choices: string[]; where: WhereTerm[]; onFilter: FilterChange }) {
+function CarbonFilter({ field, choices, where, onFilter }: { field: "project_name" | "provider" | "channel" | "machine_id" | "execution_machine_id"; choices: string[]; where: WhereTerm[]; onFilter: FilterChange }) {
   const selected = readSlice(where, field), values = [...new Set([...choices, ...selected.values.map(value => value ?? "")])].sort();
   const multiple = selected.excluded || selected.values.length > 1;
-  const label = originDimensions.find(([key]) => key===field)?.[1] ?? (field === "repository_name" ? "Repository" : "Provider");
+  const label = originDimensions.find(([key]) => key===field)?.[1] ?? (field === "project_name" ? "Project" : "Provider");
   const value = multiple ? "selection" : selected.values.length ? `v:${selected.values[0] ?? ""}` : "all";
   return <ChartSelect label={label} value={value}
-    options={[["all", `All ${field === "repository_name" ? "repositories" : field === "provider" ? "providers" : label.toLowerCase()+" values"}`], ...values.map((name): [string, string] => [`v:${name}`, isOriginDimension(field) ? originLabel(field,name) : name ? field === "provider" ? providers[name] ?? name : name : field === "provider" ? "Unknown provider" : "No repository"]), ...(multiple ? [["selection", "Multiple values / exclusions", "Filters restored from this link"] as [string, string, string]] : [])]}
+    options={[["all", `All ${field === "project_name" ? "projects" : field === "provider" ? "providers" : label.toLowerCase()+" values"}`], ...values.map((name): [string, string] => [`v:${name}`, isOriginDimension(field) ? originLabel(field,name) : name ? field === "provider" ? providers[name] ?? name : name : field === "provider" ? "Unknown provider" : "No project"]), ...(multiple ? [["selection", "Multiple values / exclusions", "Filters restored from this link"] as [string, string, string]] : [])]}
     onChange={next => onFilter(current => withSlice(current, field, { values: next === "all" ? [] : [next.slice(2) || null], excluded: false }))} />;
 }
 
@@ -54,14 +54,17 @@ export function CarbonImpact({ where, onFilter, usage: state, children }: { wher
   }, []);
   const bounds = timeBounds(where, usageTime);
   const data = useMemo(() => state.usage ? { ...state.usage, factors: factors as CarbonFactors } : null, [state.usage]), error = state.error;
-  const scopeValue = (field: "repository_name" | "provider" | "channel" | "machine_id" | "execution_machine_id") => {
+  const scopeValue = (field: "project_name" | "repository_name" | "provider" | "channel" | "machine_id" | "execution_machine_id") => {
     const selection = readSlice(where, field);
-    if (!selection.values.length) return field === "repository_name" ? "All repositories" : field === "provider" ? "All providers" : `All ${originDimensions.find(([key]) => key===field)?.[1].toLowerCase()} values`;
-    return `${selection.excluded ? "Except " : ""}${selection.values.map(value => isOriginDimension(field) ? originLabel(field,value) : value ? field === "provider" ? providers[value] ?? value : value : field === "provider" ? "Unknown provider" : "No repository").join(", ")}`;
+    if (!selection.values.length) return field === "project_name" ? "All projects" : field === "provider" ? "All providers" : `All ${originDimensions.find(([key]) => key===field)?.[1].toLowerCase()} values`;
+    return `${selection.excluded ? "Except " : ""}${selection.values.map(value => isOriginDimension(field) ? originLabel(field,value) : value ? field === "provider" ? providers[value] ?? value : value : field === "provider" ? "Unknown provider" : field === "repository_name" ? "No repository" : "No project").join(", ")}`;
   };
+  // A link from before projects filters repositories; it still does, so the
+  // scope names that filter rather than all projects.
+  const projectScope = !readSlice(where, "project_name").values.length && readSlice(where, "repository_name").values.length ? scopeValue("repository_name") : scopeValue("project_name");
   const originScope = originDimensions.filter(([field]) => readSlice(where,field).values.length).map(([field]) => scopeValue(field)).join(" · ");
-  const scope = `${originScope ? originScope+" · " : ""}${scopeValue("repository_name")} · ${scopeValue("provider")} · ${bounds.from || bounds.to ? `${bounds.from?.toLocaleString() ?? "Start of history"} → ${bounds.to?.toLocaleString() ?? "Present"}${bounds.to ? " (end exclusive)" : ""}` : "All time"}`;
-  const label = `${originScope ? originScope+" · " : ""}${scopeValue("repository_name")} · ${scopeValue("provider")} · ${rangeLabel(bounds) || "All time"}`;
+  const scope = `${originScope ? originScope+" · " : ""}${projectScope} · ${scopeValue("provider")} · ${bounds.from || bounds.to ? `${bounds.from?.toLocaleString() ?? "Start of history"} → ${bounds.to?.toLocaleString() ?? "Present"}${bounds.to ? " (end exclusive)" : ""}` : "All time"}`;
+  const label = `${originScope ? originScope+" · " : ""}${projectScope} · ${scopeValue("provider")} · ${rangeLabel(bounds) || "All time"}`;
   useLayoutEffect(() => {
     if (data) calculator?.show(data, label, scope);
     else calculator?.pending(error);
@@ -72,7 +75,7 @@ export function CarbonImpact({ where, onFilter, usage: state, children }: { wher
     <section className="carbon-filters" aria-label="Usage filters">
       <div className="carbon-filter-heading"><h3>Usage filters</h3>{where.length ? <button type="button" onClick={() => onFilter(() => [])}>Clear filters</button> : null}</div>
       <div className="usage-chart-controls">
-        <CarbonFilter field="repository_name" choices={choices.repository_name ?? []} where={where} onFilter={onFilter} />
+        <CarbonFilter field="project_name" choices={choices.project_name ?? []} where={where} onFilter={onFilter} />
         <CarbonFilter field="provider" choices={choices.provider ?? []} where={where} onFilter={onFilter} />
         {originDimensions.map(([field]) => <CarbonFilter key={field} field={field} choices={choices[field] ?? []} where={where} onFilter={onFilter} />)}
       </div>

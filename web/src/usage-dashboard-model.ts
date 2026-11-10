@@ -98,12 +98,12 @@ export function parallelismSelectionQuery(selection: ConcurrencySelection): Quer
     { field: "started_at", op: "<", value: new Date(bounds[1]).toISOString() },
     { field: "counting", op: "=", value: settings.counting },
     { field: "gap_minutes", op: "=", value: String(settings.gap) },
-    ...settings.repository ? [{ field: "repository_name", op: "=" as const, value: settings.repository }] : [],
+    ...settings.repository ? [{ field: "project_name", op: "=" as const, value: settings.repository }] : [],
     ...selected ? [{ field: "unit_id", op: "=" as const, value: settings.counting === "agent" ? selected.root_conversation_id || selected.conversation_id : selected.workspace_id }] : [],
   ], aggregations: [
-    { id: "active_units", op: "sum", field: "unit_hours", groupBy: ["repository_name"], label: "Active unit hours" },
-    { id: "wall_time", op: "sum", field: "elapsed_hours", groupBy: ["repository_name"], label: "Threaded wall hours" },
-    { id: "parallel_time", op: "sum", field: "parallel_elapsed_hours", groupBy: ["repository_name"], label: "Parallel threaded wall hours" },
+    { id: "active_units", op: "sum", field: "unit_hours", groupBy: ["project_name"], label: "Active unit hours" },
+    { id: "wall_time", op: "sum", field: "elapsed_hours", groupBy: ["project_name"], label: "Threaded wall hours" },
+    { id: "parallel_time", op: "sum", field: "parallel_elapsed_hours", groupBy: ["project_name"], label: "Parallel threaded wall hours" },
   ] };
 }
 

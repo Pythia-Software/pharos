@@ -33,8 +33,8 @@ sub-agents up to their root.
 - **Dimensions.** These have the names and meanings other datasets use:
   - `provider`, `harness`, `model` and `model_family`, `effort`: the
     conversation's own, or its main agent session's;
-  - `repository_name`, `workspace_id` and `title`: the session's own
-    workspace;
+  - `repository_name`, `project_name`, `workspace_id` and `title`: the
+    session's own workspace;
   - the origin fields (`channel`, `machine`, `execution_machine` and their
     IDs, kinds and statuses);
   - `started_at`: the first timestamped message;

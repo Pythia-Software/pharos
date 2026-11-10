@@ -241,6 +241,25 @@
       }
     },
     {
+      "name": "project_name",
+      "label": "Project",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "project_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"project_name\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "description": "The repository, else the working folder (home as ~); empty for a workspace with no working directory (No project)."
+    },
+    {
       "name": "title",
       "label": "Workspace",
       "type": "text",

@@ -703,6 +703,9 @@ func libraryExtraColumns(derived map[string]string) []libraryColumn {
 		{"purpose", "COALESCE(w.purpose," + derived["summary_initiation"] + ")"},
 		{"outcome", "COALESCE(w.outcome," + derived["summary_outcome"] + ")"},
 		{"repository_name", "r.display_name"},
+		{"project_id", projectIDSQL("w")},
+		{"project_name", projectNameSQL("w")},
+		{"project_kind", projectKindSQL("w")},
 		{"canonical_remote", "r.canonical_remote"},
 		{"file_edit_count", derived["changed_file_count"]},
 		{"branch_count", "CASE WHEN w.branch IS NULL OR TRIM(w.branch)='' THEN 0 ELSE 1 END"},
@@ -791,7 +794,7 @@ func libraryRowSelect(value func(libraryColumn) string, fields libraryFields) st
 			columns = append(columns, column.expr+" "+column.name)
 		}
 	}
-	return "SELECT " + strings.Join(columns, ",\n\t") + "\n\tFROM workspaces w LEFT JOIN repositories r ON r.id=w.repository_id"
+	return "SELECT " + strings.Join(columns, ",\n\t") + "\n\tFROM workspaces w LEFT JOIN repositories r ON r.id=w.repository_id" + projectJoin("w")
 }
 
 // libraryRows reads Library rows with fields (nil: every column) for

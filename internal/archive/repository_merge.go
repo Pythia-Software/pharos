@@ -125,6 +125,9 @@ func mergeRepositoryGroupTx(tx *sql.Tx, group repositoryMergeGroup) error {
 		if _, err := tx.Exec(`UPDATE workspaces SET repository_id=? WHERE repository_id=?`, group.Survivor.ID, loser.ID); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(`UPDATE workspaces SET folder_repository_id=? WHERE folder_repository_id=?`, group.Survivor.ID, loser.ID); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`INSERT INTO protections(scope_type,scope_id,mode,until_at,reason,created_at)
 			SELECT scope_type,?,mode,until_at,reason,created_at FROM protections WHERE scope_type='repository' AND scope_id=? AND 1
 			ON CONFLICT(scope_type,scope_id,mode) DO UPDATE SET until_at=CASE WHEN protections.until_at IS NULL OR excluded.until_at IS NULL THEN NULL ELSE MAX(protections.until_at,excluded.until_at) END,
@@ -222,6 +225,9 @@ func mergeRepositoryGroupTx(tx *sql.Tx, group repositoryMergeGroup) error {
 		directories = append(directories, filepath.Clean(expandHome(location)))
 	}
 	if err := reresolveToolPaths(tx, directories); err != nil {
+		return err
+	}
+	if err := resolveFolderProjects(context.Background(), tx, directories); err != nil {
 		return err
 	}
 	_, err = tx.Exec(`DELETE FROM meta WHERE key='tool_rollup_generation'`)

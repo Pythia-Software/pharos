@@ -274,7 +274,7 @@ func agentEventsFreshnessNote(ctx context.Context, q queryer) (string, error) {
 var agentEventDataset = func() sqlDataset {
 	columns := map[string]string{
 		"id": "('e'||e.id)", "message_id": "e.message_id", "conversation_id": "e.conversation_id",
-		"workspace_id": "c.workspace_id", "title": "w.title", "repository_name": "r.display_name",
+		"workspace_id": "c.workspace_id", "title": "w.title", "repository_name": "r.display_name", "project_name": projectNameSQL("w"),
 		"provider": "c.provider", "model": "COALESCE(m.model,c.model)", "subagent": "(c.parent_id IS NOT NULL)",
 		"source":       "e.source",
 		"in_thinking":  "(e.source='thinking')",
@@ -291,17 +291,18 @@ var agentEventDataset = func() sqlDataset {
 	}
 	return sqlDataset{
 		from: `FROM agent_events e JOIN conversations c ON c.id=e.conversation_id LEFT JOIN messages m ON m.id=e.message_id
-			LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id`,
+			LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w"),
 		base:      fmt.Sprintf("e.probability>=%g", agentEventThreshold),
 		countFrom: "FROM agent_events e", countAlias: "e",
 		lookups:    map[string]bool{"message_id": true, "conversation_id": true},
 		columns:    columns,
 		timestamps: map[string]string{"occurred_at": "e.occurred_at"},
 		optionalJoins: map[string]string{
-			"c": " JOIN conversations c ON c.id=e.conversation_id",
-			"m": " LEFT JOIN messages m ON m.id=e.message_id",
-			"w": " LEFT JOIN workspaces w ON w.id=c.workspace_id",
-			"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
+			"c":  " JOIN conversations c ON c.id=e.conversation_id",
+			"m":  " LEFT JOIN messages m ON m.id=e.message_id",
+			"w":  " LEFT JOIN workspaces w ON w.id=c.workspace_id",
+			"r":  " LEFT JOIN repositories r ON r.id=w.repository_id",
+			"pj": projectJoin("w"),
 		},
 		pageFrom: "FROM agent_events e",
 	}
@@ -312,7 +313,7 @@ var agentEventDataset = func() sqlDataset {
 var agentEventMessageDataset = func() sqlDataset {
 	columns := map[string]string{
 		"id": "a.message_id", "message_id": "a.message_id", "conversation_id": "a.conversation_id",
-		"workspace_id": "c.workspace_id", "title": "w.title", "repository_name": "r.display_name",
+		"workspace_id": "c.workspace_id", "title": "w.title", "repository_name": "r.display_name", "project_name": projectNameSQL("w"),
 		"provider": "c.provider", "model": "COALESCE(m.model,c.model)", "subagent": "(c.parent_id IS NOT NULL)",
 		// events is stored with the message's row: its events at the threshold.
 		"source": "a.source", "candidates": "a.candidates",
@@ -324,16 +325,17 @@ var agentEventMessageDataset = func() sqlDataset {
 	}
 	return sqlDataset{
 		from: `FROM agent_event_messages a JOIN conversations c ON c.id=a.conversation_id LEFT JOIN messages m ON m.id=a.message_id
-			LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id`,
+			LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w"),
 		countFrom: "FROM agent_event_messages a", countAlias: "a",
 		lookups:    map[string]bool{"id": true, "message_id": true, "conversation_id": true},
 		columns:    columns,
 		timestamps: map[string]string{"occurred_at": "a.occurred_at"},
 		optionalJoins: map[string]string{
-			"c": " JOIN conversations c ON c.id=a.conversation_id",
-			"m": " LEFT JOIN messages m ON m.id=a.message_id",
-			"w": " LEFT JOIN workspaces w ON w.id=c.workspace_id",
-			"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
+			"c":  " JOIN conversations c ON c.id=a.conversation_id",
+			"m":  " LEFT JOIN messages m ON m.id=a.message_id",
+			"w":  " LEFT JOIN workspaces w ON w.id=c.workspace_id",
+			"r":  " LEFT JOIN repositories r ON r.id=w.repository_id",
+			"pj": projectJoin("w"),
 		},
 		pageFrom: "FROM agent_event_messages a",
 	}

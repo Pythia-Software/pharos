@@ -200,7 +200,7 @@ func (d sqlDataset) project(fields []string) sqlDataset {
 	if d.scalarFacts && d.pageFrom == "FROM tool_calls t" {
 		compact := true
 		for field := range columns {
-			compact = compact && slices.Contains([]string{"id", "workspace_id", "started_at", "day", "week", "month", "duration_ms", "provider", "activity", "tool_category", "call_count", "repository_name", "source_kind", "title"}, field)
+			compact = compact && slices.Contains([]string{"id", "workspace_id", "started_at", "day", "week", "month", "duration_ms", "provider", "activity", "tool_category", "call_count", "repository_name", "project_name", "source_kind", "title"}, field)
 		}
 		if compact {
 			d.from = strings.Replace(d.from, "FROM tool_calls t", "FROM tool_query_facts t", 1)
@@ -679,7 +679,7 @@ func (d sqlDataset) Distinct(ctx context.Context, q queryer, fieldName, search s
 	if _, ok := d.cube.dimensionFor(fieldName); ok {
 		// Daily summaries preserve this set of dimension values, including
 		// absent values, with far fewer and narrower rows than the raw cube.
-		if d.cube == toolCallCube && slices.Contains([]string{"day", "week", "month", "repository_name", "source_kind", "provider", "model", "effort", "model_family", "model_effort", "session_kind", "tool_name", "tool_category", "mcp_server", "mcp_method", "program", "subcommand", "command_name", "command_category", "activity", "operation_key", "operation_name"}, fieldName) {
+		if d.cube == toolCallCube && slices.Contains([]string{"day", "week", "month", "repository_name", "project_name", "source_kind", "provider", "model", "effort", "model_family", "model_effort", "session_kind", "tool_name", "tool_category", "mcp_server", "mcp_method", "program", "subcommand", "command_name", "command_category", "activity", "operation_key", "operation_name"}, fieldName) {
 			return toolRollupDataset.Distinct(ctx, q, fieldName, search, limit, schema)
 		}
 		return d.cube.table().Distinct(ctx, q, fieldName, search, limit, schema)

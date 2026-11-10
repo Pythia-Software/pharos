@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeIntervals, workspaceSpans, concurrencyAverage, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration, clipIntervals, workSessions, concurrencyMetrics, stackSegments, zonedDayBounds } from "../../../src/concurrency-data";
+import { concurrencyThreadPlace, mergeIntervals, workspaceSpans, concurrencyAverage, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration, clipIntervals, workSessions, concurrencyMetrics, stackSegments, zonedDayBounds } from "../../../src/concurrency-data";
 import { invalidateConcurrencyData, loadConcurrencyData, threadedSummaryWindow, quickStatsRuntimeWindow, openConcurrencyModal, closeConcurrencyModal } from "../../../src/concurrency-store";
 import { normalizeConcurrencySettings, resolveConcurrencyRange } from "../../../src/concurrency-settings";
 import { parallelismAnalysisCatalog } from "../../../src/parallelism-analysis-catalog";
@@ -8,7 +8,7 @@ import { describeDataSource } from "../../../src/data-taxonomy-model";
 
 const minute = 60_000;
 const thread = (id, workspace_id, turns, model_spans = turns, agent_depth = 0) => ({ id, workspace_id, turns, model_spans, agent_depth });
-const repoThread = (workspace, repository, spans) => ({ ...thread(workspace, workspace, spans), repository });
+const repoThread = (workspace, project, spans) => ({ ...thread(workspace, workspace, spans), project });
 const rowsAt = (segments, time) => Object.fromEntries(segments.filter(s => s.start <= time && time < s.end).map(s => [s.workspace, s.bottom]));
 
 test("timing data loads from the library, retries failures, and preserves explicit prototype previews", async t => {
@@ -65,7 +65,7 @@ test("conversation table timings respect the selected range and clipped gap brid
   assert.deepEqual([...conversationTimings(threads, 15)], [["first", { model: 0, threaded: 2 * minute }], ["second", { model: 2 * minute, threaded: 2 * minute }]]);
 });
 
-test("simultaneous workspaces start grouped by repository", () => {
+test("simultaneous workspaces start grouped by project", () => {
   const threads = [repoThread("a", "alpha", [[0, 20]]), repoThread("b", "beta", [[0, 20]]), repoThread("c", "alpha", [[0, 20]])];
   assert.deepEqual(rowsAt(stackSegments(threads, "model", 0, ["a", "b", "c"], [0, 20]), 5), { a: 0, c: 1, b: 2 });
 });
@@ -124,7 +124,7 @@ test("packing stays deterministic, gap-free, and preserves workspace activity in
   const threads = Array.from({ length: 60 }, (_, i) => {
     const workspace = `w${i % 13}`, start = Math.floor(random() * 80) * minute;
     const spans = [[start, start + minute], [start + 5 * minute, start + 7 * minute]];
-    return { ...thread(`t${i}`, workspace, spans, spans, i % 7 === 0 ? 1 : 0), repository: `repo${i % 13 % 3}` };
+    return { ...thread(`t${i}`, workspace, spans, spans, i % 7 === 0 ? 1 : 0), project: `repo${i % 13 % 3}` };
   });
   const order = Array.from(new Set(threads.map(t => t.workspace_id))), bounds = [13 * minute, 87 * minute];
   for (const mode of ["model", "user"]) {
@@ -252,8 +252,8 @@ test("local days follow the snapshot timezone across daylight savings", () => {
 
 test("header threaded averages use the same saved gap and repository settings", () => {
   const base = Date.parse("2026-10-06T10:00:00Z"), hour = 60 * minute;
-  const a = { ...thread("a", "one", [[base, base + hour], [base + 2 * hour, base + 3 * hour]]), repository: "alpha" };
-  const b = { ...thread("b", "two", [[base + hour, base + 2 * hour]]), repository: "beta" };
+  const a = { ...thread("a", "one", [[base, base + hour], [base + 2 * hour, base + 3 * hour]]), project: "alpha" };
+  const b = { ...thread("b", "two", [[base + hour, base + 2 * hour]]), project: "beta" };
   const data = { period_start: "2026-10-01", period_end: "2026-10-07", timezone: "UTC", threads: [a, b] };
   const reference = Date.parse("2026-10-07T01:00:00Z");
   assert.equal(threadedSummaryWindow(data, 0, "", "24h", reference).average, 3 / 24);
@@ -415,4 +415,10 @@ test("Quick Stats runtimes count parallel sessions separately and union wall tim
   const gaps = {...data,threads:[thread("gaps", "same", [[base,base+minute],[base+10*minute,base+11*minute]])]};
   assert.equal(quickStatsRuntimeWindow(gaps, 0, "1h", base + hour).agent, 2*minute);
   assert.equal(quickStatsRuntimeWindow(gaps, 15, "1h", base + hour).agent, 11*minute);
+});
+
+test("the hover and selection detail name a thread's project, folder or none", () => {
+  assert.equal(concurrencyThreadPlace({ project: "app", workspace_name: "lisbon" }), "app / lisbon");
+  assert.equal(concurrencyThreadPlace({ project: "~/notes", repository: "", workspace_name: "notes" }), "~/notes / notes");
+  assert.equal(concurrencyThreadPlace({ project: "", workspace_name: "chat" }), "No project / chat");
 });

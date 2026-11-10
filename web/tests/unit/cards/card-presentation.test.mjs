@@ -98,7 +98,7 @@ test("box covers budget three readable rows and disclose the same subset", () =>
 test("timeline headlines keep their measure and never reuse a ranked list total", () => {
   const input = preview({ headlineMetric: { value: "$2,686", unit: "", label: "API equivalent" }, buckets: [{ key: "today" }] });
   const { clause, result } = input.metrics[0];
-  clause.groupBy = ["day", "repository_name"];
+  clause.groupBy = ["day", "project_name"];
   result.groupCount = 2;
   result.buckets = [{ keys: ["today", "pharos"], value: 100, count: 1 }, { keys: ["today", "qt"], value: 200, count: 1 }];
   const before = structuredClone(input), presentation = compactMetricPresentation(input);

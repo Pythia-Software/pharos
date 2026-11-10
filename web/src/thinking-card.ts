@@ -40,7 +40,7 @@ export function readThinkingCard(address: string, now = new Date()): { topic: "t
 const recipe = (id: string) => thinkingCardRecipes.find(item => item.id === id)!;
 const breakdownField: Record<ThinkingState["groupBy"], string | undefined> = {
   none: undefined, model: "model", model_effort: "model_effort", speed: "speed", model_speed: "model_speed", model_effort_speed: "model_effort_speed", provider: "provider", effort: "effort", harness: "harness",
-  repository: "repository_name", machine: "machine", preceding_tool: "preceding_tool", agent_depth: "agent_depth",
+  project: "project_name", machine: "machine", preceding_tool: "preceding_tool", agent_depth: "agent_depth",
 };
 const breakdownLabel = (state: ThinkingState) => thinkingBreakdowns.find(([id]) => id === state.groupBy)![1].toLowerCase();
 // The model and effort the page's controls narrowed to, which every chart shares.

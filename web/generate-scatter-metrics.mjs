@@ -7,7 +7,7 @@ export async function generateScatterMetrics(check = false) {
   const { scatterMetrics, scatterMetricDefinitions } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
   const fields = [
     ['id', 'Point ID', 'text'], ['entity_id', 'Point', 'text'], ['point_kind', 'Point type', 'text'],
-    ['title', 'Title', 'text'], ['provider', 'Provider', 'text'], ['repository_name', 'Repository', 'text'], ['model', 'Model', 'text'],
+    ['title', 'Title', 'text'], ['provider', 'Provider', 'text'], ['repository_name', 'Repository', 'text'], ['project_name', 'Project', 'text'], ['model', 'Model', 'text'],
     ['first_at', 'First matching record', 'datetime'], ['last_at', 'Last matching record', 'datetime'],
   ].map(([name,label,type]) => ({name,label,type,group:'Point',bindings:{sqlite:{expr:`r."${name}"`,...type==='datetime'?{datetimeFormat:'utc-millis'}:{}}},aggregate:{groupable:true}}));
   for (const item of scatterMetrics) fields.push({name:item.id,label:item.measure.label,type:'number',group:item.group,description:item.measure.note,bindings:{sqlite:{expr:`r."${item.id}"`,expressionNumeric:true}},aggregate:{groupable:true}});
