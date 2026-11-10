@@ -1,0 +1,314 @@
+[
+  {
+    "name": "all visible",
+    "state": {},
+    "valid": true
+  },
+  {
+    "name": "all values hidden",
+    "state": {
+      "events": {
+        "values": [],
+        "excluded": false,
+        "allHidden": true
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "all layers hidden",
+    "state": {
+      "sections": {
+        "values": [],
+        "excluded": false,
+        "allHidden": true
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "invalid allHidden type",
+    "state": {
+      "events": {
+        "values": [],
+        "excluded": false,
+        "allHidden": "yes"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "conflicting allHidden selection",
+    "state": {
+      "events": {
+        "values": [
+          "choices"
+        ],
+        "excluded": false,
+        "allHidden": true
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "all sections",
+    "state": {
+      "modes": {
+        "values": [
+          "C.report.finding",
+          "?"
+        ],
+        "excluded": false
+      },
+      "events": {
+        "values": [
+          "choices"
+        ],
+        "excluded": true
+      },
+      "tools": {
+        "values": [
+          "error"
+        ],
+        "excluded": true
+      },
+      "origins": {
+        "values": [
+          "typed"
+        ],
+        "excluded": false
+      },
+      "sections": {
+        "values": [
+          "modes",
+          "events",
+          "tools",
+          "origins"
+        ],
+        "excluded": false
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "only agent events layer",
+    "state": {
+      "sections": {
+        "values": [
+          "events"
+        ],
+        "excluded": false
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "all except caller text layer",
+    "state": {
+      "sections": {
+        "values": [
+          "origins"
+        ],
+        "excluded": true
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "multiple layers with inner selection",
+    "state": {
+      "sections": {
+        "values": [
+          "tools",
+          "events"
+        ],
+        "excluded": false
+      },
+      "tools": {
+        "values": [
+          "error"
+        ],
+        "excluded": true
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "invalid layer selection",
+    "state": {
+      "sections": {
+        "values": [
+          "events"
+        ],
+        "excluded": "false"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "empty exclusion",
+    "state": {
+      "events": {
+        "values": [],
+        "excluded": true
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "future value IDs",
+    "state": {
+      "tools": {
+        "values": [
+          "future-tool"
+        ],
+        "excluded": false
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "selection extension",
+    "state": {
+      "events": {
+        "values": [
+          "friction"
+        ],
+        "excluded": false,
+        "extra": "metadata"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "null state",
+    "state": null,
+    "valid": false
+  },
+  {
+    "name": "array state",
+    "state": [],
+    "valid": false
+  },
+  {
+    "name": "scalar state",
+    "state": "all",
+    "valid": false
+  },
+  {
+    "name": "unknown section",
+    "state": {
+      "other": {
+        "values": [],
+        "excluded": false
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "null selection",
+    "state": {
+      "events": null
+    },
+    "valid": false
+  },
+  {
+    "name": "array selection",
+    "state": {
+      "events": []
+    },
+    "valid": false
+  },
+  {
+    "name": "scalar selection",
+    "state": {
+      "events": true
+    },
+    "valid": false
+  },
+  {
+    "name": "missing exclusion",
+    "state": {
+      "events": {
+        "values": [
+          "choices"
+        ]
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "null exclusion",
+    "state": {
+      "events": {
+        "values": [],
+        "excluded": null
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "string exclusion",
+    "state": {
+      "events": {
+        "values": [],
+        "excluded": "false"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "missing values",
+    "state": {
+      "tools": {
+        "excluded": false
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "null values",
+    "state": {
+      "tools": {
+        "values": null,
+        "excluded": false
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "scalar values",
+    "state": {
+      "tools": {
+        "values": "read",
+        "excluded": false
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "non-string value",
+    "state": {
+      "modes": {
+        "values": [
+          "?",
+          1
+        ],
+        "excluded": false
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "null value",
+    "state": {
+      "origins": {
+        "values": [
+          null
+        ],
+        "excluded": false
+      }
+    },
+    "valid": false
+  }
+]

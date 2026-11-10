@@ -14,7 +14,7 @@ import (
 // Name the generated bundles explicitly so a fresh checkout cannot compile a
 // service without its frontend. Run tools/setup.sh before Go builds or tests.
 //
-//go:embed assets assets/query-tables.js assets/query-tables.css
+//go:embed assets assets/query-tables.js assets/query-tables.css assets/data-guide.js assets/data-guide.css
 var assets embed.FS
 
 func schemaSQL() string {

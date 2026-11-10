@@ -36,23 +36,23 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
   // A method name can recur on several servers, so cards keep them apart.
   mcp_server_method: { label: "MCP server + method", fields: ["mcp_server", "mcp_method"], where: methods, note: "MCP servers and methods count calls with a recorded MCP method only." },
   project_name: projectBreakdown(),
-  source_kind: { label: "App", fields: ["source_kind"] },
+  source_kind: { label: "Source", fields: ["source_kind"] },
   channel: { label: "Channel", fields: ["channel"] },
   machine_id: { label: "Machine", fields: ["machine_id"] },
   execution_machine_id: { label: "Execution machine", fields: ["execution_machine_id"] },
   provider: { label: "Provider", fields: ["provider"], order: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"] },
   model_family: { label: "Model", fields: ["model_family"] },
-  session_kind: { label: "Agent kind", fields: ["session_kind"], order: ["root", "subagent"], values: { root: "Root agent", subagent: "Sub-agent" } },
+  session_kind: { label: "Agent kind", fields: ["session_kind"], order: ["root", "subagent"], values: { root: "Main agent", subagent: "Sub-agent" } },
 };
 
 // The rollup's day is text, so time bounds become day predicates.
 const time: TimeFields = { first: "day", last: "day" };
 export const toolsAnalysisCatalog: AnalysisCatalog = {
   dataset: "tools", time, measures, breakdowns, units: {},
-  records: { label: "Daily tool summary", plural: "Daily tool summaries", note: "A daily tool summary is one recorded day's calls of one tool, command, model, project and origin: a rollup, not one call. Follow a summary's Calls link to its individual calls." },
+  records: { label: "Daily tool summary", plural: "Daily tool summaries", note: "A daily tool summary is one recorded day's calls of one tool, command, model, project and origin: a daily summary rather than an individual call. Follow a summary's Calls link to its individual calls." },
   periods: { day: "day", week: "week", month: "month" },
   trend: { metric: "calls", split: "tool_category" }, legacy: projectLegacy(),
-  rangeNote: "The tools rollup records whole local days, so the range snaps to whole days: a range starting mid-day counts that whole day.",
+  rangeNote: "Tool summaries record whole local days, so the range snaps to whole days: a range starting mid-day counts that whole day.",
   // A minimum counts calls: a daily summary holds many.
   samples: { unit: "calls", label: "Calls", sum: "call_count" },
   executable: (where, now) => toolDashboardWhere(where, timeBounds(where, time, now), new Date(now)),

@@ -1,4 +1,6 @@
+import {dataEntities,dataEntityGroups,dataSources,describeDataSource,resolveGuideEntity} from '../../../src/data-taxonomy-model';
 import searchCases from '../../../../testdata/search-draft-cases.json';
+import timelineVisibilityCases from '../../../../testdata/timeline-visibility-cases.json';
 import inspectionCases from '../../../../testdata/json-inspection-cases.json';
 import {parseDetailTarget,detailReference,revealQueryDetail} from '../../../src/query-attention';
 import {findingsRank} from '../../../src/findings-route';
@@ -7,7 +9,7 @@ import {createAttentionRegistry,parseJsonInspections} from '@pythia-software/que
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
-import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView,viewPageForURL} from '../../../src/view-contract';
+import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView,retainNavigationView,viewPageForURL} from '../../../src/view-contract';
 import {portableQueryLinks} from '../../../src/portable-query-link';
 import {viewRequestURL} from '../../../src/query-request';
 import {withSearchDateWindow,emptyTextSearch,refreshSearchToday,readTextSearch} from '../../../src/text-search-model';
@@ -41,11 +43,23 @@ test('semantic detail targets preserve typed identities, reject ambiguous paths,
 });
 
 test('host view codecs preserve explicit false, empty values, ordered IDs and relative intent',()=>{
- const values={card_window:'today',card_filters:false,search_cards:{},delegation_columns:['cost','tokens'],reader_expanded:['message:m'],disclosures:{'row:r:input':true},findings_rank:'tokens'};
+ const values={card_window:'today',card_filters:false,search_cards:{},delegation_columns:['cost','tokens'],reader_expanded:['message:m'],reader_highlight_hidden:['events:event-friction','labels:C.report'],reader_navigator:['timeline','context','turns'],disclosures:{'row:r:input':true,'timeline-key':false},findings_rank:'tokens',timeline_visibility:{modes:{values:['C.report.finding','?'],excluded:false},events:{values:['friction'],excluded:true},tools:{values:['error'],excluded:true},origins:{values:['typed'],excluded:false}}};
  for(const [key,value]of Object.entries(values))assert.deepEqual(parseViewValue(viewFields[key],encodeViewValue(viewFields[key],value)),value,key);
  assert.equal(fieldsForPage('findings/settings').findings_rank,undefined);
  assert.equal(fieldsForPage('analyze/query/tool_calls','tool_calls').record_keyword.param,'record_tool_calls');
  for(const [key,raw]of [['card_filters','false'],['card_window','forever'],['delegation_columns','[1]'],['search_state','{}']])assert.throws(()=>parseViewValue(viewFields[key],raw),key);
+ for(const sample of timelineVisibilityCases){
+  if(sample.valid)assert.deepEqual(parseViewValue(viewFields.timeline_visibility,encodeViewValue(viewFields.timeline_visibility,sample.state)),sample.state,sample.name);
+  else assert.throws(()=>encodeViewValue(viewFields.timeline_visibility,sample.state),undefined,sample.name);
+ }
+ for(const count of [1000,1001]){
+  const state={modes:{values:Array(count).fill('?'),excluded:false}};
+  if(count===1000)assert.doesNotThrow(()=>encodeViewValue(viewFields.timeline_visibility,state));
+  else assert.throws(()=>encodeViewValue(viewFields.timeline_visibility,state));
+ }
+ assert.deepEqual(parseViewValue(viewFields.timeline_visibility,'{}'),{});
+ assert.deepEqual(parseViewValue(viewFields.reader_navigator,'[]'),[]);
+ for(const raw of ['[\"unknown\"]','[\"turns\",\"turns\"]','{}'])assert.throws(()=>parseViewValue(viewFields.reader_navigator,raw));
 });
 
 test('Safety links restore their own section, lifecycle, case and evidence disclosures',()=>{
@@ -315,6 +329,23 @@ test('changing a window preserves unrelated datetime constraints and pinned Toda
 });
 
 
+test('workspace navigation scopes selections while retaining presentation and stable content identities',()=>{
+ const url=path=>new URL(path,'http://pharos.test');
+ const source=url('/work/first/conversation/one');
+ const selections={conversation:'one',message:'m1',call:'c1',at:'2026-11-08',delegation_session:'session',delegation_start:'100',delegation_end:'200',delegation_collapsed:'session',delegation_page:'2',delegation_expanded:'["session"]',delegation_relatives:'["session"]',delegation_event:'event-1',reader_event_link:'e1',reader_expanded:'["call:c1"]',reader_collapsed:'["message:m1"]',highlight:'message:m1',reveal:'message:m1',find:'previous page'};
+ const state={...selections,reader_content:'{"loaded:m1":true}',disclosures:'{"work:first:files":true}',reader_writing:'1',sidebar_width:'490',delegation_scope:'self',delegation_mode:'rank',nav_collapsed:'1',q_library:'saved-query'};
+ const same=new URLSearchParams(state);retainNavigationView(same,url('/work/first'),source);
+ assert.equal(same.get('conversation'),'one');assert.equal(same.get('delegation_start'),'100');
+ const changed=new URLSearchParams(state);retainNavigationView(changed,url('/work/second'),source);
+ for(const key of Object.keys(selections))assert.equal(changed.has(key),false,key);
+ for(const key of ['reader_content','disclosures','reader_writing','sidebar_width','delegation_scope','delegation_mode','nav_collapsed','q_library'])assert.equal(changed.get(key),state[key],key);
+ const search=new URLSearchParams(state);retainNavigationView(search,url('/library'),source);
+ for(const key of ['conversation','message','call','at','delegation_session','delegation_start','delegation_mode','reader_event_link'])assert.equal(search.has(key),false,key);
+ assert.equal(search.get('reader_content'),state.reader_content);assert.equal(search.get('q_library'),'saved-query');
+ const reopened=new URLSearchParams(state);retainNavigationView(reopened,url('/work/second'),url('/library'));
+ assert.equal(reopened.has('conversation'),false,'old library URLs cannot inject a selection');
+});
+
 test('page navigation drops source attention while preserving global view controls',()=>{
  const params=new URLSearchParams({highlight:'text:quorum',reveal:'message:old',nav_collapsed:'1',reader_content:'{"old":true}'});
  params.append('highlight','card:old');
@@ -425,4 +456,38 @@ test('a linked Findings rank applies without saving; a manual choice saves the d
  assert.deepEqual(findingsRank('','tokens'),{rank:'tokens'},'an unlinked view shows the saved default');
  assert.deepEqual(findingsRank('',undefined),{rank:'usd'});
  assert.deepEqual(findingsRank('minutes','usd','tokens'),{rank:'tokens',save:{rank:'tokens'}});
+});
+
+
+test('every guide term and dataset round-trips through the shared view contract',()=>{
+ const grouped=dataEntityGroups.flatMap(group=>group.entities);
+ assert.equal(new Set(grouped).size,grouped.length);
+ assert.deepEqual([...grouped].sort(),Object.keys(dataEntities).sort());
+ for(const term of grouped)assert.equal(parseViewValue(viewFields.guide_entity,encodeViewValue(viewFields.guide_entity,term)),term);
+ for(const [dataset,source]of Object.entries(dataSources)){
+  assert.ok(dataEntities[source.entity],dataset);
+  assert.equal(parseViewValue(viewFields.guide_dataset,encodeViewValue(viewFields.guide_dataset,dataset)),dataset);
+ }
+ for(const [oldTerm,noun]of [['datasets','conversations'],['labels','messages'],['findings','conversations'],['model_requests','tokens'],['execution_machines','machines']]){
+  const linked=parseViewValue(viewFields.guide_entity,oldTerm);
+  assert.equal(resolveGuideEntity(linked),noun,'older guide links still open the related history');
+ }
+ assert.equal(describeDataSource('parallelism','workspace').entity,'workspaces');
+ assert.equal(describeDataSource('parallelism','agent').entity,'conversations');
+});
+
+
+test("dashboard query settings apply to every native request and explicit settings win", () => {
+ const values={carbon_settings:'{"pue":1.2}',habits_settings:'{"engagedGap":30,"dayStart":4}',parallelism_settings:'{"counting":"workspace","gap":30}'};
+ const view=new URL('http://localhost/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_query_settings:JSON.stringify(values)}));
+ for(const [dataset,name]of [['usage','carbon_settings'],['rhythm','habits_settings'],['parallelism','parallelism_settings']])for(const operation of ['query-v3','metrics','rows','stats','distinct','schema']){
+  const request=new URL(viewRequestURL('/api/query/'+dataset+'/'+operation,view),view.origin);
+  assert.equal(request.searchParams.get(name),values[name]);
+  assert.deepEqual([...request.searchParams.keys()],[name],"another source's settings do not leak into the request");
+ }
+ assert.equal(new URL(viewRequestURL('/api/query/rhythm/metrics?habits_settings=explicit',view),view.origin).searchParams.get('habits_settings'),'explicit');
+ assert.equal(viewRequestURL('https://elsewhere.test/api/query/rhythm/rows',view),'https://elsewhere.test/api/query/rhythm/rows');
+ assert.equal(viewRequestURL('/api/query/tool_calls/rows',view),'/api/query/tool_calls/rows');
+ const invalid=new URL('http://localhost/analyze?analyze_query_settings=%5B%5D');
+ assert.throws(()=>viewRequestURL('/api/query/rhythm/rows',invalid),/Invalid dashboard query settings/);
 });

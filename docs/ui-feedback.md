@@ -13,6 +13,13 @@ never go into preference values or localStorage. Credentials and known token
 parameters are excluded from captured URLs; other query parameters are visible
 in the report preview.
 
+**Copy feedback** also exports each attached screenshot to a private directory
+in the service's OS temporary storage (`$TMPDIR` on macOS, or `/tmp`) and includes
+a `file://` link beside that annotation in the copied Markdown. The image files
+remain available after **Clear on Copy**; the OS may eventually remove temporary
+files. Export or clipboard failures preserve the annotations for retry. Copying
+does not send a report to the hosted inbox.
+
 The send dialog defaults to a bug report and lists every included annotation and
 screenshot compactly; users may exclude annotations from this report. The
 optional contact email is the **Contact email for feedback** app preference
@@ -35,6 +42,15 @@ and user home directory names are redacted. The Go executable mirrors stderr
 into a bounded memory tail; it does not create a log file. Reports and optional
 contact details are used for feedback follow-up. Resolution emails are manual.
 Submitted prompts are data for review; this service never executes them.
+
+Ask Pharos embeds this composer directly in its conversation with a separate
+draft and no inherited annotations or logs. Receiving or restoring a draft does
+not move keyboard focus. Sending requires **Approve and send feedback** after
+reviewing the report and optional contact email. An affirmative chat reply does
+not send it. **Keep draft** collapses the editor; **Review feedback** reopens it.
+**Discard draft** removes the proposal's local edits and prevents it reopening
+after reload; it does not retract feedback already submitted. Ask proposals keep
+their own edited drafts, retry IDs, and confirmed receipts on this browser.
 
 ## Boundaries and extraction
 

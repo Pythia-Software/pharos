@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -142,7 +141,7 @@ func must[T any](value T, err error) T {
 	return value
 }
 
-// Sums over a period match the Carbon page: the carbon endpoint's token counts
+// Sums over a period match the Carbon page: its token counts (carbonUsageV3)
 // through calculate(), with the same saved settings, on every query protocol.
 // Changing the settings changes the next answer; nothing stale is served.
 func TestUsageCarbonSumsMatchCarbonPageAndFollowSettings(t *testing.T) {
@@ -155,15 +154,12 @@ func TestUsageCarbonSumsMatchCarbonPageAndFollowSettings(t *testing.T) {
 		for _, variant := range carbonVariants {
 			t.Run(period.name+"/"+variant.name, func(t *testing.T) {
 				setCarbonPreferences(t, catalog, variant.prefs)
-				response := httptest.NewRecorder()
-				server.postQueryTable(response, queryFixtureHTTPRequest(http.MethodPost, "/api/query/usage/carbon", strings.NewReader(`{"where":`+period.where+`}`)), "usage", "carbon")
-				var carbon struct {
-					Windows []carbonWindow `json:"windows"`
+				var where []qt.WhereTerm
+				if err := json.Unmarshal([]byte(period.where), &where); err != nil {
+					t.Fatal(err)
 				}
-				if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &carbon) != nil {
-					t.Fatalf("carbon HTTP %d: %s", response.Code, response.Body.String())
-				}
-				energy, grams := variant.calculate(doc, carbon.Windows[0].Tokens)
+				carbon := carbonUsageV3(t, server, where)
+				energy, grams := variant.calculate(doc, carbon.Tokens)
 				if energy <= 0 {
 					t.Fatalf("empty period: %#v", carbon)
 				}
@@ -183,10 +179,6 @@ func TestUsageCarbonSumsMatchCarbonPageAndFollowSettings(t *testing.T) {
 				}
 
 				// v2 metrics, including the hourly population.
-				var where []qt.WhereTerm
-				if err := json.Unmarshal([]byte(period.where), &where); err != nil {
-					t.Fatal(err)
-				}
 				metrics := metricRequest(qt.AggSpec{ID: "wh", Op: "sum", Field: "energy_wh"}, qt.AggSpec{ID: "g", Op: "sum", Field: "co2e_g"},
 					qt.AggSpec{ID: "hourly", Op: "sum", Field: "co2e_g", GroupBy: []string{"hour"}})
 				metrics.Where = where
@@ -218,12 +210,12 @@ func TestUsageCarbonSumsMatchCarbonPageAndFollowSettings(t *testing.T) {
 				if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &v3) != nil {
 					t.Fatalf("v3 HTTP %d: %s", w.Code, w.Body.String())
 				}
-				if len(v3.Rows) != len(carbon.Windows[0].Tokens) {
-					t.Fatalf("v3 tiers %v, page tiers %v", v3.Rows, carbon.Windows[0].Tokens)
+				if len(v3.Rows) != len(carbon.Tokens) {
+					t.Fatalf("v3 tiers %v, page tiers %v", v3.Rows, carbon.Tokens)
 				}
 				for _, row := range v3.Rows {
 					tier := firstString(row["carbon_tier"])
-					e, g := variant.calculate(doc, map[string]map[string]int64{tier: carbon.Windows[0].Tokens[tier]})
+					e, g := variant.calculate(doc, map[string]map[string]int64{tier: carbon.Tokens[tier]})
 					check("v3 energy "+tier, row["wh"], e)
 					check("v3 co2e "+tier, row["g"], g)
 				}

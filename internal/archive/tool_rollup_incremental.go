@@ -138,17 +138,11 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	if !build.full {
 		cubeQuery = strings.Replace(cubeQuery, " GROUP BY ", " AND t.workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build) GROUP BY ", 1)
 	}
-	aggregateCount := len(workspaces)
-	if !build.full {
-		if err := snapshot.QueryRowContext(ctx, "SELECT COUNT(*) FROM temp.tool_dirty_build").Scan(&aggregateCount); err != nil {
-			return build, err
-		}
-	}
-	reportWork(ctx, "aggregating tool calls", "workspace", 0, aggregateCount)
+	// SQLite exposes no partial progress for this aggregation.
+	reportWork(ctx, "aggregating tool calls", "", 0, -1, "Unitary step")
 	if _, err := snapshot.ExecContext(ctx, "CREATE TEMP TABLE tool_cube_build AS "+cubeQuery); err != nil {
 		return build, err
 	}
-	reportWork(ctx, "aggregating tool calls", "workspace", aggregateCount, aggregateCount)
 	if build.full {
 		if _, err := snapshot.ExecContext(ctx, "CREATE TEMP VIEW tool_cube_merge AS SELECT * FROM temp.tool_cube_build"); err != nil {
 			return build, err
@@ -207,7 +201,7 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 }
 
 func (c *Catalog) publishToolPartitions(ctx context.Context, conn *sql.Conn, build toolRollupBuild) error {
-	release, err := c.acquireWriteGate(ctx)
+	release, _, err := c.queueWriteGate(ctx, "tool-partitions publish")
 	if err != nil {
 		return err
 	}

@@ -1,5 +1,22 @@
 main:has(> #home.active) { overflow-x:hidden; }
 main > #home { padding-bottom:28px; }
+.home-recent { margin-top:36px; }
+.home-recent-heading h2 { margin:0; font:400 22px/1.2 Charter,Georgia,serif; }
+.home-recent-heading p { margin:8px 0 20px; }
+.home-recent-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.home-recent-grid .conversation-result-card { min-width:0; }
+.home-recent-grid h3 { margin:0; font:inherit; }
+.home-recent-grid .conversation-result-title { display:inline; text-decoration:none; overflow-wrap:anywhere; }
+.home-recent-grid .conversation-result-title:hover { text-decoration:underline; }
+.home-recent-grid .conversation-result-title svg { display:inline; width:15px; height:15px; margin-left:8px; }
+.home-recent-grid .conversation-result-meta { overflow-wrap:anywhere; margin-top:8px; }
+.home-recent-facts { display:flex; flex-wrap:wrap; gap:6px 12px; margin-top:10px; font-size:var(--fs-xs); color:var(--muted); }
+.home-recent-grid .result-message-body { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden; }
+.home-recent-search { display:flex; align-items:center; justify-content:center; gap:8px; width:fit-content; margin:22px auto 0; padding:10px 18px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--accent); text-decoration:none; }
+.home-recent-search svg { width:16px; height:16px; }
+.home-recent-search:hover { border-color:var(--accent); }
+.home-recent-empty { color:var(--muted); text-align:center; padding:20px 0; }
+@media (max-width:700px) { .home-recent-grid { grid-template-columns:minmax(0,1fr); } }
 .curiosity-home { --home-conveyor-gutter:calc(var(--app-page-gutter,22px) + 6px); padding:28px 6px 0; }
 .home-intro { max-width:740px; text-align:center; margin:8px auto 40px; }
 .home-intro h1 { font:400 34px/1.18 Charter,"Iowan Old Style",Georgia,serif; letter-spacing:-.65px; margin:0 0 24px; color:var(--ink); }

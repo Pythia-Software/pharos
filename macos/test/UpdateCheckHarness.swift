@@ -57,7 +57,361 @@ func refuses(_ work: () throws -> Void, _ message: String) {
     do { try work(); fatalError(message) } catch { }
 }
 
+/// Records WebKit's native sender metadata and forwards the real messages to
+/// the production entry points. The pages use an injected picker and request no
+/// successful clipboard write, update installation, eject or real window movement.
+@MainActor final class BridgeMessages: NSObject, WKScriptMessageHandler, WKScriptMessageHandlerWithReply {
+    let coordinator: ArchiveWebView.Coordinator
+    var results: [Bool: [String: String]] = [:]
+    var senders: [(String, URL?, Bool)] = []
+    var replies: [Bool: Int] = [:]
+
+    init(_ coordinator: ArchiveWebView.Coordinator) { self.coordinator = coordinator }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "bridgeTestResults" {
+            results[message.frameInfo.isMainFrame] = message.body as? [String: String]
+            return
+        }
+        senders.append((message.name, message.frameInfo.request.url, message.frameInfo.isMainFrame))
+        coordinator.userContentController(controller, didReceive: message)
+    }
+
+    func userContentController(
+        _ controller: WKUserContentController, didReceive message: WKScriptMessage,
+        replyHandler: @escaping (Any?, String?) -> Void
+    ) {
+        let mainFrame = message.frameInfo.isMainFrame
+        senders.append((message.name, message.frameInfo.request.url, mainFrame))
+        coordinator.userContentController(controller, didReceive: message) { value, error in
+            self.replies[mainFrame, default: 0] += 1
+            replyHandler(value, error)
+        }
+    }
+}
+
+/// A retained completion can fire synchronously during cancellation or arrive late.
+final class FakeFolderPicker: ArchiveFolderPicker {
+    var completion: ((String?) -> Void)?
+    var cancellations = 0
+    var onBegin: (() -> Void)?
+    func begin(_ completion: @escaping (String?) -> Void) {
+        self.completion = completion
+        onBegin?()
+    }
+    func cancel() {
+        cancellations += 1
+        completion?(nil)
+    }
+}
+
 @main struct UpdateCheckHarness {
+    static func nativeSenderTests() {
+        let origin = URL(string: "http://localhost:18765/")!
+        let cases: [(String, URL?, Bool, Bool)] = [
+            ("exact origin", origin, true, true),
+            ("path/query/fragment", URL(string: "http://localhost:18765/library?q=test#row"), true, true),
+            ("different port", URL(string: "http://localhost:18766/"), true, false),
+            ("missing explicit port", URL(string: "http://localhost/"), true, false),
+            ("invalid port", URL(string: "http://localhost:65536/"), true, false),
+            ("different hostname", URL(string: "http://127.0.0.1:18765/"), true, false),
+            ("different scheme", URL(string: "https://localhost:18765/"), true, false),
+            ("missing URL", nil, true, false),
+            ("invalid URL", URL(string: "http://[invalid"), true, false),
+            ("relative URL", URL(string: "/library"), true, false),
+            ("missing host", URL(string: "http:/library"), true, false),
+            ("same-origin subframe", origin, false, false),
+            ("about document", URL(string: "about:blank"), true, false),
+            ("blob document", URL(string: "blob:http://localhost:18765/id"), true, false),
+            ("data document", URL(string: "data:text/html,hello"), true, false),
+            ("file document", URL(fileURLWithPath: "/tmp/bridge-test.html"), true, false),
+        ]
+        for (label, sender, mainFrame, allowed) in cases {
+            expect(NativeBridgeSender.allows(expectedOrigin: origin, senderURL: sender, isMainFrame: mainFrame) == allowed, label)
+            for handler in NativeBridgeSender.Handler.allCases {
+                for replying in [false, true] {
+                    var actions: [NativeBridgeSender.Handler] = []
+                    var errors: [String] = []
+                    NativeBridgeSender.dispatch(
+                        name: handler.rawValue, expectedOrigin: origin, senderURL: sender, isMainFrame: mainFrame,
+                        replying: replying, reject: { errors.append($0) }, receive: { actions.append($0) }
+                    )
+                    let dispatched = allowed && replying == handler.replies
+                    expect(actions == (dispatched ? [handler] : []), "\(label): only the registered delivery reaches \(handler)")
+                    expect(errors.count == (dispatched ? 0 : 1) && errors.allSatisfy { !$0.isEmpty }, "\(label): a rejection finishes once with a clear error")
+                }
+            }
+        }
+        for url in ["about:blank", "blob:http://localhost:18765/id", "data:text/html,hello", "file:///tmp/page"] {
+            let special = URL(string: url)!
+            expect(!NativeBridgeSender.allows(expectedOrigin: special, senderURL: special, isMainFrame: true), "non-application schemes cannot authorize themselves")
+        }
+        let invalidPort = URL(string: "http://localhost:65536/")!
+        expect(!NativeBridgeSender.allows(expectedOrigin: invalidPort, senderURL: invalidPort, isMainFrame: true), "an invalid application port cannot authorize itself")
+        let https = URL(string: "https://localhost:18765/")!
+        expect(NativeBridgeSender.allows(expectedOrigin: https, senderURL: https, isMainFrame: true), "an HTTPS application origin is allowed")
+        let defaultPort = URL(string: "http://localhost/")!
+        expect(!NativeBridgeSender.allows(expectedOrigin: defaultPort, senderURL: URL(string: "http://localhost:80/"), isMainFrame: true), "an explicit default port remains distinct")
+        for replying in [false, true] {
+            var errors = 0
+            NativeBridgeSender.dispatch(name: "unknown", expectedOrigin: origin, senderURL: origin, isMainFrame: true, replying: replying, reject: { _ in errors += 1 }) { _ in
+                fatalError("an unknown name reached native effects")
+            }
+            expect(errors == 1, "unknown handlers are rejected once")
+        }
+        // Deferred actions retain their reply after dispatch returns. Rejected
+        // folder/eject calls never acquire a callback or begin a native action.
+        for mainFrame in [false, true] {
+            for action in ["chooseFolder", "eject"] {
+                var completion: (() -> Void)?
+                var replies = 0
+                NativeBridgeSender.dispatch(
+                    name: "pharosLibrary", expectedOrigin: origin, senderURL: origin, isMainFrame: mainFrame,
+                    replying: true, reject: { _ in replies += 1 }
+                ) { handler in
+                    expect(handler == .library, "deferred \(action) routes to the library")
+                    completion = { replies += 1 }
+                }
+                expect((completion != nil) == mainFrame, "only an allowed \(action) begins")
+                expect(replies == (mainFrame ? 0 : 1), "rejected \(action) replies immediately")
+                completion?()
+                expect(replies == 1, "\(action) completes exactly once")
+            }
+        }
+        print("Native sender predicate and recorded dispatch checks passed")
+    }
+
+    @MainActor static func nativeFolderPickerTests() {
+        let origin = URL(string: "http://localhost:18765/")!
+        for selected in ["/tmp/chosen", nil] as [String?] {
+            var pickers: [FakeFolderPicker] = []
+            var purposes: [String] = []
+            let coordinator = ArchiveWebView.Coordinator(origin: origin) { purpose in
+                let picker = FakeFolderPicker()
+                pickers.append(picker)
+                purposes.append(purpose)
+                return picker
+            }
+            var replies: [(String?, String?)] = []
+            coordinator.library(["action": "chooseFolder", "purpose": "source"]) { value, error in
+                replies.append((value as? String, error))
+            }
+            var refused: [(Any?, String?)] = []
+            coordinator.library(["action": "chooseFolder", "purpose": "export"]) { refused.append(($0, $1)) }
+            expect(pickers.count == 1 && purposes == ["source"], "concurrent requests must not replace the first picker")
+            expect(refused.count == 1 && refused[0].0 == nil && refused[0].1?.isEmpty == false, "the concurrent caller gets its own clear error")
+            expect(replies.isEmpty, "refusing another request must leave the first pending")
+            pickers[0].completion?(selected)
+            pickers[0].completion?("/tmp/duplicate")
+            expect(replies.count == 1 && replies[0].0 == selected && replies[0].1 == nil, "selection and user cancellation each reply once with the existing payload")
+            expect(pickers[0].cancellations == 0, "a completed picker needs no cancellation")
+            // Completion clears ownership before user code can start the next request.
+            coordinator.library(["action": "chooseFolder", "purpose": "export"]) { _, _ in
+                coordinator.library(["action": "chooseFolder"]) { _, _ in }
+            }
+            pickers[1].completion?(nil)
+            expect(purposes == ["source", "export", "library"], "all purposes pass through, including the default and a reentrant request")
+            coordinator.cancelFolderPicker()
+        }
+        for event in ["navigation", "termination", "dismantle"] {
+            let page = ArchiveWKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+            var pickers: [FakeFolderPicker] = []
+            let coordinator = ArchiveWebView.Coordinator(origin: origin) { _ in
+                let picker = FakeFolderPicker()
+                pickers.append(picker)
+                return picker
+            }
+            var oldReplies = 0, freshReplies = 0
+            coordinator.library(["action": "chooseFolder"]) { value, error in
+                oldReplies += 1
+                expect(value == nil && error == nil, "\(event) replies as cancellation")
+                // Invalidation clears ownership before invoking the original reply.
+                coordinator.library(["action": "chooseFolder"]) { value, error in
+                    freshReplies += 1
+                    expect(value as? String == "/tmp/fresh" && error == nil, "the fresh request retains its own result")
+                }
+            }
+            switch event {
+            case "navigation": coordinator.webView(page, didStartProvisionalNavigation: nil)
+            case "termination": coordinator.webViewWebContentProcessDidTerminate(page)
+            default: ArchiveWebView.dismantleNSView(page, coordinator: coordinator)
+            }
+            expect(oldReplies == 1 && pickers[0].cancellations == 1, "\(event) dismisses and settles the owned picker once")
+            expect(pickers.count == 2 && freshReplies == 0, "\(event) admits a fresh request after invalidation")
+            pickers[0].completion?("/tmp/obsolete")
+            pickers[0].completion?(nil)
+            expect(oldReplies == 1 && freshReplies == 0, "late callbacks must neither duplicate the old reply nor finish the new request")
+            pickers[1].completion?("/tmp/fresh")
+            coordinator.cancelFolderPicker()
+            expect(freshReplies == 1 && pickers[1].cancellations == 0, "the fresh picker completes normally")
+        }
+        print("Owned native folder picker lifecycle checks passed")
+    }
+
+    @MainActor static func nativeWebKitSenderTests(root: URL) throws {
+        _ = NSApplication.shared
+        let pages = root.appendingPathComponent("bridge-pages")
+        try FileManager.default.createDirectory(at: pages, withIntermediateDirectories: true)
+        let portFile = pages.appendingPathComponent("port")
+        // Serve only disposable fixtures on an OS-assigned loopback port.
+        let server = Process()
+        server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        server.arguments = ["-c", """
+        import http.server, pathlib, signal, sys
+        signal.alarm(45)
+        class Handler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=sys.argv[1], **kwargs)
+            def log_message(self, *args): pass
+        server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+        pathlib.Path(sys.argv[2]).write_text(str(server.server_port))
+        server.serve_forever()
+        """, pages.path, portFile.path]
+        try server.run()
+        defer { if server.isRunning { server.terminate() }; server.waitUntilExit() }
+        until("native bridge fixture server did not start") { FileManager.default.fileExists(atPath: portFile.path) || !server.isRunning }
+        let port = try String(contentsOf: portFile, encoding: .utf8)
+        let origin = URL(string: "http://127.0.0.1:\(port)/")!
+        let script = """
+        <script>
+        (async () => {
+          const main = window === window.top, handlers = window.webkit.messageHandlers;
+          const result = {};
+          const post = async (name, body, key = name) => {
+            try { await handlers[name].postMessage(body); result[key] = 'ok'; }
+            catch (error) { result[key] = String(error); }
+          };
+          handlers.pharosWindow.postMessage({contextTarget: {reference: main ? 'main' : 'iframe'}, contextFile: {path: main ? '/tmp/main' : '/tmp/iframe'}, pageActions: main});
+          handlers.pharosWindow.postMessage({headerCenter: main ? 26 : 200});
+          handlers.pharosWindow.postMessage({background: main ? 'rgb(10, 20, 30)' : 'rgb(200, 200, 200)'});
+          handlers.pharosMenuBar.postMessage(null);
+          await post('pharosUpdates', {action: 'status'});
+          await post('pharosLibrary', {action: 'invalid'});
+          await post('pharosLibrary', {action: 'chooseFolder', purpose: 'source'}, 'chooseFolder');
+          // Invalid payloads keep this integration fixture harmless even if
+          // sender validation regresses; iframe errors must precede parsing.
+          await post('pharosClipboard', {});
+          await post('pharosDictation', {action: 'invalid'});
+          if (!main) {
+            handlers.pharosWindow.postMessage('drag');
+            handlers.pharosWindow.postMessage('doubleClick');
+          }
+          handlers.bridgeTestResults.postMessage(result);
+        })();
+        </script>
+        """
+        try ("<!doctype html>" + script + "<iframe src='/frame.html'></iframe>").write(to: pages.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try ("<!doctype html>" + script).write(to: pages.appendingPathComponent("frame.html"), atomically: true, encoding: .utf8)
+        var pickerCount = 0
+        let coordinator = ArchiveWebView.Coordinator(origin: origin) { purpose in
+            expect(purpose == "source", "the allowed main-document picker preserves its purpose")
+            pickerCount += 1
+            let picker = FakeFolderPicker()
+            picker.onBegin = { [weak picker] in picker?.completion?(nil) }
+            return picker
+        }
+        let updates = UpdateNotice()
+        coordinator.updates = updates
+        let recorder = BridgeMessages(coordinator)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let controller = configuration.userContentController
+        for handler in NativeBridgeSender.Handler.allCases {
+            if handler.replies {
+                controller.addScriptMessageHandler(recorder, contentWorld: .page, name: handler.rawValue)
+            } else {
+                controller.add(recorder, name: handler.rawValue)
+            }
+        }
+        controller.add(recorder, name: "bridgeTestResults")
+        defer {
+            for handler in NativeBridgeSender.Handler.allCases { controller.removeScriptMessageHandler(forName: handler.rawValue) }
+            controller.removeScriptMessageHandler(forName: "bridgeTestResults")
+        }
+        let page = ArchiveWKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480), configuration: configuration)
+        coordinator.webView = page
+        page.load(URLRequest(url: origin))
+        until("real WKWebView main/iframe bridge messages did not complete", timeout: 20) { recorder.results.count == 2 }
+        expect(recorder.results[true]?["pharosUpdates"] == "ok", "the main document reaches update status")
+        expect(recorder.results[true]?["pharosLibrary"] == "Error: Unknown library action.", "the main document keeps library payload validation")
+        expect(recorder.results[true]?["pharosClipboard"] == "Error: Clipboard content must be text.", "the main document keeps clipboard payload validation without writing")
+        expect(recorder.results[true]?["pharosDictation"] == "Error: Unknown dictation action.", "the main document keeps dictation payload validation without recording")
+        for error in recorder.results[false]!.values {
+            expect(error.contains("main window document"), "every iframe reply reports a native sender rejection: \(error)")
+        }
+        expect(recorder.results[true]?["chooseFolder"] == "ok" && pickerCount == 1, "only the real main-document sender creates a picker")
+        expect(recorder.replies[true] == 5 && recorder.replies[false] == 5, "each real WebKit reply finishes once")
+        for mainFrame in [true, false] {
+            let senders = recorder.senders.filter { $0.2 == mainFrame }
+            expect(Set(senders.map { $0.0 }) == Set(NativeBridgeSender.Handler.allCases.map(\.rawValue)), "both frames exercise every registered name")
+            expect(senders.allSatisfy { $0.1?.host == origin.host && $0.1?.port == origin.port }, "sender URLs are extracted from actual same-origin WebKit requests")
+        }
+        expect(page.contextTarget?.reference == "main" && page.contextFile?.url.path == "/tmp/main" && page.pageActions, "iframe messages cannot change main-document context state")
+        expect(page.underPageBackgroundColor == ArchiveWebView.Coordinator.color(css: "rgb(10, 20, 30)"), "iframe messages cannot change the page background")
+
+        func evaluate(_ script: String) {
+            var finished = false
+            page.evaluateJavaScript(script + "\n; true;") { _, error in
+                expect(error == nil, "context menu fixture script succeeds: \(String(describing: error))")
+                finished = true
+            }
+            until("context menu fixture script did not finish") { finished }
+        }
+        evaluate("""
+        document.body.innerHTML = '<header><div class="brand"><svg><path id="mark"></path></svg></div><nav class="tabs"><button data-view="home"><span id="home">Home</span></button><button id="other">Search</button></nav></header>';
+        window.loadingIndicator = true;
+        window.pharosLighthouseLoadingIndicator = () => window.loadingIndicator;
+        window.pharosPageAction = action => { if (action === 'lighthouse-loading') window.loadingIndicator = !window.loadingIndicator; };
+        """)
+        evaluate(ArchiveWebView.windowChromeScript)
+        func rightClick(_ selector: String) {
+            let count = recorder.senders.count
+            evaluate("document.querySelector('\(selector)').dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, button:2}))")
+            until("context menu target was not reported") { recorder.senders.count > count }
+        }
+        let event = NSEvent.mouseEvent(with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!
+        for selector in ["#mark", "#home"] {
+            rightClick(selector)
+            expect(page.contextLighthouseLoading == true, "\(selector) reports the enabled loading indicator")
+            let menu = NSMenu()
+            page.willOpenMenu(menu, with: event)
+            guard let item = menu.item(withTitle: "Lighthouse Loading Indicator") else { fatalError("the Lighthouse menu item is missing") }
+            expect(item.state == .on && item.isEnabled, "the Lighthouse menu item is checked and enabled")
+            _ = NSApp.sendAction(item.action!, to: item.target, from: item)
+            evaluate("void 0")
+            rightClick(selector)
+            expect(page.contextLighthouseLoading == false, "the Lighthouse action updates the next menu")
+            let disabledMenu = NSMenu()
+            page.willOpenMenu(disabledMenu, with: event)
+            let disabledItem = disabledMenu.item(withTitle: "Lighthouse Loading Indicator")!
+            expect(disabledItem.state == .off, "the menu shows the disabled indicator")
+            _ = NSApp.sendAction(disabledItem.action!, to: disabledItem.target, from: disabledItem)
+            evaluate("void 0")
+        }
+        rightClick("#other")
+        expect(page.contextLighthouseLoading == nil, "other navigation items do not offer the Lighthouse setting")
+        let otherMenu = NSMenu()
+        page.willOpenMenu(otherMenu, with: event)
+        expect(otherMenu.item(withTitle: "Lighthouse Loading Indicator") == nil, "the Lighthouse menu item is limited to its targets")
+        page.didCloseMenu(otherMenu, with: event)
+        evaluate("window.attention = true; window.pharosView = {hasAttention: () => window.attention, clearAttention: () => { window.attention = false; }}")
+        rightClick("#other")
+        expect(page.contextHasAttention, "page reports attention even when the clicked element has no target")
+        let attentionMenu = NSMenu()
+        page.willOpenMenu(attentionMenu, with: event)
+        guard let clear = attentionMenu.item(withTitle: "Clear Highlights"), let action = clear.action else { fatalError("the clear highlights action is missing") }
+        _ = NSApp.sendAction(action, to: clear.target, from: clear)
+        evaluate("void 0")
+        rightClick("#other")
+        expect(!page.contextHasAttention, "the clear highlights action updates the page")
+        let clearedMenu = NSMenu()
+        page.willOpenMenu(clearedMenu, with: event)
+        expect(clearedMenu.item(withTitle: "Clear Highlights") == nil, "clear highlights is offered only when attention exists")
+        page.didCloseMenu(clearedMenu, with: event)
+        page.stopLoading()
+        print("Real WKWebView main-document and same-origin iframe sender checks passed")
+    }
+
     @MainActor static func preparedHandoffFailureTests(service: ArchiveService, updater: SPUUpdater, item: SUAppcastItem) throws {
         let lease = AppUpdateLock.current()
         let marker = lease.base.appendingPathExtension("pending")
@@ -325,6 +679,21 @@ func refuses(_ work: () throws -> Void, _ message: String) {
                         expect(!service.pageLoading, "navigation after an ignored error does not rearm the startup beacon")
                     }
                 }
+                // A live broker whose routing probe is busy must enter the
+                // waiting screen on the first timeout, then restore the exact
+                // failed page once catalog initialization lets routing answer.
+                StartupResponse.ready = false
+                let target = URL(string: "/library?nav_collapsed=1", relativeTo: service.url!)!.absoluteURL
+                coordinator.webView(page, didStartProvisionalNavigation: nil)
+                coordinator.webView(page, didFailProvisionalNavigation: nil, withError: NSError(
+                    domain: NSURLErrorDomain, code: NSURLErrorTimedOut,
+                    userInfo: [NSURLErrorFailingURLErrorKey: target]
+                ))
+                until("busy routing did not enter page recovery") { service.pageWaiting }
+                expect(service.pageError == nil, "catalog initialization must not become a terminal page error")
+                StartupResponse.ready = true
+                until("page recovery did not resume after catalog initialization") { !service.pageWaiting }
+                expect(service.pageError == nil && service.takePageTarget() == target, "recovery preserves the failed route and its view state")
                 // An explicit install asks first and stops nothing while
                 // work cannot stop in time; it reports what it waits for.
                 try FileManager.default.removeItem(at: signalFile)
@@ -385,6 +754,9 @@ func refuses(_ work: () throws -> Void, _ message: String) {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         setenv("PHAROS_SUPPORT_DIR", root.appendingPathComponent("support").path, 1)
+        nativeSenderTests()
+        nativeFolderPickerTests()
+        try nativeWebKitSenderTests(root: root)
         try applicationLifecycleTests(root: root)
         let app = root.appendingPathComponent("Library with spaces/Pharos.app")
         let cli = canonicalPath(app.appendingPathComponent("Contents/MacOS/pharos"))

@@ -1,0 +1,36 @@
+.reader-navigator-host{position:sticky;top:0;z-index:6;background:var(--bg);border-block:1px solid var(--line);isolation:isolate;transform:translateZ(0)}
+.reader-navigator{position:relative;padding:7px var(--workspace-page-gutter,16px);font-size:var(--fs-xs);--navigator-label:72px}
+.reader-navigator-choice{display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-size:10px;color:var(--muted);white-space:nowrap}
+.reader-navigator-choice input{margin:0;width:11px;height:11px;accent-color:var(--accent)}
+.reader-navigator-hidden{display:inline-flex;flex-wrap:wrap;gap:4px 12px}
+.reader-navigator-bars{position:relative}
+.reader-navigator-row{display:grid;grid-template-columns:var(--navigator-label) minmax(0,1fr);align-items:center;min-height:26px;gap:0}
+.reader-navigator-track{height:24px;position:relative;min-width:0;background:var(--panel);border-bottom:1px solid var(--line);overflow:hidden}
+.reader-navigator-timeline{height:34px;cursor:pointer}
+.reader-navigator-timeline .lt-session-ribbon{height:34px;width:100%;margin-right:0}
+.reader-navigator-keyboard{position:absolute;inset:0;pointer-events:none;background:transparent;border:0;padding:0}
+.reader-navigator-keyboard:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+.reader-navigator-window-track{position:absolute;inset:0 0 0 var(--navigator-label);pointer-events:none;overflow:hidden}
+.reader-navigator-window,.reader-navigator-boundary{position:absolute;inset:0;width:100%;transform-origin:left;will-change:transform;pointer-events:none}
+.reader-navigator-window{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.reader-navigator-boundary{border-left:2px solid var(--accent);box-sizing:border-box}
+.reader-navigator-window[hidden],.reader-navigator-boundary[hidden]{display:none}
+.reader-navigator-turn,.reader-navigator-context .token-marker{position:absolute;top:0;bottom:0;min-width:3px;padding:0;border:0;border-radius:0}
+.reader-navigator-turn{background:color-mix(in srgb,var(--muted) 18%,transparent);border-left:2px solid var(--gold);color:var(--muted);font:9px ui-monospace,monospace;overflow:hidden;text-align:left}
+.reader-navigator-turn:hover{background:color-mix(in srgb,var(--accent) 25%,transparent)}
+.reader-navigator-context .token-marker{background:transparent;clip-path:var(--context-profile)}
+.reader-navigator-context .token-marker::before{content:'';position:absolute;inset:0;background:var(--token-color);opacity:.7;pointer-events:none}
+.reader-navigator-context .compaction-marker{width:2px!important}
+.reader-navigator-context .token-marker:hover,.reader-navigator-context .token-marker:focus-visible{outline:1px solid var(--ink);outline-offset:-1px}
+.reader-navigator-track>small{display:block;color:var(--muted);font-size:10px;padding:5px}
+.reader-navigator-note{display:block;font-size:10px;color:var(--muted);margin-top:4px}
+/* The context bar's explanation floats over the transcript while the bar is
+ * hovered or focused, so it neither takes a row nor moves the sticky rail. */
+.reader-navigator-context-note{display:none;position:absolute;top:calc(100% + 2px);left:calc(var(--workspace-page-gutter,16px) + var(--navigator-label));max-width:calc(100% - 2 * var(--workspace-page-gutter,16px) - var(--navigator-label));box-sizing:border-box;padding:4px 8px;font-size:10px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;box-shadow:0 4px 12px rgb(0 0 0/.25);pointer-events:none}
+.reader-navigator:has(.reader-navigator-context:hover,.reader-navigator-context :focus-visible) .reader-navigator-context-note{display:block}
+.reader-navigator-key{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin:6px 0 0 var(--navigator-label);font-size:10px;color:var(--muted)}
+.reader-navigator-key>span{display:inline-flex;align-items:center;gap:4px}
+.reader-navigator-key.is-bare{margin:0}
+/* Tool swatches keep their own dot-and-line shape (delegation.css). */
+.reader-navigator-key i:not(.lt-tool-swatch){width:8px;height:8px;display:inline-block}
+@media(max-width:580px){.reader-navigator{--navigator-label:64px;padding:5px 8px}.reader-navigator-context-note{left:8px;max-width:calc(100% - 16px)}.reader-navigator-key{gap:4px 8px}}

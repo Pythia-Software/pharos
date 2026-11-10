@@ -406,8 +406,18 @@ const (
 // GitHub runs with identities.
 func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode, only map[string]bool, runPhase func(string, func() error) error) (err error) {
 	forceFindings := findings == findingsForce
+	explicit := workCallerExplicit(ctx)
 	ctx, chain := s.Catalog.beginOp(ctx, OperationSpec{Kind: "analysis.chain", Trigger: triggerChained})
-	defer func() { chain.Finish(err) }()
+	defer func() {
+		// Stages change rows that labels and agent events were built on
+		// (authorship, origins, names). Mark what that leaves stale now: until
+		// it is marked, every reader that holds pending conversations back
+		// works the set out again after each further change.
+		if err == nil {
+			err = s.Catalog.propagateExecutionChanges(ctx)
+		}
+		chain.Finish(err)
+	}()
 	measure := runPhase
 	if measure == nil {
 		measure = func(_ string, work func() error) error { return work() }
@@ -440,21 +450,9 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 	}
 	// Earlier stages can dirty later consumers. Snapshot each stage just before
 	// its work, while retaining changes that arrive during that work for later.
-	readGeneration := func(name string) (int64, error) {
-		var value int64
-		err := s.Catalog.DB.QueryRowContext(ctx, `SELECT COALESCE((SELECT generation FROM sync_deferred WHERE name=? AND generation>completed_generation),0)`, name).Scan(&value)
-		return value, err
-	}
-	complete := func(name string, generation int64) error {
-		return s.Catalog.writeTransaction(ctx, "complete deferred "+name, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, "UPDATE sync_deferred SET completed_generation=MAX(completed_generation,?),completed_at=? WHERE name=?", generation, now(), name)
-			return err
-		})
-	}
-	stages := []struct {
-		name string
-		work func(context.Context) error
-	}{
+	readGeneration := func(name string) (int64, error) { return s.Catalog.deferredPendingGeneration(ctx, name) }
+	complete := func(name string, generation int64) error { return s.Catalog.completeDeferred(ctx, name, generation) }
+	stages := []deferredStage{
 		{"identities", func(ctx context.Context) error { _, err := s.Catalog.ReconcileIdentitiesContext(ctx); return err }},
 		{"git", func(ctx context.Context) error { return s.Catalog.refreshMainIntegrations(ctx) }},
 		{"tools", func(ctx context.Context) error { return s.Catalog.ensureToolRollup(ctx) }},
@@ -505,8 +503,14 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			if failure != "" {
 				return fmt.Errorf("writing estimates: %s", failure)
 			}
+			if s.Catalog.authorshipQuickPending() {
+				return errStageContinues
+			}
 			return nil
 		}},
+		// Related conversations read the copied-text evidence authorship
+		// stores and the tool ledger (docs/peer-conversations-design.md).
+		{"peers", func(ctx context.Context) error { return s.Catalog.RefreshPeerLinks(ctx) }},
 		{"findings", func(ctx context.Context) error {
 			// A page or another explicit action may already be discovering
 			// findings. Wait before asking for this run's fresh pass.
@@ -532,21 +536,37 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 	// before (docs/local-labeler.md).
 	disabled := []string{}
 	if settings := s.Config().Labels; settings.Enabled {
-		stages = append(stages, struct {
-			name string
-			work func(context.Context) error
-		}{"labels", func(ctx context.Context) error { return s.chainLabels(ctx, settings) }})
+		stages = append(stages, deferredStage{"labels", func(ctx context.Context) error { return s.chainLabels(ctx, settings) }})
 	} else {
 		disabled = append(disabled, "labels")
 	}
 	// Agent events follow, also only where they are turned on.
 	if settings := s.Config().AgentEvents; s.agentEventsEnabled(ctx) {
-		stages = append(stages, struct {
-			name string
-			work func(context.Context) error
-		}{"agent_events", func(ctx context.Context) error { return s.chainAgentEvents(ctx, s.Config().Labels, settings) }})
+		stages = append(stages, deferredStage{"agent_events", func(ctx context.Context) error { return s.chainAgentEvents(ctx, s.Config().Labels, settings) }})
 	} else {
 		disabled = append(disabled, "agent_events")
+	}
+	if s.work != nil {
+		// Population execution: the chain submits demand in this order and
+		// the runner executes it (work_maintenance.go). The stages' own
+		// operations are the runner's executions, so a stage here is only
+		// measured, not given a second operation.
+		scheduled := func(name string, work func(context.Context) error) error {
+			if op != nil {
+				features := s.analysisStepFeatures(ctx, name, s.analysisForecastFeatures(), forceFindings, false)
+				op.revise("analysis:"+name, "", features, true)
+				op.begin("analysis:" + name)
+			}
+			err := measure(name, func() error { return work(ctx) })
+			if op != nil {
+				op.end("analysis:"+name, err == nil && ctx.Err() == nil)
+			}
+			return err
+		}
+		if err := s.routeDeferredStages(ctx, findings, only, stages, scheduled, explicit); err != nil {
+			return err
+		}
+		stages = nil
 	}
 	for _, stage := range stages {
 		if err := ctx.Err(); err != nil {

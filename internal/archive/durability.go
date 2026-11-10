@@ -51,8 +51,17 @@ var durableCatalog = catalogPragmas{synchronous: "FULL", fullfsync: true, checkp
 // durability itself restore durableCatalog.
 var catalogDurability = durableCatalog
 
+// syncToDrive flushes retained files and their directories before publication.
+// Ordinary tests keep writes in the OS cache, as testDurability does for
+// SQLite; durability tests restore the real flush. A process exit alone does
+// not discard that cache, and the suite does not simulate drive power loss.
+var syncToDrive = (*os.File).Sync
+
 func catalogDSN(path string) string {
-	pragmas := catalogDurability
+	return catalogDSNWithPragmas(path, catalogDurability)
+}
+
+func catalogDSNWithPragmas(path string, pragmas catalogPragmas) string {
 	fullfsync, checkpointFullfsync := 0, 0
 	if pragmas.fullfsync {
 		fullfsync = 1
@@ -70,8 +79,9 @@ func catalogDSN(path string) string {
 // connections background work keeps checked out during a sync (the tool
 // rollup, the authorship scan, the findings snapshot) cannot leave a page
 // waiting for one. In WAL a reader never waits on the writer; it reads the last
-// commit. The page cache is per connection, so it is smaller than the writer
-// pool's; the shared mmap does most of the caching.
+// commit. Heavy executions are separately bounded by heavyQueries before they
+// lease a connection, leaving capacity here for light request reads. SQLite's
+// darwin build shares a page-cache mutex even across separate connections.
 const readerConns = 8
 
 func readerDSN(path string) string {

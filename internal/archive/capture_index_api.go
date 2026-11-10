@@ -284,13 +284,15 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 			base.Messages += result.Messages
 			base.SkippedCurrent += result.SkippedCurrent
 		}
-		result := s.Catalog.IndexCapture(meter.context(ctx), target, func(phase string, w, c, m, skipped, processed int) {
-			s.updateRun(runID, func(run *SyncRun) {
-				run.CurrentSource, run.Phase, run.CompletedSources = label, phase, index
-				plan.report(run, index, processed)
-				meter.report(run, phase, label, processed)
-				run.Workspaces, run.Conversations = base.Workspaces+w, base.Conversations+c
-				run.Messages, run.SkippedCurrent = base.Messages+m, base.SkippedCurrent+skipped
+		result := s.Catalog.admittedIngest(meter.context(ctx), target.Source, target.Host.ID, func(ctx context.Context) IngestResult {
+			return s.Catalog.IndexCapture(ctx, target, func(phase string, w, c, m, skipped, processed int) {
+				s.updateRun(runID, func(run *SyncRun) {
+					run.CurrentSource, run.Phase, run.CompletedSources = label, phase, index
+					plan.report(run, index, processed)
+					meter.report(run, phase, label, processed)
+					run.Workspaces, run.Conversations = base.Workspaces+w, base.Conversations+c
+					run.Messages, run.SkippedCurrent = base.Messages+m, base.SkippedCurrent+skipped
+				})
 			})
 		})
 		meter.record(s, ctx, result)
@@ -440,7 +442,7 @@ func (c *Catalog) indexCaptureTargets(ctx context.Context, targets []captureTarg
 			break
 		}
 		started := time.Now()
-		result := c.IndexCapture(ctx, target, nil)
+		result := c.admittedIngest(ctx, target.Source, target.Host.ID, func(ctx context.Context) IngestResult { return c.IndexCapture(ctx, target, nil) })
 		if done != nil {
 			done(target, result, time.Since(started))
 		}

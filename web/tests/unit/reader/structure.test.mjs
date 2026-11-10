@@ -2,6 +2,7 @@
 // (reader-model.js). The fixture test is the JS half of
 // internal/archive/transcript_find_test.go; both read
 // testdata/transcript-find-fixtures.json.
+import { readerKeyState, updateReaderKeys } from "../../../src/reader-key-model";
 import { sidebarWidth } from "../../../src/workspace-inbox-model";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -131,7 +132,12 @@ test("result outlines keep turns, setup and nested inline agents under their own
  // Result cards can load the reader even if another page-shell initializer fails.
  assert.equal(typeof reader.window.pharosConversationOutline, "function");
  const outline = reader.window.pharosConversationOutline(conversation);
- assert.equal(outline.length, 3); assert.equal(outline[0].label, "Session setup");
+ assert.equal(outline.length, 3); assert.equal(outline[0].label, "Agent setup");
+ const graph = reader.conversationGraph(reader.conversationMessages(conversation));
+ assert.equal(graph.turns.length, 3, "the reader count includes the displayed setup and excludes nested agent messages");
+ const agentOnly = reader.conversationGraph(reader.conversationMessages({messages:[event("reply", "message", "Working without a retained prompt.")]}));
+ assert.equal(agentOnly.turns.length, 1, "an agent-only transcript still has one displayed turn");
+ assert.equal(reader.conversationGraph([]).turns.length, 0);
  assert.equal(outline[1].label, "Turn 1"); assert.equal(outline[2].label, "Turn 2");
  assert.equal(outline[1].human.text, "Inspect the rules."); assert.equal(outline[1].response.text, "Done.");
  const agent = outline[1].children[0];
@@ -185,4 +191,51 @@ test("linked disclosure and content overrides change only the identities they na
  assert.equal(readerContentShown({ "m-1": false }, "m-1", true), false, "an explicit false overrides an open default");
  assert.equal(readerContentShown({ "m-1": true }, "m-1", false), true);
  assert.equal(readerContentShown({ "m-1": true }, "toString", false), false, "only the state's own keys count");
+});
+
+
+test("reader legend keys isolate values and categories, combine choices, and allow hiding everything", () => {
+  const all = ['prompt', 'reply', 'read', 'edit'], tools = ['read', 'edit'];
+  assert.deepEqual(updateReaderKeys(all, all, tools, 'only'), tools);
+  assert.deepEqual(updateReaderKeys(all, ['read'], tools, 'toggle'), tools);
+  assert.deepEqual(updateReaderKeys(all, ['prompt', 'read'], tools, 'toggle'), ['prompt', 'read', 'edit']);
+  assert.deepEqual(updateReaderKeys(all, tools, tools, 'toggle'), []);
+  assert.deepEqual(updateReaderKeys(all, [], ['reply'], 'toggle'), ['reply']);
+  assert.deepEqual(updateReaderKeys(all, ['reply'], tools, 'exclude'), ['prompt', 'reply']);
+  assert.deepEqual(updateReaderKeys(all, [], tools, 'clear'), all);
+  assert.deepEqual(updateReaderKeys(all, ['prompt', 'read'], tools, 'show'), ['prompt', 'read', 'edit']);
+  assert.deepEqual(updateReaderKeys(all, ['prompt', 'read'], tools, 'hide'), ['prompt']);
+  assert.deepEqual(updateReaderKeys(all, all, tools, 'show'), all, 'Show keeps visible values visible');
+  assert.deepEqual(updateReaderKeys(all, ['prompt'], tools, 'hide'), ['prompt'], 'Hide keeps hidden values hidden');
+  assert.deepEqual(readerKeyState(all, ['read'], tools), {active:false,mixed:true,dimmed:false,selectionActive:true,soleSelection:false,visibleCount:1,hiddenCount:1});
+  assert.equal(readerKeyState(all, [], tools).dimmed, true);
+  assert.equal(readerKeyState(all, all, tools).selectionActive, false);
+  const hidden = ['events:event-friction', 'labels:P.frame', 'writing'], available = ['writing', 'events:event-learning'];
+  const exclusions = shown => plain(reader.readerHighlightExclusions(hidden, available, shown));
+  assert.deepEqual(exclusions(available), ['events:event-friction', 'labels:P.frame'], 'adding writing preserves keys absent from this conversation');
+  assert.deepEqual(exclusions([]), [...hidden, 'events:event-learning'], 'hiding available keys retains unrelated exclusions');
+  assert.deepEqual(hidden, ['events:event-friction', 'labels:P.frame', 'writing']);
+});
+
+
+test("whole-key defaults set visibility and every highlight together, clearing stale hue exclusions", () => {
+ const reading=plain(reader.readerKeyPresetValues('reading'));
+ assert.deepEqual(reading,{reader_filter_level:'primary',reader_filter:['prompts','response'],reader_writing:true,reader_events:false,reader_labels:false,reader_highlight_hidden:[]});
+ const reasoning=plain(reader.readerKeyPresetValues('reasoning'));
+ assert.deepEqual(reasoning.reader_filter,['prompts','response','replies','thinking']);
+ assert.deepEqual([reasoning.reader_writing,reasoning.reader_events,reasoning.reader_labels],[false,true,true]);
+ const previous={reader_writing:false,reader_events:false,reader_labels:false,reader_highlight_hidden:['labels:C.report','events:event-friction']};
+ const review={...previous,...plain(reader.readerKeyPresetValues('review'))};
+ assert.equal(review.reader_filter.includes('usage'),false);
+ assert.deepEqual([review.reader_writing,review.reader_events,review.reader_labels,review.reader_highlight_hidden],[true,true,true,[]]);
+ assert.deepEqual(previous.reader_highlight_hidden,['labels:C.report','events:event-friction'],'applying defaults never mutates the prior state');
+ for(const preset of reader.READER_KEY_PRESETS){
+  const values=reader.readerKeyPresetValues(preset.id);
+  const state={level:values.reader_filter_level};
+  assert.equal(reader.readerKeyPresetID(state,values,values.reader_highlight_hidden),preset.id);
+ }
+ assert.equal(reader.readerKeyPresetID({level:'custom',custom:['response','prompts']},reading,[]),'reading','preset identity follows effective content, not category order or a second stored label');
+ assert.equal(reader.readerKeyPresetID({level:'all-minus-usage'}, {...review,reader_events:false}, []),null);
+ assert.equal(reader.readerKeyPresetID({level:'all-minus-usage'}, review, ['labels:C.report']),null);
+ assert.equal(reader.readerKeyPresetValues('unknown'),null);
 });

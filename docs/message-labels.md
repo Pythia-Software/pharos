@@ -40,21 +40,55 @@ contract. Query URLs use `q_message_labels`, including its registered
 cover all messages, human input and agent thinking. Retired `label_lab` URLs
 redirect to the dashboard, preserving compatible population and chart filters.
 
+## People dashboards
+
+Conversations' **Human messages**, Human Words' **User messages** and
+**Messages with typed text**, and Habits' **Typed messages** offer
+**Message label · general** and **Message label · specific** breakdowns.
+They work in trends and record-level comparisons. Words, tokens and elapsed
+hours keep their existing breakdowns: message labels do not attribute those
+quantities to a message function.
+
+Each message counts once under its highest-confidence most-specific accepted
+label, or that label's family at general resolution. Groups add up to the message
+total, and percentage shares add up to 100%, including missing classifications
+under Uncategorized. Equal or unavailable probabilities use label ID order to
+keep the assignment stable.
+The `people_message_labels` source preserves each dashboard's existing
+population and attribution, including Human Words' supplied-only messages,
+Conversations' human-message criteria and root metadata, and Habits' typed
+message population, canonical thread mapping and recorded hour placement.
+Supporting queries retain the population and link to the exact source message.
+Saved dashboard cards use this same source, filtering and counting.
+Human Words text predicates keep their full-message filtering semantics.
+Returning from a supporting query preserves the dashboard's filters and date
+selection; edited query dates replace that selection using the originating
+dashboard's timestamp fields. V3 requests forward scope and date predicates
+before source rows are staged, so a narrow query avoids unrelated populations
+and old message history.
+
+Reader message labels tint entire prompt, reply and expanded reasoning cards.
+Agent events keep sentence-level marks on top of those backgrounds; the two
+checkboxes and their URL state remain independent. Timeline inspection quotes
+also use a message-level background tint.
+
 ## Fingerprint accounting and appearance
 
 Sender functions use cool cyan, blue, green and violet hues; Receiver functions
 use warm yellow, orange, coral and magenta hues. Difficulty is red; Challenge and
 Reject sit near red. Deepest accepted labels supply the individual stripes.
-Uncategorized evidence stays neutral and translucent. Color does not encode
-model scores.
+Processed messages with no matching label are fully transparent; messages not
+yet processed (including pending or stale labels) stay light grey. Color does
+not encode model scores.
 
 Each message contributes one unit to a fingerprint column. A message with both
 roots allocates half to each; deepest labels within a root divide its weight
 equally. Ancestors receive their children's sums. Parent-only matches appear as
-Other, including Generic root matches. Uncategorized distinguishes Not labeled
-from Labeled / no match. The hover hierarchy and stripe heights use the same
-weights, so every parent's children add to its value. These additive fingerprint
-shares differ from the dashboard's overlapping distinct-message frequencies.
+Other, including Generic root matches. Uncategorized distinguishes Not yet
+processed from Processed / no match. The hover hierarchy and stripe heights use
+the same weights, so every parent's children add to its value. These additive
+fingerprint shares differ from the dashboard's overlapping distinct-message
+frequencies.
 
 Centered diagonal hatching widens smoothly with extra overlapping recorded
 branches, remains distinguishable above three branches, and disappears with no
@@ -62,6 +96,13 @@ overlap. Overlap uses recorded session envelopes, not CPU activity. Width
 compresses message volume rather than duration. Fingerprints have square
 intrinsic corners; containing cards may clip them. Hover is viewport-bounded,
 scrollable, keyboard-accessible and retains the complete observed hierarchy.
+Click a column, or press Enter or Space while it is focused, to pin its key.
+The pinned key adds **Show in conversation**, which reveals the message at
+the clicked point, including within a compressed column or workspace ribbon.
+
+Conversation and workspace fingerprints also show the timeline's agent event
+markers and arcs to earlier text. Hover or focus a marker to inspect it; pin
+its details to open the event and its target in the source conversation.
 
 ## Conversation timelines
 
@@ -118,7 +159,8 @@ unchanged.
 A queued conversation immediately leaves the stored branch. Its live projection
 supplies observations in the same query snapshot until replacement commits.
 Initial builds and algorithm/calendar upgrades retain the complete live path
-until publication. Maintenance advances the shared query-cache generation.
+until publication. Maintenance advances the shared query-cache generation and
+its label count, so only views that read labels are recomputed.
 Read-only catalogs and CLI reads never start maintenance or inference. The query
 tables are disposable; the classifier ledger remains authoritative.
 

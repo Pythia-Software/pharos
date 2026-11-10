@@ -55,7 +55,9 @@ use host/source scopes. Catalog reads use keyset batches.
 
 Review every page and the catalog preservation boundary. The report gives
 native bytes, existing pin costs (including other owners), catalog/WAL bytes,
-the existing free-space reserve and free capture-drive bytes. Logical output,
+the existing free-space reserve and free capture-drive bytes (informational,
+outside the plan's ID, and 0 when the drive's capacity cannot be read; the
+budget and job checks read it again and refuse to write without it). Logical output,
 compression ratios, full-library rollback-copy size, temporary/WAL growth and
 scratch/catalog growth are explicitly unknown, not zero. Budget the **whole
 library** rollback copy, including already pinned evidence, on its destination.
@@ -178,10 +180,14 @@ captures/.history-backfill/objects/ENVELOPE_SHA256.json
 ```
 
 The plan/job identity is deterministic. It binds original source identities,
-manifest hashes, selected retained versions, catalog observation state and
-scope. Jobs persist their cursor, budget, rollback hash, protected input paths,
-phase and errors on the capture drive. They can be rediscovered without the
-live catalog. No receipt depends solely on a temporary file or an index marker.
+manifest hashes, selected retained versions, catalog observation state,
+scope and the capture root's device and inode (`capture_root_identity`, the
+unsigned `device:inode` plans have always stored). A capture root whose identity
+cannot be read is not planned, and protection refuses before writing any job
+state unless the root still has the plan's identity; platforms that report no
+identity cannot plan a backfill yet. Jobs persist their cursor, budget,
+rollback hash, protected input paths, phase and errors on the capture drive.
+They can be rediscovered without the live catalog. No receipt depends solely on a temporary file or an index marker.
 Immutable envelopes deduplicate across identical observations; their receipt
 carries the particular rollback snapshot's provenance.
 

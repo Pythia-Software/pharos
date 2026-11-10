@@ -1,0 +1,1942 @@
+{
+  "$schema": "https://github.com/Pythia-Software/query-table/schema/query-table.schema.json",
+  "name": "pharos_messages",
+  "version": 1,
+  "idField": "id",
+  "defaultLimit": 50,
+  "defaultSort": [
+    {
+      "field": "sent_at",
+      "dir": "desc",
+      "nulls": "last"
+    }
+  ],
+  "tiebreakSort": [
+    {
+      "field": "id",
+      "dir": "asc"
+    }
+  ],
+  "defaultSelect": [
+    {
+      "field": "sent_at",
+      "width": 150
+    },
+    {
+      "field": "role",
+      "width": 100
+    },
+    {
+      "field": "kind",
+      "width": 120
+    },
+    {
+      "field": "text",
+      "width": 410
+    },
+    {
+      "field": "model",
+      "width": 160
+    },
+    {
+      "field": "title",
+      "width": 220
+    }
+  ],
+  "fields": [
+    {
+      "name": "id",
+      "label": "Message ID",
+      "type": "text",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"id\""
+        }
+      }
+    },
+    {
+      "name": "sent_at",
+      "label": "Occurred",
+      "type": "datetime",
+      "group": "Time",
+      "render": "datetime_rel",
+      "bindings": {
+        "postgres": {
+          "expr": "sent_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"sent_at\"",
+          "datetimeFormat": "utc-millis"
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "day",
+      "label": "Day",
+      "type": "text",
+      "group": "Time",
+      "aliases": [
+        "date"
+      ],
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "day",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"day\""
+        }
+      }
+    },
+    {
+      "name": "week",
+      "label": "Week (Mon)",
+      "type": "text",
+      "group": "Time",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "week",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"week\""
+        }
+      }
+    },
+    {
+      "name": "month",
+      "label": "Month",
+      "type": "text",
+      "group": "Time",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "month",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"month\""
+        }
+      }
+    },
+    {
+      "name": "authorship_sent_at",
+      "label": "Writing sent",
+      "description": "Timestamp recorded for this message by Writing classification; can differ from the source message time.",
+      "type": "datetime",
+      "group": "Writing context",
+      "select": {
+        "default": false
+      },
+      "render": "datetime_rel",
+      "bindings": {
+        "postgres": {
+          "expr": "authorship_sent_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"authorship_sent_at\"",
+          "datetimeFormat": "utc-millis"
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "authorship_day",
+      "label": "Writing day",
+      "description": "Calendar day recorded by Writing classification; can differ from the source message day.",
+      "type": "text",
+      "group": "Writing context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "authorship_day",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"authorship_day\""
+        }
+      }
+    },
+    {
+      "name": "authorship_week",
+      "label": "Writing week (Mon)",
+      "description": "Monday-based week of the Writing classification day.",
+      "type": "text",
+      "group": "Writing context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "authorship_week",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"authorship_week\""
+        }
+      }
+    },
+    {
+      "name": "authorship_month",
+      "label": "Writing month",
+      "description": "Month of the Writing classification day.",
+      "type": "text",
+      "group": "Writing context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "authorship_month",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"authorship_month\""
+        }
+      }
+    },
+    {
+      "name": "text",
+      "label": "Message",
+      "type": "text",
+      "group": "Message",
+      "render": "authored_text",
+      "filter": {
+        "values": {
+          "source": "freeform"
+        }
+      },
+      "aliases": [
+        "content",
+        "prompt"
+      ],
+      "bindings": {
+        "postgres": {
+          "expr": "text",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"text\""
+        }
+      },
+      "aggregate": {
+        "groupable": false,
+        "measure": false
+      }
+    },
+    {
+      "name": "main_category",
+      "label": "Mostly",
+      "type": "enum",
+      "group": "Message",
+      "render": "authorship_category",
+      "aliases": [
+        "category"
+      ],
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "typed",
+              "label": "Typed"
+            },
+            {
+              "value": "pasted",
+              "label": "Likely pasted"
+            },
+            {
+              "value": "quoted",
+              "label": "Copied"
+            },
+            {
+              "value": "resent",
+              "label": "Re-sent"
+            },
+            {
+              "value": "template",
+              "label": "Template"
+            },
+            {
+              "value": "attachment",
+              "label": "Attachment"
+            },
+            {
+              "value": "harness",
+              "label": "App instructions"
+            },
+            {
+              "value": "automated",
+              "label": "Automated"
+            }
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "main_category",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"main_category\""
+        }
+      }
+    },
+    {
+      "name": "categories",
+      "label": "Categories",
+      "type": "textarray",
+      "group": "Message",
+      "render": "authorship_categories",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "typed",
+              "label": "Typed"
+            },
+            {
+              "value": "pasted",
+              "label": "Likely pasted"
+            },
+            {
+              "value": "quoted",
+              "label": "Copied"
+            },
+            {
+              "value": "resent",
+              "label": "Re-sent"
+            },
+            {
+              "value": "template",
+              "label": "Template"
+            },
+            {
+              "value": "attachment",
+              "label": "Attachment"
+            },
+            {
+              "value": "harness",
+              "label": "App instructions"
+            },
+            {
+              "value": "automated",
+              "label": "Automated"
+            }
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "categories",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"categories\""
+        }
+      }
+    },
+    {
+      "name": "rules",
+      "label": "Rules",
+      "type": "textarray",
+      "group": "Message",
+      "render": "authorship_rules",
+      "aliases": [
+        "reason",
+        "why"
+      ],
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            "No other rule matched",
+            "Code block",
+            "Log, trace, code, or data",
+            "Table",
+            "Formatted like agent output",
+            "Mostly identifiers, paths, or code",
+            "Path, URL, or ID",
+            "Sent faster than typing",
+            "Generated page feedback",
+            "Human feedback comment",
+            "Quoted with >",
+            "Matches recent agent output",
+            "Already sent earlier",
+            "Line already sent in other conversations",
+            "Repeated prompt",
+            "Slash command",
+            "Attachment reference",
+            "Conductor system instruction",
+            "System reminder",
+            "Environment context",
+            "Project instructions",
+            "Plugin recommendations",
+            "Harness context",
+            "Launched by a command",
+            "Sent by a headless claude -p run",
+            "Sent by a codex exec run",
+            "Sent by a headless agy -p run",
+            "Sent by automation",
+            "Sent by another agent session",
+            "Sent by TL1 orchestration",
+            "Sub-agent conversation",
+            "Sent by a headless claude -p or SDK run Conductor did not start",
+            "Matches agent-written content",
+            "Generated question form",
+            "Pasted conversation",
+            "Reported output"
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "rules",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"rules\""
+        }
+      }
+    },
+    {
+      "name": "has_source",
+      "label": "Copied from a conversation",
+      "type": "bool",
+      "group": "Message",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "has_source",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"has_source\""
+        }
+      }
+    },
+    {
+      "name": "typed_message",
+      "label": "Has typed text",
+      "type": "bool",
+      "group": "Message",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "typed_message",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"typed_message\""
+        }
+      }
+    },
+    {
+      "name": "correction_cue",
+      "label": "Authored correction cue",
+      "description": "English correction substrings inside individual typed/dictated spans only, including I meant, you misunderstood, and you missed. Negation and hypothetical wording can match; not a mistake classification.",
+      "type": "bool",
+      "group": "Steering",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "correction_cue",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"correction_cue\""
+        }
+      }
+    },
+    {
+      "name": "positive_cue",
+      "label": "Authored positive cue",
+      "description": "English praise/thanks substrings inside individual typed/dictated spans only, including great work, looks good, and thank you. Negation and politeness can match; not measured satisfaction or completion.",
+      "type": "bool",
+      "group": "Steering",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "positive_cue",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"positive_cue\""
+        }
+      }
+    },
+    {
+      "name": "typed_words",
+      "label": "Typed words",
+      "type": "number",
+      "group": "Your writing",
+      "render": "number",
+      "select": {
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "typed_words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"typed_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "typed_share",
+      "label": "Typed %",
+      "type": "number",
+      "group": "Your writing",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "aggregate": {
+        "measure": false,
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "typed_share",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"typed_share\"",
+          "expressionNumeric": true
+        }
+      }
+    },
+    {
+      "name": "other_words",
+      "label": "Words from elsewhere",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "other_words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"other_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "pasted_words",
+      "label": "Likely pasted words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "pasted_words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"pasted_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "copied_words",
+      "label": "Copied or re-sent words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "copied_words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"copied_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "prompt_words",
+      "label": "Template and attachment words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "prompt_words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"prompt_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "machine_words",
+      "label": "App instruction and automation words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "machine_words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"machine_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "quoted_words",
+      "label": "Copied words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "quoted_words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"quoted_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "resent_words",
+      "label": "Re-sent words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "resent_words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"resent_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "template_words",
+      "label": "Template words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "template_words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"template_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "attachment_words",
+      "label": "Attachment words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "attachment_words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"attachment_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "harness_words",
+      "label": "App instruction words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "harness_words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"harness_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "automated_words",
+      "label": "Automated words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "automated_words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"automated_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "words",
+      "label": "Words",
+      "type": "number",
+      "group": "Size",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "words",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "chars",
+      "label": "Characters",
+      "type": "number",
+      "group": "Size",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "chars",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"chars\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "message_count",
+      "label": "Messages",
+      "type": "number",
+      "group": "Size",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "message_count",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"message_count\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "title",
+      "label": "Workspace",
+      "type": "text",
+      "group": "Context",
+      "render": "usage_conversation",
+      "bindings": {
+        "postgres": {
+          "expr": "title",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"title\""
+        }
+      }
+    },
+    {
+      "name": "project_name",
+      "label": "Project",
+      "type": "text",
+      "group": "Context",
+      "description": "The repository, else the working folder (home as ~); empty for a workspace with no working directory (No project).",
+      "bindings": {
+        "postgres": {
+          "expr": "project_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"project_name\""
+        }
+      }
+    },
+    {
+      "name": "repository_name",
+      "label": "Repository",
+      "type": "text",
+      "group": "Context",
+      "aliases": [
+        "repo"
+      ],
+      "bindings": {
+        "postgres": {
+          "expr": "repository_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"repository_name\""
+        }
+      }
+    },
+    {
+      "name": "source_kind",
+      "label": "Source",
+      "type": "enum",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "tl1",
+              "label": "TL1"
+            },
+            {
+              "value": "tl1-export",
+              "label": "TL1 export"
+            },
+            {
+              "value": "conductor",
+              "label": "Conductor"
+            },
+            {
+              "value": "codex",
+              "label": "Codex"
+            },
+            {
+              "value": "claude",
+              "label": "Claude"
+            },
+            {
+              "value": "chatgpt",
+              "label": "ChatGPT"
+            },
+            {
+              "value": "antigravity",
+              "label": "Antigravity"
+            },
+            {
+              "value": "canonical",
+              "label": "Canonical export"
+            }
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "source_kind",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"source_kind\""
+        }
+      }
+    },
+    {
+      "name": "authorship_title",
+      "label": "Writing workspace",
+      "description": "Title of the workspace this message counts toward in Writing; can differ from the source workspace title.",
+      "type": "text",
+      "group": "Writing context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "authorship_title",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"authorship_title\""
+        }
+      }
+    },
+    {
+      "name": "authorship_project_name",
+      "label": "Writing project",
+      "description": "Project of the workspace this message counts toward in Writing; can differ from the source project.",
+      "type": "text",
+      "group": "Writing context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "authorship_project_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"authorship_project_name\""
+        }
+      }
+    },
+    {
+      "name": "authorship_repository_name",
+      "label": "Writing repository",
+      "description": "Repository of the workspace this message counts toward in Writing; can differ from the source repository.",
+      "type": "text",
+      "group": "Writing context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "authorship_repository_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"authorship_repository_name\""
+        }
+      }
+    },
+    {
+      "name": "authorship_source_kind",
+      "label": "Writing source",
+      "description": "Source of the workspace this message counts toward in Writing; can differ from the source message workspace.",
+      "type": "enum",
+      "group": "Writing context",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "tl1",
+              "label": "TL1"
+            },
+            {
+              "value": "tl1-export",
+              "label": "TL1 export"
+            },
+            {
+              "value": "conductor",
+              "label": "Conductor"
+            },
+            {
+              "value": "codex",
+              "label": "Codex"
+            },
+            {
+              "value": "claude",
+              "label": "Claude"
+            },
+            {
+              "value": "chatgpt",
+              "label": "ChatGPT"
+            },
+            {
+              "value": "antigravity",
+              "label": "Antigravity"
+            },
+            {
+              "value": "canonical",
+              "label": "Canonical export"
+            }
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "authorship_source_kind",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"authorship_source_kind\""
+        }
+      }
+    },
+    {
+      "name": "provider",
+      "label": "Provider",
+      "type": "enum",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "claude",
+              "label": "Claude"
+            },
+            {
+              "value": "codex",
+              "label": "Codex"
+            },
+            {
+              "value": "tl1",
+              "label": "TL1"
+            },
+            {
+              "value": "chatgpt",
+              "label": "ChatGPT"
+            },
+            {
+              "value": "antigravity",
+              "label": "Antigravity"
+            },
+            {
+              "value": "canonical",
+              "label": "Canonical export"
+            }
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "provider",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"provider\""
+        }
+      }
+    },
+    {
+      "name": "channel",
+      "label": "Channel",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "channel",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"channel\""
+        }
+      },
+      "description": "How the top-level conversation started; linked sub-agents inherit this channel.",
+      "render": "origin_channel"
+    },
+    {
+      "name": "machine_id",
+      "label": "Machine",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "machine_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"machine_id\""
+        }
+      },
+      "description": "Device where the top-level conversation started; linked sub-agents inherit this machine. Execution machine is recorded separately.",
+      "render": "origin_machine_id"
+    },
+    {
+      "name": "machine",
+      "label": "Machine name",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "machine",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"machine\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+    },
+    {
+      "name": "machine_kind",
+      "label": "Machine kind",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "machine_kind",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"machine_kind\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+    },
+    {
+      "name": "execution_machine_id",
+      "label": "Execution machine",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "execution_machine_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"execution_machine_id\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran.",
+      "render": "origin_execution_machine_id"
+    },
+    {
+      "name": "execution_machine",
+      "label": "Execution machine name",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "execution_machine",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"execution_machine\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+    },
+    {
+      "name": "execution_machine_kind",
+      "label": "Execution machine kind",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "execution_machine_kind",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"execution_machine_kind\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+    },
+    {
+      "name": "channel_status",
+      "label": "Channel attribution",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "channel_status",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"channel_status\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+    },
+    {
+      "name": "machine_status",
+      "label": "Machine attribution",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "machine_status",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"machine_status\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+    },
+    {
+      "name": "execution_machine_status",
+      "label": "Execution machine attribution",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "execution_machine_status",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"execution_machine_status\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+    },
+    {
+      "name": "origin_conversation_id",
+      "label": "Initiating conversation",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "origin_conversation_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"origin_conversation_id\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+    },
+    {
+      "name": "origin_evidence",
+      "label": "Origin evidence",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "origin_evidence",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"origin_evidence\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+    },
+    {
+      "name": "channels",
+      "label": "Channels",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "channels",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"channels\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+    },
+    {
+      "name": "machines",
+      "label": "Machines",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "machines",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"machines\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+    },
+    {
+      "name": "execution_machines",
+      "label": "Execution machines",
+      "type": "text",
+      "group": "Origin",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "execution_machines",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"execution_machines\""
+        }
+      },
+      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+    },
+    {
+      "name": "subagent",
+      "label": "Sub-agent conversation",
+      "type": "bool",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "subagent",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"subagent\""
+        }
+      }
+    },
+    {
+      "name": "sender",
+      "label": "Sender",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "sender",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"sender\""
+        }
+      }
+    },
+    {
+      "name": "conversation_id",
+      "relationship": {
+        "objectType": "pharos_conversations",
+        "key": {
+          "id": "conversation_id"
+        }
+      },
+      "label": "Conversation ID",
+      "type": "text",
+      "render": "conversation_link",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "conversation_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"conversation_id\""
+        }
+      }
+    },
+    {
+      "name": "workspace_id",
+      "relationship": {
+        "objectType": "pharos_library",
+        "key": {
+          "id": "workspace_id"
+        }
+      },
+      "label": "Workspace ID",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "workspace_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"workspace_id\""
+        }
+      }
+    },
+    {
+      "name": "work_id",
+      "label": "Writing workspace ID",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "work_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"work_id\""
+        }
+      }
+    },
+    {
+      "name": "role",
+      "label": "Role",
+      "type": "text",
+      "group": "Message",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "role",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"role\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "kind",
+      "label": "Kind",
+      "type": "text",
+      "group": "Message",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "kind",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"kind\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "model",
+      "label": "Recorded model",
+      "type": "text",
+      "group": "Model",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "model",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"model\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "effort",
+      "label": "Recorded effort",
+      "type": "text",
+      "group": "Model",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "effort",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"effort\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "has_authorship",
+      "label": "Has authorship",
+      "type": "bool",
+      "group": "Authorship",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "has_authorship",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"has_authorship\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "selected",
+      "label": "Selected in source",
+      "type": "bool",
+      "group": "Message",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "selected",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"selected\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "native_id",
+      "label": "Source message ID",
+      "type": "text",
+      "group": "Identity",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "native_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"native_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "conversation_native_id",
+      "label": "Source conversation ID",
+      "type": "text",
+      "group": "Identity",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "conversation_native_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"conversation_native_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "workspace_source_id",
+      "label": "Source workspace ID",
+      "type": "text",
+      "group": "Identity",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "workspace_source_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"workspace_source_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "source_account",
+      "label": "Source account",
+      "type": "text",
+      "group": "Identity",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "source_account",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"source_account\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "source_order",
+      "label": "Source order",
+      "type": "number",
+      "group": "Identity",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "source_order",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"source_order\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "call_id",
+      "label": "Tool call ID",
+      "type": "text",
+      "group": "Identity",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "call_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"call_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "parent_native_id",
+      "label": "Parent source message ID",
+      "type": "text",
+      "group": "Identity",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "parent_native_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"parent_native_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "previous_native_id",
+      "label": "Previous source message ID",
+      "type": "text",
+      "group": "Identity",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "previous_native_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"previous_native_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "evidence_locator",
+      "label": "Evidence locator",
+      "type": "text",
+      "group": "Identity",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "evidence_locator",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"evidence_locator\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "reasoning_format",
+      "label": "Reasoning format",
+      "type": "text",
+      "group": "Message",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "reasoning_format",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"reasoning_format\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    }
+  ]
+}

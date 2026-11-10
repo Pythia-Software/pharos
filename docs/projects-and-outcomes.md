@@ -30,8 +30,9 @@ Every workspace belongs to exactly one **project**, chosen in this order:
    the new checkout. It also covers a session recorded on another Mac in a
    checkout this library knows.
 3. **The working folder.** The location is normalized as a folder key:
-   - The home directory is shown as `~`. For `/Users/<name>/…` and
-     `/home/<name>/…` that applies on any Mac, not only the current one.
+   - A home directory, `/Users/<name>/…` or `/home/<name>/…`, is shown as
+     `~`. The rule reads nothing of the host, so every Mac sharing a
+     library derives the same key; a home elsewhere keeps its full path.
    - Temporary directories (`/tmp`, `/private/tmp`, `/var/folders`) form
      one project, `/tmp`. Otherwise each throwaway directory would be a
      project of its own.
@@ -78,11 +79,15 @@ These columns are derived and are written only by ingest and maintenance,
 never by a request:
 
 - Ingest sets them for each workspace it writes.
-- When a repository gains checkout locations, workspaces in those folders
-  are resolved again.
+- When a repository gains checkout locations, the workspaces without a
+  repository whose folders are at or under them are resolved again (all of
+  `/tmp` when a checkout is in a temporary directory). Other folders cannot
+  change, so ingest's write transaction reads only these, by an index on
+  `project_folder`.
 - A repository merge moves `folder_repository_id` to the survivor.
 - Capture recovery, which restores repositories without that writer,
-  resolves folder workspaces again when it changes any checkout.
+  resolves again the folder workspaces under each checkout it adds or
+  removes.
 - A build from before projects can still write to the catalog (the schema
   version is unchanged), leaving the columns missing or stale. Each build's
   first open derives them for every workspace, and the identities stage of
@@ -92,7 +97,10 @@ never by a request:
 Readers use `projectJoin`/`projectNameSQL` (`projects.go`). They join
 `repositories` on `COALESCE(repository_id, folder_repository_id)` and derive
 `project_id` (`repository:<id>` or `folder:<key>`), `project_name` and
-`project_kind`.
+`project_kind`. Every query dataset with `repository_name` also has
+`project_name` (the library also `project_kind` and `project_id`), except
+Findings, which are computed per repository; Scatter points carry it as
+point metadata.
 
 ### Where projects appear
 
@@ -101,13 +109,23 @@ Readers use `projectJoin`/`projectNameSQL` (`projects.go`). They join
 - **Analyze:** a "Project" breakdown in every catalog that had
   "Repository". Links that name `repository_name` read as the project
   breakdown (the catalog's `legacy` mapping), so saved links and card
-  destinations keep working.
+  destinations keep working. Compactions, Session Shape, Agent Event rates
+  and Scatter keep their Repository breakdown beside Project, since their
+  cards still group by repository. File paths stay Git-only: "Repository path",
+  "Repository + path", the "Path in a conversation" unit and the read-path
+  and edit-path cards pair `repo_path` with the repository holding the file
+  (`path_repository`), which can differ from the session's project. Files
+  outside a Git checkout have no repository path, so a library without Git
+  has none.
 - **Storage:** a By project tab.
 - **MCP:** `list_projects` lists repositories and folders alike, with the
   count of conversations without a project; `list_repositories` is kept
   unchanged as the repository-only view. `search_conversations`,
   `search_work`, `search_messages`, `search_text` and `query_statistics`
   take a `project` filter, and `query_statistics` groups by `project`.
+  A filter that is exactly a project's name, a repository's remote or a
+  folder's key or path (`~`, `~/notes`) names only that project; any other
+  text matches by part of a name, as the `repository` filter does.
   `trace_worktree` and `list_findings` stay repository-only: findings are
   computed per repository.
 

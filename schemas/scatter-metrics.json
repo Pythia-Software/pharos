@@ -1,0 +1,2598 @@
+{
+  "human_typed": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "typed_words"
+    }
+  },
+  "human_words": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "words"
+    }
+  },
+  "human_typed_messages": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [
+      {
+        "field": "typed_words",
+        "op": ">",
+        "value": "0"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "count"
+    }
+  },
+  "human_messages": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count"
+    }
+  },
+  "human_conversations": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "conversation_id"
+    }
+  },
+  "human_typed_share": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([typed_words])/NULLIF(SUM([words]),0)"
+    }
+  },
+  "human_words_per_message": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([typed_words])/NULLIF(SUM(IF([typed_words]>0,1,0)),0)"
+    }
+  },
+  "human_copied_share": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM(IF([has_source],1,0))/NULLIF(COUNT([id]),0)"
+    }
+  },
+  "tokens_tokens": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "total_tokens"
+    }
+  },
+  "tokens_cost": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "cost_usd"
+    }
+  },
+  "tokens_priced_cost": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [
+      {
+        "field": "price_status",
+        "op": "=",
+        "value": "priced"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "cost_usd"
+    }
+  },
+  "tokens_input": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "input_tokens"
+    }
+  },
+  "tokens_output": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "output_tokens"
+    }
+  },
+  "tokens_cache_read_share": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)"
+    }
+  },
+  "tokens_output_share": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([output_tokens])/NULLIF(SUM([total_tokens]),0)"
+    }
+  },
+  "tokens_delegating_share": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "COUNT_DISTINCT(IF([delegated_run_depth]>0,[root_conversation_id],NULL))/NULLIF(COUNT_DISTINCT([root_conversation_id]),0)"
+    }
+  },
+  "tokens_delegated_share": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM(IF([delegated_run_depth]>0,[total_tokens],0))/NULLIF(SUM([total_tokens]),0)"
+    }
+  },
+  "tokens_root_conversations": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "root_conversation_id"
+    }
+  },
+  "tokens_conversations": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "conversation_id"
+    }
+  },
+  "tokens_agent_sessions": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "agent_session_id"
+    }
+  },
+  "tokens_delegated_runs": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "delegated_session_id"
+    }
+  },
+  "tokens_average_fanout": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [
+      {
+        "field": "total_tokens",
+        "op": ">",
+        "value": "0"
+      },
+      {
+        "field": "root_conversation_id",
+        "op": "is_not_null",
+        "value": ""
+      },
+      {
+        "field": "root_conversation_id",
+        "op": "!=",
+        "value": ""
+      },
+      {
+        "field": "delegated_run_depth",
+        "op": ">",
+        "value": "0"
+      },
+      {
+        "field": "delegated_parent_session_id",
+        "op": "is_not_null",
+        "value": ""
+      },
+      {
+        "field": "delegated_parent_session_id",
+        "op": "!=",
+        "value": ""
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "COUNT_DISTINCT([delegated_session_id])/NULLIF(COUNT_DISTINCT([delegated_parent_session_id]),0)"
+    }
+  },
+  "activity_conversations": {
+    "dataset": "conversation_activity",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id"
+    },
+    "time": {
+      "first": "event_at",
+      "last": "event_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "root_conversation_id"
+    }
+  },
+  "activity_messages": {
+    "dataset": "conversation_activity",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id"
+    },
+    "time": {
+      "first": "event_at",
+      "last": "event_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "human_messages"
+    }
+  },
+  "activity_output": {
+    "dataset": "conversation_activity",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id"
+    },
+    "time": {
+      "first": "event_at",
+      "last": "event_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "output_tokens"
+    }
+  },
+  "calls_time": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "duration_ms"
+    }
+  },
+  "calls_calls": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count"
+    }
+  },
+  "calls_mean_time": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([duration_ms])/NULLIF(COUNT([duration_ms]),0)"
+    }
+  },
+  "calls_failures": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "error_count"
+    }
+  },
+  "calls_failure_rate": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([error_count])/NULLIF(COUNT([id]),0)"
+    }
+  },
+  "calls_truncation_rate": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM(IF([truncated],1,0))/NULLIF(COUNT([id]),0)"
+    }
+  },
+  "calls_conversations": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "conversation_id"
+    }
+  },
+  "calls_projects": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "project_name"
+    }
+  },
+  "calls_carried_tokens": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "carried_tokens"
+    }
+  },
+  "calls_result_tokens": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "result_tokens"
+    }
+  },
+  "skills_records": {
+    "dataset": "skill_usages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "evidence_message_id"
+    },
+    "time": {
+      "first": "created_at",
+      "last": "created_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count"
+    }
+  },
+  "skills_body": {
+    "dataset": "skill_usages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "evidence_message_id"
+    },
+    "time": {
+      "first": "created_at",
+      "last": "created_at"
+    },
+    "where": [
+      {
+        "field": "content_bytes",
+        "op": ">",
+        "value": "0"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "content_bytes"
+    }
+  },
+  "skills_conversations": {
+    "dataset": "skill_usages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "evidence_message_id"
+    },
+    "time": {
+      "first": "created_at",
+      "last": "created_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "conversation_id"
+    }
+  },
+  "skills_projects": {
+    "dataset": "skill_usages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "evidence_message_id"
+    },
+    "time": {
+      "first": "created_at",
+      "last": "created_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "project_name"
+    }
+  },
+  "skills_loads": {
+    "dataset": "skill_usages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "evidence_message_id"
+    },
+    "time": {
+      "first": "created_at",
+      "last": "created_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "tool_call_id"
+    }
+  },
+  "compaction_compactions": {
+    "dataset": "compactions",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count"
+    }
+  },
+  "compaction_conversations": {
+    "dataset": "compactions",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "conversation_id"
+    }
+  },
+  "session_shape_sessions": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count"
+    }
+  },
+  "session_shape_active_hours": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "active_hours"
+    }
+  },
+  "session_shape_active_time": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([active_seconds])/NULLIF(COUNT([active_seconds]),0)"
+    }
+  },
+  "session_shape_messages": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "messages"
+    }
+  },
+  "session_shape_typed_messages": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_authorship",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "typed_human_messages"
+    }
+  },
+  "session_shape_tool_calls": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "tool_calls"
+    }
+  },
+  "session_shape_autonomy": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      },
+      {
+        "field": "has_authorship",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([tool_calls])/NULLIF(SUM([autonomy_prompts]),0)"
+    }
+  },
+  "session_shape_calls_per_words": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      },
+      {
+        "field": "has_authorship",
+        "op": "=",
+        "value": "true"
+      },
+      {
+        "field": "typed_words",
+        "op": ">",
+        "value": "0"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([tool_calls]*100)/NULLIF(SUM([typed_words]),0)"
+    }
+  },
+  "session_shape_turn_cycle": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([turn_cycle_p50_seconds])/NULLIF(COUNT([turn_cycle_p50_seconds]),0)"
+    }
+  },
+  "session_shape_active_share": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([active_seconds])/NULLIF(SUM([wall_seconds]),0)"
+    }
+  },
+  "session_shape_context_peak": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_context_window",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([context_peak_ratio])/NULLIF(COUNT([context_peak_ratio]),0)"
+    }
+  },
+  "session_shape_one_shot_rate": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      },
+      {
+        "field": "has_authorship",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([one_shot_edit_turns])/NULLIF(SUM([edit_turns]),0)"
+    }
+  },
+  "session_shape_steering_load": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_authorship",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([corrections])/NULLIF(SUM([typed_human_messages]),0)"
+    }
+  },
+  "session_shape_verification": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      },
+      {
+        "field": "has_authorship",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([verified_handbacks])/NULLIF(SUM([edit_handbacks]),0)"
+    }
+  },
+  "session_shape_failure_rate": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([failed_calls])/NULLIF(SUM([tool_calls]),0)"
+    }
+  },
+  "session_shape_failed_calls": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "failed_calls"
+    }
+  },
+  "session_shape_rejections": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "rejections"
+    }
+  },
+  "session_shape_interrupts": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "interrupts"
+    }
+  },
+  "session_shape_hook_blocks": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "hook_blocks"
+    }
+  },
+  "session_shape_identical_retries": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "identical_retries"
+    }
+  },
+  "session_shape_thrash_retries": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      },
+      {
+        "field": "has_authorship",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "thrash_retries"
+    }
+  },
+  "session_shape_churned_files": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "churned_files"
+    }
+  },
+  "session_shape_mid_task_compactions": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "mid_task_compactions"
+    }
+  },
+  "session_shape_context_pressure": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_context_window",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "context_pressure"
+    }
+  },
+  "session_shape_corrections": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_authorship",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "corrections"
+    }
+  },
+  "session_shape_long_unprompted_runs": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      },
+      {
+        "field": "has_authorship",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "long_unprompted_runs"
+    }
+  },
+  "session_shape_ended_on_failure": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [
+      {
+        "field": "has_tool_data",
+        "op": "=",
+        "value": "true"
+      },
+      {
+        "field": "has_authorship",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "ended_on_failure"
+    }
+  },
+  "session_shape_forensic_events": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "forensic_events"
+    }
+  },
+  "agent_experience_events": {
+    "dataset": "agent_events",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count"
+    }
+  },
+  "agent_experience_conversations": {
+    "dataset": "agent_events",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "conversation_id"
+    }
+  },
+  "agent_experience_messages": {
+    "dataset": "agent_events",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "message_id"
+    }
+  },
+  "agent_experience_projects": {
+    "dataset": "agent_events",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "project_name"
+    }
+  },
+  "agent_experience_thinking_share": {
+    "dataset": "agent_events",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([in_thinking])/NULLIF(COUNT([id]),0)"
+    }
+  },
+  "agent_experience_explained_share": {
+    "dataset": "agent_events",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM(IF([has_subject],1,0))/NULLIF(COUNT([id]),0)"
+    }
+  },
+  "agent_event_rates_per_thousand": {
+    "dataset": "agent_event_rates",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([events])/NULLIF(COUNT_DISTINCT([message_id])/1000,0)"
+    }
+  },
+  "agent_event_rates_message_share": {
+    "dataset": "agent_event_rates",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "COUNT_DISTINCT(IF([events]>0,[message_id],NULL))/NULLIF(COUNT_DISTINCT([message_id]),0)"
+    }
+  },
+  "agent_event_rates_turn_share": {
+    "dataset": "agent_event_rates",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "COUNT_DISTINCT(IF([events]>0,[turn_id],NULL))/NULLIF(COUNT_DISTINCT([turn_id]),0)"
+    }
+  },
+  "agent_event_rates_conversation_share": {
+    "dataset": "agent_event_rates",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "COUNT_DISTINCT(IF([events]>0,[conversation_id],NULL))/NULLIF(COUNT_DISTINCT([conversation_id]),0)"
+    }
+  },
+  "agent_event_rates_events": {
+    "dataset": "agent_event_rates",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "events"
+    }
+  },
+  "agent_event_rates_messages": {
+    "dataset": "agent_event_rates",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "message_id"
+    }
+  },
+  "labels_messages": {
+    "dataset": "message_labels",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "message_id"
+    }
+  },
+  "labels_conversations": {
+    "dataset": "message_labels",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "conversation_id"
+    }
+  },
+  "labels_labels": {
+    "dataset": "message_labels",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "label"
+    }
+  },
+  "labels_observations": {
+    "dataset": "message_labels",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "message_id"
+    },
+    "time": {
+      "first": "occurred_at",
+      "last": "occurred_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count"
+    }
+  },
+  "carbon_co2": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "co2e_g"
+    }
+  },
+  "carbon_energy": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "energy_wh"
+    }
+  },
+  "work_hours_wall_hours": {
+    "dataset": "rhythm",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [
+      {
+        "field": "actor",
+        "op": "!=",
+        "value": "you"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "elapsed_hours"
+    }
+  },
+  "work_hours_active_hours": {
+    "dataset": "rhythm",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [
+      {
+        "field": "actor",
+        "op": "!=",
+        "value": "you"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "active_hours"
+    }
+  },
+  "work_hours_parallel_hours": {
+    "dataset": "rhythm",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [
+      {
+        "field": "actor",
+        "op": "!=",
+        "value": "you"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "parallel_elapsed_hours"
+    }
+  },
+  "work_hours_messages": {
+    "dataset": "rhythm",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "messages"
+    }
+  },
+  "work_hours_typed_words": {
+    "dataset": "rhythm",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "typed_words"
+    }
+  },
+  "work_hours_turns": {
+    "dataset": "rhythm",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "turns"
+    }
+  },
+  "work_hours_at_once": {
+    "dataset": "rhythm",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [
+      {
+        "field": "actor",
+        "op": "!=",
+        "value": "you"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([active_ms])/NULLIF(SUM([elapsed_ms]),0)"
+    }
+  },
+  "work_hours_conversations": {
+    "dataset": "rhythm",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "unit_id"
+    }
+  },
+  "parallelism_agent_hours": {
+    "dataset": "parallelism",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "unit_hours"
+    }
+  },
+  "parallelism_active_hours": {
+    "dataset": "parallelism",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "elapsed_hours"
+    }
+  },
+  "parallelism_parallel_hours": {
+    "dataset": "parallelism",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "parallel_elapsed_hours"
+    }
+  },
+  "parallelism_at_once": {
+    "dataset": "parallelism",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([unit_ms])/NULLIF(SUM([elapsed_ms]),0)"
+    }
+  },
+  "parallelism_agents": {
+    "dataset": "parallelism",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "count_distinct",
+      "field": "unit_id"
+    }
+  },
+  "work_hours_engaged_hours": {
+    "dataset": "rhythm",
+    "keys": {
+      "conversation": "conversation_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [
+      {
+        "field": "actor",
+        "op": "=",
+        "value": "you"
+      }
+    ],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "elapsed_hours"
+    }
+  },
+  "writing_messages_chars": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "chars"
+    }
+  },
+  "writing_messages_pasted_words": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "pasted_words"
+    }
+  },
+  "writing_messages_copied_words": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "copied_words"
+    }
+  },
+  "writing_messages_prompt_words": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "prompt_words"
+    }
+  },
+  "writing_messages_machine_words": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "machine_words"
+    }
+  },
+  "usage_uncached_input_tokens": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "uncached_input_tokens"
+    }
+  },
+  "usage_cache_read_input_tokens": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "cache_read_input_tokens"
+    }
+  },
+  "usage_cache_creation_input_tokens": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "cache_creation_input_tokens"
+    }
+  },
+  "usage_reasoning_output_tokens": {
+    "dataset": "usage",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "first_usage_at",
+      "last": "last_usage_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "reasoning_output_tokens"
+    }
+  },
+  "model_requests_gap_seconds": {
+    "dataset": "model_requests",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "requested_at",
+      "last": "requested_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "avg",
+      "field": "gap_seconds"
+    }
+  },
+  "model_requests_input_tokens": {
+    "dataset": "model_requests",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "requested_at",
+      "last": "requested_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "avg",
+      "field": "input_tokens"
+    }
+  },
+  "model_requests_output_tokens": {
+    "dataset": "model_requests",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "requested_at",
+      "last": "requested_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "avg",
+      "field": "output_tokens"
+    }
+  },
+  "tool_calls_lines_added": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "lines_added"
+    }
+  },
+  "tool_calls_lines_removed": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "lines_removed"
+    }
+  },
+  "tool_calls_result_bytes": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "result_bytes"
+    }
+  },
+  "tool_calls_input_bytes": {
+    "dataset": "tool_calls",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "call_message_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "started_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "input_bytes"
+    }
+  },
+  "session_shape_wall_seconds": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "wall_seconds"
+    }
+  },
+  "session_shape_idle_seconds": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "idle_seconds"
+    }
+  },
+  "session_shape_files_edited": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "files_edited"
+    }
+  },
+  "session_shape_subagents": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "subagents"
+    }
+  },
+  "session_shape_turn_cycles": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "turn_cycles"
+    }
+  },
+  "session_shape_first_response_seconds": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "avg",
+      "field": "first_response_seconds"
+    }
+  },
+  "session_shape_turn_cycle_p90_seconds": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "avg",
+      "field": "turn_cycle_p90_seconds"
+    }
+  },
+  "session_shape_max_unprompted_tool_calls": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "max",
+      "field": "max_unprompted_tool_calls"
+    }
+  },
+  "session_shape_failure_streak_max": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "max",
+      "field": "failure_streak_max"
+    }
+  },
+  "session_shape_context_peak_tokens": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "max",
+      "field": "context_peak_tokens"
+    }
+  },
+  "session_shape_verified_handbacks": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "verified_handbacks"
+    }
+  },
+  "session_shape_unverified_handbacks": {
+    "dataset": "session_shape",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id"
+    },
+    "time": {
+      "first": "started_at",
+      "last": "last_message_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "unverified_handbacks"
+    }
+  }
+}

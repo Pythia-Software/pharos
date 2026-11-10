@@ -15,6 +15,7 @@ func (s *Server) labelsSettings() map[string]any {
 	config := s.Config()
 	settings := config.Labels.withAssets()
 	status := "Off. Turn on to label messages in this library."
+	notice := ""
 	if settings.Enabled {
 		status = "On. Message labels follow the background update schedule."
 		waiting := settings.labelsWaiting()
@@ -27,9 +28,14 @@ func (s *Server) labelsSettings() map[string]any {
 		} else if waiting != "" {
 			status = "On, " + waiting + "."
 		}
+		if waiting != "" || settings.labelerProblem() != "" {
+			notice = status
+		}
 	}
-	return map[string]any{"enabled": settings.Enabled, "can_change": config.Path != "", "status": status,
-		"threads": max(1, settings.Threads), "thread_choices": labelerThreadChoices()}
+	document := map[string]any{"enabled": settings.Enabled, "can_change": config.Path != "", "status": status, "notice": notice,
+		"threads": max(1, settings.Threads)}
+	s.addLabelerDevice(document, settings, config.Path != "")
+	return document
 }
 
 // labelerThreadChoices are the threads per worker Settings offers each
@@ -50,6 +56,7 @@ func (s *Server) agentEventsSettings(ctx context.Context) map[string]any {
 	configured := config.AgentEvents.Enabled
 	enabled := configured || s.Catalog.featureFlag(ctx, agentEventsFlag)
 	status := "Off. Turn on to find agent events in this library."
+	notice := ""
 	if enabled {
 		status = "On. Agent events follow the background update schedule."
 		if configured {
@@ -64,9 +71,17 @@ func (s *Server) agentEventsSettings(ctx context.Context) map[string]any {
 		} else if waiting != "" {
 			status = "On, " + waiting + "."
 		}
+		if configured || waiting != "" || config.Labels.withAssets().labelerProblem() != "" {
+			notice = status
+		}
 	}
-	return map[string]any{"enabled": enabled, "can_change": !configured, "status": status,
-		"threads": max(1, config.AgentEvents.threads(config.Labels)), "threads_can_change": config.Path != "", "thread_choices": labelerThreadChoices()}
+	document := map[string]any{"enabled": enabled, "can_change": !configured, "status": status, "notice": notice,
+		"threads": max(1, config.AgentEvents.threads(config.Labels))}
+	settings := config.AgentEvents.labeler(config.Labels.withAssets())
+	model := config.AgentEvents.withAssets()
+	settings.ModelDir, settings.Variant = model.ModelDir, model.Variant
+	s.addLabelerDevice(document, settings, config.Path != "")
+	return document
 }
 
 // labelerProblem is why no labeling can run on this Mac, however long it
@@ -124,6 +139,12 @@ func (s *Server) postLabelsSettings(w http.ResponseWriter, r *http.Request, body
 		}
 	}
 	s.wakeBackground()
+	if s.work != nil {
+		if len(threads) > 0 {
+			s.Catalog.labelerManager(s.Config().Labels).Retire()
+		}
+		s.work.runner.Wake()
+	}
 	s.getBackground(w, r)
 }
 
@@ -163,7 +184,13 @@ func (s *Server) setLabelerThreads(threads map[string]int) error {
 
 func (s *Server) setLabelsEnabled(ctx context.Context, enabled bool) error {
 	s.configMu.Lock()
-	defer s.configMu.Unlock()
+	changed := false
+	defer func() {
+		s.configMu.Unlock()
+		if changed && s.work != nil {
+			s.work.runner.InterruptKinds([]string{"analysis.labels", "maintenance.labels.query"}, "message-label policy changed; reissue the request with the current analyses")
+		}
+	}()
 	// Enabling an already indexed library must schedule its earlier messages
 	// too, even if the disabled stage had previously been marked complete.
 	if enabled && !s.config.Labels.Enabled {
@@ -179,6 +206,7 @@ func (s *Server) setLabelsEnabled(ctx context.Context, enabled bool) error {
 	if err != nil {
 		return err
 	}
+	changed = s.config.Labels.Enabled != enabled
 	s.config.Labels.Enabled = enabled
 	return nil
 }

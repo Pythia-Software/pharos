@@ -2,6 +2,7 @@ package archive
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -11,8 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"golang.org/x/sys/unix"
 )
 
 func TestMarkdownLinksResolveAndOpenFiles(t *testing.T) {
@@ -100,7 +99,7 @@ func TestMarkdownLinksResolveAndOpenFiles(t *testing.T) {
 	}
 	finderInfo := make([]byte, 32)
 	finderInfo[8] = 0x80
-	legacyAlias := unix.Setxattr(legacy, "com.apple.FinderInfo", finderInfo, 0) == nil
+	legacyAlias := setFinderInfo(legacy, finderInfo) == nil
 	real := func(path string) string { resolved, _ := filepath.EvalSymlinks(path); return resolved }
 	for _, test := range []struct {
 		href string
@@ -131,6 +130,39 @@ func TestMarkdownLinksResolveAndOpenFiles(t *testing.T) {
 			t.Fatalf("probe %s: %+v", test.href, probe)
 		}
 	}
+	// Bookmark bytes are read in common code; only the Finder flags come
+	// from the platform's attribute read, whose failure or short data never
+	// marks a file launchable and never hides a bookmark.
+	var finderInfo32 []byte
+	var finderInfoErr error
+	override(t, &markdownFinderInfo, func(string) ([]byte, error) { return finderInfo32, finderInfoErr })
+	plain := filepath.Join(root, "plain.txt")
+	if err := os.WriteFile(plain, []byte("alias"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		info []byte
+		err  error
+		href string
+		want bool
+	}{
+		{"attribute failure", nil, errors.New("no attribute"), plain, false},
+		{"unsupported", nil, errFinderInfoUnsupported, plain, false},
+		{"failure despite flag bytes", []byte{8: 0x80, 9: 0}, errors.New("short read"), plain, false},
+		{"short data", []byte{8: 0x80}, nil, plain, false},
+		{"flags clear", make([]byte, 32), nil, plain, false},
+		{"low flag byte", []byte{8: 0, 9: 0x80}, nil, plain, false},
+		{"alias flag", []byte{8: 0x80, 9: 0}, nil, plain, true},
+		{"bookmark without attributes", nil, errFinderInfoUnsupported, bookmark, true},
+	} {
+		finderInfo32, finderInfoErr = test.info, test.err
+		var probe struct{ Launchable bool }
+		if json.Unmarshal(get(url.Values{"href": {test.href}, "workspace": {"links"}}).Body.Bytes(), &probe); probe.Launchable != test.want {
+			t.Fatalf("%s: launchable %v", test.name, probe.Launchable)
+		}
+	}
+
 	launched = nil
 	r := httptest.NewRequest(http.MethodPost, "/api/markdown-link?"+url.Values{"href": {"missing.md"}, "workspace": {"links"}}.Encode(), nil)
 	r.Header.Set("Authorization", "Bearer test-token")

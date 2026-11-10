@@ -15,6 +15,17 @@ import (
 	"time"
 )
 
+// backgroundExplicitKey marks a background pass someone asked for (Run now).
+type backgroundExplicitKey struct{}
+
+func withBackgroundExplicit(ctx context.Context, explicit bool) context.Context {
+	return context.WithValue(ctx, backgroundExplicitKey{}, explicit)
+}
+func backgroundExplicit(ctx context.Context) bool {
+	explicit, _ := ctx.Value(backgroundExplicitKey{}).(bool)
+	return explicit
+}
+
 // Background Processing (docs/background-work.md §11). Every kind of derived
 // data has an automatic owner on one of three cadences: Frequently, with the
 // scheduled index; Hourly, once the library has been quiet; and Daily,
@@ -83,7 +94,7 @@ type backgroundItem struct {
 	Kinds             []string
 	continuous        bool
 	readsWholeSources bool
-	// requiresLabels items exist only where labels_enabled is on;
+	// requiresLabels items run only where labels_enabled is on;
 	// requiresAgentEvents ones only where agent_events_enabled is.
 	requiresLabels      bool
 	requiresAgentEvents bool
@@ -116,8 +127,8 @@ var backgroundItems = []backgroundItem{
 		Stages: []string{"identities", "git"}, Kinds: []string{"analysis.github", "analysis.identities", "analysis.git"}, Why: "Links conversations to their repositories, and asks Git which branches merged."},
 	{ID: "tools", Label: "Tools & usage", Verb: "Updating tools and usage", Feeds: "Analyze → Tools, and the usage cards", Cadence: cadenceFrequent, Adaptive: true,
 		Stages: []string{"tools"}, Kinds: []string{"analysis.tools"}, Why: "Adds the commands and tokens of the workspaces that changed."},
-	{ID: "writing", Label: "Update writing estimates", Verb: "Updating writing estimates", Feeds: "Human Words cards, and Analyze → Writing", Cadence: cadenceFrequent,
-		Stages: []string{"authorship"}, Kinds: []string{"analysis.authorship"}, Why: "Updates a bounded batch of new or changed messages. Estimates are refined overnight."},
+	{ID: "writing", Label: "Update writing estimates", Verb: "Updating writing estimates", Feeds: "Human Words cards, Analyze → Writing, and related conversations on Work pages", Cadence: cadenceFrequent,
+		Stages: []string{"authorship", "peers"}, Kinds: []string{"analysis.authorship"}, Why: "Updates a bounded batch of new or changed messages, then links reviews to the work they read or were pasted into. Estimates are refined overnight."},
 	{ID: "findings", Label: "Findings", Verb: "Updating findings", Feeds: "Optimize", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"findings"}, Kinds: []string{"analysis.findings"}, Why: "Measures the findings you watch against new work."},
 	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
@@ -130,10 +141,12 @@ var backgroundItems = []backgroundItem{
 		Kinds: []string{"analysis.authorship.refine"}, Why: "Applies the complete analysis to retained history, reconciling templates, copied text and conversation relationships."},
 	{ID: "suggestions", Label: "Ask Pharos suggestions", Verb: "Choosing Ask Pharos suggestions", Feeds: "Ask Pharos suggestions", Cadence: cadenceHourly, Adaptive: true, requiresAsk: true, afterChain: true,
 		Kinds: []string{"ask.suggestions"}, Why: "Looks over the last few weeks' summaries for questions worth suggesting, after the analyses they read change."},
+	{ID: "fingerprints", Label: "Conversation fingerprints", Verb: "Rendering conversation fingerprints", Feeds: "Fingerprint columns and conversation cards", Cadence: cadenceFrequent, continuous: true, afterChain: true,
+		Kinds: []string{"maintenance.fingerprints"}, Why: "Prepares compact images in the background and refreshes them when their messages, labels, events or tools change."},
 }
 
 // stageOrder is the analysis chain's order (finishDeferredStages).
-var stageOrder = []string{"identities", "git", "tools", "authorship", "findings", "labels", "agent_events"}
+var stageOrder = []string{"identities", "git", "tools", "authorship", "peers", "findings", "labels", "agent_events"}
 
 func backgroundItemByID(id string) (backgroundItem, bool) {
 	for _, item := range backgroundItems {
@@ -365,12 +378,13 @@ func (c *Catalog) automaticIndexCost(ctx context.Context) (itemCost, bool) {
 // automaticSample is the part of a scheduled index's run history the
 // schedule reads.
 type automaticSample struct {
-	FinishedAt string  `json:"finished_at"`
-	Seconds    float64 `json:"seconds"`
-	CPUSeconds float64 `json:"cpu_seconds"`
-	Workspaces int     `json:"workspaces"`
-	Peak       int64   `json:"rss_observed_peak_bytes"`
-	Trigger    string  `json:"trigger"`
+	FinishedAt string   `json:"finished_at"`
+	Seconds    float64  `json:"seconds"`
+	CPUSeconds *float64 `json:"cpu_seconds"`
+	Workspaces int      `json:"workspaces"`
+	// Peak is null for a run whose RSS was never read.
+	Peak    *int64 `json:"rss_observed_peak_bytes"`
+	Trigger string `json:"trigger"`
 }
 
 func (c *Catalog) automaticSamples(ctx context.Context, limit int) []automaticSample {
@@ -451,7 +465,9 @@ func (c *Catalog) backgroundRuns(ctx context.Context) map[string]backgroundRunRo
 }
 
 // recordBackgroundRun stores an item's outcome: started when it begins,
-// then finished with its error (nil for success).
+// then finished with its error (nil for success). A withdrawn run
+// (backgroundWithdrawn) finishes with neither: it did not fail, and its
+// work is still pending.
 func (c *Catalog) recordBackgroundRun(ctx context.Context, item string, started time.Time, finished bool, failure error) {
 	_ = c.writeTransaction(ctx, "background run", func(tx *sql.Tx) error {
 		if !finished {
@@ -459,13 +475,24 @@ func (c *Catalog) recordBackgroundRun(ctx context.Context, item string, started 
 				ON CONFLICT(host_id,item) DO UPDATE SET started_at=excluded.started_at`, currentHost().ID, item, formatTime(started))
 			return err
 		}
-		stamp := now()
+		stamp, problem := now(), errorString(failure)
+		if backgroundWithdrawn(failure) {
+			problem = ""
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO background_runs(host_id,item,started_at,finished_at,succeeded_at,error,seconds) VALUES(?,?,?,?,?,?,?)
 			ON CONFLICT(host_id,item) DO UPDATE SET finished_at=excluded.finished_at,succeeded_at=COALESCE(excluded.succeeded_at,background_runs.succeeded_at),
 			error=excluded.error,seconds=excluded.seconds`, currentHost().ID, item, formatTime(started), stamp, conditionalString(failure == nil, stamp),
-			nilIfEmpty(errorString(failure)), time.Since(started).Seconds())
+			nilIfEmpty(problem), time.Since(started).Seconds())
 		return err
 	})
+}
+
+// backgroundWithdrawn reports an item whose only outcome is work a Stop
+// held and its await withdrew (errWorkHeld): a deliberate Stop, not a
+// failure. Chain stages already return nil for this, as the classic
+// errStageContinues did.
+func backgroundWithdrawn(err error) bool {
+	return errors.Is(err, errWorkHeld) && len(withoutHeld(err)) == 0
 }
 
 // dailyInstant is the latest daily time at or before at, in local time.
@@ -490,7 +517,9 @@ type backgroundInputs struct {
 	// findingsBuilt whether any did.
 	findingsToday, findingsBuilt bool
 	writingPending               bool
+	writingBacklog               authorshipBacklog
 	writingRefinedAt             string
+	writingRefinementPending     bool
 	upgradePending               bool
 	otherSources                 []string
 	backupDestination            string
@@ -518,8 +547,12 @@ func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
 	in := backgroundInputs{runs: c.backgroundRuns(ctx)}
 	in.verificationNext = c.queuedVerificationNext(ctx)
 	want, built, err := c.authorshipEstimateGenerations()
-	in.writingPending = err != nil || want != built || c.authorshipQuickPending()
+	var backlogErr error
+	in.writingBacklog, backlogErr = c.authorshipBacklog(ctx)
+	in.writingPending = err != nil || backlogErr != nil || want != built || in.writingBacklog.Pending > 0
 	in.writingRefinedAt, _ = c.metaValue(ctx, "authorship_refined_at")
+	in.writingRefinementPending, err = c.authorshipRefinementPending(ctx)
+	in.writingRefinementPending = in.writingRefinementPending || err != nil
 	in.deferred, _ = c.freshnessDeferred(ctx)
 	generation, _ := c.metaValue(ctx, "findings_generation")
 	in.findingsBuilt, in.findingsToday = generation != "", generation == c.findingsGeneration()
@@ -621,20 +654,26 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			if refined, ok := parseTime(in.writingRefinedAt); ok {
 				plan.LastDone = maxTime(plan.LastDone, refined)
 			}
-			plan.Pending = true
-			standaloneNext(&plan, settings, quiet, at)
+			plan.Pending = in.writingRefinementPending
+			if plan.Pending {
+				standaloneNext(&plan, settings, quiet, at)
+			}
 		case len(item.Stages) > 0:
-			plan.LastDone = time.Time{}
+			completed := time.Time{}
 			first := true
 			for _, stage := range item.Stages {
 				row := in.deferred[stage]
 				plan.Pending = plan.Pending || row.generation > row.completed
 				done, _ := parseTime(row.completedAt)
-				if first || done.Before(plan.LastDone) {
-					plan.LastDone = done
+				if first || done.Before(completed) {
+					completed = done
 				}
 				first = false
 			}
+			// A bounded pass can succeed while its backlog stays deferred.
+			// Keep that run's time for Last run and the cadence's clock;
+			// Pending still follows the deferred generations.
+			plan.LastDone = maxTime(plan.LastDone, completed)
 			switch {
 			case !plan.Pending:
 				if plan.Cadence == cadenceDaily {
@@ -699,8 +738,12 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			plan.Pending = true
 			standaloneNext(&plan, settings, quiet, at)
 		}
-		if value, ok := parseTime(run.finished); ok && run.err != "" && !value.Before(plan.LastDone) {
-			plan.Failed, plan.Error = true, run.err
+		if value, ok := parseTime(run.finished); ok && !value.Before(plan.LastDone) && (run.err != "" || run.finished != run.succeeded) {
+			// A failure, or a withdrawn run (finished with neither an error
+			// nor a success): both wait backgroundRetry, so a kind left
+			// stopped is not asked again on every check; only a failure
+			// says Failed.
+			plan.Failed, plan.Error = run.err != "", run.err
 			if retry := value.Add(backgroundRetry); retry.After(plan.Next) {
 				plan.Next = retry
 			}
@@ -791,8 +834,11 @@ type backgroundState struct {
 	mu        sync.Mutex
 	requested map[string]bool
 	wake      chan struct{}
-	costs     map[string]itemCost
-	costsAt   time.Time
+	// fingerprintRetry retains an accepted pass waiting for analysis, with
+	// its original cadence so a scheduled retry stays scheduled demand.
+	fingerprintRetry string
+	costs            map[string]itemCost
+	costsAt          time.Time
 	// power is the last power reading (cachedPower).
 	power   powerState
 	powerAt time.Time
@@ -945,6 +991,22 @@ func (s *Server) backgroundPass(ctx context.Context, at time.Time) bool {
 		return false
 	}
 	requested := s.peekRequested()
+	s.background.mu.Lock()
+	fingerprintRetry := s.background.fingerprintRetry
+	s.background.mu.Unlock()
+	fingerprintReady := false
+	if requested["fingerprints"] || fingerprintRetry != "" {
+		fingerprintReady, err = s.fingerprintPassReady(s.fingerprintContext(ctx))
+		if err != nil || !fingerprintReady {
+			// Keep the original request, but let due analysis run first.
+			delete(requested, "fingerprints")
+		} else if fingerprintRetry == "requested" {
+			if requested == nil {
+				requested = map[string]bool{}
+			}
+			requested["fingerprints"] = true
+		}
+	}
 	if settings.Mode == "on" {
 		s.updatePlacements(ctx, settings)
 	} else if len(requested) == 0 {
@@ -953,6 +1015,11 @@ func (s *Server) backgroundPass(ctx context.Context, at time.Time) bool {
 	plans := backgroundPlan(settings, s.backgroundInputsFor(ctx, requested), at)
 	group, cadence := []itemPlan{}, ""
 	for _, plan := range plans {
+		if plan.ID == "fingerprints" && fingerprintRetry != "" && fingerprintReady && settings.Mode == "on" && !plan.WaitsForPower {
+			// This pass was already accepted: finish it after analysis even
+			// when the next Hourly/Daily/Ad hoc pass is not due yet.
+			plan.Due = true
+		}
 		if !plan.Due {
 			continue
 		}
@@ -1088,6 +1155,9 @@ func backgroundSteps(ids []string) []StepPlan {
 // pass. It reports whether any item succeeded (and so may have changed
 // what pages show).
 func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence string, ids []string, plans []itemPlan) (succeeded bool, failure error) {
+	// Under population execution, Run now is explicit demand; a scheduled
+	// pass is ordinary live demand. Neither makes history foreground.
+	ctx = withBackgroundExplicit(ctx, cadence == "requested")
 	record := func(id string, started time.Time, err error) {
 		s.Catalog.recordBackgroundRun(context.WithoutCancel(ctx), id, started, true, err)
 		succeeded = succeeded || err == nil
@@ -1119,11 +1189,22 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			started := time.Now()
 			s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
 			err := s.runBackgroundItem(ctx, op, id)
+			if id == "fingerprints" {
+				s.background.mu.Lock()
+				if errors.Is(err, errFingerprintWaiting) {
+					if s.background.fingerprintRetry != "requested" {
+						s.background.fingerprintRetry = cadence
+					}
+				} else if err == nil || backgroundWithdrawn(err) {
+					s.background.fingerprintRetry = ""
+				}
+				s.background.mu.Unlock()
+			}
 			if ctx.Err() != nil && err == nil {
 				err = ctx.Err()
 			}
 			record(id, started, err)
-			if err != nil && failure == nil {
+			if err != nil && failure == nil && !backgroundWithdrawn(err) {
 				failure = fmt.Errorf("%s: %w", item.Label, err)
 			}
 		}
@@ -1250,4 +1331,4 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 }
 
 // stageItems is the background item each chain stage belongs to.
-var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "findings": "findings", "labels": "labels", "agent_events": "agent_events"}
+var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "peers": "writing", "findings": "findings", "labels": "labels", "agent_events": "agent_events"}

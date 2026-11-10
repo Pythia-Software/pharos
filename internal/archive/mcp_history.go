@@ -258,56 +258,6 @@ func (c *Catalog) closeMCPHistory() {
 	}
 }
 
-func (c *Catalog) MCPCallHistory(limit, offset int, tool, status string) (map[string]any, error) {
-	limit = clamp(limit, 1, 100)
-	offset = max(offset, 0)
-	where := []string{}
-	args := []any{}
-	if tool != "" {
-		where = append(where, "tool_name=?")
-		args = append(args, tool)
-	}
-	if status != "" {
-		where = append(where, "status=?")
-		args = append(args, status)
-	}
-	predicate := ""
-	if len(where) > 0 {
-		predicate = " WHERE " + strings.Join(where, " AND ")
-	}
-	filtered, err := queryMaps(c.DB, "SELECT COUNT(*) total FROM mcp_calls"+predicate, args...)
-	if err != nil {
-		return nil, err
-	}
-	args = append(args, limit, offset)
-	rows, err := queryMaps(c.DB, `SELECT id,called_at,tool_name,arguments_json,status,error_text,duration_ms,
-		response_bytes,estimated_output_tokens,result_count,truncated FROM mcp_calls`+predicate+` ORDER BY id DESC LIMIT ? OFFSET ?`, args...)
-	if err != nil {
-		return nil, err
-	}
-	stats, err := queryMaps(c.DB, `SELECT COUNT(*) total_calls,
-		COALESCE(SUM(CASE WHEN status<>'ok' THEN 1 ELSE 0 END),0) failed_calls,
-		COALESCE(ROUND(AVG(estimated_output_tokens)),0) average_output_tokens,
-		COALESCE(MAX(estimated_output_tokens),0) largest_output_tokens,
-		COALESCE(SUM(CASE WHEN truncated<>0 THEN 1 ELSE 0 END),0) truncated_calls
-		FROM mcp_calls`)
-	if err != nil {
-		return nil, err
-	}
-	tools, err := queryMaps(c.DB, `SELECT tool_name,COUNT(*) calls,
-		SUM(CASE WHEN status<>'ok' THEN 1 ELSE 0 END) errors,
-		ROUND(AVG(estimated_output_tokens)) average_output_tokens,
-		MAX(estimated_output_tokens) largest_output_tokens,
-		SUM(CASE WHEN truncated<>0 THEN 1 ELSE 0 END) truncated_calls,
-		ROUND(AVG(duration_ms)) average_duration_ms
-		FROM mcp_calls GROUP BY tool_name ORDER BY calls DESC,tool_name`)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"items": rows, "stats": stats[0], "tool_stats": tools,
-		"filtered_total": filtered[0]["total"], "limit": limit, "offset": offset}, nil
-}
-
 func (c *Catalog) MCPStatus(config Config) (map[string]any, error) {
 	enabled, err := c.MCPEnabled()
 	if err != nil {

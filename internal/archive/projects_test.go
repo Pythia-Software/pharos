@@ -1,21 +1,18 @@
 package archive
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 )
 
 func TestFolderKey(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A home elsewhere is this host's alone, so it is not ~: another Mac
+	// sharing the library would derive another key for the same folder.
+	t.Setenv("HOME", "/srv/me")
 	for location, want := range map[string]string{
 		"":                               "",
 		"relative/dir":                   "",
-		home:                             "~",
-		filepath.Join(home, "notes"):     "~/notes",
+		"/srv/me/notes":                  "/srv/me/notes",
 		"/Users/someone/Documents/notes": "~/Documents/notes",
 		"/Users/someone":                 "~",
 		"/home/someone/data/":            "~/data",
@@ -99,10 +96,18 @@ func TestProjectsFolderBecomesRepository(t *testing.T) {
 		t.Fatalf("plain folder: %#v", notes)
 	}
 
+	// The new checkout resolves again only the folders inside it: a stale
+	// row elsewhere is left for the repair pass, not read under the writer.
+	execTx(t, library.catalog.DB, `UPDATE workspaces SET folder_repository_id='stale' WHERE source_id='s-notes'`)
 	later := library.folders["later"]
 	gitInit(t, later)
 	writeClaudeSession(t, library.claude, "s-later-git", claudeSession("s-later-git", later, "main", "Keep drafting", 20))
 	library.ingestClaude(t)
+	var stale string
+	if err := library.catalog.DB.QueryRow(`SELECT COALESCE(folder_repository_id,'') FROM workspaces WHERE source_id='s-notes'`).Scan(&stale); err != nil || stale != "stale" {
+		t.Fatalf("a folder outside the new checkout was resolved again: %q %v", stale, err)
+	}
+	execTx(t, library.catalog.DB, `UPDATE workspaces SET folder_repository_id=NULL WHERE source_id='s-notes'`)
 	projects = library.projects(t)
 	repository := projects["s-later-git"]
 	if repository["project_kind"] != "repository" || repository["project_name"] != "later" {
@@ -185,5 +190,64 @@ func TestProjectsRecoveredInAnyOrder(t *testing.T) {
 	got := projectLibrary{catalog: fresh}.projects(t)
 	if got["s-later"]["project_id"] != want["s-later-git"]["project_id"] || got["s-later"]["project_kind"] != "repository" {
 		t.Fatalf("recovered folder session: %#v", got["s-later"])
+	}
+}
+
+// A new checkout resolves again the folders at or under it, including the
+// temporary directories that are all one /tmp project, and no others.
+func TestResolveFolderProjectsBounds(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	execTx(t, catalog.DB,
+		`INSERT INTO repositories(id,display_name,local_locations_json,created_at,updated_at) VALUES
+			('r-tmp','build','["/tmp/build/app"]','x','x'),('r-app','app','["/Users/someone/app"]','x','x')`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,location,project_folder,folder_repository_id,indexed_at) VALUES
+			('w-tmp','claude','local','s-tmp','T','/tmp/build/app/sub','/tmp',NULL,'x'),
+			('w-app','claude','local','s-app','A','/Users/other/app/docs','~/app/docs',NULL,'x'),
+			('w-near','claude','local','s-near','N','/Users/other/application','~/application','stale','x'),
+			('w-else','claude','local','s-else','E','/srv/else','/srv/else','stale','x')`)
+	tx := seedTx(t, catalog.DB)
+	defer tx.Rollback()
+	if err := resolveFolderProjects(t.Context(), tx, changedRoots(nil, []projectRoot{{"/tmp/build/app", "r-tmp"}, {"~/app", "r-app"}})); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"w-tmp": "r-tmp", "w-app": "r-app", "w-near": "stale", "w-else": "stale"} {
+		var got string
+		if err := tx.QueryRow(`SELECT COALESCE(folder_repository_id,'') FROM workspaces WHERE id=?`, id).Scan(&got); err != nil || got != want {
+			t.Errorf("%s: %q %v, want %q", id, got, err, want)
+		}
+	}
+}
+
+// A project filter that is exactly a project's name, remote or folder key
+// names only that project; anything else matches by part of a name.
+func TestProjectPredicateExactFirst(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	execTx(t, catalog.DB,
+		`INSERT INTO repositories(id,display_name,canonical_remote,created_at,updated_at) VALUES('r-app','app','github.com/me/app','x','x'),('r-application','application',NULL,'x','x')`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,location,repository_id,project_folder,indexed_at) VALUES
+			('w-home','claude','local','home','H','/Users/me',NULL,'~','x'),
+			('w-notes','claude','local','notes','N','/Users/me/notes',NULL,'~/notes','x'),
+			('w-notes-old','claude','local','notes-old','O','/Users/me/notes-old',NULL,'~/notes-old','x'),
+			('w-app','claude','local','app','A','/src/app','r-app','/src/app','x'),
+			('w-application','claude','local','application','B','/src/application','r-application','/src/application','x')`)
+	for value, want := range map[string]string{
+		"~":                 "w-home",
+		"/Users/other":      "w-home",
+		"~/notes":           "w-notes",
+		"/home/me/notes":    "w-notes",
+		"notes":             "w-notes,w-notes-old",
+		"app":               "w-app",
+		"APP":               "w-app",
+		"github.com/me/app": "w-app",
+		"appl":              "w-application",
+		"ap":                "w-app,w-application",
+	} {
+		rows, err := queryMaps(catalog.DB, `SELECT group_concat(id) ids FROM (SELECT w.id FROM workspaces w WHERE `+projectPredicate("w")+` ORDER BY w.id)`, projectArgs(value)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := firstString(rows[0]["ids"]); got != want {
+			t.Errorf("project %q: %q, want %q", value, got, want)
+		}
 	}
 }

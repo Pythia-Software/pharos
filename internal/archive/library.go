@@ -423,6 +423,9 @@ func (c *Catalog) resumeLibraryRefresh() bool {
 	defer c.catchUp.mu.Unlock()
 	stopped := c.catchUp.stopped
 	c.catchUp.stopped = false
+	if c.work != nil {
+		c.work.runner.Wake()
+	}
 	return stopped
 }
 
@@ -492,7 +495,7 @@ func (c *Catalog) originsPass(ctx context.Context) {
 // that stores origins is one too. A pass that does nothing is forgotten.
 func (c *Catalog) maintainLibrary(ctx context.Context) {
 	schedule := searchScheduleGate{}
-	var view, previews, parallelism *daemonPass
+	var view, previews, parallelism, shape, names *daemonPass
 	settle := func(pass **daemonPass, more bool, err error) {
 		if *pass != nil && (!more || err != nil) {
 			(*pass).end(err)
@@ -504,17 +507,30 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			*pass = c.beginPass(ctx, kind, triggerChained)
 		}
 	}
-	defer func() { settle(&view, false, nil); settle(&previews, false, nil); settle(&parallelism, false, nil) }()
+	defer func() {
+		settle(&view, false, nil)
+		settle(&previews, false, nil)
+		settle(&parallelism, false, nil)
+		settle(&shape, false, nil)
+		settle(&names, false, nil)
+	}()
 	var originsAt time.Time
+	var resumeProjections func()
+	var projectionWaitReason string
+	defer func() {
+		if resumeProjections != nil {
+			resumeProjections()
+		}
+	}()
 	for {
 		workCtx := ctx
-		for _, active := range []*daemonPass{view, previews, parallelism} {
+		for _, active := range []*daemonPass{view, previews, parallelism, shape, names} {
 			if active.active() {
 				workCtx = active.context(ctx)
 				break
 			}
 		}
-		if schedule.wait(ctx, c, &view, &previews, &parallelism) != nil || c.queries.wait(workCtx) != nil {
+		if schedule.wait(ctx, c, &view, &previews, &parallelism, &shape, &names) != nil || c.queries.wait(workCtx) != nil {
 			return
 		}
 		if !c.libraryRefreshStopped() && (c.ingestRuns.Load() == 0 || time.Since(originsAt) >= originsRunInterval) {
@@ -522,6 +538,20 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			originsAt = time.Now()
 		}
 		if c.projectionBatches.Load() > 0 || c.libraryRefreshStopped() {
+			// These passes can have committed a batch before the index took
+			// over. Keep that progress, but do not present the time spent
+			// waiting through its analysis chain as active measurement.
+			reason, detail := "ingest-busy", "source indexing and its follow-up analysis to finish"
+			if c.libraryRefreshStopped() {
+				reason, detail = "search-stopped", "the Search view refresh to resume"
+			}
+			if resumeProjections == nil || projectionWaitReason != reason {
+				if resumeProjections != nil {
+					resumeProjections()
+				}
+				resumeProjections = waitForDaemonPasses(reason, detail, view, previews, parallelism, shape, names)
+				projectionWaitReason = reason
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -529,9 +559,23 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 				continue
 			}
 		}
+		if resumeProjections != nil {
+			resumeProjections()
+			resumeProjections = nil
+		}
 		pass, done, running := c.libraryPass(ctx)
 		if !running {
 			continue
+		}
+		// Names advance even while a large Search projection is catching up.
+		begin(&names, kindNames)
+		var named int
+		var nameErr error
+		names.runIO(pass, func(ctx context.Context) { named, nameErr = c.refreshConversationNames(ctx, 25) })
+		names.worked(named)
+		settle(&names, named > 0, nameErr)
+		if nameErr != nil && pass.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Conversation names: %v\n", nameErr)
 		}
 		begin(&view, "maintenance.library-view")
 		var count int
@@ -540,6 +584,20 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 		c.noteLibraryRefresh(count, err)
 		view.worked(count)
 		settle(&view, count > 0, err)
+		// Session facts must also advance during a large Search refresh. Doing
+		// one conversation between view batches avoids waiting for every dirty
+		// workspace and preview before an upgrade's backfill can even start.
+		if count > 0 && err == nil {
+			begin(&shape, "maintenance.session-shape")
+			var shaped int
+			var shapeErr error
+			shape.runIO(pass, func(ctx context.Context) { shaped, shapeErr = c.refreshSessionShape(ctx, 1, false) })
+			shape.worked(shaped)
+			settle(&shape, shaped > 0, shapeErr)
+			if shapeErr != nil && pass.Err() == nil {
+				fmt.Fprintf(os.Stderr, "Session shape: %v\n", shapeErr)
+			}
+		}
 		wait := time.Duration(0)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -571,11 +629,26 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 					if err != nil && pass.Err() == nil {
 						fmt.Fprintf(os.Stderr, "Parallelism activity: %v\n", err)
 					}
-					wait = 2 * time.Second
-					// Warming only reads; its operation is never published.
-					warm := c.beginPass(ctx, "maintenance.cache-warm", triggerChained)
-					warm.runIO(ctx, func(ctx context.Context) { c.warmCaches(ctx) })
-					warm.end(nil)
+					// Then changed conversations' session shape, likewise.
+					begin(&shape, "maintenance.session-shape")
+					var shaped int
+					shape.runIO(pass, func(ctx context.Context) { shaped, err = c.refreshSessionShape(ctx, sessionShapeBatch, false) })
+					shape.worked(shaped)
+					settle(&shape, shaped > 0, err)
+					if err != nil || shaped == 0 {
+						if err != nil && pass.Err() == nil {
+							fmt.Fprintf(os.Stderr, "Session shape: %v\n", err)
+						}
+						if named > 0 && nameErr == nil && err == nil {
+							done()
+							continue
+						}
+						wait = 2 * time.Second
+						// Warming only reads; its operation is never published.
+						warm := c.beginPass(ctx, "maintenance.cache-warm", triggerChained)
+						warm.runIO(ctx, func(ctx context.Context) { c.warmCaches(ctx) })
+						warm.end(nil)
+					}
 				}
 			}
 		}

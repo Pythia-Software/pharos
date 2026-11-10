@@ -1,4 +1,5 @@
 import type {LabelMessage} from './conversation-labels';
+import {trimTimelineSnippet} from './timeline-preview';
 
 export type AuthorshipPart = {category:string;bytes:number};
 export const callerSources = [
@@ -8,7 +9,7 @@ export const callerSources = [
   {id:'resent',name:'Re-sent',pattern:'diagonal',hint:'Matches text sent previously.'},
   {id:'template',name:'Template',pattern:'grid',hint:'Retained prompt-template classification.'},
   {id:'attachment',name:'Attachment',pattern:'rings',hint:'Attachment or image placeholder.'},
-  {id:'harness',name:'Harness context',pattern:'crosshatch',hint:'Context supplied by the harness.'},
+  {id:'harness',name:'App context',pattern:'crosshatch',hint:'Context supplied by the agent app.'},
   {id:'automated',name:'Automated input',pattern:'dashes',hint:'Recorded as coming from a script or another agent.'},
   {id:'unknown',name:'Unknown origin',pattern:'dots',hint:'No retained authorship classification; user role alone does not establish human writing.'},
 ] as const;
@@ -26,7 +27,7 @@ export function authorshipExcerpt(message:LabelMessage,part:ReturnType<typeof au
   const preview=new TextEncoder().encode(message.text),total=(message.authorship??[]).filter(run=>Number.isFinite(run.bytes)&&run.bytes>0).reduce((sum,run)=>sum+run.bytes,0)||preview.length;
   const start=Math.round(part.start*total),end=Math.round(part.end*total);
   if(start>=preview.length)return null;
-  const text=new TextDecoder().decode(preview.subarray(start,Math.min(end,preview.length))),characters=Array.from(text);
+  const text=trimTimelineSnippet(new TextDecoder().decode(preview.subarray(start,Math.min(end,preview.length)))),characters=Array.from(text);
   return {text:characters.slice(0,240).join(''),truncated:end>preview.length||characters.length>240||!message.authorship&&message.truncated};
 }
 export function authorshipMix(message:LabelMessage):AuthorshipPart[] {

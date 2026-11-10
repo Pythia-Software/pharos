@@ -1,6 +1,9 @@
 package archive
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // One row per most-specific accepted message label, or one coverage row when
 // none exists. Distinct message counts preserve overlapping labels; dirty
@@ -26,14 +29,28 @@ const messageLabelMaskIndexSQL = "CREATE INDEX IF NOT EXISTS message_labels_mask
 
 var messageLabelDataset = messageLabelLiveDataset("")
 
+// messageLabelLiveDataset is messageLabelLiveDatasetFor with the unmarked
+// fallback, for SQL read without the catalog (executionUnmarkedFallbackSQL).
+func messageLabelLiveDataset(conversations string) sqlDataset {
+	return messageLabelLiveDatasetFor(conversations, executionUnmarkedFallbackSQL("message_labels_conversations"))
+}
+
+// Labels of a conversation that is dirty, or whose execution evidence changed
+// without a mark yet (unmarked: executionUnmarkedSQL, "" for none), read as
+// unlabeled: pending, never old attribution presented as current.
+//
 // Restrict both messages and mask decoding when only a pending subset needs
 // live projection. The selector is host-owned SQL, never request text.
-func messageLabelLiveDataset(conversations string) sqlDataset {
+func messageLabelLiveDatasetFor(conversations, unmarked string) sqlDataset {
+	if unmarked != "" {
+		unmarked = "\n AND m.conversation_id NOT IN (" + unmarked + ")"
+	}
 	source := `FROM messages m
  JOIN conversations c ON c.id=m.conversation_id
- LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories repo ON repo.id=w.repository_id
+ LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories repo ON repo.id=w.repository_id` + projectJoin("w") + `
  LEFT JOIN message_authorship ma ON ma.message_id=m.id
  LEFT JOIN message_labels l ON l.message_id=m.id AND EXISTS(SELECT 1 FROM message_labels_conversations complete WHERE complete.conversation_id=m.conversation_id) AND NOT EXISTS(SELECT 1 FROM message_labels_dirty dirty WHERE dirty.conversation_id=m.conversation_id)
+ ` + unmarked + `
  LEFT JOIN message_labels_models lm ON lm.model=l.model
  LEFT JOIN (
  WITH taxonomy AS MATERIALIZED (
@@ -53,7 +70,8 @@ func messageLabelLiveDataset(conversations string) sqlDataset {
 	columns := map[string]string{
 		"id": "m.id||':'||" + label, "message_id": "m.id", "conversation_id": "c.id", "workspace_id": "c.workspace_id",
 		"fingerprint": "c.id", "title": "COALESCE(NULLIF(c.agent_nickname,''),w.title,c.id)", "repository_name": "repo.display_name",
-		"provider": "c.provider", "model": "CASE WHEN m.role IN ('assistant','agent') THEN COALESCE(NULLIF(m.model,''),c.model) ELSE NULL END",
+		"project_name": projectNameSQL("w"),
+		"provider":     "c.provider", "model": "CASE WHEN m.role IN ('assistant','agent') THEN COALESCE(NULLIF(m.model,''),c.model) ELSE NULL END",
 		"day": "date(m.created_at,'localtime')", "week": "date(m.created_at,'localtime','-6 days','weekday 1')", "month": "strftime('%Y-%m',m.created_at,'localtime')", "occurred_at": "m.created_at", "kind": "m.kind", "role": "m.role", "subagent": "c.parent_id IS NOT NULL",
 		"label": label, "family": family, "function_role": "CASE WHEN substr(tag.value,1,1)='P' THEN 'Sender' WHEN substr(tag.value,1,1)='C' THEN 'Receiver' ELSE 'Coverage' END",
 		"label_status": "CASE WHEN tag.value IS NOT NULL THEN 'matched' WHEN l.message_id IS NULL OR lm.model IS NULL THEN 'unlabeled' ELSE 'no_match' END",
@@ -77,20 +95,51 @@ func messageLabelLiveDataset(conversations string) sqlDataset {
 			"lm":   " LEFT JOIN message_labels_models lm ON lm.model=l.model",
 			"w":    " LEFT JOIN workspaces w ON w.id=c.workspace_id",
 			"repo": " LEFT JOIN repositories repo ON repo.id=w.repository_id",
+			"pj":   projectJoin("w"),
 		}, timestamps: map[string]string{"occurred_at": "m.created_at"}, lookups: map[string]bool{"message_id": true, "conversation_id": true, "workspace_id": true}}
 }
 
 // Optional labeling ledgers are created by the background labeler. Querying an
 // unlabelled library must expose its missing coverage without creating tables.
-func (c *Catalog) sqlDatasetFor(dataset string) (sqlDataset, bool) {
-	table, ok := sqlDatasetFor(dataset)
+//
+// Datasets resting on execution evidence read the current unmarked set
+// (executionUnmarkedSQL) when they are routed: it is computed once per source
+// generation and propagation state, and both move the cached-view generation.
+func (c *Catalog) sqlDatasetFor(dataset string) (table sqlDataset, ok bool) {
+	defer func() {
+		if ok {
+			table = withAgentSessionIdentity(dataset, table)
+		}
+	}()
+	ctx := context.Background()
+	table, ok = sqlDatasetFor(dataset)
+	if (dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "agent_event_rates") && ok {
+		// Leave out events resting on superseded execution evidence once the
+		// events ledger exists (agent_events.go); imports alone have none.
+		// Rates leave out the conversation's messages from both sides.
+		if present, err := agentEventsLedgerPresent(ctx, c.reader()); err == nil && present {
+			alias := map[string]string{"agent_events": "e", "agent_event_messages": "a", "agent_event_rates": "f"}[dataset]
+			return withheldAgentEvents(table, alias, agentEventsWithheldSQLFor(ctx, c.reader())), true
+		}
+		return table, ok
+	}
+	if dataset == "compactions" {
+		// Read stored boundaries once they are complete; until then, and in a
+		// catalog opened without Initialize, derive them from message bodies.
+		if ready, err := compactionBoundariesReady(ctx, c.reader()); err == nil && ready {
+			return compactionStoredDataset, true
+		}
+		return table, ok
+	}
 	if dataset != "message_labels" || !ok {
 		return table, ok
 	}
+	unmarked := executionUnmarkedSQL(ctx, c.reader(), "message_labels_conversations")
 	var ready string
 	if err := c.reader().QueryRow("SELECT value FROM meta WHERE key='message_label_facts_ready'").Scan(&ready); err == nil && ready == messageLabelFactsVersion() {
-		return messageLabelStoredDataset(c.hasLabelsLedger()), true
+		return messageLabelStoredDataset(c.hasLabelsLedger(), unmarked), true
 	}
+	table = messageLabelLiveDatasetFor("", unmarked)
 	// Older read-only snapshots need not have the additive index yet. Retain
 	// their valid query path instead of forcing an unavailable index.
 	var indexed int

@@ -16,7 +16,7 @@ import (
 )
 
 func (s *Server) queryTableSchema(dataset string) (querytable.Schema, error) {
-	if _, ok := s.Catalog.sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "safety" && dataset != "parallelism" && dataset != "rhythm" {
+	if _, ok := s.Catalog.sqlDatasetFor(dataset); !ok && dataset != "scatter" && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "people_message_labels" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "safety" && dataset != "fixes" && dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" {
 		return querytable.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 	}
 	document, err := querySchemaDocument(dataset)
@@ -66,6 +66,8 @@ func (s *Server) queryTableRows(ctx context.Context, dataset string, values url.
 
 func (s *Server) queryTableSourceRows(ctx context.Context, dataset string, values url.Values, fields libraryFields, where ...[]querytable.WhereTerm) ([]map[string]any, error) {
 	switch dataset {
+	case "scatter":
+		return s.scatterRows(ctx, fields, where...)
 	case "library":
 		rows, _, err := s.libraryRows(ctx, values, fields, nil, where...)
 		return rows, err
@@ -106,6 +108,9 @@ func (c *Catalog) datasetRows(ctx context.Context, dataset string, fields librar
 		} else {
 			rows, err = c.localUsageRows(ctx)
 		}
+		rows = usageRowsWithin(rows, where)
+	case "people_message_labels":
+		rows, err = c.peopleMessageLabelRows(ctx, fields, where...)
 	case "conversation_activity":
 		rows, err = c.conversationActivityRows(ctx)
 	case "writing":
@@ -116,12 +121,16 @@ func (c *Catalog) datasetRows(ctx context.Context, dataset string, fields librar
 		rows, err = c.cachedTL1AttemptRows(ctx)
 	case "safety":
 		rows, err = c.safetyQueryRows(ctx)
+	case "fixes":
+		rows, err = c.fixesQueryRows(ctx)
 	case "findings":
 		rows, err = c.findingQueryRows(ctx)
 	case "parallelism":
 		rows, err = c.parallelismQueryRows(ctx, fields, where...)
 	case "rhythm":
 		rows, err = c.rhythmQueryRows(ctx, fields, where...)
+	case "session_shape":
+		rows, err = c.sessionShapeQueryRows(ctx, fields, where...)
 	default:
 		return nil, false, nil
 	}
@@ -204,6 +213,10 @@ func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, 
 		return
 	}
 	field := r.URL.Query().Get("field")
+	if dataset == "messages" && (field == "text" || field == "content" || field == "prompt") {
+		writeError(w, fmt.Errorf("message text has no distinct-value list"), http.StatusBadRequest)
+		return
+	}
 	limit := 50
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil {
@@ -355,18 +368,6 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 		return
 	}
 	switch {
-	case dataset == "usage" && operation == "carbon":
-		var request carbonSeriesRequest
-		if err := decoder.Decode(&request); err != nil {
-			writeError(w, fmt.Errorf("carbon json: %w", err), http.StatusBadRequest)
-			return
-		}
-		value, err := s.Catalog.carbonSeries(r.Context(), request)
-		if err != nil {
-			writeError(w, err, http.StatusBadRequest)
-			return
-		}
-		writeJSON(w, value, http.StatusOK)
 	case dataset == "writing" && operation == "series":
 		var request writingSeriesRequest
 		if err := decoder.Decode(&request); err != nil {
@@ -450,13 +451,20 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 // prepareSQLDataset brings the derived table an SQL dataset reads up to date:
 // the tool rollup for tool use, stored request timings for model requests,
 // and for user messages, a classification that is missing or by older rules
-// (see ensureAuthorship).
+// (see ensureAuthorship). Compactions only start their one-time boundary
+// backfill, which runs with the tools stage.
 func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
+	if dataset == "messages" {
+		return nil // canonical messages and any already-recorded authorship
+	}
 	if dataset == "writing_messages" {
 		c.ensureAuthorship()
 		return nil
 	}
-	if dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "message_labels" {
+	if dataset == "compactions" {
+		return c.currentCompactionBoundaries(ctx)
+	}
+	if dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "agent_event_rates" || dataset == "message_labels" {
 		return nil // imported (agent_events.go); nothing to bring up to date
 	}
 	if dataset == "model_requests" {
@@ -500,6 +508,8 @@ func (s *Server) postSQLQueryTable(w http.ResponseWriter, r *http.Request, datas
 			err = s.Catalog.priceToolCalls(result.Rows)
 		case "writing_messages":
 			err = s.Catalog.attachAuthoredText(r.Context(), result.Rows)
+		case "messages":
+			err = s.Catalog.attachMessageText(r.Context(), result.Rows)
 		}
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)

@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 )
@@ -17,9 +18,11 @@ import (
 var queryCacheTables = []string{
 	"hosts", "machines", "host_machines", "origin_observations", "conversation_sightings", "conversation_origins",
 	"repositories", "workspaces", "workspace_names", "work_items", "conversations",
-	"messages", "message_authorship", "message_authorship_spans", "conversation_launches",
+	"messages", "message_authorship", "message_authorship_spans", "conversation_launches", "work_peer_links",
 	"conversation_documents", "conversation_identity_links", "conversation_group_membership",
+	"conversation_name_candidates", "authorship_message_state",
 	"declared_native_aliases", "agent_sessions", "agent_session_usage", "agent_session_messages",
+	"agent_session_token_evidence", "usage_attribution_state",
 	"model_requests", "tool_calls", "tool_ledger_state", "tool_commands", "tool_urls",
 	"skill_usages", "conversation_instructions", "tool_usage_daily", "tool_mirror_workspaces",
 	"cost_changes", "model_aliases", "summaries", "semantic_documents",
@@ -28,10 +31,94 @@ var queryCacheTables = []string{
 	"tl1_installations", "tl1_flavors", "tl1_tasks", "tl1_attempts", "tl1_candidates",
 	"tl1_events", "tl1_review_findings", "tl1_human_touches", "tl1_configuration_health",
 	"agent_events", "agent_event_messages",
+	// Typed execution evidence decides parents, bindings and occurrence
+	// ownership in delegation, quick stats, activity and parallelism; a
+	// backfill writes nothing else. Publication never writes it.
+	"execution_claims", "execution_evidence_state",
+	// One stamp per rebuilt conversation; its facts are written in the same
+	// transaction.
+	"agent_event_fact_conversations",
 	"message_labels", "message_labels_models", "message_labels_conversations", "message_labels_dirty",
 	// Enqueue and publication invalidate the label view once per conversation;
 	// individual fact/membership writes are internal to that atomic refresh.
 	"message_label_facts_dirty",
+}
+
+// queryCacheDomains are the tables only some cached views read: what the
+// labeling and agent-event passes write, one conversation at a time, for
+// hours on a large library. A write to one advances its domain's count as
+// well as the generation, so a view that reads neither (cacheGenerations)
+// is not recomputed after every conversation those passes finish.
+var queryCacheDomains = map[string]string{
+	"message_labels": "labels", "message_labels_models": "labels", "message_labels_conversations": "labels",
+	"message_labels_dirty": "labels", "message_label_facts_dirty": "labels",
+	"agent_events": "events", "agent_event_messages": "events", "agent_event_fact_conversations": "events",
+	// The agent-event ledger is no cached view's source itself; its stamp
+	// triggers (executionDependentsStampTriggers) advance the generation.
+	"agent_events_conversations": "events",
+}
+
+// cacheGenerations are the cached-view generation and, of its advances, how
+// many were writes to a domain's tables alone.
+type cacheGenerations struct{ all, labels, events int64 }
+
+// A view's generation counts the advances that can change it. The whole
+// generation is always safe, and is what an older executable's triggers
+// advance alone.
+const (
+	generationAll    = "all"
+	generationEvents = "events" // everything but label writes
+	generationCore   = "core"   // neither label nor agent-event writes
+	// The whole generation, and the MCP call log, which no trigger counts:
+	// an agent's every call is written there, and counting it would make
+	// every other view stale (queryResultLedgers).
+	generationMCPCalls = "mcp_calls"
+)
+
+func (g cacheGenerations) of(scope string) int64 {
+	switch scope {
+	case generationCore:
+		return g.all - g.labels - g.events
+	case generationEvents:
+		return g.all - g.labels
+	}
+	return g.all
+}
+
+// cacheGenerationsSQL reads cacheGenerations in one statement, so the three
+// counts describe one snapshot. A catalog without the domain table (not yet
+// initialized by this build) fails it; readCacheGenerations falls back.
+const cacheGenerationsSQL = `SELECT value,
+ COALESCE((SELECT value FROM query_cache_domains WHERE name='labels'),0),
+ COALESCE((SELECT value FROM query_cache_domains WHERE name='events'),0)
+ FROM query_cache_generation WHERE id=1`
+
+type rowQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func readCacheGenerations(ctx context.Context, q rowQueryer) (cacheGenerations, error) {
+	var g cacheGenerations
+	err := q.QueryRowContext(ctx, cacheGenerationsSQL).Scan(&g.all, &g.labels, &g.events)
+	if err != nil && strings.Contains(err.Error(), "no such table: query_cache_domains") {
+		g = cacheGenerations{}
+		err = q.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&g.all)
+	}
+	return g, err
+}
+
+// advanceCacheGeneration is for a change no trigger sees (a publication
+// recorded in meta, say): it advances the generation and domain's count,
+// as that domain's triggers do.
+func advanceCacheGeneration(ctx context.Context, tx *sql.Tx, domain string) error {
+	_, err := tx.ExecContext(ctx, "UPDATE query_cache_generation SET value=value+1 WHERE id=1")
+	if err == nil {
+		_, err = tx.ExecContext(ctx, "UPDATE query_cache_domains SET value=value+1 WHERE name=?", domain)
+		if err != nil && strings.Contains(err.Error(), "no such table") {
+			err = nil // the whole generation moved, which every view heeds
+		}
+	}
+	return err
 }
 
 // Re-observing unchanged inputs refreshes these bookkeeping fields without
@@ -60,7 +147,9 @@ func (c *Catalog) ensureQueryCacheGeneration() error {
 	if _, err = tx.Exec(`CREATE TABLE IF NOT EXISTS query_cache_generation (
  id INTEGER PRIMARY KEY CHECK(id=1), value INTEGER NOT NULL);
  INSERT INTO query_cache_generation(id,value) SELECT 1,1
- WHERE NOT EXISTS(SELECT 1 FROM query_cache_generation WHERE id=1)`); err != nil {
+ WHERE NOT EXISTS(SELECT 1 FROM query_cache_generation WHERE id=1);
+ CREATE TABLE IF NOT EXISTS query_cache_domains (name TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
+ INSERT OR IGNORE INTO query_cache_domains(name,value) VALUES('labels',0),('events',0)`); err != nil {
 		return err
 	}
 	old, err := queryMaps(tx, `SELECT name FROM sqlite_schema WHERE type='trigger' AND name GLOB 'query_cache_*'`)
@@ -95,8 +184,12 @@ func (c *Catalog) ensureQueryCacheGeneration() error {
 				when = " WHEN " + strings.Join(changed, " OR ")
 			}
 			// Recreate on Initialize so newly added source columns participate.
+			domain := ""
+			if name := queryCacheDomains[table]; name != "" {
+				domain = " UPDATE query_cache_domains SET value=value+1 WHERE name='" + name + "';"
+			}
 			statement := fmt.Sprintf(`CREATE TRIGGER query_cache_%s_%s AFTER %s ON %s%s
- BEGIN UPDATE query_cache_generation SET value=value+1 WHERE id=1; END`, table, event, event, table, when)
+ BEGIN UPDATE query_cache_generation SET value=value+1 WHERE id=1;%s END`, table, event, event, table, when, domain)
 			if _, err = tx.Exec(statement); err != nil {
 				return err
 			}

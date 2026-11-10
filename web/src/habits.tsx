@@ -1,24 +1,30 @@
+import { EMPTY_QUERY, loadSchema } from "@pythia-software/query-table-core";
+import { schemaDocuments } from "./schema-documents";
+import { habitsQueryContext } from "./dashboard-query-adapters";
+import { createPortal } from "react-dom";
+import { UsageDashboardLinks, useDashboardHeadline } from "./usage-workspace";
+import { habitsAutomationsLink } from "./habits-automations-query";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { DashboardSelect } from "./dashboard-select";
 import { ChartSelect } from "./usage-chart";
 import { preferences } from "./preferences";
 import { useViewState } from "./view-state";
 import { ViewDisclosure } from "./view-disclosure";
-import { initiatorLabels } from "./habits-analysis-catalog";
-import { CreateDashboardCard } from "./create-dashboard-card";
+import { DashboardResultActions } from "./create-dashboard-card";
 import { CalendarChart, DaysChart, PunchcardChart } from "./habits-charts";
-import { habitsCardTitle, readHabitsCardView, type HabitsCardTarget, type HabitsCardView } from "./habits-card";
+import { habitsCardTitle, habitsViews, habitsViewTarget, readHabitsView, readHabitsCardView, type HabitsView, type HabitsCardTarget, type HabitsCardView } from "./habits-card";
 import {
-  defaultHabitsSettings, engagedGaps, formatClock, formatDay, formatGap, formatHours, habitsSettingsKey, healthStats,
+  defaultHabitsSettings, engagedGaps, formatClock, formatDay, formatHours, habitsSettingsKey, healthStats,
   normalizeHabitsSettings, recentWork, punchcardViews, streakActors, streakDays, todayLabel, toggleVacation, validDay,
   type HabitsDay, type HabitsMode, type HabitsSettings, type HabitsSummary, type PunchcardView, type StreakActor,
 } from "./habits-model";
 import "./habits.css";
+import { DashboardLoading } from "./card-loading";
 
 // Habits: streaks, calendars, a punchcard, the shape of your days and the
 // automations that run without you, from the service's summary
-// (/api/habits, internal/archive/habits.go). The catalog views below the
-// panel read the same records (rhythm) by actor and hour.
+// (/api/habits, internal/archive/habits.go). Work Hours explores the same
+// records (rhythm) by actor and hour in the standard catalog dashboard.
 
 const savedSettings = () => normalizeHabitsSettings(preferences().get<unknown>(habitsSettingsKey, defaultHabitsSettings));
 const saveSettings = (settings: HabitsSettings) => preferences().set(habitsSettingsKey, settings);
@@ -50,7 +56,11 @@ function useHabits(mode: HabitsMode, days: number) {
   return { ...state, settings, update };
 }
 
-export function HabitsPanel({ analysis }: { analysis?: React.ReactNode }) {
+// One set of URL-backed controls chooses the chart. Summary cards keep their
+// place above and below it, and share its summary request.
+export function HabitsDashboard() {
+  const headline = useDashboardHeadline();
+  const [chart, setChart] = useViewState<HabitsView>("habits_view", readHabitsView(new URLSearchParams(location.search)));
   const [mode, setMode] = useViewState<HabitsMode>("habits_streak", "all");
   const [weeks, setWeeks] = useViewState<string>("habits_weeks", "53");
   const [calendar, setCalendar] = useViewState<StreakActor>("habits_calendar", "you");
@@ -60,47 +70,48 @@ export function HabitsPanel({ analysis }: { analysis?: React.ReactNode }) {
   const [shapeDays, setShapeDays] = useViewState<string>("habits_shape_days", "28");
   const [selected, setSelected] = useViewState<string>("habits_day", "");
   const { data, error, loading, settings, update } = useHabits(mode, punchcardDays === "all" ? 0 : Number(punchcardDays));
-  if (error && !data) return <p className="query-table-error" role="alert">{error}</p>;
-  if (!data) return <p className="muted" role="status">Loading your habits…</p>;
-  const day = validDay(selected) ? data.days.find(item => item.day === selected) : undefined;
+  const day = validDay(selected) ? data?.days.find(item => item.day === selected) : undefined;
   const cardView: HabitsCardView = { mode, weeks: Number(weeks), calendar, weekends: weekends !== "hide", punchcard: view, range: punchcardDays, shapeDays: Number(shapeDays) };
-  return <HabitsViewContext.Provider value={cardView}><section className="habits-panel" aria-label="Habits" aria-busy={loading}>
-    <div className="habits-streaks-head">
+  const target = habitsViewTarget(chart);
+  return <HabitsViewContext.Provider value={cardView}>
+    {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{habitsCardTitle(target, cardView)}</h2><DashboardResultActions target={target} /></div>, headline) : null}
+    <section className="usage-habits-dashboard habits-panel" aria-label="Habits" aria-busy={loading}>
       <div className="usage-chart-controls habits-controls">
+        <ChartSelect label="View" value={chart} onChange={setChart} options={habitsViews} />
         <ChartSelect label="Streaks count" value={mode} onChange={setMode} options={[["all", "Every day"], ["weekdays", "Weekdays only"]]} />
+        {chart === "calendar" ? <>
+          <ChartSelect label="Whose days" value={calendar} onChange={setCalendar} options={streakActors.map(actor => [actor.id, actor.label])} />
+          <ChartSelect label="Range" ariaLabel="Calendar range" value={weeks} onChange={setWeeks} options={[["13", "Last 13 weeks"], ["26", "Last 26 weeks"], ["53", "Last year"]]} />
+          <ChartSelect label="Weekends" value={weekends} onChange={setWeekends} options={[["show", "Show Saturday and Sunday"], ["hide", "Weekdays only"]]} />
+        </> : chart === "punchcard" ? <>
+          <ChartSelect label="Whose time" ariaLabel="Punchcard time" value={view} onChange={setView} options={punchcardViews} />
+          <ChartSelect label="Range" ariaLabel="Punchcard range" value={punchcardDays} onChange={setPunchcardDays} options={punchcardRanges} />
+        </> : <ChartSelect label="Range" ariaLabel="Your days range" value={shapeDays} onChange={setShapeDays} options={shapeRanges} />}
       </div>
-      <Heading target="habits-streaks" />
-    </div>
-    <Streaks data={data} settings={settings} />
-    <div className="habits-card" data-pharos-target="section:habits-calendar">
-      <Heading target="habits-calendar" />
-      <div className="usage-chart-controls habits-controls">
-        <ChartSelect label="Whose days" value={calendar} onChange={setCalendar} options={streakActors.map(actor => [actor.id, actor.label])} />
-        <ChartSelect label="Range" ariaLabel="Calendar range" value={weeks} onChange={setWeeks} options={[["13", "Last 13 weeks"], ["26", "Last 26 weeks"], ["53", "Last year"]]} />
-        <ChartSelect label="Weekends" value={weekends} onChange={setWeekends} options={[["show", "Show Saturday and Sunday"], ["hide", "Weekdays only"]]} />
-      </div>
-      <p className="muted">{streakActors.find(actor => actor.id === calendar)?.rule(settings)} Each square is a day; darker is more time. Click a day for its details, or to mark it as a vacation day.</p>
-      <div className="habits-calendar-row">
-        <CalendarChart data={data} actor={calendar} weeks={Number(weeks)} weekends={weekends !== "hide"} selected={day?.day ?? ""} onSelect={setSelected} />
-        <DayDetail data={data} day={day} settings={settings} onSelect={setSelected} onVacation={() => day && update(toggleVacation(settings, day.day))} />
-      </div>
-    </div>
-    <Health data={data} />
-    <div className="habits-pair habits-charts-pair">
-      <Punchcard data={data} view={view} onView={setView} days={punchcardDays} onDays={setPunchcardDays} />
-      <WorkdayShape data={data} days={Number(shapeDays)} onDays={setShapeDays} />
-    </div>
-    {analysis}
-    <p className="usage-dashboard-note">Your time is estimated from the messages you typed: each one adds its typing time, and messages within {settings.engagedGap} minutes join one engaged block. Agent turns are split by whether you were engaged and by who started them. {data.coverage.unmatched_turns ? `${data.coverage.unmatched_turns.toLocaleString()} of ${data.coverage.turns.toLocaleString()} turns have no prompt to read who started them; they count as unattended.` : ""}</p>
-    <Automations data={data} />
-    <HabitsSettingsPanel settings={settings} onChange={update} />
-  </section></HabitsViewContext.Provider>;
+      {!data ? error ? <p className="query-table-error" role="alert">{error}</p> : <DashboardLoading spec={{ kind: chart === "days" ? "columns" : "heatmap", count: 24 }} /> : <>
+        <div><Heading target="habits-streaks" /><Streaks data={data} settings={settings} /></div>
+        {chart === "calendar" ? <div className="habits-card" data-pharos-target="section:habits-calendar">
+          <Heading target="habits-calendar" primary />
+          <p className="muted">{streakActors.find(actor => actor.id === calendar)?.rule(settings)} Each square is a day; darker is more time. Click a day for its details, or to mark it as a vacation day.</p>
+          <div className="habits-calendar-row">
+            <CalendarChart data={data} actor={calendar} weeks={Number(weeks)} weekends={weekends !== "hide"} selected={day?.day ?? ""} onSelect={setSelected} />
+            <DayDetail data={data} day={day} settings={settings} onSelect={setSelected} onVacation={() => day && update(toggleVacation(settings, day.day))} />
+          </div>
+        </div> : chart === "punchcard" ? <Punchcard data={data} view={view} /> : <WorkdayShape data={data} days={Number(shapeDays)} />}
+        <Health data={data} />
+        <p className="usage-dashboard-note">Your time is estimated from the messages you typed: each one adds its typing time, and messages within {settings.engagedGap} minutes join one engaged block. Agent turns are split by whether you were engaged and by who started them. {data.coverage.unmatched_turns ? `${data.coverage.unmatched_turns.toLocaleString()} of ${data.coverage.turns.toLocaleString()} turns have no prompt to read who started them; they count as unattended.` : ""}</p>
+        <UsageDashboardLinks dataset="rhythm" schema={loadSchema(schemaDocuments.rhythm)} query={EMPTY_QUERY} context={habitsQueryContext(data, chart, cardView, day?.day)} extra={habitsAutomationsLink(data, new URLSearchParams(location.search))} />
+        <HabitsSettingsPanel settings={settings} onChange={update} />
+      </>}
+    </section>
+  </HabitsViewContext.Provider>;
 }
 
 // A section's heading, with the standard control that makes it a Home card.
-function Heading({ target }: { target: HabitsCardTarget }) {
-  const view = useContext(HabitsViewContext);
-  return <div className="habits-card-title"><h3>{habitsCardTitle(target, view)}</h3><CreateDashboardCard target={target} /></div>;
+function Heading({ target, primary = false }: { target: HabitsCardTarget; primary?: boolean }) {
+  const view = useContext(HabitsViewContext), headline = useDashboardHeadline();
+  if (primary && headline) return null;
+  return <div className="habits-card-title"><h3>{habitsCardTitle(target, view)}</h3><DashboardResultActions target={target} /></div>;
 }
 
 // Your streak only: agents and automatic runs have their calendars below.
@@ -133,23 +144,18 @@ function DayDetail({ data, day, settings, onSelect, onVacation }: { data: Habits
 const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
 const punchcardRanges: Array<[string, string]> = [["7", "Last 7 days"], ["30", "Last 30 days"], ["90", "Last 90 days"], ["365", "Last year"], ["all", "All time"]];
-function Punchcard({ data, view, onView, days, onDays }: { data: HabitsSummary; view: PunchcardView; onView: (view: PunchcardView) => void; days: string; onDays: (days: string) => void }) {
+function Punchcard({ data, view }: { data: HabitsSummary; view: PunchcardView }) {
   return <div className="habits-card" data-pharos-target="section:habits-punchcard">
-    <Heading target="habits-punchcard" />
-    <div className="usage-chart-controls habits-controls">
-      <ChartSelect label="Whose time" ariaLabel="Punchcard time" value={view} onChange={onView} options={punchcardViews} />
-      <ChartSelect label="Range" ariaLabel="Punchcard range" value={days} onChange={onDays} options={punchcardRanges} />
-    </div>
+    <Heading target="habits-punchcard" primary />
     <p className="muted">Minutes per week in each hour, {formatDay(data.punchcard.from)} to {formatDay(data.punchcard.to)}.{view === "difference" ? " Filled is more agent time than yours; hollow, more of yours." : ""} Colours are the time of day.</p>
     <div className="habits-scroll"><PunchcardChart data={data} view={view} /></div>
   </div>;
 }
 
 const shapeRanges: Array<[string, string]> = [["7", "Last 7 days"], ["14", "Last 14 days"], ["28", "Last 28 days"], ["56", "Last 56 days"], ["90", "Last 90 days"]];
-function WorkdayShape({ data, days, onDays }: { data: HabitsSummary; days: number; onDays: (days: string) => void }) {
+function WorkdayShape({ data, days }: { data: HabitsSummary; days: number }) {
   return <div className="habits-card" data-pharos-target="section:habits-days">
-    <Heading target="habits-days" />
-    <div className="usage-chart-controls habits-controls"><ChartSelect label="Range" ariaLabel="Your days range" value={String(days)} onChange={onDays} options={shapeRanges} /></div>
+    <Heading target="habits-days" primary />
     <p className="muted">The faint bar runs from your first engaged minute to your last; the solid pieces are when you were engaged, coloured by time of day.</p>
     <DaysChart data={data} count={days} />
   </div>;
@@ -169,28 +175,6 @@ function Health({ data }: { data: HabitsSummary }) {
     </div>
   </section>;
 }
-
-function Automations({ data }: { data: HabitsSummary }) {
-  const days = useMemo(() => { const result: string[] = []; for (let day = data.punchcard.from; day <= data.punchcard.to; day = shift(day)) result.push(day); return result.slice(-400); }, [data.punchcard]);
-  if (!data.automations.length) return <div className="habits-card" data-pharos-target="section:habits-automations"><Heading target="habits-automations" /><p className="muted">No agent runs started by a schedule, script, orchestrator or another agent in this range.</p></div>;
-  return <div className="habits-card" data-pharos-target="section:habits-automations">
-    <Heading target="habits-automations" />
-    <p className="muted">What started agents without a message from you, {formatDay(data.punchcard.from)} to {formatDay(data.punchcard.to)}. A scheduled run is missed when a gap is more than twice its usual one.</p>
-    <div className="habits-scroll"><table className="habits-automations">
-      <thead><tr><th scope="col">Started by</th><th scope="col">Kind</th><th scope="col">Runs</th><th scope="col">Days</th><th scope="col">Agent time</th><th scope="col">Cadence</th><th scope="col">Missed</th><th scope="col">Last run</th><th scope="col">Daily runs</th></tr></thead>
-      <tbody>{data.automations.map(item => {
-        const largest = Math.max(1, ...Object.values(item.daily));
-        return <tr key={`${item.initiator}:${item.label}`}>
-          <th scope="row">{item.label}</th><td>{initiatorLabels[item.initiator] ?? item.initiator}</td><td>{item.runs.toLocaleString()}</td><td>{item.active_days}</td>
-          <td>{item.agent_hours.toFixed(1)} h</td><td>{formatGap(item.median_gap_ms)}</td><td>{item.initiator === "scheduled" ? item.missed : "—"}</td>
-          <td>{item.last_run ? new Date(item.last_run).toLocaleDateString() : "—"}</td>
-          <td><svg width={days.length * 2} height={14} aria-hidden="true">{days.map((day, index) => item.daily[day] ? <rect key={day} x={index * 2} y={14 - Math.max(2, 14 * item.daily[day] / largest)} width={2} height={Math.max(2, 14 * item.daily[day] / largest)} className="habits-strip" /> : null)}</svg></td>
-        </tr>;
-      })}</tbody>
-    </table></div>
-  </div>;
-}
-const shift = (day: string) => { const date = new Date(`${day}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + 1); return date.toISOString().slice(0, 10); };
 
 function HabitsSettingsPanel({ settings, onChange }: { settings: HabitsSettings; onChange: (settings: HabitsSettings) => void }) {
   const set = <K extends keyof HabitsSettings>(key: K, value: HabitsSettings[K]) => onChange(normalizeHabitsSettings({ ...settings, [key]: value }));

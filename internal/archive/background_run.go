@@ -15,6 +15,8 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 	switch id {
 	case "search":
 		return s.Catalog.backgroundSearch(ctx)
+	case "fingerprints":
+		return s.runFingerprintPass(ctx)
 	case "other-sources":
 		names := s.backgroundInputsFor(ctx, nil).otherSources
 		return s.backgroundCapture(ctx, op, "sources", names)
@@ -36,25 +38,18 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 	case "backup":
 		return s.backgroundBackup(ctx, op)
 	case "writing-refine":
+		if s.work.declares(kindRefine) {
+			// The runner's execution is the refinement's operation.
+			return s.work.runRefineWork(ctx, backgroundExplicit(ctx))
+		}
 		ctx, child := op.Child(OperationSpec{Kind: "analysis.authorship.refine", Trigger: triggerChained})
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		child.setStopper(cancel)
 		ctx = withWorkProgress(ctx, child.mirrorWork)
-		err := s.Catalog.RefineAuthorship(ctx)
+		err := s.Catalog.refineAuthorship(ctx, false)
 		child.Finish(err)
-		if err != nil {
-			return err
-		}
-		// Refinement can change the human spans consumed by downstream work.
-		return s.Catalog.writeTransaction(ctx, "schedule refined writing consumers", func(tx *sql.Tx) error {
-			for _, name := range []string{"labels", "findings"} {
-				if err := markSyncDeferredStage(tx, name); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
+		return err
 	case "suggestions":
 		ctx, child := op.Child(OperationSpec{Kind: "ask.suggestions", Trigger: triggerChained})
 		err := s.refreshAskSuggestions(ctx)
@@ -91,7 +86,7 @@ func (s *Server) captureAndIndex(ctx context.Context, op *Op, names []string) er
 		op.Step("Capture this Mac", "", -1)
 		summary, err := Capture(ctx, config, sources, func(result CaptureSourceResult) {
 			work := captureWork(result)
-			op.progress(work.Phase, result.Name, work.Unit, work.Done, work.Total, work.TotalKnown)
+			op.progress(work.Phase, result.Name, work.Unit, work.Done, work.Total, work.TotalKnown, work.Detail)
 		})
 		if err != nil {
 			return err
@@ -113,7 +108,9 @@ func (s *Server) captureAndIndex(ctx context.Context, op *Op, names []string) er
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		result := s.Catalog.IndexCapture(withIngestMode(ctx, ingestMode{deferGit: true}), target, nil)
+		result := s.Catalog.admittedIngest(ctx, target.Source, target.Host.ID, func(ctx context.Context) IngestResult {
+			return s.Catalog.IndexCapture(withIngestMode(ctx, ingestMode{deferGit: true}), target, nil)
+		})
 		op.Advance(1)
 		wrote = wrote || result.Workspaces > 0
 		if result.Error != nil && failure == nil {

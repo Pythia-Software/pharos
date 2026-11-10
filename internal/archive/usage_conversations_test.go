@@ -78,7 +78,7 @@ func TestUsageWholeConversationOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lineage, err := catalog.usageConversationRoots(ledger)
+	lineage, err := catalog.usageConversationRoots(t.Context(), ledger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestUsageSessionRoles(t *testing.T) {
 	run(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,parent_id,kind,provider) VALUES('child','work','parent','child','s-parent','subagent','codex')`)
 	run(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,parent_id,kind,provider) VALUES('grandchild','work','parent','grandchild','child','subagent','codex')`)
 	run(`INSERT INTO conversation_launches(child_id,parent_id,tool_call_id,program) VALUES('launched','launch-parent','launch','codex')`)
-	lineage, err := catalog.usageConversationRoots(nil)
+	lineage, err := catalog.usageConversationRoots(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

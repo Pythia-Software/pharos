@@ -8,6 +8,36 @@ The machine-readable companion [homepage-query-cards.json](homepage-query-cards.
 
 The [destination audit](homepage-card-destinations.md) records the direct-dashboard navigation contract for every active card.
 
+## Recent conversations
+
+Below the Dashboard Catalog, Home shows up to ten recent top-level conversations
+using the Library card frame and compact message previews. Each title opens that
+specific conversation; **Search conversations** opens the Library's conversation
+view. These entries are navigation aids, with no collection or pin actions.
+
+`GET /api/library/recent-conversations` takes at most 200 active top-level
+conversation records through `conversations_recent_idx`, ordered by ended/start
+time, before reading stored `conversation_documents`. Known command-launched
+helpers are excluded before this limit. Indexed parent and command-launch links
+connect descendants across workspaces; embedded sessions on each descendant also
+contribute to depth. Codex filename continuations add no helper level. Traversal
+is capped at 10,000 conversation records across the candidate families; exceeding
+the cap leaves discovery unavailable rather than displaying incomplete depths.
+The query checks the optional conversation completion and dirty ledgers only
+when message labels or agent events are on.
+A completed pass with no detected events still counts as processed. Dirty
+conversations and zero-unit labeling passes do not receive the completion boost.
+The request never reads message bodies, derives metrics, or runs inference, and
+has a 1.5-second budget independent of dashboard previews.
+
+Selection favors completed enrichment, unseen repositories/providers/models and
+different depths, reserving roughly half the places for conversations with
+sub-agents when available in the candidate pool. The last 30 days of library
+activity supply the pool, extended to ten candidates for sparse/older libraries.
+These are preferences within the bounded pool, rather than catalog-wide quotas.
+Results are deterministic for unchanged inputs and refresh when Home becomes
+active or receives the existing data-refresh notifications.
+
 ## Card library and editing (October 2026)
 
 Analyze dashboards also offer **Create card** above the chart. Give the card a title and description to add it to your Home collection. Its canonical dashboard URL retains the chart, population filters, legend selection and time intent. Home runs the same analysis/trend models for its live preview; relative ranges and Today advance when refreshed, while custom fixed ranges stay fixed. Carbon and Parallelism cards retain their selected assumptions. These custom cards use the collection’s existing rename, description, reorder, refresh and remove actions; change the chart by opening its dashboard and creating another card.

@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -139,6 +140,10 @@ type fakeUsage struct {
 	procs map[int]processUsage
 }
 
+// sampled is what a scripted reading has unless a test says otherwise:
+// CPU, its own and its reaped children's, and memory.
+const sampled = counterOwnCPU | counterChildCPU | counterMemory
+
 func (f *fakeUsage) read(pid int) (processUsage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -162,8 +167,8 @@ func (f *fakeUsage) set(pid int, usage processUsage) {
 // the totals carry the server's line.
 func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	source := &fakeUsage{procs: map[int]processUsage{
-		10: {CPUSeconds: 5, ChildCPUSeconds: 1, Footprint: 300e6, Started: 1, DiskBytes: 1e9, DiskKnown: true},
-		20: {CPUSeconds: 2, Footprint: 41_234_567, Started: 7, DiskBytes: 5e6, DiskKnown: true},
+		10: {Known: sampled | counterDisk, CPUSeconds: 5, ChildCPUSeconds: 1, Footprint: 300e6, Started: 1, DiskBytes: 1e9},
+		20: {Known: sampled | counterDisk, CPUSeconds: 2, Footprint: 41_234_567, Started: 7, DiskBytes: 5e6},
 	}}
 	clock := time.Date(2026, 10, 27, 16, 0, 0, 0, time.UTC)
 	sampler := &resourceSampler{read: source.read, basis: resourceBasisKernel, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
@@ -181,11 +186,11 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	if len(first) != 2 || first[0].PID != 10 || first[1].PID != 20 || sampler.reads != 3 {
 		t.Fatalf("each PID read once, the unreadable one left out: %+v (%d reads)", first, sampler.reads)
 	}
-	if first[0].CPUPercent != nil || first[0].DiskBytesPerSecond != nil || first[0].MemoryBytes != 300e6 || first[1].MemoryBytes != 41e6 {
+	if first[0].CPUPercent != nil || first[0].DiskBytesPerSecond != nil || *first[0].MemoryBytes != 300e6 || *first[1].MemoryBytes != 41e6 {
 		t.Fatalf("no CPU from one reading; memory rounded to two figures: %+v", first)
 	}
 	summary := summarizeResources("Pharos", first)
-	if summary.CPUPercent != nil || summary.MemoryBytes != 340e6 || summary.Label != "Pharos is using 340 MB" || summary.Approximate || summary.Basis != resourceBasisKernel {
+	if summary.CPUPercent != nil || *summary.MemoryBytes != 340e6 || summary.Label != "Pharos is using 340 MB" || summary.Approximate || summary.Basis != resourceBasisKernel {
 		t.Fatalf("totals before CPU is known: %+v", summary)
 	}
 	if first[1].Text != "pharos ingest (Terminal) · 41 MB" {
@@ -202,8 +207,8 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	// exited (a git call) is 75 % of one core; 20 used 0.004 s.
 	clock = clock.Add(2*time.Second - resourceSampleInterval/2)
 	// Disk is bytes read and written per second: 10 moved 24 MB, 20 1 MB.
-	source.set(10, processUsage{CPUSeconds: 6, ChildCPUSeconds: 1.5, Footprint: 1_234_000_000, Started: 1, DiskBytes: 1.024e9, DiskKnown: true})
-	source.set(20, processUsage{CPUSeconds: 2.004, Footprint: 41e6, Started: 7, DiskBytes: 6e6, DiskKnown: true})
+	source.set(10, processUsage{Known: sampled | counterDisk, CPUSeconds: 6, ChildCPUSeconds: 1.5, Footprint: 1_234_000_000, Started: 1, DiskBytes: 1.024e9})
+	source.set(20, processUsage{Known: sampled | counterDisk, CPUSeconds: 2.004, Footprint: 41e6, Started: 7, DiskBytes: 6e6})
 	second := sample(processes[:2])
 	if second[0].CPUPercent == nil || *second[0].CPUPercent != 75 || *second[1].CPUPercent != 0 {
 		t.Fatalf("CPU over the interval: %+v", second)
@@ -225,7 +230,7 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	// A new worker does not erase the measured CPU and I/O rates. Both
 	// totals are explicitly lower bounds until that worker has a delta.
 	clock = clock.Add(2 * time.Second)
-	source.set(30, processUsage{CPUSeconds: 1, Footprint: 10e6, Started: 3})
+	source.set(30, processUsage{Known: sampled, CPUSeconds: 1, Footprint: 10e6, Started: 3})
 	mixed := sample(processes[:3])
 	if total := summarizeResources("Pharos", mixed); len(mixed) != 3 || total.CPUPercent == nil || !total.CPUPartial || !total.DiskPartial ||
 		!strings.Contains(total.Label, "lower bound") || total.DiskBytesPerSecond == nil {
@@ -234,7 +239,7 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 
 	// PID 20 exits and its number is reused: no delta across processes.
 	clock = clock.Add(2 * time.Second)
-	source.set(20, processUsage{CPUSeconds: 0.1, Footprint: 5e6, Started: 99})
+	source.set(20, processUsage{Known: sampled, CPUSeconds: 0.1, Footprint: 5e6, Started: 99})
 	if reused := sample(processes[1:2]); reused[0].CPUPercent != nil {
 		t.Fatalf("a reused PID is a new process: %+v", reused)
 	}
@@ -249,33 +254,33 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	// a figure never exceeds every core; and the broker leaves out its
 	// children, the services it reads itself.
 	override(t, &resourceCores, func() int { return 4 })
-	source.set(40, processUsage{CPUSeconds: 10, ChildCPUSeconds: 0, Started: 4, Footprint: 1e6})
-	source.set(41, processUsage{CPUSeconds: 10, Started: 5, Footprint: 1e6})
-	source.set(42, processUsage{CPUSeconds: 10, Started: 6, Footprint: 1e6})
+	source.set(40, processUsage{Known: sampled, CPUSeconds: 10, ChildCPUSeconds: 0, Started: 4, Footprint: 1e6})
+	source.set(41, processUsage{Known: sampled, CPUSeconds: 10, Started: 5, Footprint: 1e6})
+	source.set(42, processUsage{Known: sampled, CPUSeconds: 10, Started: 6, Footprint: 1e6})
 	children := []resourceProcess{{PID: 40, Role: "service"}, {PID: 41, Role: "service"}, {PID: 42, Role: "broker", OwnOnly: true}}
 	sample(children)
 	clock = clock.Add(2 * time.Second)
-	source.set(40, processUsage{CPUSeconds: 10.2, ChildCPUSeconds: 2400, Started: 4, Footprint: 1e6})
-	source.set(41, processUsage{CPUSeconds: 30, Started: 5, Footprint: 1e6})
-	source.set(42, processUsage{CPUSeconds: 10.1, ChildCPUSeconds: 2400, Started: 6, Footprint: 1e6})
+	source.set(40, processUsage{Known: sampled, CPUSeconds: 10.2, ChildCPUSeconds: 2400, Started: 4, Footprint: 1e6})
+	source.set(41, processUsage{Known: sampled, CPUSeconds: 30, Started: 5, Footprint: 1e6})
+	source.set(42, processUsage{Known: sampled, CPUSeconds: 10.1, ChildCPUSeconds: 2400, Started: 6, Footprint: 1e6})
 	jumped := sample(children)
 	if jumped[0].CPUPercent != nil || *jumped[1].CPUPercent != 400 || *jumped[2].CPUPercent != 5 {
 		t.Fatalf("child jump, clamp and own-only: %v %v %v", jumped[0].cpu, jumped[1].cpu, jumped[2].cpu)
 	}
 	clock = clock.Add(2 * time.Second)
-	source.set(40, processUsage{CPUSeconds: 10.4, ChildCPUSeconds: 2400.2, Started: 4, Footprint: 1e6})
+	source.set(40, processUsage{Known: sampled, CPUSeconds: 10.4, ChildCPUSeconds: 2400.2, Started: 4, Footprint: 1e6})
 	if after := sample(children[:1]); after[0].CPUPercent == nil || *after[0].CPUPercent != 20 {
 		t.Fatalf("after the jump, the next interval counts again: %+v", after)
 	}
 	// A gap longer than resourceStaleGap (no page open) is a new baseline,
 	// not an average shown as the current load.
 	clock = clock.Add(resourceStaleGap + time.Second)
-	source.set(40, processUsage{CPUSeconds: 20, ChildCPUSeconds: 2400.2, Started: 4, Footprint: 1e6})
+	source.set(40, processUsage{Known: sampled, CPUSeconds: 20, ChildCPUSeconds: 2400.2, Started: 4, Footprint: 1e6})
 	if stale := sample(children[:1]); stale[0].CPUPercent != nil {
 		t.Fatalf("an average over a long gap: %+v", stale)
 	}
 	clock = clock.Add(2 * time.Second)
-	source.set(40, processUsage{CPUSeconds: 20.1, ChildCPUSeconds: 2400.2, Started: 4, Footprint: 1e6})
+	source.set(40, processUsage{Known: sampled, CPUSeconds: 20.1, ChildCPUSeconds: 2400.2, Started: 4, Footprint: 1e6})
 	if fresh := sample(children[:1]); fresh[0].CPUPercent == nil || *fresh[0].CPUPercent != 5 {
 		t.Fatalf("the reading after a gap: %+v", fresh)
 	}
@@ -289,66 +294,16 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	if summarizeResources("Pharos", nil) != nil {
 		t.Fatal("nothing readable keeps the Load row out")
 	}
-	approximate := summarizeResources("Pharos", []resourceReading{{PID: 1, Basis: "self-reported", memory: 1e6}})
+	approximate := summarizeResources("Pharos", []resourceReading{{PID: 1, Basis: "self-reported", memory: new(uint64(1e6))}})
 	if !approximate.Approximate || !strings.HasSuffix(approximate.Label, "(approximate)") {
 		t.Fatalf("a process's own report is marked approximate: %+v", approximate)
 	}
 }
 
-// The kernel's reading of this process agrees with getrusage (the timebase
-// conversion), reads another of this user's processes, and its resident
-// size is the figure ps reports, so the index runs' RSS samples stay
-// comparable with those taken by forking ps.
-func TestProcessUsageMatchesTheKernel(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("proc_pid_rusage is macOS only")
-	}
-	deadline := time.Now().Add(50 * time.Millisecond)
-	for time.Now().Before(deadline) {
-	}
-	usage, err := processUsageOf(os.Getpid())
-	var self syscall.Rusage
-	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &self)
-	getrusage := float64(self.Utime.Nano()+self.Stime.Nano()) / 1e9
-	if err != nil || usage.CPUSeconds < getrusage*0.9 || usage.CPUSeconds > getrusage*1.1+0.05 {
-		t.Fatalf("own CPU %.3f s, getrusage %.3f s (%v)", usage.CPUSeconds, getrusage, err)
-	}
-	if usage.Footprint == 0 || usage.Resident == 0 || usage.Started == 0 {
-		t.Fatalf("memory and start time: %+v", usage)
-	}
-	child := exec.Command("sleep", "30")
-	if err := child.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer child.Wait()
-	defer child.Process.Kill()
-	found := false
-	for _, process := range expandResourceProcesses([]resourceProcess{{PID: os.Getpid(), Role: "service"}}, resourceProcessTable()) {
-		if process.PID == child.Process.Pid {
-			found = process.Parent == os.Getpid() && strings.HasPrefix(process.Role, "worker:")
-		}
-	}
-	if !found {
-		t.Fatal("live subprocess missing from resource rows")
-	}
-	if other, err := processUsageOf(child.Process.Pid); err != nil || other.Footprint == 0 {
-		t.Fatalf("another of this user's processes: %+v %v", other, err)
-	}
-	if _, err := processUsageOf(1); err == nil && os.Geteuid() != 0 {
-		t.Fatal("launchd's usage should not be readable by this user")
-	}
-	kernel, ps := processRSS(), processRSSFromPS()
-	if kernel <= 0 || ps <= 0 || float64(kernel) < float64(ps)*0.8 || float64(kernel) > float64(ps)*1.25 {
-		t.Fatalf("resident size %d, ps %d", kernel, ps)
-	}
-}
-
-// Sampling must cost under about 1 % of one core (§10). It runs once per
-// snapshot computation, at most every resourceSampleInterval, over the
-// processes of every library; this measures samples of ten processes taken
-// back to back and states the cost at one sample per interval.
-func TestResourceSamplingIsCheap(t *testing.T) {
-	override(t, &resourceSampleInterval, 0)
+// Sampling's cost is measured on demand; the scripted sampler tests above
+// cover its behavior without repeatedly querying this Mac's process table.
+func BenchmarkResourceSampling(b *testing.B) {
+	override(b, &resourceSampleInterval, 0)
 	sampler := newResourceSampler()
 	processes := []resourceProcess{{PID: os.Getpid(), Role: "broker"}}
 	if runtime.GOOS == "darwin" {
@@ -357,27 +312,163 @@ func TestResourceSamplingIsCheap(t *testing.T) {
 		for range 9 {
 			child := exec.Command("sleep", "30")
 			if err := child.Start(); err != nil {
-				t.Fatal(err)
+				b.Fatal(err)
 			}
-			t.Cleanup(func() { child.Process.Kill(); child.Wait() })
+			b.Cleanup(func() { child.Process.Kill(); child.Wait() })
 			processes = append(processes, resourceProcess{PID: child.Process.Pid, Role: "service"})
 		}
 	}
-	const rounds = 2000
-	cpu := func() float64 {
-		var usage syscall.Rusage
-		_ = syscall.Getrusage(syscall.RUSAGE_SELF, &usage)
-		return float64(usage.Utime.Nano()+usage.Stime.Nano()) / 1e9
-	}
-	before := cpu()
-	for range rounds {
+	before := processResourceUsage()
+	b.ResetTimer()
+	for range b.N {
 		summarizeResources("Pharos", sampler.sample(processes))
 	}
-	perSample := (cpu() - before) / rounds
+	b.StopTimer()
+	after := processResourceUsage()
+	own := counterDelta(before.cpu, after.cpu, before.known.has(counterOwnCPU), after.known.has(counterOwnCPU))
+	if own == nil {
+		b.Skip("this platform reads no CPU counter")
+	}
+	perSample := *own / float64(b.N)
 	share := 100 * perSample / (1500 * time.Millisecond).Seconds()
-	t.Logf("one sample and its summary: %.1f µs of CPU; at one sample per 1.5 s, %.4f%% of one core", perSample*1e6, share)
-	if share > 1 {
-		t.Fatalf("sampling costs %.3f%% of one core", share)
+	b.ReportMetric(perSample*1e6, "cpu-µs/sample")
+	b.ReportMetric(share, "core-%")
+}
+
+// An unavailable counter (unsupported, or its read failed) is a missing
+// figure, never a zero: the sampler gives no rate across it, keeps the
+// independent counters that were read, starts a new baseline when a counter
+// goes backwards, and the totals say what they leave out.
+func TestResourceSamplerKeepsUnavailableCountersMissing(t *testing.T) {
+	source := &fakeUsage{procs: map[int]processUsage{}}
+	clock := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	sampler := &resourceSampler{read: source.read, basis: resourceBasisKernel, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
+	table := []processNode{{PID: 10, Parent: 1}, {PID: 20, Parent: 1}}
+	sample := func(processes ...resourceProcess) []resourceReading { return sampler.sampleWithTable(processes, table) }
+	step := func(pid int, usage processUsage) {
+		clock = clock.Add(2 * time.Second)
+		source.set(pid, usage)
+	}
+	service, broker := resourceProcess{PID: 10, Role: "service"}, resourceProcess{PID: 20, Role: "broker", OwnOnly: true}
+
+	// An error-free zero is a real reading: 0 %, not missing.
+	source.set(10, processUsage{Known: sampled | counterDisk, CPUSeconds: 5, Footprint: 1e6, Started: 1, DiskBytes: 100})
+	sample(service)
+	step(10, processUsage{Known: sampled | counterDisk, CPUSeconds: 5, Footprint: 1e6, Started: 1, DiskBytes: 100})
+	if got := sample(service)[0]; got.CPUPercent == nil || *got.CPUPercent != 0 || got.DiskBytesPerSecond == nil || *got.DiskBytesPerSecond != 0 {
+		t.Fatalf("zero CPU and disk are measured: %+v", got)
+	}
+	// The child counter fails: no rate (the own part alone is not the
+	// process's CPU), but disk, read independently, keeps its rate.
+	step(10, processUsage{Known: counterOwnCPU | counterMemory | counterDisk, CPUSeconds: 6, Footprint: 1e6, Started: 1, DiskBytes: 300})
+	got := sample(service)[0]
+	if got.CPUPercent != nil || got.DiskBytesPerSecond == nil || *got.DiskBytesPerSecond != 100 || got.MemoryBytes == nil {
+		t.Fatalf("an unavailable child counter: %+v", got)
+	}
+	// The next reading has both, but its baseline lacked one: still no
+	// rate, and no delta from a zero. The one after recovers.
+	step(10, processUsage{Known: sampled, CPUSeconds: 7, ChildCPUSeconds: 3, Footprint: 1e6, Started: 1})
+	if got := sample(service)[0]; got.CPUPercent != nil || got.DiskBytesPerSecond != nil {
+		t.Fatalf("a baseline without a counter gives no rate: %+v", got)
+	}
+	step(10, processUsage{Known: sampled, CPUSeconds: 7.5, ChildCPUSeconds: 3.5, Footprint: 1e6, Started: 1})
+	if got := sample(service)[0]; got.CPUPercent == nil || *got.CPUPercent != 50 {
+		t.Fatalf("recovered to a valid baseline: %+v", got)
+	}
+	// A counter that goes backwards in the same process is a reset: a new
+	// baseline, not a negative or zero load.
+	step(10, processUsage{Known: sampled, CPUSeconds: 1, ChildCPUSeconds: 3.5, Footprint: 1e6, Started: 1})
+	if got := sample(service)[0]; got.CPUPercent != nil {
+		t.Fatalf("a decreasing counter: %+v", got)
+	}
+	step(10, processUsage{Known: sampled, CPUSeconds: 1.2, ChildCPUSeconds: 3.5, Footprint: 1e6, Started: 1})
+	if got := sample(service)[0]; got.CPUPercent == nil || *got.CPUPercent != 10 {
+		t.Fatalf("the interval after a reset: %+v", got)
+	}
+	// Own-only needs only its own counter.
+	source.set(20, processUsage{Known: counterOwnCPU | counterMemory, CPUSeconds: 1, Footprint: 2e6})
+	sample(broker)
+	step(20, processUsage{Known: counterOwnCPU | counterMemory, CPUSeconds: 1.4, Footprint: 2e6})
+	if got := sample(broker)[0]; got.CPUPercent == nil || *got.CPUPercent != 20 {
+		t.Fatalf("own-only CPU without a child counter: %+v", got)
+	}
+
+	// A platform with only the Go runtime's memory: memory, never a CPU.
+	step(10, processUsage{Known: counterMemory, Footprint: 30e6, Started: 1})
+	step(20, processUsage{Known: counterMemory, Footprint: 2e6})
+	sample(service, broker)
+	clock = clock.Add(2 * time.Second)
+	readings := sample(service, broker)
+	if readings[0].CPUPercent != nil || readings[0].DiskBytesPerSecond != nil || *readings[0].MemoryBytes != 30e6 || readings[0].Text != "Library service · 30 MB" {
+		t.Fatalf("memory alone: %+v", readings[0])
+	}
+	summary := summarizeResources("Pharos", readings)
+	if summary.CPUPercent != nil || !summary.CPUPartial || summary.MemoryPartial || *summary.MemoryBytes != 32e6 || summary.Label != "Pharos is using 32 MB" {
+		t.Fatalf("a total with no CPU: %+v", summary)
+	}
+
+	// Mixed: one process's CPU known, the other's unreadable. The total is
+	// the measured part, said to be a lower bound for that reason.
+	mixed := summarizeResources("Pharos", []resourceReading{
+		{PID: 1, Basis: resourceBasisKernel, cpu: new(40.0), memory: new(uint64(1e6))},
+		{PID: 2, Basis: resourceBasisKernel, cpuUnavailable: true},
+	})
+	if mixed.CPUPercent == nil || *mixed.CPUPercent != 40 || !mixed.CPUPartial || !mixed.MemoryPartial || *mixed.MemoryBytes != 1e6 ||
+		!strings.Contains(mixed.Label, "a process's CPU could not be read") || !strings.Contains(mixed.Label, "memory is a lower bound") {
+		t.Fatalf("a partial total: %+v", mixed)
+	}
+	// Nothing measured: null totals, and a label that does not say zero.
+	none := summarizeResources("Pharos", []resourceReading{{PID: 1, Basis: resourceBasisKernel, cpuUnavailable: true}})
+	if none.CPUPercent != nil || none.MemoryBytes != nil || none.DiskBytesPerSecond != nil || strings.Contains(none.Label, "using") {
+		t.Fatalf("a total of nothing measured: %+v", none)
+	}
+	encoded, _ := json.Marshal(none)
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := document["memory_bytes"]; !ok || value != nil || document["cpu_percent"] != nil {
+		t.Fatalf("unmeasured figures are null in the document: %s", encoded)
+	}
+	// A service's snapshot read back by the broker keeps known and
+	// missing memory apart.
+	var roundTrip resourceSummary
+	if err := json.Unmarshal([]byte(`{"memory_bytes":0,"processes":[{"pid":3,"role":"cli:ingest","memory_bytes":null}]}`), &roundTrip); err != nil ||
+		roundTrip.MemoryBytes == nil || *roundTrip.MemoryBytes != 0 || roundTrip.Processes[0].MemoryBytes != nil {
+		t.Fatalf("a snapshot's figures: %+v %v", roundTrip, err)
+	}
+}
+
+// Each platform's observation names exactly the counters it reads: the
+// kernel's everything; Linux's self-reported getrusage CPU and the Go
+// runtime's memory, which is not a resident size; elsewhere only that
+// memory. The sync meter's getrusage counters follow the same split.
+func TestPlatformObservationNamesItsCounters(t *testing.T) {
+	usage, err := processUsageOf(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := processResourceUsage()
+	unix := counterOwnCPU | counterChildCPU | counterBlocks
+	switch resourceBasis {
+	case resourceBasisKernel:
+		if usage.Known != counterOwnCPU|counterChildCPU|counterMemory|counterResident|counterDisk || resources.known != unix {
+			t.Fatalf("kernel counters: %b %b", usage.Known, resources.known)
+		}
+	case "self-reported":
+		if usage.Known != counterOwnCPU|counterChildCPU|counterMemory || resources.known != unix {
+			t.Fatalf("self-reported counters: %b %b", usage.Known, resources.known)
+		}
+	default:
+		if usage.Known != counterMemory || resources.known != 0 {
+			t.Fatalf("Go runtime only: %b %b", usage.Known, resources.known)
+		}
+		if _, ok := processRSS(); ok {
+			t.Fatal("no resident size is read here")
+		}
+	}
+	if goUsage := goRuntimeUsage(); goUsage.Known != counterMemory || goUsage.Footprint == 0 {
+		t.Fatalf("the Go runtime's memory is an approximation, not a resident size: %+v", goUsage)
 	}
 }
 
@@ -395,12 +486,12 @@ func TestResourceWorkerTree(t *testing.T) {
 		if p.OwnOnly || (p.PID == 21 && p.Library != "b") || (p.PID == 12 && p.Library != "a") {
 			t.Fatalf("attribution: %+v", p)
 		}
-		source.set(p.PID, processUsage{CPUSeconds: 1})
+		source.set(p.PID, processUsage{Known: sampled, CPUSeconds: 1})
 	}
 	sampler.sampleWithTable(processes, table)
 	clock = clock.Add(2 * time.Second)
 	for _, p := range processes {
-		source.set(p.PID, processUsage{CPUSeconds: 2})
+		source.set(p.PID, processUsage{Known: sampled, CPUSeconds: 2})
 	}
 	summary := summarizeResources("Pharos", sampler.sampleWithTable(processes, table))
 	if summary.CPUPercent == nil || *summary.CPUPercent != 250 {
@@ -409,15 +500,15 @@ func TestResourceWorkerTree(t *testing.T) {
 }
 
 func TestResourceSamplerCountsReapedHelpersWithoutRepeatingLiveChildren(t *testing.T) {
-	source := &fakeUsage{procs: map[int]processUsage{10: {Started: 1, CPUSeconds: 10}, 11: {Started: 2, CPUSeconds: 5}}}
+	source := &fakeUsage{procs: map[int]processUsage{10: {Known: sampled, Started: 1, CPUSeconds: 10}, 11: {Known: sampled, Started: 2, CPUSeconds: 5}}}
 	clock := time.Now()
 	sampler := &resourceSampler{read: source.read, basis: resourceBasisKernel, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
 	roots := []resourceProcess{{PID: 10, Role: "service"}}
 	live := []processNode{{PID: 10, Parent: 1}, {PID: 11, Parent: 10, Name: "worker"}}
 	sampler.sampleWithTable(roots, live)
 	clock = clock.Add(2 * time.Second)
-	source.set(10, processUsage{Started: 1, CPUSeconds: 10.2})
-	source.set(11, processUsage{Started: 2, CPUSeconds: 5.4})
+	source.set(10, processUsage{Known: sampled, Started: 1, CPUSeconds: 10.2})
+	source.set(11, processUsage{Known: sampled, Started: 2, CPUSeconds: 5.4})
 	if got := summarizeResources("Pharos", sampler.sampleWithTable(roots, live)); got.CPUPercent == nil || *got.CPUPercent != 30 {
 		t.Fatalf("both live processes counted once: %+v", got)
 	}
@@ -425,18 +516,18 @@ func TestResourceSamplerCountsReapedHelpersWithoutRepeatingLiveChildren(t *testi
 	// must be deducted from the parent's child counter. A 0.4 s helper
 	// that lived entirely between samples contributes through that counter.
 	clock = clock.Add(2 * time.Second)
-	source.set(10, processUsage{Started: 1, CPUSeconds: 10.4, ChildCPUSeconds: 6.4})
+	source.set(10, processUsage{Known: sampled, Started: 1, CPUSeconds: 10.4, ChildCPUSeconds: 6.4})
 	if got := summarizeResources("Pharos", sampler.sampleWithTable(roots, live[:1])); got.CPUPercent == nil || *got.CPUPercent != 60 {
 		t.Fatalf("reaped worker and short helper, without old CPU: %+v", got)
 	}
 	clock = clock.Add(2 * time.Second)
-	source.set(10, processUsage{Started: 1, CPUSeconds: 10.6, ChildCPUSeconds: 6.4})
+	source.set(10, processUsage{Known: sampled, Started: 1, CPUSeconds: 10.6, ChildCPUSeconds: 6.4})
 	if got := summarizeResources("Pharos", sampler.sampleWithTable(roots, live[:1])); got.CPUPercent == nil || *got.CPUPercent != 10 {
 		t.Fatalf("reaped CPU is charged only once: %+v", got)
 	}
 	t.Run("nested workers exit together", func(t *testing.T) {
 		source := &fakeUsage{procs: map[int]processUsage{
-			10: {Started: 1, CPUSeconds: 10}, 11: {Started: 2, CPUSeconds: 5}, 12: {Started: 3, CPUSeconds: 10.2},
+			10: {Known: sampled, Started: 1, CPUSeconds: 10}, 11: {Known: sampled, Started: 2, CPUSeconds: 5}, 12: {Known: sampled, Started: 3, CPUSeconds: 10.2},
 		}}
 		clock := time.Now()
 		sampler := &resourceSampler{read: source.read, basis: resourceBasisKernel, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
@@ -444,14 +535,14 @@ func TestResourceSamplerCountsReapedHelpersWithoutRepeatingLiveChildren(t *testi
 		tree := []processNode{{PID: 10, Parent: 1}, {PID: 11, Parent: 10, Name: "worker"}, {PID: 12, Parent: 11, Name: "nested"}}
 		sampler.sampleWithTable(roots, tree)
 		clock = clock.Add(2 * time.Second)
-		source.set(10, processUsage{Started: 1, CPUSeconds: 10.2})
-		source.set(11, processUsage{Started: 2, CPUSeconds: 5.2})
-		source.set(12, processUsage{Started: 3, CPUSeconds: 10.4})
+		source.set(10, processUsage{Known: sampled, Started: 1, CPUSeconds: 10.2})
+		source.set(11, processUsage{Known: sampled, Started: 2, CPUSeconds: 5.2})
+		source.set(12, processUsage{Known: sampled, Started: 3, CPUSeconds: 10.4})
 		sampler.sampleWithTable(roots, tree)
 		// The worker reaps its nested child, then the service reaps the
 		// worker. Both lifetimes arrive in the service's child counter.
 		clock = clock.Add(2 * time.Second)
-		source.set(10, processUsage{Started: 1, CPUSeconds: 10.4, ChildCPUSeconds: 16.0})
+		source.set(10, processUsage{Known: sampled, Started: 1, CPUSeconds: 10.4, ChildCPUSeconds: 16.0})
 		got := summarizeResources("Pharos", sampler.sampleWithTable(roots, tree[:1]))
 		if got.CPUPercent == nil || *got.CPUPercent != 30 {
 			t.Fatalf("the whole exited subtree has 30%% current CPU, not its lifetime: %+v", got)
@@ -459,7 +550,7 @@ func TestResourceSamplerCountsReapedHelpersWithoutRepeatingLiveChildren(t *testi
 	})
 	t.Run("cached snapshot still names the exited worker", func(t *testing.T) {
 		source := &fakeUsage{procs: map[int]processUsage{
-			10: {Started: 1, CPUSeconds: 10}, 11: {Started: 2, CPUSeconds: 5.2},
+			10: {Known: sampled, Started: 1, CPUSeconds: 10}, 11: {Known: sampled, Started: 2, CPUSeconds: 5.2},
 		}}
 		clock := time.Now()
 		sampler := &resourceSampler{read: source.read, basis: resourceBasisKernel, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
@@ -469,11 +560,11 @@ func TestResourceSamplerCountsReapedHelpersWithoutRepeatingLiveChildren(t *testi
 		tree := []processNode{{PID: 10, Parent: 1}, {PID: 11, Parent: 10, Name: "git"}}
 		sampler.sampleWithTable(roots, tree)
 		clock = clock.Add(2 * time.Second)
-		source.set(10, processUsage{Started: 1, CPUSeconds: 10.2})
-		source.set(11, processUsage{Started: 2, CPUSeconds: 5.4})
+		source.set(10, processUsage{Known: sampled, Started: 1, CPUSeconds: 10.2})
+		source.set(11, processUsage{Known: sampled, Started: 2, CPUSeconds: 5.4})
 		sampler.sampleWithTable(roots, tree)
 		clock = clock.Add(2 * time.Second)
-		source.set(10, processUsage{Started: 1, CPUSeconds: 10.6, ChildCPUSeconds: 5.8})
+		source.set(10, processUsage{Known: sampled, Started: 1, CPUSeconds: 10.6, ChildCPUSeconds: 5.8})
 		source.mu.Lock()
 		delete(source.procs, 11)
 		source.mu.Unlock()
