@@ -174,6 +174,21 @@ export function ChartSelect<T extends string>({ label, ariaLabel = label, value,
   </label>;
 }
 
+// A dashboard's controls in two groups. Data chooses what the chart holds:
+// the analysis, measure, groups, records and periods. View chooses how the
+// same groups, records and periods are drawn: chart form, shares, scale,
+// smoothing and reference levels. View has its own labelled row and is left
+// out when none of its controls apply. A fragment's children are counted, so
+// a fragment of nulls is no section.
+export function ControlSections({ data, view }: { data: React.ReactNode; view?: React.ReactNode }) {
+  const heading = React.useId();
+  const shown = (node: React.ReactNode) => React.Children.toArray(React.isValidElement(node) && node.type === React.Fragment ? (node.props as { children?: React.ReactNode }).children : node).length > 0;
+  return <>
+    <div className="dashboard-controls-data" role="group" aria-label="Data">{data}</div>
+    {shown(view) ? <div className="dashboard-controls-view" role="group" aria-labelledby={heading}><span id={heading} className="dashboard-controls-heading">View</span>{view}</div> : null}
+  </>;
+}
+
 // A control's caveat sits in an info circle beside its label.
 function ControlNote({ label, children }: { label: string; children: React.ReactNode }) {
   return <span className="usage-chart-control-note"><SearchHelp label={label}>{children}</SearchHelp></span>;

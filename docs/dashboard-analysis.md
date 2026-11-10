@@ -244,7 +244,7 @@ what each offers and why.
 - **Record views** follow from the catalog. Without units, Scatter is
   unavailable; without units or any measure with a per-record `value`,
   Distribution is too (the Tools rollup: a daily summary is not an
-  observation). The View control disables them with the reason
+  observation). The Analysis control disables them with the reason
   (`viewUnavailable`), and a link asking for one opens Compare. Where records
   carry values but some measure does not (Pharos MCP's call count), the
   distribution's Metric control disables that measure.
@@ -420,7 +420,7 @@ can:
 - **Leaving for the trend.** The trend draws every measure and population
   over records. A unit compare maps only when it adds up records (Total). A
   count, mean, median or largest of units is another quantity, so
-  `trendUnavailable` disables Over time for it, the View control shows the
+  `trendUnavailable` disables Over time for it, the Analysis control shows the
   reason, and `switchView` leaves the state unchanged. A breakdown carries
   across. A summed component breakdown also carries between Over time and
   Compare groups; distribution and scatter need record fields, so use `none`.
@@ -657,12 +657,22 @@ no sum, cumulative or share.
   without totals (`lines`, `additive`), name the window (`rolling`) and draw
   the norm (`reference`). The other dashboards still pass interval amounts
   and let it transform them.
-- **Controls.** `AnalysisControls` is the one control bar for every view;
-  the trend adds Show as (values or shares), Display, Time bucket,
-  Smoothing with its Window (average or total), Periods (whole periods
-  only) and %ile, a multi-select of reference levels (`PercentileControl`;
-  a level the chart cannot draw is disabled with its reason,
-  `percentileLimit`).
+- **Controls.** `AnalysisControls` is the one control bar for every view,
+  in two groups (`ControlSections`). **Data** chooses what the chart
+  holds: Analysis (Over time, Compare groups, Distribution, Scatter plot,
+  cycle; the state's `view` key), Count each, Metric, Breakdown, Combine
+  or Summarize, Minimum, Cycle, Population, Range, and for the trend Time
+  bucket and Periods (whole periods only). **View**, a labelled row of its
+  own, chooses how those same groups, records and periods are drawn:
+  Display, Show as (values, without zeroes or shares; Compare's bars or
+  share of total), Scale, Smoothing with its Window (average or total)
+  and %ile, a multi-select of reference levels (`PercentileControl`; a
+  level the chart cannot draw is disabled with its reason,
+  `percentileLimit`). The test for View: the chart's underlying table
+  (its groups, records and periods) is the same whatever the control's
+  value, even when the drawn numbers are transformed (shares, a trailing
+  window). Legend selection is visibility, not a control; "Make this the
+  population" moves it into Data.
 - **Chosen charts.** A catalog may choose each chart itself (`present`):
   given the view, measure and breakdown, how it is drawn — display, shares,
   scale, a default reference level, Compare's bars or shares, and for Over time whether it draws
