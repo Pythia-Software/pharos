@@ -3,6 +3,7 @@ package archive
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -241,6 +242,12 @@ func TestFileHistoryWithGit(t *testing.T) {
 	if err != nil || entries(gen) != "script.go:file:0:1:true" || gen["dir"] != "gen" {
 		t.Fatalf("gen: %#v %v", gen, err)
 	}
+	// A directory's name of any characters lists its children by theirs.
+	execTx(t, f.catalog.DB, `INSERT INTO git_tree_files(repository_id,path) VALUES('repo-app','docs/café/x.go')`)
+	if accented, err := f.catalog.FileTree(t.Context(), FileTreeOptions{Project: "app", Dir: "docs/café"}); err != nil || entries(accented) != "x.go:file:0:0:true" ||
+		accented["entries"].([]map[string]any)[0]["path"] != "docs/café/x.go" {
+		t.Fatalf("an accented directory: %#v %v", accented, err)
+	}
 	// A commit: its files and the sessions linked to it.
 	commit, err := f.catalog.FileCommit(t.Context(), FileCommitOptions{Project: "app", Commit: second[:7]})
 	if err != nil {
@@ -372,6 +379,36 @@ func TestFileHistoryWithoutGit(t *testing.T) {
 	}
 	if _, err := f.catalog.FileCommit(t.Context(), FileCommitOptions{Project: folderKey(folder), Commit: "abcdef0"}); err == nil {
 		t.Fatal("a folder has no commits")
+	}
+	// A file outside the folder is under its own absolute directory, which
+	// opens to it and to the sessions that edited there.
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	f.session("wanderer", "claude")
+	execTx(t, f.catalog.DB, `UPDATE workspaces SET project_folder='`+folderKey(folder)+`' WHERE id='wanderer'`)
+	f.write("wanderer", outside, 4, code("outside", 0, 2))
+	f.refresh()
+	dir := path.Dir(folderKey(outside))
+	for path.Dir(dir) != "/" && path.Dir(dir) != "." {
+		dir = path.Dir(dir)
+	}
+	root, err := f.catalog.FileTree(t.Context(), FileTreeOptions{Project: folderKey(folder)})
+	if err != nil || !strings.Contains(fmt.Sprint(root["entries"]), "name:"+dir+" ") {
+		t.Fatalf("an absolute directory at the root (%s): %#v %v", dir, root, err)
+	}
+	for next := dir; ; {
+		opened, err := f.catalog.FileTree(t.Context(), FileTreeOptions{Project: folderKey(folder), Dir: next, Activity: true})
+		if listed := opened["entries"].([]map[string]any); err != nil || opened["dir"] != next || len(listed) != 1 ||
+			!strings.Contains(fmt.Sprint(opened["sessions"]), "workspace_id:wanderer") {
+			t.Fatalf("%s: %#v %v", next, opened, err)
+		}
+		entry := opened["entries"].([]map[string]any)[0]
+		if entry["kind"] == "file" {
+			if entry["path"] != folderKey(outside) {
+				t.Fatalf("the file outside: %#v", entry)
+			}
+			break
+		}
+		next = firstString(entry["path"])
 	}
 	// A file of no project links by its path, and its page's changes are
 	// its own edits; an empty project names none.

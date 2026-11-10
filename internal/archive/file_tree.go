@@ -9,6 +9,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // The files page (docs/projects-and-outcomes.md, "Files, sessions and
@@ -232,7 +233,7 @@ func (c *Catalog) FileTree(ctx context.Context, options FileTreeOptions) (map[st
 	if err != nil || choices != nil {
 		return map[string]any{"choices": choices}, err
 	}
-	dir := strings.Trim(path.Clean("/"+strings.TrimSpace(options.Dir)), "/")
+	dir := treeDir(project, options.Dir)
 	result := map[string]any{"project": project.value(), "dir": dir}
 	var entries map[string]*fileTreeEntry
 	if project.Kind == "repository" {
@@ -291,6 +292,20 @@ func (c *Catalog) FileTree(ctx context.Context, options FileTreeOptions) (map[st
 	return result, nil
 }
 
+// treeDir is a directory as a project's tree names it: repository-relative,
+// "" for the root. A folder project's directory outside the folder keeps its
+// own folder path (/… or ~/…), as folderTreeEntries lists it.
+func treeDir(project fileProject, dir string) string {
+	dir = strings.TrimSpace(dir)
+	if project.Kind != "repository" && strings.HasPrefix(dir, "/") {
+		if clean := path.Clean(dir); clean != "/" {
+			return clean
+		}
+		return ""
+	}
+	return strings.Trim(path.Clean("/"+dir), "/")
+}
+
 // fileTreeProjectLimit bounds the projects listed without one chosen.
 var fileTreeProjectLimit = 100
 
@@ -326,11 +341,16 @@ func prefixRange(prefix string) (string, string) {
 }
 
 // childSQL is the child of the directory a path under it falls in: its
-// first segment after the start'th byte, and whether that is a directory.
+// first segment from the start'th character (sqlStart), and whether that is
+// a directory.
 const childSQL = `CASE WHEN instr(substr(%[1]s,?),'/')>0 THEN substr(%[1]s,?,instr(substr(%[1]s,?),'/')-1) ELSE substr(%[1]s,?) END child,
 	instr(substr(%[1]s,?),'/')>0 is_dir`
 
 func childArgs(start int) []any { return []any{start, start, start, start, start} }
+
+// sqlStart is where SQLite's substr finds what follows prefix: it counts
+// characters, not bytes.
+func sqlStart(prefix string) int { return utf8.RuneCountInString(prefix) + 1 }
 
 // repositoryTreeEntries are a repository directory's children: the tree's
 // paths, the files sessions edited and the files commits changed, which may
@@ -340,7 +360,7 @@ func (c *Catalog) repositoryTreeEntries(ctx context.Context, repository, dir str
 	if dir != "" {
 		prefix = dir + "/"
 	}
-	start := len(prefix) + 1
+	start := sqlStart(prefix)
 	low, high := prefixRange(prefix)
 	entries := map[string]*fileTreeEntry{}
 	entry := func(row map[string]any) *fileTreeEntry {
@@ -375,7 +395,7 @@ func (c *Catalog) repositoryTreeEntries(ctx context.Context, repository, dir str
 	rows, err := queryMapsContext(ctx, c.reader(), `SELECT `+fmt.Sprintf(childSQL, "p")+`,COUNT(DISTINCT workspace_id) sessions,MAX(COALESCE(last_edit_at,'')) last_at,workspace_id
 		FROM (SELECT substr(file_key,?) p,workspace_id,last_edit_at FROM session_files WHERE file_key>=? AND file_key<?
 			AND workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)) GROUP BY child`,
-		append(childArgs(start), len(keyPrefix)+1, keyLow, keyHigh)...)
+		append(childArgs(start), sqlStart(keyPrefix), keyLow, keyHigh)...)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +558,7 @@ func (c *Catalog) FileFind(ctx context.Context, projectValue, query string) (map
 			UNION ALL SELECT substr(file_key,?) p,0 t FROM session_files WHERE file_key>=? AND file_key<?
 			UNION ALL SELECT path p,0 t FROM git_commit_files WHERE repository_id=?) WHERE 1` + like + ` GROUP BY p`
 		low, high := prefixRange(keyPrefix)
-		args = append([]any{project.RepositoryID, len(keyPrefix) + 1, low, high, project.RepositoryID}, args...)
+		args = append([]any{project.RepositoryID, sqlStart(keyPrefix), low, high, project.RepositoryID}, args...)
 	} else {
 		statement = `SELECT p,0 in_tree FROM (SELECT DISTINCT sf.path p FROM session_files sf JOIN workspaces w ON w.id=sf.workspace_id
 			WHERE w.project_folder=? AND w.repository_id IS NULL AND w.folder_repository_id IS NULL AND sf.repository_id IS NULL) WHERE 1` + like
