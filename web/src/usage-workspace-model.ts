@@ -31,7 +31,7 @@ export const usageDatasets = {
   agent_event_rates: { label: "Agent event observations", description: "Every agent message checked for events, once per kind of event, with who prompted its turn, its model and effort: the rows the Agent Events rates divide.", field: "title", searchLabel: "Agent Event Rate Conversation Titles" },
   agent_event_messages: { label: "Messages checked for agent events", description: "Agent replies and thinking blocks checked for events, with matching keywords and classifications.", field: "title", searchLabel: "Agent Event Conversation Titles" },
   session_shape: { label: "Agent sessions", description: "One row per agent session: its length, active time, tool calls and autonomy, and the forensic signals that fired.", field: "title", searchLabel: "Session Titles" },
-  outcomes: { label: "Session outcomes", description: "Each session's outcome, the evidence that decided it, its cost and what it changed.", field: "title", searchLabel: "Session Titles" },
+  outcomes: { label: "Workspace outcomes", description: "One row per Library workspace: its outcome, the evidence that decided it, its cost and what it changed.", field: "title", searchLabel: "Workspace Titles" },
 } as const;
 export type UsageDataset = keyof typeof usageDatasets;
 
@@ -60,7 +60,7 @@ export const engineUsageTopics = {
   mcp: { label: "Pharos MCP", description: "How are agents using Pharos? Explore calls, reliability, response sizes, and time spent serving requests." },
   carbon: { label: "Carbon Impact", description: "Estimated electricity and emissions, with explicit assumptions." },
   agent_event_rates: { label: "Agent Events", description: "How often do agents run into each kind of event? Rates per message, turn or conversation the event pass read, by kind, model and effort, who prompted, prompt length, repository and more." },
-  outcomes: { label: "Outcomes", description: "What became of agents' work, and what did it cost? Sessions by outcome, rework, cost per kept change and evidence coverage, with or without Git." },
+  outcomes: { label: "Outcomes", description: "What became of agents' work, and what did it cost? Workspaces by outcome, rework, cost per kept change and evidence coverage, with or without Git." },
   agent_experience: { label: "Agent Experience", description: "What are agents running into? Obstacles, surprises, discoveries, workarounds and unchecked claims, found in their replies and thinking." },
   session_shape: { label: "Session Shape", description: "What does a typical session look like, and which went badly? Session length, active time, tool calls, autonomy and turn cycles, and forensic signals against your own history." },
 } as const;
