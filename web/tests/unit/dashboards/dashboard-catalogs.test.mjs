@@ -1,6 +1,6 @@
 import { dashboardExplorations, dashboardQueryMeaning, dashboardQueryPurposes } from "../../../src/dashboard-query-explorations";
 import { schemaDocuments } from "../../../src/schema-documents";
-import { dashboardDefaults } from "../../../src/dashboard-defaults";
+import { dashboardDefaults, legacyViewDefaults } from "../../../src/dashboard-defaults";
 import { compactionAnalysisCatalog as compaction } from "../../../src/compaction-analysis-catalog";
 import { conversationAnalysisCatalog as activity } from "../../../src/conversation-analysis-catalog";
 import { population } from "../../support/query-server.mjs";
@@ -18,7 +18,7 @@ import { groupedDashboardQuery } from "../../../src/usage-dashboard-model";
 import { analysisCatalogs, normalizedDashboardChart } from "../../../src/analysis-catalogs";
 import { trendHeatmap } from "../../../src/dashboard-heatmap-model";
 import { now, toolCalls, toolsRollup, mcpCalls, skillUsages } from "../helpers/record-ledgers.mjs";
-import { heatmapAxis, heatmapSource, percentileLimit, isTrendView, analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, nativeCycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
+import { viewKeys, clearView, changeState, canonicalState, heatmapAxis, heatmapSource, percentileLimit, isTrendView, analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, nativeCycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catalog";
@@ -168,6 +168,20 @@ test("older links: numbered metrics read as measures; only dashboards with a leg
   }
   assert.equal(normalizeAnalysis(mcp, { metric: "mean_output", split: "tool_name" }).metric, "mean_output", "a mean is now a pooled ratio");
   assert.ok(mcp.measures.mean_output.ratio);
+  // Before version 3 a page wrote its view defaults into every link: a value
+  // equal to one is left out and drawn by default; any other is a choice.
+  const written = { v: 2, view: "trend", metric: "tokens", split: "provider", period: "day", nonzero: true, scale: "half", display: "interval", share: false, rollingPeriods: 0 };
+  const read = readAnalysisLink(tokenAnalysisCatalog, written, [], legacyViewDefaults.tokens);
+  assert.deepEqual(read.state, { v: analysisVersion, view: "trend", metric: "tokens", split: "provider", period: "day" });
+  assert.deepEqual(normalizeAnalysis(tokenAnalysisCatalog, read.state), normalizeAnalysis(tokenAnalysisCatalog, { ...written, v: analysisVersion }), "and draws as it did");
+  const chose = readAnalysisLink(tokenAnalysisCatalog, { ...written, nonzero: false, scale: "logarithmic", rollingPeriods: 7 }, [], legacyViewDefaults.tokens).state;
+  assert.deepEqual([chose.nonzero, chose.scale, chose.rollingPeriods, chose.display], [false, "logarithmic", 7, undefined]);
+  // Session Shape drew none of a link's display, shares or scale.
+  const shaped = readAnalysisLink(sessionShape, { v: 2, view: "trend", metric: "sessions", split: "length_band", display: "cumulative", scale: "logarithmic", rollingPeriods: 7, percentiles: ["p90"] }, [], legacyViewDefaults.session_shape).state;
+  assert.deepEqual(shaped, { v: analysisVersion, view: "trend", metric: "sessions", split: "length_band", percentiles: ["p90"] });
+  // A current link is read as written, and Reset view leaves only the data.
+  assert.deepEqual(readAnalysisLink(tokenAnalysisCatalog, { ...written, v: analysisVersion }, []).state, { ...written, v: analysisVersion });
+  assert.deepEqual(viewKeys.filter(key => canonicalState(tokenAnalysisCatalog, changeState(tokenAnalysisCatalog, written, clearView))[key] !== undefined), []);
 });
 
 test("a timestamp cycle is Query Table's hour of day or day of week in the viewer's zone, over whole local days or hours", () => {
@@ -419,10 +433,12 @@ test("the day boundary: Over time's days are the recorded days the cards count; 
   // Hours: every catalog with a timestamp offers them, as UTC clock hours,
   // whose supporting query opens the hourly totals as grouped rows.
   for (const catalog of [mcp, time, skills]) {
-    assert.equal(trendAdjustments(catalog, { metric: catalog.trend.metric, split: "none", period: "hour" }).length, 0, catalog.dataset);
-    const hours = trendQuery(catalog, { metric: catalog.trend.metric, split: "none", period: "hour" }, where.map(term => ({ ...term, field: catalog.time.first })), { now, zone: localZone });
+    // With its zeroes: a daily dashboard leaves them out by default (dailyView).
+    const hourly = { metric: catalog.trend.metric, split: "none", period: "hour", nonzero: false };
+    assert.equal(trendAdjustments(catalog, hourly).length, 0, catalog.dataset);
+    const hours = trendQuery(catalog, hourly, where.map(term => ({ ...term, field: catalog.time.first })), { now, zone: localZone });
     assert.deepEqual(hours.query.aggregations[0].dateGrouping, { field: catalog.timestamp, interval: "hour", timeZone: "UTC", includeEmpty: false, range: "query" });
-    const drawn = trendSeries(catalog, { metric: catalog.trend.metric, split: "none", period: "hour" }, hours, run(catalog, hours.query), { now });
+    const drawn = trendSeries(catalog, hourly, hours, run(catalog, hours.query), { now });
     assert.equal(drawn.error, undefined);
     assert.ok(drawn.buckets.length > 24 * 29 && drawn.buckets.some(bucket => bucket.values.total), catalog.dataset);
     const grouped = groupedDashboardQuery(hours.supporting);
@@ -636,7 +652,8 @@ test("recommendations follow metric changes and avoid dimensions fixed by filter
   const selected = { values: [sessionShape.breakdowns.length_band.order[0]], excluded: false };
   const rate = normalizeAnalysis(sessionShape, { view: "trend", metric: "failure_rate", split: "length_band", selection: selected });
   assert.notEqual(rate.display, "heatmap");
-  const heatmap = normalizeAnalysis(sessionShape, { ...rate, metric: "sessions" });
+  // The state as asked for: a new metric is drawn as its data suggests.
+  const heatmap = normalizeAnalysis(sessionShape, { view: "trend", metric: "sessions", split: "length_band", selection: selected });
   assert.equal(heatmap.display, "heatmap");
   const effective = heatmapSource(sessionShape, heatmap), where = month(sessionShape);
   const supporting = trendQuery(effective.catalog, effective.state, where, { now }).supporting;

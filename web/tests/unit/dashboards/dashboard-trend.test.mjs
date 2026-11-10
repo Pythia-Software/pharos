@@ -15,7 +15,7 @@ import { usageDashboardReturn } from "../../../src/usage-workspace-model";
 import { analysisCatalogs } from "../../../src/analysis-catalogs";
 
 const { rows, hourly } = usageLedger(), schema = schemas.usage;
-const base = { period: "day", hours: 6, days: 3, rollingPeriods: 0, scale: "linear", display: "interval" };
+const base = { period: "day", hours: 6, days: 3, rollingPeriods: 0, scale: "linear", display: "interval", nonzero: false };
 const range = [{ field: "last_usage_at", op: ">=", value: "-30d" }, { field: "first_usage_at", op: "<", value: "+0s" }];
 
 test("a trend keeps its selected drawing while results are loading", () => {
@@ -297,7 +297,8 @@ test("a change applies to the state as asked for: old names never override it, a
     const link = { ...base, metric: alias, split: "provider" };
     const values = normalizeAnalysis(catalog, changeState(catalog, link, { share: false }));
     assert.deepEqual([values.metric, values.share], [alias === "percent" ? "tokens" : "cost", false], `${alias}: Values takes effect at once`);
-    assert.equal(normalizeAnalysis(catalog, changeState(catalog, link, { split: "model_family" })).share, true, `${alias}: other changes keep the shares`);
+    assert.equal(normalizeAnalysis(catalog, changeState(catalog, link, { period: "week" })).share, true, `${alias}: other changes keep the shares`);
+    assert.equal(normalizeAnalysis(catalog, changeState(catalog, link, { split: "model_family" })).share, false, `${alias}: a new breakdown returns the view to its defaults`);
   }
   const asked = { ...base, metric: "tokens", split: "provider", share: true, rollingPeriods: 7, rollingOp: "sum", percentiles: ["mean"] };
   const ratio = changeState(catalog, asked, { metric: "cache_read_share" });
@@ -308,9 +309,10 @@ test("a change applies to the state as asked for: old names never override it, a
   assert.deepEqual(normalizeAnalysis(catalog, back), normalizeAnalysis(catalog, asked), "and tokens draws exactly as before");
   // Shares have no reference level, so without them the saved mean draws again.
   assert.equal(normalizeAnalysis(catalog, changeState(catalog, back, { share: false })).norm, true);
-  // A visit to Compare keeps the trend's own settings.
+  // A visit to Compare returns the view to its defaults; the data stays.
   const returned = switchView(catalog, switchView(catalog, asked, "compare"), "trend");
-  assert.deepEqual(["share", "rollingOp", "percentiles", "rollingPeriods"].map(key => returned[key]), [true, "sum", ["mean"], 7]);
+  assert.deepEqual(["metric", "split", "share", "rollingOp", "percentiles", "rollingPeriods"].map(key => returned[key]), ["tokens", "provider", undefined, undefined, undefined, undefined]);
+  assert.deepEqual(normalizeAnalysis(catalog, changeState(catalog, asked, { view: "compare" })).compareAs, "bars", "and so does choosing another analysis");
 });
 
 test("a share is of every group in the filters; a legend selection only chooses what is drawn, in the trend and in Compare", () => {
@@ -671,7 +673,7 @@ test('label line and bar views share amounts and preserve chart settings when sw
  assert.ok(barSeries.buckets.some(bucket=>Object.values(bucket.values).some(value=>value>0)),'comparison includes actual label amounts');
  assert.deepEqual({...barSeries,lines:true},lineSeries);
  const compare=switchView(messageLabelsCatalog,bar,'compare');
- assert.equal(compare.compareAs,'bars','overlapping labels remain values when comparison cannot form shares');
+ assert.equal(normalizeAnalysis(messageLabelsCatalog,{...compare,compareAs:'share'}).compareAs,'bars','overlapping labels remain values when comparison cannot form shares');
  assert.equal(switchView(messageLabelsCatalog,compare,'trend_bar').view,'trend_bar');
  // Saved requests keep unsupported settings so the chart can explain its
  // daily, non-cumulative rendering without silently rewriting the link.

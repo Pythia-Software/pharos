@@ -1,5 +1,6 @@
 import {peopleLabelBreakdowns} from "./people-message-labels";
 import type { AnalysisCatalog } from "./dashboard-analysis-model";
+import { dailyView } from "./dashboard-analysis-model";
 
 const number = { kind: "number", decimals: 0 } as const;
 const breakdowns = {
@@ -27,5 +28,5 @@ export const conversationAnalysisCatalog: AnalysisCatalog = {
     breakdowns: { provider: breakdowns.provider.fields, model_family: breakdowns.model_family.fields, provider_model: breakdowns.provider_model.fields, effort: breakdowns.effort.fields }, note: "A top-level conversation includes its attributed delegated activity. Only activity in the selected range counts." } },
   periods: {}, timestamp: "event_at",
   cycle: { hour: { kind: "timestamp", field: "event_at" }, weekday: { kind: "timestamp", field: "event_at" } },
-  trend: { metric: "conversations", split: "provider_model" }, scatter: ["messages", "output"],
+  trend: { metric: "conversations", split: "provider_model" }, scatter: ["messages", "output"], defaultView: dailyView,
 };

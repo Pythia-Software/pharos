@@ -1,6 +1,7 @@
 import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure, AnalysisState } from "./dashboard-analysis-model";
 import { activityPresentation } from "./machine-activity-data";
+import { dailyView } from "./dashboard-analysis-model";
 
 // Tool Time and Skills read individual records (tool calls, skill evidence),
 // so each record is one observation, and records of one agent conversation
@@ -67,7 +68,7 @@ export const toolTimeAnalysisCatalog: AnalysisCatalog = {
   trend: { metric: "time", split: "activity" },
   legacy: numbered(["time", "calls"]),
   legacySlices: true,
-  scatter: ["calls", "time"],
+  scatter: ["calls", "time"], defaultView: dailyView,
 };
 toolTimeAnalysisCatalog.breakdowns.provider.order = providerOrder;
 toolTimeAnalysisCatalog.breakdowns.repository_name.empty = "No repository";
@@ -102,7 +103,7 @@ export const skillsAnalysisCatalog: AnalysisCatalog = {
   trend: { metric: "records", split: "skill_name" },
   legacy: numbered(["records", "body"]),
   legacySlices: true,
-  scatter: ["records", "body"],
+  scatter: ["records", "body"], defaultView: dailyView,
 };
 skillsAnalysisCatalog.breakdowns.provider.order = providerOrder;
 skillsAnalysisCatalog.breakdowns.repository_name.empty = "No repository";

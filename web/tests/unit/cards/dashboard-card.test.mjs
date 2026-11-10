@@ -653,14 +653,16 @@ test('percentage-valued dashboard trends retain their selected scale independent
   assert.equal(preview.dashboardTrend.unit, 'percent');
   assert.equal(readDashboardCard(url).state.scale, 'logarithmic', 'share trends retain the scale for switching back');
   assert.doesNotMatch(dashboardCardDescription(url), /Logarithmic scale/, 'share trends draw a linear percentage axis');
-  const pie = switchView(catalog, { ...selected, share: true }, 'compare');
+  const pie = { ...selected, view: 'compare', compareAs: 'share' };
   assert.equal(analysisQuery(catalog, pie, []).clause.display.kind, 'pie');
   assert.equal(pie.scale, 'logarithmic', 'pies retain the dormant scale');
   assert.doesNotMatch(dashboardCardDescription(makeURL(pie, [])), /Logarithmic scale/);
   for (const view of ['trend', 'compare', 'distribution', 'scatter', 'cycle']) {
-    const active = switchView(catalog, selected, view);
+    // The scale chosen in each analysis; a new analysis starts from its own default.
+    const active = { ...switchView(catalog, selected, view), scale: 'logarithmic' };
     assert.match(dashboardCardDescription(makeURL(active, [])), /Logarithmic scale/, `${view} still reports an active logarithmic axis`);
   }
+  assert.doesNotMatch(dashboardCardDescription(makeURL(switchView(catalog, selected, 'compare'), [])), /Logarithmic scale/, 'the trend\'s scale is no choice about Compare');
   assert.doesNotMatch(dashboardCardDescription(makeURL({ ...selected, view: 'compare', split: 'none' }, [])), /Logarithmic scale/, 'a scalar comparison has no axis');
 });
 

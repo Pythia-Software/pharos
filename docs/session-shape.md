@@ -284,12 +284,13 @@ The main chart's catalog is described in
 
 ### Charts
 
-Session Shape chooses how each chart is drawn from its view, measure and
-breakdown (the catalog's `present`), rather than offering every display,
-share and scale. Those controls are not shown, and a link's values
-for them are ignored. The %ile control stays: a single line starts with its
-mean, a heatmap with its median and 90th percentile, and either takes any
-other levels the reader ticks.
+Session Shape's default view follows the analysis, measure and breakdown
+(the catalog's `defaultView` function), as the table below says. The View
+controls (Display, Show as, Scale, Smoothing, %ile) change any of it, and
+the chart draws what the reader chose until the Breakdown or Analysis
+changes, which returns the view to its defaults (Reset view does too). A
+single line starts with its mean, a heatmap with its median and 90th
+percentile, and a day's sessions with a trailing week's smoothing.
 
 | View | Measure and breakdown | Drawn as |
 |---|---|---|

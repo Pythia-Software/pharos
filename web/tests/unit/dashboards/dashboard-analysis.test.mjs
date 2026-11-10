@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { core, schemas, recipeById, instantiateRecipe, cardCoverQuery } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { aggregate, analysisResult, analysisLabels, analysisFields, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, availableViews, catalogProblems, cycleResult, normalizeAnalysis, switchView, trendUnavailable, validAnalysisState, viewOptions } from "../../../src/dashboard-analysis-model";
+import { viewKeys, aggregate, analysisResult, analysisLabels, analysisFields, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, availableViews, catalogProblems, cycleResult, normalizeAnalysis, switchView, trendUnavailable, validAnalysisState, viewOptions } from "../../../src/dashboard-analysis-model";
 import { humanAnalysisCatalog as human } from "../../../src/human-analysis-catalog";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { runAnalysisQuery } from "../../../src/analysis-request";
@@ -50,14 +50,16 @@ test("field validation rejects unknown measures, units and thresholds but not co
   }
 });
 
-test("switching views keeps what both views share and coerces the rest", () => {
+test("switching views keeps the data both views share, coerces the rest and returns the view to its defaults", () => {
   const share = switchView(catalog, { ...trend, split: "provider" }, "compare");
-  assert.deepEqual([share.metric, share.compareAs, share.split, share.rollingPeriods], ["cost", "share", "provider", 7], "percent cost becomes a cost share");
-  assert.deepEqual(["metric", "share", "split"].map(key => switchView(catalog, share, "trend")[key]), ["cost", true, "provider"]);
+  assert.deepEqual([share.metric, share.split], ["cost", "provider"], "percent cost becomes cost");
+  assert.deepEqual(viewKeys.filter(key => share[key] !== undefined), [], "the trend's shares, smoothing and scale are no choice about Compare");
+  assert.equal(normalizeAnalysis(catalog, share).compareAs, "bars");
+  assert.deepEqual(["metric", "share", "split"].map(key => normalizeAnalysis(catalog, switchView(catalog, { ...share, compareAs: "share" }, "trend"))[key]), ["cost", false, "provider"], "nor are Compare's shares about the trend");
   const typed = switchView(catalog, { ...trend, metric: "percent" }, "compare");
-  assert.deepEqual([typed.metric, typed.compareAs, typed.split], ["tokens", "share", "type"], "token type remains a component breakdown and keeps shares");
-  assert.deepEqual(["metric", "share", "split"].map(key => switchView(catalog, typed, "trend")[key]), ["tokens", true, "type"], "component shares return to the trend");
-  const ratio = switchView(catalog, { ...share, metric: "cache_read_share", split: "provider" }, "compare");
+  assert.deepEqual([typed.metric, typed.split], ["tokens", "type"], "token type remains a component breakdown");
+  assert.deepEqual(["metric", "split"].map(key => switchView(catalog, typed, "trend")[key]), ["tokens", "type"], "and returns to the trend");
+  const ratio = normalizeAnalysis(catalog, switchView(catalog, { ...share, metric: "cache_read_share", split: "provider", compareAs: "share" }, "compare"));
   assert.equal(ratio.compareAs, "bars", "a ratio cannot be shown as shares");
   const scatter = switchView(catalog, { view: "compare", metric: "cost", split: "model_effort" }, "scatter");
   assert.deepEqual([scatter.unit, scatter.metricY, scatter.split], ["conversation", "tokens", "none"], "scatter pairs two measures of a unit; model + effort is not constant within a conversation");
@@ -66,7 +68,7 @@ test("switching views keeps what both views share and coerces the rest", () => {
   assert.equal(switchView(catalog, { view: "compare", metric: "cache_read_share", split: "none" }, "distribution").unit, "conversation", "a ratio has no per-record value");
   assert.equal(switchView(catalog, { view: "compare", metric: "tokens", split: "none" }, "distribution").unit, "records");
   assert.equal(switchView(catalog, { view: "compare", unit: "agent_session", metric: "tokens", split: "provider", reduce: "count", compareAs: "share" }, "compare").compareAs, "share", "unit counts partition the units");
-  assert.equal(switchView(catalog, { view: "compare", unit: "agent_session", metric: "tokens", split: "provider", reduce: "mean", compareAs: "share" }, "compare").compareAs, "bars");
+  assert.equal(normalizeAnalysis(catalog, switchView(catalog, { view: "compare", unit: "agent_session", metric: "tokens", split: "provider", reduce: "mean", compareAs: "share" }, "compare")).compareAs, "bars");
   assert.equal(switchView(catalog, { view: "scatter", unit: "conversation", metric: "tokens", metricY: "tokens", split: "none" }, "scatter").metricY, "cost");
 });
 
@@ -244,25 +246,25 @@ test("Over time draws every measure and population; only unit reductions stay un
     assert.equal(trendUnavailable(catalog, state), undefined, metric);
     assert.equal(viewOptions(catalog, state).find(([view]) => view === "trend")[2], undefined, `${metric}: the option is enabled`);
     const there = switchView(catalog, state, "trend");
-    assert.deepEqual([there.view, there.metric, there.split, there.share], ["trend", metric, split, false], `${metric} by ${split}: nothing is substituted`);
-    assert.deepEqual(["metric", "split", "compareAs"].map(key => switchView(catalog, there, "compare")[key]), [metric, split, "bars"], `${metric} by ${split}: and back`);
+    assert.deepEqual([there.view, there.metric, there.split, normalizeAnalysis(catalog, there).share], ["trend", metric, split, false], `${metric} by ${split}: nothing is substituted`);
+    assert.deepEqual(["metric", "split", "compareAs"].map(key => normalizeAnalysis(catalog, switchView(catalog, there, "compare"))[key]), [metric, split, "bars"], `${metric} by ${split}: and back`);
   }
   const share = { ...trend, view: "compare", metric: "cost", split: "provider", compareAs: "share" };
   assert.equal(trendUnavailable(catalog, share), undefined);
   const there = switchView(catalog, share, "trend"), back = switchView(catalog, there, "compare");
-  assert.deepEqual([there.metric, there.share, there.split, back.metric, back.compareAs, back.split], ["cost", true, "provider", "cost", "share", "provider"]);
+  assert.deepEqual([there.metric, there.share, there.split, back.metric, back.compareAs, back.split], ["cost", undefined, "provider", "cost", undefined, "provider"], "the data moves; the shares return to the default");
   // Unit counts, means, medians and maxima are not record totals.
   for (const reduce of ["count", "mean", "median", "max"]) {
     const units = { ...share, unit: "conversation", reduce };
     assert.match(trendUnavailable(catalog, units), /over records/, reduce);
     assert.deepEqual(switchView(catalog, units, "trend").view, "compare", reduce);
   }
-  assert.deepEqual(["metric", "share"].map(key => switchView(catalog, { ...share, unit: "conversation", reduce: "total" }, "trend")[key]), ["cost", true], "a unit total adds up the same records");
+  assert.deepEqual(["metric", "view"].map(key => switchView(catalog, { ...share, unit: "conversation", reduce: "total" }, "trend")[key]), ["cost", "trend"], "a unit total adds up the same records");
   // A share needs groups to divide.
   assert.equal(normalizeAnalysis(catalog, { ...share, split: "none" }).compareAs, "bars");
-  assert.equal(switchView(catalog, { ...trend, metric: "percent", split: "type" }, "compare").compareAs, "share", "token components partition the total");
+  assert.equal(normalizeAnalysis(catalog, { ...switchView(catalog, { ...trend, metric: "percent", split: "type" }, "compare"), compareAs: "share" }).compareAs, "share", "token components partition the total");
   // Values return as bars, whatever display came before.
-  assert.equal(switchView(catalog, { ...there, share: false }, "compare").compareAs, "bars");
+  assert.equal(normalizeAnalysis(catalog, switchView(catalog, { ...there, share: true }, "compare")).compareAs, "bars");
 });
 
 test("minimums count plotted observations, and shares ignore them", () => {

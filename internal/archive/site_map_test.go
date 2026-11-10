@@ -414,7 +414,7 @@ func TestSiteLinkDrawsTheChosenPercentiles(t *testing.T) {
 	}
 	// An older link's norm opens as the mean, written under its current name.
 	dashboard := site.Analyze.Dashboards["tokens"]
-	old := map[string]any{"v": float64(2), "view": "trend", "metric": "tokens", "split": "none", "norm": true}
+	old := map[string]any{"v": float64(site.Analyze.Version), "view": "trend", "metric": "tokens", "split": "none", "norm": true}
 	if verdict, _ := site.judge(dashboard, old); verdict != verdictCoercible {
 		t.Errorf("norm judged %s", verdict)
 	}
@@ -440,9 +440,10 @@ func TestSiteLinkRejectsWhatTheSiteMapCannotExpress(t *testing.T) {
 		"legacy alias":         "/tools",
 		"unknown page":         "/nowhere",
 		"other origin":         "https://example.com" + cases.Example.URL,
-		"coerced chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"cost","split":"type"}`) }),
+		"coerced chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":3,"view":"trend","metric":"cost","split":"type"}`) }),
 		"older chart":          with(func(v url.Values) { v.Set("analyze_chart", `{"view":"trend","metric":"tokens"}`) }),
-		"invalid chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"metric":"bogus"}`) }),
+		"version 2 chart":      with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"tokens","split":"provider"}`) }),
+		"invalid chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":3,"metric":"bogus"}`) }),
 		"window disagreement":  with(func(v url.Values) { v.Set("analyze_days", "90") }),
 		"unknown filter field": "/analyze?analyze_mode=query&analyze_topic=tokens&analyze_data=usage&q_usage=" + mustToken(t, site, `[{"field":"nope","op":"=","value":"x"}]`),
 		"tab without finding":  "/findings?tab=evidence",
@@ -459,12 +460,12 @@ func TestSiteLinkRejectsWhatTheSiteMapCannotExpress(t *testing.T) {
 	}
 	// A link in older names opens as the current chart, and comes back in them.
 	result, err := site.linkTool(map[string]any{"url": with(func(v url.Values) {
-		v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"percent","split":"model_family"}`)
+		v.Set("analyze_chart", `{"v":3,"view":"trend","metric":"percent","split":"model_family"}`)
 	})})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state, _ := site.parseURL(result["url"].(string)); compactJSON(state.Chart) != `{"v":2,"view":"trend","metric":"tokens","split":"model_family","share":true}` || result["canonical"] != false {
+	if state, _ := site.parseURL(result["url"].(string)); compactJSON(state.Chart) != `{"v":3,"view":"trend","metric":"tokens","split":"model_family","share":true}` || result["canonical"] != false {
 		t.Errorf("older names read as %s", compactJSON(state.Chart))
 	}
 }

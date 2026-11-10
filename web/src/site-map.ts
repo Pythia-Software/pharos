@@ -15,7 +15,7 @@ import { singleSeries, percentileLabel, percentileLevels, type PercentileLevel, 
 import { dashboardDefaults } from "./dashboard-defaults";
 import { defaultThinking, thinkingBreakdowns, thinkingRangeDays, thinkingViews } from "./thinking-model";
 import { chartPeriods } from "./chart-period";
-import { analysisDisplays } from "./dashboard-analysis-model";
+import { analysisDisplays, readableVersions } from "./dashboard-analysis-model";
 import { chartScales } from "./chart-scale";
 import { chartRanges, rangeDays, withTimeRange } from "./chart-range";
 import { queryRecipes, instantiateRecipe, describeRecipeText, type QueryRecipe } from "./curiosity-data";
@@ -99,8 +99,8 @@ export function chartVerdict(topic: UsageTopic, chart: Record<string, unknown>):
   return Object.keys(chart).filter(key => keys.includes(key)).every(key => json(drawn[key]) === json(chart[key])) ? "valid" : "coercible";
 }
 // What Go writes for a chart: its older names read as current ones (as
-// readChart reads them), then only the keys its view draws and a non-empty
-// selection. The keys the merge adds are left to the page, which adds them
+// readChart reads them), then only the keys its view draws (with the view
+// settings the rules leave to the page, kept) and a non-empty selection. The keys the merge adds are left to the page, which adds them
 // again; writing them would turn a valid partial chart coercible where the
 // page moves one. The generator checks that it draws as the whole chart does.
 const legacyByTopic = new Map<UsageTopic, LegacyName[]>();
@@ -109,7 +109,7 @@ export function viewChart(topic: UsageTopic, chart: Record<string, unknown>): Re
   const merged = { ...dashboardDefaults[topic], ...chart } as Record<string, unknown>;
   const current = Object.assign({}, chart, ...legacyByTopic.get(topic)!.filter(entry => json(merged[entry.key]) === json(entry.value)).map(entry => entry.set)) as Record<string, unknown>;
   const view = (current.view ?? dashboardDefaults[topic].view ?? "trend") as AnalysisView, selection = current.selection as { values?: unknown[] } | undefined;
-  return Object.fromEntries(Object.entries(current).filter(([key]) => topicChartKeys(topic, view).includes(key) || key === "selection" && Boolean(selection?.values?.length)));
+  return Object.fromEntries(Object.entries(current).filter(([key]) => chartKeys[view].includes(key) || key === "selection" && Boolean(selection?.values?.length)));
 }
 
 // The keys a canonical analyze_chart holds for each view, in order: the
@@ -123,10 +123,12 @@ export const chartKeys: Record<AnalysisView, string[]> = {
   scatter: ["v", "view", "unit", "metric", "metricY", "split", "scale", "scaleY"],
   cycle: ["v", "view", "unit", "metric", "split", "cycle", "cycleOn", "reduce", "scale"],
 };
-// A catalog that chooses each chart itself (present) draws these settings as
-// it chooses, so its charts neither hold nor check them.
+// A catalog whose default view depends on the data asked for (a defaultView
+// function, viewDefaults) has no one value to fill a missing setting with,
+// so its charts neither hold nor check these view settings: a link the map
+// writes holds data settings, and the page draws it with its defaults.
 const presentedKeys = ["display", "share", "nonzero", "scale", "scaleY", "compareAs"];
-const presents = (topic: UsageTopic) => Boolean(analysisCatalogs[topic]?.present);
+const presents = (topic: UsageTopic) => typeof analysisCatalogs[topic]?.defaultView === "function";
 export const topicChartKeys = (topic: UsageTopic, view: AnalysisView) => presents(topic) ? chartKeys[view].filter(key => !presentedKeys.includes(key)) : chartKeys[view];
 // A chart's keys in canonical order, over the view's defaults.
 export function canonicalChart(defaults: Record<string, unknown>, change: Record<string, unknown> = {}, keys = chartKeys): Record<string, unknown> {
@@ -254,8 +256,9 @@ export function readChart(facts: ChartFacts, chart: Record<string, unknown>) {
 export function judgeChart(facts: ChartFacts, version: number, chart: Record<string, unknown>): Verdict {
   // A renamed chart opens, but not as it was written.
   const { merged, renamed } = readChart(facts, chart), view = facts.views[String(merged.view ?? "trend")];
-  // A chart without v is an older link, which the page migrates.
-  if (!view || merged.v !== undefined && merged.v !== version) return "invalid";
+  // A chart without v, or of an earlier readable version, is an older link,
+  // which the page migrates.
+  if (!view || merged.v !== undefined && !readableVersions.includes(merged.v as number)) return "invalid";
   for (const [name, value] of Object.entries(merged)) {
     if (name === "v" || name === "view") continue;
     const range = view.numeric[name];
@@ -271,7 +274,7 @@ export function judgeChart(facts: ChartFacts, version: number, chart: Record<str
     }
     // Keys the view neither draws nor checks, the page ignores.
   }
-  if (merged.v === undefined || renamed) return "coercible";
+  if (merged.v !== version || renamed) return "coercible";
   const drawn = drawChart(view, merged);
   return Object.keys(chart).every(name => !view.keys.includes(name) || !(name in drawn) || json(drawn[name]) === json(chart[name])) ? "valid" : "coercible";
 }
@@ -306,7 +309,9 @@ export function enumerateView(topic: UsageTopic, view: AnalysisView, defaults: R
 // A catalog that chooses its charts (present) holds no display in its
 // charts; chosen_display says which one it draws for each measure and
 // breakdown, so a reader can describe the chart.
-type ViewFacts = ViewRules & { label: string; defaults: Record<string, unknown>; chosen_display?: { given: string[]; values: Record<string, unknown> } };
+// kept: view settings a chart may hold, as the reader chose them, that the
+// rules neither check nor fill (presents); Go keeps them where it writes.
+type ViewFacts = ViewRules & { label: string; defaults: Record<string, unknown>; kept?: string[]; chosen_display?: { given: string[]; values: Record<string, unknown> } };
 function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFacts {
   const catalog = analysisCatalogs[topic]!, merge = dashboardDefaults[topic] as Record<string, unknown>;
   const start = { ...merge, v: analysisVersion } as AnalysisState;
@@ -360,6 +365,7 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
   // A rule that never changes its option says nothing; a list rule always
   // says which values its list may hold.
   const facts: ViewFacts = { label, keys, defaults, domains, numeric, rules: rules.filter(rule => rule.list || rule.constraints.length || rule.fallback || rule.fill !== undefined) };
+  if (presents(topic)) facts.kept = chartKeys[view].filter(key => presentedKeys.includes(key));
   if (presents(topic) && isTrendView(view)) {
     const values: Record<string, unknown> = {};
     for (const item of drawing) {
@@ -871,7 +877,7 @@ export function buildSiteMap(inputs: SiteInputs) {
     excluded: { legacy_routes: legacyRoutes, params: ["ask_chat", "token", "fresh"] },
     windows: { days: rollingWindowDays, dashboard: dashboardWindows, analyze_days: analyzeDays, analyze_days_default: readUsageWorkspace(new URLSearchParams()).days, labels: optionLabels.window, tables: windowTables, ...windowTemplates() },
     analyze: {
-      version: analysisVersion, fill_defaults: fillDefaults, absent, fallback: viaFallback, labels: { view: optionLabels.view, reduce: optionLabels.reduce, percentiles: optionLabels.percentiles },
+      version: analysisVersion, readable_versions: readableVersions, fill_defaults: fillDefaults, absent, fallback: viaFallback, labels: { view: optionLabels.view, reduce: optionLabels.reduce, percentiles: optionLabels.percentiles },
       options: { period: Object.keys(chartPeriods), display: analysisDisplays, scale: chartScales, rollingOp: rollingOps, compareAs: compareModes, cycle: analysisCycles, split_none: noSplit, unit_records: records },
       dashboards,
     },

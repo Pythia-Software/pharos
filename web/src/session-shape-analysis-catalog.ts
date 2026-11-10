@@ -1,5 +1,5 @@
 import type { WhereTerm } from "@pythia-software/query-table-core";
-import { heatmapAxis, isTrendView, noSplit, type AnalysisCatalog, type AnalysisMeasure, type AnalysisPresentation, type RatioPart } from "./dashboard-analysis-model";
+import { heatmapAxis, isTrendView, noSplit, type AnalysisCatalog, type AnalysisMeasure, type ViewDefaults, type ViewInputs, type RatioPart } from "./dashboard-analysis-model";
 import { archetypes, bandBins, bandBreakdowns } from "./session-shape-bands";
 
 // Session shape over the session_shape dataset: one record is one agent
@@ -82,20 +82,23 @@ const sessionBreakdowns: AnalysisCatalog["breakdowns"] = {
   execution_machine_id: { label: "Execution machine", fields: ["execution_machine_id"] },
 };
 
-// Each chart is drawn one way (docs/session-shape.md#charts). Over time, a
+// Each chart's default view (docs/session-shape.md#charts); the View
+// controls change any of it. Over time, a
 // total by a band (or the archetypes) is a heatmap of the band's own value
 // on a continuous axis, the band's edges as guides; a per-session measure
 // with a band of its own is, without a breakdown, the same heatmap of its
 // sessions. Totals by any other breakdown stack as columns, rates draw a
 // line per group, and a single series is a line with its mean, until the %ile control asks for other levels. Long-tailed
-// times and counts are on a log axis outside Over time.
+// times and counts are on a log axis outside Over time. A day's sessions are
+// smoothed over a trailing week, which reads the bands best.
 const longTailed = new Set(["active_time", "turn_cycle", "autonomy", "calls_per_words", "messages", "typed_messages", "tool_calls", "active_hours"]);
 const axis = (metric: string) => longTailed.has(metric) ? "logarithmic" as const : "linear" as const;
-function present({ view, metric, metricY, split }: { view: string; metric: string; metricY: string; split: string }): AnalysisPresentation {
+function defaultView({ view, metric, metricY, split, period }: ViewInputs): ViewDefaults {
   const measure = measures[metric], scale = axis(metric);
   if (isTrendView(view)) {
-    if (heatmapAxis(sessionShapeAnalysisCatalog, { metric, split })) return { view: "trend", display: "heatmap", share: false, nonzero: false };
-    const lines = { display: "interval", share: false, nonzero: false, scale: "linear" } as const;
+    const smoothing = { rollingPeriods: period === "day" ? 7 : 0 };
+    if (heatmapAxis(sessionShapeAnalysisCatalog, { metric, split })) return { ...smoothing, view: "trend", display: "heatmap", share: false, nonzero: false };
+    const lines = { ...smoothing, display: "interval", share: false, nonzero: false, scale: "linear" } as const;
     if (split === noSplit) return { ...lines, view: "trend_line", percentiles: ["mean"] };
     return { ...lines, view: measure.additive ? "trend" : "trend_line" };
   }
@@ -125,5 +128,5 @@ export const sessionShapeAnalysisCatalog: AnalysisCatalog = {
   trend: { metric: "sessions", split: "length_band" },
   scatter: ["active_time", "tool_calls"],
   population: true,
-  present,
+  defaultView,
 };

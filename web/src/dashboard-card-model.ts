@@ -1,9 +1,9 @@
 import {peopleMessageLabelCatalog} from "./people-message-labels";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, type FieldSchema, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogFor, analysisCatalogs } from "./analysis-catalogs";
-import { isTrendView, barsShown, canonicalState, normalizeAnalysis, slicesShown, trendDrawing, validAnalysisState, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
+import { isTrendView, barsShown, analysisVersion, canonicalState, normalizeAnalysis, readLegacyView, slicesShown, trendDrawing, validAnalysisState, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
 
-import { dashboardDefaults } from "./dashboard-defaults";
+import { dashboardDefaults, legacyViewDefaults } from "./dashboard-defaults";
 import { readDashboardLink } from "./usage-dashboard-model";
 import { readUsageWorkspace, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset } from "./usage-workspace-model";
 import { cardLabels, collectDurableQuery, readBookmarks, writeBookmarks, type Bookmark, type CardLabels } from "./bookmarks";
@@ -79,10 +79,13 @@ export function dashboardCardSource(address: string): { dataset: UsageDataset; w
   return { dataset, where };
 }
 
+// A card's filters are always its population, so only its view settings are
+// read as an older link's are: a value its page wrote by default before
+// version 3 is left out (readLegacyView), and drawn by default.
 export function readDashboardCard(address: string, now = new Date()) {
   const url = new URL(address, location.origin), { topic, mode } = readUsageWorkspace(url.searchParams), catalog = analysisCatalogs[topic];
   if (url.origin !== location.origin || url.pathname !== "/analyze" || mode !== "dashboards" || !catalog || !Object.hasOwn(usageTopics, url.searchParams.get("analyze_topic") ?? "")) throw new Error("This dashboard card is unavailable.");
-  const opened = readDashboardLink(url.searchParams, dashboardDefaults[topic], state => validAnalysisState(catalog, state), catalog.time, undefined, now);
+  const opened = readDashboardLink(url.searchParams, dashboardDefaults[topic], state => validAnalysisState(catalog, state), catalog.time, (state, where) => ({ state: state.v === analysisVersion ? state : readLegacyView(state, legacyViewDefaults[topic as keyof typeof legacyViewDefaults]), where }), now);
   if (opened.error) throw new Error(opened.error);
   const resolved=peopleMessageLabelCatalog(catalog,opened.view);
   return { topic, dataset: resolved.dataset as UsageDataset, state: normalizeAnalysis(resolved, opened.view), where: opened.where, params: url.searchParams };

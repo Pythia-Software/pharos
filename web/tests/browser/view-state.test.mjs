@@ -1992,7 +1992,10 @@ test('component share charts restore their controls across reloads and view swit
  await fresh.page.getByRole('combobox',{name:'Analysis',exact:true}).selectOption('compare');
  await fresh.page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await fresh.settled();
  assert.equal(await fresh.page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'category');
- assert.equal(await fresh.page.getByRole('combobox',{name:'Show as',exact:true}).inputValue(),'share');
+ // The data returns; the view starts from its defaults in each analysis.
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Show as',exact:true}).inputValue(),'bars');
+ await fresh.page.getByRole('combobox',{name:'Show as',exact:true}).selectOption('share');
+ await fresh.page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await fresh.settled();
  await fresh.page.getByRole('button',{name:/^Typed:/}).click();
  await fresh.page.waitForURL(url=>url.searchParams.get('analyze_mode')==='query');await fresh.settled();
  const tokenAPI={'POST /api/query/usage/query-v3':({body})=>answerQuery('query-v3',body,queryFixtureDatasets.usage.map(row=>({...row,input_tokens:100,uncached_input_tokens:20,cache_read_input_tokens:70,cache_creation_input_tokens:10})),loadSchema(usageDocument))};

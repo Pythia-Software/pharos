@@ -2,7 +2,7 @@ import { DataReadinessIndicator, DataReadinessEmpty } from "./data-readiness";
 import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
-import { isTrendView, changeState, noSplit, heatmapAxis, heatmapSource, percentileLabel, trendDrawing, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { isTrendView, changeState, canonicalState, viewChosen, noSplit, heatmapAxis, heatmapSource, percentileLabel, trendDrawing, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { trendPeriodCount, trendQuery, trendSeries } from "./dashboard-trend-model";
 import { analysisCardCopy } from "./dashboard-card-copy";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
@@ -101,7 +101,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const population = usePopulation(catalog, schema, where);
   const outputEmpty=!result.loading&&!result.error&&result.results.every(entry=>!entry.buckets.length);
   const title = analysisCardCopy(catalog, view, where, schema).title;
-  const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)}
+  const controls = <AnalysisControls catalog={catalog} view={view} chosen={viewChosen(canonicalState(catalog, state))} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)}
     population={catalog.population ? <PopulationControl catalog={catalog} schema={schema} where={where} terms={population.terms} subjects={catalog.records.plural.toLowerCase()} onFilter={onFilter} /> : undefined} />;
   const action = <><DataReadinessIndicator id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty} updatedAt={result.updatedAt} />{onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : null}</>;
   // A heatmap draws the value its bins hold on that value's own axis, with

@@ -3161,7 +3161,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "failures",
           "split": "tool_name",
@@ -3284,7 +3284,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "calls",
           "split": "error_signature",
@@ -3496,7 +3496,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "calls",
           "split": "repository_path",
@@ -3588,7 +3588,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "calls",
           "split": "repository_command",
@@ -3745,7 +3745,7 @@
       "destination": {
         "topic": "time",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "result_tokens",
           "split": "tool_source",
@@ -3837,7 +3837,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "truncation_rate",
           "split": "tool_name",
@@ -3925,7 +3925,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "calls",
           "split": "repository_path",
@@ -4126,7 +4126,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "calls",
           "split": "host",
@@ -4223,7 +4223,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "calls",
           "split": "mcp_server_method",
@@ -4349,7 +4349,7 @@
       "destination": {
         "topic": "skills",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "conversations",
           "split": "skill_name",
@@ -4526,7 +4526,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "typed",
           "split": "none",
@@ -4613,7 +4613,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "typed",
           "split": "repository_name",
@@ -4719,7 +4719,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "model_family",
           "hours": 6,
@@ -4832,7 +4832,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "repository_name",
           "hours": 6,
@@ -4955,7 +4955,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "repository_name",
           "hours": 6,
@@ -5303,7 +5303,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "failure_rate",
           "split": "tool_name",
@@ -5470,7 +5470,7 @@
       "destination": {
         "topic": "time",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "time",
           "split": "command_source",
@@ -5585,7 +5585,7 @@
       "destination": {
         "topic": "time",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "result_tokens",
           "split": "tool_source",
@@ -5790,7 +5790,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "repositories",
           "split": "error_signature",
@@ -5895,7 +5895,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "calls",
           "split": "repository_error",
@@ -6039,7 +6039,7 @@
       "destination": {
         "topic": "skills",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "repositories",
           "split": "skill_name",
@@ -6668,7 +6668,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "calls",
           "split": "repository_path",
@@ -6791,7 +6791,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "typed_share",
           "split": "repository_name",
@@ -6932,7 +6932,7 @@
           "scale": "logarithmic",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "repository_name",
           "hours": 6,
@@ -7039,7 +7039,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cache_read_share",
           "split": "provider_model",
           "hours": 6,
@@ -7156,7 +7156,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "provider_model_effort",
           "hours": 6,
@@ -7405,7 +7405,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "delegated_run_depth",
           "hours": 6,
@@ -7516,7 +7516,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "price_status",
           "hours": 6,
@@ -7733,7 +7733,7 @@
       "destination": {
         "topic": "mcp",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "bytes",
           "split": "tool_name",
@@ -8261,7 +8261,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "words",
           "split": "kind",
@@ -9246,7 +9246,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "conversations",
           "split": "url",
@@ -9414,7 +9414,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "cycle",
           "metric": "typed",
           "split": "none",
@@ -9515,7 +9515,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "typed",
           "split": "none",
@@ -9627,7 +9627,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "typed",
           "split": "repository_name",
@@ -9713,7 +9713,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "words_per_message",
           "split": "none",
@@ -9812,7 +9812,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "typed",
           "split": "none",
@@ -9852,7 +9852,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "typed",
           "split": "none",
@@ -9935,7 +9935,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "typed",
           "split": "repository_name",
@@ -10129,7 +10129,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "typed",
           "split": "none",
@@ -10206,7 +10206,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "typed_messages",
           "split": "none",
@@ -10273,7 +10273,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "typed_messages",
           "split": "none",
@@ -10350,7 +10350,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "conversations",
           "split": "none",
@@ -10479,7 +10479,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "percent",
           "split": "model_family",
           "hours": 6,
@@ -10605,7 +10605,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "percent_cost",
           "split": "model_family",
           "hours": 6,
@@ -10748,7 +10748,7 @@
           "scale": "logarithmic",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "provider_model",
           "hours": 6,
@@ -10966,7 +10966,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "delegated_runs",
           "split": "provider_model_effort",
           "hours": 6,
@@ -11060,7 +11060,7 @@
       "destination": {
         "topic": "scatter",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "scatter",
           "metric": "activity_messages",
           "metricY": "tokens_output",
@@ -11208,7 +11208,7 @@
           "scale": "logarithmic",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "delegated_runs",
           "split": "provider_model_effort",
           "hours": 6,
@@ -11336,7 +11336,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "agent_sessions",
           "split": "provider_model_role",
           "hours": 6,
@@ -11428,7 +11428,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "effort",
           "hours": 6,
@@ -11630,7 +11630,7 @@
       "destination": {
         "topic": "scatter",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "scatter",
           "metric": "tokens_tokens",
           "metricY": "tokens_cost",
@@ -11720,7 +11720,7 @@
       "destination": {
         "topic": "scatter",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "scatter",
           "metric": "tokens_input",
           "metricY": "tokens_output",
@@ -11812,7 +11812,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "provider_model",
           "hours": 6,
@@ -11917,7 +11917,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "conversations",
           "split": "provider_model",
           "hours": 6,
@@ -12012,7 +12012,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "repository_provider_model",
           "hours": 6,
@@ -12220,7 +12220,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "provider_model",
           "hours": 6,
@@ -12521,7 +12521,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cache_read_share",
           "split": "repository_name",
           "hours": 6,
@@ -12820,7 +12820,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "failure_rate",
           "split": "repository_name",
@@ -12926,7 +12926,7 @@
       "destination": {
         "topic": "time",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "calls",
           "split": "tool_name",
@@ -13005,7 +13005,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "calls",
           "split": "tool_name",
@@ -13106,7 +13106,7 @@
       "destination": {
         "topic": "time",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "calls",
           "split": "repository_name",
@@ -13376,7 +13376,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "calls",
           "split": "app_provider",
@@ -13440,7 +13440,7 @@
       "destination": {
         "topic": "mcp",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "calls",
           "split": "query_source",
@@ -13550,7 +13550,7 @@
       "destination": {
         "topic": "mcp",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "time",
           "split": "tool_name",
@@ -13749,7 +13749,7 @@
       "destination": {
         "topic": "skills",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "body",
           "split": "skill_evidence",
@@ -14000,7 +14000,7 @@
       "destination": {
         "topic": "skills",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "loads",
           "split": "skill_name",
@@ -14371,7 +14371,7 @@
       "destination": {
         "topic": "time",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "calls",
           "split": "repository_name",
@@ -14598,7 +14598,7 @@
       "destination": {
         "topic": "mcp",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "empty_rate",
           "split": "tool_name",
@@ -14723,7 +14723,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "percent_cost",
           "split": "provider",
           "hours": 6,
@@ -14818,7 +14818,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "repository_name",
           "hours": 6,
@@ -14939,7 +14939,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "repository_name",
           "hours": 6,
@@ -15072,7 +15072,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "repository_name",
           "hours": 6,
@@ -15236,7 +15236,7 @@
           "scale": "logarithmic",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "repository_name",
           "hours": 6,
@@ -15331,7 +15331,7 @@
       "destination": {
         "topic": "scatter",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "scatter",
           "metric": "tokens_conversations",
           "metricY": "tokens_cost",
@@ -15409,7 +15409,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "channel",
           "hours": 6,
@@ -15488,7 +15488,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "channel",
           "hours": 6,
@@ -15567,7 +15567,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "machine_id",
           "hours": 6,
@@ -15646,7 +15646,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "machine_id",
           "hours": 6,
@@ -15725,7 +15725,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "execution_machine_id",
           "hours": 6,
@@ -15804,7 +15804,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "execution_machine_id",
           "hours": 6,
@@ -15976,7 +15976,7 @@
           "scale": "logarithmic",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "effort",
           "hours": 6,
@@ -16079,7 +16079,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "repository_name",
           "hours": 6,
@@ -16238,7 +16238,7 @@
           "scale": "logarithmic",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "repository_name",
           "hours": 6,
@@ -16398,7 +16398,7 @@
           "scale": "logarithmic",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "output",
           "split": "repository_name",
           "hours": 6,
@@ -16502,7 +16502,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "output_share",
           "split": "repository_name",
           "hours": 6,
@@ -16667,7 +16667,7 @@
           "scale": "logarithmic",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "effort",
           "hours": 6,
@@ -16837,7 +16837,7 @@
           "scale": "logarithmic",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "provider_model",
           "hours": 6,
@@ -17010,7 +17010,7 @@
           "scale": "logarithmic",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "provider_model_effort",
           "hours": 6,
@@ -17807,7 +17807,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "delegated_runs",
           "split": "none",
           "hours": 6,
@@ -17918,7 +17918,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": true,
-          "v": 2,
+          "v": 3,
           "metric": "average_fanout",
           "split": "none",
           "hours": 6,
@@ -18083,7 +18083,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "delegated_runs",
           "split": "none",
           "hours": 6,
@@ -18221,7 +18221,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "delegated_share",
           "split": "root_repository_name",
           "hours": 6,
@@ -18378,7 +18378,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "delegating_share",
           "split": "root_repository_name",
           "hours": 6,
@@ -18541,7 +18541,7 @@
           "scale": "logarithmic",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "repository_name",
           "hours": 6,
@@ -19317,7 +19317,7 @@
       "destination": {
         "topic": "time",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "time",
           "split": "activity",
@@ -19421,7 +19421,7 @@
       "destination": {
         "topic": "time",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "time",
           "split": "activity",
@@ -19510,7 +19510,7 @@
       "destination": {
         "topic": "time",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "time",
           "split": "operation_name",
@@ -19575,7 +19575,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "calls",
           "split": "none",
@@ -19650,7 +19650,7 @@
       "destination": {
         "topic": "calls",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "mean_time",
           "split": "none",
@@ -19741,7 +19741,7 @@
       "destination": {
         "topic": "parallelism",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "active_hours",
           "split": "level_band",
@@ -19806,7 +19806,7 @@
       "destination": {
         "topic": "parallelism",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "at_once",
           "split": "none",
@@ -19875,7 +19875,7 @@
       "destination": {
         "topic": "parallelism",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "cycle",
           "metric": "agent_hours",
           "split": "none",
@@ -19963,7 +19963,7 @@
       "destination": {
         "topic": "parallelism",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "agent_hours",
           "split": "repository_name",
@@ -20078,7 +20078,7 @@
       "destination": {
         "topic": "carbon",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "co2",
           "split": "none",
@@ -20186,7 +20186,7 @@
       "destination": {
         "topic": "carbon",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "co2",
           "split": "carbon_tier",
@@ -20274,7 +20274,7 @@
       "destination": {
         "topic": "carbon",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "co2",
           "split": "repository_name",
@@ -20361,7 +20361,7 @@
       "destination": {
         "topic": "carbon",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "co2",
           "split": "model_family",
@@ -20464,7 +20464,7 @@
       "destination": {
         "topic": "carbon",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "co2",
           "split": "provider",
@@ -20568,7 +20568,7 @@
       "destination": {
         "topic": "carbon",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "co2",
           "split": "effort",
@@ -20879,7 +20879,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "model",
           "hours": 6,
@@ -20939,13 +20939,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "sessions",
           "split": "harness",
-          "period": "day",
-          "scale": "linear",
-          "nonzero": false
+          "period": "day"
         },
         "dataset": "session_shape",
         "detailAction": "Compare harnesses"
@@ -21010,13 +21008,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "sessions",
           "split": "archetype",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "session_shape",
@@ -21082,13 +21078,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "sessions",
           "split": "length_band",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "session_shape",
@@ -21163,13 +21157,12 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "active_time",
           "split": "archetype",
           "period": "day",
           "scale": "logarithmic",
-          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "session_shape",
@@ -21244,13 +21237,12 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "turn_cycle",
           "split": "provider",
           "period": "day",
           "scale": "logarithmic",
-          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "session_shape",
@@ -21340,13 +21332,12 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "autonomy",
           "split": "provider",
           "period": "day",
           "scale": "logarithmic",
-          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "session_shape",
@@ -21446,13 +21437,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "failure_rate",
           "split": "model_family",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "minSamples": 20
         },
         "dataset": "session_shape",
@@ -21547,13 +21536,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "failure_rate",
           "split": "archetype",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "minSamples": 10
         },
         "dataset": "session_shape",
@@ -21625,13 +21612,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "failure_rate",
           "split": "none",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "percentiles": [
@@ -21706,13 +21691,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "active_hours",
           "split": "repository_name",
-          "period": "day",
-          "scale": "linear",
-          "nonzero": false
+          "period": "day"
         },
         "dataset": "session_shape",
         "detailAction": "Compare repositories"
@@ -21811,13 +21794,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "verification",
           "split": "repository_name",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "minSamples": 20
         },
         "dataset": "session_shape",
@@ -21882,13 +21863,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "sessions",
           "split": "none",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "percentiles": [
@@ -21991,13 +21970,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "active_hours",
           "split": "none",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "percentiles": [
@@ -22077,13 +22054,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "autonomy",
           "split": "none",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "session_shape",
@@ -22149,13 +22124,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "turn_cycle",
           "split": "none",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "session_shape",
@@ -22226,13 +22199,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "context_peak",
           "split": "none",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "session_shape",
@@ -22298,13 +22269,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "active_time",
           "split": "none",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "session_shape",
@@ -22409,13 +22378,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "active_hours",
           "split": "length_band",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "session_shape",
@@ -22525,13 +22492,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "tool_calls",
           "split": "length_band",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "session_shape",
@@ -22611,13 +22576,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "distribution",
           "metric": "context_peak",
           "split": "model_family",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "minSamples": 10
         },
         "dataset": "session_shape",
@@ -22690,13 +22653,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "cycle",
           "metric": "sessions",
           "split": "none",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "cycle": "weekday",
           "reduce": "median"
         },
@@ -22770,13 +22731,11 @@
       "destination": {
         "topic": "session_shape",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "cycle",
           "metric": "sessions",
           "split": "none",
           "period": "day",
-          "scale": "linear",
-          "nonzero": false,
           "cycle": "weekday",
           "reduce": "median",
           "cycleOn": "last_message"
@@ -22861,7 +22820,7 @@
       "destination": {
         "topic": "scatter",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "scatter",
           "metric": "human_typed",
           "metricY": "tokens_cost",
@@ -22915,7 +22874,7 @@
       "destination": {
         "topic": "compaction",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "compactions",
           "split": "trigger",
@@ -22968,7 +22927,7 @@
       "destination": {
         "topic": "labels",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend_line",
           "metric": "messages",
           "split": "family",
@@ -23028,7 +22987,7 @@
       "destination": {
         "topic": "labels",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend_line",
           "metric": "messages",
           "split": "family",
@@ -23088,7 +23047,7 @@
       "destination": {
         "topic": "labels",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend_line",
           "metric": "messages",
           "split": "family",
@@ -23206,7 +23165,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "provider",
           "hours": 6,
@@ -23324,7 +23283,7 @@
           "scale": "logarithmic",
           "seriesLimit": 15,
           "nonzero": true,
-          "v": 2,
+          "v": 3,
           "metric": "tokens",
           "split": "repository_name",
           "hours": 6,
@@ -23451,7 +23410,7 @@
           "scale": "linear",
           "seriesLimit": 15,
           "nonzero": false,
-          "v": 2,
+          "v": 3,
           "metric": "cost",
           "split": "provider",
           "hours": 6,
@@ -23543,7 +23502,7 @@
       "destination": {
         "topic": "mcp",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "trend",
           "metric": "calls",
           "split": "tool_name",
@@ -23637,7 +23596,7 @@
       "destination": {
         "topic": "agent_event_rates",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "per_thousand",
           "split": "friction_repository",
@@ -23725,7 +23684,7 @@
       "destination": {
         "topic": "agent_event_rates",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "per_thousand",
           "split": "repository_name",
@@ -23813,7 +23772,7 @@
       "destination": {
         "topic": "agent_event_rates",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "per_thousand",
           "split": "repository_name",
@@ -23907,7 +23866,7 @@
       "destination": {
         "topic": "agent_event_rates",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "per_thousand",
           "split": "choices_repository",
@@ -24298,7 +24257,7 @@
       "destination": {
         "topic": "agent_event_rates",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "compare",
           "metric": "per_thousand",
           "split": "week",
@@ -24635,7 +24594,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "cycle",
           "metric": "typed",
           "split": "none",
@@ -24714,7 +24673,7 @@
       "destination": {
         "topic": "human",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "cycle",
           "metric": "typed_messages",
           "split": "none",
@@ -24788,7 +24747,7 @@
       "destination": {
         "topic": "parallelism",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "cycle",
           "metric": "active_hours",
           "split": "none",
@@ -24863,7 +24822,7 @@
       "destination": {
         "topic": "parallelism",
         "chart": {
-          "v": 2,
+          "v": 3,
           "view": "cycle",
           "metric": "at_once",
           "split": "none",

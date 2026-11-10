@@ -5,6 +5,7 @@ import { authorshipCategories } from "./authorship-categories";
 import writing from "../../schemas/writing.schema.json";
 import writingMessages from "../../schemas/writing_messages.schema.json";
 import type { AnalysisCatalog, AnalysisMeasure, AnalysisState } from "./dashboard-analysis-model";
+import { dailyView } from "./dashboard-analysis-model";
 
 // Human Words over writing_messages: one record is one classified user
 // message, with its words split by where the text came from. Messages carry
@@ -79,7 +80,7 @@ export const humanAnalysisCatalog: AnalysisCatalog = {
   periods: { day: "day", week: "week", month: "month" }, timestamp: "sent_at",
   trend: { metric: "typed", split: "none" },
   legacy, legacySlices: true,
-  scatter: ["typed", "words"],
+  scatter: ["typed", "words"], defaultView: dailyView,
 };
 humanAnalysisCatalog.breakdowns.provider.order = ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"];
 // The series endpoint grouped a whole work by its combined providers,

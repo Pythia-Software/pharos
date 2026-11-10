@@ -8830,6 +8830,15 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
+      "key": "2a1942d91e55682a:0",
+      "file": "web/src/usage-chart.tsx",
+      "owner": "ControlSections",
+      "tag": "button",
+      "control": "onClick={onReset}",
+      "contract": "dashboard",
+      "reason": "Reset view unsets every view setting in analyze_chart (clearView), so the chart is drawn with its defaults; analyze_chart carries what remains."
+    },
+    {
       "key": "6dc6679bcdf3c20d:0",
       "file": "web/src/usage-chart.tsx",
       "owner": "CustomDates",

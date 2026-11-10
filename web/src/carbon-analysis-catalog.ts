@@ -1,5 +1,6 @@
 import {  type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type DerivedTotals } from "./dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
+import { dailyView } from "./dashboard-analysis-model";
 
 // Carbon over the usage ledger: one record is one agent session's usage of
 // one model and effort on one recorded day, as in Tokens and Cost. Its
@@ -73,7 +74,7 @@ export function carbonAnalysisCatalog(assumptions?: CarbonAssumptions): Analysis
       derived: { inputs: { fields: inputs, groupBy: ["carbon_tier"] }, derive: (totals, metric) => deriveCarbon(assumptions, totals, metric) } } },
     request: assumptions ? { params: { carbon_settings: JSON.stringify(assumptions.settings) } } : undefined,
     trend: { metric: "co2", split: "type" },
-    scatter: ["tokens", "co2"],
+    scatter: ["tokens", "co2"], defaultView: dailyView,
   };
 }
 // For validation and comparison only.

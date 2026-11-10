@@ -253,7 +253,8 @@ with. `absent` and `fallback` are the markers the rules use.
 | `domains` | For each non-numeric key, the values the page accepts |
 | `numeric` | Integer ranges (`min`, optional `max`, `integer`) and the legend selection's `max_values` |
 | `rules` | How the page draws each option of the merged chart, in order |
-| `chosen_display` | Only for a catalog that chooses its charts (Session Shape's `present`), whose charts hold no `display`: the display the page draws, walked by `given` (`metric`, `split`) |
+| `kept` | Only for a catalog whose default view depends on the data asked for (a `defaultView` function: Session Shape). Its view settings (`display`, `share`, `nonzero`, `scale`, `scaleY`, `compareAs`) are not among `keys` and no rule fills or checks them, since no one value fills a missing one; a chart may hold them as the reader chose them, and Go keeps them where it writes (`viewChart`) and accepts them as options |
+| `chosen_display` | For the same catalogs: the display the page draws by default, walked by `given` (`metric`, `split`); a chart's own `display` is drawn instead |
 
 #### Valid combinations
 
@@ -287,7 +288,7 @@ implementation:
      example, Carbon's default split `type` is no breakdown outside the
      trend, so a Compare chart without `split` is invalid.
 2. **Invalid.** The chart is invalid if any of these holds:
-   - `v` is present and is not `analyze.version`;
+   - `v` is present and is not one of `analyze.readable_versions`;
    - the view is not in `views`;
    - a merged key that has a domain holds a value outside it;
    - a numeric key is outside `numeric`;
@@ -300,8 +301,12 @@ implementation:
    `domains` and `numeric` cover every key `validAnalysisState` checks in
    the view, drawn or not. A key the view does not check has neither, and is
    ignored.
-3. **Older link.** Otherwise, a chart without `v`, or one with an older name,
-   is coercible: the page migrates or renames it.
+3. **Older link.** Otherwise, a chart without `v`, one with an earlier
+   readable `v`, or one with an older name, is coercible: the page migrates
+   or renames it. A version 2 page wrote its view defaults into every link;
+   version 3 holds only the view settings the reader chose, and the page
+   leaves a version 2 link's default-equal values out
+   (`readAnalysisLink`, `legacyViewDefaults`).
 4. **Draw.** Apply each rule `{option, fill?, constraints, fallback?}` in
    order:
    - **Own value.** The option's own value is its merged value. A missing

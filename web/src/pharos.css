@@ -189,6 +189,7 @@
    own (ControlSections); View is set off by a rule and its heading. */
 :is(.usage-chart-controls, .usage-tools-controls) > :is(.dashboard-controls-data, .dashboard-controls-view) { flex: 1 0 100%; width: 100%; gap: inherit; }
 .dashboard-controls-view { padding-top: 10px; border-top: 1px solid var(--line); }
+:is(.usage-chart-controls, .usage-tools-controls) .dashboard-controls-view > .dashboard-controls-reset { flex: 0 0 auto; align-self: flex-end; min-height: 30px; margin-left: auto; }
 :is(.usage-chart-controls, .usage-tools-controls) .dashboard-controls-view > .dashboard-controls-heading { flex: 0 0 auto; align-self: flex-end; line-height: 30px; color: var(--ink); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .usage-chart-controls .dashboard-select { width: 100%; }
 .usage-chart-controls .usage-presets { margin: 0; }

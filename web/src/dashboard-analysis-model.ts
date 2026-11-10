@@ -199,21 +199,47 @@ export type AnalysisCatalog = {
   // Whether the controls show the population (the filters other than the
   // range) and the legend can change it (dashboard-population.ts).
   population?: boolean;
-  // A catalog that chooses each chart itself: for the view, measure and
-  // breakdown asked for, how it is drawn. The choice overrides the state, and
-  // the controls for what it sets are not shown.
-  present?: (state: Pick<ResolvedAnalysis, "view" | "metric" | "metricY" | "split" | "unit">) => AnalysisPresentation;
+  // How this catalog draws a chart by default, for the data asked for
+  // (viewDefaults): over the engine's own defaults, under the reader's
+  // choices.
+  // A function when the default depends on the data asked for; the site map
+  // then leaves the view to the page (site-map.ts, presents).
+  defaultView?: ViewDefaults | ((state: ViewInputs) => ViewDefaults);
 };
-// What a catalog's present chooses. For Over time, view chooses how the trend
-// is drawn (lines or bars, trendDrawing) while the state's view stays as it
-// was; the other views ignore it.
-// Its percentiles are only a default: the %ile control stays the reader's.
-export type AnalysisPresentation = Partial<Pick<AnalysisState, "view" | "display" | "share" | "nonzero" | "scale" | "scaleY" | "compareAs" | "percentiles">>;
-// A catalog's choice for this state, limited to what the state's view uses.
-export function presentation(catalog: AnalysisCatalog, state: Pick<ResolvedAnalysis, "view" | "metric" | "metricY" | "split" | "unit">): AnalysisPresentation {
-  if (!catalog.present) return {};
-  const { view, ...chosen } = catalog.present(state);
-  return isTrendView(state.view) ? { ...chosen, ...isTrendView(view) && view ? { view } : {} } : { ...chosen.scale ? { scale: chosen.scale } : {}, ...chosen.scaleY ? { scaleY: chosen.scaleY } : {}, ...chosen.compareAs ? { compareAs: chosen.compareAs } : {} };
+// The data controls a chart's default view is derived from.
+export type ViewInputs = Pick<ResolvedAnalysis, "view" | "metric" | "metricY" | "split" | "unit" | "period">;
+// A default view. For Over time, view chooses how the trend is drawn (lines
+// or bars, trendDrawing) while the state's view stays as it was; the other
+// analyses ignore it.
+export type ViewDefaults = Partial<Pick<AnalysisState, "view" | "display" | "share" | "nonzero" | "scale" | "scaleY" | "compareAs" | "percentiles" | "rollingPeriods">>;
+// The View controls' settings (ControlSections). A state holds one only when
+// the reader chose it: an absent one is drawn as viewDefaults says, and
+// changing the Breakdown or the Analysis returns every one to its default
+// (changeState, switchView). seriesLimit and selection are the legend's.
+export const viewKeys = ["display", "share", "nonzero", "scale", "scaleY", "compareAs", "rollingPeriods", "rollingOp", "percentiles", "norm", "normPeriods"] as const satisfies ReadonlyArray<keyof AnalysisState>;
+// Daily trends open without their zeroes: idle days (weekends, days away)
+// would otherwise fill most of a sparse month with empty columns.
+export const dailyView: ViewDefaults = { nonzero: true };
+// A change that unsets every view setting, so a state merged with it (the
+// page merges each change over its state) returns to the defaults.
+export const clearView: Partial<AnalysisState> = Object.fromEntries(viewKeys.map(key => [key, undefined]));
+export const withoutView = <T extends AnalysisState>(state: T): T => ({ ...state, ...clearView });
+export const chosenView = (state: AnalysisState): Partial<AnalysisState> => Object.fromEntries(viewKeys.filter(key => state[key] !== undefined).map(key => [key, state[key]]));
+export const viewChosen = (state: AnalysisState) => viewKeys.some(key => state[key] !== undefined);
+// How a chart is drawn where the reader has not chosen: the catalog's own
+// defaults (defaultView) over the engine's (analysisDefaults), limited to
+// what the state's analysis uses. Only data controls are read, so a link
+// draws the same way before its data arrives and wherever it is opened.
+export function viewDefaults(catalog: AnalysisCatalog, state: ViewInputs): ViewDefaults {
+  const trend = isTrendView(state.view);
+  const { view, ...chosen } = typeof catalog.defaultView === "function" ? catalog.defaultView(state) : catalog.defaultView ?? {};
+  if (trend) return { ...chosen, ...isTrendView(view) && view ? { view } : {} };
+  return { ...chosen.scale ? { scale: chosen.scale } : {}, ...chosen.scaleY ? { scaleY: chosen.scaleY } : {}, ...chosen.compareAs ? { compareAs: chosen.compareAs } : {} };
+}
+// Fills each view setting the state asked for no value of with its default.
+function withViewDefaults<T extends AnalysisState>(next: T, asked: AnalysisState, defaults: ViewDefaults): T {
+  for (const [key, value] of Object.entries(defaults)) if (key !== "view" && asked[key as keyof AnalysisState] === undefined) (next as Record<string, unknown>)[key] = value;
+  return next;
 }
 
 export const rollingOps = ["mean", "sum"] as const;
@@ -223,8 +249,11 @@ export const compareModes = ["bars", "share"] as const;
 export const analysisCycles: readonly CalendarCycle[] = ["weekday", "hour"];
 // The analyze_chart format. Version 2 keeps a legend selection in the state
 // (selection) and leaves where to the population; an unversioned link may
-// hold the selection as a filter (readAnalysisLink).
-export const analysisVersion = 2;
+// hold the selection as a filter (readAnalysisLink). Version 3 holds only the
+// view settings the reader chose (viewKeys); a version 2 link also holds the
+// defaults its page wrote into it, which readAnalysisLink leaves out.
+export const analysisVersion = 3;
+export const readableVersions = [2, analysisVersion];
 // The trend draws per interval, cumulative, or as a heatmap: each period's
 // share of records in each group of an ordered breakdown (a band), rows in
 // that order (dashboard-heatmap-model.ts).
@@ -344,7 +373,7 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
     && [state.share, state.nonzero, state.completePeriods, state.norm].every(value => value === undefined || typeof value === "boolean")
     && (state.normPeriods === undefined || Number.isInteger(state.normPeriods) && state.normPeriods >= 1 && state.normPeriods <= 1000)
     && (state.percentiles === undefined || Array.isArray(state.percentiles) && state.percentiles.every(level => oneOf(level, percentileLevels)) && new Set(state.percentiles).size === state.percentiles.length);
-  if (!trendFields || state.v !== undefined && state.v !== analysisVersion) return false;
+  if (!trendFields || state.v !== undefined && !readableVersions.includes(state.v)) return false;
   if (isTrendView(state.view)) return (state.view === undefined || !viewUnavailable(catalog, state.view)) && has(catalog.measures, state.metric) && trendSplit(catalog, state.split)
     && (state.unit === undefined || state.unit === records || has(catalog.units, state.unit));
   return oneOf(state.view, availableViews(catalog).map(([view]) => view))
@@ -397,7 +426,10 @@ export function reductionLabel(reduce: AnalysisReduce, measure: AnalysisMeasure,
 // percentiles ["mean"]; norm: false asks for none and is left out). A state
 // that names its percentiles keeps them: a resolved state carries norm as
 // whether it draws them, so reading it again must not turn them into a mean.
-export function canonicalState<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): T {
+// A setting held as undefined is unset: a control that returns a setting to
+// its default (clearView) leaves it so.
+export function canonicalState<T extends AnalysisState>(catalog: AnalysisCatalog, input: T): T {
+  const state = Object.values(input).some(value => value === undefined) ? Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as T : input;
   const read = catalog.legacy ? catalog.legacy(state) as T : state;
   if (typeof read.norm !== "boolean") return read;
   const { norm, ...rest } = read;
@@ -413,24 +445,49 @@ export function canonicalState<T extends AnalysisState>(catalog: AnalysisCatalog
 // result is marked, so it is read the same way again.
 // A card's link is marked current where it stops being a card link
 // (stampCardChart), since cards always wrote their filters as the population.
-export function readAnalysisLink<T extends AnalysisState>(catalog: AnalysisCatalog, state: T, where: WhereTerm[]): { state: T; where: WhereTerm[] } {
+// Before version 3, a page wrote its defaults into every link it opened:
+// legacyView names the view settings its page drew without a value (the
+// topic's own, over the engine's), and a version 2 or older link's value
+// equal to one of them is left out, so it is drawn by default as it was. A
+// catalog that chose its charts itself (Session Shape) drew none of a link's
+// display, shares, scale or Compare's bars, so those are all left out.
+export type LegacyView = { values: Partial<AnalysisState>; chose?: boolean };
+const legacyEngineView: Partial<AnalysisState> = { display: "interval", share: false, nonzero: false, scaleY: "linear", compareAs: "bars", rollingPeriods: 0, rollingOp: "mean", normPeriods: 30 };
+const legacyChosenKeys = ["display", "share", "nonzero", "scale", "scaleY", "compareAs"];
+export function readLegacyView<T extends AnalysisState>(state: T, legacy: LegacyView = { values: {} }): T {
+  const defaults: Record<string, unknown> = { ...legacyEngineView, scale: isTrendView(state.view) ? defaultChartScale : "linear", ...legacy.values };
+  return Object.fromEntries(Object.entries(state).filter(([key, value]) => !(viewKeys as readonly string[]).includes(key)
+    || !(legacy.chose && legacyChosenKeys.includes(key)) && JSON.stringify(value) !== JSON.stringify(defaults[key]))) as T;
+}
+export function readAnalysisLink<T extends AnalysisState>(catalog: AnalysisCatalog, state: T, where: WhereTerm[], legacy?: LegacyView): { state: T; where: WhereTerm[] } {
   if (state.v === analysisVersion) return { state, where };
+  const read = { ...readLegacyView(state, legacy), v: analysisVersion };
+  if (state.v === 2) return { state: read, where };
   const fields = catalog.breakdowns[canonicalState(catalog, state).split]?.fields ?? [], field = fields[0];
-  if (!catalog.legacySlices || fields.length !== 1 || !where.some(term => isSliceTerm(term, field))) return { state: { ...state, v: analysisVersion }, where };
+  if (!catalog.legacySlices || fields.length !== 1 || !where.some(term => isSliceTerm(term, field))) return { state: read, where };
   const slice = readSlice(where, field);
-  return { state: { ...state, v: analysisVersion, selection: { ...slice, values: slice.values.map(value => value ?? "") } }, where: where.filter(term => !isSliceTerm(term, field)) };
+  return { state: { ...read, selection: { ...slice, values: slice.values.map(value => value ?? "") } }, where: where.filter(term => !isSliceTerm(term, field)) };
 }
 
 // A control's change, applied to the state as asked for rather than as drawn.
-export const changeState = <T extends AnalysisState>(catalog: AnalysisCatalog, state: T, change: Partial<AnalysisState>): T => ({ ...canonicalState(catalog, state), ...change });
+// A new breakdown or analysis returns the view to its defaults: a scale or
+// smoothing chosen for one breakdown is no choice about another.
+export function changeState<T extends AnalysisState>(catalog: AnalysisCatalog, state: T, change: Partial<AnalysisState>): T {
+  const asked = canonicalState(catalog, state);
+  const fresh = change.split !== undefined && change.split !== asked.split || change.view !== undefined && newAnalysis(asked.view, change.view);
+  return { ...fresh ? withoutView(asked) : asked, ...change };
+}
+// Over time drawn as lines or as bars is one analysis.
+const newAnalysis = (from: AnalysisView | undefined, to: AnalysisView) => isTrendView(from) ? !isTrendView(to) : from !== to;
 
 export function normalizeAnalysis<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): T & ResolvedAnalysis {
-  const next = { ...analysisDefaults, ...canonicalState(catalog, state) } as T & ResolvedAnalysis;
+  const asked = canonicalState(catalog, state);
+  const next = { ...analysisDefaults, ...asked } as T & ResolvedAnalysis;
   if(catalog.breakdowns[next.split]?.measures && !catalog.breakdowns[next.split].measures!.includes(next.metric)) next.split=noSplit;
   next.view ??= "trend";
   if(catalog.breakdowns[next.split]?.views && !catalog.breakdowns[next.split].views!.includes(next.view)) next.split=noSplit;
   if (catalog.views && !catalog.views.includes(next.view)) next.view = catalog.views[0] ?? "trend";
-  if (isTrendView(next.view)) return normalizeTrend(catalog, next);
+  if (isTrendView(next.view)) return normalizeTrend(catalog, next, asked);
   const firstUnit = Object.keys(catalog.units)[0];
   // A view this catalog cannot show at all becomes Compare; viewOptions
   // disables it with the reason.
@@ -457,7 +514,7 @@ export function normalizeAnalysis<T extends AnalysisState>(catalog: AnalysisCata
   }
   if (next.view === "distribution" && next.unit !== records && catalog.units[next.unit].recordsAlike && catalog.measures[next.metric].value) next.unit = records;
   if (!splitValid(catalog, next.unit, next.split) && !(next.view === "compare" && !comparisonComponentUnavailable(catalog, next, next.split))) next.split = catalog.allowNoSplit === false ? catalog.trend.split : noSplit;
-  Object.assign(next, presentation(catalog, next));
+  withViewDefaults(next, asked, viewDefaults(catalog, next));
   // A cycle summarizes slot values: a box per slot by default, or their mean,
   // or their total where slot values add up (not ratios or distinct counts).
   if (next.view === "cycle") { if (state.reduce === undefined || !["total", "mean", "median"].includes(next.reduce) || next.reduce === "total" && !cycleTotal(catalog.measures[next.metric])) next.reduce = "median"; }
@@ -478,8 +535,9 @@ export const periodField = (period: ChartPeriod): TrendPeriodField => period ===
 const baseUnit = (period: ChartPeriod) => period === "hours" ? "hour" : period === "days" ? "day" : period;
 const multiplePeriods = (state: Pick<AnalysisState, "period" | "hours" | "days">) => state.period === "hours" && (state.hours ?? 1) > 1 || state.period === "days" && (state.days ?? 1) > 1;
 
-// How Over time draws a state: its own view, or the one its catalog chose.
-export const trendDrawing = (catalog: AnalysisCatalog, state: ResolvedAnalysis): AnalysisView => presentation(catalog, state).view ?? state.view;
+// How Over time draws a state: as lines or bars where its analysis says so,
+// otherwise as its default view says.
+export const trendDrawing = (catalog: AnalysisCatalog, state: ResolvedAnalysis): AnalysisView => state.view !== "trend" ? state.view : viewDefaults(catalog, state).view ?? state.view;
 
 // The heatmap draws a value on a continuous axis: one column per period, a
 // row per fine bin of the value, each cell shaded by the records (or an
@@ -519,7 +577,7 @@ export function heatmapSource<T extends AnalysisState>(catalog: AnalysisCatalog,
     if (typeof key !== "string") return { catalog, state };
     const measure = catalog.measures[state.metric];
     return {
-      catalog: { ...catalog, present: undefined, trend: { ...catalog.trend, allSeries: true }, trendHeatmapUnit: { scheme: axis.bins.scheme },
+      catalog: { ...catalog, defaultView: undefined, trend: { ...catalog.trend, allSeries: true }, trendHeatmapUnit: { scheme: axis.bins.scheme },
         measures: { ...catalog.measures, [state.metric]: { ...measure, where: [...measure.where ?? [], ...unit.where] } },
         breakdowns: { ...catalog.breakdowns, [heatmapBins]: { label: axis.bins.label, fields: [key] } } },
       state: { ...state, split: heatmapBins, selection: undefined, norm: false, percentiles: [], rollingOp: "mean" },
@@ -528,7 +586,7 @@ export function heatmapSource<T extends AnalysisState>(catalog: AnalysisCatalog,
   const measure = catalog.measures[state.metric], valued = { field: axis.bins.field, op: "is_not_null" as const, value: "" };
   const weight: AnalysisMeasure = axis.counted ? { ...catalog.measures[catalog.records.count!], where: [...measure.where ?? [], valued] } : { ...measure, where: [...measure.where ?? [], valued] };
   return {
-    catalog: { ...catalog, present: undefined, trend: { ...catalog.trend, allSeries: true }, measures: { ...catalog.measures, [state.metric]: weight }, breakdowns: { ...catalog.breakdowns, [heatmapBins]: { label: axis.bins.label, fields: [axis.bins.field] } } },
+    catalog: { ...catalog, defaultView: undefined, trend: { ...catalog.trend, allSeries: true }, measures: { ...catalog.measures, [state.metric]: weight }, breakdowns: { ...catalog.breakdowns, [heatmapBins]: { label: axis.bins.label, fields: [axis.bins.field] } } },
     state: { ...state, split: heatmapBins, selection: undefined, norm: false, percentiles: [] },
   };
 }
@@ -564,13 +622,13 @@ export const singleSeries = (state: Pick<AnalysisState, "selection">) => state.s
 // the nearest one it can. Only drawing and querying use the result; the saved
 // state keeps what was asked for, so a setting returns with a measure that
 // allows it.
-function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next: T & ResolvedAnalysis): T & ResolvedAnalysis {
+function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next: T & ResolvedAnalysis, asked: AnalysisState): T & ResolvedAnalysis {
   if (!Number.isInteger(next.normPeriods) || next.normPeriods < 1) next.normPeriods = analysisDefaults.normPeriods;
   if (!has(catalog.measures, next.metric) || notTrended(catalog.measures[next.metric])) next.metric = catalog.trend.metric;
   if (!trendSplit(catalog, next.split)) next.split = catalog.trend.split;
   if (catalog.components?.[next.split] && !catalog.components[next.split].measures.includes(next.metric)) next.split = catalog.components[next.split].fallback;
-  const { view: _drawing, percentiles: suggested, ...chosen } = presentation(catalog, next);
-  Object.assign(next, chosen);
+  const { view: _drawing, percentiles: suggested, ...defaults } = viewDefaults(catalog, next);
+  withViewDefaults(next, asked, defaults);
   next.share = next.share === true; next.nonzero = next.nonzero === true; next.completePeriods = next.completePeriods === true; next.norm = next.norm === true;
   // The trend's scale, resolved once for the control and the chart: a state
   // without one draws the old trend charts' default, the linear + log split.
@@ -621,7 +679,7 @@ export function trendAdjustments(catalog: AnalysisCatalog, input: AnalysisState)
   if (!isTrendView(input.view)) return [];
   const state = normalizeAnalysis(catalog, input), measure = catalog.measures[state.metric];
   // What the catalog chose was never asked for, so it needs no explanation.
-  const asked = { ...analysisDefaults, ...canonicalState(catalog, input), ...presentation(catalog, state) };
+  const asked = withViewDefaults({ ...analysisDefaults, ...canonicalState(catalog, input) }, canonicalState(catalog, input), viewDefaults(catalog, state));
   const limits = trendLimits(catalog, { ...state, split: asked.split, display: asked.display, share: asked.share === true });
   const notes: string[] = [];
   if (has(catalog.measures, asked.metric) && notTrended(catalog.measures[asked.metric])) notes.push(`${notTrended(catalog.measures[asked.metric])}; ${measure.label.toLowerCase()} is shown instead.`);
@@ -642,24 +700,26 @@ const chartPeriodUnit = (period: ChartPeriod) => baseUnit(period);
 // active on three days is three conversation-days.
 export const rollingSumUnit = (measure: AnalysisMeasure, period: ChartPeriod) => trendKind(measure) === "count" ? `${singular(measure.unit)}-${baseUnit(period)}s` : measure.unit;
 
-// Move between views, carrying what both share: the trend's shares become
-// a share display, and back. A unit reduction the trend cannot draw stays
-// where it is (trendUnavailable says why); nothing is substituted.
-// The trend keeps what was asked for (its own settings survive a visit to
-// another view); the other views are saved as drawn, as in phase 1.
-export function switchView<T extends AnalysisState>(catalog: AnalysisCatalog, input: T, view: AnalysisView): T & ResolvedAnalysis {
+// Move between analyses, carrying the data both share. The view returns to
+// its defaults (viewKeys): Over time's shares are no choice about Compare's.
+// A unit reduction the trend cannot draw stays where it is (trendUnavailable
+// says why); nothing is substituted. The other analyses' data settings are
+// saved as drawn, as in phase 1.
+export function switchView<T extends AnalysisState>(catalog: AnalysisCatalog, input: T, view: AnalysisView): T {
   const state = canonicalState(catalog, input), current = state.view ?? "trend";
+  const data = (next: AnalysisState) => ({ ...withoutView(next), ...newAnalysis(current, view) ? {} : chosenView(input) }) as T;
   if (isTrendView(view)) {
-    if (trendUnavailable(catalog, state)) return normalizeAnalysis(catalog, state);
-    if (isTrendView(current)) return normalizeAnalysis(catalog, { ...state, view });
-    return { ...state, view, share: current === "compare" && state.compareAs === "share" } as T & ResolvedAnalysis;
+    if (trendUnavailable(catalog, state)) return input;
+    // Lines or bars: the same analysis, with the reader's view.
+    if (isTrendView(current)) return { ...input, view };
+    return data({ ...state, view });
   }
   if (isTrendView(current)) {
-    const trend = normalizeTrend(catalog, { ...analysisDefaults, ...state, view: "trend" } as T & ResolvedAnalysis);
-    return normalizeAnalysis(catalog, { ...state, view, metric: trend.metric, compareAs: trend.share ? "share" as const : "bars" as const, ...view === "cycle" ? { reduce: "median" as const } : {},
-      split: has(catalog.breakdowns, trend.split) || view === "compare" && !comparisonComponentUnavailable(catalog, trend, trend.split) ? trend.split : noSplit });
+    const trend = normalizeTrend(catalog, { ...analysisDefaults, ...state, view: "trend" } as T & ResolvedAnalysis, state);
+    return data(normalizeAnalysis(catalog, withoutView({ ...state, view, metric: trend.metric, ...view === "cycle" ? { reduce: "median" as const } : {},
+      split: has(catalog.breakdowns, trend.split) || view === "compare" && !comparisonComponentUnavailable(catalog, trend, trend.split) ? trend.split : noSplit })));
   }
-  return normalizeAnalysis(catalog, { ...state, view, ...view === "cycle" ? { reduce: "median" as const } : {} });
+  return data(normalizeAnalysis(catalog, withoutView({ ...state, view, ...view === "cycle" ? { reduce: "median" as const } : {} })));
 }
 
 export const unique = (terms: WhereTerm[]) => terms.filter((term, index) => terms.findIndex(other => JSON.stringify(other) === JSON.stringify(term)) === index);

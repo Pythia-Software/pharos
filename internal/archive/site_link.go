@@ -798,7 +798,7 @@ func (site *siteMap) argChart(node *siteNode, base, options map[string]any) (ord
 		return orderedObject{}, linkError("options.view", message, dashboard.viewOrder...)
 	}
 	for key := range options {
-		if key == "v" || key == "selection" || slices.Contains(view.Keys, key) {
+		if key == "v" || key == "selection" || slices.Contains(view.Keys, key) || slices.Contains(view.Kept, key) {
 			continue
 		}
 		return orderedObject{}, linkError("options."+key, fmt.Sprintf("is not an option of the %s view; browse_site({path: %q}) lists them.", viewName, node.Path+"/chart/"+viewName), viewOptionNames(view)...)
@@ -2113,8 +2113,9 @@ func (site *siteMap) chartPhrase(node *siteNode, chart map[string]any) string {
 	}
 	switch viewName {
 	case "trend":
+		// A display the link chose is drawn; otherwise the catalog's default.
 		display := text("display")
-		if chosen := view.ChosenDisplay; chosen != nil {
+		if chosen := view.ChosenDisplay; chosen != nil && merged["display"] == nil {
 			keys := make([]string, len(chosen.Given))
 			for index, name := range chosen.Given {
 				keys[index] = text(name)

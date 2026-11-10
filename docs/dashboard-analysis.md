@@ -673,15 +673,24 @@ no sum, cumulative or share.
   value, even when the drawn numbers are transformed (shares, a trailing
   window). Legend selection is visibility, not a control; "Make this the
   population" moves it into Data.
-- **Chosen charts.** A catalog may choose each chart itself (`present`):
-  given the view, measure and breakdown, how it is drawn — display, shares,
-  scale, a default reference level, Compare's bars or shares, and for Over time whether it draws
-  lines or bars (`trendDrawing`, without changing the state's view). The
-  choice overrides what a link asked for, the controls for those settings
-  are hidden, and the site map leaves them out of the topic's chart keys
-  (`topicChartKeys`), so a link neither holds nor checks them. Session
-  Shape is the one catalog that chooses
-  ([its charts](session-shape.md#charts)).
+- **Default views.** A state holds a View setting (`viewKeys`) only when
+  the reader chose it. An absent one is drawn as `viewDefaults` says: the
+  catalog's `defaultView` over the engine's `analysisDefaults`, read from
+  the data settings alone, so a link draws the same way before its data
+  arrives and wherever it opens. Daily dashboards leave out empty days
+  (`dailyView`); Message Labels shows shares. A `defaultView` function
+  chooses by the analysis, measure, breakdown and time bucket — display,
+  shares, scale, smoothing, a default reference level, Compare's bars or
+  shares, and for Over time whether it draws lines or bars (`trendDrawing`,
+  without changing the state's view). Session Shape is the one such
+  catalog ([its charts](session-shape.md#charts)); the site map leaves its
+  view settings to the page (`kept`). Changing the Breakdown or the
+  Analysis returns every view setting to its default (`changeState`,
+  `switchView`), and the View section's Reset view does so at once
+  (`clearView`). `dashboardDefaults` hold data settings only. Version 3 of
+  `analyze_chart` holds only chosen view settings; `readAnalysisLink`
+  leaves out a version 2 link's values equal to the defaults its page
+  wrote into it (`legacyViewDefaults`).
 - **Heatmap.** Display = Heatmap draws a value on a continuous axis over
   time, as an observability heatmap does: one column per period, the value
   up the side, and each cell shaded by how much falls in that narrow range
