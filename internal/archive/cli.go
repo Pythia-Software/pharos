@@ -195,6 +195,9 @@ func Run(arguments []string) error {
 	// Capturing and backing up only copy files; they never open the catalog
 	// for writing.
 	// Each holds a lease under the capture root while it writes (§6.5).
+	if command == "claude-import" {
+		return runClaudeImportCommand(config, args)
+	}
 	if command == "sqlite-records" {
 		if subcommand := firstOf(args); subcommand == "status" || subcommand == "verify" {
 			return runSQLiteRecordsCLI(config, args)
@@ -571,7 +574,7 @@ func firstOf(args []string) string {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,agent-events,execution-evidence,conversation-names,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,claude-import,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,agent-events,execution-evidence,conversation-names,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
 
 }
 func urlQueryEscape(value string) string {

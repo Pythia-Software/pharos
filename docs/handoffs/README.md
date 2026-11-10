@@ -87,6 +87,12 @@ That handoff superseded the requests in
 Each is marked with the release that resolved it and remains the detailed
 record of its request.
 
+[`query-table-row-pipeline-cost.md`](query-table-row-pipeline-cost.md) is
+open: a V3 metric over a large SQL source spends most of its time copying
+rows through one materialized validation stage per field. On 1.5 million
+rows the compiled request takes 8.5 s where the same aggregate written by
+hand takes 2.4 s. It can be sent directly to the Query Table team.
+
 [`query-table-go-link-codec.md`](query-table-go-link-codec.md) asked for Go
 `EncodeQueryLink` and `DecodeQueryLink`, at parity with `encodeQuery` and
 `decodeQueryStrict`, for the [site map](../site-map.md)'s link tools. Query

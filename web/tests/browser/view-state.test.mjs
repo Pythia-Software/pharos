@@ -177,11 +177,11 @@ test('relatives left out at the family bound load from the URL in a fresh browse
 
 test('Timeline pending events stay announced for a collapsed session, after restoration and without taking focus',{skip},async t=>{
  const status=page=>page.locator('[role=status].delegation-truncation');
- const caption=page=>page.locator('.lt-recursive-lane[data-session-id="s-nested"] .delegation-truncation');
- const app=await open(t,{url:`/work/${workID}?explorer=timeline`,api:pendingEvidenceApi,ready:'.lt-recursive-lane[data-session-id="s-nested"] .delegation-truncation'}),{page}=app;
+ const caption=page=>page.locator('.lt-recursive-lane[data-session-id="s-nested"] .lt-session-notice');
+ const app=await open(t,{url:`/work/${workID}?explorer=timeline`,api:pendingEvidenceApi,ready:'.lt-recursive-lane[data-session-id="s-nested"] .lt-session-notice'}),{page}=app;
  await status(page).first().waitFor();const drawn=await status(page).first().textContent();
  assert.equal(await page.evaluate(()=>document.activeElement===document.body),true,'the status does not take focus');
- // Collapsing the parent hides the pending lane and its caption; the Timeline still says so.
+ // Collapsing the parent hides the pending lane and its notice; the Timeline still says so.
  await page.getByRole('button',{name:/^Collapse child sessions of Review implementation/}).click();
  await caption(page).waitFor({state:'detached'});
  await page.waitForFunction(text=>[...document.querySelectorAll('[role=status].delegation-truncation')].some(el=>el.textContent!==text),drawn);

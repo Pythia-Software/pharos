@@ -1325,9 +1325,14 @@ func parallelismRows(data *concurrencyData, settings parallelismSettings) []map[
 // The engine still applies the whole WHERE. Relative values must already be
 // resolved against the request's clock; anything else leaves a side open.
 func parallelismWindow(where []querytable.WhereTerm) (from, to int64) {
+	return timeWindow(where, "started_at")
+}
+
+// timeWindow is the span the top-level bounds on one datetime field allow.
+func timeWindow(where []querytable.WhereTerm, field string) (from, to int64) {
 	from, to = math.MinInt64, math.MaxInt64
 	for _, term := range where {
-		if term.IsGroup() || term.Negated || term.Field != "started_at" || strings.HasPrefix(term.Value, "+") || strings.HasPrefix(term.Value, "-") {
+		if term.IsGroup() || term.Negated || term.Field != field || strings.HasPrefix(term.Value, "+") || strings.HasPrefix(term.Value, "-") {
 			continue
 		}
 		// The engine's datetime literals (sqliteParseTime).
@@ -1347,6 +1352,36 @@ func parallelismWindow(where []querytable.WhereTerm) (from, to int64) {
 		}
 	}
 	return from, to
+}
+
+// usageRowsWithin leaves out the rows a filter's bounds on first_usage_at
+// rule out, so a request for last week does not stage every day on record.
+// The engine still applies the whole filter; a day of slack on each side
+// covers a date literal read in another zone.
+func usageRowsWithin(rows []map[string]any, where [][]querytable.WhereTerm) []map[string]any {
+	from, to := int64(math.MinInt64), int64(math.MaxInt64)
+	for _, terms := range where {
+		a, b := timeWindow(terms, "first_usage_at")
+		from, to = max(from, a), min(to, b)
+	}
+	if from == math.MinInt64 && to == math.MaxInt64 {
+		return rows
+	}
+	const slack = int64(24 * time.Hour / time.Millisecond)
+	if from > math.MinInt64+slack {
+		from -= slack
+	}
+	if to < math.MaxInt64-slack {
+		to += slack
+	}
+	kept := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		at, err := time.Parse(time.RFC3339Nano, firstString(row["first_usage_at"]))
+		if err != nil || at.UnixMilli() >= from && at.UnixMilli() <= to {
+			kept = append(kept, row)
+		}
+	}
+	return kept
 }
 
 // parallelismQueryRows feeds the query-table engine. Preference writes don't
@@ -1383,7 +1418,12 @@ func (c *Catalog) parallelismQueryRows(ctx context.Context, fields libraryFields
 // against the request's clock. Each source decides which predicates are safe
 // to apply before staging; the query engine still applies the full filter.
 func (s *Server) mapRowsWhere(dataset string, where []querytable.WhereTerm, clock time.Time) [][]querytable.WhereTerm {
-	if dataset != "scatter" && dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" && dataset != "people_message_labels" || len(where) == 0 {
+	if dataset != "scatter" && dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" && dataset != "people_message_labels" && dataset != "usage" || len(where) == 0 {
+		return nil
+	}
+	// A Usage filter on hour matches a day by any of its hours, so the day's
+	// own first hour does not decide it.
+	if dataset == "usage" && slices.Contains(whereFields(where), "hour") {
 		return nil
 	}
 	schema, err := s.queryTableSchema(dataset)

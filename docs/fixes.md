@@ -82,10 +82,21 @@ lab's "v3" grouping:
      what ("Read-only sandbox blocks Go’s temporary build directory",
      "Merges keep conflicting in generated site map").
 
-   Failing that, it is the lead cut to the problem, without first-person
-   openers or a trailing plan. The item's best
-   self-contained member sentence (first person, plans and back-references ranked
-   down) is kept as its **lead** and quoted under the title.
+   Failing that, it is the lead cut to the problem: without first-person or
+   "Actually,"/"Wait,"/"Confirmed:"/"Minor —" openers, and without a trailing
+   plan or what the agent did next ("…; I rebuilt it", "… -- I need a…", "; fix
+   imports with Python"). The item's best self-contained member sentence is
+   kept as its **lead** and quoted under the title. A member that states the
+   problem wins over one that states an outcome: a remedy ("The fix is to…",
+   "the right approach is…", "my best move is…") or work already done ("Fixed
+   the parser…", "…now passes", "…now displays correctly after fixing…") is
+   ranked far down, unless a later clause says something still fails.
+   "Fixed", "resolved" or "patched" used as adjectives ("The port is fixed at
+   18768", "Resolved symlinks point outside…") and "now builds twice" are not
+   done work. Plans ("I'll…" anywhere), advice ("should", "instead of") and
+   first person rank down less, and naming an obstacle ranks up. Titles may change between builds; an
+   item's ID comes from its group's leader or key term, never its title or
+   lead, so its state, cart entry and handoffs stay with it.
 8. **Split off and merge known failing checks.** Known-failure sentences in a
    group about something else are split off, so an aside does not name or
    hide the group's own problem. A test named in code
@@ -103,6 +114,12 @@ lab's "v3" grouping:
    (fails on master, unrelated to this change) is a known failing check, not an
    environment problem. Items in the same place that name the same check (a quoted
    name, or two shared distinctive words such as "dashboard parity") merge into one.
+
+   After merging, an item whose every member reports work already done ("I
+   fixed the review finding and handed the candidate back") names nothing left
+   to fix and is left out; its events count as excluded (`done`). Remedies
+   alone stay: a recurring "the fix is to…" is a fact worth writing down.
+   Dropping it last changes no other item or ID.
 10. **Mark intended constraints.** When at least two events, and a fifth of the
    item's, cite a rule they are following ("per CLAUDE.md", "the guidance says
    never…"), the item is marked **Guidance already covers this (intended)** and left
