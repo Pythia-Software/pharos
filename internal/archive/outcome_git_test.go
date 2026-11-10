@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -318,6 +319,13 @@ func TestSessionGitLinksCommits(t *testing.T) {
 // Failing to look is never evidence: a repository local Git cannot read is
 // "not checked", with the reason, and keeps nothing it did not find.
 func TestSessionGitNotChecked(t *testing.T) {
+	// The Library's Git counts read their project's kind, and local Git's
+	// counts its check too, whichever columns are shown.
+	for selected, want := range map[string]string{"pr_count": "project_kind", "branch_count": "project_kind", "linked_commits": "git_check_reason"} {
+		if fields := queryRowActionFields("library", []string{"title", selected}); !slices.Contains(fields, want) {
+			t.Errorf("library row fields for %s: %v", selected, fields)
+		}
+	}
 	f := newGitFixture(t)
 	f.session("elsewhere", "host_other_mac")
 	f.edit("elsewhere", "main.go", 5)
