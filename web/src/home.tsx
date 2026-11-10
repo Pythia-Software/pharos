@@ -13,7 +13,7 @@ import "./home.css";
 import { AskPharosHome } from "./ask-pharos";
 import { cardTemplates } from "./card-library-model";
 import { cardLoadingPresentation } from "./card-loading-model";
-import { loadCardPreviews, invalidateCardPreviews } from "./card-previews";
+import { batchPreviewArrivals, loadCardPreviews, invalidateCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
 import type { ResultPolicy } from "./result-cache";
 import { collectCardTemplate, DASHBOARD_CARD_ACTION, dashboardCardGroups, dashboardCardLabels, dashboardCardPresentation, dashboardCardSource, dashboardCardWindow } from "./dashboard-card-model";
@@ -89,13 +89,15 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       ...collection.map(item => ({ id: item.id, spec: collectionSpec(item), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, dashboard: item.dashboard ? item.url : undefined, dashboardTarget: item.dashboardTarget, groups: item.maxGroups } })),
       ...pool.filter(item => ![...saved].some(id => id!.split(":")[0] === item.id)).map(item => ({ id: item.instanceId, spec: { dataset: item.dataset, query: item.query, window: item.window }, options: { recipe: item, cover: item.cover, url: item.url, suggested: true } })),
     ];
+    const arrivals = batchPreviewArrivals(batch => {
+      setPreviews(current => { const next = { ...current }; for (const { id, preview } of batch) { if (preview) next[id] = preview; else delete next[id]; } return next; });
+      setErrors(current => { const next = { ...current }; for (const { id, preview, error } of batch) { if (preview) delete next[id]; else next[id] = String(error); } return next; });
+    });
     void loadCardPreviews(jobs.flatMap(job => job.spec ? [{ id: job.id, dataset: job.spec.dataset, query: job.spec.query, schema: schemas[job.spec.dataset], options: { ...job.options, window: job.spec.window } }] : []), (id, preview, error) => {
-      if (controller.signal.aborted) return;
-      if (preview) { setPreviews(current => ({ ...current, [id]: preview })); setErrors(current => { const next = { ...current }; delete next[id]; return next; }); }
-      else { setErrors(current => ({ ...current, [id]: String(error) })); setPreviews(current => { const next = { ...current }; delete next[id]; return next; }); }
-    }, controller.signal, { policy: refreshPolicy.current }).then(() => { if (!controller.signal.aborted) setLoading(false); });
+      if (!controller.signal.aborted) arrivals.publish(id, preview, error);
+    }, controller.signal, { policy: refreshPolicy.current }).then(() => { if (!controller.signal.aborted) { arrivals.flush(); setLoading(false); } });
     refreshPolicy.current = "cached";
-    return () => controller.abort();
+    return () => { controller.abort(); arrivals.cancel(); };
   }, [active, collection, pool, generation, schemas]);
 
   useEffect(() => {

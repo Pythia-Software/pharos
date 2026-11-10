@@ -1,3 +1,4 @@
+import { localeNumber } from "./locale-format";
 import { formatUSD } from "./currency";
 import type { AggregationBucket, AggregationResultEntry, MetricBoxSummary } from "@pythia-software/query-table-core";
 
@@ -41,10 +42,10 @@ export function boxCost(value: number): string {
   return formatUSD(value);
 }
 export function boxNumber(value: number): string {
-  return value.toLocaleString(undefined, { maximumFractionDigits: value !== 0 && Math.abs(value) < .01 ? Math.min(6, 1 - Math.floor(Math.log10(Math.abs(value)))) : 2 });
+  return localeNumber(value, { maximumFractionDigits: value !== 0 && Math.abs(value) < .01 ? Math.min(6, 1 - Math.floor(Math.log10(Math.abs(value)))) : 2 });
 }
 export function boxAxisNumber(value: number): string {
-  return Math.abs(value) >= 1000 ? value.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 }) : boxNumber(value);
+  return Math.abs(value) >= 1000 ? localeNumber(value, { notation: "compact", maximumFractionDigits: 1 }) : boxNumber(value);
 }
 export function boxDuration(value: number): string {
   return value >= 3600000 ? `${boxNumber(value / 3600000)}h` : value >= 60000 ? `${boxNumber(value / 60000)}min` : value >= 1000 ? `${boxNumber(value / 1000)}s` : `${boxNumber(value)}ms`;

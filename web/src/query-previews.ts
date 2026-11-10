@@ -56,6 +56,18 @@ type Context = { schema: FieldSchema; execution: ComputedExecution; queryCapabil
 type Payload = { served?: ResultServed; now?: number; coverage?: AgentEventsCoverage; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
 const cache = new Map<string, Cached>();
+// An answer is reused for a minute. After that it only holds memory: whole
+// result pages, for every cover a page prepared.
+const CACHE_LIFETIME = 60_000;
+let cacheSweep: ReturnType<typeof setTimeout> | undefined;
+function sweepPreviewCache() {
+  clearTimeout(cacheSweep); cacheSweep = undefined;
+  // Entries are kept in the order they were stored, oldest first.
+  for (const [key, entry] of cache) { if (Date.now() - entry.at < CACHE_LIFETIME) break; cache.delete(key); }
+  if (!cache.size) return;
+  cacheSweep = setTimeout(sweepPreviewCache, CACHE_LIFETIME);
+  (cacheSweep as { unref?: () => void }).unref?.();
+}
 export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); invalidateConcurrencyData(); }
 
 export function formatPreviewValue(value: number, unit: string): string {
@@ -298,7 +310,13 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     }).filter(Boolean).join(" · ") || preview.groupEvidence?.[JSON.stringify(values[0].keys)];
   }
   if (query.grouping && recipe?.exploration?.labelFields && payload.rows?.length) {
-    preview.groupLabels = Object.fromEntries(payload.rows.map(row => [JSON.stringify(groupKeyFields(query.grouping!.keys).map(key => row[key] ?? null)), recipe.exploration!.labelFields!.map(field => keyLabel(schema, field)?.(row[field]) ?? String(row[field] ?? "Unspecified")).join(" · ")]));
+    // Only the groups a metric returned are ever drawn or looked up. A result
+    // page can hold thousands of others, and covers are cached by the hundred.
+    const drawn = new Set(metrics.flatMap(metric => metric.result.buckets.map(bucket => JSON.stringify(bucket.keys))));
+    preview.groupLabels = Object.fromEntries(payload.rows.flatMap(row => {
+      const key = JSON.stringify(groupKeyFields(query.grouping!.keys).map(key => row[key] ?? null));
+      return drawn.has(key) ? [[key, recipe.exploration!.labelFields!.map(field => keyLabel(schema, field)?.(row[field]) ?? String(row[field] ?? "Unspecified")).join(" · ")]] : [];
+    }));
   }
   // A ranked cover needs values and evidence as well as bars. Match companion
   // metrics by their actual group keys, never by bucket position.
@@ -523,7 +541,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   function enqueue(item: Item) {
     if (signal?.aborted) return;
     const key = JSON.stringify([item.job.dataset, item.query, item.search]), cached = cache.get(key);
-    if (cached && Date.now() - cached.at < 60_000) {
+    if (cached && Date.now() - cached.at < CACHE_LIFETIME) {
       item.accept(cached);
       return;
     }
@@ -533,7 +551,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   }
   for (const item of resolved) {
     const cached = cache.get(JSON.stringify([item.job.dataset, item.query, item.search]));
-    const now = cached && Date.now() - cached.at < 60_000 ? cached.payload.now ?? clock.getTime() : clock.getTime();
+    const now = cached && Date.now() - cached.at < CACHE_LIFETIME ? cached.payload.now ?? clock.getTime() : clock.getTime();
     const historyQuery = smoothingQuery(item.job, item.query, now);
     let visible: Cached | undefined, history: Cached | undefined, done = false;
     const fail = (error: unknown) => { if (!done && !signal?.aborted) { done = true; publish(item.job.id, undefined, error); } };
@@ -610,7 +628,11 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     if (cache.size >= 200) cache.delete(cache.keys().next().value!);
     payload = { ...payload, served: payload.served ?? servedOf(payload), now: payload.now ?? item.now };
     // A stale answer is asked for again; holding it here would answer that.
-    if (payload.served?.state !== "stale") cache.set(JSON.stringify([item.job.dataset, item.query, item.search]), { at: Date.now(), payload, schema });
+    if (payload.served?.state !== "stale") {
+      const key = JSON.stringify([item.job.dataset, item.query, item.search]);
+      cache.delete(key); cache.set(key, { at: Date.now(), payload, schema });
+      if (cacheSweep === undefined) sweepPreviewCache();
+    }
     item.accept({ at: Date.now(), payload, schema });
   }
   async function work() {

@@ -11,6 +11,14 @@ const defaultLimits = { entries: 400, bytes: 16 * 1024 * 1024 };
 export function createCardPreviewCache(storage?: CardPreviewStorage, limits = defaultLimits) {
   const entries = new Map<string, CardPreviewSnapshot & { generation: number }>();
   let generation = 1, writes = Promise.resolve();
+  // An entry never changes after put, so its stored size is measured once: a
+  // save while a catalog loads would otherwise serialize every cover again.
+  const sizes = new WeakMap<object, number>(), encoder = new TextEncoder();
+  const sizeOf = (entry: object) => {
+    let size = sizes.get(entry);
+    if (size === undefined) sizes.set(entry, size = encoder.encode(JSON.stringify(entry)).length);
+    return size;
+  };
   // A busy or blocked browser store must not hold up live queries.
   let readTimer: ReturnType<typeof setTimeout> | undefined;
   const loaded = storage ? Promise.race([
@@ -47,7 +55,7 @@ export function createCardPreviewCache(storage?: CardPreviewStorage, limits = de
       let bytes = 0;
       const kept = [...entries.values()].reverse().sort((a, b) => b.at - a.at).filter(entry => {
         if (Date.now() - entry.at > lifetime) return false;
-        const size = new TextEncoder().encode(JSON.stringify(entry)).length;
+        const size = sizeOf(entry);
         if (bytes + size > limits.bytes) return false;
         bytes += size; return true;
       }).slice(0, limits.entries).map(({ key, at, preview }) => ({ key, at, preview }));

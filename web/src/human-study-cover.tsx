@@ -1,12 +1,13 @@
+import { localeDate, localeNumber, localeTime } from "./locale-format";
 import { formatUSD } from "./currency";
 import React, { useLayoutEffect, useRef, useState } from "react";
 import { hourOfDayColor } from "./chart-colors";
 import type { HumanStudyPreview } from "./human-study";
 import "./human-study.css";
 
-const percent = (value: number) => value.toLocaleString(undefined, { style: "percent", maximumFractionDigits: 1 });
-const number = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 1 });
-const endpointDate = (time: number) => new Date(time).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+const percent = (value: number) => localeNumber(value, { style: "percent", maximumFractionDigits: 1 });
+const number = (value: number) => localeNumber(value, { maximumFractionDigits: 1 });
+const endpointDate = (time: number) => localeDate(time, { month: "short", day: "numeric", year: "numeric" });
 export function HumanStudyCover({ study }: { study: HumanStudyPreview }) {
   const plot = useRef<HTMLSpanElement>(null), [size, setSize] = useState({ width: 260, height: 120 });
   useLayoutEffect(() => {
@@ -43,7 +44,7 @@ export function HumanStudyCover({ study }: { study: HumanStudyPreview }) {
     return [
       time === undefined ? `Daily endpoint ${index + 1}` : endpointDate(time),
       value === null ? "No eligible messages in this window" : `${format(value)} ${study.pointValueLabel ?? study.valueLabel}`,
-      `Trailing ${study.lookbackDays} days${time === undefined ? "" : ` · ending ${new Date(time).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZoneName: "short" })}`}`,
+      `Trailing ${study.lookbackDays} days${time === undefined ? "" : ` · ending ${localeTime(time, { hour: "numeric", minute: "2-digit", timeZoneName: "short" })}`}`,
     ].join("\n");
   };
   return <span className={`human-study-cover is-${study.kind}`}>
