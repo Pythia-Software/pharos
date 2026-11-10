@@ -738,8 +738,12 @@ PY
   async function loadCloud(){
     clearTimeout(cloudPoll);if(document.hidden)return;
     try{const response=await fetch('/api/cloud-backup');const result=await response.json();if(!response.ok)throw new Error(result.error||'Cloud backup status is unavailable');cloudState=result;cloudError='';renderSaved();}catch(error){cloudError=error.message;}
-    refresh();renderOngoing();const active=cloudActive();cloudPoll=setTimeout(loadCloud,active?1500:10000);
+    refresh();renderOngoing();const active=cloudActive();cloudLoadedAt=Date.now();cloudPoll=setTimeout(loadCloud,active?1500:onSettings()?10000:60000);
   }
+  // This is drawn only in Settings; other pages just keep it from going stale.
+  let cloudLoadedAt=0;
+  const onSettings=()=>Boolean(document.getElementById('settings')?.classList.contains('active'));
+  window.addEventListener('pharos:route',()=>{if(onSettings()&&Date.now()-cloudLoadedAt>10000)void loadCloud();});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)void loadCloud();});
   async function connectCloud(){
     cloudBusy=true;cloudError='';refresh();

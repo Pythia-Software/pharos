@@ -549,13 +549,18 @@ test("labelled covers fetch friendly titles beyond twelve visible groups", async
   const state={...core.EMPTY_QUERY,...request.result,select:request.result.select.map(field=>({field})),aggregations:request.metrics,grouping:{...request.grouping,source:{...core.EMPTY_QUERY,...request.source,select:request.source.select.map(field=>({field}))}}};
   const prepared=core.prepareGrouping(population,schemas.usage,state.grouping,{now:request.now});
   const page=core.applyQuery(population,state,schemas.usage,{now:request.now});
-  return response({version:3,now:request.now,sourceTotal:population.length,...page,metrics:core.evaluateMetrics(population,state,schemas.usage,{now:request.now,shownRows:page.rows}).metrics,execution,schema:{name:prepared.schema.name,idField:prepared.schema.idField,fields:prepared.schema.fields.map(({name,type})=>({name,type}))}});
+  // The page may hold more groups than the metrics chart.
+  const rows=core.applyQuery(population,{...state,limit:25},schemas.usage,{now:request.now}).rows;
+  return response({version:3,now:request.now,sourceTotal:population.length,...page,rows,metrics:core.evaluateMetrics(population,state,schemas.usage,{now:request.now,shownRows:page.rows}).metrics,execution,schema:{name:prepared.schema.name,idField:prepared.schema.idField,fields:prepared.schema.fields.map(({name,type})=>({name,type}))}});
  });
  const recipe=queryRecipes.find(recipe=>recipe.id==="usage-work"),item=instantiateRecipe(recipe,7),cover={mode:"result",metricId:recipe.exploration.valueField,maxGroups:20};
  const preview=await loadQueryPreview("usage",item.query,schemas.usage,{recipe,cover});
  assert.equal(requests.find(({path})=>path.includes("/usage/query-v3")).request.result.limit,20);
  assert.equal(Object.keys(preview.groupLabels).length,20);
  assert.equal(preview.groupLabels[JSON.stringify(["repo","root-19"])],"Friendly work 19 · repo");
+ // Labels are kept only for groups a metric returned: covers are cached by the hundred.
+ const drawn=new Set(preview.metrics.flatMap(metric=>metric.result.buckets.map(bucket=>JSON.stringify(bucket.keys))));
+ assert.deepEqual(Object.keys(preview.groupLabels).filter(key=>!drawn.has(key)),[]);
 });
 
 test("cost history shares identical loads, preserves mixed windows, and refetches truncated timestamp ranges", async t => {
@@ -665,7 +670,7 @@ test("parallel hours by day headline is the share of active hours with several a
 });
 
 // Card covers can be shown from a prior visit while canonical queries refresh.
-import { cardPreviewKey, invalidateCardPreviews, loadCardPreviews } from "../../../src/card-previews";
+import { batchPreviewArrivals, cardPreviewKey, invalidateCardPreviews, loadCardPreviews } from "../../../src/card-previews";
 import { createCardPreviewCache } from "../../../src/card-preview-cache";
 
 test("cached card covers revalidate and remain visible after refresh failure", async t => {
@@ -849,4 +854,27 @@ test("Today persisted preview identity changes at local midnight", async t => {
   t.mock.timers.setTime(+before + 2000);
   assert.notEqual(await cardPreviewKey(item), todayKey);
   assert.equal(await cardPreviewKey(fixed), elapsedKey);
+});
+
+test("cover arrivals reach a page together, in order, and never after it has left", async () => {
+  const applied = [];
+  const arrivals = batchPreviewArrivals(batch => applied.push(batch.map(item => [item.id, item.preview?.summary ?? String(item.error)])), 0);
+  // A timer set after the batch's own fires after it.
+  const afterInterval = () => new Promise(resolve => setTimeout(resolve, 0));
+  arrivals.publish("a", { state: "ready", summary: "first" });
+  arrivals.publish("b", undefined, "Offline");
+  arrivals.publish("a", { state: "ready", summary: "second" });
+  assert.deepEqual(applied, []);
+  await afterInterval();
+  assert.deepEqual(applied, [[["a", "first"], ["b", "Offline"], ["a", "second"]]]);
+  // The end of a load does not wait for the interval.
+  arrivals.publish("c", { state: "empty", summary: "third" });
+  arrivals.flush();
+  assert.equal(applied.length, 2);
+  arrivals.flush();
+  assert.equal(applied.length, 2);
+  arrivals.publish("d", { state: "ready", summary: "dropped" });
+  arrivals.cancel();
+  await afterInterval();
+  assert.equal(applied.length, 2);
 });

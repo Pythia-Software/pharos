@@ -99,7 +99,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     ideaOrder=ideas.map((_,index)=>index);
   }
   let ideaCenter=1,ideaPaused=matchMedia('(prefers-reduced-motion: reduce)').matches,ideaElapsed = 0, ideaLastTick = Date.now();
-  let ideaCount=3,ideaLead=1,ideaStride=0,ideaSize='',ideaMoving=false,ideaScrollEnd=null,ideaMotion=null;
+  let ideaCount=3,ideaLead=1,ideaStride=0,ideaBuild=0,ideaSize='',ideaMoving=false,ideaScrollEnd=null,ideaMotion=null;
   const ideaCycleMs = 30000;
   let appearance = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   let pickerPage = null;
@@ -913,7 +913,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   const ideaSlot=center=>ideaLead*ideas.length+center;
   function buildIdeas(copies){
     if(ideaRow.children.length===copies*ideas.length)return;
-    ideaRow.replaceChildren();
+    ideaBuild++;ideaRow.replaceChildren();
     for(let slot=0;slot<ideas.length*copies;slot++){
       const id=ideaOrder[slot%ideas.length],button=find('#pharos-suggestion-template').content.firstElementChild.cloneNode(true);
       button.dataset.idea=id;button.dataset.slot=slot;button.dataset.corners=ideaCorners[id].join(',');
@@ -925,7 +925,14 @@ window.initPharosAsk = function(root, {previews} = {}) {
       ideaRow.append(button);
     }
   }
-  function ideaHeld(){return frozenAt!==null||ideaPaused||suggestions.hidden||ideasHidden||document.hidden||pending||question.value.trim()||!picker.hidden||chatHistory.open||consent.open||ideaMoving||ideaViewport.matches(':hover,:focus-within')||matchMedia('(prefers-reduced-motion: reduce)').matches;}
+  // Every page runs this composer, mostly out of sight: closed in the header,
+  // or scrolled away. Unseen suggestions neither count down nor glide. The
+  // observer also replaces asking the composer for its boxes four times a
+  // second, which made every page recalculate styles on each tick.
+  let ideasOnScreen=true,questionOnScreen=true;
+  const ideaSeen=typeof IntersectionObserver==='function'?new IntersectionObserver(entries=>{for(const entry of entries){if(entry.target===ideaViewport)ideasOnScreen=entry.isIntersecting;else questionOnScreen=entry.isIntersecting;}}):null;
+  ideaSeen?.observe(ideaViewport);ideaSeen?.observe(question);
+  function ideaHeld(){return frozenAt!==null||ideaPaused||!ideasOnScreen||suggestions.hidden||ideasHidden||document.hidden||pending||question.value.trim()||!picker.hidden||chatHistory.open||consent.open||ideaMoving||ideaViewport.matches(':hover,:focus-within')||matchMedia('(prefers-reduced-motion: reduce)').matches;}
   // This runs four times a second on every page, so write only changes: each
   // DOM write makes the page restyle and, in WebKit, composite again.
   const setIdeaText=(element,text)=>{if(element.textContent!==text)element.textContent=text;};
@@ -934,9 +941,16 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const bar=find('.pharos-idea-countdown-track i'),transform=`scaleX(${Math.max(0,1-ideaElapsed/ideaCycleMs)})`;if(bar.style.transform!==transform)bar.style.transform=transform;
     const play=find('.pharos-idea-play');setIdeaText(play,ideaPaused?'\u25b6 Play':'\u2161 Pause');play.setAttribute('aria-label',ideaPaused?'Play suggestions':'Pause suggestions');play.setAttribute('aria-pressed',String(ideaPaused));
   }
-  function markReading(){
+  // A glide calls this on every frame, and again for each scroll event it
+  // causes. The reading area changes only when the row passes a whole card,
+  // so the per-frame calls return before measuring or writing anything.
+  let readingMark='';
+  function markReading(moving=false){
     if(ideasHidden||suggestions.hidden||!ideaViewport.clientWidth)return;
     const at=ideaStride?Math.round(ideaViewport.scrollLeft/ideaStride):ideaSlot(ideaCenter);
+    const mark=[at,ideaCount,ideaRow.children.length,ideaViewport.clientWidth,ideaBuild].join(':');
+    if(moving&&mark===readingMark)return;
+    readingMark=mark;
     const first=at-Math.floor(ideaCount/2),last=first+ideaCount-1;
     let height=54,repaint=false;
     [...ideaRow.children].forEach((button,slot)=>{
@@ -985,7 +999,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const step=()=>{
       if(ideaMotion!==motion||frozenAt!==null)return;
       const elapsed=motion.elapsedMs+performance.now()-motion.started,t=Math.min(1,elapsed/motion.duration),ease=1-Math.pow(1-t,3);
-      ideaViewport.scrollLeft=(motion.from+(motion.to-motion.from)*ease)*ideaStride;markReading();
+      ideaViewport.scrollLeft=(motion.from+(motion.to-motion.from)*ease)*ideaStride;markReading(true);
       if(t<1)motion.frame=requestAnimationFrame(step);else settleIdeas();
     };
     motion.frame=requestAnimationFrame(step);
@@ -1011,7 +1025,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   function rotateIdeas() {moveIdeas(ideaCount,false);}
   function advanceIdeas(now=Date.now()) {
     const delta = Math.max(0,now-ideaLastTick);ideaLastTick=now;
-    const hint=promptHints.advance(delta,document.hidden||ai.hidden||turns.length>0||openingSession!==null||question.dataset.empty!=='true'||question.matches(':focus-within')||!question.getClientRects().length||matchMedia('(prefers-reduced-motion: reduce)').matches);
+    const hint=promptHints.advance(delta,document.hidden||ai.hidden||turns.length>0||openingSession!==null||question.dataset.empty!=='true'||question.matches(':focus-within')||!questionOnScreen||matchMedia('(prefers-reduced-motion: reduce)').matches);
     setPromptHint(hint);
     if(!ideaHeld()){ideaElapsed+=delta;if(ideaElapsed>=ideaCycleMs)rotateIdeas();}
     updateIdeaClock();
@@ -1023,7 +1037,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   find('.pharos-idea-refresh').addEventListener('click',()=>{ideaSeed++;void loadIdeas('Prompt suggestions refreshed.');});
   ideaViewport.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight'].includes(event.key)&&!event.altKey&&!event.metaKey&&!event.ctrlKey&&!event.shiftKey){event.preventDefault();moveIdeas((event.key==='ArrowLeft'?-1:1)*Math.ceil(ideaCount/2),true);}});
   ideaViewport.addEventListener('scroll',()=>{
-    markReading();if(ideaMotion||frozenAt!==null)return;
+    markReading(true);if(ideaMotion||frozenAt!==null)return;
     ideaMoving=true;clearTimeout(ideaScrollEnd);ideaScrollEnd=setTimeout(settleIdeas,150);
   },{passive:true});
   function interruptIdeaSlide(){if(ideaMotion){ideaMotion.cancel();ideaMotion=null;ideaViewport.removeAttribute('data-moving');ideaViewport.style.scrollSnapType='';settleIdeas();}ideaElapsed=0;ideaLastTick=Date.now();}
@@ -1265,5 +1279,5 @@ window.initPharosAsk = function(root, {previews} = {}) {
     if(draftPending){const payload=draftPending;draftPending=null;void fetch('/api/ask/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),keepalive:true});}
   });
   syncFullscreen();render();syncTheme();void refreshStatus().then(visitChanged).catch(report);
-  return ()=>{saveVisit.stop();disposePreviews();popOutMotion?.cancel();if(overlay.open)overlay.close();mount(mountHost);overlay.remove();floating.remove();announcement.remove();if(headerButton)headerButton.disabled=true;disposed=true;ideaController.abort();clearTimeout(ideaRetry);sessionLoads.invalidate();requests.forEach(run=>{run.controller.abort();releaseRequest(run);});seenObserver.disconnect();stop();glows.forEach(glow=>glow.destroy());pageTrace.destroy();clearTimeout(draftTimer);cancelAnimationFrame(threadLayoutFrame);cancelAnimationFrame(overlayLayoutFrame);cancelAnimationFrame(edgeLayoutFrame);overlayObserver.disconnect();threadObserver.disconnect();historyHeaderObserver.disconnect();clearInterval(ideaTimer);clearTimeout(ideaScrollEnd);ideaMotion?.cancel();edgeObserver.disconnect();ideaObserver.disconnect();clearTimeout(historyTimer);themeObserver.disconnect();cleanup.forEach(fn=>fn());window.removeEventListener('pharos:ask-config',configChanged);window.removeEventListener('pharos:visit',visitChanged);window.removeEventListener('pharos:route',routeChanged);};
+  return ()=>{saveVisit.stop();ideaSeen?.disconnect();disposePreviews();popOutMotion?.cancel();if(overlay.open)overlay.close();mount(mountHost);overlay.remove();floating.remove();announcement.remove();if(headerButton)headerButton.disabled=true;disposed=true;ideaController.abort();clearTimeout(ideaRetry);sessionLoads.invalidate();requests.forEach(run=>{run.controller.abort();releaseRequest(run);});seenObserver.disconnect();stop();glows.forEach(glow=>glow.destroy());pageTrace.destroy();clearTimeout(draftTimer);cancelAnimationFrame(threadLayoutFrame);cancelAnimationFrame(overlayLayoutFrame);cancelAnimationFrame(edgeLayoutFrame);overlayObserver.disconnect();threadObserver.disconnect();historyHeaderObserver.disconnect();clearInterval(ideaTimer);clearTimeout(ideaScrollEnd);ideaMotion?.cancel();edgeObserver.disconnect();ideaObserver.disconnect();clearTimeout(historyTimer);themeObserver.disconnect();cleanup.forEach(fn=>fn());window.removeEventListener('pharos:ask-config',configChanged);window.removeEventListener('pharos:visit',visitChanged);window.removeEventListener('pharos:route',routeChanged);};
 };

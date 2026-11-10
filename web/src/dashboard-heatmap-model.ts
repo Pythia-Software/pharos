@@ -1,3 +1,4 @@
+import { localeDate, localeDateTime, localeNumber } from "./locale-format";
 import type { ChartPeriod } from "./chart-period";
 import type { ChartBucket, ChartSeries } from "./chart-series";
 import { gridTicks, type GridCover } from "./grid-cover";
@@ -124,13 +125,13 @@ export function heatmapBinLabel(row: Pick<HeatmapRow, "low" | "high" | "zero">, 
 
 // A column's name, as the trend names its periods.
 export function heatmapPeriodLabel(date: Date, period: ChartPeriod): string {
-  if (period === "hour" || period === "hours") return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric" });
-  if (period === "month") return date.toLocaleDateString(undefined, { month: "short", year: "numeric" });
-  return `${period === "week" ? "Week of " : ""}${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+  if (period === "hour" || period === "hours") return localeDateTime(date, { month: "short", day: "numeric", hour: "numeric" });
+  if (period === "month") return localeDate(date, { month: "short", year: "numeric" });
+  return `${period === "week" ? "Week of " : ""}${localeDate(date, { month: "short", day: "numeric" })}`;
 }
 
 type CellOptions = { period: ChartPeriod; noun: string; label: string; format?: (value: number) => string; amount?: (value: number) => string; rollingPeriods?: number };
-const counted = (value: number, rollingPeriods: number) => value.toLocaleString(undefined, { maximumFractionDigits: rollingPeriods > 1 ? 1 : 0 });
+const counted = (value: number, rollingPeriods: number) => localeNumber(value, { maximumFractionDigits: rollingPeriods > 1 ? 1 : 0 });
 
 // A cell's tooltip: the period, the bin, the amount in it and its share of
 // the period. A smoothed column's amounts are averages over its window.
@@ -139,7 +140,7 @@ export function heatmapCellText(heatmap: Heatmap, row: number, column: number, {
   const bin = `${label} ${heatmapBinLabel(heatmap.rows[row], heatmap.scheme, format)}`;
   if (item.total <= 0) return `${when}\n${bin}\nNo ${noun} in this period`;
   const smoothed = rollingPeriods > 1 ? `, a ${rollingPeriods}-period average` : "";
-  const share = (100 * value / item.total).toLocaleString(undefined, { maximumFractionDigits: 1 });
+  const share = localeNumber(100 * value / item.total, { maximumFractionDigits: 1 });
   return [`${when}\n${bin}\n${amount ? amount(value) : counted(value, rollingPeriods)} ${noun} (${share}% of ${amount ? amount(item.total) : counted(item.total, rollingPeriods)})${smoothed}`, ...heatmapLevelLines(heatmap, column, format)].join("\n");
 }
 

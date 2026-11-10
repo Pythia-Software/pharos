@@ -2,7 +2,7 @@ import { DataReadinessIndicator } from "./data-readiness";
 import { cardReadinessSource, type CardReadinessSource } from "./data-readiness-card";
 import { formatUSD } from "./currency";
 import { cardNavigationURL } from "./card-exploration";
-import React, { useRef } from "react";
+import React, { memo, useRef } from "react";
 import { CompactColumns } from "./column-marks";
 import { compactMetricPresentation } from "./card-presentation";
 import { boxCoverHeight } from "./compact-box-model";
@@ -25,7 +25,9 @@ export function QueryChip({ title, description, active, onClick }: { title: stri
 // Daily covers chart durations in hours (see previewOf) and carbon in kilograms.
 const columnUnit = (field = "") => field.includes("cost") ? "USD" : field.includes("words") ? "words" : field === "duration_ms" || field.endsWith("_hours") ? "h" : field === "co2e_kg" ? "kg" : field === "call_count" ? "calls" : "tokens";
 // Homepage and collected cards share the same compact presentation.
-export function CardVisualization({ preview }: { preview: QueryPreview }) {
+// Memoized: a cover's charts format every mark's label and tooltip, and the
+// pages holding cards re-render for each preview that arrives.
+export const CardVisualization = memo(function CardVisualization({ preview }: { preview: QueryPreview }) {
   const presentation = compactMetricPresentation(preview);
   const coverMetric = preview.metrics?.find(metric => metric.clause.id === preview.coverMetricId)?.clause;
   const ranked = presentation?.ranked || Boolean(!presentation && (preview.insights || preview.ranking || preview.groupSummary));
@@ -51,7 +53,7 @@ export function CardVisualization({ preview }: { preview: QueryPreview }) {
       : <span className="query-excerpt">{preview.excerpt}</span>}
     {summary && !headlineMetric ? <span className="query-result-summary">{summary}</span> : null}
   </>;
-}
+});
 
 // With editing, the card is its own editor: its title and description (and,
 // when offered, its category and call to action) are fields in place, and it

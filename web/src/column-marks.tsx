@@ -1,3 +1,4 @@
+import { localeDateTime, localeNumber } from "./locale-format";
 import { formatUSD } from "./currency";
 import React from "react";
 import type { ChartScale } from "./chart-scale";
@@ -12,8 +13,8 @@ export function compactTimelineBuckets(source: ChartBucket[], { display, rolling
 
 const tooltipValue = (value: number, unit: string) => unit === "USD"
   ? formatUSD(value)
-  : unit === "percent" ? value.toLocaleString(undefined, { style: "percent", maximumFractionDigits: 2 })
-  : `${value.toLocaleString(undefined, { maximumFractionDigits: 3 })}${unit ? ` ${unit}` : ""}`;
+  : unit === "percent" ? localeNumber(value, { style: "percent", maximumFractionDigits: 2 })
+  : `${localeNumber(value, { maximumFractionDigits: 3 })}${unit ? ` ${unit}` : ""}`;
 
 // Both Usage and query-card covers use these marks. Keep stack geometry and
 // visibility decisions here so compact previews inherit chart changes.
@@ -51,7 +52,7 @@ export function CompactColumns({ buckets: sourceBuckets, series, unit = "", show
   const axis: number[] = [0];
   for (const tick of ticks) if (y(tick) - y(axis.at(-1)!) >= 20) axis.push(tick);
   const dates = [...new Set([0, Math.floor((buckets.length - 1) / 2), buckets.length - 1])].filter(index => buckets[index]);
-  const dateLabel = (date: Date, detail = false) => date.toLocaleString(undefined, { month: "short", day: "numeric", ...detail ? { year: "numeric" as const } : {}, ...prepared && ["hour", "hours"].includes(xLabel) ? { hour: "numeric" as const, minute: "2-digit" as const } : {} });
+  const dateLabel = (date: Date, detail = false) => localeDateTime(date, { month: "short", day: "numeric", ...detail ? { year: "numeric" as const } : {}, ...prepared && ["hour", "hours"].includes(xLabel) ? { hour: "numeric" as const, minute: "2-digit" as const } : {} });
   // The tooltip keys each line to its colour, so notes get none.
   const tooltipLines = (bucket: typeof buckets[number]) => {
     const notes = [dateLabel(bucket.date, true), accumulated ? "Cumulative from range start" : rollingPeriods > 1 ? `${bucket.windowSize}d rolling average` : undefined, scale === "logarithmic" && !percent ? "Log scale" : undefined].filter(Boolean) as string[];

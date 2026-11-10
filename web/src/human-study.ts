@@ -20,6 +20,16 @@ type EvidenceBatch = { rows: StudyMessage[]; now: number };
 const messageCache = new Map<string, { at: number; batch: EvidenceBatch }>();
 const directoryCache = new Map<string, { at: number; rows: StudyWorkspace[] }>();
 export function clearHumanStudyCache() { messageCache.clear(); directoryCache.clear(); }
+// A cached batch answers the studies of one page load: up to 20,000 whole
+// messages, reused for a minute. Past that it would only hold memory.
+const CACHE_LIFETIME = 60000;
+function keepBriefly<T extends { at: number }>(cache: Map<string, T>, key: string, entry: T) {
+  if (cache.size >= 2) cache.delete(cache.keys().next().value!);
+  cache.set(key, entry);
+  const timer = setTimeout(() => { if (cache.get(key) === entry) cache.delete(key); }, CACHE_LIFETIME);
+  // Node's test runner must not wait on it.
+  (timer as { unref?: () => void }).unref?.();
+}
 const positive = (message: StudyMessage) => message.typed_words > 0;
 const human = (message: StudyMessage) => message.typed_words > 0 || message.pasted_words > 0 || message.attachment_words > 0;
 export function ownText(message: StudyMessage): string {
@@ -191,8 +201,7 @@ export function createHumanStudyLoader(now: number, schema: FieldSchema, signal?
         if (unique.length !== first.total) throw new Error("Contribution evidence was incomplete. Refresh to try again; no partial score is shown.");
         const batch = { rows: unique.sort((a, b) => a.sent_at.localeCompare(b.sent_at) || a.id.localeCompare(b.id)), now };
         if (!signal?.aborted) {
-          if (messageCache.size >= 2) messageCache.delete(messageCache.keys().next().value!);
-          messageCache.set(key, { at: Date.now(), batch });
+          keepBriefly(messageCache, key, { at: Date.now(), batch });
         }
         return batch;
       })();
@@ -223,8 +232,7 @@ export function createHumanStudyLoader(now: number, schema: FieldSchema, signal?
             rows.push(...page.rows);
           } }));
           if (!signal?.aborted) {
-            if (directoryCache.size >= 2) directoryCache.delete(directoryCache.keys().next().value!);
-            directoryCache.set(key, { at: Date.now(), rows });
+            keepBriefly(directoryCache, key, { at: Date.now(), rows });
           }
           return rows;
         })();

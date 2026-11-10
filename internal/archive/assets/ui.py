@@ -1706,7 +1706,8 @@ for(const option of BRAND_OPTIONS){setBrandOption(option,pharosPrefs.get(option.
 let pageLoads=0;
 async function pageLoad(load){pageLoads++;document.documentElement.classList.add('page-loading');let turning=false;const timer=setTimeout(()=>{turning=true;brandLoads++;renderBrand()},150);try{return await load()}finally{clearTimeout(timer);if(turning){brandLoads--;renderBrand()}if(!--pageLoads)document.documentElement.classList.remove('page-loading')}}
 let indexWatchTimer;
-async function watchIndexing(){clearTimeout(indexWatchTimer);let active=false;try{active=(await api('/api/activity')).active>0}catch{}setBrandSyncing(active);indexWatchTimer=setTimeout(watchIndexing,active?3000:15000)}
+async function watchIndexing(){clearTimeout(indexWatchTimer);let active=false;try{active=(await api('/api/activity')).active>0}catch{}setBrandSyncing(active);if(!document.hidden)indexWatchTimer=setTimeout(watchIndexing,active?3000:15000)}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearTimeout(indexWatchTimer);else watchIndexing()});
 watchIndexing();
 const USAGE_SUMMARY_ROWS=quickStatsMetrics(document.documentElement.hasAttribute('data-concurrency-prototype'));
 const USAGE_SUMMARY_COLUMNS=Object.fromEntries(QUICK_STATS_WINDOWS.map(([key,label])=>[key,label]));

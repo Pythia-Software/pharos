@@ -299,8 +299,18 @@
         window.pharosLibrary?.renderAlerts?.();
       }
     } catch (error) { if (!status) showError(error.message); }
-    finally { busy = false; clearTimeout(timer); timer = setTimeout(() => refresh({automatic: true}), 3000); }
+    finally { busy = false; schedule(); }
   }
+  // Follow a run, Settings and first-run setup closely; otherwise the header
+  // only needs to notice that something started. A hidden page asks nothing
+  // and catches up when it is shown.
+  function schedule() {
+    clearTimeout(timer);
+    if (document.hidden) return;
+    const close = activeRun || status?.library_empty || document.getElementById('settings')?.classList.contains('active');
+    timer = setTimeout(() => refresh({automatic: true}), close ? 3000 : 10000);
+  }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else refresh({automatic: true}); });
   window.addEventListener('pharos:route', () => refresh());
   window.pharosSync = {status: () => status, tableStatus: () => tableStatus, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.

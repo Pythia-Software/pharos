@@ -1,3 +1,4 @@
+import { localeDate, localeDateTime } from "./locale-format";
 import { hourOfDayColor } from "./chart-colors";
 
 // The Habits panel's model, without a DOM: the service's summary
@@ -93,7 +94,7 @@ export function calendarWeeks(days: HabitsDay[], weeks: number): Array<Array<Hab
 // The month a column starts, for its label: only where it changes.
 export const monthLabels = (columns: Array<Array<HabitsDay | null>>) => columns.map((column, index) => {
   const day = column.find(Boolean)?.day, previous = index ? columns[index - 1].find(Boolean)?.day : undefined;
-  return day && (!previous || previous.slice(0, 7) !== day.slice(0, 7)) ? new Date(`${day}T00:00:00Z`).toLocaleString("en-US", { month: "short", timeZone: "UTC" }) : "";
+  return day && (!previous || previous.slice(0, 7) !== day.slice(0, 7)) ? localeDateTime(new Date(`${day}T00:00:00Z`), { month: "short", timeZone: "UTC" }, "en-US") : "";
 });
 
 export type PunchcardView = PunchcardActor | "agents" | "difference";
@@ -180,7 +181,7 @@ export function formatGap(ms: number) {
   const minutes = ms / 60_000;
   return minutes < 1 ? "under a minute apart" : minutes < 90 ? `every ${Math.round(minutes)} min` : minutes < 36 * 60 ? `every ${(minutes / 60).toFixed(minutes < 600 ? 1 : 0)} h` : `every ${(minutes / 1440).toFixed(1)} days`;
 }
-export const formatDay = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+export const formatDay = (day: string) => localeDate(new Date(`${day}T00:00:00Z`), { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }, "en-US");
 // Clock times as 9 AM or 1:15 PM; hours past 24 wrap to the next day.
 export const formatClock = (hours: number) => {
   const total = Math.round(hours * 60), h = ((Math.floor(total / 60) % 24) + 24) % 24, m = ((total % 60) + 60) % 60;

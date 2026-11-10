@@ -12,7 +12,7 @@ import type { QueryDataset } from "./query-links";
 import { QueryCard } from "./query-card";
 import { Icon } from "./icons";
 import { preferences } from "./preferences";
-import { invalidateCardPreviews, loadCardPreviews } from "./card-previews";
+import { batchPreviewArrivals, invalidateCardPreviews, loadCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
 import { migrateSavedQueries, readBookmarks } from "./bookmarks";
 import { collectCardTemplate } from "./dashboard-card-model";
@@ -143,12 +143,18 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     const retained = new Set([...definitions].filter(([id, definition]) => previousJobs.current.get(id) === definition).map(([id]) => id));
     previousJobs.current = definitions;
     setPreviews(current => Object.fromEntries(Object.entries(current).filter(([id]) => retained.has(id))));
+    const arrivals = batchPreviewArrivals(batch => {
+      if (batch.some(item => item.preview)) setPreviews(current => { const next = { ...current }; for (const { id, preview } of batch) if (preview) next[id] = preview; return next; });
+      setErrors(current => {
+        const next = { ...current };
+        for (const { id, preview, error } of batch) { if (preview) delete next[id]; if (error) next[id] = String(error); }
+        return Object.keys(next).length || Object.keys(current).length ? next : current;
+      });
+    });
     void loadCardPreviews(jobs, (id, preview, error) => {
-      if (controller.signal.aborted) return;
-      if (preview) { setPreviews(current => ({ ...current, [id]: preview })); setErrors(current => { const next = { ...current }; delete next[id]; return next; }); }
-      if (error) setErrors(current => ({ ...current, [id]: String(error) }));
-    }, controller.signal).then(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
+      if (!controller.signal.aborted) arrivals.publish(id, preview, error);
+    }, controller.signal).then(() => { if (!controller.signal.aborted) { arrivals.flush(); setLoading(false); } });
+    return () => { controller.abort(); arrivals.cancel(); };
   }, [active, cards, schemas, generation]);
   useEffect(() => {
     if (!prewarm || loading) return;
