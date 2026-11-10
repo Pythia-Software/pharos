@@ -146,6 +146,21 @@ func TestBranchUsageRows(t *testing.T) {
 	if after := queryRows(t, library.catalog, `SELECT * FROM agent_session_branch_shares ORDER BY 1,2,3,4`); fmt.Sprint(after) != fmt.Sprint(before) {
 		t.Fatalf("shares changed without new usage")
 	}
+	// A forced index writes the sessions again, with the same totals; their
+	// shares are read again too.
+	adapter, err := MakeAdapter(SourceConfig{Name: "claude", Kind: "claude", Path: library.claude, Account: "local", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := library.catalog.IngestContext(withIngestMode(ctx, ingestMode{force: true}), adapter, nil); result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	if err := library.catalog.refreshBranchUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := queryRows(t, library.catalog, `SELECT * FROM agent_session_branch_shares ORDER BY 1,2,3,4`); fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatalf("shares after a forced index\n got %v\nwant %v", after, before)
+	}
 }
 
 func queryRows(t *testing.T, catalog *Catalog, statement string) []map[string]any {

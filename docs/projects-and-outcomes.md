@@ -460,7 +460,9 @@ each branch. It follows CodeBurn's by-branch lens (see References).
   `branch_usage.go`) runs after commit linking and never on a request. It
   reads only the events Pharos kept whole, which include every usage event.
   It skips a conversation whose sessions' usage has not changed since it
-  was last read (`branch_usage_scans`). When the rules of outcomes, commit
+  was last read (`branch_usage_scans`). Indexing a conversation's sessions
+  again (a full sync or a capture replay, which write them with the same
+  totals) deletes their shares and that record, so it is read again. When the rules of outcomes, commit
   linking or spend by branch change, opening the library schedules the
   stage (`scheduleToolDerivations`), so a library with nothing new to index
   still derives again.
