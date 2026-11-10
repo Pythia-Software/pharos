@@ -333,7 +333,13 @@ no linked commit is judged on its Tier 1 facts.
   2. a `git commit` or `git revert` of the session's that was running when
      the commit was made and wrote its subject (0.95);
   3. the only such command running when the commit was both written and
-     committed, that wrote no other subject (0.9). A rebase, cherry-pick or
+     committed, that wrote no other subject (0.9). Time alone is enough only
+     when the command named its repository (`-C` or `cd`) and its window is
+     at most 10 seconds; otherwise (a call that ran tests first, or one
+     counted in the session's own repository because it named none) the
+     commit must also change a file the session had edited, or the HEAD
+     reflog of the session's checkout must have made it, else the command
+     does not explain it. A rebase, cherry-pick or
      `git am` keeps the author time and an amend too, so neither makes the
      commits it rewrites its own;
   4. a rewrite of a commit linked by these: the same author email, author
@@ -619,7 +625,7 @@ each branch. It follows CodeBurn's by-branch lens (see References).
 | Hash printed by `git commit` in the session's own tool output, and the commit exists locally | 1.0 |
 | Hash printed by `git commit`, but the commit is not in the local repository | Not linked; it stays a Tier 1 fact (`recorded_commits`) |
 | Message: a `git commit` or `git revert` of the session's was running at the commit time and wrote its subject | 0.95 |
-| Window: the only such command running when the commit was written and committed, writing no other subject | 0.9 |
+| Window: the only such command running when the commit was written and committed, writing no other subject; past 10 seconds or without a named repository, also changing a file the session edited or made by its checkout (reflog) | 0.9 |
 | Command, of several sessions', the one whose checkout's reflog made the commit, or whose kept lines it adds (as below) | 0.9 or 0.8 (at most the command's own) |
 | Command, of several sessions', the shortest-running | 0.5, a candidate |
 | Rewrite (same author email, author time and subject) of a commit linked by the rules above | The original's |
@@ -632,7 +638,9 @@ each branch. It follows CodeBurn's by-branch lens (see References).
 
 A command's window is its call's start and end, two seconds either side
 (commit times are whole seconds; some harnesses record the end when the
-output arrives). Links of 0.7 and above count toward a session's linked and
+output arrives). A long window or an unnamed repository needs that
+confirmation because time alone would claim any commit made meanwhile, such
+as one made by hand in another worktree while the call ran tests. Links of 0.7 and above count toward a session's linked and
 landed commits, its committed and landed lines, and its label.
 
 ## Commit-linking calibration
@@ -654,6 +662,10 @@ them; then the commits each pipeline links were counted.
   | Rewrite (0.9 to 0.95) | 11 | 0 |
   | Edit inference, where no command explained it (0.7 to 0.9) | 10 | 22 |
   | Edit inference, nearest (0.5, not counted) | 0 | 5 |
+
+  The window rule's confirmation (rule 3 above) came after this
+  measurement and was not measured: it only removes window links, and a
+  commit it removes falls to edit inference.
 
   Edit inference does badly here because these are the commits a command
   should have explained: the printing session usually made no edits, and

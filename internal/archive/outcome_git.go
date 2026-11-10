@@ -872,6 +872,13 @@ func linkCommits(sessions map[string]*gitSession, members []string, repository s
 			if link, ids := commandLink(windows, sessions, repository, commit, signals); link != nil {
 				links = append(links, *link)
 			} else if len(ids) > 0 {
+				// Should the commands not explain it, edit inference reads
+				// the same signals.
+				for _, candidate := range commitCandidates(sessions, members, repository, commit) {
+					if !slices.Contains(ids, candidate.id) {
+						ids = append(ids, candidate.id)
+					}
+				}
 				contested[hash] = ids
 			}
 		}
@@ -975,6 +982,16 @@ type gitOpWindow struct {
 	from, until time.Time
 }
 
+// gitOpTrusted is the longest window in which time alone says a command
+// made a commit, when the command named its repository. A longer call (tests
+// before the commit, say) or one counted in the session's own repository
+// because it named none must be confirmed: see commandLink.
+var gitOpTrusted = 10 * time.Second
+
+func (window gitOpWindow) trusted() bool {
+	return window.op.Repository != "" && window.until.Sub(window.from) <= gitOpTrusted
+}
+
 // gitOpWindows are a repository's, by start, with the longest's span.
 type gitOpWindows struct {
 	windows []gitOpWindow
@@ -1013,28 +1030,58 @@ func (index gitOpWindows) holding(at time.Time) []gitOpWindow {
 // commandLink links a commit to the session whose git command made it: one
 // that ran when it was committed and wrote its subject, else one that ran
 // when it was both written and committed (an amend keeps the author time)
-// and wrote no other subject. Between several sessions, the signals decide,
-// else the command that ran the shortest, at 0.5. It returns no link and the
-// candidates when they need signals.
+// and wrote no other subject. Time alone is confirmed when the window is not
+// trusted: the commit changes a file the session had edited, or the
+// session's checkout's reflog made it; else the command does not explain it.
+// Between several sessions, the signals decide, else the command that ran
+// the shortest, at 0.5. It returns no link and the candidates when they need
+// signals.
 func commandLink(windows gitOpWindows, sessions map[string]*gitSession, repository string, commit *gitCommit, signals *gitSignals) (*gitLink, []string) {
 	type candidate struct {
 		gitOpWindow
-		message bool
+		message   bool
+		confirmed string
 	}
 	best := map[string]candidate{}
+	unconfirmed := []string{}
 	for _, window := range windows.holding(commit.Commit) {
 		message := commit.Subject != "" && slices.Contains(window.op.Subjects, commit.Subject)
 		if !message && (len(window.op.Subjects) > 0 || commit.Author.Before(window.from) || commit.Author.After(window.until)) {
 			continue
 		}
+		confirmed := ""
+		if !message && !window.trusted() {
+			session := sessions[window.session]
+			switch {
+			case editedBefore(session, repository, commit):
+				confirmed = "edited"
+			case signals != nil && slices.ContainsFunc(session.Locations, func(location string) bool { return slices.Contains(signals.MadeIn[commit.Hash], location) }):
+				confirmed = "checkout"
+			default:
+				if signals == nil && !slices.Contains(unconfirmed, window.session) {
+					unconfirmed = append(unconfirmed, window.session)
+				}
+				continue
+			}
+		}
 		current, seen := best[window.session]
 		if span := window.until.Sub(window.from); !seen || message && !current.message || message == current.message && span < current.until.Sub(current.from) {
-			best[window.session] = candidate{window, message}
+			best[window.session] = candidate{window, message, confirmed}
 		}
 	}
 	candidates := slices.SortedFunc(maps.Values(best), func(a, b candidate) int { return cmp.Compare(a.session, b.session) })
 	if slices.ContainsFunc(candidates, func(c candidate) bool { return c.message }) {
 		candidates = slices.DeleteFunc(candidates, func(c candidate) bool { return !c.message })
+	} else if len(unconfirmed) > 0 {
+		// The checkouts' reflogs may confirm them.
+		ids := slices.Clone(unconfirmed)
+		for _, candidate := range candidates {
+			if !slices.Contains(ids, candidate.session) {
+				ids = append(ids, candidate.session)
+			}
+		}
+		slices.Sort(ids)
+		return nil, ids
 	}
 	if len(candidates) == 0 {
 		return nil, nil
@@ -1072,7 +1119,21 @@ func commandLink(windows gitOpWindows, sessions map[string]*gitSession, reposito
 	if by != "" {
 		evidence["chosen_by"] = by
 	}
+	if chosen.confirmed != "" {
+		evidence["confirmed_by"] = chosen.confirmed
+	}
 	return &gitLink{Session: chosen.session, Hash: commit.Hash, Method: method, Confidence: confidence, Evidence: evidence}, nil
+}
+
+// editedBefore says whether a session had edited one of a commit's files by
+// the time it was committed.
+func editedBefore(session *gitSession, repository string, commit *gitCommit) bool {
+	for path := range commit.Files {
+		if span, ok := session.Files[repository][path]; ok && !commit.Commit.Before(span.First) {
+			return true
+		}
+	}
+	return false
 }
 
 // commitIdentity is what a rebase, amend or cherry-pick keeps of a commit:

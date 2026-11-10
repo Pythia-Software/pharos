@@ -717,7 +717,7 @@ func TestSessionGitCommandLinks(t *testing.T) {
 	// The checkout is the repository's by its remote (gitIdentity.holds).
 	execTx(t, f.catalog.DB, `UPDATE repositories SET normalized_remote='github.com/acme/app' WHERE id='repo-app'`)
 	repo.git(time.Now(), "remote", "add", "origin", "git@github.com:acme/app.git")
-	for _, id := range []string{"quiet", "heredoc", "scripted", "wrong", "hand", "nested", "rebased", "long", "short", "treed", "listed", "twin", "pulled", "picker"} {
+	for _, id := range []string{"quiet", "heredoc", "scripted", "wrong", "hand", "nested", "rebased", "long", "short", "treed", "listed", "twin", "pulled", "picker", "tester"} {
 		f.session(id, "")
 	}
 	base := time.Now().Add(-20 * 24 * time.Hour).Truncate(time.Second)
@@ -817,6 +817,14 @@ func TestSessionGitCommandLinks(t *testing.T) {
 	repo.git(at(23, 10), "cherry-pick", source)
 	cherry := repo.git(at(23, 10), "rev-parse", "HEAD")
 	f.command("picker", "git cherry-pick "+source[:7], "[main "+cherry[:7]+"] Picked by a command\n", at(23, 10), 3*time.Second)
+	// A long call's window holds a commit made by hand in another worktree
+	// meanwhile: time alone does not link it, as the checkout's reflog made
+	// only the session's own.
+	worktree := &gitRepository{t, filepath.Join(t.TempDir(), "by-hand")}
+	repo.git(at(24, 0), "worktree", "add", "-q", "-b", "by-hand", worktree.dir)
+	f.command("tester", "npm test && git commit -qaF .git/MESSAGE", "", at(24, 0), 4*time.Minute)
+	byHand := worktree.commitAt(at(24, 100), "Made by hand meanwhile", map[string]string{"by-hand.go": "package byhand\n"})
+	tested := repo.commitAt(at(24, 230), "From a message file", map[string]string{"tested.go": "package tested\n"})
 	repo.git(time.Now(), "update-ref", "refs/remotes/origin/main", "HEAD")
 	f.refresh()
 
@@ -834,6 +842,7 @@ func TestSessionGitCommandLinks(t *testing.T) {
 		"hand": hand[:7] + " inferred 0.7", "nested": messages(nested), "rebased": rebased[:7] + " rewrite 1",
 		"short": concurrent[:7] + " window 0.5", "treed": messages(treed, treedMore), "listed": messages(listed, common),
 		"twin": messages(twin), "pulled": messages(pulled, pulledMore, side), "picker": cherry[:7] + " transcript 1",
+		"tester": tested[:7] + " window 0.9",
 	} {
 		if strings.Join(links[id], ", ") != want {
 			t.Errorf("%s links: %v, want %s", id, links[id], want)
@@ -843,6 +852,9 @@ func TestSessionGitCommandLinks(t *testing.T) {
 		if len(links[id]) != 0 {
 			t.Errorf("%s links: %v", id, links[id])
 		}
+	}
+	if count := countRows(t, f.catalog, `SELECT COUNT(*) FROM session_commit_links WHERE hash=?`, byHand); count != 0 {
+		t.Errorf("the commit made by hand has %d links", count)
 	}
 	rows, err := queryMaps(f.catalog.DB, `SELECT hash,COALESCE(on_mainline,-1) on_mainline,COALESCE(mainline_evidence,'') evidence FROM git_commits WHERE hash IN (?,?,?,?,?,?,?,?,?)`,
 		treed, treedMore, listed, common, twin, pulled, pulledMore, rebased, side)
