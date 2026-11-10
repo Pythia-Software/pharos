@@ -84,6 +84,7 @@ import { acceptDefaultQuery, libraryStorageAdapter, rejectDefaultQuery, retryDef
 import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-request";
 import { PageErrorBoundary, QueryRecovery, tableRecoveryQuery } from "./query-recovery";
 import { createMCPMonitor, type MCPStatus } from "./mcp-monitor";
+import { loadWritingTotals, type WritingTotals } from "./writing-totals";
 import { HomePage } from "./home";
 import { AskPharosSearch, AskPharosSettings } from "./ask-pharos";
 import { CardLibraryPage } from "./card-library";
@@ -207,6 +208,7 @@ declare global {
       filterRepository: (repository: string) => void;
       filterModel: (model: string) => void;
       summaryURL: typeof usageSummaryURL;
+      writingTotals: (publish: (totals: WritingTotals) => void, signal: AbortSignal) => Promise<void>;
     };
   }
 }
@@ -1672,6 +1674,7 @@ window.pharosQueryTables = {
   filterModel(model) {
     filterLibrary([{ field: "models", op: "contains", value: model }]);
   },
+  writingTotals: (publish, signal) => loadWritingTotals(schemas.writing_messages, publish, signal),
 };
 
 window.dispatchEvent(new Event("pharos:search-ready"));
