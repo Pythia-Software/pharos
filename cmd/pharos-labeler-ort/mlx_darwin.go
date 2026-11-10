@@ -22,6 +22,16 @@ static const pharos_mlx_api* load_mlx(const char* path, char** err) {
 static void* mlx_open(const pharos_mlx_api* api, const char* p, const char* t, const char* s, char** e) { return api->open(p,t,s,e); }
 static int mlx_run(const pharos_mlx_api* api, void* m, const int32_t* i, const int32_t* a, const int32_t* p, const int32_t* s, int b, int q, float* o, char** e) { return api->run(m,i,a,p,s,b,q,o,e); }
 static void mlx_close(const pharos_mlx_api* api, void* m) { api->close(m); }
+// Keep this optional symbol separate from the stable inference ABI. An old
+// engine can still run, but cannot confirm device availability in Settings.
+static int mlx_probe(const char* path, char** err) {
+ if (!load_mlx(path, err)) return 0;
+ void* lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+ int (*probe)(void) = dlsym(lib, "pharos_mlx_available_v1");
+ if (!probe) { *err = strdup("this MLX engine cannot report GPU availability; device is confirmed when labeling starts"); return -1; }
+ if (!probe()) { *err = strdup("MLX Metal GPU is unavailable"); return 0; }
+ return 1;
+}
 */
 import "C"
 
@@ -37,6 +47,22 @@ type mlxSession struct {
 	api   *C.pharos_mlx_api
 	model unsafe.Pointer
 	info  modelInfo
+}
+
+func probeMLX(library string) (*bool, error) {
+	path := C.CString(library)
+	defer C.free(unsafe.Pointer(path))
+	var msg *C.char
+	result := C.mlx_probe(path, &msg)
+	var available *bool
+	if result >= 0 {
+		value := result == 1
+		available = &value
+	}
+	if msg != nil {
+		return available, mlxError(msg)
+	}
+	return available, nil
 }
 
 func openMLX(library, path string, artifact labeler.MLXArtifact) (session, error) {

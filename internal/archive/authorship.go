@@ -199,10 +199,12 @@ func spanRule(span authorSpan) string {
 
 // authorshipState tracks the in-process rebuild.
 type authorshipState struct {
-	rebuild  sync.Mutex
-	mu       sync.Mutex
-	running  bool
-	refining bool
+	workRepresentatives    map[string]string
+	workPreparedGeneration string
+	rebuild                sync.Mutex
+	mu                     sync.Mutex
+	running                bool
+	refining               bool
 	// A bounded first pass must not be repeated by page polling.
 	estimatesAttempted bool
 	lastError          string
@@ -1266,7 +1268,7 @@ func (c *Catalog) refreshAuthorshipInContext(parent context.Context) bool {
 // messages changed since the ledger was built.
 func (c *Catalog) ensureAuthorship() (stale bool) {
 	want, built, err := c.authorshipEstimateGenerations()
-	if err != nil || want == built {
+	if err != nil || want == built && !c.authorshipQuickPending() {
 		return false
 	}
 	c.authorship.mu.Lock()
@@ -1305,6 +1307,9 @@ func (c *Catalog) ingestEnded(stopped bool) {
 }
 
 func (c *Catalog) startAuthorshipInContext(generation string, parent context.Context) bool {
+	if c.work.declares(kindAuthorship) {
+		return c.startAuthorshipWork(parent)
+	}
 	state := &c.authorship
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -1330,7 +1335,7 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 		} else {
 			ctx = withWorkProgress(ctx, op.mirrorWork)
 		}
-		err := c.UpdateAuthorship(ctx, generation)
+		err := admitWorkCPU(ctx, c, 1, 1, func(ctx context.Context, _ workAllocation) error { return c.UpdateAuthorship(ctx, generation) })
 		state.mu.Lock()
 		state.running, state.lastError = false, ""
 		// Cancellation interrupts a rebuild; it must not block a later page retry.
@@ -1358,6 +1363,129 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 		state.running = false // the service is stopping
 	}
 	return state.running
+}
+
+// startAuthorshipWork is startAuthorshipInContext under population
+// execution: the bounded pass becomes this caller's own request for the
+// recent conversations' estimates plus the classic pass's historical share
+// (authorshipHistoricalShare; the rest of history stays with the analysis
+// chain's backfill), and a waiter the service's lifetime tracks
+// keeps the classic state the pages read: running while it is outstanding,
+// lastError when it failed, estimatesAttempted once one succeeded. A
+// cancelled parent (a stopped index) withdraws only this request; the shared
+// execution continues for any other request that needs it.
+func (c *Catalog) startAuthorshipWork(parent context.Context) bool {
+	w := c.work
+	state := &c.authorship
+	state.mu.Lock()
+	if state.running || parent != nil && parent.Err() != nil {
+		state.mu.Unlock()
+		return false
+	}
+	state.running = true
+	state.mu.Unlock()
+	finish := func(failure string, succeeded bool) {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		state.running, state.lastError = false, failure
+		if succeeded {
+			state.estimatesAttempted = true
+		}
+	}
+	spec := workRequestSpec{Scope: "selection", Kinds: []string{kindAuthorship}, Priority: workPriorityLive, Trigger: triggerRead,
+		// Someone is reading; Pause never held the classic page pass.
+		Unpausable: true}
+	if parent != nil {
+		spec.Trigger, spec.Unpausable = triggerChained, false
+	}
+	until := c.clock()
+	from := until.Add(-maintenanceRecent)
+	spec.Build = func(ctx context.Context, b *workInventoryBuilder) error {
+		if err := c.freezeWorkPopulation(ctx, b, from, until, nil); err != nil {
+			return err
+		}
+		// Reuse the builder's bounded storage for membership lookup; do
+		// not allocate a second map the size of the recent population.
+		slices.SortFunc(b.members, func(a, b workMember) int { return strings.Compare(a.ID, b.ID) })
+		older, err := c.authorshipHistoricalShare(ctx, from, b.members)
+		if err != nil || len(older) == 0 {
+			return err
+		}
+		return c.freezeWorkPopulation(ctx, b, time.Time{}, time.Time{}, older)
+	}
+	id, record, err := w.submit(w.server.life.ctx, spec)
+	if err != nil {
+		finish("", false)
+		return false
+	}
+	started := w.server.spawn(func(life context.Context) {
+		wait := life
+		if parent != nil {
+			var cancel context.CancelFunc
+			wait, cancel = context.WithCancel(life)
+			defer cancel()
+			defer context.AfterFunc(parent, cancel)()
+		}
+		facts, err := w.await(wait, id, record)
+		failure, succeeded := authorshipRequestOutcome(facts, err)
+		finish(failure, succeeded)
+		// Remember work arriving during an ingest, as the classic pass does.
+		if succeeded && c.ingestRuns.Load() > 0 {
+			state.deferred.Store(true)
+		}
+	})
+	if !started {
+		// The service is stopping: nothing will wait for the request.
+		w.runner.Cancel(id)
+		finish("", false)
+	}
+	return started
+}
+
+// authorshipRequestOutcome is a page request's result as the classic state
+// records it. An interruption (a withdrawn or held request, or recent
+// conversations still being written) must not block a later page retry, nor
+// read as an estimates error.
+func authorshipRequestOutcome(facts workRequestFacts, err error) (failure string, succeeded bool) {
+	switch {
+	case err != nil || facts.State == opCancelled || facts.State == opInterrupted:
+		return "", false
+	case facts.State == opSucceeded:
+		return "", true
+	}
+	return workRequestError(facts).Error(), false
+}
+
+// authorshipHistoricalShare names the older conversations a page pass also
+// estimates, as runAuthorshipLanes' historical lane does: the oldest-queued
+// pending messages sent before from, up to the quick limit less the recent
+// lane's pending messages but never under a fifth of it, so a fully
+// historical library still makes bounded progress. A chosen conversation is
+// estimated whole. Conversations in sorted skip (the recent members) are left out.
+func (c *Catalog) authorshipHistoricalShare(ctx context.Context, from time.Time, skip []workMember) ([]string, error) {
+	limit := max(1, authorshipQuickLimit)
+	cutoff := formatTime(from)
+	var recent int
+	if err := c.reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM authorship_pending WHERE sent_at>=? LIMIT ?)`, cutoff, limit).Scan(&recent); err != nil {
+		return nil, err
+	}
+	rows, err := c.reader().QueryContext(ctx, `SELECT m.conversation_id FROM authorship_pending p JOIN messages m ON m.id=p.message_id
+ WHERE p.sent_at<? OR p.sent_at IS NULL ORDER BY p.queued_at,p.rowid LIMIT ?`, cutoff, max(limit/5, limit-recent, 1))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if _, found := slices.BinarySearchFunc(skip, id, func(m workMember, id string) int { return strings.Compare(m.ID, id) }); !found {
+			ids = append(ids, id)
+		}
+	}
+	return ids, rows.Err()
 }
 
 // authorshipRunning reports whether a rebuild is writing message_authorship.
@@ -1414,7 +1542,15 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, forc
 					return err
 				}
 			}
-			for key, value := range map[string]string{"authorship_generation": generation, "authorship_state_generation": generation, "authorship_built_at": now(), "authorship_quick_generation": generation, "authorship_quick_at": now(), "authorship_quick_version": authorshipQuickVersion} {
+			metadata := map[string]string{"authorship_generation": generation, "authorship_state_generation": generation, "authorship_built_at": now(), "authorship_quick_generation": generation, "authorship_quick_at": now(), "authorship_quick_version": authorshipQuickVersion}
+			var pending bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM authorship_pending)`).Scan(&pending); err != nil {
+				return err
+			}
+			if !pending {
+				metadata["authorship_complete_at"] = now()
+			}
+			for key, value := range metadata {
 				if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 					return err
 				}
@@ -1428,6 +1564,7 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, forc
 	}
 	full := run.classifier == nil
 	if full {
+		run.refinementKey = authorshipRefinementKey(run.checkpoint.revision)
 		run.inputs, run.launches, err = c.authorshipInputs(ctx)
 		if err != nil {
 			return err
@@ -1734,9 +1871,9 @@ func walkAuthorshipInputs(ctx context.Context, inputs []authorInput, classifier 
 	return results, nil
 }
 
-// AuthorshipStats summarizes user-turn text for Settings: all-time and
-// last-30-day totals, and a daily series the page rolls up by week or month.
-// Every total has characters and words per category.
+// AuthorshipStats is the state of the writing estimates: whether they are
+// built, running or catching up. The words themselves are the
+// writing_messages dataset, read through query-v3.
 func (c *Catalog) AuthorshipStats(ctx context.Context) (map[string]any, error) {
 	stale := c.ensureAuthorship()
 	refinedAt, err := c.metaValue(ctx, "authorship_refined_at")
@@ -1750,45 +1887,33 @@ func (c *Catalog) AuthorshipStats(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	sums := []string{"COUNT(*) messages", "COALESCE(SUM(typed_words>0),0) typed_messages"}
-	for _, column := range authorshipColumns() {
-		sums = append(sums, fmt.Sprintf("COALESCE(SUM(%s),0) %s", column, column))
-	}
-	aggregate := strings.Join(sums, ",")
-	totals, err := queryMapsContext(ctx, c.DB, "SELECT "+aggregate+",COALESCE(SUM(total_chars),0) total_chars,MIN(day) first_day,MAX(day) last_day FROM message_authorship")
+	refinementPending, err := c.authorshipRefinementPending(ctx)
 	if err != nil {
 		return nil, err
 	}
-	since := c.clock().AddDate(0, 0, -29).Format("2006-01-02")
-	recent, err := queryMapsContext(ctx, c.DB, "SELECT "+aggregate+" FROM message_authorship WHERE day>=?", since)
+	var provisional, deferred int
+	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM authorship_message_state WHERE provisional=1 AND disposition='counted'").Scan(&provisional); err != nil {
+		return nil, err
+	}
+	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM authorship_message_state WHERE disposition='deferred'").Scan(&deferred); err != nil {
+		return nil, err
+	}
+	backlog, err := c.authorshipBacklog(ctx)
 	if err != nil {
 		return nil, err
 	}
-	daily, err := queryMapsContext(ctx, c.DB, "SELECT day,"+aggregate+" FROM message_authorship GROUP BY day ORDER BY day")
+	completeAt, err := c.metaValue(ctx, "authorship_complete_at")
 	if err != nil {
-		return nil, err
-	}
-	want, refined, err := c.authorshipGenerations()
-	if err != nil {
-		return nil, err
-	}
-	var provisional, pending, deferred int
-	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM authorship_message_state WHERE provisional=1").Scan(&provisional); err != nil {
-		return nil, err
-	}
-	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM authorship_message_state WHERE provisional=1 AND version=?", authorshipVersion+"/deferred").Scan(&deferred); err != nil {
-		return nil, err
-	}
-	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM authorship_pending").Scan(&pending); err != nil {
 		return nil, err
 	}
 	state := &c.authorship
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return map[string]any{
-		"refined_at": nilIfEmpty(refinedAt), "refinement_pending": want != refined || provisional > 0, "provisional_messages": provisional - deferred, "deferred_messages": deferred, "pending_messages": pending, "refining": state.refining,
+		"refined_at": nilIfEmpty(refinedAt), "refinement_pending": refinementPending, "provisional_messages": provisional, "deferred_messages": deferred, "pending_messages": backlog.Pending,
+		"pending_recent_messages": backlog.Recent, "pending_historical_messages": backlog.Historical, "oldest_pending_sent_at": nilIfEmpty(backlog.OldestSent), "oldest_pending_queued_at": nilIfEmpty(backlog.OldestQueued), "complete_at": nilIfEmpty(completeAt), "refining": state.refining,
 		"version": authorshipVersion, "built_at": nilIfEmpty(builtAt), "running": state.running, "stale": stale, "error": nilIfEmpty(state.lastError),
-		"window_hours": int(authorshipWindow.Hours()), "totals": totals[0], "last_30_days": recent[0], "daily": daily,
+		"window_hours": int(authorshipWindow.Hours()),
 	}, nil
 }
 

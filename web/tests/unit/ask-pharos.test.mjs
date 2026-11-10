@@ -12,6 +12,56 @@ import { loadClassicScript, plain } from './helpers/classic-script.mjs';
 const model = loadClassicScript('ask-model.js',{TextEncoder,TextDecoder});
 const prompt = loadClassicScript('ask-prompt.js');
 
+test('Ask progress puzzles produce distinct solvable shuffles using adjacent moves',()=>{
+  let seed=19;const random=()=>((seed=(seed*16807)%2147483647)/2147483647);
+  let previous=null;
+  for(let round=0;round<20;round++){
+    const path=plain(model.askPuzzlePath(random,previous));
+    assert.notDeepEqual(path[0],previous);
+    assert.notDeepEqual(path[0],[1,2,3,4,5,6,7,8,0]);
+    assert.deepEqual(path.at(-1),[1,2,3,4,5,6,7,8,0]);
+    for(let i=1;i<path.length;i++){
+      const before=path[i-1],after=path[i],empty=before.indexOf(0),next=after.indexOf(0);
+      assert.equal(Math.abs(empty%3-next%3)+Math.abs(Math.floor(empty/3)-Math.floor(next/3)),1);
+      assert.equal(before[next],after[empty]);
+      assert.equal(before.filter((tile,index)=>tile!==after[index]).length,2);
+    }
+    previous=path[0];
+  }
+  const repeated=plain(model.askPuzzlePath(()=>0));
+  assert.notDeepEqual(plain(model.askPuzzlePath(()=>0,repeated[0]))[0],repeated[0],'even a repeated random sequence gets a fresh board');
+});
+
+test('Ask progress motion pauses around the solve, resets together, and stops cleanly',()=>{
+  let change;const media={matches:false,addEventListener:(_,fn)=>{change=fn;},removeEventListener:(_,fn)=>assert.equal(fn,change)};
+  const created=[],tiles=Array.from({length:8},()=>({style:{removeProperty(){}},animate(frames,options){
+    const animation={frames,options,canceled:false,cancel(){this.canceled=true;}};created.push(animation);return animation;
+  }}));
+  const motion=model.askPuzzleMotion({children:tiles},{random:()=>0,media});
+  motion.setWorking(true);
+  const first=created.slice(0,8),duration=first[0].options.duration;
+  assert.equal(duration,18840);
+  for(const animation of first){
+    assert.equal(animation.frames[1].offset,1000/duration,'initial board stays still for one second');
+    assert.equal(animation.frames[2].offset,1640/duration,'each move lasts 640 milliseconds');
+    assert.equal(animation.frames[3].offset,1800/duration,'the next move starts after a 160 millisecond pause');
+    assert.equal(animation.frames[2].transform,animation.frames[3].transform,'tiles hold position between moves');
+    assert.equal(animation.frames.at(-2).offset,16840/duration,'solved board stays still for two seconds');
+    assert.equal(animation.frames.at(-1).transform,'translate(0px,0px)');
+  }
+  motion.setWorking(true);assert.equal(created.length,8,'progress updates do not restart the solve');
+  first[0].onfinish();
+  const reset=created.slice(8,16);assert.equal(reset.length,8);
+  assert.ok(reset.every(animation=>animation.options.duration===400&&animation.frames.length===2),'all tiles reset together');
+  reset[0].onfinish();
+  const second=created.slice(16,24);assert.equal(second.length,8);
+  assert.ok(second[0].options.duration>=17840&&second[0].options.duration<=18640);
+  media.matches=true;change();assert.ok(second.every(animation=>animation.canceled),'reduced motion cancels animations');
+  media.matches=false;change();assert.equal(created.length,32,'motion resumes when allowed');
+  motion.setWorking(false);assert.ok(created.slice(24).every(animation=>animation.canceled));
+  motion.destroy();
+});
+
 test('prompt invitations rotate after idle time and restart the wait after editing or hiding',()=>{
   const items=['A','B','C','D','E'].map(text=>({id:text,text}));
   const hints=prompt.askPromptHints(()=>0),first=hints.update(items,items.slice(0,2)),seen=new Set([first]);
@@ -197,6 +247,33 @@ test('suggestions keep only well-formed, distinct questions from the library', (
   assert.equal(model.askSuggestionItems(Array.from({length:20},(_,i)=>({id:'f'+i,text:'Question '+i+'?'}))).length,12);
 });
 
+test('wider suggestion rows show more cards without narrowing them', () => {
+  const count=(width,available=12)=>model.askIdeaLayout(width,available).count;
+  assert.equal(count(320),1,'a phone reads one card at a time');
+  assert.equal(count(660),3,'the Home composer keeps three cards');
+  assert.ok(count(1200)>3&&count(1200)<count(2133),'full screen Ask fills a wide window');
+  assert.equal(count(5000),11,'one question stays off the row for the placeholder and rotation');
+  assert.equal(count(5000,3),3,'a short slate still fills three cards');
+  assert.equal(count(2133,2),2);
+  assert.equal(count(0),0);
+  for(const width of [320,599,600,660,1000,1200,1440,1920,2133,2600,5000])for(const available of [1,2,3,5,12]){
+    const layout=model.askIdeaLayout(width,available),{count:n,card,peek,stride,side}=layout;
+    assert.ok(n>=1&&n<=available&&(n<=3||n<available));
+    if(n>3)assert.ok(card>=200,`cards stay readable at ${width}px`);
+    // The reading block, centered on slot k at scrollLeft k*stride, starts after the left peek and fills the row.
+    assert.ok(Math.abs(side-Math.floor(n/2)*stride-peek)<1e-9);
+    assert.ok(Math.abs(peek+n*card+(n-1)*(stride-card)+peek-width)<1e-9,`cards and peeks fill ${width}px`);
+    // From any resting card, two rotations either way (a timed glide plus a
+    // click during it) keep the reading block and its peeks on built cards.
+    const slots=layout.copies*available;
+    for(let center=0;center<available;center++)for(const shift of [-2*n,0,2*n]){
+      const first=layout.lead*available+center+shift-Math.floor(n/2);
+      assert.ok(first-1>=0&&first+n<slots,`${width}px, ${available} cards: rotating ${shift} from ${center} runs out of cards`);
+    }
+  }
+  assert.equal(model.askIdeaLayout(660,12).copies,3,'the Home row keeps one copy of the slate on each side');
+});
+
 test('Ask keeps asking for suggestions while they are being chosen, backing off', () => {
   const delays=Array.from({length:8},(_,attempt)=>model.askSuggestionRetryDelay(attempt));
   assert.equal(delays[0],20000);
@@ -206,10 +283,11 @@ test('Ask keeps asking for suggestions while they are being chosen, backing off'
 
 test('Ask composer keeps search available while draft and conversation controls follow content', () => {
   const actions = state => plain(model.askComposerActions({enabled:true, model:'available-model', ...state}));
-  assert.deepEqual(actions({}), {send:false, stop:false, history:true, clear:false, modelLocked:false});
-  assert.deepEqual(actions({draft:'  '}), {send:false, stop:false, history:false, clear:true, modelLocked:false});
-  assert.deepEqual(actions({draft:'Find my work'}), {send:true, stop:false, history:false, clear:true, modelLocked:false});
-  assert.deepEqual(actions({turns:[{prompt:'Find my work'}]}), {send:false, stop:false, history:false, clear:true, modelLocked:true});
+  assert.deepEqual(actions({}), {send:false, stop:false, history:true, clear:false, clearLabel:'Clear', modelLocked:false});
+  assert.deepEqual(actions({draft:'  '}), {send:false, stop:false, history:true, clear:true, clearLabel:'Clear', modelLocked:false});
+  assert.deepEqual(actions({draft:'Find my work'}), {send:true, stop:false, history:true, clear:true, clearLabel:'Clear', modelLocked:false});
+  assert.deepEqual(actions({turns:[{prompt:'Find my work'}]}), {send:false, stop:false, history:true, clear:true, clearLabel:'New Chat', modelLocked:true});
+  assert.equal(actions({draft:'Follow up',turns:[{prompt:'First question'}],pending:true}).clearLabel,'New Chat');
   assert.equal(actions({draft:'Follow up', pending:true}).send, false);
   assert.equal(actions({draft:'Find', enabled:false}).send, false);
   assert.equal(actions({draft:'Find', model:''}).send, false);
@@ -339,6 +417,29 @@ test('history keeps server matches from later messages and only adds the current
   assert.deepEqual(entries({current}).map(session=>session.id),['initial','newer']);
   assert.deepEqual(entries({query:'later topic',current,sessions:[]}),[],'an unmatched current chat must not leak into search results');
 });
+test('history rows name their turns, models and when the chat was last active', () => {
+  const now=new Date(2026,10,7,15,30).getTime(),at=(month,day,hour=9,year=2026)=>new Date(year,month,day,hour).getTime();
+  const summary={id:'s',createdAt:at(10,7,8),updatedAt:at(10,7,14),questionCount:3,selection:{provider:'Codex',model:'gpt'},conversation:[{prompt:'Where did time go?',cli:'Codex'}],
+    models:[{cli:'Claude',model:'opus',label:'Opus'},{cli:'Codex',model:'gpt',label:''}]};
+  const row=plain(model.askHistoryRow(summary,{now,labels:{Codex:{gpt:'GPT-5'}}}));
+  assert.equal(row.title,'Where did time go?');
+  assert.equal(row.turns,'3 turns');
+  assert.deepEqual(row.models.map(use=>use.label),['Opus','GPT-5'],'summaries keep their most recent model first and fill missing labels from the catalog');
+  assert.equal(row.stamp,new Date(summary.updatedAt).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}));
+  assert.match(row.when,/^Last active .* · Started /);
+  // The open chat has full turns and no summary list.
+  const open={id:'o',createdAt:at(10,6),updatedAt:at(10,6),selection:{provider:'Claude',model:'opus'},conversation:[
+    {prompt:'First',cli:'Codex',model:'gpt',modelLabel:'GPT-5'},{prompt:'Second',cli:'Claude',model:'opus',modelLabel:'Opus'},{prompt:'Third',cli:'Codex',model:'gpt',modelLabel:'GPT-5'}]};
+  const openRow=plain(model.askHistoryRow(open,{now}));
+  assert.deepEqual(openRow.models.map(use=>use.cli),['Codex','Claude']);
+  assert.equal(openRow.turns,'3 turns');
+  assert.equal(openRow.stamp,new Date(open.updatedAt).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}));
+  assert.ok(!openRow.when.includes('Started'),'an unchanged start date is not repeated');
+  const draft=plain(model.askHistoryRow({id:'d',updatedAt:at(10,2),draft:'Half a thought',selection:{provider:'Claude',model:'opus'},conversation:[]},{now,labels:{Claude:{opus:'Opus'}}}));
+  assert.deepEqual([draft.title,draft.turns,draft.modelSummary],['Half a thought','Draft','Opus'],'a draft names the model it will ask');
+  assert.equal(model.askHistoryRow({...summary,questionCount:1},{now}).turns,'1 turn');
+  assert.match(model.askHistoryStamp(at(0,3,9,2025),now),/2025/);
+});
 test('private visit writes preserve deletion order and recover after a failed update', async () => {
   const events=[];
   let finish;
@@ -353,6 +454,70 @@ test('private visit writes preserve deletion order and recover after a failed up
   const clear=model.askWriteVisit(()=>events.push('clear'));
   await assert.rejects(failed,/offline/);await clear;
   assert.equal(events.at(-1),'clear');
+});
+test('background saves retry temporary failures and surface persistent or invalid requests', async () => {
+  const waits=[], busy=Object.assign(new Error('busy'),{status:503});
+  let attempts=0;
+  assert.equal(await model.askRetryBackground(()=>{if(++attempts<3)throw busy;return 'saved';},async ms=>waits.push(ms)),'saved');
+  assert.equal(attempts,3);
+  assert.deepEqual(waits,[500,1000]);
+  attempts=0;
+  await assert.rejects(model.askRetryBackground(()=>{attempts++;throw busy;},async()=>{}),/busy/);
+  assert.equal(attempts,3,'a persistent outage must be reported');
+  attempts=0;
+  await assert.rejects(model.askRetryBackground(()=>{attempts++;throw Object.assign(new Error('invalid'),{status:400});},async()=>{}),/invalid/);
+  assert.equal(attempts,1,'validation errors are not transient');
+  const networkModel=loadClassicScript('ask-model.js',{TypeError});
+  attempts=0;
+  assert.equal(await networkModel.askRetryBackground(()=>{if(++attempts===1)throw new TypeError('offline');return 'saved';},async()=>{}),'saved');
+});
+test('a retrying visit stays ahead of a later deletion', async () => {
+  const timers=[], events=[];
+  const queued=loadClassicScript('ask-model.js',{setTimeout:fn=>timers.push(fn)});
+  let attempts=0;
+  const visit=queued.askWriteVisit(()=>{events.push('visit');if(++attempts===1)throw Object.assign(new Error('busy'),{status:503});});
+  const removal=queued.askWriteVisit(()=>events.push('remove'));
+  while(!timers.length)await Promise.resolve();
+  assert.deepEqual(events,['visit']);
+  timers.shift()();await Promise.all([visit,removal]);
+  assert.deepEqual(events,['visit','visit','remove']);
+});
+test('automatic visits coalesce while busy and reconcile after failure or deletion', async () => {
+  const timers=[],writes=[];
+  const queued=loadClassicScript('ask-model.js',{setTimeout:fn=>{timers.push(fn);return timers.length},clearTimeout(){}});
+  const first={url:'/one',at:1,title:'One'},second={url:'/two',at:2,title:'Two'},third={url:'/three',at:3,title:'Three'};
+  let history=[first],finish;
+  const buffer=queued.askBufferVisits(input=>{writes.push(plain(input));if(writes.length===1)return new Promise(resolve=>{finish=resolve});if(writes.length===2)throw new Error('busy');},
+    ()=>({reconcile:true,visits:[...history]}),write=>write());
+  buffer.add({reconcile:false,visits:[first]});
+  const running=timers.shift()();
+  history=[third,second,first];buffer.add({reconcile:false,visits:[second]});buffer.add({reconcile:false,visits:[third]});
+  finish();await running;
+  assert.equal(timers.length,1,'many visits leave only one pending write');
+  await timers.shift()();
+  assert.deepEqual(writes[1],{reconcile:true,visits:[third,second,first]});
+  history=[];
+  await timers.shift()();
+  assert.deepEqual(writes[2],{reconcile:true,visits:[]},'retry uses history after an explicit clear');
+  buffer.stop();
+
+  // Exercise the real retry queue: a later visit can arrive after one
+  // attempt fails, but before askRetryBackground starts its next attempt.
+  const retryTimers=[],attempts=[];
+  const retrying=loadClassicScript('ask-model.js',{setTimeout:(fn,ms)=>{retryTimers.push({fn,ms});return retryTimers.length},clearTimeout(){}});
+  history=[first];
+  const retryBuffer=retrying.askBufferVisits(async input=>{
+    attempts.push(plain(input));
+    if(attempts.length===1)throw Object.assign(new Error('busy'),{status:503});
+  },()=>({reconcile:true,visits:[...history]}));
+  retryBuffer.add({reconcile:false,visits:[first],replaces:{url:'/old',at:0}});
+  const retryingWrite=retryTimers.shift().fn();
+  while(!retryTimers.length)await Promise.resolve();
+  assert.equal(retryTimers[0].ms,500);
+  history=[second,first];retryBuffer.add({reconcile:false,visits:[second]});
+  retryTimers.shift().fn();await retryingWrite;
+  assert.deepEqual(attempts[1],{reconcile:true,visits:[second,first]},'the retry reconciles both visits and removes superseded entries');
+  retryBuffer.stop();
 });
 test('a single visit replaces one entry, while a full history write reconciles the private store', () => {
   const visit={url:'/analyze',at:2,title:'Analyze'};
@@ -487,7 +652,7 @@ test('Ask stream failures reconcile instead of accepting an unfinished answer', 
   await assert.rejects(model.askReadResponse(stream('{"type":"progress","activity":{}}\n')),/before the answer/);
   await assert.rejects(model.askReadResponse(stream('{"type":"result","session":')),/before the answer/);
   await assert.rejects(model.askReadResponse(stream('not JSON\n')),/JSON|Unexpected/);
-  await assert.rejects(model.askReadResponse(new Response('{"error":"Model unavailable"}',{status:400})),/Model unavailable/);
+  await assert.rejects(model.askReadResponse(new Response('{"error":"Model unavailable"}',{status:400})),error=>error.message==='Model unavailable'&&error.status===400);
   const session={id:'older-server'};
   assert.deepEqual(plain(await model.askReadResponse(new Response(JSON.stringify(session)))),session);
 });
@@ -642,4 +807,71 @@ test('retained Ask charts revalidate on reopening and their own data or calendar
   data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'usage'}));
   data.dispatchEvent(new Event('pharos:usage-refresh'));
   assert.equal(refreshes.length,3,'switching or clearing chats removes every refresh subscription');
+});
+
+ test('retry with another model retains the feedback proposal as an unsent draft',()=>{
+  const draft=model.askRetryDraft({turns:[{prompt:'Request export',status:'feedback',feedback:{kind:'feature',comment:'Export selected conversations to Markdown.'}}]});
+  assert.match(draft,/Feedback draft \(feature\):\nExport selected conversations/);
+ });
+
+
+test('Ask request ownership follows each chat through switching, completion and retry',()=>{
+  const requests=model.askRequestRegistry(),first={id:'first',turnId:'a'},second={id:'second',turnId:'b'};
+  requests.start(first);requests.start(second);
+  assert.equal(requests.size,2);
+  assert.equal(requests.get('first'),first);
+  assert.equal(requests.get('second'),second);
+  assert.throws(()=>requests.start({id:'first',turnId:'duplicate'}));
+  requests.release(second);
+  assert.equal(requests.get('first'),first,'stopping one chat leaves the other running');
+  const retry={id:'second',turnId:'b'};requests.start(retry);requests.release(second);
+  assert.equal(requests.get('second'),retry,'a stale callback cannot release its retry');
+  requests.release(first);requests.release(retry);assert.equal(requests.size,0);
+
+  const saved={id:'previous',status:'multiple',reply:'Earlier answer'},turn={id:'queued',status:'loading',prompt:'Still sending'};
+  const snapshot=[saved];
+  const restored=model.askRestoreTurns(snapshot,turn);
+  assert.equal(restored.length,2,'a saved snapshot can omit the queued question');
+  assert.equal(restored[1],turn,'the restored question shares the running request object');
+  assert.notEqual(restored[0],saved,'stored turns are copied before editing');
+  assert.equal(snapshot.length,1,'restoration leaves the saved snapshot alone');
+  Object.assign(turn,{status:'multiple',reply:'The completed answer'});
+  assert.equal(restored[1].reply,'The completed answer','stream completion updates the restored turn');
+  const present=model.askRestoreTurns([saved,{id:turn.id,status:'loading'}],turn);
+  assert.equal(present.length,2,'a saved copy of the pending question is not duplicated');
+  assert.equal(present[1],turn);
+  assert.equal(model.askRestoreTurns(snapshot,turn)[1],turn,'a request that finished while loading still supersedes its older snapshot');
+  assert.equal(model.askRestoreTurns(snapshot).length,1);
+});
+
+test('Ask inbox distinguishes answering, unseen answers, seen answers and drafts',()=>{
+  const state=conversation=>plain(model.askInboxState({conversation}));
+  assert.deepEqual(state([]),{running:false,unread:0,label:'Draft'});
+  const answer={id:'a',status:'multiple',startedAt:1};
+  assert.equal(state([answer]).unread,1);
+  assert.equal(state([{...answer,seenAt:5}]).label,'Seen');
+  assert.equal(state([{...answer,status:'loading'}]).running,true);
+  assert.equal(state([{...answer,status:'loading'}]).unread,0);
+  assert.equal(state([{...answer,status:'canceled'}]).unread,0);
+  assert.equal(state([answer,{id:'b',status:'clarification'}]).label,'2 unseen answers');
+  assert.deepEqual(plain(model.askInboxState({lastStatus:'loading',unreadCount:2,conversation:[{prompt:'Title only'}]})),{running:true,unread:2,label:'Answering…'});
+  assert.equal(model.askAnswerUnread({...answer,seenAt:5}),false);
+  assert.equal(model.askAnswerUnread({...answer,status:'error'}),true);
+
+  const oldError={id:'retry',startedAt:10,status:'error',reply:'Original error'};
+  const reopened={id:'chat',conversation:model.askRestoreTurns([oldError])};
+  const receipt={id:'chat',turnID:oldError.id,startedAt:oldError.startedAt};
+  const retry=reopened.conversation[0];
+  Object.assign(retry,{startedAt:20,status:'loading',reply:''});
+  assert.equal(model.askApplyReceipt(reopened,receipt,100),null,'an old receipt cannot read the running retry');
+  Object.assign(retry,{status:'multiple',reply:'Recovered answer'});
+  assert.equal(model.askApplyReceipt(reopened,receipt,100),null,'reopening broke the captured object identity, but the attempt still guards the final answer');
+  assert.equal(retry.reply,'Recovered answer');assert.equal(retry.seenAt,undefined);
+  assert.equal(oldError.startedAt,10,'the captured old object remains unchanged');
+  assert.equal(model.askApplyReceipt({...reopened,id:'other'}, {...receipt,startedAt:20},100),null,'another active chat cannot accept this receipt');
+  assert.equal(model.askApplyReceipt(reopened, {...receipt,turnID:'other',startedAt:20},100),null);
+  assert.equal(model.askApplyReceipt(reopened, {...receipt,startedAt:20},100),retry,'a valid receipt resolves the current instance');
+  assert.equal(retry.seenAt,100);
+  assert.equal(model.askApplyReceipt(reopened, {...receipt,startedAt:20},200),null,'repeated receipts keep the original seen time');
+  assert.equal(retry.seenAt,100);
 });

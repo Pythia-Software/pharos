@@ -1,7 +1,10 @@
+import { dataSources } from "./data-taxonomy-model";
 import { analyzePages } from "./app-navigation-model";
+import { askedRefresh } from "./dataset-refresh";
 import React, { createContext, useContext, useEffect, useState } from "react";
 import {EMPTY_QUERY,encodeQuery,type FieldSchema,type QueryState } from "@pythia-software/query-table-core";
 import { dashboardQueryLinks } from "./dashboard-query-links";
+import { dashboardQueryPurposes, type DashboardQueryContext } from "./dashboard-query-explorations";
 import { Icon } from "./icons";
 import { ResetPage } from "./query-recovery";
 import { readUsageWorkspace, usageDashboardReturn, usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
@@ -16,14 +19,29 @@ export const UsageWorkspaceLink = PageLink;
 const DashboardHeadline = createContext<HTMLElement | null>(null);
 export const useDashboardHeadline = () => useContext(DashboardHeadline);
 
-export function UsageDashboardLinks({ dataset, query, schema }: { dataset: UsageDataset; query: QueryState; schema: FieldSchema }) {
+export const DashboardQueryOverride = createContext<DashboardQueryContext | null>(null);
+
+export function UsageDashboardLinks({ dataset, query, schema, context, extra }: { dataset: UsageDataset; query: QueryState; schema: FieldSchema; context: DashboardQueryContext; extra?: { title: string; note: string; href: string; target?: string } }) {
+  const override = useContext(DashboardQueryOverride);
+  const resolved = override ?? context;
   const params = new URLSearchParams(location.search);
-  return <div className="usage-dashboard-links">
-    <div className="usage-query-destinations">{dashboardQueryLinks(dataset, query, schema, params).map(link => <UsageWorkspaceLink className="usage-query-destination" key={link.title} href={link.href}>
-      <span className="usage-query-destination-heading"><strong>{link.title}</strong><Icon name="arrow-right" /></span>
-      {link.sentence.length ? <span className="usage-query-sentence">{link.sentence.map(part => <React.Fragment key={part.keyword}>{part.prefix}<strong>{part.keyword}</strong>{part.text ? ` ${part.text}` : ""}</React.Fragment>)}.</span> : null}
-    </UsageWorkspaceLink>)}</div>
-  </div>;
+  return <nav className="usage-dashboard-links" aria-label="Explore this dashboard">
+    <div className="usage-query-destinations">{dashboardQueryLinks(dataset, query, schema, params, resolved).map(link => {
+      const content = <>
+        <span className="usage-query-purpose">{dashboardQueryPurposes.find(purpose => purpose.id === link.purpose)!.label}</span>
+        <span className="usage-query-destination-heading"><strong>{link.title}</strong>{link.href ? <Icon name="arrow-right" /> : null}</span>
+        <span className="usage-query-note">{link.blocked ?? link.note}</span>
+        {!link.blocked && link.sentence.length ? <span className="usage-query-sentence">{link.sentence.map(part => <React.Fragment key={part.keyword}>{part.prefix}<strong>{part.keyword}</strong>{part.text ? ` ${part.text}` : ""}</React.Fragment>)}.</span> : null}
+      </>;
+      const className = `usage-query-destination usage-query-${link.purpose}`;
+      return link.href ? <UsageWorkspaceLink className={className} key={link.purpose} href={link.href}>{content}</UsageWorkspaceLink>
+        : <div className={className} key={link.purpose} aria-disabled="true">{content}</div>;
+    })}{extra ? <UsageWorkspaceLink className="usage-query-destination usage-query-compare" href={extra.href} data-pharos-target={extra.target}>
+      <span className="usage-query-purpose">Explore automatic work</span>
+      <span className="usage-query-destination-heading"><strong>{extra.title}</strong><Icon name="arrow-right" /></span>
+      <span className="usage-query-note">{extra.note}</span>
+    </UsageWorkspaceLink> : null}</div>
+  </nav>;
 }
 
 // New records arrive while a dashboard is open (Pharos MCP's own requests,
@@ -55,12 +73,12 @@ export function UsageWorkspace({ renderDashboard, renderTable }: { renderDashboa
     {failure?.address === address ? <><span>{failure.message}</span><button type="button" onClick={() => setAttempt(value => value + 1)}>Try again</button><ResetPage /></> : <span>Opening dashboard…</span>}
   </section>;
   const back = usageDashboardReturn(params);
-  const title = mode === "dashboards" ? usageTopics[topic].label : `Query · ${usageDatasets[dataset].label}`;
+  const title = mode === "dashboards" ? usageTopics[topic].label : usageDatasets[dataset].label;
   const pages = analyzePages(params);
   return <NestedPageLayout className="pharos-query-page usage-workspace" contentClassName="usage-workspace-content"
     label="Analyze" pages={pages} current={`${mode}:${mode === "dashboards" ? topic : dataset}`} title={title} titleSlot={setHeadline}
-    description={mode === "dashboards" ? "" : "Build your own analysis. Filter record fields with where, or search record text for words and phrases. Group the matches and use having to filter grouped results."}
-    actions={<><ResetPage />{mode==='dashboards'&&['human','thinking-detail'].includes(topic)?<UsageWorkspaceLink href={'/analyze?analyze_mode=dashboards&analyze_topic=labels&analyze_data=message_labels&analyze_filters='+encodeURIComponent(encodeQuery({...EMPTY_QUERY,where:[{field:'source',op:'=',value:topic==='human'?'human':'thinking'}]}))}>Explore {topic==='human'?'human words':'thinking'} labels<Icon name="arrow-right"/></UsageWorkspaceLink>:null}{mode === "dashboards" ? <button type="button" className="usage-dashboard-refresh" onClick={() => window.dispatchEvent(new Event("pharos:usage-refresh"))}>Refresh</button> : null}{mode !== "dashboards" ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
+    description={mode === "dashboards" ? "" : `${dataSources[dataset].grain}. Choose a query idea, or explore the records with your own filters and grouping.`}
+    actions={<><ResetPage />{mode==='dashboards'&&['human','thinking-detail'].includes(topic)?<UsageWorkspaceLink href={'/analyze?analyze_mode=dashboards&analyze_topic=labels&analyze_data=message_labels&analyze_filters='+encodeURIComponent(encodeQuery({...EMPTY_QUERY,where:[{field:'source',op:'=',value:topic==='human'?'human':'thinking'}]}))}>Explore {topic==='human'?'human words':'thinking'} labels<Icon name="arrow-right"/></UsageWorkspaceLink>:null}{mode === "dashboards" ? <button type="button" className="usage-dashboard-refresh" onClick={() => window.dispatchEvent(askedRefresh())}>Refresh</button> : null}{mode !== "dashboards" && (params.has("analyze_opened") || params.has("analyze_chart")) ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
     {mode === "dashboards" ? <div className="usage-dashboard" key={topic}>
       <DashboardHeadline.Provider value={headline}>{renderDashboard(topic)}</DashboardHeadline.Provider></div>
       : <div className="usage-workspace-table" key={dataset}>{renderTable(dataset)}</div>}

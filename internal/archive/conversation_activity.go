@@ -12,11 +12,13 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 		if err != nil {
 			return nil, err
 		}
-		ledger, err := c.representativeLedger()
+		ledger, err := c.representativeLedgerContext(ctx)
 		if err != nil {
 			return nil, err
 		}
-		lineage, err := c.usageConversationRoots(ledger)
+		// A human message a transcript copied from its ancestry happened once,
+		// in the transcript that owns the original.
+		lineage, occurrences, err := c.usageConversationRootsAndOccurrences(ctx, ledger)
 		if err != nil {
 			return nil, err
 		}
@@ -40,6 +42,7 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 				continue
 			}
 			event := base("usage:"+firstString(row["id"]), root, row["first_usage_at"], "usage")
+			event["root_quality"] = nilIfEmpty(lineage.rootQuality[firstString(row["conversation_id"])])
 			event["output_tokens"] = row["output_tokens"]
 			for _, field := range []string{"workspace_id", "conversation_id", "title", "repository_name", "project_name"} {
 				event[field] = row[field]
@@ -48,13 +51,21 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 		}
 		for _, message := range messages {
 			root := lineage.roots[firstString(message["conversation_id"])]
-			if root == nil {
+			if root == nil || !occurrences.Counts(sourceRef{sourceMessage, firstString(message["message_id"])}, sourceRef{sourceConversation, firstString(message["conversation_id"])}) {
 				continue
 			}
 			// A human message holds some text besides harness and automated
 			// spans; it counts once, at the time it was sent.
 			event := base("human:"+firstString(message["message_id"]), root, message["sent_at"], "human")
+			event["root_quality"] = nilIfEmpty(lineage.rootQuality[firstString(message["conversation_id"])])
 			event["human_messages"] = int64(1)
+			// The message may repeat history its transcript copied, when the
+			// evidence cannot tell (occurrenceIndex.Partial).
+			event["occurrence_coverage"] = "complete"
+			if occurrences.Lookup(sourceRef{sourceMessage, firstString(message["message_id"])}, sourceRef{}).Role == occurrenceUnresolved ||
+				occurrences.Partial(firstString(message["conversation_id"])) != "" {
+				event["occurrence_coverage"] = "partial"
+			}
 			for _, field := range []string{"workspace_id", "conversation_id", "title", "repository_name", "project_name", "message_id"} {
 				event[field] = message[field]
 			}

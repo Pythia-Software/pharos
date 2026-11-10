@@ -214,7 +214,7 @@ func legacyUpgradeCatalog(t *testing.T) *Catalog {
 func TestLibraryUpgrade(t *testing.T) {
 	catalog := legacyUpgradeCatalog(t)
 	pending := upgradePending(t, catalog)
-	if pending["repositories"] == 0 || pending["usage"] != 1 || pending["harness"] == 0 || pending["instructions"] == 0 || pending["reasoning"] == 0 || pending["message-search"] != 2 || pending["tools"] != 2 {
+	if pending["repositories"] == 0 || pending["usage"] != 2 || pending["harness"] == 0 || pending["instructions"] == 0 || pending["reasoning"] == 0 || pending["message-search"] != 2 || pending["tools"] != 2 {
 		t.Fatalf("legacy library pending: %v", pending)
 	}
 	preview, err := catalog.RepositoryMergePreview(context.Background())

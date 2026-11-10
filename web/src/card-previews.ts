@@ -1,6 +1,7 @@
 import { todayBounds } from "./day-window";
 import { browserCardPreviewStorage, createCardPreviewCache } from "./card-preview-cache";
 import { clearPreviewCache, loadQueryPreviews, type PreviewJob, type QueryPreview } from "./query-previews";
+import { followStale, staleRetryDelays, type ResultPolicy } from "./result-cache";
 
 declare global { interface Window { pharosPreviewScope?: string } }
 let scope: string | undefined, cache: ReturnType<typeof createCardPreviewCache> | undefined;
@@ -27,8 +28,15 @@ export async function cardPreviewKey(job: PreviewJob): Promise<string> {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function loadCardPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal) {
+// policy is how the server's result cache answers (result-cache.ts): a page
+// showing its cards asks "cached", a person refreshing asks "fresh" or
+// "live". A card answered with a stale result is published with its real
+// age and marked refreshing, then asked for again in the background (unless
+// follow is false: work that only prepares covers nobody is looking at).
+export async function loadCardPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal,
+  options: { policy?: ResultPolicy; follow?: boolean } = {}) {
   if (signal?.aborted) return;
+  const policy = options.policy ?? "cached";
   const store = currentCache();
   const keys = new Map(await Promise.all(jobs.map(async job => [job.id, await cardPreviewKey(job)] as const)));
   await store.ready;
@@ -41,20 +49,33 @@ export async function loadCardPreviews(jobs: PreviewJob[], publish: (id: string,
       const preview = { ...entry.preview, updatedAt: entry.at, refreshing: !entry.fresh };
       previous.set(job.id, preview); publish(job.id, preview);
     }
-    if (!entry?.fresh) pending.push(job);
+    if (!entry?.fresh || policy === "live") pending.push(job);
   }
   const generation = store.generation();
   let lastSave = Date.now();
-  await loadQueryPreviews(pending, (id, preview, error) => {
+  const stale = new Map<string, PreviewJob>(), byID = new Map(jobs.map(job => [job.id, job]));
+  const receive = (final: boolean) => (id: string, preview?: QueryPreview, error?: unknown) => {
     if (signal?.aborted) return;
     if (preview) {
-      store.put(keys.get(id)!, preview, generation);
-      publish(id, { ...preview, updatedAt: Date.now() });
+      const waiting = preview.served?.state === "stale", at = preview.served?.built ?? Date.now();
+      if (waiting) stale.set(id, byID.get(id)!); else stale.delete(id);
+      store.put(keys.get(id)!, preview, generation, at);
+      const shown = { ...preview, updatedAt: at, refreshing: waiting && !final };
+      previous.set(id, shown); publish(id, shown);
       // Keep completed work even if a large catalog load is interrupted.
       if (Date.now() - lastSave > 1000) { lastSave = Date.now(); void store.save(); }
     } else if (previous.has(id)) {
       publish(id, { ...previous.get(id)!, refreshing: false, refreshError: String(error) });
     } else publish(id, undefined, error);
-  }, signal);
+  };
+  await loadQueryPreviews(pending, receive(options.follow === false), signal, policy);
   if (pending.length) void store.save();
+  if (!stale.size || options.follow === false) return;
+  // Not awaited: the page's cards are all drawn; this only freshens them.
+  void followStale(async attempt => {
+    const last = attempt === staleRetryDelays.length - 1;
+    await loadQueryPreviews([...stale.values()], receive(last), signal, "cached");
+    void store.save();
+    return stale.size > 0;
+  }, signal);
 }

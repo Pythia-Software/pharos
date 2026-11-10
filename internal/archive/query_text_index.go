@@ -28,7 +28,7 @@ func (index queryTextIndex) version() string {
 	if index.table == toolQueryFacts.table {
 		janName, janOffset := time.Date(2020, 1, 1, 12, 0, 0, 0, time.Local).Zone()
 		julName, julOffset := time.Date(2020, 7, 1, 12, 0, 0, 0, time.Local).Zone()
-		return fmt.Sprintf("%s/day-v1/%s/%s:%d/%s:%d", toolRollupVersion, toolRollupTimezone(), janName, janOffset, julName, julOffset)
+		return fmt.Sprintf("%s/day-v1/%s/%s:%d/%s:%d", toolQueryFactsVersion, toolRollupTimezone(), janName, janOffset, julName, julOffset)
 	}
 	return "1"
 }
@@ -95,7 +95,7 @@ func (c *Catalog) queryTextDataset(ctx context.Context, dataset string, table sq
 	if err == nil && dataset == "tool_calls" {
 		var built string
 		err = c.reader().QueryRowContext(ctx, "SELECT COALESCE((SELECT value FROM meta WHERE key='tool_query_facts_ready'),'')").Scan(&built)
-		table.scalarFacts = built == toolRollupVersion || strings.HasPrefix(built, toolRollupVersion+"/day-v1/")
+		table.scalarFacts = built == toolQueryFactsVersion || strings.HasPrefix(built, toolQueryFactsVersion+"/day-v1/")
 		table.calendarFacts = built == toolQueryFacts.version()
 	}
 	return table, err
@@ -116,7 +116,7 @@ func (c *Catalog) indexQueryTextBatch(ctx context.Context, index queryTextIndex)
 	}
 	var cursor, last sql.NullInt64
 	var count int
-	calendarUpgrade := index.table == toolQueryFacts.table && (ready == toolRollupVersion || strings.HasPrefix(ready, toolRollupVersion+"/day-v1/"))
+	calendarUpgrade := index.table == toolQueryFacts.table && (ready == toolQueryFactsVersion || strings.HasPrefix(ready, toolQueryFactsVersion+"/day-v1/"))
 	from := index.from
 	if calendarUpgrade {
 		from = "FROM tool_query_facts t"

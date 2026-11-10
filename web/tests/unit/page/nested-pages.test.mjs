@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { localPageNavigation, nestedPageTrail } from "../../../src/nested-pages-model";
 import { analyzePages, appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, navigationPageURL, optimizePages, toggleNavigationSection } from "../../../src/app-navigation-model";
-import { usageTopics } from "../../../src/usage-workspace-model";
+import { EMPTY_QUERY, decodeQueryStrict, encodeQuery } from "@pythia-software/query-table-core";
+import { analyzeQueryDatasets, usageTopics } from "../../../src/usage-workspace-model";
 
 test("every dashboard belongs to People, Agents or Outcomes and retains its destination", () => {
   const params = new URLSearchParams('analyze_topic=human&analyze_days=7');
@@ -11,6 +12,7 @@ test("every dashboard belongs to People, Agents or Outcomes and retains its dest
     const pages = analyzePages(params, previews), groups = pages.find(page => page.id === 'dashboards').children;
     assert.deepEqual(groups.map(group => group.label), ['People', 'Agents', 'Outcomes']);
     const dashboards = groups.flatMap(group => group.children);
+    // Agent Events is always listed, under Agents; the lab's Agent Experience waits on the preview.
     const topics = Object.keys(usageTopics).filter(topic => previews || topic !== 'agent_experience');
     assert.deepEqual(dashboards.map(page => page.id).sort(), topics.map(topic => `dashboards:${topic}`).sort());
     assert.equal(new Set(dashboards.map(page => page.id)).size, dashboards.length);
@@ -24,8 +26,8 @@ test("every dashboard belongs to People, Agents or Outcomes and retains its dest
     }
     assert.equal(nestedPageTrail(pages, 'dashboards:human')[1].label, 'People');
     assert.equal(nestedPageTrail(pages, 'dashboards:thinking-detail')[1].label, 'Agents');
+    assert.equal(nestedPageTrail(pages, 'dashboards:agent_event_rates')[1].label, 'Agents');
     assert.equal(nestedPageTrail(pages, 'dashboards:carbon')[1].label, 'Outcomes');
-    assert.ok(pages.find(page => page.id === 'query').children.every(page => page.href));
   }
   assert.equal(params.toString(), before);
 });
@@ -38,7 +40,7 @@ test("the app tree resolves global, nested, and legacy destinations without chan
   const active = appLocation('/analyze', params);
   assert.equal(appLocationLabel(sections, active).page.label, 'Token usage');
   const link = new URL(appLocationLabel(sections, active).page.href, 'https://pharos.test');
-  assert.equal(link.searchParams.get('q_usage'), 'saved');
+  assert.deepEqual(decodeQueryStrict(link.searchParams.get('q_usage')).where, [], 'dataset navigation opens the complete source');
   assert.equal(params.toString(), before, 'building navigation never mutates the current URL');
   assert.equal(appLocationLabel(sections, appLocation('/settings/sources', params)).page.label, 'Sources');
   assert.equal(appLocation('/work/work-1/conversation/conv-1', params).section, 'library');
@@ -58,11 +60,11 @@ test("the app tree resolves global, nested, and legacy destinations without chan
   ]) assert.equal(appLocation(path, new URLSearchParams(query)).current, current);
 });
 
-test("Optimize resolves separate efficiency and safety pages", () => {
+test("Optimize resolves separate efficiency, safety and fixes pages", () => {
   const sections = appSections([], new URLSearchParams());
   const optimize = sections.find(section => section.id === "findings");
-  assert.deepEqual(optimize.pages.map(page => page.id), ["findings", "safety"]);
-  assert.deepEqual(optimizePages().map(page => page.id), ["findings", "safety"]);
+  assert.deepEqual(optimize.pages.map(page => page.id), ["findings", "safety", "fixes"]);
+  assert.deepEqual(optimizePages().map(page => page.id), ["findings", "safety", "fixes"]);
   for (const [path, query, trail] of [
     ["/findings", "", ["findings", "findings:dashboard"]],
     ["/findings", "list=watching&repo=example", ["findings", "findings:dashboard"]],
@@ -73,6 +75,10 @@ test("Optimize resolves separate efficiency and safety pages", () => {
     ["/findings", "optimize_area=safety&view=table", ["safety", "safety:table"]],
     ["/findings", "optimize_area=safety&view=settings", ["safety", "safety:settings"]],
     ["/findings", "optimize_area=safety&safety_list=handed_off&safety_case=example", ["safety", "safety:dashboard"]],
+    ["/findings", "optimize_area=fixes", ["fixes", "fixes:dashboard"]],
+    ["/findings", "optimize_area=fixes&fixes_item=x&fixes_list=dismissed", ["fixes", "fixes:dashboard"]],
+    ["/findings", "optimize_area=fixes&view=table&q_fixes=saved", ["fixes", "fixes:table"]],
+    ["/findings", "optimize_area=fixes&view=settings", ["fixes", "fixes:settings"]],
   ]) {
     const params = new URLSearchParams(query), before = params.toString();
     const selected = appLocation(path, params);
@@ -135,6 +141,14 @@ test("navigation groups preserve each section's choices independently of their d
   const opened = toggleNavigationSection({}, 'analyze', 'dashboard-group:people', false);
   assert.equal(isNavigationSectionExpanded(opened.analyze, 'dashboard-group:people', false), true);
   assert.equal(isNavigationSectionExpanded(nested.analyze, 'dashboard-group:people', true), false, 'explicit choices override the current-page default');
+  // Links from before the groups were renamed (dashboards:<group>) keep their
+  // choices; a new choice is recorded under the group's id and wins.
+  const legacy = { 'dashboards:people': false, 'dashboards:agents': false, 'dashboards:outcomes': false };
+  for (const group of ['people', 'agents', 'outcomes']) assert.equal(isNavigationSectionExpanded(legacy, `dashboard-group:${group}`), false, group);
+  const reopenedLegacy = toggleNavigationSection({ analyze: legacy }, 'analyze', 'dashboard-group:outcomes');
+  assert.equal(isNavigationSectionExpanded(reopenedLegacy.analyze, 'dashboard-group:outcomes'), true);
+  assert.equal(isNavigationSectionExpanded(reopenedLegacy.analyze, 'dashboard-group:people'), false);
+  assert.equal(isNavigationSectionExpanded(legacy, 'dashboards'), true, 'only the renamed groups read an old key');
 });
 
 test("local page navigation preserves the complete destination and browser link semantics", () => {
@@ -162,4 +176,32 @@ test('sidebar presentation updates keep the picker open while page and query cha
   for (const destination of ['/settings', '/analyze?analyze_topic=human', '/analyze?analyze_topic=tokens&analyze_days=7', '/analyze?analyze_topic=tokens#chart']) {
     assert.notEqual(navigationPageURL(new URL(destination, base).href), navigationPageURL(base));
   }
+});
+
+
+test("dataset navigation groups every available table and opens complete records", () => {
+  const current = new URLSearchParams({ analyze_mode: "query", analyze_data: "messages", q_messages: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "role", op: "=", value: "user" }] }), record_messages: "old keyword", window_dataset: "messages", window_days: "7" });
+  const before = current.toString();
+  for (const previews of [false, true]) {
+    const tree = analyzePages(current, previews), groups = tree.find(page => page.id === "query").children;
+    assert.deepEqual(groups.map(group => group.label), ["Conversations & agent sessions", "Tools & context", "Usage & activity", "Agent events"]);
+    const pages = groups.flatMap(group => group.children);
+    const expected = analyzeQueryDatasets.filter(dataset => previews || !["agent_events", "agent_event_messages"].includes(dataset));
+    assert.deepEqual(pages.map(page => page.id).sort(), expected.map(dataset => `query:${dataset}`).sort());
+    assert.equal(new Set(pages.map(page => page.id)).size, pages.length);
+    for (const group of groups) {
+      assert.ok(group.children.length);
+      for (const page of group.children) {
+        const params = new URL(page.href, "https://pharos.test").searchParams;
+        const dataset = params.get("analyze_data"), query = decodeQueryStrict(params.get(`q_${dataset}`));
+        assert.ok(query, dataset);
+        assert.deepEqual(query.where, [], dataset);
+        assert.equal(query.grouping, undefined, dataset);
+        assert.equal([...params.keys()].some(key => key.startsWith("record_") || key.startsWith("window_")), false, dataset);
+        assert.equal(appLocation("/analyze", params).current, page.id);
+        assert.deepEqual(nestedPageTrail(tree, page.id).map(item => item.id), ["query", group.id, page.id]);
+      }
+    }
+  }
+  assert.equal(current.toString(), before);
 });

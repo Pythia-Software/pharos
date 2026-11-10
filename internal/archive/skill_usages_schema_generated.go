@@ -8,6 +8,7 @@ func PharosSkillUsagesSchema() querytable.Schema {
 		Name:    "pharos_skill_usages",
 		IDField: "id",
 		Fields: map[string]querytable.FieldSpec{
+			"agent_session_id":         {Name: "agent_session_id", Kind: querytable.FieldText, Expr: "r.\"agent_session_id\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"agent_session_id\""},
 			"id":                       {Name: "id", Kind: querytable.FieldText, Expr: "r.\"id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"id\""},
 			"created_at":               {Name: "created_at", Kind: querytable.FieldDatetime, Expr: "r.\"created_at\"", Synthetic: false, SQLiteDatetimeFormat: "utc-millis", Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"created_at\""},
 			"day":                      {Name: "day", Kind: querytable.FieldText, Expr: "r.\"day\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"day\""},

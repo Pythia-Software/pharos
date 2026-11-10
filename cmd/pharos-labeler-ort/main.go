@@ -13,6 +13,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -23,7 +24,7 @@ import (
 const (
 	workerName = "pharos-labeler-ort"
 	// workerVersion changes with any change to this worker's behaviour.
-	workerVersion = "2"
+	workerVersion = "3"
 )
 
 // runtimeLibraryName is the runtime library's file name on this system.
@@ -44,6 +45,7 @@ func main() {
 	backend := flags.String("backend", "auto", "inference backend: auto, cpu, or mlx (Apple silicon GPU)")
 	mlxRuntime := flags.String("mlx-runtime", "", "native MLX engine library (default $PHAROS_MLX_LIBRARY, then mlx/libpharos_mlx.dylib beside this executable)")
 	version := flags.Bool("version", false, "print the version and exit")
+	probe := flags.Bool("probe-mlx", false, "report GPU availability as JSON without loading a model")
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "usage: %s [--runtime PATH] [--backend auto|cpu|mlx] [--mlx-runtime PATH]\n\nSpeaks pharos-labeler/1 on stdin and stdout.\n\n", workerName)
 		flags.PrintDefaults()
@@ -57,6 +59,17 @@ func main() {
 	}
 	if *version {
 		fmt.Printf("%s %s (protocol pharos-labeler/1)\n", workerName, workerVersion)
+		return
+	}
+	if *probe {
+		// Runtime diagnostics must not corrupt the JSON reply on stdout.
+		reply := reserveStdout()
+		available, err := probeMLX(resolveMLXRuntime(*mlxRuntime))
+		result := labelerProbe{Available: available}
+		if err != nil {
+			result.Reason = err.Error()
+		}
+		json.NewEncoder(reply).Encode(result)
 		return
 	}
 	if *backend != "auto" && *backend != "cpu" && *backend != "mlx" {

@@ -171,7 +171,7 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 		file.Close()
 		return err
 	}
-	if err := file.Sync(); err != nil {
+	if err := syncToDrive(file); err != nil {
 		file.Close()
 		return err
 	}

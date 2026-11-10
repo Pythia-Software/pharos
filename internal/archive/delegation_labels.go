@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -13,6 +15,11 @@ import (
 // observations outside the viewport so zooming does not change attribution at
 // its edges. Bodies remain excerpts; the reader owns the original messages.
 var delegationMessageLimit = 2400
+
+// delegationMessageScanBatches bounds how many batches of candidate rows a
+// lane reads to find its own messages once copied history is left out. A
+// scan stopped by it reports the lane truncated.
+var delegationMessageScanBatches = 4
 
 // Extract familiar envelope content inside SQLite, before clipping. Large source
 // bodies never have to be loaded into Go just to decode an excerpt. Unknown
@@ -92,36 +99,76 @@ func (c *Catalog) delegationTimelineMessages(ctx context.Context, snapshot *dele
 		pending bool
 	}
 	readers := map[string]labelReader{}
-	canonical := func(id string) string {
-		for seen := map[string]bool{}; snapshot.Aliases[id] != "" && !seen[id]; {
-			seen[id] = true
-			id = snapshot.Aliases[id]
+	linksByConversation := map[string][]map[string]any{}
+	conversations := []string{}
+	for _, id := range ids {
+		if n := snapshot.ByID[id]; n != nil && !n.ContextOnly {
+			conversations = append(conversations, snapshot.projection.transcripts(snapshot.members[id])...)
+			conversations = append(conversations, n.ConversationID)
 		}
-		return id
+	}
+	// Ownership, occurrences and message rows are read in one transaction
+	// whose resolution is the snapshot's: a lane never pairs the snapshot's
+	// graph with rows (or copies) of a newer generation.
+	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	res, err := c.executionResolutionAt(ctx, tx)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Compare the Revision, not the generation: core keeps the Revision when
+	// new evidence leaves every decision unchanged, so such a lane is valid.
+	if res.Revision != snapshot.Revision {
+		return nil, nil, errDelegationSnapshotChanged
+	}
+	occurrences, err := res.Occurrences(ctx, tx, uniqueStrings(conversations))
+	if err != nil {
+		return nil, nil, err
+	}
+	eventsWithheld, eventsDirty, err := delegationEventFreshness(ctx, tx)
+	if err != nil {
+		return nil, nil, err
 	}
 	for _, id := range ids {
 		n := snapshot.ByID[id]
 		if n == nil || n.ContextOnly {
 			continue
 		}
-		members := []string{id}
-		for alias := range snapshot.Aliases {
-			if canonical(alias) == id {
-				members = append(members, alias)
-			}
+		// The lane is the execution's own streams. Messages without session
+		// membership belong to the execution whose own stream is their transcript.
+		members := snapshot.members[id]
+		if len(members) == 0 {
+			members = []string{id}
 		}
 		memberJSON, _ := json.Marshal(members)
-		var root string
-		err := c.reader().QueryRowContext(ctx, `SELECT id FROM agent_sessions WHERE conversation_id=? AND native_id='main' LIMIT 1`, n.ConversationID).Scan(&root)
-		if err != nil && err != sql.ErrNoRows {
-			return nil, nil, err
+		transcripts, _ := json.Marshal(snapshot.projection.transcripts(members))
+		// Copied history is the reader's context, not this execution's own
+		// messages: it is left out of the lane and counted. Messages whose
+		// equivalence is unresolved stay, marked, and leave the lane partial.
+		// The cap applies to what remains, so rows are read in batches until
+		// it is exceeded, the window is exhausted, or the scan budget ends.
+		inherited, repeated, unresolved := 0, 0, false
+		owners, reasons := map[string]bool{}, map[string]bool{}
+		kept := []map[string]any{}
+		// A transcript whose copied history the evidence cannot account for
+		// leaves the lane partial even when every row read is a copy, or none
+		// is: the note follows the transcripts, as the Self metrics do.
+		for _, cid := range append(snapshot.projection.transcripts(members), n.ConversationID) {
+			if reason := occurrences.Partial(cid); cid != "" && reason != "" {
+				unresolved, reasons[reason] = true, true
+			}
 		}
-		fallback := id == "conversation:"+n.ConversationID || canonical(root) == id
-		rows, err := queryMapsContext(ctx, c.reader(), `WITH bounds(lo,hi) AS (VALUES(julianday(?,'unixepoch'),julianday(?,'unixepoch'))), candidates AS (
-SELECT message_id id FROM agent_session_messages WHERE agent_session_id IN (SELECT value FROM json_each(?))
-UNION SELECT id FROM messages m WHERE ? AND m.conversation_id=? AND NOT EXISTS(SELECT 1 FROM agent_session_messages am WHERE am.message_id=m.id)
-)
-SELECT m.id,m.conversation_id,m.role,m.kind,m.created_at,m.model,m.call_id,substr(COALESCE(m.text,''),1,320) text,
+		batch, exhausted := delegationMessageLimit+1, false
+		for scanned := 0; scanned < delegationMessageScanBatches && len(kept) <= delegationMessageLimit && !exhausted; scanned++ {
+			rows, err := queryMapsContext(ctx, tx, `WITH bounds(lo,hi) AS (VALUES(julianday(?,'unixepoch'),julianday(?,'unixepoch'))), candidates AS (
+SELECT id,min(sid) sid FROM (
+SELECT message_id id,agent_session_id sid FROM agent_session_messages WHERE agent_session_id IN (SELECT value FROM json_each(?))
+UNION ALL SELECT id,NULL FROM messages m WHERE m.conversation_id IN (SELECT value FROM json_each(?)) AND NOT EXISTS(SELECT 1 FROM agent_session_messages am WHERE am.message_id=m.id)
+) GROUP BY id)
+SELECT m.id,m.conversation_id,candidates.sid agent_session_id,m.role,m.kind,m.created_at,m.model,m.call_id,substr(COALESCE(m.text,''),1,320) text,
 substr((CASE WHEN m.kind='delegation' THEN `+timelineInputSQL("m.text")+` WHEN m.role='user' AND m.kind='message' THEN m.text ELSE `+timelineContentSQL("m.text")+` END),1,640) preview,
 length((CASE WHEN m.kind='delegation' THEN `+timelineInputSQL("m.text")+` WHEN m.role='user' AND m.kind='message' THEN m.text ELSE `+timelineContentSQL("m.text")+` END))>640 preview_truncated,
 length(CAST(COALESCE(m.text,'') AS BLOB)) text_bytes,a.spans_json authorship_spans
@@ -131,13 +178,59 @@ AND m.selected=1 AND m.kind IN ('message','reasoning','thinking','delegation','d
 AND (m.created_at IS NULL OR julianday(m.created_at) BETWEEN lo-30.0/1440 AND hi+30.0/1440)
 ORDER BY CASE WHEN julianday(m.created_at) BETWEEN lo AND hi THEN 0 ELSE 1 END,
 m.created_at IS NULL,CASE WHEN julianday(m.created_at)<lo THEN lo-julianday(m.created_at) WHEN julianday(m.created_at)>hi THEN julianday(m.created_at)-hi ELSE 0 END,
-m.created_at,m.source_order IS NULL,m.source_order,m.id LIMIT ?`, start/1000, end/1000, string(memberJSON), fallback, n.ConversationID, n.WorkspaceID, delegationMessageLimit+1)
-		if err != nil {
-			return nil, nil, err
+m.created_at,m.source_order IS NULL,m.source_order,m.id LIMIT ? OFFSET ?`, start/1000, end/1000, string(memberJSON), string(transcripts), n.WorkspaceID, batch, scanned*batch)
+			if err != nil {
+				return nil, nil, err
+			}
+			exhausted = len(rows) < batch
+			for _, row := range rows {
+				stream := sourceRef{sourceSession, firstString(row["agent_session_id"])}
+				if stream.ID == "" {
+					stream = sourceRef{sourceConversation, firstString(row["conversation_id"])}
+				}
+				delete(row, "agent_session_id")
+				if reason := occurrences.Partial(firstString(row["conversation_id"])); reason != "" {
+					unresolved, reasons[reason] = true, true
+				}
+				switch o := occurrences.Lookup(sourceRef{sourceMessage, firstString(row["id"])}, stream); o.Role {
+				case occurrenceInherited, occurrenceDuplicate:
+					// The lane links to the execution that owns the original; an
+					// original whose owner is unknown leaves only the count. A copy
+					// of the execution's own earlier segment repeats this lane.
+					switch owner := snapshot.projection.nodeID(o.Owner); {
+					case o.Owner == "":
+						inherited++
+					case owner == id:
+						repeated++
+					default:
+						inherited++
+						owners[owner] = true
+					}
+					continue
+				case occurrenceUnresolved:
+					row["occurrence"], unresolved = "unresolved", true
+					reasons["unresolved-observations"] = true
+				}
+				kept = append(kept, row)
+			}
 		}
-		truncated := len(rows) > delegationMessageLimit
-		if truncated {
+		rows := kept
+		// Truncated when more own messages remain than the cap, or when the
+		// scan budget ended before the window did (counts then cover only
+		// the rows read).
+		truncated := len(rows) > delegationMessageLimit || !exhausted
+		if len(rows) > delegationMessageLimit {
 			rows = rows[:delegationMessageLimit]
+		}
+		// Segments of the execution retained in other workspaces are not read
+		// by this lane; it says so rather than looking complete.
+		omitted := []delegationSegment{}
+		if x := res.Executions[n.execution]; x != nil && len(x.Segments) > 1 {
+			for _, segment := range snapshot.projection.segments(x) {
+				if segment.WorkspaceID != n.WorkspaceID {
+					omitted = append(omitted, segment)
+				}
+			}
 		}
 		// Visible messages take precedence over context at the cap. Restore
 		// chronological display order after choosing the nearest context.
@@ -195,7 +288,7 @@ m.created_at,m.source_order IS NULL,m.source_order,m.id LIMIT ?`, start/1000, en
 			cid := firstString(row["conversation_id"])
 			reader, ok := readers[cid]
 			if !ok {
-				attach, summary, err := c.messageLabelsAttacher(cid)
+				attach, summary, err := c.messageLabelsAttacherContext(ctx, cid, nil)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -223,7 +316,7 @@ m.created_at,m.source_order IS NULL,m.source_order,m.id LIMIT ?`, start/1000, en
 			encoded, _ := json.Marshal(textParts)
 			// 960 bytes contain at least 240 UTF-8 characters; the outer
 			// substring discards any partial trailing rune beyond that limit.
-			excerpts, err := queryMapsContext(ctx, c.reader(), `SELECT json_extract(p.value,'$.message') message,
+			excerpts, err := queryMapsContext(ctx, tx, `SELECT json_extract(p.value,'$.message') message,
 json_extract(p.value,'$.part') part,
 substr(CAST(substr(CAST(COALESCE(m.text,'') AS BLOB),json_extract(p.value,'$.offset')+1,min(json_extract(p.value,'$.bytes'),960)) AS TEXT),1,240) text
 FROM json_each(?) p JOIN messages m ON m.id=json_extract(p.value,'$.message')`, string(encoded))
@@ -240,7 +333,41 @@ FROM json_each(?) p JOIN messages m ON m.id=json_extract(p.value,'$.message')`, 
 				}
 			}
 		}
-		lanes[id] = map[string]any{"messages": rows, "messages_truncated": truncated, "labels_pending": pending}
+		// Agent events said in this lane's messages, with their targets
+		// (agent_event_links.go), read once per displayed transcript: a
+		// continuation's lane shows each of its local segments.
+		inLane, shown := map[string]bool{}, map[string]bool{n.ConversationID: true}
+		for _, row := range rows {
+			inLane[firstString(row["id"])] = true
+			shown[firstString(row["conversation_id"])] = true
+		}
+		// Events resting on superseded execution evidence are withheld, as
+		// the Agent Experience datasets withhold them; the lane says so.
+		events, eventsPending := []map[string]any{}, false
+		for _, cid := range slices.Sorted(maps.Keys(shown)) {
+			if eventsWithheld[cid] || eventsDirty[cid] {
+				eventsPending = true
+			}
+			if eventsWithheld[cid] {
+				continue
+			}
+			links, ok := linksByConversation[cid]
+			if !ok {
+				if links, err = c.agentEventLinks(ctx, cid); err != nil {
+					return nil, nil, err
+				}
+				linksByConversation[cid] = links
+			}
+			events = append(events, links...)
+		}
+		laneEvents := []map[string]any{}
+		for _, event := range events {
+			if inLane[firstString(event["message_id"])] {
+				laneEvents = append(laneEvents, event)
+			}
+		}
+		lanes[id] = map[string]any{"messages": rows, "messages_truncated": truncated, "labels_pending": pending, "agent_events": laneEvents, "events_pending": eventsPending, "inherited_messages": inherited, "repeated_messages": repeated, "inherited_owners": append([]string{}, slices.Sorted(maps.Keys(owners))...), "occurrence_partial": unresolved,
+			"occurrence_reasons": append([]string{}, slices.Sorted(maps.Keys(reasons))...), "omitted_segments": omitted}
 	}
 	return lanes, taxonomy, nil
 }

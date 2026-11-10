@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/localidentity"
 )
 
 func TestScheduledSyncDefersAnalysesAndManualSyncRefreshesGitHub(t *testing.T) {
@@ -383,6 +386,180 @@ func TestAutomaticRefreshKeepsIntentionalStateAndAuditsNoops(t *testing.T) {
 	}
 }
 
+// scripted returns values in turn, repeating the last.
+func scripted[T any](values ...T) func() T {
+	return func() T {
+		value := values[0]
+		if len(values) > 1 {
+			values = values[1:]
+		}
+		return value
+	}
+}
+
+type rssReading struct {
+	bytes int64
+	ok    bool
+}
+
+// A sync meter's CPU, block counts and RSS are unavailable rather than zero
+// or negative when a reading failed or a counter went backwards; each phase
+// takes its own baseline, so a failed run baseline does not spoil a later
+// phase, and a known RSS peak survives a failed reading.
+func TestSyncMeterKeepsUnavailableMeasurementsMissing(t *testing.T) {
+	both := counterOwnCPU | counterChildCPU | counterBlocks
+	unread := processResources{}
+	at := func(own, child float64, read, written int64) processResources {
+		return processResources{cpu: own, childCPU: child, read: read, written: written, known: both}
+	}
+	meter := func(rss []rssReading, observations ...processResources) *syncMeter {
+		clock := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+		next := scripted(rss...)
+		return newSyncMeter(syncMeterSources{
+			observe: scripted(observations...),
+			rss:     func() (int64, bool) { reading := next(); return reading.bytes, reading.ok },
+			now:     func() time.Time { clock = clock.Add(2 * time.Second); return clock },
+		})
+	}
+	ok := func(bytes int64) rssReading { return rssReading{bytes, true} }
+	failed := rssReading{}
+
+	// The baseline fails, the phases and the end are read: the run has no
+	// CPU or blocks (not a delta from zero), the phase has its own.
+	m := meter([]rssReading{failed, ok(100), failed, ok(50)}, unread, at(10, 1, 5, 5), at(12, 1, 6, 6), at(13, 1, 7, 7))
+	m.sampleMemory()
+	m.sampleMemory()
+	m.endPhase(m.beginPhase("discovery"))
+	sample := m.finish()
+	if sample.CPUSeconds != nil || sample.CPUPercent != nil || sample.ReadBlocks != nil || sample.WrittenBlocks != nil {
+		t.Fatalf("a failed baseline gives no run delta: %+v", sample)
+	}
+	if sample.Phases[0].CPUSeconds == nil || *sample.Phases[0].CPUSeconds != 2 || sample.Phases[0].Seconds != 2 {
+		t.Fatalf("the phase's own baseline: %+v", sample.Phases[0])
+	}
+	if sample.RSSBaseline != nil || sample.RSSPeak == nil || *sample.RSSPeak != 100 {
+		t.Fatalf("a failed RSS baseline and a failed sample keep the known peak: %v %v", sample.RSSBaseline, sample.RSSPeak)
+	}
+
+	// Read at both ends, with no change: real zeros.
+	m = meter([]rssReading{ok(0)}, at(10, 1, 5, 5))
+	sample = m.finish()
+	if sample.CPUSeconds == nil || *sample.CPUSeconds != 0 || *sample.CPUPercent != 0 || *sample.ReadBlocks != 0 || *sample.WrittenBlocks != 0 || *sample.RSSBaseline != 0 || *sample.RSSPeak != 0 {
+		t.Fatalf("zero measurements: %+v", sample)
+	}
+	if sample.Seconds != 2 {
+		t.Fatalf("elapsed: %v", sample.Seconds)
+	}
+
+	// The end fails: no delta at all, not a negative one. RSS that was
+	// never read has no peak.
+	m = meter([]rssReading{failed}, at(10, 1, 5, 5), unread)
+	sample = m.finish()
+	if sample.CPUSeconds != nil || sample.CPUPercent != nil || sample.ReadBlocks != nil || sample.RSSPeak != nil || sample.RSSBaseline != nil {
+		t.Fatalf("a failed final reading: %+v", sample)
+	}
+
+	// The child counter fails at the end: own CPU alone is not the run's
+	// CPU, and the block counts (which need both calls) are unavailable.
+	m = meter([]rssReading{ok(1)}, at(10, 1, 5, 5), processResources{cpu: 20, known: counterOwnCPU})
+	if sample = m.finish(); sample.CPUSeconds != nil || sample.ReadBlocks != nil {
+		t.Fatalf("a partial final reading: %+v", sample)
+	}
+
+	// Counters that go backwards (a reset): an unavailable interval, for
+	// the run and for the phase across it; the next phase recovers.
+	m = meter([]rssReading{ok(1)}, at(10, 1, 5, 5), at(11, 1, 6, 6), at(3, 0, 1, 1), at(3, 0, 1, 1), at(4, 0.5, 2, 3), at(4, 0.5, 2, 3))
+	m.endPhase(m.beginPhase("source"))
+	m.endPhase(m.beginPhase("audit"))
+	sample = m.finish()
+	if sample.CPUSeconds != nil || sample.ReadBlocks != nil || sample.WrittenBlocks != nil {
+		t.Fatalf("a reset is not a negative cost: %+v", sample)
+	}
+	if sample.Phases[0].CPUSeconds != nil || sample.Phases[1].CPUSeconds == nil || *sample.Phases[1].CPUSeconds != 1.5 {
+		t.Fatalf("phase deltas across and after a reset: %v %v", sample.Phases[0].CPUSeconds, sample.Phases[1].CPUSeconds)
+	}
+
+	// Ordinary growth in both counters: the run's CPU and its one-core
+	// percent over the 2 seconds.
+	m = meter([]rssReading{ok(1)}, at(10, 20, 5, 5), at(12, 23, 6, 6))
+	if sample = m.finish(); sample.CPUSeconds == nil || *sample.CPUSeconds != 5 || sample.CPUPercent == nil || *sample.CPUPercent != 250 {
+		t.Fatalf("a monotonic run: %+v", sample)
+	}
+
+	// One counter resets while the other grows by more, so the total still
+	// rises: each counter is checked on its own. Own CPU resets in the
+	// first phase and across the run; the zero phase and the next phase are
+	// known, and so are the run's block counts, which did not reset.
+	m = meter([]rssReading{ok(1)}, at(10, 20, 5, 5), at(10, 20, 5, 5), at(9, 25, 6, 6), at(9, 25, 6, 6), at(9, 25, 6, 6), at(9, 25, 6, 6), at(9.5, 27, 7, 8), at(9.5, 27, 7, 8))
+	m.endPhase(m.beginPhase("source"))
+	m.endPhase(m.beginPhase("index"))
+	m.endPhase(m.beginPhase("audit"))
+	sample = m.finish()
+	if sample.CPUSeconds != nil || sample.CPUPercent != nil || sample.ReadBlocks == nil || *sample.ReadBlocks != 2 || sample.WrittenBlocks == nil || *sample.WrittenBlocks != 3 {
+		t.Fatalf("a masked own-CPU reset across the run: %+v", sample)
+	}
+	phases := sample.Phases
+	if phases[0].CPUSeconds != nil || phases[1].CPUSeconds == nil || *phases[1].CPUSeconds != 0 || phases[2].CPUSeconds == nil || *phases[2].CPUSeconds != 2.5 {
+		t.Fatalf("phase deltas across and after a masked own-CPU reset: %v %v %v", phases[0].CPUSeconds, phases[1].CPUSeconds, phases[2].CPUSeconds)
+	}
+
+	// Completed-child CPU resets while own CPU grows by more: the phase
+	// across it and the run are unavailable, the next phase recovers.
+	m = meter([]rssReading{ok(1)}, at(10, 20, 5, 5), at(10, 20, 5, 5), at(15, 19, 6, 6), at(15, 19, 6, 6), at(16, 19, 7, 7), at(16, 19, 7, 7))
+	m.endPhase(m.beginPhase("source"))
+	m.endPhase(m.beginPhase("audit"))
+	sample = m.finish()
+	if sample.CPUSeconds != nil || sample.CPUPercent != nil || sample.ReadBlocks == nil || *sample.ReadBlocks != 2 {
+		t.Fatalf("a masked child-CPU reset across the run: %+v", sample)
+	}
+	if sample.Phases[0].CPUSeconds != nil || sample.Phases[1].CPUSeconds == nil || *sample.Phases[1].CPUSeconds != 1 {
+		t.Fatalf("phase deltas across and after a masked child-CPU reset: %v %v", sample.Phases[0].CPUSeconds, sample.Phases[1].CPUSeconds)
+	}
+}
+
+// Statistics count a sample's elapsed time always, its CPU and RSS only
+// when they were measured (real zeros included). A metric no sample
+// measured is null, not a fabricated zero, and so is its CPU duty. Samples
+// are newest first; last is the newest measured value.
+func TestSyncStatisticsExcludesUnmeasuredSamples(t *testing.T) {
+	samples := []syncMeasurement{
+		{Class: "changes", Seconds: 4, RSSPeak: new(int64(300))},
+		{Class: "changes", Seconds: 1, CPUSeconds: new(0.0), RSSPeak: new(int64(0))},
+		{Class: "changes", Seconds: 3, CPUSeconds: new(6.0)},
+		{Class: "changes", Seconds: 2, CPUSeconds: new(3.0), RSSPeak: new(int64(100))},
+		{Class: "no_changes", Seconds: 1},
+		{Class: "no_changes", Seconds: 2},
+	}
+	encoded, _ := json.Marshal(syncStatistics(samples, 60))
+	var stats map[string]struct {
+		Samples int                `json:"samples"`
+		Elapsed map[string]float64 `json:"elapsed_seconds"`
+		CPU     map[string]float64 `json:"cpu_seconds"`
+		RAM     map[string]float64 `json:"rss_observed_peak_bytes"`
+		Duty    *float64           `json:"estimated_cpu_duty_percent_one_core"`
+	}
+	if err := json.Unmarshal(encoded, &stats); err != nil {
+		t.Fatal(err)
+	}
+	changes := stats["changes"]
+	if changes.Samples != 4 || changes.Elapsed["samples"] != 4 || changes.Elapsed["last"] != 4 || changes.Elapsed["median"] != 2 {
+		t.Fatalf("elapsed counts every sample: %s", encoded)
+	}
+	if changes.CPU["samples"] != 3 || changes.CPU["last"] != 0 || changes.CPU["median"] != 3 || changes.CPU["p95"] != 6 {
+		t.Fatalf("CPU from measured samples, zero included: %s", encoded)
+	}
+	if changes.RAM["samples"] != 3 || changes.RAM["last"] != 300 || changes.RAM["median"] != 100 {
+		t.Fatalf("RSS from measured samples, zero included: %s", encoded)
+	}
+	if changes.Duty == nil || *changes.Duty != 5 {
+		t.Fatalf("duty from the measured CPU median: %s", encoded)
+	}
+	quiet := stats["no_changes"]
+	if quiet.Samples != 2 || quiet.Elapsed["median"] != 1 || quiet.CPU != nil || quiet.RAM != nil || quiet.Duty != nil {
+		t.Fatalf("an unmeasured metric is null: %s", encoded)
+	}
+}
+
 func TestSyncHistoryRestoresLegacyCompletionTime(t *testing.T) {
 	useHost(t, "host-a")
 	server := automaticTestServer(t, stableCodexSource(t, 3))
@@ -405,6 +582,79 @@ func TestSyncHistoryRestoresLegacyCompletionTime(t *testing.T) {
 		if response.Code != 200 || len(samples) != 1 || samples[0].FinishedAt != stamp || len(samples[0].SourceResults) != 0 {
 			t.Fatalf("legacy history must retain its timestamp without inventing source counts: %s", response.Body.String())
 		}
+	}
+}
+
+// Stored history keeps measured figures as the numbers they were (zeros
+// included), and an unmeasured one missing: null where a run recorded it so,
+// absent in history older than the fields, without a migration.
+func TestSyncHistoryKeepsUnmeasuredFiguresMissing(t *testing.T) {
+	useHost(t, "host-a")
+	server := automaticTestServer(t, stableCodexSource(t, 3))
+	measured := syncMeasurement{RunID: "measured", State: "complete", Class: "changes", Trigger: "automatic", Seconds: 2,
+		CPUSeconds: new(0.0), CPUPercent: new(0.0), RSSBaseline: new(int64(0)), RSSPeak: new(int64(5 << 20)), ReadBlocks: new(int64(0)), WrittenBlocks: new(int64(3)),
+		Phases: []syncPhase{{Name: "audit", Seconds: 1, CPUSeconds: new(0.0)}}}
+	unmeasured := syncMeasurement{RunID: "unmeasured", State: "complete", Class: "changes", Trigger: "automatic", Seconds: 3, Phases: []syncPhase{{Name: "audit", Seconds: 1}}}
+	rows := []struct{ id, text string }{
+		// Older history: plain numbers, and no figures at all.
+		{"legacy", `{"run_id":"legacy","state":"complete","class":"changes","trigger":"automatic","seconds":4,"cpu_seconds":1.5,"cpu_percent_one_core":37.5,"rss_baseline_bytes":100,"rss_observed_peak_bytes":200,"read_blocks":0,"written_blocks":7,"phases":[{"name":"audit","seconds":1,"cpu_seconds":0.5}]}`},
+		{"oldest", `{"run_id":"oldest","state":"complete","class":"changes","trigger":"automatic","seconds":5}`},
+		{measured.RunID, jsonText(measured)},
+		{unmeasured.RunID, jsonText(unmeasured)},
+	}
+	for _, row := range rows {
+		if _, err := server.Catalog.DB.Exec("INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES(?,?,?,?)", currentHost().ID, row.id, "2026-11-07T12:00:00Z", row.text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stored := jsonText(unmeasured); !strings.Contains(stored, `"cpu_seconds":null`) || !strings.Contains(stored, `"rss_observed_peak_bytes":null`) || !strings.Contains(stored, `"read_blocks":null`) {
+		t.Fatalf("an unmeasured figure is stored as null: %s", stored)
+	}
+	response := httptest.NewRecorder()
+	server.getIncrementalSync(response, httptest.NewRequest("GET", "/api/sync/history", nil))
+	var body struct {
+		Samples    []map[string]any `json:"samples"`
+		Statistics map[string]struct {
+			CPU map[string]float64 `json:"cpu_seconds"`
+			RAM map[string]float64 `json:"rss_observed_peak_bytes"`
+		} `json:"statistics"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || len(body.Samples) != 4 {
+		t.Fatalf("history: %s (%v)", response.Body.String(), err)
+	}
+	byRun := map[string]map[string]any{}
+	for _, sample := range body.Samples {
+		byRun[sample["run_id"].(string)] = sample
+	}
+	figures := []string{"cpu_seconds", "cpu_percent_one_core", "rss_baseline_bytes", "rss_observed_peak_bytes", "read_blocks", "written_blocks"}
+	for _, field := range figures {
+		for _, run := range []string{"unmeasured", "oldest"} {
+			if value, present := byRun[run][field]; !present || value != nil {
+				t.Errorf("%s %s is missing, not %v", run, field, value)
+			}
+		}
+		if _, ok := byRun["legacy"][field].(float64); !ok {
+			t.Errorf("legacy %s keeps its number: %v", field, byRun["legacy"][field])
+		}
+		if _, ok := byRun["measured"][field].(float64); !ok {
+			t.Errorf("measured %s keeps its number, zero included: %v", field, byRun["measured"][field])
+		}
+	}
+	phase := func(run string) any { return byRun[run]["phases"].([]any)[0].(map[string]any)["cpu_seconds"] }
+	if phase("unmeasured") != nil || phase("measured") != 0.0 || phase("legacy") != 0.5 {
+		t.Errorf("phase CPU: %v %v %v", phase("unmeasured"), phase("measured"), phase("legacy"))
+	}
+	// Newest first: unmeasured, measured, oldest, legacy.
+	changes := body.Statistics["changes"]
+	if changes.CPU["samples"] != 2 || changes.CPU["last"] != 0 || changes.RAM["samples"] != 2 || changes.RAM["last"] != 5<<20 {
+		t.Errorf("statistics leave out unmeasured runs: %+v", changes)
+	}
+	var peaks []*int64
+	for _, sample := range server.Catalog.automaticSamples(t.Context(), 10) {
+		peaks = append(peaks, sample.Peak)
+	}
+	if len(peaks) != 4 || peaks[0] != nil || *peaks[1] != 5<<20 || peaks[2] != nil || *peaks[3] != 200 {
+		t.Errorf("the schedule's peaks keep unmeasured runs missing: %v", peaks)
 	}
 }
 
@@ -948,6 +1198,20 @@ func TestSyncStatusExposesLowercaseSourceChoices(t *testing.T) {
 	if pending() != false {
 		t.Fatal("a capture after the index did not clear Needs capture")
 	}
+	// Busy remains true during scheduled work, but manual maintenance can
+	// interrupt it. Foreground work must finish before another repair starts.
+	for _, kind := range []string{"automatic-sync", backgroundRunKind, "manual-sync", "verification", "library-update"} {
+		run := server.startRunNamed(kind, nil)
+		status := readStatus(server)
+		want := kind != "automatic-sync" && kind != backgroundRunKind
+		if status["busy"] != true || status["maintenance_busy"] != want {
+			t.Fatalf("%s maintenance availability: busy=%v maintenance_busy=%v", kind, status["busy"], status["maintenance_busy"])
+		}
+		server.updateRun(run.ID, func(run *SyncRun) { run.State = "complete" })
+	}
+	if status := readStatus(server); status["maintenance_busy"] != false {
+		t.Fatalf("finished work blocks maintenance: %v", status["maintenance_busy"])
+	}
 }
 
 func TestDeferredIdentityReconciliationHonorsCancellation(t *testing.T) {
@@ -1168,5 +1432,82 @@ func TestUnchangedIngestDoesNotCertifyLegacyEvidence(t *testing.T) {
 	}
 	if status := catalog.inputPreservationStatus(t.Context(), "host-a", source.Name); status["status"] != "indexed" || status["pending_newer_inputs"] != false {
 		t.Fatalf("missing indexed acquisition: %#v", status)
+	}
+}
+
+// A Conductor preflight hashes the adapter fingerprint, the directory's
+// legacy "device:inode" text and the index version. Without that identity the
+// preflight is an error: the source is checked, never skipped as unchanged,
+// and the last good preflight is kept for when the identity returns.
+func TestConductorPreflightRequiresDirectoryIdentity(t *testing.T) {
+	useHost(t, "host-a")
+	dir := t.TempDir()
+	exec := conductorFixture(t, dir)
+	exec(addConductorSession("session", 2)...)
+	source := SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true}
+	server := automaticTestServer(t, source)
+	settings := syncSettings{Enabled: true, Interval: 60}
+	server.runAutomatic(server.life.ctx, settings)
+	stored := func() (preflight, failure string) {
+		t.Helper()
+		if err := server.Catalog.DB.QueryRow("SELECT COALESCE(preflight,''),COALESCE(error,'') FROM automatic_source_states WHERE host_id='host-a' AND source_name=?", source.Name).Scan(&preflight, &failure); err != nil {
+			t.Fatal(err)
+		}
+		return preflight, failure
+	}
+	prepare := func() preparedSyncSource {
+		t.Helper()
+		adapter, err := MakeAdapter(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared := preparedSyncSource{adapter: adapter}
+		server.prepareSyncSource(t.Context(), source, &prepared)
+		if prepared.close != nil {
+			prepared.close()
+		}
+		return prepared
+	}
+	good, failure := stored()
+	if good == "" || failure != "" {
+		t.Fatalf("first run: preflight %q, error %q", good, failure)
+	}
+	adapter, _ := MakeAdapter(source)
+	fingerprint, err := adapter.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := localidentity.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := key.DeviceInode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflight, err := conductorPreflight(adapter); err != nil || preflight != hashBytes([]byte(fingerprint+":"+identity+":"+sourceIndexVersion(adapter))) {
+		t.Fatalf("preflight hash changed: %q, %v", preflight, err)
+	}
+	if prepared := prepare(); prepared.err != nil || !prepared.skipped || prepared.preflight != good {
+		t.Fatalf("unchanged source was not skipped: %+v", prepared)
+	}
+
+	override(t, &localIdentity, func(fs.FileInfo) (localidentity.Key, error) {
+		return localidentity.Key{}, localidentity.ErrUnavailable
+	})
+	for range 2 {
+		prepared := prepare()
+		if !errors.Is(prepared.err, localidentity.ErrUnavailable) || prepared.skipped || prepared.preflight != "" {
+			t.Fatalf("unidentified source: %+v", prepared)
+		}
+		server.runAutomatic(server.life.ctx, settings)
+		if preflight, failure := stored(); preflight != good || failure == "" {
+			t.Fatalf("unidentified run: preflight %q, error %q", preflight, failure)
+		}
+	}
+
+	localIdentity = localidentity.Of
+	if prepared := prepare(); prepared.err != nil || !prepared.skipped {
+		t.Fatalf("restored identity lost the last good preflight: %+v", prepared)
 	}
 }

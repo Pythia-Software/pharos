@@ -40,15 +40,19 @@ func withWorkProgress(ctx context.Context, report func(activityWork)) context.Co
 
 // Progress hooks never persist or acquire a catalog write lock: they may run
 // inside a transaction. The coordinator saves measurements after work returns.
-func reportWork(ctx context.Context, phase, unit string, done, total int) {
+func reportWork(ctx context.Context, phase, unit string, done, total int, detail ...string) {
 	if ctx == nil {
 		return
 	}
 	work := activityWork{Phase: phase, Unit: unit, Done: float64(done), Total: float64(total), TotalKnown: total >= 0}
+	if len(detail) > 0 {
+		work.Detail = detail[0]
+	}
 	// Every operation observes its own workers, including scheduled stages
 	// without a SyncRun meter. An inherited callback still records run history
 	// and forecasts. Explicit mirrors on older entry points are idempotent.
 	opFrom(ctx).mirrorWork(work)
+	taskResourcesFrom(ctx).progress(phase, unit, float64(done), float64(total))
 	if report, ok := ctx.Value(workProgressKey{}).(func(activityWork)); ok {
 		report(work)
 	}

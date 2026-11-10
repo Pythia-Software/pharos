@@ -180,3 +180,8 @@ void close_model(void* handle) {
 const pharos_mlx_api api{open_model, run_model, close_model};
 }
 extern "C" const pharos_mlx_api* pharos_mlx_api_v1() { return &api; }
+// Device check only: do not load weights, allocate model buffers or run inference.
+extern "C" int pharos_mlx_available_v1() {
+    try { return mx::is_available(mx::Device::gpu) ? 1 : 0; }
+    catch (...) { return 0; }
+}

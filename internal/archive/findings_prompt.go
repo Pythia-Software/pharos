@@ -133,8 +133,14 @@ func renderFindingPrompt(target, label, location, handoff string, items []cartIt
 		if len(items) == 1 {
 			happen = "that happens"
 		}
-		lines = append(lines, fmt.Sprintf("You are editing %s's global instructions on this Mac (%s). Pharos found %s %s across repositories.",
-			providerLabel(provider), strings.Trim(globalInstructionFile(provider), "`"), count, happen))
+		if file := globalInstructionFile(provider); instructionPath(file) || file == anyGlobalInstructions {
+			lines = append(lines, fmt.Sprintf("You are editing %s's global instructions on this Mac (%s). Pharos found %s %s across repositories.",
+				providerLabel(provider), strings.Trim(file, "`"), count, happen))
+		} else {
+			// Kept in the app's settings, which an agent cannot edit.
+			lines = append(lines, fmt.Sprintf("You are drafting lines for %s's global instructions, which the person keeps in %s; give them the lines to add there. Pharos found %s %s across repositories.",
+				providerLabel(provider), file, count, happen))
+		}
 	default:
 		lines = append(lines, "You are improving the automation "+label+". Pharos found "+count+" in its runs; the fixes go in its prompt, configuration, or scripts.")
 	}

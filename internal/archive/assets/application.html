@@ -30,7 +30,7 @@ body[data-application-setup] #navigator{display:none}
 .application-setup button,.application-setup .button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:7px 14px;border:1px solid var(--line);border-radius:5px;font:600 var(--fs-sm)/1.4 var(--sans);text-decoration:none;background:var(--panel);color:var(--ink);cursor:pointer}
 .application-setup button.primary,.application-setup .button:not(.secondary),.application-setup button[type=submit]{background:var(--accent);border-color:var(--accent);color:var(--panel)}
 .application-setup button:hover:not(:disabled){border-color:var(--accent)}
-.application-setup button:disabled{opacity:.55;cursor:wait}
+.application-setup button:disabled{opacity:.55;cursor:default}
 .application-setup a{color:var(--accent)}
 .application-setup label{display:block;font-size:var(--fs-sm);font-weight:600;margin:18px 0 6px}
 .application-setup input,.application-setup select{display:block;box-sizing:border-box;width:100%;min-width:0;min-height:38px;border:1px solid var(--line);border-radius:5px;background:var(--bg);color:var(--ink);padding:8px 11px;font:inherit}
@@ -214,8 +214,9 @@ body[data-application-setup] #navigator{display:none}
 <section class="wizard-panel" id="wizard-recover-review" hidden><p class="wizard-lead">Pharos will create and verify a separate restored library.</p><dl class="wizard-review"><dt>Backup</dt><dd class="path" id="review-backup"></dd><dt>Restore to</dt><dd class="path" id="review-recover-path"></dd></dl><p class="wizard-note">Capture and automatic delivery start paused, so you can inspect the restored history first.</p></section>
 <div class="setup-actions wizard-footer"><span class="steps wizard-progress" id="steps"></span><button id="cancel" type="button" class="secondary">Back</button><button id="submit" type="submit">Continue</button></div>
 </form></section>
-<section class="card" id="next" tabindex="-1" hidden><h2 id="ready-title">Your library is ready</h2><p>Next, Pharos will find tools in common locations on this Mac. Review the detected tools and their source folders before approving capture.</p><div class="setup-actions"><a class="button secondary" href="/library">Browse library</a><button class="primary" id="configure-sources" type="button">Continue</button></div></section>
+<section class="card" id="next" tabindex="-1" hidden><h2 id="ready-title">Your library is ready</h2><p>Next, choose how Pharos finds your AI conversations on this Mac: in the places your tools usually keep them, or only in folders you name. Nothing is copied until you approve it.</p><div class="setup-actions"><a class="button secondary" href="/library">Browse library</a><button class="primary" id="configure-sources" type="button">Continue</button></div></section>
 </div></dialog>
+<script src="/assets/host-services.js"></script>
 <script id="setup-wizard-model">
 function nextPharosLibraryName(libraries) {
   const names = new Set(libraries.map(library => library.name));
@@ -288,6 +289,8 @@ function createPharosSetupWizard() {
 
 (()=>{'use strict';let state={},flow='create',renderSignature='',introStep='welcome',wizard=createPharosSetupWizard(),flowOrigin='about',recoverStep=0;const $=id=>document.getElementById(id);const notice=(message,error=false)=>{$('notice').textContent=message;$('notice').classList.toggle('error',error)};const call=async(path,body)=>{const r=await fetch('/api/app/'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw Error(data.error||r.statusText);return data};
 const dialog=$('application-setup');
+// Wizard fields are reused across steps; connection alone cannot identify a view.
+let wizardView=0;
 // Keep the opposing cones on one optical axis. Measure the title so its
 // light reaches both lines, and leave the paragraphs below the beam's edge.
 const welcomeStory=$('welcome').querySelector('.setup-story'),welcomeArt=$('welcome').querySelector('.setup-art'),welcomeHeading=$('welcome').querySelector('.welcome-heading');
@@ -314,7 +317,7 @@ const welcomeResize=new ResizeObserver(scheduleWelcomeBeams);for(const el of [we
 document.fonts.ready.then(scheduleWelcomeBeams);window.addEventListener('resize',scheduleWelcomeBeams);
 function showIntroduction(step,focus=true){introStep=step;$('welcome').hidden=step!=='welcome';$('about-pharos').hidden=step!=='about';dialog.classList.toggle('introduction',step!=='setup');const title={welcome:'welcome-title',about:'about-title',setup:'heading'}[step];dialog.setAttribute('aria-labelledby',title);document.querySelector('.application-body').scrollTop=0;if(focus)$(title).focus()}
 $('meet-pharos').onclick=()=>showIntroduction('about');$('start-setup').onclick=()=>startFlow('create');$('back-to-welcome').onclick=()=>showIntroduction('welcome');
-const setFlowOpen=open=>{if(open)dialog.classList.remove('library-ready');dialog.classList.toggle('flow-open',open);dialog.setAttribute('aria-labelledby',open?'flow-title':'heading')};
+const setFlowOpen=open=>{wizardView++;if(open)dialog.classList.remove('library-ready');dialog.classList.toggle('flow-open',open);dialog.setAttribute('aria-labelledby',open?'flow-title':'heading')};
 const returnToLibrary=()=>{location.href='/library'};
 $('application-close').onclick=returnToLibrary;
 $('application-theme').onclick=()=>{const dark=document.documentElement.dataset.theme==='dark';document.documentElement.dataset.theme=dark?'light':'dark';$('application-theme').setAttribute('aria-label',dark?'Use dark theme':'Use light theme')};
@@ -381,6 +384,7 @@ function updateLibraryProposal(){
   $('details-note').textContent=wizard.storage==='ssd'&&!parent?'Connect your SSD, then press Edit to choose its folder.':`Pharos will create a new “${wizard.name.trim()||'My Library'}” folder here. You’ll choose what to add next.`;
 }
 function editLibraryDetail(field,editing,focus=true){
+  if(field==='path')wizardView++;
   $(field==='name'?'name':'path-editor').hidden=!editing;$(field==='name'?'name-value':'location-value').hidden=editing;
   const button=$('edit-'+field),label=field==='name'?'name':'location';
   button.textContent=editing?'Done':'Edit';button.setAttribute('aria-expanded',String(editing));button.setAttribute('aria-label',(editing?'Done editing':'Edit')+' library '+label);
@@ -405,6 +409,7 @@ function updateWizardChoices(){
   if(wizard.step==='details')updateLibraryProposal();
 }
 function renderWizard(focus=true){
+  wizardView++;
   const titles={machines:'Where do you work with AI?',storage:'Where should your history live?',details:'Your library.',review:'Review your setup.'};
   const stages=['machines','storage','details','review'];const stage=flow==='create'?wizard.step:flow==='open'?'open':['backup','recover-target','recover-review'][recoverStep];
   for(const panel of document.querySelectorAll('#library-form > .wizard-panel')){panel.hidden=panel.id!=='wizard-'+stage;if(!panel.hidden)panel.scrollTop=0}
@@ -431,14 +436,16 @@ $('cancel').onclick=()=>{
   $('setup').hidden=true;setFlowOpen(false);if(flowOrigin==='chooser'){showIntroduction('setup');document.querySelector(`[data-flow="${flow}"]`).focus()}else showIntroduction('about');
 };
 async function pickFolder(id,button){
+  const view=wizardView,field=$(id);
+  const current=()=>view===wizardView&&field.isConnected&&button.isConnected&&$(id)===field&&dialog.open&&!$('setup').hidden&&!dialog.classList.contains('source-setup-open')&&!field.closest('[hidden]');
   const controls=[...$('library-form').querySelectorAll('button')].map(el=>[el,el.disabled]);
   for(const [el]of controls)el.disabled=true;
   notice('');
   try{
-    const native=window.webkit?.messageHandlers?.pharosLibrary;
-    const path=native?await native.postMessage({action:'chooseFolder'}):(await call('choose-folder',{})).path;
-    if(path){$(id).value=path+(id==='recover-path'?'/Recovered Library':'');if(id==='path')updateLibraryProposal()}
-  }finally{for(const [el,disabled]of controls)el.disabled=disabled;button.focus()}
+    const path=window.pharosHost.capabilities.folders.available?await window.pharosHost.folders.chooseLibraryFolder():(await call('choose-folder',{})).path;
+    if(current()&&path){field.value=path+(id==='recover-path'?'/Recovered Library':'');if(id==='path')updateLibraryProposal()}
+  }catch(error){if(current())notice(error.message,true)}
+  finally{for(const [el,disabled]of controls)el.disabled=disabled;if(current())button.focus()}
 }
 $('choose-folder').onclick=()=>act(()=>pickFolder('path',$('choose-folder')));for(const b of document.querySelectorAll('[data-pick]'))b.onclick=()=>act(()=>pickFolder(b.dataset.pick,b));
 function invalid(field,message){notice(message,true);if(flow==='create'&&wizard.step==='details'&&['name','path'].includes(field))editLibraryDetail(field,true);$(field).focus()}

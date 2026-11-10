@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -62,6 +64,22 @@ func (r *gitRepository) commit(days float64, message string, files map[string]st
 	r.git(at, "add", "-A")
 	r.git(at, "commit", "-q", "-m", message)
 	return r.git(at, "rev-parse", "HEAD")
+}
+
+// signHead rewrites the commit HEAD names as signed, with a signature that
+// only running gpg.program could check.
+func (r *gitRepository) signHead() string {
+	r.t.Helper()
+	body := r.git(time.Now(), "cat-file", "commit", "HEAD") + "\n"
+	at := strings.Index(body, "\n\n")
+	command := exec.Command("git", "-C", r.dir, "hash-object", "-t", "commit", "-w", "--stdin")
+	command.Stdin = strings.NewReader(body[:at] + "\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n iQ==\n -----END PGP SIGNATURE-----" + body[at:])
+	signed, err := command.Output()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.git(time.Now(), "update-ref", "HEAD", strings.TrimSpace(string(signed)))
+	return strings.TrimSpace(string(signed))
 }
 
 // gitFixture is an outcome fixture whose sessions work in one repository
@@ -133,7 +151,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	f := newGitFixture(t)
 	repo := f.repo
 	for _, id := range []string{"direct", "inferred", "stale", "wide", "narrow", "branch", "picked", "squashed", "reverted", "undone", "late",
-		"early", "printer", "printer-too", "detached"} {
+		"early", "printer", "printer-too", "detached", "editor", "publisher", "empty", "cloned"} {
 		f.session(id, "")
 	}
 	// A session that only committed, before every other session's edits.
@@ -146,6 +164,17 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo.dir, ".git", "info", "attributes"), []byte("*.txt diff=custom\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Nor is its signature program, which a log would run for each signed
+	// commit with log.showSignature set; and colour it forces on does not
+	// hide a change from patch-id.
+	ran := filepath.Join(t.TempDir(), "gpg-ran")
+	program := filepath.Join(t.TempDir(), "gpg")
+	if err := os.WriteFile(program, []byte("#!/bin/sh\ntouch '"+ran+"'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo.git(time.Now(), "config", "log.showSignature", "true")
+	repo.git(time.Now(), "config", "gpg.program", program)
+	repo.git(time.Now(), "config", "color.ui", "always")
 	// Its own git commit printed the hash: linked directly, and on mainline.
 	f.edit("direct", "main.go", 30)
 	direct := repo.commit(29.99, "Direct", map[string]string{"main.go": "package main\n"})
@@ -155,6 +184,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	f.edit("inferred", "util.go", 25)
 	inferred := repo.commit(24.99, "Inferred", map[string]string{"util.go": "package util\n"})
 	repo.commit(24.98, "Elsewhere", map[string]string{"other.go": "package other\n"})
+	repo.signHead()
 	// Two sessions were editing a file a commit changed: the tightest
 	// window gets the link, as a candidate that does not count. A session that edited it once, earlier, has a tighter
 	// window still but stopped long before the commit, so it does not.
@@ -181,6 +211,10 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	repo.git(time.Now(), "checkout", "-q", "-b", "feature")
 	f.edit("branch", "branch.go", 8)
 	branch := repo.commit(7.99, "Branch", map[string]string{"branch.go": "package branch\n", "notes.txt": "converted\n"})
+	// A commit with no change has no patch-id: whether it landed is unknown.
+	repo.git(time.Now().Add(-7*24*time.Hour), "commit", "-q", "--allow-empty", "-m", "Empty")
+	empty := repo.git(time.Now(), "rev-parse", "HEAD")
+	f.printed("empty", empty, 7)
 	// Two sessions printed one commit, which one of them also has as its
 	// copy on mainline: each keeps its link, and the copy keeps the
 	// printed hash's evidence.
@@ -200,7 +234,21 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	repo.git(time.Now().Add(-3*24*time.Hour), "cherry-pick", squashed)
 	repo.git(time.Now().Add(-3*24*time.Hour), "commit", "-q", "--amend", "--no-edit", "--reset-author")
 	squash := repo.git(time.Now(), "rev-parse", "HEAD")
+	// A session that only committed another's work (opening the pull
+	// request) keeps the printed hash, and the session that edited its files
+	// is linked too.
+	f.edit("editor", "pr.go", 2.6)
+	pr := repo.commit(2.59, "Pull request", map[string]string{"pr.go": "package pr\n"})
+	f.printed("publisher", pr, 2.59)
 	repo.git(time.Now(), "update-ref", "refs/remotes/origin/main", "HEAD")
+	// Another clone of the repository, with a branch only it has.
+	clone := &gitRepository{t, filepath.Join(t.TempDir(), "clone")}
+	repo.git(time.Now(), "clone", "-q", repo.dir, clone.dir)
+	clone.git(time.Now(), "checkout", "-q", "-b", "unpushed")
+	clone.git(time.Now(), "config", "color.ui", "always")
+	execTx(t, f.catalog.DB, `UPDATE workspace_sightings SET location='`+clone.dir+`' WHERE workspace_id='cloned'`)
+	f.edit("cloned", "cloned.go", 2.5)
+	cloned := clone.commit(2.49, "Cloned", map[string]string{"cloned.go": "package cloned\n"})
 	// A commit in a worktree on a detached HEAD, which no ref holds.
 	tree := filepath.Join(t.TempDir(), "tree")
 	repo.git(time.Now(), "worktree", "add", "-q", "--detach", tree)
@@ -214,6 +262,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 		"direct": direct[:7] + " transcript 1", "inferred": inferred[:7] + " inferred 0.7", "narrow": narrow[:7] + " inferred 0.5",
 		"reverted": reverted[:7] + " inferred 0.7", "undone": undone[:7] + " inferred 0.7", "branch": branch[:7] + " inferred 0.7", "picked": copied[:7] + " inferred 0.7", "squashed": squashed[:7] + " inferred 0.7",
 		"early": early[:7] + " transcript 1", "printer": printedCopy[:7] + " transcript 1", "printer-too": printed[:7] + " transcript 1", "detached": detached[:7] + " transcript 1",
+		"editor": pr[:7] + " inferred 0.7", "publisher": pr[:7] + " transcript 1", "empty": empty[:7] + " transcript 1", "cloned": cloned[:7] + " inferred 0.7",
 	} {
 		if strings.Join(links[id], ", ") != want {
 			t.Errorf("%s links: %v, want %s", id, links[id], want)
@@ -227,6 +276,9 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	if notes := repo.git(time.Now(), "for-each-ref", "refs/notes"); notes != "" {
 		t.Fatalf("a scan wrote notes: %s", notes)
 	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Fatal("a scan ran the repository's signature program")
+	}
 	// A candidate link is kept but counts toward nothing.
 	if linked := countRows(t, f.catalog, `SELECT linked_commits FROM session_git WHERE workspace_id='narrow'`); linked != 0 {
 		t.Fatalf("narrow counts %d linked commits", linked)
@@ -235,6 +287,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	for id, want := range map[string]string{
 		"direct": "landed", "inferred": "landed", "narrow": "changed_kept", "picked": "landed", "squashed": "landed", "branch": "committed",
 		"reverted": "reworked", "undone": "reworked", "stale": "changed_kept", "wide": "changed_kept", "late": "changed_recent",
+		"editor": "landed", "publisher": "landed", "empty": "committed", "cloned": "committed",
 	} {
 		if labels[id][0] != want {
 			t.Errorf("%s: %s, want %s (%s)", id, labels[id][0], want, labels[id][1])
@@ -244,6 +297,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 		"direct":   "1 of its 1 linked commit reached mainline (local Git).",
 		"branch":   "1 linked commit, not on mainline (local Git).",
 		"reverted": "A later commit reverted 1 of its 1 linked commit (local Git).",
+		"empty":    "1 linked commit; mainline could not be checked (local Git).",
 	} {
 		if labels[id][1] != want {
 			t.Errorf("%s evidence: %q, want %q", id, labels[id][1], want)
@@ -254,8 +308,9 @@ func TestSessionGitLinksCommits(t *testing.T) {
 		FROM (SELECT * FROM git_commits WHERE hash IN (?,?,?))`, squashed, reverted, undone).Scan(&evidence); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{squashed + " same change as " + squash[:12], reverted + " reachable from remotes/origin/main message", undone + " reachable from remotes/origin/main inverse_diff"} {
-		if !strings.Contains(evidence, want) {
+	// Either clone can say so: the other's origin is this checkout's main.
+	for _, want := range []string{squashed + " same change as " + squash[:12] + " ", reverted + " reachable from remotes/origin/(main|HEAD) message", undone + " reachable from remotes/origin/(main|HEAD) inverse_diff"} {
+		if !regexp.MustCompile(want).MatchString(evidence) {
 			t.Errorf("commit evidence %q lacks %q", evidence, want)
 		}
 	}
@@ -264,6 +319,13 @@ func TestSessionGitLinksCommits(t *testing.T) {
 // Failing to look is never evidence: a repository local Git cannot read is
 // "not checked", with the reason, and keeps nothing it did not find.
 func TestSessionGitNotChecked(t *testing.T) {
+	// The Library's Git counts read their project's kind, and local Git's
+	// counts its check too, whichever columns are shown.
+	for selected, want := range map[string]string{"pr_count": "project_kind", "branch_count": "project_kind", "linked_commits": "git_check_reason"} {
+		if fields := queryRowActionFields("library", []string{"title", selected}); !slices.Contains(fields, want) {
+			t.Errorf("library row fields for %s: %v", selected, fields)
+		}
+	}
 	f := newGitFixture(t)
 	f.session("elsewhere", "host_other_mac")
 	f.edit("elsewhere", "main.go", 5)
@@ -330,6 +392,88 @@ func TestSessionGitNotChecked(t *testing.T) {
 	if got := state("notes"); got != "not_applicable|<nil>|<nil>" {
 		t.Fatalf("a folder: %s", got)
 	}
+	// A recorded folder inside some other repository (a home folder kept in
+	// Git, once the checkout in it is gone) is not a checkout of this one:
+	// it needs the repository's root commit or remote, or, with neither
+	// known, to be the checkout itself.
+	home := filepath.Join(t.TempDir(), "home")
+	gitInit(t, home)
+	folder := filepath.Join(home, "app")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := f.repo.git(time.Now(), "rev-list", "--max-parents=0", "HEAD")
+	f.repo.git(time.Now(), "remote", "add", "origin", "git@github.com:Owner/App.git")
+	ctx := context.Background()
+	for _, check := range []struct {
+		identity  gitIdentity
+		locations []string
+		want      string
+	}{
+		{gitIdentity{Root: root}, []string{folder}, "The checkouts recorded on this Mac hold another repository."},
+		{gitIdentity{Remotes: []string{"github.com/owner/app"}}, []string{folder}, "The checkouts recorded on this Mac hold another repository."},
+		{gitIdentity{}, []string{folder}, "The checkouts recorded on this Mac hold another repository."},
+		{gitIdentity{Root: root}, []string{folder, f.repo.dir}, f.repo.dir},
+		{gitIdentity{Root: strings.Repeat("0", 40), Remotes: []string{"github.com/owner/app"}}, []string{f.repo.dir}, f.repo.dir},
+		{gitIdentity{}, []string{folder, f.repo.dir}, f.repo.dir},
+	} {
+		clones, reason := gitCheckouts(ctx, check.locations, check.identity)
+		if len(clones) == 1 {
+			reason = clones[0].Dir
+		}
+		if reason != check.want || len(clones) > 1 {
+			t.Errorf("%+v in %v: %s, want %s", check.identity, check.locations, reason, check.want)
+		}
+	}
+}
+
+// A library drive moves between Macs, each with its own clones. A Mac with
+// no checkout, or whose clone lacks another's branch, leaves that Mac's links
+// and checked state alone; a Mac drops its own link once the commit is gone
+// from its clones.
+func TestSessionGitAcrossMacs(t *testing.T) {
+	f := newGitFixture(t)
+	home := currentHost().ID
+	f.session("work", "")
+	f.edit("work", "main.go", 5)
+	f.repo.git(time.Now(), "checkout", "-q", "-b", "local")
+	commit := f.repo.commit(4.99, "Work", map[string]string{"main.go": "package main\n"})
+	f.repo.git(time.Now(), "checkout", "-q", "main")
+	state := func() string {
+		t.Helper()
+		rows, err := queryMaps(f.catalog.DB, `SELECT status,COALESCE(reason,'') reason,linked_commits FROM session_git WHERE workspace_id='work'`)
+		if err != nil || len(rows) != 1 {
+			t.Fatal(rows, err)
+		}
+		return fmt.Sprintf("%v|%v|%v|%s|%s", rows[0]["status"], rows[0]["reason"], rows[0]["linked_commits"], strings.Join(f.links()["work"], ","), f.labels()["work"][0])
+	}
+	f.refresh()
+	want := "checked||1|" + commit[:7] + " inferred 0.7|committed"
+	if got := state(); got != want {
+		t.Fatalf("first Mac: %s", got)
+	}
+	useHost(t, "host_other_mac")
+	f.refresh()
+	if got := state(); got != want {
+		t.Fatalf("a Mac without a checkout: %s", got)
+	}
+	other := filepath.Join(t.TempDir(), "other")
+	f.repo.git(time.Now(), "clone", "-q", "--single-branch", "--branch", "main", f.repo.dir, other)
+	execTx(t, f.catalog.DB, `INSERT INTO workspace_sightings(workspace_id,host_id,source_name,location,first_seen_at,last_seen_at) VALUES('work','host_other_mac','claude','`+other+`','x','x')`)
+	f.refresh()
+	if got := state(); got != want || countRows(t, f.catalog, `SELECT COUNT(*) FROM git_repository_scans WHERE host_id='host_other_mac' AND status='checked'`) != 1 {
+		t.Fatalf("a Mac whose clone lacks the branch: %s", got)
+	}
+	useHost(t, home)
+	f.refresh()
+	if got := state(); got != want {
+		t.Fatalf("back on the first Mac: %s", got)
+	}
+	f.repo.git(time.Now(), "branch", "-q", "-D", "local")
+	f.refresh()
+	if got := state(); got != "checked||0||changed_recent" {
+		t.Fatalf("after the branch was deleted: %s", got)
+	}
 }
 
 // An unchanged repository is not scanned again, and a new commit or a
@@ -366,11 +510,25 @@ func TestSessionGitScansOnlyWhatChanged(t *testing.T) {
 	if logs != 0 || generation() != before {
 		t.Fatalf("an unchanged repository read its log %d times, generation %d to %d", logs, before, generation())
 	}
+	// A scan rewrites only the links and commits that changed: a commit
+	// that links to no session writes nothing, and the views stay.
+	execTx(t, f.catalog.DB, `CREATE TABLE link_writes(n INTEGER)`,
+		`CREATE TRIGGER links_inserted AFTER INSERT ON session_commit_links BEGIN INSERT INTO link_writes VALUES(1); END`,
+		`CREATE TRIGGER links_deleted AFTER DELETE ON session_commit_links BEGIN INSERT INTO link_writes VALUES(1); END`,
+		`CREATE TRIGGER commits_inserted AFTER INSERT ON git_commits BEGIN INSERT INTO link_writes VALUES(1); END`,
+		`CREATE TRIGGER commits_deleted AFTER DELETE ON git_commits BEGIN INSERT INTO link_writes VALUES(1); END`)
+	f.repo.commit(4.5, "Unrelated", map[string]string{"other.go": "package other\n"})
+	f.refresh()
+	if writes := countRows(t, f.catalog, `SELECT COUNT(*) FROM link_writes`); logs == 0 || writes != 0 || generation() != before {
+		t.Fatalf("a scan that linked nothing new: %d logs, %d writes, generation %d to %d", logs, writes, before, generation())
+	}
+	// New work writes its link and commit, and the first link again, since
+	// its evidence holds the session's window, now wider.
 	f.edit("work", "util.go", 4)
 	f.repo.commit(3.99, "More", map[string]string{"util.go": "package util\n"})
 	f.refresh()
-	if logs == 0 || len(f.links()["work"]) != 2 {
-		t.Fatalf("after new work: %d logs, %v", logs, f.links())
+	if writes := countRows(t, f.catalog, `SELECT COUNT(*) FROM link_writes`); logs == 0 || len(f.links()["work"]) != 2 || writes != 3 {
+		t.Fatalf("after new work: %d logs, %d writes, %v", logs, writes, f.links())
 	}
 	// Lines and edit times a session gained later scan again, and a
 	// fingerprint is read as the bytes it is, spaces included.

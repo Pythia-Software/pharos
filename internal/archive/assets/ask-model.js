@@ -1,4 +1,4 @@
-// DOM-free interaction rules shared by the composer and its unit tests.
+// Interaction rules shared by the composer and its unit tests.
 // The library chooses suggestions (GET /api/ask/suggestions,
 // docs/ask-suggestions.md); keep only well-formed, distinct questions.
 function askSuggestionItems(list) {
@@ -11,6 +11,27 @@ function askSuggestionItems(list) {
   }).slice(0,12);
 }
 
+// The suggestion carousel shows one card on narrow screens and at least three
+// from 600 px. Wider rows, such as full screen Ask, add cards while each stays
+// at least 200 px wide. Past three, one question stays off the row, for the
+// placeholder and for rotation to bring in. Peeks of the neighbouring cards
+// sit on both sides; side is the list padding that puts the first card read
+// right after the left peek when the viewport scrolls to the reading block's
+// center slot times the stride.
+// The row repeats the slate copies times and rests in the copy after lead
+// copies, with room on each side for two full rotations and a peek: a timed
+// glide plus a click during it never scrolls past the last card.
+function askIdeaLayout(width, available) {
+  const gap=14,minCard=200;
+  if(!(width>0)||!(available>0))return {count:0,card:0,peek:0,stride:0,side:0,lead:0,copies:0};
+  const fit=Math.floor((width-2*44+gap)/(minCard+gap));
+  const count=Math.max(1,width<600?1:Math.min(available,Math.max(3,Math.min(fit,available-1))));
+  const peek=count>1?44:28,card=(width-2*peek-(count-1)*gap)/count,stride=card+gap;
+  const lead=Math.max(1,Math.ceil((Math.floor(count/2)+2*count+1)/available));
+  const trail=Math.max(1,Math.ceil((Math.ceil(count/2)+2*count)/available));
+  return {count,card,peek,stride,side:peek+Math.floor(count/2)*stride,lead,copies:lead+1+trail};
+}
+
 // While the first suggestions are still being chosen, ask again after 20 s,
 // doubling up to every five minutes: a busy library can take longer than any
 // fixed number of tries.
@@ -21,7 +42,7 @@ function askSuggestionRetryDelay(attempt) {
 async function askReadResponse(response, onProgress) {
   if (!response.ok || !response.headers.get('Content-Type')?.includes('application/x-ndjson')) {
     const result=await response.json();
-    if(!response.ok)throw new Error(result.error||'Ask Pharos request failed');
+    if(!response.ok){const error=new Error(result.error||'Ask Pharos request failed');error.status=response.status;throw error;}
     return result;
   }
   const reader=response.body.getReader(),decoder=new TextDecoder();
@@ -56,16 +77,73 @@ function askWaitStatus({activity=[],elapsedMs=0,message='',cli=''}) {
     elapsed:latest?elapsed+'s elapsed'+(silent>=10?' · '+silent+'s since last update':''):'',
   };
 }
+
+// Walk away from the solved board with legal moves, then reverse the walk.
+// Avoid returning the same board twice, including with a deterministic RNG.
+function askPuzzlePath(random=Math.random,previous=null) {
+  const solved=[1,2,3,4,5,6,7,8,0],boards=[solved],same=(a,b)=>!!b&&a.every((tile,index)=>tile===b[index]);
+  let board=solved,priorEmpty=-1;
+  const nextBoards=(avoidUndo=true)=>{
+    const empty=board.indexOf(0);
+    return board.flatMap((tile,index)=>{
+      if((avoidUndo&&index===priorEmpty)||Math.abs(index%3-empty%3)+Math.abs(Math.floor(index/3)-Math.floor(empty/3))!==1)return [];
+      const next=board.slice();next[empty]=tile;next[index]=0;return [next];
+    });
+  };
+  function advance(next){priorEmpty=board.indexOf(0);board=next;boards.push(next);}
+  for(let i=0;i<20;i++){const options=nextBoards();advance(options[Math.floor(random()*options.length)]);}
+  if(same(board,previous)||same(board,solved))advance(nextBoards(false).find(next=>!same(next,previous)&&!same(next,solved)));
+  return boards.reverse();
+}
+
+// One compositor-driven transform animation per tile. JavaScript only runs at
+// the end of a solve or reset, and cancels all motion when the turn is hidden.
+function askPuzzleMotion(host, {random=Math.random, media=matchMedia('(prefers-reduced-motion: reduce)')}={}) {
+  const tiles=[...host.children],step=640,pause=160,initial=1000,rest=2000,reset=400;
+  let active=false,animations=[],previous=null;
+  const position=(board,tile)=>{
+    const index=board.indexOf(tile),home=tile-1;
+    return `translate(${(index%3-home%3)*6}px,${(Math.floor(index/3)-Math.floor(home/3))*6}px)`;
+  };
+  function cancel(){animations.forEach(animation=>animation.cancel());animations=[];tiles.forEach(tile=>tile.style.removeProperty('transform'));}
+  function animate(frames,duration,done){
+    animations=tiles.map((tile,index)=>tile.animate(frames[index],{duration,fill:'forwards',easing:'linear'}));
+    animations[0].onfinish=()=>{if(active&&!media.matches)done();};
+  }
+  function solve(path,delay){
+    const moves=path.length-1,duration=delay+moves*step+(moves-1)*pause+rest;
+    const frames=tiles.map((_,index)=>{
+      const tile=index+1,first=position(path[0],tile),keyframes=[{transform:first,offset:0}];
+      if(delay)keyframes.push({transform:first,offset:delay/duration});
+      for(let i=1;i<path.length;i++){
+        const start=delay+(i-1)*(step+pause);
+        if(i>1)keyframes.push({transform:position(path[i-1],tile),offset:start/duration});
+        keyframes.push({transform:position(path[i],tile),offset:(start+step)/duration});
+      }
+      keyframes.push({transform:position(path.at(-1),tile),offset:1});return keyframes;
+    });
+    animate(frames,duration,()=>{
+      const next=askPuzzlePath(random,previous);previous=next[0];
+      const resetFrames=tiles.map((_,index)=>[{transform:position(path.at(-1),index+1)},{transform:position(next[0],index+1)}]);
+      cancel();animate(resetFrames,reset,()=>{cancel();solve(next,0);});
+    });
+  }
+  function start(){const path=askPuzzlePath(random,previous);previous=path[0];solve(path,initial);}
+  function setWorking(value){const next=!!value;if(next===active)return;active=next;cancel();if(active&&!media.matches)start();}
+  function changed(){cancel();if(active&&!media.matches)start();}
+  media.addEventListener('change',changed);
+  return {setWorking,destroy(){active=false;cancel();media.removeEventListener('change',changed);}};
+}
 function askComposerActions({draft = '', turns = [], pending = false, opening = false, enabled = false, model = ''}) {
   const populated = turns.length > 0 || draft.length > 0;
-  return {send: enabled && !!model && !pending && !opening && !!draft.trim(), stop: pending, history: !populated, clear: populated, modelLocked: turns.length > 0};
+  return {send: enabled && !!model && !pending && !opening && !!draft.trim(), stop: pending, history: true, clear: populated, clearLabel: turns.length ? 'New Chat' : 'Clear', modelLocked: turns.length > 0};
 }
 // Carry the visible conversation into a fresh, editable prompt for another model.
 function askRetryDraft({turns = [], draft = ''}) {
   const messages=[];
   for(const turn of turns){
     const prompt='You:\n'+turn.prompt;
-    const reply=[turn.reply,turn.clarification?.question,
+    const reply=[turn.reply,turn.feedback&&'Feedback draft ('+turn.feedback.kind+'):\n'+turn.feedback.comment,turn.clarification?.question,
       ...(turn.clarification?.options||[]).map(option=>'- '+option),
       ...(turn.cards||[]).map(card=>[card.title,card.description,card.href].filter(Boolean).join('\n')),
     ].filter(text=>text&&text.trim()).join('\n\n');
@@ -138,13 +216,136 @@ function askHistoryEntries({sessions = [], current = null, query = ''}) {
   const entries = query || !current ? sessions : [current, ...sessions.filter(session => session.id !== current.id)];
   return [...entries].sort((a, b) => b.updatedAt - a.updatedAt);
 }
+// Request ownership stays with its chat when the visible composer switches.
+// Releasing an old attempt cannot release a later retry of the same chat.
+function askRequestRegistry(){
+  const requests=new Map();
+  return {
+    get size(){return requests.size;},
+    get:id=>requests.get(id),values:()=>requests.values(),
+    forEach:callback=>requests.forEach(callback),
+    start(run){if(requests.has(run.id))throw new Error('This chat is already answering.');requests.set(run.id,run);},
+    release(run){if(requests.get(run.id)===run)requests.delete(run.id);},
+  };
+}
+// A queued request may not be present in a saved snapshot yet. Preserve its
+// live object so the stream and the restored transcript share the same turn.
+function askRestoreTurns(conversation = [], localTurn = null){
+  const turns=conversation.map(turn=>turn.id===localTurn?.id?localTurn:{...turn});
+  if(localTurn&&!turns.some(turn=>turn.id===localTurn.id))turns.push(localTurn);
+  return turns;
+}
+// Resolve a receipt against the current session, never the object captured by
+// the original read. Reopening clones turns and retrying creates a new attempt.
+function askApplyReceipt(session, {id,turnID,startedAt}, seenAt){
+  if(session?.id!==id)return null;
+  const turn=session.conversation?.find(turn=>turn.id===turnID&&turn.startedAt===startedAt);
+  if(!askAnswerUnread(turn))return null;
+  turn.seenAt=seenAt;
+  return turn;
+}
+// Receipts belong to an answer attempt, and only a visible answer is seen.
+function askAnswerUnread(turn) {
+  return !!turn && !['loading','canceled'].includes(turn.status) && !!turn.status && !turn.seenAt;
+}
+function askInboxState(session) {
+  const turns=session.conversation||[],latest=turns.at(-1);
+  const status=session.lastStatus||latest?.status,running=status==='loading';
+  const unread=session.unreadCount??turns.filter(askAnswerUnread).length;
+  return {running,unread,label:running?'Answering…':status==='canceled'?'Canceled':unread?unread+(unread===1?' unseen answer':' unseen answers'):turns.length||session.questionCount?'Seen':'Draft'};
+}
+// Each CLI and model a chat's turns used, most recent first. Server summaries
+// carry the list; the open chat derives it from its turns, and a chat without
+// a question yet names the model it will ask.
+function askHistoryModels(session, labels = {}) {
+  let uses = Array.isArray(session.models) ? session.models : [];
+  if (!Array.isArray(session.models)) {
+    const seen = new Set();
+    for (const turn of [...(session.conversation || [])].reverse()) {
+      const key = turn.cli + '\u0000' + turn.model;
+      if (!turn.model || seen.has(key)) continue;
+      seen.add(key); uses.push({cli: turn.cli, model: turn.model, label: turn.modelLabel});
+    }
+    if (!uses.length && session.selection?.model) uses = [{cli: session.selection.provider, model: session.selection.model}];
+  }
+  return uses.map(use => ({cli: use.cli || '', model: use.model || '', label: use.label || labels[use.cli]?.[use.model] || use.model || use.cli || ''}));
+}
+function askHistoryDay(timestamp) { const day = new Date(timestamp); day.setHours(0, 0, 0, 0); return day; }
+function askHistoryStamp(timestamp, now = Date.now()) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp), days = Math.round((askHistoryDay(now) - askHistoryDay(timestamp)) / 86400000);
+  if (days <= 0) return date.toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
+  if (days < 7) return date.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
+  return date.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(date.getFullYear() !== new Date(now).getFullYear() ? {year: 'numeric'} : {})});
+}
+function askHistoryFullDate(timestamp) {
+  return new Date(timestamp).toLocaleString(undefined, {weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit'});
+}
+// One history row: title, turn count, models and when the chat was last active.
+function askHistoryRow(session, {now = Date.now(), labels = {}} = {}) {
+  const turns = session.questionCount ?? session.conversation?.length ?? 0, models = askHistoryModels(session, labels);
+  const started = session.createdAt && session.createdAt !== session.updatedAt ? 'Started ' + askHistoryFullDate(session.createdAt) : '';
+  return {
+    title: session.conversation?.[0]?.prompt || session.draft || 'Untitled chat',
+    turns: turns ? turns + (turns === 1 ? ' turn' : ' turns') : 'Draft',
+    models,
+    modelSummary: models.map(model => model.label).join(', '),
+    stamp: askHistoryStamp(session.updatedAt, now),
+    when: [session.updatedAt ? (turns ? 'Last active ' : 'Edited ') + askHistoryFullDate(session.updatedAt) : '', started].filter(Boolean).join(' · '),
+  };
+}
+// Retry only safe background writes, never a question that may have started a CLI.
+// The bounded retries leave persistent failures visible to the user.
+async function askRetryBackground(write, wait = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  for(let attempt=0;;attempt++) {
+    try{return await write();}
+    catch(error){
+      if(attempt>=2 || !(error instanceof TypeError || [502,503,504].includes(error?.status)))throw error;
+      await wait(500*2**attempt);
+    }
+  }
+}
 // Keep snapshots/replacements ahead of later removals, even on slow requests.
 // A failed write must not prevent the next deletion or clear from running.
 let askVisitWrites = Promise.resolve();
 function askWriteVisit(write) {
-  const result = askVisitWrites.then(write);
+  const result = askVisitWrites.then(()=>askRetryBackground(write));
   askVisitWrites = result.catch(() => {});
   return result;
+}
+// Automatic visits are disposable. Keep at most one pending update while a
+// writer is busy; reconcile the current history after coalescing or failure.
+// The shared queue still orders these writes with explicit history removals.
+function askBufferVisits(write, snapshot, enqueue = askWriteVisit) {
+  let active=false, dirty=false, reconcile=false, latest=null, timer=null, delay=150, stopped=false;
+  const schedule=ms=>{if(!stopped&&!active&&timer===null)timer=setTimeout(run,ms);};
+  async function run(){
+    timer=null;
+    if(stopped||active||!dirty)return;
+    active=true;
+    try{
+      await enqueue(async()=>{
+        if(stopped)return;
+        const input=latest, full=snapshot();
+        const visit=input?.visits?.[0];
+        const retained=visit&&full.visits.some(item=>item.url===visit.url&&item.at===visit.at);
+        const current=reconcile||!input||input.reconcile||!retained?full:input;
+        dirty=false;reconcile=false;latest=null;
+        try { return await write(current); }
+        catch(error) { reconcile=true; throw error; }
+      });
+      delay=150;
+    }catch{
+      dirty=true;reconcile=true;delay=Math.min(delay*2,30000);
+    }finally{
+      active=false;
+      if(dirty)schedule(delay);
+    }
+  }
+  return {
+    add(input){if(dirty)reconcile=true;dirty=true;latest=input;schedule(150);},
+    stop(){stopped=true;clearTimeout(timer);timer=null;},
+  };
 }
 // Keep a little of the preceding reply for context, then the latest exchange.
 // The viewport budget wins when a single exchange is itself very long.

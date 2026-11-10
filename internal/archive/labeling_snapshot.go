@@ -104,7 +104,9 @@ func labelingCompatibility(ctx context.Context, tx *sql.Tx) ([]string, map[strin
 				coverage = append(coverage, table.table+" is absent: "+table.note)
 			}
 		case len(missing) > 0:
-			views = append(views, fmt.Sprintf("CREATE TEMP VIEW %s AS SELECT *,%s FROM main.%s", table.table, strings.Join(selects, ","), table.table))
+			// rowid stays addressable: the shared resolver joins on it
+			// (execution_occurrences.go), and a view has none of its own.
+			views = append(views, fmt.Sprintf("CREATE TEMP VIEW %s AS SELECT rowid AS rowid,*,%s FROM main.%s", table.table, strings.Join(selects, ","), table.table))
 			present[table.table+":partial"] = true
 		}
 	}

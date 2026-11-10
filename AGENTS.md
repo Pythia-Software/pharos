@@ -8,6 +8,13 @@ others sit beside it). The Query Table frontend is TypeScript in `web/src`,
 bundled into the gitignored `internal/archive/assets/query-tables.{js,css}`. See
 [docs/technical-overview.md](docs/technical-overview.md) for the architecture.
 
+Main agent: delegate broad repository exploration to one read-only subagent
+(Claude Code: Explore; Codex: spawn_agent) when available. Request a short
+summary of relevant files, symbols, tests, and suggested edit points, then
+implement from it; reread only what editing or verification needs. Keep small
+lookups local; if delegation is unavailable, use targeted searches.
+Prefer a subagent with the same model and effort level as the main agent.
+
 Split long tasks. Past a few hundred requests, write a short handoff in
 `.context/` (what's done, what's next, where things are) and continue in a
 fresh session.
@@ -30,6 +37,14 @@ the release command fails, address that specific failure and resume publishing.
 Release-only tasks must never run release-machine setup or create/import signing
 keys. Missing deployment configuration or signing keys is a blocker to report;
 signing and publication belong on the separately configured deployment Mac.
+
+## User-facing vocabulary
+
+Use the Data Guide vocabulary in `web/src/data-taxonomy-model.ts` and the
+relationship/copy rules in [docs/ui-vocabulary.md](docs/ui-vocabulary.md).
+Name the actual counting unit: workspace, conversation, agent session, message
+or tool call. Work items are source-recorded tasks, not another name for
+workspace rows. Preserve source text, stored field keys and URL/API identities.
 
 ## Query Table dependency policy
 
@@ -82,6 +97,30 @@ author edits when switching targets or changing cover controls. Extend the
 discovered-target and control-change cases in `dashboard-card.test.mjs`; do not
 copy a static page heading or generic topic description into a creation path.
 
+## Portability boundaries
+
+Shared code owns policy; reviewed native helpers own OS mechanisms. Reuse the
+existing platform primitives and host-services adapter. Keep unsupported distinct
+from success, unknown liveness from absence, and missing measurements from zero.
+Preserve descriptor/process lifetimes and persisted identity encodings. See
+[the portability guide](docs/portability.md) and the
+[work-execution contract](docs/work-portability.md). Windows/Linux hosts,
+distributions and a Web product require a separate task.
+
+`go test ./internal/architecture` is a fast source-only boundary check, also
+included in the normal Go suite. Native leaves and legacy shared exceptions
+have exact reviewed entries in `internal/architecture/native_test.go`; a platform
+filename alone is not approval. New exceptions need a reason and cheap failure/
+lifetime contract coverage. `npm --prefix web run check-host-boundaries` discovers
+authored JS/TS and executable shell fragments; native transport and clipboard
+implementations belong only in the approved host adapter.
+
+The cross-compilation matrix is **opt-in only**:
+`go test -tags portability_compile -run '^TestCrossPlatformCompilation$' -timeout 15m ./internal/architecture`.
+It requires the built frontend from setup. Do not add it to setup, merge checks,
+npm checks, normal test commands or other common paths. It proves production
+compilation, not target runtime support. Run it only when explicitly requested.
+
 ## Running tests
 
 The JS tooling needs Node 24 LTS, pinned in `.nvmrc` (`nvm use`) and in
@@ -118,6 +157,7 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 | JS checks before a PR | `npm --prefix web run check` (typecheck, schemas, recipe snapshot, bundle, unit tests) |
 | Python tools | `python3 -m unittest discover -s tools` |
 | Frontend bundle | `npm --prefix web run build` after any `web/src` or `pricing/*.json` change; outputs are gitignored |
+| Provider golden records | `PHAROS_UPDATE_GOLDEN=1 go test -vet=off -run TestProviderConformance ./internal/archive` after changing what an adapter reads; it rewrites `testdata/ingestion/<kind>.json`, and refuses a change without a new index version (`same-version` overrides) |
 | Recipe snapshot | `npm --prefix web run generate-recipes` after changing card recipes; it rewrites `implemented_recipes` in `docs/homepage-query-cards.json`, which Go's `TestHomeQueryRecipesV2` executes |
 | Site map | `npm --prefix web run generate-site-map` after changing pages, routes, analysis catalogs, dashboard defaults, schemas or card recipes; it rewrites `internal/archive/assets/site-map.json`, `testdata/site-map-cases.json` and the Ask suggestion catalog `internal/archive/assets/ask-suggestions.json` ([docs/site-map.md](docs/site-map.md), [docs/ask-suggestions.md](docs/ask-suggestions.md)) |
 
@@ -199,7 +239,8 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   - `slowTest(t)` for a test that takes seconds, so that `-short` skips it.
 
   `TestMain` keeps tests off this Mac: no `ioreg`, `scutil`, `diskutil` or
-  GitHub, no user git configuration, and catalogs without drive flushes.
+  GitHub, no user git configuration, and disposable files and catalogs without
+  drive flushes.
   Tests of those opt back in, for example with `stubDriveTool` or
   `useDurableCatalog`.
 - **Go tests run in several processes, one test at a time in each.**

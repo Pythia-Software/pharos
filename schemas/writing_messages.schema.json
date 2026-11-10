@@ -44,6 +44,7 @@
     }
   ],
   "fields": [
+    {"name":"agent_session_id","label":"Agent session ID","type":"text","group":"Context","select":{"default":false},"aggregate":{"groupable":true},"bindings":{"sqlite":{"expr":"r.\"agent_session_id\""}},"description":"Recorded owner of this message or ledger record; ambiguous ownership is missing."},
     {
       "name": "id",
       "label": "Message ID",
@@ -199,7 +200,7 @@
             },
             {
               "value": "harness",
-              "label": "Harness"
+              "label": "App instructions"
             },
             {
               "value": "automated",
@@ -258,7 +259,7 @@
             },
             {
               "value": "harness",
-              "label": "Harness"
+              "label": "App instructions"
             },
             {
               "value": "automated",
@@ -563,7 +564,7 @@
     },
     {
       "name": "machine_words",
-      "label": "Harness and automation words",
+      "label": "App instruction and automation words",
       "type": "number",
       "group": "Other input",
       "render": "number",
@@ -683,7 +684,7 @@
     },
     {
       "name": "harness_words",
-      "label": "Harness words",
+      "label": "App instruction words",
       "type": "number",
       "group": "Other input",
       "render": "number",
@@ -849,7 +850,7 @@
           "expr": "r.\"project_name\""
         }
       },
-      "description": "The repository, else the working folder (home as ~); empty for a session with no working directory (No project)."
+      "description": "The repository, else the working folder (home as ~); empty for a workspace with no working directory (No project)."
     },
     {
       "name": "source_kind",
@@ -894,7 +895,7 @@
             },
             {
               "value": "canonical",
-              "label": "Canonical"
+              "label": "Canonical export"
             }
           ]
         }
@@ -944,7 +945,7 @@
             },
             {
               "value": "canonical",
-              "label": "Canonical"
+              "label": "Canonical export"
             }
           ]
         }
@@ -959,21 +960,21 @@
         }
       }
     },
-    {"name": "channel", "label": "Channel", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "channel", "synthetic": true}, "sqlite": {"expr": "r.\"channel\""}}, "description": "Initiating channel, inherited through the entire task tree.", "render": "origin_channel"},
-    {"name": "machine_id", "label": "Machine", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machine_id", "synthetic": true}, "sqlite": {"expr": "r.\"machine_id\""}}, "description": "Initiating location, inherited through the task tree; execution location is separate.", "render": "origin_machine_id"},
-    {"name": "machine", "label": "Machine name", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machine", "synthetic": true}, "sqlite": {"expr": "r.\"machine\""}}, "description": "Recorded task origin metadata."},
-    {"name": "machine_kind", "label": "Machine kind", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machine_kind", "synthetic": true}, "sqlite": {"expr": "r.\"machine_kind\""}}, "description": "Recorded task origin metadata."},
-    {"name": "execution_machine_id", "label": "Execution machine", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine_id", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine_id\""}}, "description": "Recorded task origin metadata.", "render": "origin_execution_machine_id"},
-    {"name": "execution_machine", "label": "Execution machine name", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine\""}}, "description": "Recorded task origin metadata."},
-    {"name": "execution_machine_kind", "label": "Execution machine kind", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine_kind", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine_kind\""}}, "description": "Recorded task origin metadata."},
-    {"name": "channel_status", "label": "Channel attribution", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "channel_status", "synthetic": true}, "sqlite": {"expr": "r.\"channel_status\""}}, "description": "Recorded task origin metadata."},
-    {"name": "machine_status", "label": "Machine attribution", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machine_status", "synthetic": true}, "sqlite": {"expr": "r.\"machine_status\""}}, "description": "Recorded task origin metadata."},
-    {"name": "execution_machine_status", "label": "Execution machine attribution", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine_status", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine_status\""}}, "description": "Recorded task origin metadata."},
-    {"name": "origin_conversation_id", "label": "Initiating conversation", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "origin_conversation_id", "synthetic": true}, "sqlite": {"expr": "r.\"origin_conversation_id\""}}, "description": "Recorded task origin metadata."},
-    {"name": "origin_evidence", "label": "Origin evidence", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "origin_evidence", "synthetic": true}, "sqlite": {"expr": "r.\"origin_evidence\""}}, "description": "Recorded task origin metadata."},
-    {"name": "channels", "label": "Channels", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "channels", "synthetic": true}, "sqlite": {"expr": "r.\"channels\""}}, "description": "Recorded task origin metadata."},
-    {"name": "machines", "label": "Machines", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machines", "synthetic": true}, "sqlite": {"expr": "r.\"machines\""}}, "description": "Recorded task origin metadata."},
-    {"name": "execution_machines", "label": "Execution machines", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machines", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machines\""}}, "description": "Recorded task origin metadata."},
+    {"name": "channel", "label": "Channel", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "channel", "synthetic": true}, "sqlite": {"expr": "r.\"channel\""}}, "description": "How the top-level conversation started; linked sub-agents inherit this channel.", "render": "origin_channel"},
+    {"name": "machine_id", "label": "Machine", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machine_id", "synthetic": true}, "sqlite": {"expr": "r.\"machine_id\""}}, "description": "Device where the top-level conversation started; linked sub-agents inherit this machine. Execution machine is recorded separately.", "render": "origin_machine_id"},
+    {"name": "machine", "label": "Machine name", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machine", "synthetic": true}, "sqlite": {"expr": "r.\"machine\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
+    {"name": "machine_kind", "label": "Machine kind", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machine_kind", "synthetic": true}, "sqlite": {"expr": "r.\"machine_kind\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
+    {"name": "execution_machine_id", "label": "Execution machine", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine_id", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine_id\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran.", "render": "origin_execution_machine_id"},
+    {"name": "execution_machine", "label": "Execution machine name", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
+    {"name": "execution_machine_kind", "label": "Execution machine kind", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine_kind", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine_kind\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
+    {"name": "channel_status", "label": "Channel attribution", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "channel_status", "synthetic": true}, "sqlite": {"expr": "r.\"channel_status\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
+    {"name": "machine_status", "label": "Machine attribution", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machine_status", "synthetic": true}, "sqlite": {"expr": "r.\"machine_status\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
+    {"name": "execution_machine_status", "label": "Execution machine attribution", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine_status", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine_status\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
+    {"name": "origin_conversation_id", "label": "Initiating conversation", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "origin_conversation_id", "synthetic": true}, "sqlite": {"expr": "r.\"origin_conversation_id\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
+    {"name": "origin_evidence", "label": "Origin evidence", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "origin_evidence", "synthetic": true}, "sqlite": {"expr": "r.\"origin_evidence\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
+    {"name": "channels", "label": "Channels", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "channels", "synthetic": true}, "sqlite": {"expr": "r.\"channels\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
+    {"name": "machines", "label": "Machines", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machines", "synthetic": true}, "sqlite": {"expr": "r.\"machines\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
+    {"name": "execution_machines", "label": "Execution machines", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machines", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machines\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
     {
       "name": "subagent",
       "label": "Sub-agent",
