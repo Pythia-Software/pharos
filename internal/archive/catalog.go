@@ -289,6 +289,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureOutcomeGit(); err != nil {
 		return fmt.Errorf("initialize outcome git: %w", err)
 	}
+	if err := c.ensureBranchUsage(); err != nil {
+		return fmt.Errorf("initialize branch usage: %w", err)
+	}
 	if err := c.ensureAnalysisPartitions(); err != nil {
 		return fmt.Errorf("initialize analysis partitions: %w", err)
 	}
@@ -668,6 +671,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureQueryPlannerStatistics(context.Background()); err != nil {
 		return fmt.Errorf("initialize query planner statistics: %w", err)
+	}
+	if err := c.scheduleToolDerivations(); err != nil {
+		return fmt.Errorf("schedule derivations: %w", err)
 	}
 	// Last, so a query open skips Initialize only after all of it succeeded.
 	return c.recordInitializedBuild()

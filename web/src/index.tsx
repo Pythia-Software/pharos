@@ -115,6 +115,7 @@ import agentEventMessagesDocument from "../../schemas/agent_event_messages.schem
 import agentEventRatesDocument from "../../schemas/agent_event_rates.schema.json";
 import sessionShapeDocument from "../../schemas/session_shape.schema.json";
 import outcomesDocument from "../../schemas/outcomes.schema.json";
+import branchUsageDocument from "../../schemas/branch_usage.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { safetyDetailURL, safetyStateLabels } from "./safety-route";
 import { SafetySelectionBar, SafetyTableContext } from "./safety";
@@ -134,6 +135,7 @@ import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
+import { branchAnalysisCatalog, branchCoverage, branchSummaryMetrics, branchUsageDisplay } from "./branch-analysis-catalog";
 import { outcomeCatalogFor, outcomeCostText, outcomeGroupLabel, outcomeKeptCostCell, outcomeRatioRows, outcomeTierCoverage, outcomeTiersReached, outcomesAnalysisCatalog } from "./outcomes-analysis-catalog";
 import { agentEventFixLinks, agentEventRatesCatalog } from "./agent-event-rates-catalog";
 import { agentEventReadWhere } from "./agent-event-rates-model";
@@ -164,7 +166,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "scatter" | "messages" | "people_message_labels" | "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages" | "agent_event_rates" | "session_shape" | "outcomes";
+type Dataset = "scatter" | "messages" | "people_message_labels" | "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages" | "agent_event_rates" | "session_shape" | "outcomes" | "branch_usage";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -244,6 +246,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   agent_event_rates: loadSchema<Row>(agentEventRatesDocument),
   session_shape: loadSchema<Row>(sessionShapeDocument),
   outcomes: loadSchema<Row>(outcomesDocument),
+  branch_usage: loadSchema<Row>(branchUsageDocument),
 };
 
 const tableApis = new Map<Dataset, QueryTableApi<Row>>();
@@ -367,6 +370,11 @@ const renderers: RenderRegistry<Row> = {
     const fact = gitFactDisplay(value, row.project_kind, row.git_check, row.git_check_reason);
     return fact.muted ? <span className="qt-muted" title={fact.title}>{fact.text}</span> : fact.text;
   },
+  // Spend by branch: a row without a branch says which coverage it is.
+  branch_usage({ value, row }: CellContext<Row>) {
+    const branch = branchUsageDisplay(value, row.coverage);
+    return branch.muted ? <span className="qt-muted">{branch.text}</span> : branch.text;
+  },
   git_branch({ value, row }: CellContext<Row>) {
     const branch = branchDisplay(value, row.project_kind);
     return branch.muted ? <span className="qt-muted" title={branch.title}>{branch.text}</span> : branch.text;
@@ -449,6 +457,7 @@ const emptyMessages: Record<Dataset, string> = {
   agent_event_rates: "No messages checked for agent events match this query.",
   session_shape: "No sessions match this query.",
   outcomes: "No workspaces match this query.",
+  branch_usage: "No spend in a Git repository matches this query.",
 };
 
 // Query Table 1.0.0 still formats numeric metrics with a field renderer only for
@@ -1158,6 +1167,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "agent_event_rates") return <AgentEventRatesDashboard />;
   if (topic === "session_shape") return <SessionShapeDashboard />;
   if (topic === "outcomes") return <OutcomesDashboard />;
+  if (topic === "branches") return <BranchesDashboard />;
   return <SkillsDashboard />;
 }
 
@@ -1530,6 +1540,29 @@ function OutcomesDashboard() {
         format={outcomeKeptCostCell} />
       <OutcomeCoveragePanel where={where} />
     </div>} />;
+}
+
+// Spend by Branch: priced usage of sessions in Git repositories, per branch,
+// turn by turn (branch_usage). Its summary is the coverage split. A library
+// with no session in a repository has nothing to split and says so.
+const branchPresenceMetrics: AggregationClause[] = [{ id: "rows", op: "count", groupBy: [] }];
+function BranchesSummary({ where }: { where: WhereTerm[] }) {
+  const result = useMetrics("branch_usage", where, branchSummaryMetrics);
+  const coverage = branchCoverage(metricBuckets(result, "cost"));
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  const detail: Record<string, string> = { on_branch: "on a recorded branch", unknown: "before a session's first branch, on a detached HEAD, or not placed on a turn", no_branch_data: "in sessions that recorded no branch" };
+  return <div className="mcp-metrics dashboard-stats" aria-label="Spend by branch coverage" aria-busy={result.loading}>
+    {coverage.map(item => card(item.label, formatUSD(item.cost), `${outcomePercent(item.share)} of spend ${detail[item.coverage]}`))}
+    {card("Branches", (Number(metricBuckets(result, "branches")[0]?.value) || 0).toLocaleString(), "with recorded spend, counted per project")}
+  </div>;
+}
+function BranchesDashboard() {
+  // Read over the whole library, so a filter never hides the dashboard.
+  const present = useMetrics("branch_usage", [], branchPresenceMetrics);
+  if (!present.loading && !present.error && !(Number(metricBuckets(present, "rows")[0]?.value) > 0))
+    return <p className="usage-dashboard-note" role="status">Spend by branch covers sessions in Git repositories, and none of this library's sessions with usage ran in one. Outcomes and Tokens and Cost cover every session.</p>;
+  return <CatalogDashboard catalog={branchAnalysisCatalog} dataset="branch_usage" name="branches" defaults={dashboardDefaults.branches}
+    summary={where => <BranchesSummary where={where} />} />;
 }
 
 function MCPUsageDashboard() {

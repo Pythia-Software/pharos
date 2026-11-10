@@ -456,9 +456,10 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 		{"identities", func(ctx context.Context) error { _, err := s.Catalog.ReconcileIdentitiesContext(ctx); return err }},
 		{"git", func(ctx context.Context) error { return s.Catalog.refreshMainIntegrations(ctx) }},
 		// Commit links (outcome_git.go) start from the outcomes the rollup
-		// derives, so they follow it here, never on a page's request.
+		// derives, so they follow it here, never on a page's request, as
+		// does spend by branch (branch_usage.go).
 		{"tools", func(ctx context.Context) error {
-			return errors.Join(s.Catalog.ensureToolRollup(ctx), s.Catalog.refreshSessionGit(ctx))
+			return errors.Join(s.Catalog.ensureToolRollup(ctx), s.Catalog.refreshSessionGit(ctx), s.Catalog.refreshBranchUsage(ctx))
 		}},
 		{"authorship", func(ctx context.Context) error {
 			// A page may already be estimating older inputs. Wait for that

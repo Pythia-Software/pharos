@@ -437,6 +437,86 @@ Git check, whose reason reads "No session has local Git evidence: local Git
 checks only repositories on this Mac". There is no Tier 3 breakdown: Pharos
 holds no forge data for outcomes yet.
 
+### Spend by branch
+
+Analyze → Spend by Branch shows what sessions in Git repositories spent on
+each branch. It follows CodeBurn's by-branch lens (see References).
+
+- **Turn by turn.** Claude Code records the checkout's branch (`gitBranch`)
+  on each event. Each turn is on the last branch recorded at or before it,
+  so a session that switches branches spends on each in turn. A response
+  whose usage is repeated on each content block counts once. Claude Code
+  records `gitBranch` on its responses as well as its prompts (all 10,166
+  usage events in a sample of the library had one), so each turn's own
+  record places it, and a switch recorded on a prompt is recorded again on
+  the next response.
+- **How it is stored.** The usage ledger is hourly, per session and model.
+  `agent_session_branch_shares` records the tokens each branch's turns used
+  in each of those hours. The `branch_usage` dataset splits each priced
+  ledger row among branches by those tokens and keeps its hour, so hourly
+  trends and time ranges place the spend when it happened. Only branch
+  names and token counts are stored, both already in the transcript.
+- **When it runs.** A background stage (`refreshBranchUsage`,
+  `branch_usage.go`) runs after commit linking and never on a request. It
+  reads only the events Pharos kept whole, which include every usage event.
+  It skips a conversation whose sessions' usage has not changed since it
+  was last read (`branch_usage_scans`). Indexing a conversation's sessions
+  again (a full sync or a capture replay, which write them with the same
+  totals) deletes their shares and that record, so it is read again. When the rules of outcomes, commit
+  linking or spend by branch change, opening the library schedules the
+  stage (`scheduleToolDerivations`), so a library with nothing new to index
+  still derives again.
+- **Session-level branches.** Codex records one branch per session, and
+  Conductor one per workspace; their messages carry no per-turn branch. A
+  session without per-turn branches is on that branch for all its usage.
+- **Mirrors count once.** A Conductor workspace that mirrors a Claude Code
+  session carries the same usage. As in Tokens and Cost, only the native
+  session counts, with its per-turn branches.
+- **Branches are per project.** The default view compares spend by project
+  and branch (`project_branch`), and the Branches count counts each
+  project's branches, so `main` in ten repositories is ten branches. The
+  "Branch name" breakdown adds same-named branches together.
+- **Coverage split.** It sums to the repository sessions' whole spend:
+
+  | Coverage | Meaning |
+  |---|---|
+  | On a branch | Usage on a recorded branch, per turn or per session. |
+  | Unknown branch | In a session that recorded a branch: usage before its first branch, on a detached HEAD, or not placed on a turn. Never relabelled as `main`. |
+  | No branch data | A session that recorded no branch. |
+
+  Usage not placed on a turn is usage the transcript reports for a run or
+  the whole session rather than a request (a Claude Code cost-state, say),
+  usage without a timestamp, which the ledger places at the session's
+  start, and usage in an hour and model in which no turn recorded tokens.
+
+  "Unknown branch" is wider than CodeBurn's "unknown, before first branch".
+  It also covers a detached HEAD and usage not placed on a turn. Neither
+  can honestly be given a branch.
+- **Git sessions only.** Sessions in folders, or without a project, are not
+  in the dataset. A library without Git shows a note on the page instead of
+  an empty chart.
+- **On a real library** (the 2026-11-01 backup, read immutable by
+  `branch_usage_probe_test.go`):
+  - It has 18,629 Claude-model conversations in repositories. Claude Code's
+    own sessions recorded per-turn branches in 5,186 of 5,198. Conductor's
+    5,020 use its workspace branch, except those that mirror a Claude Code
+    session: 49 billion tokens of mirrored usage count once, on the
+    native session. TL1's 8,411 mostly have no branch data.
+  - A first pass read 1.5 million kept events in 2 min 24 s; the slowest
+    conversation took 1.1 s. A pass with nothing new runs only the
+    change-detection query, which took 0.37 s.
+  - Coverage, by tokens, mirrors counted once:
+
+    | Coverage | Share |
+    |---|---|
+    | On a branch, per session | 83.8% |
+    | On a branch, per turn | 13.8% |
+    | Unknown branch | 0.1% |
+    | No branch data | 2.3% |
+- **Approximation.** Within one hour, a session's cost is split by tokens.
+  If a session switched branches mid-hour, the two branches' token types
+  (cache reads and output, for example) are priced as that hour's mix.
+
 ## Commit-linking rules and confidence
 
 | Evidence | Confidence |
@@ -783,6 +863,7 @@ head in, and writes `main_merge_*`. Its properties:
 |---|---|---|
 | Library, Analyze, Storage and MCP grouping | Every folder session fell into "No repository" (Analyze, Storage) or was blank (Library). `list_repositories` counted them only as `conversations_without_repository`. | Each folder is a project. Chat exports are "No project". |
 | MCP `repository` filters | A folder could not be named, and passing a path returned an error. | `project` filters accept a folder key or path. |
+| Spend by branch | Not available. | Git sessions only; a library without Git sees a note, not an empty chart. |
 | Library `branch_count`, `pr_count` | 0 for folder sessions, the same as a git session with no branch or PR. | (Outcome PR) Shown as "Not a repository". |
 | File search | Found only Conductor sessions. | (Tier 1 PR) Every harness that records tool calls. |
 

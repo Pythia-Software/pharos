@@ -32,12 +32,13 @@ import sessionShape from "../../../../schemas/session_shape.schema.json";
 import fixes from "../../../../schemas/fixes.schema.json";
 import safety from "../../../../schemas/safety.schema.json";
 import outcomes from "../../../../schemas/outcomes.schema.json";
+import branchUsage from "../../../../schemas/branch_usage.schema.json";
 
 export { core, instantiateRecipe, queryRecipes, cardCoverQuery };
 
 // Every dataset the repository defines a schema for.
 export const schemas = Object.fromEntries(Object.entries({
-  scatter, messages: messagesDocument, people_message_labels:peopleMessageLabels, message_labels:messageLabels, compactions, model_requests: modelRequests, activity, conversation_activity: conversationActivity, findings, library, mcp_calls: mcpCalls, parallelism, rhythm, skill_usages: skillUsages, tl1_attempts: tl1Attempts, tool_calls: toolCalls, tools, usage, writing, writing_messages: writingMessages, agent_events: agentEvents, agent_event_messages: agentEventMessages, agent_event_rates: agentEventRates, session_shape: sessionShape, fixes, safety, outcomes,
+  scatter, messages: messagesDocument, people_message_labels:peopleMessageLabels, message_labels:messageLabels, compactions, model_requests: modelRequests, activity, conversation_activity: conversationActivity, findings, library, mcp_calls: mcpCalls, parallelism, rhythm, skill_usages: skillUsages, tl1_attempts: tl1Attempts, tool_calls: toolCalls, tools, usage, writing, writing_messages: writingMessages, agent_events: agentEvents, agent_event_messages: agentEventMessages, agent_event_rates: agentEventRates, session_shape: sessionShape, fixes, safety, outcomes, branch_usage: branchUsage,
 }).map(([dataset, document]) => [dataset, core.loadSchema(document)]));
 export { execution, queryCapabilities as capabilities } from "../../support/query-server.mjs";
 export const day = 86400000;

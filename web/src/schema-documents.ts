@@ -25,6 +25,7 @@ import agentEventMessagesDocument from "../../schemas/agent_event_messages.schem
 import agentEventRatesDocument from "../../schemas/agent_event_rates.schema.json";
 import sessionShapeDocument from "../../schemas/session_shape.schema.json";
 import outcomesDocument from "../../schemas/outcomes.schema.json";
+import branchUsageDocument from "../../schemas/branch_usage.schema.json";
 
 export const schemaDocuments = {
   scatter: scatterDocument,
@@ -33,5 +34,5 @@ export const schemaDocuments = {
   compactions: compactionsDocument, model_requests: modelRequestsDocument, library: libraryDocument, usage: usageDocument, writing: writingDocument, conversation_activity: conversationActivityDocument,
   writing_messages: writingMessagesDocument, mcp_calls: mcpCallsDocument, tools: toolsDocument, tool_calls: toolCallsDocument,
   skill_usages: skillUsagesDocument, tl1_attempts: tl1AttemptsDocument, parallelism: parallelismDocument, rhythm: rhythmDocument, findings: findingsDocument, safety: safetyDocument, fixes: fixesDocument,
-  agent_events: agentEventsDocument, agent_event_messages: agentEventMessagesDocument, agent_event_rates: agentEventRatesDocument, session_shape: sessionShapeDocument, outcomes: outcomesDocument,
+  agent_events: agentEventsDocument, agent_event_messages: agentEventMessagesDocument, agent_event_rates: agentEventRatesDocument, session_shape: sessionShapeDocument, outcomes: outcomesDocument, branch_usage: branchUsageDocument,
 };
