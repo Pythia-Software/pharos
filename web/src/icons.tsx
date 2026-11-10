@@ -4,7 +4,7 @@ import React from "react";
 // use the same 24 px, 1.6 px stroke icon set. See docs/iconography.md.
 export type IconName =
   | "arrow-left" | "arrow-right" | "arrow-down" | "refresh" | "severity-high"
-  | "severity-medium" | "severity-low" | "check" | "info" | "settings" | "chevron-down" | "copy"
+  | "severity-medium" | "severity-low" | "check" | "info" | "settings" | "chevron-down" | "copy" | "mic"
   | "command" | "human" | "tree" | "search" | "grip" | "edit" | "close" | "plus" | "compass" | "arrow-up" | "read" | "web" | "bookmark" | "chevron-left" | "chevron-right" | "more" | "sidebar" | "error" | "code" | "thought"
   | "freshness-database" | "freshness-check" | "freshness-clock" | "freshness-unknown" | "freshness-missing";
 

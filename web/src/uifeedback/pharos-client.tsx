@@ -5,6 +5,7 @@ import { boundedLog, pendingSubmission, safeURL, type Annotation, type Diagnosti
 import { Icon } from "../icons";
 import { preferences } from "../preferences";
 import { SearchHelp } from "../search-help";
+import { DictationButton } from "../dictation-button";
 import "./pharos-client.css";
 import { annotationForUpload, createAskFeedbackSender, feedbackReceipt, restoreReview, type AskFeedbackOutcome, type FeedbackReceipt, type FeedbackReview, type PharosAnnotation, type PreparedAskFeedback } from "./pharos-model";
 declare global {
@@ -157,6 +158,7 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null), [logs, setLogs] = useState(false), [collecting, setCollecting] = useState(false), [busy, setBusy] = useState(false), [receipt, setReceipt] = useState<FeedbackReceipt | null>(null);
   const [sourceIDs, setSourceIDs] = useState<string[]>([]);
   const dialog = useRef<HTMLDialogElement>(null), fields = useRef<HTMLDivElement>(null);
+  const comment = useRef<HTMLTextAreaElement>(null);
   const [collapsed, setCollapsed] = useState(false), [discarded, setDiscarded] = useState(false);
   const discardMessage = useRef<HTMLParagraphElement>(null), discardedHere = useRef(false);
   const sentHere = useRef(false), wasCollapsed = useRef(false), receiptMessage = useRef<HTMLParagraphElement>(null);
@@ -287,7 +289,7 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
   } : undefined}><div className="uifeedback-heading"><Heading id={proposal ? undefined : "uifeedback-title"}>{title}</Heading>{!proposal && <button type="button" disabled={busy} onClick={() => void keepDraft()} aria-label="Close feedback"><Icon name="close" /></button>}</div>
     {receipt ? <><p role="status" tabIndex={-1} ref={receiptMessage}>Your feedback was received. Thank you.</p><p>Report: <code>{receipt.id}</code></p><p>{email ? "We can contact you at the address you provided." : "No contact email was included."}</p></> : <>
       <label>Type<select value={draft.kind} disabled={busy} onChange={e => { const kind = e.target.value as Draft["kind"]; update({ kind }); if (!proposal && kind === "bug" && !logs) void includeLogs(true); }}><option value="bug">Bug report</option><option value="feedback">Feedback</option><option value="feature">Feature request</option><option value="prompt">Prompt to build</option></select></label>
-      <label>What would you like changed?<textarea value={draft.comment} maxLength={16000} disabled={busy} onChange={e => update({ comment: e.target.value })} placeholder={annotations.length ? "Optional context for these annotations" : "Describe the issue, request, or prompt"} required={!annotations.length} /></label>
+      <label>What would you like changed?<span className="dictation-field"><textarea ref={comment} value={draft.comment} maxLength={16000} disabled={busy} onChange={e => update({ comment: e.target.value })} placeholder={annotations.length ? "Optional context for these annotations" : "Describe the issue, request, or prompt"} required={!annotations.length} /><DictationButton field={comment} onError={setError} /></span></label>
       {annotations.length > 0 && <ul className="uifeedback-annotations" aria-label="Included annotations">{annotations.map(a => <li key={a.id}>{a.screenshot && <img alt={`Screenshot of ${a.label}`} src={`data:${a.screenshot.mime};base64,${a.screenshot.data}`} />}<div><strong>{a.label}</strong>{a.comment && <span> · {a.comment}</span>}{(a.url || a.text) && <small title={[a.url, a.text].filter(Boolean).join("\n")}>{a.url || a.text}</small>}</div><button type="button" disabled={busy} onClick={() => setAnnotations(items => items.filter(item => item.id !== a.id))} aria-label={`Exclude ${a.label} from this report`} title="Exclude from this report"><Icon name="close" /></button></li>)}</ul>}
       {!proposal && <button type="button" className="uifeedback-annotate" disabled={busy || collecting || !ready} onClick={() => void keepDraft(() => window.pharosFeedback?.annotate())}>Annotate an element</button>}
       <label>Contact email (optional)<span className="uifeedback-email"><input type="email" maxLength={254} value={email} disabled={busy} onChange={e => { setEmail(e.target.value); saveContact(e.target.value.trim()); }} autoComplete="email" /><button type="button" disabled={busy} onClick={() => void keepDraft(() => window.pharosNavigate?.("/settings/preferences"))} aria-label="Contact email settings" title="Contact email settings"><Icon name="settings" /></button></span></label>

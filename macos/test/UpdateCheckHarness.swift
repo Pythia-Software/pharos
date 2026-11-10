@@ -291,6 +291,7 @@ final class FakeFolderPicker: ArchiveFolderPicker {
           // Invalid payloads keep this integration fixture harmless even if
           // sender validation regresses; iframe errors must precede parsing.
           await post('pharosClipboard', {});
+          await post('pharosDictation', {action: 'invalid'});
           if (!main) {
             handlers.pharosWindow.postMessage('drag');
             handlers.pharosWindow.postMessage('doubleClick');
@@ -334,11 +335,12 @@ final class FakeFolderPicker: ArchiveFolderPicker {
         expect(recorder.results[true]?["pharosUpdates"] == "ok", "the main document reaches update status")
         expect(recorder.results[true]?["pharosLibrary"] == "Error: Unknown library action.", "the main document keeps library payload validation")
         expect(recorder.results[true]?["pharosClipboard"] == "Error: Clipboard content must be text.", "the main document keeps clipboard payload validation without writing")
+        expect(recorder.results[true]?["pharosDictation"] == "Error: Unknown dictation action.", "the main document keeps dictation payload validation without recording")
         for error in recorder.results[false]!.values {
             expect(error.contains("main window document"), "every iframe reply reports a native sender rejection: \(error)")
         }
         expect(recorder.results[true]?["chooseFolder"] == "ok" && pickerCount == 1, "only the real main-document sender creates a picker")
-        expect(recorder.replies[true] == 4 && recorder.replies[false] == 4, "each real WebKit reply finishes once")
+        expect(recorder.replies[true] == 5 && recorder.replies[false] == 5, "each real WebKit reply finishes once")
         for mainFrame in [true, false] {
             let senders = recorder.senders.filter { $0.2 == mainFrame }
             expect(Set(senders.map { $0.0 }) == Set(NativeBridgeSender.Handler.allCases.map(\.rawValue)), "both frames exercise every registered name")

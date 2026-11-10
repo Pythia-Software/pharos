@@ -25,6 +25,7 @@ test('host adapter preserves legacy payloads, reply objects and one-way dispatch
     pharosLibrary: {postMessage(payload) {sent.push(['library', plain(payload)]); return Promise.resolve(payload.action === 'eject' ? {released: true} : '/Volumes/Archive');}},
     pharosUpdates: native('updates', Promise.resolve(update)),
     pharosMenuBar: native('menu', undefined),
+    pharosDictation: native('dictation', Promise.resolve({available: true})),
   }}});
   const host = window.pharosHost;
   assert.equal(host.protocolVersion, 1);
@@ -37,22 +38,24 @@ test('host adapter preserves legacy payloads, reply objects and one-way dispatch
   assert.deepEqual(plain(await host.lifecycle.requestEject()), {released: true});
   assert.deepEqual(plain(host.menu.applyPreferences({enabled: true, order: ['open', 'quit']})), {dispatched: true});
   assert.deepEqual(plain(host.menu.refreshUsage()), {dispatched: true});
+  assert.deepEqual(plain(await host.dictation.status()), {available: true});
   assert.deepEqual(sent, [
     ['clipboard', 'hello'], ['library', {action: 'chooseFolder'}],
     ['updates', {action: 'status'}], ['updates', {action: 'install'}],
     ['library', {action: 'eject'}], ['menu', {enabled: true, order: ['open', 'quit']}], ['menu', {refreshUsage: true}],
+    ['dictation', {action: 'status'}],
   ]);
 });
 
 test('host adapter resolves capabilities and missing handlers at call time without using the user agent', async () => {
   const window = load({navigator: {userAgent: 'Macintosh AppleWebKit'}}), host = window.pharosHost;
   assert.equal(host.kind, 'browser');
-  for (const name of ['folders', 'updates', 'menu', 'eject']) {
+  for (const name of ['folders', 'updates', 'menu', 'eject', 'dictation']) {
     assert.equal(host.capabilities[name].supported, false);
     assert.equal(host.capabilities[name].available, false);
     assert.ok(host.capabilities[name].reason);
   }
-  const requests = [() => host.folders.chooseLibraryFolder(), () => host.updates.status(), () => host.updates.install(), () => host.lifecycle.requestEject()];
+  const requests = [() => host.folders.chooseLibraryFolder(), () => host.updates.status(), () => host.updates.install(), () => host.lifecycle.requestEject(), () => host.dictation.status()];
   for (const request of requests) await assert.rejects(request(), rejected('unsupported'));
   assert.throws(() => host.menu.refreshUsage(), rejected('unsupported'));
   window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => null}}};
