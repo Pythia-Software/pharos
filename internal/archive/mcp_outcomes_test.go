@@ -64,10 +64,25 @@ func TestOutcomeToolsForAgents(t *testing.T) {
 		{"trace", map[string]any{"file": "cmd/serve.go"}},
 		{"query_statistics", map[string]any{"file": "cmd/serve.go"}},
 		{"search_conversations", map[string]any{"file": "serve-plan.md", "project": notes}},
+		// An absolute path, as agents have them: a file or folder in a
+		// checkout, or a folder's file.
+		{"search_conversations", map[string]any{"file": filepath.Join(app, "cmd", "serve.go")}},
+		{"query_statistics", map[string]any{"file": filepath.Join(app, "cmd")}},
+		{"search_work", map[string]any{"file": filepath.Join(notes, "serve-plan.md")}},
 	} {
 		result := callProjectTool(t, library.catalog, call.tool, call.args)
 		if items, _ := result["items"].([]any); len(items) != 1 {
 			t.Fatalf("%s %v: %#v", call.tool, call.args, result)
+		}
+	}
+	// Text in a file's key, not its path, matches nothing: every
+	// repository file's key starts repository:, every folder file's path:.
+	for _, file := range []string{"repo", "repository", "path", "tory"} {
+		for _, tool := range []string{"search_conversations", "search_work", "trace", "query_statistics"} {
+			result := callProjectTool(t, library.catalog, tool, map[string]any{"file": file})
+			if items, _ := result["items"].([]any); len(items) != 0 {
+				t.Fatalf("%s file=%s: %#v", tool, file, result)
+			}
 		}
 	}
 

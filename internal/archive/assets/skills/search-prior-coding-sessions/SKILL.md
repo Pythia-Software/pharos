@@ -118,7 +118,9 @@ For the work rather than the conversation: `trace` finds work by changed file,
 PR number, or task; `search_work` (which also takes `project`) and
 `get_work_detail` give a workspace's changes, PRs, and metrics;
 `get_change_set` gives a patch locator. A `file` filter matches files a
-session edited through its tool calls, for every agent that has file tools.
+session edited through its tool calls, for every agent that has file tools:
+pass a repository-relative path (`internal/app.go`) or a part of one; an
+absolute path works where Pharos knows the checkout.
 `get_work_detail` defaults to identity metadata. Request the needed `section`
 from `available_sections` and follow `next_offset` to page it. Read any
 `truncated_fields` losslessly with `field`, the row's `item_offset` as `offset`,

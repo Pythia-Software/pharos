@@ -1226,8 +1226,12 @@ func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields)
 		where = append(where, "w.id IN (SELECT mx.workspace_id FROM metrics mx WHERE "+strings.Join(clause, " AND ")+")")
 	}
 	if options.File != "" {
+		roots, err := fileFilterRoots(ctx, c.reader(), options.File)
+		if err != nil {
+			return nil, err
+		}
 		where = append(where, fileFilterSQL("w"))
-		args = append(args, fileFilterArgs(options.File)...)
+		args = append(args, fileFilterArgs(options.File, roots)...)
 	}
 	if options.ChangedOnly {
 		where = append(where, "w.id IN (SELECT x.workspace_id FROM change_files xf JOIN change_sets x ON x.id=xf.change_set_id)")

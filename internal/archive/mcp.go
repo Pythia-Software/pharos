@@ -10,7 +10,7 @@ import (
 )
 
 // fileFilterDescription says what a file filter matches (fileFilterSQL).
-const fileFilterDescription = "Text in the path of a file the work changed: a change set's file, or a file a session edited through its tool calls (every harness with file tools)."
+const fileFilterDescription = "Text in the path of a file the work changed: a change set's file, or a file a session edited through its tool calls (every harness with file tools), by its path in its repository (internal/app.go) or, outside a repository, its folder path. An absolute path also finds a repository's file through a checkout Pharos knows."
 
 // searchOutcomeLabel is the outcome_label filter of the search tools, which
 // hands the call to query_statistics (metricCall).

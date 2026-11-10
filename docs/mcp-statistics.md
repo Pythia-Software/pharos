@@ -205,7 +205,9 @@ so the cost of reworked sessions in a folder project is one aggregate:
 The older `outcome` filter is text a source reported about the work, not the
 label. `file` matches text in the path of a file the work changed: a change
 set's file, or a file a session edited through its tool calls, which every
-harness with file tools records. `list_outcomes` gives each label's evidence;
+harness with file tools records, by its path in its repository or a folder
+file's `~` or absolute path. An absolute path also finds a repository's file
+through a checkout Pharos knows. `list_outcomes` gives each label's evidence;
 `get_file_history` and `get_branch_spend` cover a file's history and spend
 per branch.
 

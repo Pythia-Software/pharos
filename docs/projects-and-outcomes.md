@@ -791,7 +791,12 @@ Every other tool takes the new facts too:
 - A `file` filter (`search_conversations`, `search_work`, `trace`,
   `query_statistics`) matches files sessions edited through their tool
   calls (`session_files`), not only change sets, so it finds Claude Code,
-  Codex and Antigravity work.
+  Codex and Antigravity work. It matches a session's file by its path in its
+  repository, or by a folder file's `~` or absolute path, never by the rest of
+  its `file_key`, whose prefixes and repository ID every file shares. An
+  absolute path also finds a repository's files at that path in a checkout
+  Pharos knows (`repositories.local_locations_json`); a new worktree Pharos
+  has not seen needs the repository-relative path.
 - `query_statistics`, `search_work` and `search_conversations` take
   `outcome_label` as a filter; `query_statistics` also selects it and groups
   by it, with `project`. The search tools hand a call with it to
