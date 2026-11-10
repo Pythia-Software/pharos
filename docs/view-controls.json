@@ -5684,11 +5684,11 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "859c0afb2af2eb42:0",
+      "key": "2174fe939f3d6607:0",
       "file": "web/src/file-history.tsx",
       "owner": "FilesHeader",
       "tag": "button",
-      "control": "onClick={() => { void navigator.clipboard?.writeText(path).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}",
+      "control": "onClick={() => { // ui.py installs the shell clipboard wrapper, the shared host clipboard owner. void window.pharosCopyText?.(path).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {}); }}",
       "contract": "action",
       "reason": "Copies the file or directory path to the clipboard; changes no view state."
     },

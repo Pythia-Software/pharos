@@ -256,7 +256,8 @@ function FilesHeader({ project, name, path, git, kind, children }: { project: st
     <div className="files-header-actions">
       <RefChip git={git} />
       {path ? <button type="button" className="files-button" onClick={() => {
-        void navigator.clipboard?.writeText(path).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
+        // ui.py installs the shell clipboard wrapper, the shared host clipboard owner.
+        void window.pharosCopyText?.(path).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {});
       }} title={`Copy ${kind === "dir" ? "the directory's" : "the file's"} path`}>{copied ? "Copied" : "Copy path"}</button> : null}
       {children}
     </div>
