@@ -1,6 +1,7 @@
 import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure, RatioPart } from "./dashboard-analysis-model";
 import { agentEventGroups, agentEventKindLabel, agentEventKinds } from "./agent-events-analysis-catalog";
+import { projectBreakdown } from "./project-analysis";
 
 // Agent Events: how often agents run into each kind of event, over time and
 // across breakdowns, over agent_event_rates. One record is one agent message
@@ -109,6 +110,7 @@ export const agentEventRatesCatalog: AnalysisCatalog = {
     provider: { label: "Provider", fields: ["provider"], order: ["claude", "codex", "antigravity", "chatgpt", "tl1", "canonical"], note: byModel },
     harness: { label: "Harness", fields: ["harness"], empty: "Harness not recorded", note: byModel },
     repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
+    project_name: projectBreakdown(),
     week: { label: "Week", fields: ["week"], empty: "No time recorded" },
     family_source: { label: "Kind + reply or thinking", fields: ["family", "source"], note: narrates },
     group_source: { label: "Kind group + reply or thinking", fields: ["family_group", "source"], note: narrates },
@@ -130,7 +132,7 @@ export const agentEventRatesCatalog: AnalysisCatalog = {
   // harness and role are its own; a kind is a filter, not a breakdown.
   units: {
     conversation: { label: "Conversation", plural: "Conversations", key: "conversation_id", where: [{ field: "conversation_id", op: "is_not_null", value: "" }],
-      breakdowns: { repository_name: ["repository_name"], provider: ["provider"], harness: ["harness"], agent_role: ["agent_role"] },
+      breakdowns: { repository_name: ["repository_name"], project_name: ["project_name"], provider: ["provider"], harness: ["harness"], agent_role: ["agent_role"] },
       note: "A conversation is one recorded agent transcript the events pass read; a delegated subagent is a conversation of its own. Its events count the kinds the population keeps." },
   },
   // Kind group, kind, repository and the rest as chips beside Range; the

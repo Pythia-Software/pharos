@@ -67,7 +67,7 @@ const dashboards: Record<string, CardDashboard> = {
   "api-cost-total": tokens("cost", "project_name", { view: "compare" }),
   "window-work-cost": tokens("cost", "project_name", { view: "compare", unit: "conversation", reduce: "median" }),
   "work-cost-distribution": tokens("cost", "project_name", { view: "distribution", unit: "conversation", scale: "logarithmic" }),
-  "work-volume-cost": scatter("tokens_conversations", "tokens_cost", "work", "repository_name"),
+  "work-volume-cost": scatter("tokens_conversations", "tokens_cost", "work", "project_name"),
   "task-token-ranges": tokens("tokens", "project_name", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
   "task-output-ranges": tokens("output", "project_name", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
   "task-model-token-ranges": tokens("tokens", "provider_model", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),

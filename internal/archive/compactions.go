@@ -69,14 +69,15 @@ func compactionDatasetOver(boundaries string) sqlDataset {
 		"occurred_at": "b.created_at", "day": "date(b.created_at,'localtime')", "week": "date(b.created_at,'localtime','-6 days','weekday 1')", "month": "strftime('%Y-%m',b.created_at,'localtime')",
 		"trigger": "b.boundary_trigger", "trigger_evidence": "b.trigger_evidence",
 		"provider": "c.provider", "harness": "c.harness", "model": "COALESCE(NULLIF(b.model,''),NULLIF(c.model,''),'Unreported')",
-		"repository_name": "r.display_name", "title": "w.title", "source_kind": "w.source_kind", "agent_depth": "c.agent_depth",
+		"repository_name": "r.display_name", "project_name": projectNameSQL("w"), "title": "w.title", "source_kind": "w.source_kind", "agent_depth": "c.agent_depth",
 		"channel": "o.channel", "machine_id": "o.machine_id", "machine": "o.machine", "execution_machine_id": "o.execution_machine_id", "execution_machine": "o.execution_machine",
 	}
 	return sqlDataset{from: `FROM ` + boundaries + ` b JOIN conversations c ON c.id=b.conversation_id
- JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
+ JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w") + `
  LEFT JOIN conversation_origins o ON o.conversation_id=c.id`,
-		base:    currentGroupConversation("c") + " AND c.id NOT IN (" + compactionAliasExclusion(boundaries) + ")",
-		columns: columns, timestamps: map[string]string{"occurred_at": "b.created_at"}, lookups: map[string]bool{"conversation_id": true, "workspace_id": true, "message_id": true}}
+		base:          currentGroupConversation("c") + " AND c.id NOT IN (" + compactionAliasExclusion(boundaries) + ")",
+		optionalJoins: map[string]string{"pj": projectJoin("w")},
+		columns:       columns, timestamps: map[string]string{"occurred_at": "b.created_at"}, lookups: map[string]bool{"conversation_id": true, "workspace_id": true, "message_id": true}}
 }
 
 // compactionDataset derives boundaries from message bodies on every query. It

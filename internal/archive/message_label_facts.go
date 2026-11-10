@@ -109,7 +109,7 @@ func messageLabelStoredFrom(ledger bool, fields []string, unmarked string) strin
  UNION ALL ` + liveSQL + `) f
  LEFT JOIN conversations c ON c.id=f.conversation_id
  LEFT JOIN workspaces w ON w.id=c.workspace_id
- LEFT JOIN repositories repo ON repo.id=w.repository_id
+ LEFT JOIN repositories repo ON repo.id=w.repository_id` + projectJoin("w") + `
  LEFT JOIN messages body ON body.id=f.message_id`
 }
 
@@ -122,7 +122,8 @@ func messageLabelStoredDataset(ledger bool, unmarked string) sqlDataset {
 	for field, expression := range map[string]string{
 		"id": "f.message_id||':'||f.label", "workspace_id": "c.workspace_id", "fingerprint": "f.conversation_id",
 		"title": "COALESCE(NULLIF(c.agent_nickname,''),w.title,c.id)", "repository_name": "repo.display_name",
-		"provider": "c.provider", "subagent": "c.parent_id IS NOT NULL",
+		"project_name": projectNameSQL("w"),
+		"provider":     "c.provider", "subagent": "c.parent_id IS NOT NULL",
 		"week": "date(f.day,'-6 days','weekday 1')", "month": "substr(f.day,1,7)",
 		"text": "substr(" + timelineContentSQL("body.text") + ",1,640)",
 	} {
@@ -150,6 +151,7 @@ func messageLabelStoredDataset(ledger bool, unmarked string) sqlDataset {
 		"c":    " LEFT JOIN conversations c ON c.id=f.conversation_id",
 		"w":    " LEFT JOIN workspaces w ON w.id=c.workspace_id",
 		"repo": " LEFT JOIN repositories repo ON repo.id=w.repository_id",
+		"pj":   projectJoin("w"),
 		"body": " LEFT JOIN messages body ON body.id=f.message_id",
 	}, timestamps: map[string]string{"occurred_at": "f.occurred_at"}, lookups: map[string]bool{"message_id": true, "conversation_id": true, "workspace_id": true},
 		// The physical facts themselves are narrow; this index supplies range access,

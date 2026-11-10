@@ -111,7 +111,7 @@ func (s *Server) scatterRows(ctx context.Context, fields libraryFields, filters 
 		summaries := []qt.SummaryColumn{summary, {ID: "first_at", Op: "min", Field: definition.Time.First}, {ID: "last_at", Op: "max", Field: definition.Time.Last}}
 		selected := []string{key, "value", "first_at", "last_at"}
 		// Representative text is display metadata, never part of the join key.
-		for _, field := range []string{"title", "provider", "repository_name", "model"} {
+		for _, field := range []string{"title", "provider", "repository_name", "project_name", "model"} {
 			if _, ok := schema.Fields[field]; !ok {
 				continue
 			}
@@ -159,7 +159,7 @@ func (s *Server) scatterRows(ctx context.Context, fields libraryFields, filters 
 				}
 				point[id] = value
 			}
-			for _, field := range []string{"title", "provider", "repository_name", "model"} {
+			for _, field := range []string{"title", "provider", "repository_name", "project_name", "model"} {
 				text := firstString(row["meta_"+field])
 				if text == "" {
 					continue

@@ -1120,8 +1120,8 @@ func (c *Catalog) newSessionShapeTable(ctx context.Context, facts map[string]ses
  (SELECT a.id FROM agent_sessions a WHERE a.conversation_id=c.id AND a.native_id='main') agent_session_id,
  COALESCE(NULLIF(c.model,''),(SELECT a.model FROM agent_sessions a WHERE a.conversation_id=c.id AND a.native_id='main' LIMIT 1)) model,
  COALESCE(NULLIF(c.effort,''),(SELECT a.effort FROM agent_sessions a WHERE a.conversation_id=c.id AND a.native_id='main' LIMIT 1)) effort,
- w.title,w.source_kind,w.activity_at,r.display_name repository_name
- FROM conversations c JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
+ w.title,w.source_kind,w.activity_at,r.display_name repository_name,`+projectNameSQL("w")+` project_name
+ FROM conversations c JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id`+projectJoin("w")+`
  WHERE `+currentGroupConversation("c")+` ORDER BY c.id`)
 	if err != nil {
 		return nil, err
@@ -1206,7 +1206,7 @@ func (c *Catalog) newSessionShapeTable(ctx context.Context, facts map[string]ses
 		model := firstString(conversation["model"])
 		for field, value := range map[string]any{"id": id, "conversation_id": id, "workspace_id": conversation["workspace_id"], "title": conversation["title"],
 			"agent_session_id": conversation["agent_session_id"],
-			"repository_name":  conversation["repository_name"], "provider": conversation["provider"], "harness": conversation["harness"],
+			"repository_name":  conversation["repository_name"], "project_name": conversation["project_name"], "provider": conversation["provider"], "harness": conversation["harness"],
 			"model": nilIfEmpty(model), "model_family": nilIfEmpty(modelFamily(defaultString(nilIfEmpty(model), "Unknown model"))), "effort": nilIfEmpty(firstString(conversation["effort"])),
 			"agent_depth": depth, "agent_kind": kind, "subagents": subagents[id], "input_tokens": int64(0), "output_tokens": int64(0), "cost_usd": nil, "price_status": nil} {
 			row[field] = value

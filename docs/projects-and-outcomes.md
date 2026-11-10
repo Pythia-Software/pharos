@@ -97,7 +97,10 @@ never by a request:
 Readers use `projectJoin`/`projectNameSQL` (`projects.go`). They join
 `repositories` on `COALESCE(repository_id, folder_repository_id)` and derive
 `project_id` (`repository:<id>` or `folder:<key>`), `project_name` and
-`project_kind`.
+`project_kind`. Every query dataset with `repository_name` also has
+`project_name` (the library also `project_kind` and `project_id`), except
+Findings, which are computed per repository; Scatter points carry it as
+point metadata.
 
 ### Where projects appear
 
@@ -106,7 +109,9 @@ Readers use `projectJoin`/`projectNameSQL` (`projects.go`). They join
 - **Analyze:** a "Project" breakdown in every catalog that had
   "Repository". Links that name `repository_name` read as the project
   breakdown (the catalog's `legacy` mapping), so saved links and card
-  destinations keep working. File paths stay Git-only: "Repository path",
+  destinations keep working. Compactions, Session Shape, Agent Event rates
+  and Scatter keep their Repository breakdown beside Project, since their
+  cards still group by repository. File paths stay Git-only: "Repository path",
   "Repository + path", the "Path in a conversation" unit and the read-path
   and edit-path cards pair `repo_path` with the repository holding the file
   (`path_repository`), which can differ from the session's project. Files

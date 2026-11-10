@@ -19,11 +19,12 @@ import (
 
 // projectDatasets are the query tables that carry project_name.
 var projectDatasets = []string{"library", "usage", "agent_events", "agent_event_messages", "conversation_activity", "skill_usages",
-	"writing", "writing_messages", "tool_calls", "tools", "rhythm", "parallelism", "model_requests"}
+	"writing", "writing_messages", "tool_calls", "tools", "rhythm", "parallelism", "model_requests", "messages", "compactions",
+	"agent_event_rates", "session_shape", "message_labels", "people_message_labels"}
 
 // projectDatasetsWithoutRows are the project datasets the fixtures' short
 // sessions leave empty: they need skills, or the agent event pass.
-var projectDatasetsWithoutRows = []string{"agent_events", "agent_event_messages", "skill_usages"}
+var projectDatasetsWithoutRows = []string{"agent_events", "agent_event_messages", "agent_event_rates", "skill_usages"}
 
 // projectServer serves a fixture library with its tool summaries and writing
 // classification built, as the background builds leave them.
@@ -62,9 +63,9 @@ func queryProjects(t *testing.T, server *Server, dataset string, fields ...strin
 	return result.Rows
 }
 
-// addProjectWork appends a model request that reads a file, and its result,
-// to each named session of the library (in its folder of the same name), so
-// the usage, tool and request datasets have rows to check.
+// addProjectWork appends a model request that reads a file, its result and a
+// compaction to each named session of the library (in its folder of the same name), so
+// the usage, tool, request and compaction datasets have rows to check.
 func addProjectWork(t *testing.T, library projectLibrary, folders ...string) {
 	t.Helper()
 	for index, folder := range folders {
@@ -77,7 +78,8 @@ func addProjectWork(t *testing.T, library projectLibrary, folders ...string) {
 		writeSourceFile(t, path, string(existing)+
 			fmt.Sprintf(`{"type":"assistant","uuid":"%s-w","sessionId":%q,"cwd":%q,"timestamp":"2026-09-02T00:%02d:00Z","message":{"id":"%s-m","role":"assistant","model":"claude-test","usage":{"input_tokens":100,"output_tokens":20},`+
 				`"content":[{"type":"tool_use","id":"%s-t","name":"Read","input":{"file_path":"README.md"}}]}}`+"\n", session, session, cwd, index, session, session)+
-			fmt.Sprintf(`{"type":"user","uuid":"%s-r","sessionId":%q,"cwd":%q,"timestamp":"2026-09-02T00:%02d:10Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"%s-t","content":"# readme"}]}}`+"\n", session, session, cwd, index, session))
+			fmt.Sprintf(`{"type":"user","uuid":"%s-r","sessionId":%q,"cwd":%q,"timestamp":"2026-09-02T00:%02d:10Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"%s-t","content":"# readme"}]}}`+"\n", session, session, cwd, index, session)+
+			fmt.Sprintf(`{"type":"system","subtype":"compact_boundary","uuid":"%s-c","sessionId":%q,"cwd":%q,"timestamp":"2026-09-02T00:%02d:20Z"}`+"\n", session, session, cwd, index))
 	}
 	library.ingestClaude(t)
 }

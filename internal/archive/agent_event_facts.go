@@ -452,7 +452,8 @@ var agentEventRateDataset = func() sqlDataset {
 	columns := map[string]string{
 		"id": "(f.message_id||':'||k.family)", "message_id": "f.message_id", "conversation_id": "f.conversation_id",
 		"workspace_id": "c.workspace_id", "title": "COALESCE(NULLIF(c.agent_nickname,''),w.title,c.id)", "repository_name": "r.display_name",
-		"provider": "f.provider", "model": "NULLIF(f.model,'')", "effort": "NULLIF(f.effort,'')",
+		"project_name": projectNameSQL("w"),
+		"provider":     "f.provider", "model": "NULLIF(f.model,'')", "effort": "NULLIF(f.effort,'')",
 		"model_effort": "(COALESCE(NULLIF(f.model,''),'Unknown model')||' · '||COALESCE(NULLIF(f.effort,''),'effort not recorded'))",
 		"harness":      "NULLIF(f.harness,'')", "subagent": "(f.subagent=1)", "agent_role": "CASE WHEN f.subagent=1 THEN 'subagent' ELSE 'main' END",
 		"source": "f.source", "turn_id": "f.turn_id", "prompted_by": "f.prompted_by", "prompt_words": "f.prompt_words",
@@ -467,7 +468,7 @@ var agentEventRateDataset = func() sqlDataset {
 	return sqlDataset{
 		// The conversation, workspace and repository are found once per
 		// message read, before its kinds multiply the rows.
-		from: `FROM agent_event_facts f LEFT JOIN conversations c ON c.id=f.conversation_id LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id` +
+		from: `FROM agent_event_facts f LEFT JOIN conversations c ON c.id=f.conversation_id LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w") +
 			` CROSS JOIN ` + agentEventKindsSQL() + ` k LEFT JOIN agent_event_fact_kinds x ON x.message_id=f.message_id AND x.family=k.family`,
 		lookups: map[string]bool{"message_id": true, "conversation_id": true},
 		// A filter on the kind leaves that kind's rows out before the join
@@ -476,10 +477,11 @@ var agentEventRateDataset = func() sqlDataset {
 		columns:    columns,
 		timestamps: map[string]string{"occurred_at": "f.occurred_at"},
 		optionalJoins: map[string]string{
-			"x": " LEFT JOIN agent_event_fact_kinds x ON x.message_id=f.message_id AND x.family=k.family",
-			"c": " LEFT JOIN conversations c ON c.id=f.conversation_id",
-			"w": " LEFT JOIN workspaces w ON w.id=c.workspace_id",
-			"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
+			"x":  " LEFT JOIN agent_event_fact_kinds x ON x.message_id=f.message_id AND x.family=k.family",
+			"c":  " LEFT JOIN conversations c ON c.id=f.conversation_id",
+			"w":  " LEFT JOIN workspaces w ON w.id=c.workspace_id",
+			"r":  " LEFT JOIN repositories r ON r.id=w.repository_id",
+			"pj": projectJoin("w"),
 		},
 		pageFrom:    "FROM agent_event_facts f",
 		newestFirst: map[string]string{"occurred_at": "agent_event_facts_time_idx"},

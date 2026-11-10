@@ -115,6 +115,20 @@
       }
     },
     {
+      "name": "project_name",
+      "label": "Project",
+      "type": "text",
+      "group": "Point",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"project_name\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
       "name": "model",
       "label": "Model",
       "type": "text",
