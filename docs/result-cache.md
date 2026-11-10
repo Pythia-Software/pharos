@@ -77,6 +77,27 @@ three days that have gone stale since, but only those someone came back to
 tried once is stored, and refreshed if it is asked for again, but creates no
 standing background work.
 
+The same refresher keeps the derived values behind the answers ready. Some
+datasets are computed in memory before any query over them can run (the
+Usage rows take seconds, and half a minute after a restart). Every few
+seconds the refresher looks at the catalog and recomputes the derived values
+requested in the last half hour, and after a restart the Usage rows, so that
+a request for a filter nobody has asked for before waits only for its own
+query. It does so only when all of these hold:
+
+- The data those values read is the same at two looks in a row. Writes they
+  do not read (label commits, for the Usage rows) do not count.
+- No ingest or projection batch is running, and the library has not been
+  stopped.
+- Nobody is waiting for a query, which is asked again before each value. A
+  request waiting for a value the refresher is computing counts as waiting.
+- Under population execution, a CPU slot is free.
+
+It runs as the maintenance pass's cache warming does, at background I/O
+priority. A rebuild that fails or is interrupted is tried again at the next
+look. This needs the result cache: a library that has none (rule under "One
+file per library") relies on the maintenance pass alone.
+
 **7. Entries leave by disuse or size.** An entry nobody asks for in 14 days
 is dropped, and the least recently used go first once the file holds more
 than 256 MB of bodies. An entry stored under another domain version is not
