@@ -69,6 +69,7 @@ type Catalog struct {
 	mcpHistory     mcpHistory
 	wal            walBound
 	writers        catalogWriteTracker
+	contention     contentionReports
 	queries        queryActivity
 	// queryCounts reuses Query Table population counts within a data
 	// generation (see query_count_cache.go).

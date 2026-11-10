@@ -201,7 +201,7 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 }
 
 func (c *Catalog) publishToolPartitions(ctx context.Context, conn *sql.Conn, build toolRollupBuild) error {
-	release, err := c.acquireWriteGate(ctx)
+	release, _, err := c.queueWriteGate(ctx, "tool-partitions publish")
 	if err != nil {
 		return err
 	}

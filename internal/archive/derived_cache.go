@@ -247,6 +247,16 @@ func isWarmOnly(ctx context.Context) bool { return ctx.Value(warmOnlyKey{}) == t
 // derivedValue is cachedValue without a type. A request marks the value as
 // used, which keeps it warm.
 func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(context.Context) (any, error), request bool) (any, error) {
+	if timing := timingFrom(ctx); timing != nil {
+		// The computation is shared by every request that asks, so it is no
+		// one request's own work: a request counts only how long it waited.
+		started, counted, inner := time.Now(), timing.pause(), compute
+		compute = func(ctx context.Context) (any, error) { return inner(withoutRequestTiming(ctx)) }
+		defer func() {
+			counted()
+			timing.derivedValue(key, time.Since(started))
+		}()
+	}
 	if parent, _ := ctx.Value(derivedAdmissionKey{}).(*derivedAdmission); parent != nil {
 		// Do not hold a heavy slot while waiting for a shared dependency. A
 		// queue of parents waiting on queued children would otherwise deadlock.
