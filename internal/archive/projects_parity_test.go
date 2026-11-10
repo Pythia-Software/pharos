@@ -3,9 +3,12 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -18,11 +21,22 @@ import (
 var projectDatasets = []string{"library", "usage", "agent_events", "agent_event_messages", "conversation_activity", "skill_usages",
 	"writing", "writing_messages", "tool_calls", "tools", "rhythm", "parallelism", "model_requests"}
 
-// projectServer serves a fixture library with its tool summaries built, as
-// the background build leaves them.
+// projectDatasetsWithoutRows are the project datasets the fixtures' short
+// sessions leave empty: they need skills, or the agent event pass.
+var projectDatasetsWithoutRows = []string{"agent_events", "agent_event_messages", "skill_usages"}
+
+// projectServer serves a fixture library with its tool summaries and writing
+// classification built, as the background builds leave them.
 func projectServer(t *testing.T, library projectLibrary) *Server {
 	t.Helper()
 	if err := library.catalog.ensureToolRollup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want, _, err := library.catalog.authorshipGenerations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := library.catalog.RebuildAuthorship(t.Context(), want); err != nil {
 		t.Fatal(err)
 	}
 	return testServer(t, library.config, library.catalog)
@@ -46,6 +60,55 @@ func queryProjects(t *testing.T, server *Server, dataset string, fields ...strin
 		t.Fatalf("%s: %v", dataset, err)
 	}
 	return result.Rows
+}
+
+// addProjectWork appends a model request that reads a file, and its result,
+// to each named session of the library (in its folder of the same name), so
+// the usage, tool and request datasets have rows to check.
+func addProjectWork(t *testing.T, library projectLibrary, folders ...string) {
+	t.Helper()
+	for index, folder := range folders {
+		session, cwd := "s-"+folder, library.folders[folder]
+		path := filepath.Join(library.claude, "project", session+".jsonl")
+		existing, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSourceFile(t, path, string(existing)+
+			fmt.Sprintf(`{"type":"assistant","uuid":"%s-w","sessionId":%q,"cwd":%q,"timestamp":"2026-09-02T00:%02d:00Z","message":{"id":"%s-m","role":"assistant","model":"claude-test","usage":{"input_tokens":100,"output_tokens":20},`+
+				`"content":[{"type":"tool_use","id":"%s-t","name":"Read","input":{"file_path":"README.md"}}]}}`+"\n", session, session, cwd, index, session, session)+
+			fmt.Sprintf(`{"type":"user","uuid":"%s-r","sessionId":%q,"cwd":%q,"timestamp":"2026-09-02T00:%02d:10Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"%s-t","content":"# readme"}]}}`+"\n", session, session, cwd, index, session))
+	}
+	library.ingestClaude(t)
+}
+
+// checkDatasetProjects queries project_name from every project dataset and
+// checks that each dataset with rows names only the fixture's projects (or
+// none) and at least one of them. A dataset whose rows the fixture's short
+// transcripts do not produce must say so in projectDatasetsWithoutRows.
+func checkDatasetProjects(t *testing.T, server *Server, library projectLibrary, projects ...string) {
+	t.Helper()
+	for _, dataset := range projectDatasets {
+		rows := queryProjects(t, server, dataset)
+		if len(rows) == 0 {
+			if !slices.Contains(projectDatasetsWithoutRows, dataset) {
+				t.Errorf("%s: no rows from the fixture library", dataset)
+			}
+			continue
+		}
+		named := 0
+		for _, row := range rows {
+			if name := firstString(row["project_name"]); name != "" {
+				if !slices.Contains(projects, name) {
+					t.Errorf("%s: project %q is not one of %q", dataset, name, projects)
+				}
+				named++
+			}
+		}
+		if named == 0 {
+			t.Errorf("%s: %d rows and none names a project", dataset, len(rows))
+		}
+	}
 }
 
 func callProjectTool(t *testing.T, catalog *Catalog, name string, args map[string]any) map[string]any {
@@ -73,11 +136,10 @@ func projectItems(result map[string]any) map[string]map[string]any {
 
 func TestProjectParityWithoutGit(t *testing.T) {
 	library := noGitLibrary(t)
+	addProjectWork(t, library, "notes", "research", "later")
 	server := projectServer(t, library)
 	notes, research := folderKey(library.folders["notes"]), folderKey(library.folders["research"])
-	for _, dataset := range projectDatasets {
-		queryProjects(t, server, dataset)
-	}
+	checkDatasetProjects(t, server, library, notes, research, folderKey(library.folders["later"]))
 	kinds := map[string]int{}
 	for _, row := range queryProjects(t, server, "library", "project_kind") {
 		kinds[firstString(row["project_name"])+"|"+firstString(row["project_kind"])]++
@@ -130,10 +192,9 @@ func TestProjectParityWithoutGit(t *testing.T) {
 
 func TestProjectParityMixed(t *testing.T) {
 	library := mixedLibrary(t)
+	addProjectWork(t, library, "notes", "app")
 	server := projectServer(t, library)
-	for _, dataset := range projectDatasets {
-		queryProjects(t, server, dataset)
-	}
+	checkDatasetProjects(t, server, library, "app", "gone", folderKey(library.folders["notes"]), folderKey(library.folders["research"]), folderKey(library.folders["later"]))
 	items := projectItems(callProjectTool(t, library.catalog, "list_projects", map[string]any{}))
 	// The session in app/docs joins the app repository it is checked out in.
 	if items["app"]["kind"] != "repository" || integer(items["app"]["conversations"]) != 2 || items[folderKey(library.folders["notes"])]["kind"] != "folder" {
