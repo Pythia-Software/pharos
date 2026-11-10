@@ -209,7 +209,8 @@ func readPatch(patch, path string) []fileEdit {
 	var current *section
 	for _, line := range strings.Split(patch, "\n") {
 		if header, ok := strings.CutPrefix(line, "*** "); ok {
-			if strings.HasPrefix(header, "Move to: ") {
+			// A move and the end-of-file mark stay in the file's section.
+			if strings.HasPrefix(header, "Move to: ") || strings.HasPrefix(header, "End of File") {
 				continue
 			}
 			current = nil

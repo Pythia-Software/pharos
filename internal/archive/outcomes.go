@@ -306,7 +306,7 @@ func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts 
 				facts.Verification = "unknown"
 			}
 		}
-		if call.Status != "ok" || call.Result == "" {
+		if call.Result == "" || call.Status != "ok" && !(call.Status == "error" && commitChained(call.Command)) {
 			continue
 		}
 		if strings.Contains(call.Command, "git") && strings.Contains(call.Command, "commit") {
@@ -320,6 +320,9 @@ func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts 
 					facts.Commits = append(facts.Commits, outcomeCommit{Hash: match[2], Branch: branch, At: call.StartedAt})
 				}
 			}
+		}
+		if call.Status != "ok" {
+			continue
 		}
 		if strings.Contains(call.Command, "git") && strings.Contains(call.Command, "push") && pushLine.MatchString(call.Result) {
 			facts.Pushed = true
@@ -338,14 +341,23 @@ func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts 
 	return facts
 }
 
+// commitChained reports whether a command runs more after its git commit, so
+// that its failure may be a later command's, such as a push: the commit lines
+// it printed still name commits made.
+func commitChained(command string) bool {
+	at := strings.Index(command, "commit")
+	return strings.Contains(command, "git") && at >= 0 && strings.ContainsAny(command[at:], ";&|\n")
+}
+
 // outcomeCallsSQL reads a session's calls in order: an edit's input, for its
 // lines, and only the output of Git and gh commands, for their commit, push
-// and pull request lines.
+// and pull request lines, and of a failed command that commits, whose failure
+// may be a later command's (commitChained).
 const outcomeCallsSQL = `SELECT t.tool_category,t.status,COALESCE(t.command_category,'') command_category,COALESCE(t.command,'') command,
 	COALESCE(t.started_at,'') started_at,COALESCE(t.path_absolute,'') path_absolute,COALESCE(t.repo_path,'') repo_path,
 	COALESCE(t.path_repository_id,'') path_repository_id,COALESCE(t.path_scope,'') path_scope,t.lines_added,t.lines_removed,
 	CASE WHEN t.status='ok' AND (t.command LIKE '%git%commit%' OR t.command LIKE '%git%push%' OR t.command LIKE '%gh pr create%')
-		THEN (SELECT r.text FROM messages r WHERE r.id=t.result_message_id) END result,
+		OR t.status='error' AND t.command LIKE '%git%commit%' THEN (SELECT r.text FROM messages r WHERE r.id=t.result_message_id) END result,
 	CASE WHEN t.tool_category='edit' AND t.status='ok' THEN (SELECT m.text FROM messages m WHERE m.id=t.call_message_id) END input
 	FROM tool_calls t WHERE t.workspace_id=? ORDER BY COALESCE(t.started_at,''),t.conversation_id,t.sequence`
 

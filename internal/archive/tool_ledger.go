@@ -694,14 +694,16 @@ func toolFilePath(name string, input any) string {
 
 // patchText is the patch from "*** Begin Patch" to "*** End Patch" in text,
 // with the escapes undone when a code-mode script holds it as a string
-// literal (its line breaks written \n); empty when text holds none.
+// literal (its line breaks written \n); empty when text holds none. A
+// script that applies several patches gives them all, from the first's
+// start to the last's end: the script between them is outside any file.
 func patchText(text string) string {
 	start := strings.Index(text, "*** Begin Patch")
 	if start < 0 {
 		return ""
 	}
 	patch := text[start:]
-	if end := strings.Index(patch, "*** End Patch"); end >= 0 {
+	if end := strings.LastIndex(patch, "*** End Patch"); end >= 0 {
 		patch = patch[:end]
 	}
 	if !strings.Contains(patch, "\n") || strings.Count(patch, `\n`) > strings.Count(patch, "\n") {

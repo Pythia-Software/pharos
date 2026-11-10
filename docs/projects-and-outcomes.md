@@ -153,8 +153,9 @@ is this document's shorthand and the stored names' (`session_outcomes`,
   so a patch's files are read from the patch itself and placed the way the
   ledger places paths, each on its own: a patch whose first file is scratch
   still changes its other files. A patch in a Codex code-mode script, where
-  the script holds it as a string literal, changes the files it names; the
-  ledger (from `tools-v11`) records its first file too. An older Codex
+  the script holds it as a string literal, changes the files it names, as
+  does every other patch the script applies; the ledger (from `tools-v14`)
+  records the first patch's first file too. An older Codex
   patch that lists its files without their lines changes those files.
   Files in temporary directories and the agent's own home (plans, memory)
   are left out. A file in a repository
@@ -205,8 +206,10 @@ is this document's shorthand and the stored names' (`session_outcomes`,
   usually adds to it. The calibration is under
   [Rework calibration](#rework-calibration).
 - **Commit, branch and PR evidence in tool output.** From the output of a
-  successful `git commit` (`[main 1a2b3c4] …`, giving hash and branch),
-  `git push` (`a..b  main -> main`, `* [new branch]`), and `gh pr create`
+  successful `git commit` (`[main 1a2b3c4] …`, giving hash and branch;
+  also of a failed command that runs more after its commit, such as
+  `git commit … && git push` whose push failed, since the commit it printed
+  was made), `git push` (`a..b  main -> main`, `* [new branch]`), and `gh pr create`
   (the pull request URL), as the model read it, out of the stored result's
   envelope. Only these commands' output is read. A hash here
   is Tier 1 evidence: it is stored, but "Committed" waits for local Git to
