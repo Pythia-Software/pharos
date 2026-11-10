@@ -1095,9 +1095,11 @@ func (c *Catalog) writeGitScan(ctx context.Context, repository, host, key string
 		if !scan.Since.IsZero() {
 			since = scan.Since.UTC().Format(time.RFC3339)
 		}
+		// A failed scan keeps the commits an earlier one stored, so it keeps
+		// how far back they were read too.
 		_, err := tx.ExecContext(ctx, `INSERT INTO git_repository_scans(repository_id,host_id,scan_key,status,reason,scanned_at,history_since) VALUES(?,?,?,?,?,?,?)
 			ON CONFLICT(repository_id,host_id) DO UPDATE SET scan_key=excluded.scan_key,status=excluded.status,reason=excluded.reason,scanned_at=excluded.scanned_at,
-			history_since=excluded.history_since`,
+			history_since=CASE WHEN excluded.status='checked' THEN excluded.history_since ELSE git_repository_scans.history_since END`,
 			repository, host, key, scan.Status, nilIfEmpty(scan.Reason), now(), since)
 		return err
 	})
