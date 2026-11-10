@@ -20,7 +20,9 @@ const legacyIds: Record<string, string> = {
 };
 
 // projectLegacy reads those older ids, after the catalog's own legacy mapping
-// when it has one.
+// when it has one. The empty group meant "No repository", every folder
+// session as well as chat exports; as "No project" it would mean only the
+// latter, so a legend selection of it is dropped rather than narrowed.
 export function projectLegacy(legacy?: (state: AnalysisState) => AnalysisState): (state: AnalysisState) => AnalysisState {
   return state => {
     const read = legacy ? legacy(state) : state;
@@ -29,6 +31,13 @@ export function projectLegacy(legacy?: (state: AnalysisState) => AnalysisState):
       const value = read[key];
       if (value !== undefined && Object.hasOwn(legacyIds, value)) change[key] = legacyIds[value];
     }
-    return Object.keys(change).length ? { ...read, ...change } : read;
+    if (!Object.keys(change).length) return read;
+    const next = { ...read, ...change };
+    if (change.split && read.selection?.values.includes("")) {
+      const values = read.selection.values.filter(value => value !== "");
+      if (values.length || read.selection.allHidden) next.selection = { ...read.selection, values };
+      else delete next.selection;
+    }
+    return next;
   };
 }

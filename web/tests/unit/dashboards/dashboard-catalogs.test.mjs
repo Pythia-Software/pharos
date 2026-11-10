@@ -205,6 +205,12 @@ test("older links: numbered metrics read as measures; only dashboards with a leg
   const repository = { field: "repository_name", op: "=", value: "pharos" }, month = { field: "day", op: ">=", value: "2026-09-01" };
   const renamed = readAnalysisLink(tokenAnalysisCatalog, { view: "trend", metric: "tokens", split: "repository_name" }, [month, repository]);
   assert.deepEqual([renamed.where, renamed.state.selection], [[month], { values: ["pharos"], excluded: false }]);
+  // "No repository" held every folder session; "No project" holds only chat
+  // exports, so that selection is dropped rather than read as the narrower one.
+  for (const [values, want] of [[[""], undefined], [["", "pharos"], { values: ["pharos"], excluded: false }]]) {
+    const read = normalizeAnalysis(tokenAnalysisCatalog, { view: "trend", metric: "tokens", split: "repository_name", selection: { values, excluded: false } });
+    assert.deepEqual([read.split, read.selection], ["project_name", want], values.join("|"));
+  }
   // Tools and MCP drew no legend: their filters were always populations.
   const tool = { field: "tool_name", op: "=", value: "Bash" };
   for (const [catalog, state] of [[tools, { metric: "failure_rate", split: "tool_name", view: "trend", period: "week", rollingPeriods: 7, display: "interval" }], [mcp, { metric: "mean_output", split: "tool_name", view: "compare", period: "day", rollingPeriods: 0, display: "interval" }]]) {

@@ -54,14 +54,17 @@ export function CarbonImpact({ where, onFilter, usage: state, children }: { wher
   }, []);
   const bounds = timeBounds(where, usageTime);
   const data = useMemo(() => state.usage ? { ...state.usage, factors: factors as CarbonFactors } : null, [state.usage]), error = state.error;
-  const scopeValue = (field: "project_name" | "provider" | "channel" | "machine_id" | "execution_machine_id") => {
+  const scopeValue = (field: "project_name" | "repository_name" | "provider" | "channel" | "machine_id" | "execution_machine_id") => {
     const selection = readSlice(where, field);
     if (!selection.values.length) return field === "project_name" ? "All projects" : field === "provider" ? "All providers" : `All ${originDimensions.find(([key]) => key===field)?.[1].toLowerCase()} values`;
-    return `${selection.excluded ? "Except " : ""}${selection.values.map(value => isOriginDimension(field) ? originLabel(field,value) : value ? field === "provider" ? providers[value] ?? value : value : field === "provider" ? "Unknown provider" : "No project").join(", ")}`;
+    return `${selection.excluded ? "Except " : ""}${selection.values.map(value => isOriginDimension(field) ? originLabel(field,value) : value ? field === "provider" ? providers[value] ?? value : value : field === "provider" ? "Unknown provider" : field === "repository_name" ? "No repository" : "No project").join(", ")}`;
   };
+  // A link from before projects filters repositories; it still does, so the
+  // scope names that filter rather than all projects.
+  const projectScope = !readSlice(where, "project_name").values.length && readSlice(where, "repository_name").values.length ? scopeValue("repository_name") : scopeValue("project_name");
   const originScope = originDimensions.filter(([field]) => readSlice(where,field).values.length).map(([field]) => scopeValue(field)).join(" · ");
-  const scope = `${originScope ? originScope+" · " : ""}${scopeValue("project_name")} · ${scopeValue("provider")} · ${bounds.from || bounds.to ? `${bounds.from?.toLocaleString() ?? "Start of history"} → ${bounds.to?.toLocaleString() ?? "Present"}${bounds.to ? " (end exclusive)" : ""}` : "All time"}`;
-  const label = `${originScope ? originScope+" · " : ""}${scopeValue("project_name")} · ${scopeValue("provider")} · ${rangeLabel(bounds) || "All time"}`;
+  const scope = `${originScope ? originScope+" · " : ""}${projectScope} · ${scopeValue("provider")} · ${bounds.from || bounds.to ? `${bounds.from?.toLocaleString() ?? "Start of history"} → ${bounds.to?.toLocaleString() ?? "Present"}${bounds.to ? " (end exclusive)" : ""}` : "All time"}`;
+  const label = `${originScope ? originScope+" · " : ""}${projectScope} · ${scopeValue("provider")} · ${rangeLabel(bounds) || "All time"}`;
   useLayoutEffect(() => {
     if (data) calculator?.show(data, label, scope);
     else calculator?.pending(error);
