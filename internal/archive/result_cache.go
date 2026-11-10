@@ -66,6 +66,9 @@ var (
 	resultSweepEvery   = 2 * time.Minute
 	// resultBuildDeadline bounds one background refresh.
 	resultBuildDeadline = 2 * time.Minute
+	// resultChangeEvery is how often the refresher looks for a change to
+	// the catalog. One that is still there at the next look has settled.
+	resultChangeEvery = 5 * time.Second
 )
 
 // resultDomain is one kind of cached response.
@@ -580,10 +583,49 @@ func (s *Server) refreshResults(ctx context.Context, sweeps bool) {
 	s.refreshResultsWhile(ctx, cache, free, sweep)
 }
 
+// derivedFollower rebuilds, once a change to the catalog has settled and
+// nobody is waiting for a query, the derived values that requests compute
+// before they can answer (the Usage rows take seconds, and half a minute
+// after a restart). The maintenance pass warms them too, but only after all
+// its other work, which a backlog or a schedule can hold off indefinitely.
+type derivedFollower struct {
+	started, opened bool
+	seen, rebuilt   int64
+}
+
+func (s *Server) rebuildDerivedAfterChange(ctx context.Context, f *derivedFollower, free func() bool) {
+	version, err := s.Catalog.catalogVersion(ctx)
+	if err != nil {
+		return
+	}
+	if f.started && version != f.seen {
+		// Not settled: more changes may follow, each undoing a rebuild.
+		f.seen = version
+		return
+	}
+	f.started, f.seen = true, version
+	if f.opened && version == f.rebuilt || !free() || s.Catalog.projectionBatches.Load() > 0 {
+		return
+	}
+	build, cancel := context.WithTimeout(backgroundQuery(ctx), resultBuildDeadline)
+	defer cancel()
+	if !f.opened {
+		// What the page the app opens on reads, as the maintenance pass
+		// warms: after a restart nothing has been requested yet.
+		_, _ = s.Catalog.localUsageRows(build)
+	}
+	s.Catalog.recomputeStaleDerived(build)
+	f.opened, f.rebuilt = true, version
+}
+
 func (s *Server) refreshResultsWhile(ctx context.Context, cache *resultCache, free func() bool, sweep *time.Timer) {
-	var swept <-chan time.Time
+	var swept, changed <-chan time.Time
+	var follower derivedFollower
 	if sweep != nil {
 		swept = sweep.C
+		look := time.NewTicker(resultChangeEvery)
+		defer look.Stop()
+		changed = look.C
 	}
 	for {
 		select {
@@ -591,6 +633,8 @@ func (s *Server) refreshResultsWhile(ctx context.Context, cache *resultCache, fr
 			return
 		case <-cache.wake:
 			cache.woke()
+		case <-changed:
+			s.rebuildDerivedAfterChange(ctx, &follower, free)
 		case <-swept:
 			s.sweepResults(ctx)
 			sweep.Reset(resultSweepEvery)

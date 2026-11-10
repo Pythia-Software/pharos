@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -214,6 +215,44 @@ func TestResultCachePolicies(t *testing.T) {
 
 // A card's query is one entry however often the page loads, is served
 // without touching the catalog, and is recomputed after the data changes.
+func TestDerivedValuesAreRebuiltOnceAChangeSettles(t *testing.T) {
+	catalog, config := libraryFixture(t)
+	server := testServer(t, config, catalog)
+	// current reports whether the Usage rows are computed for the catalog as it is.
+	current := func() bool {
+		t.Helper()
+		if _, err := catalog.catalogVersion(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		cache := &catalog.derived
+		cache.mu.Lock()
+		defer cache.mu.Unlock()
+		for key, entry := range cache.entries {
+			if strings.HasPrefix(key, "usage:") {
+				return entry.version == cache.versions.generations.of(derivedKeyGeneration(key))
+			}
+		}
+		return false
+	}
+	var follower derivedFollower
+	busy, free := func() bool { return false }, func() bool { return true }
+	if server.rebuildDerivedAfterChange(t.Context(), &follower, busy); current() {
+		t.Fatal("rebuilt while a query was waiting")
+	}
+	if server.rebuildDerivedAfterChange(t.Context(), &follower, free); !current() {
+		t.Fatal("the Usage rows were not computed after starting")
+	}
+	if _, err := catalog.DB.Exec(`UPDATE workspaces SET title='Renamed' WHERE id='c'`); err != nil {
+		t.Fatal(err)
+	}
+	if server.rebuildDerivedAfterChange(t.Context(), &follower, free); current() {
+		t.Fatal("rebuilt for a change that had not settled")
+	}
+	if server.rebuildDerivedAfterChange(t.Context(), &follower, free); !current() {
+		t.Fatal("the Usage rows were not rebuilt once the change settled")
+	}
+}
+
 func TestQueryResultStampNamesZoneAndBuild(t *testing.T) {
 	at := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	zones := map[string]string{}

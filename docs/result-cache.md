@@ -77,6 +77,15 @@ three days that have gone stale since, but only those someone came back to
 tried once is stored, and refreshed if it is asked for again, but creates no
 standing background work.
 
+The same refresher keeps the derived values behind the answers ready. Some
+datasets are computed in memory before any query over them can run (the
+Usage rows take seconds, and half a minute after a restart). Every few
+seconds the refresher looks at the catalog; once a change has settled, and
+while nobody is waiting for a query, it recomputes the derived values
+requested in the last half hour, and after a restart the Usage rows. A
+request for a filter nobody has asked for before then waits only for its
+own query.
+
 **7. Entries leave by disuse or size.** An entry nobody asks for in 14 days
 is dropped, and the least recently used go first once the file holds more
 than 256 MB of bodies. An entry stored under another domain version is not

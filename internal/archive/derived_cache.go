@@ -578,6 +578,13 @@ func (c *Catalog) warmCaches(ctx context.Context) {
 		_, _ = c.allWorkspaceUsage(ctx)
 		_ = c.currentToolRollup(ctx)
 	}
+	c.recomputeStaleDerived(ctx)
+}
+
+// recomputeStaleDerived recomputes the derived values requested recently
+// that a change has left behind, such as the Usage rows, so that a request
+// finds them ready instead of computing them itself.
+func (c *Catalog) recomputeStaleDerived(ctx context.Context) {
 	cache := &c.derived
 	cache.mu.Lock()
 	stale := map[string]func(context.Context) (any, error){}
