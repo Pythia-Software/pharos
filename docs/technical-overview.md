@@ -318,7 +318,6 @@ GET  /api/activity
 GET  /api/library/status
 GET  /api/health/drive
 GET  /api/mcp
-GET  /api/mcp/calls?limit=&offset=&tool=&status=
 POST /api/mcp/enabled
 POST /api/sources/{name}/sync
 POST /api/sources/{name}/enabled
