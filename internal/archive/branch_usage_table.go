@@ -54,7 +54,7 @@ func (c *Catalog) branchUsageRows(ctx context.Context) ([]map[string]any, error)
 			}
 			shares[session][key][firstString(row["branch"])] += integer(row["tokens"])
 		}
-		ledger, err := c.usageLedger(nil)
+		ledger, err := c.usageLedger(ctx, nil)
 		if err != nil {
 			return nil, err
 		}
