@@ -731,13 +731,14 @@ func stashCommit(subject string, parents int) bool {
 // per file; then the commits only the reflogs still hold, as replaced: those
 // a rebase, amend or reset replaced, which is where a hash a session printed
 // may now be. Git stash's commits are left out. Reflogs that cannot be read
-// in time leave out only theirs.
+// in time leave out only theirs. Its logs, like readSquashes's, turn off
+// log.showSignature, which would run the repository's signing program.
 func readGitCommits(ctx context.Context, dir, after string, heads ...string) (map[string]*gitCommit, error) {
 	commits := map[string]*gitCommit{}
 	for _, replaced := range []bool{false, true} {
-		args := append([]string{"-c", "core.quotePath=false", "log", "--branches", "--remotes", "--tags"}, heads...)
+		args := append([]string{"-c", "core.quotePath=false", "-c", "log.showSignature=false", "log", "--branches", "--remotes", "--tags"}, heads...)
 		if replaced {
-			args = append([]string{"-c", "core.quotePath=false", "log", "--reflog", "--not", "--branches", "--remotes", "--tags"}, heads...)
+			args = append([]string{"-c", "core.quotePath=false", "-c", "log.showSignature=false", "log", "--reflog", "--not", "--branches", "--remotes", "--tags"}, heads...)
 		}
 		output, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, append(append(args, after, "--no-renames", "--numstat",
 			"--format=%x1e%H%x1f%P%x1f%at%x1f%ct%x1f%T%x1f%ae%x1f%s"), gitRawDiff...)...)
@@ -1438,7 +1439,7 @@ func readSquashes(ctx context.Context, dir, after, tip string, commits map[strin
 			}
 		}
 	}
-	output, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, "log", "--no-merges", after, "--format=%x1e%H%x1f%B", tip)
+	output, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, "-c", "log.showSignature=false", "log", "--no-merges", after, "--format=%x1e%H%x1f%B", tip)
 	if err != nil {
 		return nil, err
 	}
