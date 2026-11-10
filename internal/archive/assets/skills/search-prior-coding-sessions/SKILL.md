@@ -145,7 +145,8 @@ read before advancing to the next window.
   `commit_links` give the same for one workspace.
 - **Counts and cost by outcome:** `query_statistics` takes `outcome_label`
   as a filter and in `group_by`, with `project`; for example
-  `group_by: ["outcome_label"]` with a `cost_usd` sum. The `outcome` filter
+  `group_by: ["outcome_label"]` with a `cost_usd` sum. The search tools take
+  it as a filter too, and then answer with `query_statistics` cards. The `outcome` filter
   is different: text a source reported about the work.
 - **Spend by branch:** `get_branch_spend` with `project` gives cost, tokens
   and sessions per branch, and how much spend has no recorded branch.

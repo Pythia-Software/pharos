@@ -794,7 +794,10 @@ Every other tool takes the new facts too:
   Codex and Antigravity work.
 - `query_statistics`, `search_work` and `search_conversations` take
   `outcome_label` as a filter; `query_statistics` also selects it and groups
-  by it, with `project`. The older `outcome` filter is reported text.
+  by it, with `project`. The search tools hand a call with it to
+  `query_statistics`, as they do metric filters, so it returns that tool's
+  cards rather than search cards; both schemas say so. The older `outcome`
+  filter is reported text.
 - `get_work_detail` has `session_outcome` (label, evidence, tier, local Git
   state and facts), `edited_files` and `commit_links` sections.
 - The bundled skill (`assets/skills/search-prior-coding-sessions`) starts

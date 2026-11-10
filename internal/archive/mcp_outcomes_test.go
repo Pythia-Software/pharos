@@ -87,6 +87,14 @@ func TestOutcomeToolsForAgents(t *testing.T) {
 	if items := kept["items"].([]any); len(items) != 1 {
 		t.Fatalf("search_work outcome_label: %#v", kept)
 	}
+	// Both search tools declare the filter they take.
+	for _, tool := range mcpTools {
+		if name := firstString(tool["name"]); name == "search_work" || name == "search_conversations" {
+			if tool["inputSchema"].(map[string]any)["properties"].(map[string]any)["outcome_label"] == nil {
+				t.Errorf("%s does not declare outcome_label", name)
+			}
+		}
+	}
 	if _, err := callMCP(library.catalog, "query_statistics", map[string]any{"outcome_label": "merged"}); err == nil {
 		t.Fatal("an unknown outcome label should be an error")
 	}
