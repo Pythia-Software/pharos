@@ -380,6 +380,23 @@ func TestSessionGitNotChecked(t *testing.T) {
 	if got := state("gone"); !strings.HasPrefix(got, "checked|<nil>|") {
 		t.Fatalf("after the repository changed: %s", got)
 	}
+	// A scan that fails afterwards keeps the commits it did not look at, and
+	// how far back they were read.
+	since := func() string {
+		t.Helper()
+		rows, err := queryMaps(f.catalog.DB, `SELECT history_since FROM git_repository_scans WHERE repository_id='repo-app' AND host_id=?`, currentHost().ID)
+		if err != nil || len(rows) != 1 {
+			t.Fatal(rows, err)
+		}
+		return firstString(rows[0]["history_since"])
+	}
+	checkedSince := since()
+	if err := f.catalog.writeGitScan(t.Context(), "repo-app", currentHost().ID, "failed", gitScan{Status: "not_checked", Reason: "Git took too long to read this repository."}); err != nil {
+		t.Fatal(err)
+	}
+	if got := since(); checkedSince == "" || got != checkedSince || countRows(t, f.catalog, `SELECT COUNT(*) FROM git_commit_files WHERE repository_id='repo-app'`) == 0 {
+		t.Fatalf("a failed scan's history_since %q, want %q", got, checkedSince)
+	}
 	// A repository session that changed nothing has no commits to look for.
 	f.session("idle", "")
 	f.refresh()

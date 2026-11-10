@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -264,6 +265,64 @@ func TestProjectParityWithoutGit(t *testing.T) {
 	}
 	if _, err := callMCP(library.catalog, "search_conversations", map[string]any{"project": "~/nowhere-at-all"}); err == nil || !strings.Contains(err.Error(), "list_projects") {
 		t.Fatalf("an unknown project should be an error naming list_projects: %v", err)
+	}
+
+	// A session that wrote a file: its outcome and the file's history come
+	// from the transcript alone, with nothing reported missing.
+	plan := filepath.Join(library.folders["notes"], "plan.md")
+	writeClaudeSession(t, library.claude, "s-plan", claudeEditSession("s-plan", library.folders["notes"], plan, []string{"# Plan", "", "- one", "- two"}, 20))
+	library.ingestClaude(t)
+	if err := library.catalog.ensureToolRollup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	listed := callProjectTool(t, library.catalog, "list_outcomes", map[string]any{"project": notes})
+	if integer(listed["total"]) != 2 {
+		t.Fatalf("list_outcomes in a folder: %#v", listed)
+	}
+	for _, item := range listed["items"].([]any) {
+		row := item.(map[string]any)
+		if row["git_check"] != "not_applicable" || row["git_check_reason"] != nil || firstString(row["outcome_why"]) == "" || row["outcome_label"] == "unknown" {
+			t.Fatalf("an outcome without Git: %#v", row)
+		}
+	}
+	// The project is named as any project filter takes it: its name, its
+	// folder's absolute path, or part of it.
+	for _, project := range []string{library.folders["notes"], "notes"} {
+		if files := callProjectTool(t, library.catalog, "get_file_history", map[string]any{"path": "plan.md", "project": project})["files"].([]any); len(files) != 1 {
+			t.Fatalf("get_file_history project=%q: %#v", project, files)
+		}
+	}
+	history := callProjectTool(t, library.catalog, "get_file_history", map[string]any{"path": "plan.md", "project": notes})
+	files := history["files"].([]any)
+	if len(files) != 1 {
+		t.Fatalf("get_file_history without Git: %#v", history)
+	}
+	file := files[0].(map[string]any)
+	session := file["sessions"].([]any)[0].(map[string]any)
+	if file["project"] != notes || file["git"].(map[string]any)["status"] != "not_applicable" || integer(session["lines_added"]) != 4 ||
+		!strings.Contains(firstString(session["url"]), "call=") || strings.Contains(firstString(history["note"]), "No workspace") {
+		t.Fatalf("file history without Git: %#v", history)
+	}
+	// Another project hides the file: the answer says it is edited
+	// elsewhere, not that nobody edited it.
+	hidden := callProjectTool(t, library.catalog, "get_file_history", map[string]any{"path": "plan.md", "project": research})
+	if len(hidden["files"].([]any)) != 0 || !strings.Contains(firstString(hidden["note"]), "other projects") {
+		t.Fatalf("get_file_history in another project: %#v", hidden)
+	}
+	// The endpoint answers as the tool does, and a project that names
+	// nothing is an error naming list_projects, as for every project filter.
+	for _, check := range []struct {
+		project string
+		code    int
+		want    string
+	}{{notes, http.StatusOK, `"not_applicable"`}, {"~/nowhere-at-all", http.StatusBadRequest, "list_projects"}} {
+		request := httptest.NewRequest(http.MethodGet, "/api/file-history?path=plan.md&project="+url.QueryEscape(check.project), nil)
+		request.Header.Set("Authorization", "Bearer test-token")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != check.code || !strings.Contains(response.Body.String(), check.want) {
+			t.Fatalf("file history in %s: %d %s", check.project, response.Code, response.Body.String())
+		}
 	}
 }
 

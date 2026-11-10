@@ -107,6 +107,8 @@ export const viewFields: Record<string, ViewField> = {
   habits_punchcard_days: field("habits_punchcard_days", ["analyze/habits", "analyze/query/rhythm"], "enum", "Days the Habits punchcard and automation table cover, through today, or all for every day captured.", ["7", "30", "90", "365", "all"], "90"),
   habits_shape_days: field("habits_shape_days", ["analyze/habits", "analyze/query/rhythm"], "enum", "Number of recent days shown in the Habits Your days chart.", ["7", "14", "28", "56", "90"], "28"),
   habits_day: field("habits_day", ["analyze/habits", "analyze/query/rhythm"], "text", "The calendar day selected on the Habits page (YYYY-MM-DD): its details, and the control that marks it as a vacation day."),
+  file_history_path: field("file", ["files"], "text", "File History: the file whose workspaces and commits to show. A repository-relative path (src/main.go), a folder path (~/notes/plan.md) or an absolute path; when no path matches exactly, a path ending matches in every project."),
+  file_history_project: field("file_project", ["files"], "text", "File History: only the file in this project (a list_projects name), when several projects hold the path."),
   record_keyword: field("record_{dataset}", ["analyze/query/*"], "json", "Record keyword clause: {field:<text field ID>,draft:<TextSearchDraft>}.")
 };
 // These maps have viewer-dependent initial choices. Capture effective entries

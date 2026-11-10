@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -36,6 +37,20 @@ func claudeSession(session, cwd, branch, text string, minute int) string {
 	}
 	return fmt.Sprintf(`{"type":"user","uuid":"%s-u","sessionId":%q%s,"timestamp":"2026-09-01T00:%02d:00Z","message":{"role":"user","content":%q}}`+"\n", session, session, extra, minute, text) +
 		fmt.Sprintf(`{"type":"assistant","uuid":"%s-a","sessionId":%q%s,"timestamp":"2026-09-01T00:%02d:30Z","message":{"role":"assistant","model":"claude-test","content":"Done."}}`+"\n", session, session, extra, minute)
+}
+
+// claudeEditSession is a Claude Code transcript in cwd whose Edit adds lines
+// to path, with the patch Claude Code records for it.
+func claudeEditSession(session, cwd, path string, lines []string, minute int) string {
+	input, _ := json.Marshal(map[string]any{"file_path": path, "old_string": "", "new_string": strings.Join(lines, "\n")})
+	patch := make([]string, len(lines))
+	for index, line := range lines {
+		patch[index] = "+" + line
+	}
+	result, _ := json.Marshal(map[string]any{"filePath": path, "structuredPatch": []any{map[string]any{"oldStart": 1, "oldLines": 0, "newStart": 1, "newLines": len(lines), "lines": patch}}})
+	return fmt.Sprintf(`{"type":"user","uuid":"%s-u","sessionId":%q,"cwd":%q,"timestamp":"2026-09-01T00:%02d:00Z","message":{"role":"user","content":"Write it down"}}`+"\n", session, session, cwd, minute) +
+		fmt.Sprintf(`{"type":"assistant","uuid":"%s-a","parentUuid":"%s-u","sessionId":%q,"cwd":%q,"timestamp":"2026-09-01T00:%02d:10Z","message":{"id":"%s-m","role":"assistant","model":"claude-test","content":[{"type":"tool_use","id":"%s-t","name":"Edit","input":%s}]}}`+"\n", session, session, session, cwd, minute, session, session, input) +
+		fmt.Sprintf(`{"type":"user","uuid":"%s-r","parentUuid":"%s-a","sessionId":%q,"cwd":%q,"timestamp":"2026-09-01T00:%02d:20Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"%s-t","content":"Updated","is_error":false}]},"toolUseResult":%s}`+"\n", session, session, session, cwd, minute, session, result)
 }
 
 func writeClaudeSession(t *testing.T, dir, session, content string) {

@@ -1,0 +1,245 @@
+package archive
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// fileHistoryHashes reads a history's commits as short hashes, each with
+// its linked sessions.
+func fileHistoryHashes(file map[string]any) []string {
+	result := []string{}
+	for _, item := range file["commits"].([]any) {
+		commit := item.(map[string]any)
+		sessions := []string{}
+		for _, link := range commit["sessions"].([]any) {
+			sessions = append(sessions, firstString(link.(map[string]any)["workspace_id"]))
+		}
+		result = append(result, firstString(commit["hash"])[:7]+" "+strings.Join(sessions, ","))
+	}
+	return result
+}
+
+func fileHistorySessions(file map[string]any) []string {
+	result := []string{}
+	for _, item := range file["sessions"].([]any) {
+		result = append(result, firstString(item.(map[string]any)["workspace_id"]))
+	}
+	return result
+}
+
+func TestFileHistoryWithGit(t *testing.T) {
+	f := newGitFixture(t)
+	repo := f.repo
+	for _, id := range []string{"first", "second", "elsewhere"} {
+		f.session(id, "")
+	}
+	f.edit("first", "main.go", 10)
+	first := repo.commit(9.99, "First", map[string]string{"main.go": "package main\n"})
+	// A failed edit before second's first is not its first edit.
+	execTx(t, f.catalog.DB, `INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status,started_at,
+		path_absolute,repo_path,path_repository_id,path_scope,call_message_id) VALUES('failed','second','second-c',0,'claude','tool','Edit','edit','error','`+daysAgo(5.5)+`','`+
+		filepath.Join(repo.dir, "main.go")+`','main.go','repo-app','repo','failed-m')`)
+	f.edit("second", "main.go", 5)
+	f.edit("second", "main.go", 4.9)
+	second := repo.commit(4.89, "Second", map[string]string{"main.go": "package main\n\nfunc main() {}\n"})
+	// A commit long after any session's edit is the file's history too, with
+	// no session linked to it. A file no session edited is not kept.
+	byHand := repo.commit(2, "By hand", map[string]string{"main.go": "package main\n\nfunc main() { run() }\n"})
+	// A commit no session is linked to is still checked for a revert.
+	revertedAt := time.Now().Add(-36 * time.Hour)
+	repo.git(revertedAt, "revert", "--no-edit", byHand)
+	revert := repo.git(revertedAt, "rev-parse", "HEAD")
+	repo.commit(1, "Unrelated", map[string]string{"other.go": "package other\n"})
+	f.edit("elsewhere", "util.go", 3)
+	// A path ending that sorts before the exact path, and two files that
+	// only end in x.go, with room for one file per answer.
+	f.edit("elsewhere", "a/main.go", 3)
+	f.edit("elsewhere", "a/x.go", 3)
+	f.edit("elsewhere", "b/x.go", 3)
+	override(t, &fileHistoryFiles, 1)
+	// Another checkout of the repository this Mac recorded, where no
+	// session edited.
+	copy := filepath.Join(t.TempDir(), "copy")
+	execTx(t, f.catalog.DB, `INSERT INTO workspace_sightings(workspace_id,host_id,source_name,location,first_seen_at,last_seen_at) VALUES('elsewhere','`+currentHost().ID+`','conductor','`+copy+`','x','x')`)
+	// A patch's second file is recorded only in session_files, placed by
+	// the session's checkout.
+	f.session("patcher", "")
+	execTx(t, f.catalog.DB, `UPDATE workspaces SET location='`+repo.dir+`' WHERE id='patcher'`)
+	f.call("patcher", filepath.Join(repo.dir, "lib.go"), "repo-app", "lib.go", 3.5, "apply_patch", map[string]any{"patch": "*** Begin Patch\n*** Add File: " +
+		filepath.Join(repo.dir, "lib.go") + "\n" + added(code("lib", 0, 2)) + "\n*** Add File: " + filepath.Join(repo.dir, "lib_test.go") + "\n" + added(code("lib_test", 0, 2)) + "\n*** End Patch"}, 4, 0)
+	// A change set that found main.go in second's workspace.
+	execTx(t, f.catalog.DB, `INSERT INTO change_sets(id,workspace_id,classification,created_at) VALUES('set','second','attempted','`+daysAgo(4.9)+`')`,
+		`INSERT INTO change_files(change_set_id,path,status,tracked) VALUES('set','main.go','modified',1)`)
+	repo.git(time.Now(), "update-ref", "refs/remotes/origin/main", "HEAD")
+	f.refresh()
+
+	if stored := countRows(t, f.catalog, `SELECT COUNT(*) FROM git_commit_files WHERE path='other.go'`); stored != 0 {
+		t.Fatalf("kept %d commits of a file no session edited", stored)
+	}
+	// A path in the home folder (~/…) and a path in any recorded checkout
+	// name the repository file too.
+	t.Setenv("HOME", filepath.Dir(repo.dir))
+	for _, path := range []string{"main.go", filepath.Join(repo.dir, "main.go"), "~/" + filepath.Base(repo.dir) + "/main.go", filepath.Join(copy, "main.go")} {
+		history := callProjectTool(t, f.catalog, "get_file_history", map[string]any{"path": path})
+		files := history["files"].([]any)
+		if len(files) != 1 || history["files_truncated"] != false {
+			t.Fatalf("%s: %#v", path, history)
+		}
+		file := files[0].(map[string]any)
+		if got := strings.Join(fileHistorySessions(file), " "); got != "second first" {
+			t.Fatalf("%s sessions: %s", path, got)
+		}
+		latest := file["sessions"].([]any)[0].(map[string]any)
+		if integer(latest["edits"]) != 2 || latest["outcome_label"] != "landed" || !strings.Contains(firstString(latest["url"]), "message=call-") || strings.Contains(firstString(latest["url"]), "failed") {
+			t.Fatalf("latest session: %#v", latest)
+		}
+		// Git was read from a day before the first session edit, and says so.
+		git := file["git"].(map[string]any)
+		since, _ := parseTime(firstString(git["commits_since"]))
+		if git["status"] != "checked" || !since.Before(time.Now().Add(-10*24*time.Hour)) || since.Before(time.Now().Add(-12*24*time.Hour)) {
+			t.Fatalf("git: %#v", git)
+		}
+		want := []string{revert[:7] + " ", byHand[:7] + " ", second[:7] + " second", first[:7] + " first"}
+		if got := fileHistoryHashes(file); strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Fatalf("%s commits: %v, want %v", path, got, want)
+		}
+		if commits := file["commits"].([]any); commits[1].(map[string]any)["reverted_by"] != revert || commits[2].(map[string]any)["reverted_by"] != nil {
+			t.Fatalf("%s revert state: %#v", path, commits)
+		}
+	}
+	for _, path := range []string{"lib_test.go", filepath.Join(repo.dir, "lib_test.go")} {
+		history := callProjectTool(t, f.catalog, "get_file_history", map[string]any{"path": path})
+		files := history["files"].([]any)
+		if len(files) != 1 || strings.Join(fileHistorySessions(files[0].(map[string]any)), " ") != "patcher" ||
+			!strings.Contains(firstString(files[0].(map[string]any)["sessions"].([]any)[0].(map[string]any)["url"]), "message=call-") {
+			t.Fatalf("a patch's second file at %s: %#v", path, history)
+		}
+	}
+	// Without an exact match a path ending matches, and an answer cut at the
+	// file bound says so.
+	endings := callProjectTool(t, f.catalog, "get_file_history", map[string]any{"path": "x.go"})
+	if files := endings["files"].([]any); len(files) != 1 || files[0].(map[string]any)["path"] != "a/x.go" || endings["files_truncated"] != true ||
+		!strings.Contains(firstString(endings["note"]), "More than 1 files") {
+		t.Fatalf("path endings past the bound: %#v", endings)
+	}
+	// File search finds each edited file once, with its project and the
+	// message of its first edit, a change set's find included.
+	for query, want := range map[string]int{"main.go": 3, "lib_test.go": 1} {
+		found, err := f.catalog.LibraryFind(t.Context(), LibraryFindOptions{Kind: "file", Query: query, Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hits := found["items"].([]libraryHit)
+		for _, hit := range hits {
+			if hit.Project == "" || hit.MessageID == "" {
+				t.Fatalf("file search %s: %#v", query, hits)
+			}
+		}
+		if len(hits) != want {
+			t.Fatalf("file search %s: %#v", query, hits)
+		}
+	}
+	// A Library table search, which has no cap, looks up a file's first edit
+	// only for the rows it shows, and they open at it as above.
+	set, err := f.catalog.libraryFindMatches(t.Context(), LibraryFindOptions{Kind: "file", Query: "lib_test.go", WorkspaceRows: true})
+	if err != nil || set.matches["patcher"] == nil || set.matches["patcher"].Hit.MessageID != "" {
+		t.Fatalf("table search: %v %#v", err, set)
+	}
+	rows := []map[string]any{{"id": "patcher"}}
+	if err := f.catalog.attachLibraryFind(t.Context(), set, rows); err != nil {
+		t.Fatal(err)
+	}
+	if hit := rows[0]["find_hit"].(libraryHit); hit.ConversationID != "patcher-c" || !strings.HasPrefix(hit.MessageID, "call-") || hit.Project == "" {
+		t.Fatalf("table search row: %#v", hit)
+	}
+	// A budget too small for one answer is an error, never an empty page or
+	// an answer past it.
+	for tool, args := range map[string]map[string]any{"list_outcomes": {}, "get_file_history": {"path": "main.go"}} {
+		args["max_output_tokens"] = 200
+		if _, err := callMCP(f.catalog, tool, args); err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
+			t.Fatalf("%s within 200 tokens: %v", tool, err)
+		}
+	}
+	// A time with an offset is the instant it names.
+	later := time.Now().Add(time.Hour).In(time.FixedZone("EDT", -4*3600)).Format(time.RFC3339)
+	for args, want := range map[[2]string]int64{{later, ""}: 0, {"", time.Now().UTC().Format("2006-01-02")}: 4} {
+		listed := callProjectTool(t, f.catalog, "list_outcomes", map[string]any{"from": args[0], "to": args[1]})
+		if integer(listed["total"]) != want {
+			t.Fatalf("list_outcomes from %q to %q: %#v", args[0], args[1], listed)
+		}
+	}
+	// A path in no session's edits says so instead of an empty list.
+	none := callProjectTool(t, f.catalog, "get_file_history", map[string]any{"path": "other.go"})
+	if len(none["files"].([]any)) != 0 || !strings.Contains(firstString(none["note"]), "No workspace") {
+		t.Fatalf("unedited file: %#v", none)
+	}
+	if _, err := callMCP(f.catalog, "get_file_history", map[string]any{}); err == nil {
+		t.Fatal("a history without a path should be an error")
+	}
+
+	outcomes := callProjectTool(t, f.catalog, "list_outcomes", map[string]any{"label": "landed"})
+	if integer(outcomes["total"]) != 2 || integer(outcomes["labels"].(map[string]any)["landed"]) != 2 {
+		t.Fatalf("landed outcomes: %#v", outcomes)
+	}
+	asked := callProjectTool(t, f.catalog, "list_outcomes", map[string]any{"workspace_ids": []any{"second"}})
+	items := asked["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("outcomes by ID: %#v", asked)
+	}
+	item := items[0].(map[string]any)
+	commits := item["commits"].([]any)
+	if item["evidence_tier"] != "local_git" || len(commits) != 1 || commits[0].(map[string]any)["counted"] != true ||
+		!strings.HasPrefix(firstString(commits[0].(map[string]any)["hash"]), second) {
+		t.Fatalf("second's evidence: %#v", item)
+	}
+}
+
+func TestFileHistoryWithoutGit(t *testing.T) {
+	f := newOutcomeFixture(t)
+	f.session("drafter", "claude")
+	f.session("editor", "claude")
+	folder := filepath.Join(t.TempDir(), "notes")
+	plan := filepath.Join(folder, "plan.md")
+	f.write("drafter", plan, 20, code("plan", 0, 6))
+	f.edit("editor", plan, "", "", 3, code("plan", 0, 2), code("plan", 100, 4))
+	f.refresh()
+
+	for _, path := range []string{plan, folderKey(plan), "plan.md", "notes/plan.md"} {
+		history := callProjectTool(t, f.catalog, "get_file_history", map[string]any{"path": path})
+		files := history["files"].([]any)
+		if len(files) != 1 {
+			t.Fatalf("%s: %#v", path, history)
+		}
+		file := files[0].(map[string]any)
+		if got := strings.Join(fileHistorySessions(file), " "); got != "editor drafter" {
+			t.Fatalf("%s sessions: %s", path, got)
+		}
+		// Local Git does not apply: no commits, and nothing reads as missing.
+		if git := file["git"].(map[string]any); git["status"] != "not_applicable" || len(file["commits"].([]any)) != 0 {
+			t.Fatalf("%s git: %#v", path, file)
+		}
+		drafter := file["sessions"].([]any)[1].(map[string]any)
+		if integer(drafter["lines_added"]) != 6 || drafter["outcome_label"] == nil {
+			t.Fatalf("drafter: %#v", drafter)
+		}
+	}
+	// Library file search finds the file the sessions edited, each at the
+	// conversation of its first edit, and names its project.
+	found, err := f.catalog.LibraryFind(t.Context(), LibraryFindOptions{Kind: "file", Query: "plan.md", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hits := found["items"].([]libraryHit); len(hits) != 2 || hits[0].ConversationID == "" || hits[0].Path != folderKey(plan) {
+		t.Fatalf("file search: %#v", found)
+	}
+	outcomes := callProjectTool(t, f.catalog, "list_outcomes", map[string]any{})
+	for _, item := range outcomes["items"].([]any) {
+		row := item.(map[string]any)
+		if row["git_check"] != "not_applicable" || row["evidence_tier"] == "local_git" || firstString(row["outcome_why"]) == "" {
+			t.Fatalf("an outcome without Git: %#v", row)
+		}
+	}
+}

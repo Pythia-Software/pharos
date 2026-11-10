@@ -145,7 +145,7 @@
   {
    "id": "recall",
    "label": "Past work",
-   "pages": ["library","work"],
+   "pages": ["library","work","files"],
    "signals": ["recall.history"]
   },
   {

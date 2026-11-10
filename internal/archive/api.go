@@ -348,7 +348,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings", "/ask":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings", "/ask", "/files":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -460,6 +460,23 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/library/recent-conversations":
 		value, err := s.Catalog.recentConversations(r.Context(), s.Config().Labels.Enabled, s.agentEventsEnabled(r.Context()))
 		writeResult(w, map[string]any{"items": value}, err)
+	case path == "/api/file-history":
+		q := r.URL.Query()
+		// A project that names nothing is an error, as for every project
+		// filter, not a file nobody edited.
+		var value map[string]any
+		err := error(nil)
+		if project := q.Get("project"); project != "" {
+			err = s.Catalog.checkProjectFilter(project)
+		}
+		if err == nil {
+			value, err = s.Catalog.FileHistory(r.Context(), FileHistoryOptions{Path: q.Get("path"), Project: q.Get("project"), Limit: queryInt(r, "limit", 50)})
+		}
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+		} else {
+			writeJSON(w, value, http.StatusOK)
+		}
 	case path == "/api/library/find":
 		q := r.URL.Query()
 		options, err := textOptionsFromValues(q, "")

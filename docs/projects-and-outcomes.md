@@ -127,7 +127,8 @@ point metadata.
   folder's key or path (`~`, `~/notes`) names only that project; any other
   text matches by part of a name, as the `repository` filter does.
   `trace_worktree` and `list_findings` stay repository-only: findings are
-  computed per repository.
+  computed per repository. `list_outcomes` and `get_file_history` (below)
+  take `project` too.
 
 ## Evidence tiers
 
@@ -681,6 +682,97 @@ that touched it. Batches grew from 56 ms to over 700 ms, and the full pass
 ran for more than 75 minutes before it was stopped. Facts are now derived
 first and rework judged once per marked session (`session_rework_dirty`).
 
+## File history
+
+"Why is this file like this?" The File history page (`/files?file=…`,
+optionally `&file_project=…`) and the MCP tool `get_file_history` list, for
+a file:
+
+- **Sessions:** every session that edited it through its tool calls
+  (`session_files`), newest first. Each shows its edits, the lines it added
+  and removed, whether it rewrote the whole file, its outcome label with the
+  evidence, and a link into the reader at its first edit of the file. This
+  needs no Git: a file in a plain folder gets the same timeline.
+- **Commits:** in a repository local Git checked on this Mac, every commit
+  that changed the file, with its lines, its revert state, and the sessions
+  linked to it. Mainline state is known only for a commit linked to a
+  session; for any other it is unknown (`on_mainline` null), not "not on
+  mainline". A link below the counting threshold (0.7) shows as a
+  candidate. Outside a repository the page says Git does not apply; in a
+  repository not checked here it gives the reason. Neither is an error or an
+  empty list. The scan reads Git from a day before the repository's first
+  session edit, the window commit linking needs, so the list covers only
+  that time: the page says "since" that date (`git.commits_since`), and that
+  earlier commits are not read. Reading a file's whole history would mean
+  another `git log` per edited file; it is not done.
+
+A path can be repository-relative (`src/main.go`, matching that path in
+every repository), a folder path (`~/notes/plan.md`), or an absolute or
+`~/` path in any checkout this Mac recorded (a repository's known location,
+or a workspace's location or sighting), which maps to its repository file as
+tool call paths do, whether or not a session edited in that checkout. An
+exact match wins; only when nothing matches exactly does a path ending match
+(`index.ts` finding `src/index.ts`), so `src/index.ts` is never crowded out
+by `packages/*/src/index.ts`. A project narrows the match before it is
+bounded at 50 files; more are marked `files_truncated` and the page says
+so. When the project hides every match, the note says the path was edited
+in other projects rather than by nobody, and a project that names nothing
+is an error, as for every project filter. A patch's other files than the
+one its call recorded are found too, and the reader link opens the edit
+call at the file's first edit.
+
+**Storage.** `git_commit_files` holds, per repository, the commits that
+changed a file some session edited there, with lines added and removed. The
+Tier 2 scan already reads `git log --numstat`; it keeps rows for edited
+paths only, so the table grows with the paths agents touched, not with the
+repository. It stores hashes, paths and counts. A commit no session is
+linked to is written to `git_commits` with only its time and revert state:
+the scan checks every commit it stores for a revert (by `git revert`'s
+message or an exact inverse diff), so a stored commit without `reverted_by`
+was checked and not found reverted. Only linked commits are asked about
+mainline.
+
+**Library file search** reads `session_files` as well as `change_files`, so
+Claude Code, Codex and Antigravity edits are found. Each hit opens the
+conversation at its first edit, and a File history link opens the file's
+timeline. A file a change set also found is listed once, with the session's
+project and first edit added to the change set's hit.
+
+**Line-level blame is not built.** It would map a line to its commit with
+`git blame`, then to a session. The commit-to-session links would support
+it: on the calibration sample, counted inferred links matched the hash the
+session printed for 93% to 100% of commits, depending on the rule that
+decided them (see Commit-linking calibration). But blame needs a git process
+per file view, and pages must not run Git on a request. Blaming in the background would mean blaming every edited file at
+every tip, or storing per-line ownership, and the brief forbids storing
+content beyond counts. The commit list per file answers most of the
+question; blame waits until there is a way to precompute it within those
+rules.
+
+## MCP
+
+- `list_projects`: repositories and folders alike (see Where projects
+  appear).
+- `list_outcomes`: sessions newest first with their label, the evidence
+  (`outcome_why`) and its tier, the local Git state with its reason, and
+  the transcript facts, plus counts per label for the filters. Filters:
+  `project`, `label`, `workspace_ids`, `from`, `to`, with `limit`, `offset`
+  and `max_output_tokens`. `from` and `to` are compared as instants, so a
+  timestamp's offset counts; a date `to` includes its day. Asked by
+  `workspace_ids`, each session also lists its linked commits with method,
+  confidence, evidence and whether they count.
+- `get_file_history`: the file timeline above. It sheds the oldest sessions
+  and commits first to fit `max_output_tokens`, marking the file
+  `truncated`, then files past the first. `files_truncated` marks files
+  matched past the bound or shed.
+
+A budget too small for one session, or one file with one session and one
+commit, is an error naming `max_output_tokens`, never an empty page whose
+`next_offset` does not advance.
+
+Both read stored facts only and answer as fully for folders as for
+repositories. The no-git parity test calls both on the folder fixture.
+
 ## What Pharos never does with git
 
 - It never runs `git fetch` or `git pull`, writes notes, installs hooks, or
@@ -717,8 +809,9 @@ If none of your sessions run in a repository, you get:
   see an empty chart, "0 PRs", "0% merged" or a red state. Where the Library
   or a query table has a git column, a folder session shows "Not a
   repository", not 0.
-- **File history:** the timeline of every session that touched a path,
-  built from transcripts.
+- **File history:** the timeline of every session that edited a file, with
+  its lines and outcome, built from transcripts. Library file search finds
+  those files too.
 
 ## Map of existing git behaviour
 
@@ -791,8 +884,9 @@ head in, and writes `main_merge_*`. Its properties:
 
 ### Files
 
-- Library file search (`find_kind=file`), `trace?file=` and the MCP `file`
-  filters read `change_files` only. A change is attributed to a
+- `trace?file=` and the MCP `file` filters read `change_files` only.
+  Library file search (`find_kind=file`) read only `change_files` too,
+  until File history added `session_files` to it. A change is attributed to a
   conversation only when the workspace has one conversation, its work item
   matches, or its time falls within one conversation.
 - `tool_calls` holds `file_path`, `path_absolute`, `repo_path`,
@@ -865,7 +959,8 @@ head in, and writes `main_merge_*`. Its properties:
 | MCP `repository` filters | A folder could not be named, and passing a path returned an error. | `project` filters accept a folder key or path. |
 | Spend by branch | Not available. | Git sessions only; a library without Git sees a note, not an empty chart. |
 | Library `branch_count`, `pr_count` | 0 for folder sessions, the same as a git session with no branch or PR. | (Outcome PR) Shown as "Not a repository". |
-| File search | Found only Conductor sessions. | (Tier 1 PR) Every harness that records tool calls. |
+| File search | Found only Conductor sessions. | Every harness that records tool calls, with a link to the file's history. |
+| File history | Not available. | The same session timeline for folders as for repositories; commits where local Git applies. |
 
 ## Delivery
 

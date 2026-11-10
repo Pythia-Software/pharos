@@ -29,26 +29,33 @@ type LibraryFindOptions struct {
 
 type libraryHit struct {
 	deferredEvidence bool
-	WorkspaceID      string `json:"workspace_id"`
-	ConversationID   string `json:"conversation_id,omitempty"`
-	Title            string `json:"title"`
-	Provider         string `json:"provider,omitempty"`
-	StartedAt        string `json:"started_at,omitempty"`
-	MessageID        string `json:"message_id,omitempty"`
-	Role             string `json:"role,omitempty"`
-	MessageKind      string `json:"message_kind,omitempty"`
-	Snippet          string `json:"snippet,omitempty"`
+	// firstEditOf is the session_files key of an edited file whose first
+	// edit is looked up only for a page row (attachLibraryFind), not for
+	// every workspace a Library table search matches.
+	firstEditOf    string
+	WorkspaceID    string `json:"workspace_id"`
+	ConversationID string `json:"conversation_id,omitempty"`
+	Title          string `json:"title"`
+	Provider       string `json:"provider,omitempty"`
+	StartedAt      string `json:"started_at,omitempty"`
+	MessageID      string `json:"message_id,omitempty"`
+	Role           string `json:"role,omitempty"`
+	MessageKind    string `json:"message_kind,omitempty"`
+	Snippet        string `json:"snippet,omitempty"`
 	// Highlights are the query's matches in Snippet, as UTF-16 offsets so a
 	// browser can mark them. Only Library rows carry them (attach).
-	Highlights  [][2]int `json:"highlights,omitempty"`
-	Path        string   `json:"path,omitempty"`
-	OldPath     string   `json:"old_path,omitempty"`
-	URL         string   `json:"url,omitempty"`
-	URLSource   string   `json:"url_source,omitempty"`
-	ToolName    string   `json:"tool_name,omitempty"`
-	ToolCallID  string   `json:"tool_call_id,omitempty"`
-	Attribution string   `json:"attribution,omitempty"`
-	Count       int      `json:"count"`
+	Highlights [][2]int `json:"highlights,omitempty"`
+	Path       string   `json:"path,omitempty"`
+	OldPath    string   `json:"old_path,omitempty"`
+	// Project names the file's project for a file sessions edited, so its
+	// history (FileHistory) can be opened for that file alone.
+	Project     string `json:"project,omitempty"`
+	URL         string `json:"url,omitempty"`
+	URLSource   string `json:"url_source,omitempty"`
+	ToolName    string `json:"tool_name,omitempty"`
+	ToolCallID  string `json:"tool_call_id,omitempty"`
+	Attribution string `json:"attribution,omitempty"`
+	Count       int    `json:"count"`
 }
 
 var libraryWords = regexp.MustCompile(`[\pL\pN]+`)
@@ -392,6 +399,37 @@ func (c *Catalog) findFiles(ctx context.Context, o LibraryFindOptions) ([]librar
 			hits = append(hits, hit)
 		}
 	}
+	edited, err := c.findEditedFiles(ctx, o, scope, args)
+	if err != nil {
+		return nil, err
+	}
+	// A file a change set found is found once, with what the session's
+	// edits add: its project, and its first edit's conversation and message
+	// where the change set had no conversation or the same one.
+	edits := map[string]libraryHit{}
+	for _, hit := range edited {
+		edits[hit.WorkspaceID+"\x00"+hit.Path] = hit
+	}
+	for index := range hits {
+		hit := &hits[index]
+		edit, ok := edits[hit.WorkspaceID+"\x00"+hit.Path]
+		if !ok {
+			continue
+		}
+		hit.Project, hit.firstEditOf = edit.Project, edit.firstEditOf
+		if edit.ConversationID != "" && (hit.ConversationID == "" || hit.ConversationID == edit.ConversationID) {
+			hit.ConversationID, hit.MessageID, hit.Provider, hit.Attribution = edit.ConversationID, edit.MessageID, edit.Provider, edit.Attribution
+		}
+	}
+	changed := map[string]bool{}
+	for _, hit := range hits {
+		changed[hit.WorkspaceID+"\x00"+hit.Path] = true
+	}
+	for _, hit := range edited {
+		if !changed[hit.WorkspaceID+"\x00"+hit.Path] {
+			hits = append(hits, hit)
+		}
+	}
 	unique := map[string]*libraryHit{}
 	result := []libraryHit{}
 	for _, hit := range hits {
@@ -412,6 +450,88 @@ func (c *Catalog) findFiles(ctx context.Context, o LibraryFindOptions) ([]librar
 		return result[i].Title+result[i].Path+result[i].ConversationID < result[j].Title+result[j].Path+result[j].ConversationID
 	})
 	return result, nil
+}
+
+// findEditedFiles finds the files sessions edited through their tool calls
+// (session_files), which every agent with file tools records, each at the
+// conversation of its first edit. A file a change set already found in the
+// same workspace is not repeated.
+//
+// A Library table search (WorkspaceRows) has no cap, so a short query can
+// match most of the library: its first edits are looked up only for the
+// page rows shown (attachLibraryFind), not for every match.
+func (c *Catalog) findEditedFiles(ctx context.Context, o LibraryFindOptions, scope string, args []any) ([]libraryHit, error) {
+	comparison := "instr(lower(sf.path),lower(?))>0"
+	if o.CaseSensitive {
+		comparison = "instr(sf.path,?)>0"
+	}
+	capSQL := " LIMIT 5001"
+	edit := firstEditCallSQL("m", firstEditFields)
+	if o.WorkspaceRows {
+		capSQL, edit = "", "''"
+	}
+	scope = strings.ReplaceAll(scope, "cs.workspace_id", "sf.workspace_id")
+	rows, err := queryMapsContext(ctx, c.reader(), `WITH matching AS (
+		SELECT sf.workspace_id,sf.file_key,sf.path,sf.repository_id,sf.first_edit_at,sf.edits FROM session_files sf
+		WHERE (`+comparison+`)`+scope+` AND sf.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
+		ORDER BY sf.last_edit_at DESC`+capSQL+`
+	) SELECT m.workspace_id,m.file_key,m.path,m.edits,w.title,`+projectNameSQL("w")+` project,`+edit+` edit
+		FROM matching m JOIN workspaces w ON w.id=m.workspace_id`+projectJoin("w"), append([]any{o.Query}, args[2:]...)...)
+	if err != nil {
+		return nil, err
+	}
+	if !o.WorkspaceRows && len(rows) > 5000 {
+		*o.limited = true
+	}
+	hits := make([]libraryHit, 0, len(rows))
+	for _, row := range rows {
+		hit := libraryHit{WorkspaceID: firstString(row["workspace_id"]), Title: firstString(row["title"]), Path: firstString(row["path"]), Project: firstString(row["project"]),
+			Count: int(integer(row["edits"])), Attribution: "workspace"}
+		if o.WorkspaceRows {
+			hit.firstEditOf = firstString(row["file_key"])
+		}
+		hit.withFirstEdit(firstString(row["edit"]))
+		hits = append(hits, hit)
+	}
+	return hits, nil
+}
+
+// firstEditFields are what a file hit takes from its first edit call
+// (firstEditCallSQL): its conversation, message and provider.
+const firstEditFields = "t.conversation_id||char(31)||COALESCE(t.call_message_id,'')||char(31)||COALESCE(t.provider,'')"
+
+// withFirstEdit opens a hit at its file's first edit (firstEditFields),
+// unless a change set placed it in another conversation.
+func (hit *libraryHit) withFirstEdit(edit string) {
+	parts := strings.Split(edit, "\x1f")
+	if len(parts) != 3 || parts[0] == "" || hit.ConversationID != "" && hit.ConversationID != parts[0] {
+		return
+	}
+	hit.ConversationID, hit.MessageID, hit.Provider, hit.Attribution = parts[0], parts[1], parts[2], "conversation"
+}
+
+// firstEdits looks up the first edit of the files deferred hits name
+// (firstEditOf), keyed by workspace and file.
+func (c *Catalog) firstEdits(ctx context.Context, hits []libraryHit) (map[[2]string]string, error) {
+	pairs := [][2]string{}
+	for _, hit := range hits {
+		if hit.firstEditOf != "" {
+			pairs = append(pairs, [2]string{hit.WorkspaceID, hit.firstEditOf})
+		}
+	}
+	edits := map[[2]string]string{}
+	if len(pairs) == 0 {
+		return edits, nil
+	}
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT sf.workspace_id,sf.file_key,`+firstEditCallSQL("sf", firstEditFields)+` edit
+		FROM json_each(?) p JOIN session_files sf ON sf.workspace_id=json_extract(p.value,'$[0]') AND sf.file_key=json_extract(p.value,'$[1]')`, jsonText(pairs))
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		edits[[2]string{firstString(row["workspace_id"]), firstString(row["file_key"])}] = firstString(row["edit"])
+	}
+	return edits, nil
 }
 
 func (c *Catalog) findURLs(ctx context.Context, o LibraryFindOptions) ([]libraryHit, error) {

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,10 +37,12 @@ import (
 // is checked when any Mac checked it.
 //
 // Only facts are stored: hashes, times, counts, the files a link shares and
-// how a commit was reverted. No commit message, diff or file content.
+// how a commit was reverted. No commit message, diff or file content. For
+// file history, every commit that changed a file some session edited keeps
+// that file's path and line counts (git_commit_files).
 
 // outcomeGitVersion scans every repository again when the rules change.
-const outcomeGitVersion = "2"
+const outcomeGitVersion = "3"
 
 // outcomeGitGrace is how long after a session's last edit a commit can still
 // be inferred to be its own: an agent or person commits soon after the work.
@@ -96,6 +99,15 @@ CREATE TABLE IF NOT EXISTS session_git(
   reverted_commits INTEGER NOT NULL DEFAULT 0,
   mainline_unknown INTEGER NOT NULL DEFAULT 0,
   checked_at TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS git_commit_files(
+  repository_id TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  path TEXT NOT NULL,
+  lines_added INTEGER NOT NULL,
+  lines_removed INTEGER NOT NULL,
+  PRIMARY KEY(repository_id,path,hash)) WITHOUT ROWID;
+-- File history finds a file by its path (findFileHistoryKeys).
+CREATE INDEX IF NOT EXISTS session_files_path_idx ON session_files(path);
 CREATE TABLE IF NOT EXISTS git_repository_scans(
   repository_id TEXT NOT NULL,
   host_id TEXT NOT NULL,
@@ -103,6 +115,7 @@ CREATE TABLE IF NOT EXISTS git_repository_scans(
   status TEXT NOT NULL,
   reason TEXT,
   scanned_at TEXT NOT NULL,
+  history_since TEXT,
   PRIMARY KEY(repository_id,host_id)) WITHOUT ROWID;
 `
 
@@ -163,6 +176,12 @@ type gitScan struct {
 	Status, Reason string
 	Commits        map[string]*gitCommit
 	Links          []gitLink
+	// Edited are the repository's files some session edited: the commits
+	// that changed them are kept for file history.
+	Edited map[string]bool
+	// Since is how far back the scan read: commits before it are not
+	// stored, so file history says it covers only the time since.
+	Since time.Time
 }
 
 var errGitTimeout = errors.New("git timed out")
@@ -561,28 +580,51 @@ func scanRepository(ctx context.Context, clones []*gitClone, sessions map[string
 			}
 		}
 	}
-	scan := gitScan{Status: "checked", Commits: commits}
+	scan := gitScan{Status: "checked", Commits: commits, Edited: map[string]bool{}, Since: since.Add(-24 * time.Hour)}
+	for _, id := range members {
+		for path := range sessions[id].Files[repository] {
+			scan.Edited[path] = true
+		}
+	}
 	scan.Links, _ = inferLinks(ctx, clones, sessions, members, repository, commits)
 	linked := map[string]*gitCommit{}
 	for _, link := range scan.Links {
 		linked[link.Hash] = commits[link.Hash]
 	}
-	if len(linked) == 0 {
+	if len(linked) > 0 {
+		for _, clone := range clones {
+			if err := markMainline(ctx, clone.Dir, after, clone.holding(linked), clone.Shallow); err != nil {
+				return gitScan{Status: "not_checked", Reason: gitFailure(err)}
+			}
+		}
+		scan.Links = linkCopiesOnce(scan.Links, linked)
+		linked = map[string]*gitCommit{}
+		for _, link := range scan.Links {
+			linked[link.Hash] = commits[link.Hash]
+		}
+	}
+	// Every commit stored is asked whether it was reverted: the linked ones
+	// and, for file history, those that changed an edited file, so a stored
+	// commit without reverted_by was checked and not found reverted. Only
+	// linked commits are asked about mainline.
+	stored := maps.Clone(linked)
+	for hash, commit := range commits {
+		for path := range commit.Files {
+			if scan.Edited[path] {
+				stored[hash] = commit
+				break
+			}
+		}
+	}
+	if len(stored) == 0 {
 		return scan
 	}
 	for _, clone := range clones {
-		if err := markMainline(ctx, clone.Dir, after, clone.holding(linked), clone.Shallow); err != nil {
+		if err := markReverts(ctx, clone.Dir, after, clone.holding(commits), clone.holding(stored)); err != nil {
 			return gitScan{Status: "not_checked", Reason: gitFailure(err)}
 		}
-	}
-	scan.Links = linkCopiesOnce(scan.Links, linked)
-	linked = map[string]*gitCommit{}
-	for _, link := range scan.Links {
-		linked[link.Hash] = commits[link.Hash]
-	}
-	for _, clone := range clones {
-		if err := markReverts(ctx, clone.Dir, after, clone.holding(commits), clone.holding(linked)); err != nil {
-			return gitScan{Status: "not_checked", Reason: gitFailure(err)}
+		if len(linked) == 0 {
+			continue
 		}
 		if notes, err := outcomeGitCommand(ctx, clone.Dir, outcomeGitShortTimeout, nil, "notes", "--ref=ai", "list"); err == nil {
 			for _, line := range strings.Split(string(notes), "\n") {
@@ -960,10 +1002,11 @@ func patchIDs(ctx context.Context, dir string, reverse bool, listed []string, re
 
 var revertLine = regexp.MustCompile(`(?m)^This reverts commit ([0-9a-f]{7,64})`)
 
-// markReverts records which linked commits a later commit reverted: by the
-// message git revert writes, or by a diff that is the exact inverse of the
-// commit's (same files, lines added and removed swapped, and the inverse
-// patch-id equal to the commit's).
+// markReverts records which of the given commits (scanRepository passes
+// every commit it stores) a later commit reverted: by the message git revert
+// writes, or by a diff that is the exact inverse of the commit's (same
+// files, lines added and removed swapped, and the inverse patch-id equal to
+// the commit's).
 func markReverts(ctx context.Context, dir, after string, commits, linked map[string]*gitCommit) error {
 	messages, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, "log", "--branches", "--remotes", "--tags", after,
 		"--grep=This reverts commit", "--format=%x1e%H%x1f%B")
@@ -1048,9 +1091,16 @@ func (c *Catalog) writeGitScan(ctx context.Context, repository, host, key string
 				return err
 			}
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO git_repository_scans(repository_id,host_id,scan_key,status,reason,scanned_at) VALUES(?,?,?,?,?,?)
-			ON CONFLICT(repository_id,host_id) DO UPDATE SET scan_key=excluded.scan_key,status=excluded.status,reason=excluded.reason,scanned_at=excluded.scanned_at`,
-			repository, host, key, scan.Status, nilIfEmpty(scan.Reason), now())
+		var since any
+		if !scan.Since.IsZero() {
+			since = scan.Since.UTC().Format(time.RFC3339)
+		}
+		// A failed scan keeps the commits an earlier one stored, so it keeps
+		// how far back they were read too.
+		_, err := tx.ExecContext(ctx, `INSERT INTO git_repository_scans(repository_id,host_id,scan_key,status,reason,scanned_at,history_since) VALUES(?,?,?,?,?,?,?)
+			ON CONFLICT(repository_id,host_id) DO UPDATE SET scan_key=excluded.scan_key,status=excluded.status,reason=excluded.reason,scanned_at=excluded.scanned_at,
+			history_since=CASE WHEN excluded.status='checked' THEN excluded.history_since ELSE git_repository_scans.history_since END`,
+			repository, host, key, scan.Status, nilIfEmpty(scan.Reason), now(), since)
 		return err
 	})
 }
@@ -1114,9 +1164,24 @@ func writeGitLinks(ctx context.Context, tx *sql.Tx, repository, host string, sca
 	}
 	// The commits of this scan's links, as it read them; another Mac's
 	// commits that a kept link still names stay as that Mac read them.
+	// Commits no session is linked to are kept too where they changed an
+	// edited file, for file history, with each such file's lines and their
+	// revert state but without a mainline answer.
 	linked := map[string]bool{}
 	for _, link := range scan.Links {
 		linked[link.Hash] = true
+	}
+	files := map[[2]string][2]int64{}
+	for hash, commit := range scan.Commits {
+		for path, lines := range commit.Files {
+			if scan.Edited[path] {
+				files[[2]string{hash, path}] = lines
+				linked[hash] = true
+			}
+		}
+	}
+	if err := writeGitCommitFiles(ctx, tx, repository, files); err != nil {
+		return err
 	}
 	kept, err := queryMapsContext(ctx, tx, "SELECT DISTINCT hash FROM session_commit_links WHERE repository_id=?", repository)
 	if err != nil {
@@ -1151,6 +1216,33 @@ func writeGitLinks(ctx context.Context, tx *sql.Tx, repository, host string, sca
 	for _, hash := range hashes {
 		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO git_commits(repository_id,hash,`+strings.Join(gitCommitColumns, ",")+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			append([]any{repository, hash}, gitCommitValues(scan.Commits[hash])...)...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeGitCommitFiles makes a repository's git_commit_files hold files,
+// writing only the rows that changed.
+func writeGitCommitFiles(ctx context.Context, tx *sql.Tx, repository string, files map[[2]string][2]int64) error {
+	stored, err := queryMapsContext(ctx, tx, "SELECT hash,path,lines_added,lines_removed FROM git_commit_files WHERE repository_id=?", repository)
+	if err != nil {
+		return err
+	}
+	want := maps.Clone(files)
+	for _, row := range stored {
+		id := [2]string{firstString(row["hash"]), firstString(row["path"])}
+		if lines, ok := want[id]; ok && integer(row["lines_added"]) == lines[0] && integer(row["lines_removed"]) == lines[1] {
+			delete(want, id)
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM git_commit_files WHERE repository_id=? AND hash=? AND path=?", repository, id[0], id[1]); err != nil {
+			return err
+		}
+	}
+	for id, lines := range want {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO git_commit_files(repository_id,hash,path,lines_added,lines_removed) VALUES(?,?,?,?,?)`,
+			repository, id[0], id[1], lines[0], lines[1]); err != nil {
 			return err
 		}
 	}

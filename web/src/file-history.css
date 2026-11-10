@@ -1,0 +1,14 @@
+/* File history: a file's sessions and commits, newest first. */
+.file-history-page { min-width: 0; }
+.file-history-page code { font: var(--fs-sm)/1.45 ui-monospace, SFMono-Regular, monospace; overflow-wrap: anywhere; }
+.file-history-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 16px; }
+.file-history-form input { flex: 1 1 260px; min-width: 0; }
+.file-history-file { margin: 0 0 26px; }
+.file-history-file h2 { margin: 0 0 8px; overflow-wrap: anywhere; }
+.file-history-file h3 { margin: 14px 0 6px; font-size: var(--fs-md); }
+.file-history-list { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.file-history-list > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.file-history-list > li:first-child { border-top: 0; }
+.file-history-when { flex: none; min-width: 7em; color: var(--muted); }
+.file-history-outcome { margin-left: auto; white-space: nowrap; }
+.file-history-error { color: var(--bad); }
