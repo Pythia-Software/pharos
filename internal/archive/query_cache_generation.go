@@ -53,6 +53,9 @@ var queryCacheDomains = map[string]string{
 	"message_labels": "labels", "message_labels_models": "labels", "message_labels_conversations": "labels",
 	"message_labels_dirty": "labels", "message_label_facts_dirty": "labels",
 	"agent_events": "events", "agent_event_messages": "events", "agent_event_fact_conversations": "events",
+	// The agent-event ledger is no cached view's source itself; its stamp
+	// triggers (executionDependentsStampTriggers) advance the generation.
+	"agent_events_conversations": "events",
 }
 
 // cacheGenerations are the cached-view generation and, of its advances, how
