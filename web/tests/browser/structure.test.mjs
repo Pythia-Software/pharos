@@ -699,7 +699,7 @@ const ROUTES = [
   { name: "Workspace Timeline skipping idle time, agent events expanded", url: `${work}?explorer=timeline&disclosures=${idleTimelineDisclosures}`, api: idleTimelineAPI, ready: ".lt-session-node .lt-session-row-label svg.event-link-glyph", open: page => page.locator(".lt-session-ribbon .lt-idle-cut-line").first().waitFor({ state: "attached" }), shown: ".lt-clock-heading .lt-idle-cut time" },
   // Unsettled evidence: an ≈ session count, "+N more" relatives and pending events.
   { name: "Workspace overview with pending evidence", url: work, api: pendingEvidenceApi, ready: ".delegation-table .delegation-relatives" },
-  { name: "Workspace Timeline with pending events", url: `${work}?explorer=timeline`, api: pendingEvidenceApi, ready: ".lt-recursive-lane .delegation-truncation", check: page => page.locator("[role=status].delegation-truncation").first().waitFor() },
+  { name: "Workspace Timeline with pending events", url: `${work}?explorer=timeline`, api: pendingEvidenceApi, ready: ".lt-recursive-lane .lt-session-notice", check: page => page.locator("[role=status].delegation-truncation").first().waitFor() },
   { name: "Workspace sessions sidebar with pending evidence", url: `${work}/conversation/${rootConversation}`, api: pendingEvidenceApi, ready: ".delegation-inbox-heading" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, api: tokenEvidenceAPI, ready: ".conversation-panel .turn" },
