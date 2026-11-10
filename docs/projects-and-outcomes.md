@@ -142,7 +142,10 @@ Each outcome fact is labelled with the tier it came from.
 ### Tier 1: from the transcript
 
 A **session** is a workspace, a Library row: a Claude Code or Codex session,
-a Conductor workspace. Its delegated agents' calls are its own.
+a Conductor workspace. Its delegated agents' calls are its own. "Session"
+is this document's shorthand and the stored names' (`session_outcomes`,
+`session_files`); the page copy, the "why" included, counts workspaces, as
+[the UI vocabulary](ui-vocabulary.md) asks.
 
 - **Files changed.** Each file a successful edit call changed, read from
   `tool_calls` (Claude Code's Edit, Write and MultiEdit, Codex's
@@ -268,8 +271,8 @@ decided it and its tier.
 | Committed | Committed, not on mainline (yet). | Not used. |
 | Changed and kept | Edits with no commit evidence, and no later rework within N days. | Edits with no later rework within N days. |
 | Changed, too recent | Edits less than N days ago, so rework cannot be judged yet. | Same. |
-| Reworked | Its changes were reverted, or later sessions removed at least half of the lines it added within N days. | Later sessions removed at least half of the lines it added within N days. |
-| No changes | The session changed no files. Research, review and questions are normal. | Same. |
+| Reworked | Its changes were reverted, or later workspaces removed at least half of the lines it added within N days. | Later workspaces removed at least half of the lines it added within N days. |
+| No changes | The workspace changed no files. Research, review and questions are normal. | Same. |
 | Unknown | Not enough evidence, for example a harness that records no tool calls, or edits that could not be read line by line. | Same. |
 
 "Changed, too recent" is a revision of the brief's table. Without it, every

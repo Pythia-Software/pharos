@@ -354,7 +354,7 @@ const renderers: RenderRegistry<Row> = {
     if (value == null || value === "") return row.project_kind === "none" ? <span className="qt-muted">No project</span> : "";
     return <span title={row.project_kind === "folder" ? `Folder ${value}` : `Repository ${value}`}>{String(value)}</span>;
   },
-  // A session's outcome label, with the evidence that decided it.
+  // A workspace's outcome label, with the evidence that decided it.
   outcome_label({ value, row }: CellContext<Row>) {
     const outcome = outcomeDisplay(value);
     return <span className={`qt-outcome ${outcome.id}`} title={String(row.outcome_why ?? outcome.description)}>{outcome.label}</span>;

@@ -649,14 +649,14 @@ func outcomeLabelSQL(w string) string {
 func outcomeWhySQL(w string) string {
 	return `COALESCE((SELECT CASE WHEN so.tool_calls_recorded=0 THEN 'This source records no tool calls, so its changes are unknown.'
 		WHEN so.files_changed=0 THEN 'No files edited (transcript).'
-		WHEN so.heavily_reworked=1 THEN printf('Later sessions removed %d of the %d lines it added within %d days (transcript).',so.rework_removed_lines,so.kept_lines,so.rework_days)
+		WHEN so.heavily_reworked=1 THEN printf('Later workspaces removed %d of the %d lines it added within %d days (transcript).',so.rework_removed_lines,so.kept_lines,so.rework_days)
 		WHEN julianday(so.last_edit_at)>julianday('now')-so.rework_days THEN printf('%d %s changed; rework can be judged after %s (transcript).',so.files_changed,
 			CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END,date(so.last_edit_at,printf('+%d days',so.rework_days)))
 		WHEN so.kept_lines IS NULL THEN printf('%d %s changed; its edits could not be read line by line, so rework was not judged (transcript).',so.files_changed,
 			CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END)
-		WHEN so.rework_removed_lines>0 THEN printf('%d %s changed; later sessions removed %d of the %d lines it added within %d days (transcript).',so.files_changed,
+		WHEN so.rework_removed_lines>0 THEN printf('%d %s changed; later workspaces removed %d of the %d lines it added within %d days (transcript).',so.files_changed,
 			CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END,so.rework_removed_lines,so.kept_lines,so.rework_days)
-		ELSE printf('%d %s changed; no later session removed its lines within %d days (transcript).',so.files_changed,CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END,so.rework_days)
+		ELSE printf('%d %s changed; no later workspace removed its lines within %d days (transcript).',so.files_changed,CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END,so.rework_days)
 		END FROM session_outcomes so WHERE so.workspace_id=` + w + `.id),'Not derived yet.')`
 }
 
