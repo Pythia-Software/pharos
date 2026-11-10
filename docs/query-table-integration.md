@@ -92,7 +92,12 @@ remembered in memory under Query Table's count key, the process timezone and
 the `query_cache_generation` read inside the request's own transaction, so a
 reused total always belongs to the snapshot of the page it is returned with.
 Generation triggers cover every table these sources read, or tables kept in
-step with ones that do (see `queryCacheTables`). Map-backed and Usage-hour
+step with ones that do (see `queryCacheTables`). Writes to the label and
+agent-event tables also advance a count of their own (`queryCacheDomains`), so
+sources and derived values that read neither (`queryCoreDatasets`,
+`derivedCoreFamilies`) compare a generation without them and keep their counts
+and values while those passes commit. A source or value that starts reading
+one of those tables must leave its list. Map-backed and Usage-hour
 sources are staged per request, and keyword record search gives each request
 its own plan, so neither uses the cache. A relative filter's count is reused
 only by requests with the same `now`. Tool Calls also answers unfiltered,

@@ -130,8 +130,10 @@ func (cache *libraryCache) close() {
 type dataVersionMonitor struct {
 	monitor *sql.DB
 	conn    *sql.Conn
-	// version is the last read, which cacheVersion repeats during a run.
-	version int64
+	// version is the last read, which cacheVersion repeats during a run;
+	// generations is that read by domain (see cacheGenerations).
+	version     int64
+	generations cacheGenerations
 }
 
 // cacheVersion is the catalog version caches compare against. While this
@@ -167,16 +169,17 @@ func (m *dataVersionMonitor) read(ctx context.Context, path string) (int64, erro
 		}
 		m.monitor, m.conn = monitor, conn
 	}
-	var version int64
-	err := m.conn.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&version)
+	generations, err := readCacheGenerations(ctx, m.conn)
 	if err != nil && strings.Contains(err.Error(), "no such table") {
-		err = m.conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version)
+		generations = cacheGenerations{}
+		err = m.conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&generations.all)
 	}
 	if err != nil {
 		m.close()
 		return 0, err
 	}
-	return version, nil
+	m.generations = generations
+	return generations.all, nil
 }
 
 func (m *dataVersionMonitor) close() {
@@ -185,5 +188,5 @@ func (m *dataVersionMonitor) close() {
 		m.monitor.Close()
 	}
 	m.monitor, m.conn = nil, nil
-	m.version = 0
+	m.version, m.generations = 0, cacheGenerations{}
 }

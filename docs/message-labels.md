@@ -159,7 +159,8 @@ unchanged.
 A queued conversation immediately leaves the stored branch. Its live projection
 supplies observations in the same query snapshot until replacement commits.
 Initial builds and algorithm/calendar upgrades retain the complete live path
-until publication. Maintenance advances the shared query-cache generation.
+until publication. Maintenance advances the shared query-cache generation and
+its label count, so only views that read labels are recomputed.
 Read-only catalogs and CLI reads never start maintenance or inference. The query
 tables are disposable; the classifier ledger remains authoritative.
 

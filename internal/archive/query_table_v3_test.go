@@ -866,6 +866,24 @@ func TestQueryV3ReusesPopulationCountsWithinAGeneration(t *testing.T) {
 	if got := len(rememberedCounts(c, nil)); got != before+4 {
 		t.Fatalf("a later clock reused a relative count: %d counts", got)
 	}
+	// Tool calls read no label or agent-event table, so the passes that write
+	// those leave its counts in place; a source that may read them recounts.
+	if err := c.ensureLabelsSchema(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	run("agent_events", ungroupedRowsRequest(noon))
+	held := len(rememberedCounts(c, nil))
+	execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('labelled','t')`)
+	if got := run("tool_calls", slow); got != total+1000 {
+		t.Fatalf("a label write recounted tool calls: %d, want the remembered %d", got, total+1000)
+	}
+	run("agent_events", ungroupedRowsRequest(noon))
+	if got := len(rememberedCounts(c, nil)); got != held {
+		t.Fatalf("after a label write: %d counts, want %d (tool calls kept, agent events replaced)", got, held)
+	}
+	if stats := c.queryCounts.snapshot(); stats.Generations != 1 {
+		t.Fatalf("a label write should move only the whole generation's counts: %+v", stats)
+	}
 	// A write advances the generation inside the next request's transaction.
 	if _, err := c.DB.Exec("DELETE FROM tool_calls WHERE id=(SELECT id FROM tool_calls WHERE duration_ms>100 LIMIT 1)"); err != nil {
 		t.Fatal(err)

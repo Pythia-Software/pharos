@@ -43,7 +43,7 @@ var labelsContract = strings.Join([]string{labelrt.FramingContract, labelingUnit
 // labels chunks separately too).
 const labelsMergeVersion = "chunk-union-v1"
 
-const labelsSchemaVersion = "5"
+const labelsSchemaVersion = "6"
 
 // labelsSchemaDDL is created by the first labels run, not when a catalog
 // opens: a library that never enables labeling has none of it. Older builds
@@ -151,7 +151,8 @@ func itemDirtyTriggers(dirty, prefix string) []string {
 // replaces the triggers when labelsSchemaVersion changes (version 2 marks
 // only real changes; version 3 adds each model's label order; version 4
 // records the execution dependency digest each conversation was built at;
-// version 5 the members of each component built at).
+// version 5 the members of each component built at; version 6 stamp
+// triggers that advance the labels cache domain).
 func (c *Catalog) ensureLabelsSchema(ctx context.Context) error {
 	if version, err := c.metaValue(ctx, "labels_schema_version"); err == nil && version == labelsSchemaVersion {
 		return nil

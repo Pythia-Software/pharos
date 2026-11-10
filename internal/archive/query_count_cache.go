@@ -14,6 +14,8 @@ import (
 var queryCountLimit = 256
 
 type queryCountKey struct {
+	// scope is which writes advance generation (cacheGenerations.of).
+	scope      string
 	generation int64
 	// timezone is the process's local zone: day, week and month fields
 	// convert with SQLite's 'localtime', which the statement's text does
@@ -29,8 +31,9 @@ type queryCountKey struct {
 // snapshot of the page it is returned with. It lives in memory: requests
 // never write.
 type queryCountCache struct {
-	mu     sync.Mutex
-	newest int64
+	mu sync.Mutex
+	// newest is each scope's latest generation; counts hold only those.
+	newest map[string]int64
 	counts map[queryCountKey]int64
 	// stats tally how counts were answered since the service started, so
 	// the hit rate under real use can be read from /api/diagnostics/query-counts.
@@ -44,7 +47,8 @@ type queryCountStats struct {
 	Fast    int64 `json:"fast"`
 	Counted int64 `json:"counted"`
 	// Generations is how many times a newer data generation cleared the
-	// cache; Remembered is how many counts it holds now.
+	// cache; Remembered is how many counts it holds now. Generation is the
+	// newest counted in any scope (queryCountKey.scope).
 	Generations int64 `json:"generations"`
 	Remembered  int   `json:"remembered"`
 	Generation  int64 `json:"generation"`
@@ -74,21 +78,33 @@ func (c *queryCountCache) snapshot() queryCountStats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	stats := c.stats
-	stats.Remembered, stats.Generation = len(c.counts), c.newest
+	stats.Remembered = len(c.counts)
+	for _, generation := range c.newest {
+		stats.Generation = max(stats.Generation, generation)
+	}
 	return stats
 }
 
 func (c *queryCountCache) put(key queryCountKey, n int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if key.generation < c.newest {
+	newest := c.newest[key.scope]
+	if key.generation < newest {
 		return // a reader of an older snapshot; no later request reads it
 	}
-	if key.generation > c.newest {
-		if c.newest != 0 {
+	if key.generation > newest {
+		if newest != 0 {
 			c.stats.Generations++
 		}
-		c.newest, c.counts = key.generation, nil
+		if c.newest == nil {
+			c.newest = map[string]int64{}
+		}
+		c.newest[key.scope] = key.generation
+		for old := range c.counts {
+			if old.scope == key.scope {
+				delete(c.counts, old)
+			}
+		}
 	} else if len(c.counts) >= queryCountLimit {
 		c.counts = nil
 	}
@@ -101,9 +117,24 @@ func (c *queryCountCache) put(key queryCountKey, n int64) {
 // queryGeneration is the data generation tx reads: every write to a table
 // that a cached query reads advances it (see queryCacheTables).
 func queryGeneration(ctx context.Context, tx *sql.Tx) (int64, error) {
-	var generation int64
-	err := tx.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&generation)
-	return generation, err
+	generations, err := readCacheGenerations(ctx, tx)
+	return generations.all, err
+}
+
+// queryCoreDatasets are the SQL-backed sources whose rows no label or
+// agent-event write changes (queryCacheDomains): their counts outlast those
+// writes. A source that joins such a table must not be listed.
+var queryCoreDatasets = map[string]bool{
+	"tool_calls": true, "tools": true, "messages": true, "writing_messages": true, "skill_usages": true,
+}
+
+// queryDatasetGeneration is the generation scope dataset's counts are
+// current for.
+func queryDatasetGeneration(dataset string) string {
+	if queryCoreDatasets[dataset] {
+		return generationCore
+	}
+	return generationAll
 }
 
 // queryPopulationCount answers what it can of a population count without
@@ -115,13 +146,13 @@ type queryPopulationCount func(ctx context.Context, tx *sql.Tx, p qt.PopulationC
 // fast before running the executor's statement. Use it only for a source
 // whose rows are a function of its SQL, its arguments, the local timezone
 // and tables that advance the generation (see queryCacheTables).
-func (c *Catalog) populationCounter(fast ...queryPopulationCount) qt.PopulationCounter {
+func (c *Catalog) populationCounter(scope string, fast ...queryPopulationCount) qt.PopulationCounter {
 	return qt.PopulationCounterFunc(func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount, count func(context.Context) (int64, error)) (int64, error) {
-		generation, err := queryGeneration(ctx, tx)
+		generations, err := readCacheGenerations(ctx, tx)
 		if err != nil {
 			return 0, err
 		}
-		key := queryCountKey{generation, toolRollupTimezone(), p.Key}
+		key := queryCountKey{scope, generations.of(scope), toolRollupTimezone(), p.Key}
 		if total, ok := c.queryCounts.get(key); ok {
 			return total, nil
 		}
