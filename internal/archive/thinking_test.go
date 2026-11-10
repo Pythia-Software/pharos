@@ -255,13 +255,19 @@ func TestThinkingProjection(t *testing.T) {
 	for _, c := range []struct {
 		limit int
 		where []qt.WhereTerm
-	}{{2, nil}, {50, nil}, {2, []qt.WhereTerm{{Field: "speed", Op: "=", Value: "fast"}}}, {2, []qt.WhereTerm{{Field: "speed", Op: "!=", Value: "fast"}}}} {
+	}{{2, nil}, {50, nil}, {50, []qt.WhereTerm{{Field: "speed", Op: "=", Value: "no such speed"}}}, {2, []qt.WhereTerm{{Field: "speed", Op: "=", Value: "fast"}}}, {2, []qt.WhereTerm{{Field: "speed", Op: "!=", Value: "fast"}}}} {
 		override(t, &newestDepth, func(through int) int { return through })
 		override(t, &maxNewestPage, 500)
+		before := wholeSourceReads.Load()
 		bounded, total := page(c.limit, c.where...)
+		// The whole source is read only when it has rows the newest lack: a
+		// short page that holds every match, or none, has nothing more to find.
+		if again := wholeSourceReads.Load() - before; again != 0 && c.limit == 50 {
+			t.Fatalf("newest %d of %v: read the whole source for a page that already held all %d rows", c.limit, c.where, total)
+		}
 		override(t, &maxNewestPage, 0)
 		whole, all := page(c.limit, c.where...)
-		if len(whole) == 0 || total != all || !slices.Equal(bounded, whole) {
+		if len(whole) == 0 && c.limit != 50 || total != all || !slices.Equal(bounded, whole) {
 			t.Fatalf("newest %d of %v: bounded %v of %d, whole %v of %d", c.limit, c.where, bounded, total, whole, all)
 		}
 	}
