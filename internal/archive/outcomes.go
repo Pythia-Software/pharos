@@ -667,12 +667,14 @@ func bytesValue(value any) []byte {
 // judged, so whether it was kept is unknown.
 // Local Git (session_git, outcome_git.go) adds Landed and Committed, and a
 // revert is rework; a session that committed without editing has changes.
+// Its counts decide only when it was checked, as the Library's columns show
+// them: a later failed scan keeps its links, but not the label.
 func outcomeLabelSQL(w string) string {
 	return `COALESCE((SELECT CASE WHEN so.tool_calls_recorded=0 AND COALESCE(sg.linked_commits,0)=0 THEN 'unknown'
 		WHEN so.files_changed=0 AND COALESCE(sg.linked_commits,0)=0 THEN 'no_changes'
 		WHEN so.heavily_reworked=1 OR sg.reverted_commits>0 THEN 'reworked' WHEN sg.landed_commits>0 THEN 'landed' WHEN sg.linked_commits>0 THEN 'committed'
 		WHEN julianday(so.last_edit_at)>julianday('now')-so.rework_days THEN 'changed_recent'
-		WHEN so.kept_lines IS NULL THEN 'unknown' ELSE 'changed_kept' END FROM session_outcomes so LEFT JOIN session_git sg ON sg.workspace_id=so.workspace_id WHERE so.workspace_id=` + w + `.id),'unknown')`
+		WHEN so.kept_lines IS NULL THEN 'unknown' ELSE 'changed_kept' END FROM session_outcomes so LEFT JOIN session_git sg ON sg.workspace_id=so.workspace_id AND sg.status='checked' WHERE so.workspace_id=` + w + `.id),'unknown')`
 }
 
 // outcomeWhySQL says what decided the label, and from which evidence tier.
@@ -692,7 +694,7 @@ func outcomeWhySQL(w string) string {
 		WHEN so.rework_removed_lines>0 THEN printf('%d %s changed; later workspaces removed %d of the %d lines it added within %d days (transcript).',so.files_changed,
 			` + files + `,so.rework_removed_lines,so.kept_lines,so.rework_days)
 		ELSE printf('%d %s changed; no later workspace removed its lines within %d days (transcript).',so.files_changed,` + files + `,so.rework_days)
-		END FROM session_outcomes so LEFT JOIN session_git sg ON sg.workspace_id=so.workspace_id WHERE so.workspace_id=` + w + `.id),'Not derived yet.')`
+		END FROM session_outcomes so LEFT JOIN session_git sg ON sg.workspace_id=so.workspace_id AND sg.status='checked' WHERE so.workspace_id=` + w + `.id),'Not derived yet.')`
 }
 
 // gitCheckSQL is whether local Git was asked about workspace w's session:

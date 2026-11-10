@@ -419,6 +419,55 @@ func TestSessionGitNotChecked(t *testing.T) {
 	}
 }
 
+// A library drive moves between Macs, each with its own clones. A Mac with
+// no checkout, or whose clone lacks another's branch, leaves that Mac's links
+// and checked state alone; a Mac drops its own link once the commit is gone
+// from its clones.
+func TestSessionGitAcrossMacs(t *testing.T) {
+	f := newGitFixture(t)
+	home := currentHost().ID
+	f.session("work", "")
+	f.edit("work", "main.go", 5)
+	f.repo.git(time.Now(), "checkout", "-q", "-b", "local")
+	commit := f.repo.commit(4.99, "Work", map[string]string{"main.go": "package main\n"})
+	f.repo.git(time.Now(), "checkout", "-q", "main")
+	state := func() string {
+		t.Helper()
+		rows, err := queryMaps(f.catalog.DB, `SELECT status,COALESCE(reason,'') reason,linked_commits FROM session_git WHERE workspace_id='work'`)
+		if err != nil || len(rows) != 1 {
+			t.Fatal(rows, err)
+		}
+		return fmt.Sprintf("%v|%v|%v|%s|%s", rows[0]["status"], rows[0]["reason"], rows[0]["linked_commits"], strings.Join(f.links()["work"], ","), f.labels()["work"][0])
+	}
+	f.refresh()
+	want := "checked||1|" + commit[:7] + " inferred 0.7|committed"
+	if got := state(); got != want {
+		t.Fatalf("first Mac: %s", got)
+	}
+	useHost(t, "host_other_mac")
+	f.refresh()
+	if got := state(); got != want {
+		t.Fatalf("a Mac without a checkout: %s", got)
+	}
+	other := filepath.Join(t.TempDir(), "other")
+	f.repo.git(time.Now(), "clone", "-q", "--single-branch", "--branch", "main", f.repo.dir, other)
+	execTx(t, f.catalog.DB, `INSERT INTO workspace_sightings(workspace_id,host_id,source_name,location,first_seen_at,last_seen_at) VALUES('work','host_other_mac','claude','`+other+`','x','x')`)
+	f.refresh()
+	if got := state(); got != want || countRows(t, f.catalog, `SELECT COUNT(*) FROM git_repository_scans WHERE host_id='host_other_mac' AND status='checked'`) != 1 {
+		t.Fatalf("a Mac whose clone lacks the branch: %s", got)
+	}
+	useHost(t, home)
+	f.refresh()
+	if got := state(); got != want {
+		t.Fatalf("back on the first Mac: %s", got)
+	}
+	f.repo.git(time.Now(), "branch", "-q", "-D", "local")
+	f.refresh()
+	if got := state(); got != "checked||0||changed_recent" {
+		t.Fatalf("after the branch was deleted: %s", got)
+	}
+}
+
 // An unchanged repository is not scanned again, and a new commit or a
 // changed session scans it again.
 func TestSessionGitScansOnlyWhatChanged(t *testing.T) {
@@ -453,11 +502,25 @@ func TestSessionGitScansOnlyWhatChanged(t *testing.T) {
 	if logs != 0 || generation() != before {
 		t.Fatalf("an unchanged repository read its log %d times, generation %d to %d", logs, before, generation())
 	}
+	// A scan rewrites only the links and commits that changed: a commit
+	// that links to no session writes nothing, and the views stay.
+	execTx(t, f.catalog.DB, `CREATE TABLE link_writes(n INTEGER)`,
+		`CREATE TRIGGER links_inserted AFTER INSERT ON session_commit_links BEGIN INSERT INTO link_writes VALUES(1); END`,
+		`CREATE TRIGGER links_deleted AFTER DELETE ON session_commit_links BEGIN INSERT INTO link_writes VALUES(1); END`,
+		`CREATE TRIGGER commits_inserted AFTER INSERT ON git_commits BEGIN INSERT INTO link_writes VALUES(1); END`,
+		`CREATE TRIGGER commits_deleted AFTER DELETE ON git_commits BEGIN INSERT INTO link_writes VALUES(1); END`)
+	f.repo.commit(4.5, "Unrelated", map[string]string{"other.go": "package other\n"})
+	f.refresh()
+	if writes := countRows(t, f.catalog, `SELECT COUNT(*) FROM link_writes`); logs == 0 || writes != 0 || generation() != before {
+		t.Fatalf("a scan that linked nothing new: %d logs, %d writes, generation %d to %d", logs, writes, before, generation())
+	}
+	// New work writes its link and commit, and the first link again, since
+	// its evidence holds the session's window, now wider.
 	f.edit("work", "util.go", 4)
 	f.repo.commit(3.99, "More", map[string]string{"util.go": "package util\n"})
 	f.refresh()
-	if logs == 0 || len(f.links()["work"]) != 2 {
-		t.Fatalf("after new work: %d logs, %v", logs, f.links())
+	if writes := countRows(t, f.catalog, `SELECT COUNT(*) FROM link_writes`); logs == 0 || len(f.links()["work"]) != 2 || writes != 3 {
+		t.Fatalf("after new work: %d logs, %d writes, %v", logs, writes, f.links())
 	}
 	// Lines and edit times a session gained later scan again, and a
 	// fingerprint is read as the bytes it is, spaces included.

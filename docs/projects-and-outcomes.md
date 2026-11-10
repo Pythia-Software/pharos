@@ -259,7 +259,9 @@ repository whose clones hold different branches.
   tags and `refs/notes/ai`) and its worktrees' detached HEADs, plus its
   sessions' edit windows, files (with each file's first and last edit and its kept
   line fingerprints) and printed commits. An unchanged key runs no `git log` and writes nothing, so the
-  cached views stay valid. A scan that could not start is keyed by its
+  cached views stay valid. A scan that runs writes only the links, commits
+  and session states that changed; views read the links and commits only
+  through `session_git`'s counts. A scan that could not start is keyed by its
   reason; one that timed out is tried again when the repository changes or
   on the next day.
 - **What it reads.** `git log --branches --remotes --tags --no-renames
@@ -320,7 +322,17 @@ What it stores: `git_commits` (one row per linked commit: hash, times,
 parents, counts, mainline and revert evidence), `session_commit_links`
 (method, confidence and evidence per link), `session_git` (each session's
 state and counts) and `git_repository_scans` (each repository's scan key
-and state on this host). The Library reads them as `git_check`,
+and state per Mac).
+
+A library drive moves between Macs, each with its own clones. Each link
+records the Mac whose scan made it (`session_commit_links.host_id`). A scan
+replaces the links to commits it read and its own Mac's earlier links;
+another Mac's link to a commit this Mac cannot see, such as one on a branch
+only that Mac's clone has, stays. A session's repository is checked when
+any Mac checked it, so a Mac with no checkout does not turn another Mac's
+results into "Not checked". The label uses local Git only while its state
+is checked, as the Library's columns do: a failed scan keeps the links it
+found earlier, but they decide nothing until a scan succeeds. The Library reads them as `git_check`,
 `git_check_reason`, `linked_commits` and `landed_commits`, and the outcome
 label as Landed, Committed or, for a revert, Reworked.
 
@@ -361,7 +373,7 @@ Each git-only fact has three distinct states, both in data and in the UI:
 | State | Meaning | Shown as |
 |---|---|---|
 | Not applicable | The project is a folder or none, or the session changed no file in its repository. | "Not a repository" / "No git data" / "Not applicable" |
-| Not checked | A repository, but Pharos could not inspect it. Reasons: no `git` binary, checkout deleted, holding another repository or recorded only on another Mac, a timeout, or git failing to read it. | "Not checked", with the reason |
+| Not checked | A repository, but Pharos could not inspect it. Reasons: no `git` binary, checkout deleted, holding another repository or recorded only on another Mac, a timeout, or git failing to read it. A repository any Mac checked is checked. | "Not checked", with the reason |
 | None | Inspected, and nothing was found. | "Not on mainline", "No commits" |
 
 A "Not checked" state is never negative evidence.
