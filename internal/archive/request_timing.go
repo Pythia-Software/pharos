@@ -276,13 +276,17 @@ func (t *requestTiming) derivedValue(key string, waited time.Duration) {
 	}
 }
 
-// queryQueued records a wait for a heavy-query slot.
+// queryQueued records a wait for a heavy-query slot. A derived value's build
+// queues inside the wait its request already counts as derived_wait.
 func (t *requestTiming) queryQueued(waited time.Duration) {
 	if t == nil {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.paused > 0 {
+		return
+	}
 	t.queueWait += waited
 }
 
