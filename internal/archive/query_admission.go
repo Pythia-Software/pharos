@@ -100,7 +100,13 @@ func (a *queryAdmission) acquireKind(ctx context.Context, kind string) (func(), 
 				if a.lasted == nil || len(a.lasted) >= queryKindsRemembered {
 					a.lasted = map[string]time.Duration{}
 				}
-				a.lasted[kind] = time.Since(started)
+				// Work given up on ran at least this long: it does not make a
+				// slow kind look quick.
+				lasted := time.Since(started)
+				if ctx.Err() != nil {
+					lasted = max(lasted, a.lasted[kind])
+				}
+				a.lasted[kind] = lasted
 			}
 			a.releaseLocked(slow)
 		})

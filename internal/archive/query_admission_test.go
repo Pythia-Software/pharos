@@ -123,8 +123,20 @@ func TestQueryAdmissionKeepsASlotForQuickWork(t *testing.T) {
 	quick()
 	waitForQueryQueue(t, gate, 1)
 	first()
-	// Each run is remembered: a kind that turns out quick is no longer held back.
+	// Each run is remembered: a kind that turns out quick is no longer held
+	// back. Work given up on says nothing about how long it would have run.
 	(<-second)()
+	gate.lasted["abandoned"] = time.Hour
+	gone, cancel := context.WithCancel(t.Context())
+	abandoned, err := gate.acquireKind(gone, "abandoned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	abandoned()
+	if gate.lasted["abandoned"] != time.Hour || gate.lasted["slow"] >= slowQuery {
+		t.Fatalf("remembered %v", gate.lasted)
+	}
 	a, err := gate.acquireKind(t.Context(), "slow")
 	if err != nil {
 		t.Fatal(err)
