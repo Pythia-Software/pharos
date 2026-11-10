@@ -347,7 +347,7 @@ const renderers: RenderRegistry<Row> = {
     }}>{id}</a>;
   },
   main_integration({ row }: CellContext<Row>) { return mainIntegrationLink(row); },
-  // A project is a repository or a folder; a session without a working
+  // A project is a repository or a folder; a workspace without a working
   // directory has none, which is a state of its own, not a blank.
   project({ value, row }: CellContext<Row>) {
     if (value == null || value === "") return row.project_kind === "none" ? <span className="qt-muted">No project</span> : "";

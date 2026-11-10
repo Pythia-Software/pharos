@@ -911,7 +911,7 @@
       "label": "Project",
       "type": "text",
       "group": "Context",
-      "description": "The repository, else the working folder (home as ~); empty for a session with no working directory (No project).",
+      "description": "The repository, else the working folder (home as ~); empty for a workspace with no working directory (No project).",
       "bindings": {
         "postgres": {
           "expr": "project_name",

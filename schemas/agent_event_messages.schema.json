@@ -301,7 +301,7 @@
           "expr": "r.\"project_name\""
         }
       },
-      "description": "The repository, else the working folder (home as ~); empty for a session with no working directory (No project)."
+      "description": "The repository, else the working folder (home as ~); empty for a workspace with no working directory (No project)."
     },
     {
       "name": "provider",
