@@ -812,11 +812,16 @@ func TestToolLedgerReplayChangesOnlyRowsThatDiffer(t *testing.T) {
 		"CREATE TRIGGER replay_insert AFTER INSERT ON tool_calls BEGIN INSERT INTO replay_writes VALUES(NEW.id); END",
 		// One call as an older version stored it, and one it derived that
 		// this version does not.
-		"UPDATE tool_calls SET tool_category='as an older version had it' WHERE id=(SELECT MIN(id) FROM tool_calls)",
+		"UPDATE tool_calls SET tool_category='as an older version had it' WHERE id=(SELECT MIN(id) FROM tool_calls WHERE started_at IS NOT NULL)",
 		"INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status) SELECT 'no-longer-derived',workspace_id,conversation_id,999,provider,kind,tool_name,tool_category,status FROM tool_calls LIMIT 1",
 		"INSERT INTO tool_commands(tool_call_id,position,command) VALUES('no-longer-derived',0,'true')",
 		"DELETE FROM replay_writes",
+		"DELETE FROM work_peer_links_dirty",
 		"UPDATE tool_ledger_state SET version='an older version'")
+	var corrected string
+	if err := catalog.DB.QueryRow("SELECT started_at FROM tool_calls WHERE tool_category='as an older version had it'").Scan(&corrected); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := catalog.BackfillToolLedger(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -826,5 +831,11 @@ func TestToolLedgerReplayChangesOnlyRowsThatDiffer(t *testing.T) {
 	var written int
 	if err := catalog.DB.QueryRow("SELECT COUNT(DISTINCT id) FROM replay_writes").Scan(&written); err != nil || written != 2 {
 		t.Fatalf("replay wrote %d of %d calls, want the corrected and the removed one (%v)", written, calls+1, err)
+	}
+	// The corrected call kept its rowid, so related conversations are told
+	// to look again from its start.
+	var since string
+	if err := catalog.DB.QueryRow("SELECT since FROM work_peer_links_dirty").Scan(&since); err != nil || since != corrected {
+		t.Fatalf("related conversations recheck from %q, want the corrected call's start %q (%v)", since, corrected, err)
 	}
 }

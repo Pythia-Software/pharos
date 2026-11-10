@@ -211,6 +211,17 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			return err
 		}
 		defer urlStatement.Close()
+		// A replay of another version's rows keeps their rowids, so related
+		// conversations (RefreshPeerLinks), which look for new rows, would not
+		// see a call whose classification the replay corrected. Its start is
+		// recorded as a result that arrives late is.
+		replay, corrected := priorVersion != "" && priorVersion != toolLedgerVersion, ""
+		changes := func(result sql.Result, err error) (int64, error) {
+			if err != nil {
+				return 0, err
+			}
+			return result.RowsAffected()
+		}
 		for _, call := range calls {
 			id := stableID("tool-call", conversationID, call.Key)
 			write, err := needsWrite("call", id, call)
@@ -220,6 +231,7 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			if !write {
 				continue
 			}
+			var rewritten int64
 			commandPositions, urlPositions := []int{}, []int{}
 			for _, command := range call.Commands {
 				commandPositions = append(commandPositions, command.Position)
@@ -228,11 +240,13 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 				urlPositions = append(urlPositions, address.Position)
 			}
 			for table, positions := range map[string][]int{"tool_commands": commandPositions, "tool_urls": urlPositions} {
-				if _, err := tx.Exec("DELETE FROM "+table+" WHERE tool_call_id=? AND position NOT IN (SELECT value FROM json_each(?))", id, jsonText(positions)); err != nil {
+				n, err := changes(tx.Exec("DELETE FROM "+table+" WHERE tool_call_id=? AND position NOT IN (SELECT value FROM json_each(?))", id, jsonText(positions)))
+				if err != nil {
 					return err
 				}
+				rewritten += n
 			}
-			if _, err := callStatement.Exec(id, workspaceID, conversationID, sessionID(call.Stream), nilIfEmpty(call.CallID),
+			n, err := changes(callStatement.Exec(id, workspaceID, conversationID, sessionID(call.Stream), nilIfEmpty(call.CallID),
 				messageID(call.CallNativeID), messageID(call.ResultNativeID), call.Sequence, conversation.Provider, nilIfEmpty(call.Model), nilIfEmpty(call.Effort),
 				call.Kind, call.ToolName, call.Category, nilIfEmpty(call.MCPServer), nilIfEmpty(call.Command), nilIfEmpty(call.Program),
 				nilIfEmpty(call.Subcommand), nilIfEmpty(call.CommandCategory), call.CommandCount, boolInt(call.HasPipe), boolInt(call.HasRedirect),
@@ -241,19 +255,31 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 				boolInt(call.Interrupted), boolInt(call.Truncated), call.InputBytes, call.ResultBytes, call.ResultTokens,
 				nilIfEmpty(call.ResultTokensSource), requestID(call.RequestKey), requestID(call.NextRequestKey), call.ParallelCount,
 				call.OutputTokens, call.CarriedRequests, call.CarriedTokens, nullableInt(call.LinesAdded), nullableInt(call.LinesRemoved),
-				nilIfEmpty(call.URL), nilIfEmpty(call.Host), nilIfEmpty(call.Hosts), call.URLCount, nilIfEmpty(call.SearchQuery), nilIfEmpty(call.ErrorSignature), boolInt(call.TestFailure), nilIfEmpty(call.RepoPath), nilIfEmpty(call.PathRepository), nilIfEmpty(call.PathRepositoryID), nilIfEmpty(call.PathScope), nilIfEmpty(call.PathAbsolute)); err != nil {
+				nilIfEmpty(call.URL), nilIfEmpty(call.Host), nilIfEmpty(call.Hosts), call.URLCount, nilIfEmpty(call.SearchQuery), nilIfEmpty(call.ErrorSignature), boolInt(call.TestFailure), nilIfEmpty(call.RepoPath), nilIfEmpty(call.PathRepository), nilIfEmpty(call.PathRepositoryID), nilIfEmpty(call.PathScope), nilIfEmpty(call.PathAbsolute)))
+			if err != nil {
 				return err
 			}
+			rewritten += n
 			for _, command := range call.Commands {
-				if _, err := commandStatement.Exec(id, command.Position, nilIfEmpty(command.Operator), command.Command, nilIfEmpty(command.Program),
-					nilIfEmpty(command.Subcommand), nilIfEmpty(command.Category), nullableInt(command.ExitCode), nullableInt(command.DurationMS)); err != nil {
+				n, err := changes(commandStatement.Exec(id, command.Position, nilIfEmpty(command.Operator), command.Command, nilIfEmpty(command.Program),
+					nilIfEmpty(command.Subcommand), nilIfEmpty(command.Category), nullableInt(command.ExitCode), nullableInt(command.DurationMS)))
+				if err != nil {
 					return err
 				}
+				rewritten += n
+			}
+			if replay && rewritten > 0 && call.StartedAt != "" && (corrected == "" || call.StartedAt < corrected) {
+				corrected = call.StartedAt
 			}
 			for _, address := range call.URLs {
 				if _, err := urlStatement.Exec(id, address.Position, address.URL, address.Host, address.Source); err != nil {
 					return err
 				}
+			}
+		}
+		if corrected != "" {
+			if _, err := tx.Exec(`INSERT INTO work_peer_links_dirty VALUES(1,?,hex(randomblob(8))) ON CONFLICT(id) DO UPDATE SET since=min(since,excluded.since),revision=excluded.revision`, corrected); err != nil {
+				return err
 			}
 		}
 	}
