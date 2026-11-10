@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -539,5 +540,62 @@ func TestTaskOriginsPublishDuringAnIngest(t *testing.T) {
 		}) {
 			t.Fatalf("%s: origins not published during the ingest", id)
 		}
+	}
+}
+
+// Publishing offers the catalog only rows that differ from what is stored:
+// a new conversation, a changed value, and a value against no value.
+func TestOriginsToWriteKeepsOnlyChangedRows(t *testing.T) {
+	row := func(id string, channel, machine any) map[string]any {
+		out := map[string]any{"conversation_id": id}
+		for _, field := range originFields {
+			out[field] = nil
+		}
+		out["channel"], out["machine"] = channel, machine
+		return out
+	}
+	stored := []map[string]any{row("same", "cli", "Studio"), row("changed", "cli", "Studio"), row("cleared", "cli", "Studio"), row("filled", "cli", nil), row("emptied", "cli", nil), row("gone", "cli", nil)}
+	computed := []map[string]any{row("same", "cli", "Studio"), row("changed", "desktop", "Studio"), row("cleared", "cli", nil), row("filled", "cli", "Studio"), row("emptied", "cli", ""), row("new", "cli", nil)}
+	got := []string{}
+	for _, changed := range originsToWrite(computed, stored) {
+		got = append(got, firstString(changed["conversation_id"]))
+	}
+	if want := "changed cleared filled emptied new"; strings.Join(got, " ") != want {
+		t.Fatalf("rows to write: %v, want %s", got, want)
+	}
+}
+
+// Another process can publish an older snapshot between this one's read and
+// its write. Its rows are overwritten even where this snapshot computed what
+// was published when it read.
+func TestOriginsPublishedOverAnOlderSnapshotsRows(t *testing.T) {
+	c := executionFixture(t, executionFixtureConversation{id: "root"})
+	fixtureExec(t, c, `UPDATE conversations SET harness='codex/codex_desktop' WHERE id='root'`)
+	channel := func() any {
+		t.Helper()
+		var value any
+		if err := c.DB.QueryRow("SELECT channel FROM conversation_origins WHERE conversation_id='root'").Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	publishOrigins(t, c)
+	if channel() != "desktop" {
+		t.Fatalf("precondition, the root's channel: %v", channel())
+	}
+	fixtureExec(t, c, "UPDATE origin_state SET revision=revision+2")
+	override(t, &originsComputedHook, func() {
+		fixtureExec(t, c, "UPDATE conversation_origins SET channel='cli' WHERE conversation_id='root'")
+		fixtureExec(t, c, "UPDATE origin_state SET built=revision-1")
+	})
+	if _, err := c.publishOrigins(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if channel() != "desktop" {
+		t.Fatalf("an older snapshot's row outlived a newer publication: %v", channel())
+	}
+	var revision, built int64
+	if err := c.DB.QueryRow("SELECT revision,built FROM origin_state").Scan(&revision, &built); err != nil || revision != built {
+		t.Fatalf("origins are not current: %d %d %v", revision, built, err)
 	}
 }
