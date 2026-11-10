@@ -520,6 +520,22 @@ func (c *Catalog) catalogVersion(ctx context.Context) (int64, error) {
 	return version, err
 }
 
+// storedGeneration is scope's generation (cacheGenerations.of) as the
+// catalog counts it, for a stamp kept across restarts. It fails on a catalog
+// that keeps no count.
+func (c *Catalog) storedGeneration(ctx context.Context, scope string) (int64, error) {
+	if _, err := c.catalogVersion(ctx); err != nil {
+		return 0, err
+	}
+	cache := &c.derived
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if !cache.versions.counted {
+		return 0, errors.New("catalog keeps no cached-view generation")
+	}
+	return cache.versions.generations.of(scope), nil
+}
+
 // warmCaches recomputes, once the catalog has been quiet for a maintenance
 // cycle after a change, the Library rows and derived values requested
 // recently, so the first page after a sync or an MCP call finds them ready

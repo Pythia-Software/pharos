@@ -738,6 +738,11 @@ test("persisted covers are stale on a new page and storage failures do not block
   const generation = next.generation();
   next.invalidate(); next.put("one", { state: "ready", total: 1, summary: "New" }, generation);
   assert.equal(next.get("one").fresh, false, "an older in-flight computation cannot undo invalidation");
+  // A cover the server answered from an older stored result keeps that age,
+  // so it is asked for again rather than treated as just computed.
+  next.put("old", { state: "ready", total: 1, summary: "Stored", served: { state: "stale", built: Date.now() - 600_000 } }, next.generation(), Date.now() - 600_000);
+  assert.equal(next.get("old").fresh, false);
+  assert.equal(next.get("old").preview.served, undefined, "how an answer was served is not part of the cover");
   const broken = createCardPreviewCache({ read: async () => { throw Error("blocked"); }, write: async () => { throw Error("full"); } });
   await broken.ready;
   broken.put("one", { state: "ready", total: 1, summary: "Live" });

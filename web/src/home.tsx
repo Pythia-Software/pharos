@@ -15,6 +15,7 @@ import { cardTemplates } from "./card-library-model";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { loadCardPreviews, invalidateCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
+import type { ResultPolicy } from "./result-cache";
 import { collectCardTemplate, DASHBOARD_CARD_ACTION, dashboardCardGroups, dashboardCardLabels, dashboardCardPresentation, dashboardCardSource, dashboardCardWindow } from "./dashboard-card-model";
 import { cardGroupsFor, withCardGroups, type CardGroups } from "./card-cover";
 import { CardGroupsField } from "./card-groups-field";
@@ -56,6 +57,9 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const [drag, setDrag] = useState<{ saved?: string; suggestion?: QuerySuggestion } | null>(null), [insertBefore, setInsertBefore] = useState<string | undefined>();
   const [hidden, setHidden] = useState(document.hidden);
   const reloadPreview = usePreviewReload(setPreviews, setErrors, [active, collection, pool, generation, schemas]);
+  // A person pressing Refresh gets current results; every other reload shows
+  // what the server has stored and lets it catch up (result-cache.ts).
+  const refreshPolicy = useRef<ResultPolicy>("cached");
 
   useEffect(() => {
     migrateSavedQueries(); setCollection(readBookmarks());
@@ -89,7 +93,8 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       if (controller.signal.aborted) return;
       if (preview) { setPreviews(current => ({ ...current, [id]: preview })); setErrors(current => { const next = { ...current }; delete next[id]; return next; }); }
       else { setErrors(current => ({ ...current, [id]: String(error) })); setPreviews(current => { const next = { ...current }; delete next[id]; return next; }); }
-    }, controller.signal).then(() => { if (!controller.signal.aborted) setLoading(false); });
+    }, controller.signal, { policy: refreshPolicy.current }).then(() => { if (!controller.signal.aborted) setLoading(false); });
+    refreshPolicy.current = "cached";
     return () => controller.abort();
   }, [active, collection, pool, generation, schemas]);
 
@@ -101,7 +106,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     const items = cardTemplates().map(recipe => instantiateRecipe(recipe, recipe.days?.length === 1 ? recipe.days[0] : 7));
     void (async () => {
       for (let at = 0; at < items.length && !controller.signal.aborted; at += 8) {
-        await loadCardPreviews(items.slice(at, at + 8).map(item => ({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } })), () => {}, controller.signal);
+        await loadCardPreviews(items.slice(at, at + 8).map(item => ({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } })), () => {}, controller.signal, { follow: false });
       }
     })();
     return () => controller.abort();
@@ -196,7 +201,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     </div>
     <div className="home-feedback" role="status">{feedback}{undo ? <button type="button" onClick={() => { const items = readBookmarks(); items.splice(Math.min(undo.index, items.length), 0, undo.item); writeBookmarks(items); setUndo(null); setMessage("Restored to your collection."); }}>Undo</button> : null}</div>
     <QueryConveyor items={eligible} previews={previews} loading={loading} hasErrors={Object.keys(errors).length > 0} active={active} suspended={hidden || !active || Boolean(drag) || Boolean(editing)}
-      onRefresh={() => { clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag}
+      onRefresh={() => { refreshPolicy.current = "fresh"; clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag}
       onAllCards={() => navigate("/cards")} />
     <RecentConversations active={active && !hidden} generation={generation} />
     <dialog ref={editor} className="home-editor card-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {

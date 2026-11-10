@@ -158,7 +158,7 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     const items = recipes.map(recipe => instantiateRecipe(recipe, cardDays(recipe, days === "default" ? "default" : readWindowChoice(days))));
     void (async () => {
       for (let at = 0; at < items.length && !controller.signal.aborted; at += 8) {
-        await loadCardPreviews(items.slice(at, at + 8).map(job), () => {}, controller.signal);
+        await loadCardPreviews(items.slice(at, at + 8).map(job), () => {}, controller.signal, { follow: false });
       }
     })();
     return () => controller.abort();

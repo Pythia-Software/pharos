@@ -31,6 +31,9 @@ type queryAdmission struct {
 	active int
 	slow   int // active executions admitted as slow
 	wait   list.List
+	// background counts the running and waiting work that only improves
+	// later answers (backgroundQuery), which interactive() leaves out.
+	background int
 	// lasted is how long each kind of work took the last time it ran to
 	// completion or was given up on.
 	lasted map[string]time.Duration
@@ -44,6 +47,15 @@ type queryWaiter struct {
 	slow    bool // as admitted; set with granted
 }
 
+type backgroundQueryKey struct{}
+
+// backgroundQuery marks ctx's work as competing with nobody: admission
+// still queues and counts it, but it does not make the service look busy
+// to other background work deciding whether to start.
+func backgroundQuery(ctx context.Context) context.Context {
+	return context.WithValue(ctx, backgroundQueryKey{}, true)
+}
+
 // queryLease is one admitted execution's slot.
 type queryLease struct {
 	gate    *queryAdmission
@@ -53,6 +65,8 @@ type queryLease struct {
 	ran     time.Duration // by earlier leases of the same work
 	started time.Time
 	once    sync.Once
+	// background is 1 for work marked backgroundQuery, else 0.
+	background int
 }
 
 // acquire admits work of no particular kind, which is never held back as slow.
@@ -93,7 +107,11 @@ func (a *queryAdmission) lease(ctx context.Context, kind string, ran time.Durati
 		return nil, err
 	}
 	l := &queryLease{gate: a, ctx: ctx, kind: kind, ran: ran}
+	if ctx.Value(backgroundQueryKey{}) != nil {
+		l.background = 1
+	}
 	a.mu.Lock()
+	a.background += l.background
 	l.slow = a.isSlow(kind, ran)
 	if a.admissible(l.slow) && !a.blockedBehind(l.slow) {
 		a.active++
@@ -118,6 +136,7 @@ func (a *queryAdmission) lease(ctx context.Context, kind string, ran time.Durati
 			} else {
 				a.wait.Remove(e)
 			}
+			a.background -= l.background
 			a.mu.Unlock()
 			return nil, ctx.Err()
 		}
@@ -160,6 +179,7 @@ func (l *queryLease) end(record bool) time.Duration {
 			a.lasted[l.kind] = lasted
 		}
 		a.releaseLocked(l.slow)
+		a.background -= l.background
 	})
 	return ran
 }
@@ -198,6 +218,23 @@ func (a *queryAdmission) releaseLocked(slow bool) {
 		}
 		e = next
 	}
+}
+
+// busy reports whether work is waiting for a slot or none is free: a request
+// that can be answered without computing should be.
+func (a *queryAdmission) busy() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.wait.Len() > 0 || a.active >= a.limit
+}
+
+// interactive is how much work is running or waiting that someone is
+// waiting for: zero means that background work competes with nothing. Work
+// is counted from when it asks for a slot, not while it prepares to.
+func (a *queryAdmission) interactive() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.active + a.wait.Len() - a.background
 }
 
 type derivedAdmissionKey struct{}

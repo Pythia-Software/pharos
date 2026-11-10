@@ -70,6 +70,7 @@ func TestMain(m *testing.M) {
 	}
 	catalogDurability = testDurability
 	labelingLedgerSynchronous = "OFF"
+	resultCacheSynchronous = "OFF"
 	syncToDrive = func(file *os.File) error {
 		// Keep invalid/closed-handle failures visible, but do not flush the
 		// whole drive for disposable files. Writes and closes still run.
