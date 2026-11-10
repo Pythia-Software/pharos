@@ -4,12 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"math"
-	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -171,132 +168,66 @@ func TestCarbonHealthSplitsWindowsAndCategories(t *testing.T) {
 	}
 }
 
-func TestCarbonSeriesFiltersAndHourlyTotals(t *testing.T) {
+// Carbon Impact's estimate counts the usage its filters select, to the hour:
+// a range inside a day counts that range's hours (carbonUsageV3).
+func TestCarbonUsageFiltersAndHourlyTotals(t *testing.T) {
 	previousLocation := time.Local
 	time.Local = time.UTC
 	t.Cleanup(func() { time.Local = previousLocation })
 	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog, `{"type":"token_usage_record","timestamp":"2026-09-21T03:05:00Z","payload":{"response_id":"r3","usage":{"input_tokens":90,"output_tokens":10,"total_tokens":100},"thread_token_usage":{"total_tokens":3150}}}`)
-	if _, err := catalog.DB.Exec(`INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('carbon-repo','example/repo','','')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := catalog.DB.Exec(`UPDATE workspaces SET repository_id='carbon-repo'`); err != nil {
-		t.Fatal(err)
-	}
 	server := testServer(t, config, catalog)
+	if read := carbonUsageV3(t, server, []qt.WhereTerm{{Field: "repository_name", Op: "is_null"}}); read.Unknown != 3150 {
+		t.Fatalf("no-repository usage omitted: %+v", read)
+	}
+	execTx(t, catalog.DB, `INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('carbon-repo','example/repo','','')`, `UPDATE workspaces SET repository_id='carbon-repo'`)
 	for _, sample := range []struct {
-		name, where, split string
-		want, points       int64
+		name, where string
+		want        int64
 	}{
-		{"all", `[]`, "", 3150, 2},
-		{"repository and provider", `[{"field":"repository_name","op":"=","value":"example/repo"},{"field":"provider","op":"=","value":"codex"}]`, "provider", 3150, 2},
-		// Both requests on Sep 21 share a daily row. The date bounds must
-		// count just the first hour, even when charting whole days.
-		{"partial day with offset", `[{"field":"last_usage_at","op":">=","value":"2026-09-20T19:00:00-06:00"},{"field":"first_usage_at","op":"<","value":"2026-09-20T21:00:00-06:00"}]`, "repository_name", 2030, 1},
-		{"model tier", `[]`, "tier", 3150, 2},
-		{"no match", `[{"field":"repository_name","op":"=","value":"other/repo"}]`, "", 0, 0},
-		{"wrong provider", `[{"field":"provider","op":"=","value":"claude"}]`, "", 0, 0},
+		{"all", `[]`, 3150},
+		{"repository and provider", `[{"field":"repository_name","op":"=","value":"example/repo"},{"field":"provider","op":"=","value":"codex"}]`, 3150},
+		// Both requests on Sep 21 share a daily record. The bounds count
+		// just the first hour.
+		{"partial day with offset", `[{"field":"last_usage_at","op":">=","value":"2026-09-20T19:00:00-06:00"},{"field":"first_usage_at","op":"<","value":"2026-09-20T21:00:00-06:00"}]`, 2030},
+		{"no match", `[{"field":"repository_name","op":"=","value":"other/repo"}]`, 0},
+		{"wrong provider", `[{"field":"provider","op":"=","value":"claude"}]`, 0},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
-			for _, hourly := range []bool{false, true} {
-				body := `{"where":` + sample.where + `,"split":"` + sample.split + `","hourly":` + strconv.FormatBool(hourly) + `}`
-				response := httptest.NewRecorder()
-				server.postQueryTable(response, httptest.NewRequest(http.MethodPost, "/api/query/usage/carbon", strings.NewReader(body)), "usage", "carbon")
-				if response.Code != http.StatusOK {
-					t.Fatalf("HTTP %d: %s", response.Code, response.Body.String())
+			var where []qt.WhereTerm
+			if err := json.Unmarshal([]byte(sample.where), &where); err != nil {
+				t.Fatal(err)
+			}
+			read := carbonUsageV3(t, server, where)
+			var total int64
+			for tier, counts := range read.Tokens {
+				for _, count := range counts {
+					total += count
 				}
-				var result struct {
-					Factors            carbonDocument      `json:"factors"`
-					Windows            []carbonWindow      `json:"windows"`
-					Series             []carbonPoint       `json:"series"`
-					Choices            map[string][]string `json:"choices"`
-					UnknownModelTokens int64               `json:"default_tier_unknown_tokens"`
-					UnclassifiedTokens int64               `json:"unclassified_tokens"`
+				if tier != "medium" {
+					t.Fatalf("a placeholder model takes the default tier: %+v", read.Tokens)
 				}
-				if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
-					t.Fatal(err)
-				}
-				var total, chart int64
-				for _, counts := range result.Windows[0].Tokens {
-					for _, count := range counts {
-						total += count
-					}
-				}
-				for _, point := range result.Series {
-					for _, counts := range point.Tokens {
-						for _, count := range counts {
-							chart += count
-						}
-					}
-					if hourly != strings.Contains(point.Day, "T") {
-						t.Fatalf("wrong time key: %s", point.Day)
-					}
-					if sample.split == "tier" && point.Value != result.Factors.DefaultTier {
-						t.Fatalf("placeholder model should take default tier: %#v", point)
-					}
-				}
-				if total != sample.want || chart != sample.want {
-					t.Fatalf("hourly=%v total=%d chart=%d want=%d", hourly, total, chart, sample.want)
-				}
-				if result.UnknownModelTokens != sample.want || result.UnclassifiedTokens != 0 {
-					t.Fatalf("incomplete calculation provenance: unknown=%d unclassified=%d", result.UnknownModelTokens, result.UnclassifiedTokens)
-				}
-				if !hourly && int64(len(result.Series)) != sample.points {
-					t.Fatalf("daily points: %#v", result.Series)
-				}
-				if strings.Join(result.Choices["repository_name"], ",") != "example/repo" || strings.Join(result.Choices["provider"], ",") != "codex" {
-					t.Fatalf("filters hid choices: %#v", result.Choices)
-				}
+			}
+			// The fixture reports no model: its usage is all in the note.
+			if total != sample.want || read.Unknown != sample.want || read.Unclassified != 0 || len(read.Models) != 0 {
+				t.Fatalf("total=%d, read %+v, want %d", total, read, sample.want)
+			}
+			if strings.Join(read.Choices["repository_name"], ",") != "example/repo" || strings.Join(read.Choices["provider"], ",") != "codex" {
+				t.Fatalf("filters hid choices: %#v", read.Choices)
 			}
 		})
 	}
-	for _, body := range []string{`{"where":[{"field":"not-a-field","op":"=","value":"x"}]}`, `{"split":"model"}`, `{"where":"invalid"}`} {
-		response := httptest.NewRecorder()
-		server.postQueryTable(response, httptest.NewRequest(http.MethodPost, "/api/query/usage/carbon", strings.NewReader(body)), "usage", "carbon")
-		if response.Code != http.StatusBadRequest {
-			t.Fatalf("expected rejected request %s: HTTP %d", body, response.Code)
-		}
-	}
 }
 
-func TestCarbonSeriesNoRepository(t *testing.T) {
-	catalog, _ := testCatalog(t)
+func TestCarbonUsageNamesFallbacksAndUnclassifiedTokens(t *testing.T) {
+	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog)
-	var request carbonSeriesRequest
-	if err := json.Unmarshal([]byte(`{"where":[{"field":"repository_name","op":"is_null","value":""}],"split":"repository_name"}`), &request); err != nil {
-		t.Fatal(err)
+	execTx(t, catalog.DB, `UPDATE agent_sessions SET model='mystery-model'`, `UPDATE agent_session_usage SET unclassified_tokens=10,total_tokens=total_tokens+10 WHERE output_tokens=30`)
+	read := carbonUsageV3(t, testServer(t, config, catalog), nil)
+	if len(read.Models) != 1 || read.Models["mystery-model"] != 3060 || read.Unknown != 0 || read.Unclassified != 10 {
+		t.Fatalf("named fallback provenance: %+v", read)
 	}
-	result, err := catalog.carbonSeries(t.Context(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if series := result["series"].([]*carbonPoint); len(series) == 0 || series[0].Value != "" {
-		t.Fatalf("no-repository usage omitted: %#v", series)
-	}
-}
-
-func TestCarbonSeriesNamesFallbacksAndUnclassifiedTokens(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	ingestUsageFixture(t, catalog)
-	if _, err := catalog.DB.Exec(`UPDATE agent_sessions SET model='mystery-model'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := catalog.DB.Exec(`UPDATE agent_session_usage SET unclassified_tokens=10,total_tokens=total_tokens+10 WHERE output_tokens=30`); err != nil {
-		t.Fatal(err)
-	}
-	result, err := catalog.carbonSeries(t.Context(), carbonSeriesRequest{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	models := result["default_tier_models"].([]map[string]any)
-	if len(models) != 1 || models[0]["model"] != "mystery-model" || integer(models[0]["tokens"]) != 3060 || integer(result["default_tier_unknown_tokens"]) != 0 {
-		t.Fatalf("named fallback provenance: %#v", result)
-	}
-	if integer(result["unclassified_tokens"]) != 10 {
-		t.Fatalf("unclassified provenance: %#v", result)
-	}
-	tokens := result["windows"].([]*carbonWindow)[0].Tokens["medium"]
-	if tokens["uncached_input"] != 710 {
+	if tokens := read.Tokens["medium"]; tokens["uncached_input"] != 710 {
 		t.Fatalf("unclassified tokens not counted as uncached input: %#v", tokens)
 	}
 }
@@ -450,74 +381,23 @@ func carbonUsageV3(t *testing.T, s *Server, where []qt.WhereTerm) carbonUsageRea
 	return read
 }
 
-// Parity with the endpoint the page read before (POST /api/query/usage/carbon).
-func TestCarbonUsageV3MatchesCarbonEndpoint(t *testing.T) {
-	previousLocation := time.Local
-	time.Local = time.UTC
-	t.Cleanup(func() { time.Local = previousLocation })
-	catalog, config := testCatalog(t)
-	ingestUsageFixture(t, catalog, `{"type":"token_usage_record","timestamp":"2026-09-21T03:05:00Z","payload":{"response_id":"r3","usage":{"input_tokens":90,"output_tokens":10,"total_tokens":100},"thread_token_usage":{"total_tokens":3150}}}`)
-	execTx(t, catalog.DB, `INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('carbon-repo','example/repo','','')`, `UPDATE workspaces SET repository_id='carbon-repo'`)
-	server := testServer(t, config, catalog)
-	compare := func(name, where string) {
-		t.Helper()
-		compareCarbonUsage(t, server, name, where)
+// Every tier, an hour, and usage with no date: undated usage counts in the
+// totals and is named in the note.
+func TestCarbonUsageCountsTiersAndUndatedUsage(t *testing.T) {
+	_, server, _ := carbonUsageFixture(t)
+	tokens := func(read carbonUsageRead) string { return string(must(json.Marshal(read.Tokens))) }
+	all := `{"large":{"cache_read":800,"cache_write":0,"output":20,"uncached_input":200},"medium":{"cache_read":0,"cache_write":0,"output":10,"uncached_input":90},"small":{"cache_read":1500,"cache_write":0,"output":30,"uncached_input":500}}`
+	if read := carbonUsageV3(t, server, nil); tokens(read) != all || read.Undated != 0 {
+		t.Fatalf("every tier: %+v", read)
 	}
-	for _, sample := range []struct{ name, where string }{
-		{"all", `[]`},
-		{"repository and provider", `[{"field":"repository_name","op":"=","value":"example/repo"},{"field":"provider","op":"=","value":"codex"}]`},
-		{"partial day with offset", `[{"field":"last_usage_at","op":">=","value":"2026-09-20T19:00:00-06:00"},{"field":"first_usage_at","op":"<","value":"2026-09-20T21:00:00-06:00"}]`},
-		{"no match", `[{"field":"repository_name","op":"=","value":"other/repo"}]`},
-		{"no repository", `[{"field":"repository_name","op":"is_null","value":""}]`},
-	} {
-		compare(sample.name, sample.where)
+	if read := carbonUsageV3(t, server, []qt.WhereTerm{{Field: "hour", Op: "=", Value: "2026-09-21T01:00:00Z"}}); tokens(read) != `{"small":{"cache_read":1500,"cache_write":0,"output":30,"uncached_input":500}}` {
+		t.Fatalf("one hour: %+v", read)
 	}
-	execTx(t, catalog.DB, `UPDATE agent_sessions SET model='mystery-model'`, `UPDATE agent_session_usage SET unclassified_tokens=10,total_tokens=total_tokens+10 WHERE output_tokens=30`)
-	compare("named fallback and unclassified", `[]`)
-	compare("named fallback, partial day", `[{"field":"first_usage_at","op":">=","value":"2026-09-21T02:00:00Z"}]`)
-	// Every tier, and usage with no date.
-	_, tiers, _ := carbonUsageFixture(t)
-	compareCarbonUsage(t, tiers, "tiers", `[]`)
-	compareCarbonUsage(t, tiers, "tiers, one hour", `[{"field":"hour","op":"=","value":"2026-09-21T01:00:00Z"}]`)
-	execTx(t, tiers.Catalog.DB, `UPDATE agent_session_usage SET usage_hour='' WHERE output_tokens=30`)
-	compareCarbonUsage(t, tiers, "undated", `[]`)
-	compareCarbonUsage(t, tiers, "undated, one day", `[{"field":"day","op":"=","value":"2026-09-21"}]`)
-}
-
-func compareCarbonUsage(t *testing.T, server *Server, name, where string) {
-	t.Helper()
-	{
-		response := httptest.NewRecorder()
-		server.postQueryTable(response, httptest.NewRequest(http.MethodPost, "/api/query/usage/carbon", strings.NewReader(`{"where":`+where+`}`)), "usage", "carbon")
-		var old struct {
-			Windows      []carbonWindow      `json:"windows"`
-			Choices      map[string][]string `json:"choices"`
-			Undated      int64               `json:"undated_tokens"`
-			Unclassified int64               `json:"unclassified_tokens"`
-			Unknown      int64               `json:"default_tier_unknown_tokens"`
-			Models       []struct {
-				Model  string `json:"model"`
-				Tokens int64  `json:"tokens"`
-			} `json:"default_tier_models"`
-		}
-		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &old) != nil {
-			t.Fatalf("%s: HTTP %d %s", name, response.Code, response.Body.String())
-		}
-		var terms []qt.WhereTerm
-		if err := json.Unmarshal([]byte(where), &terms); err != nil {
-			t.Fatal(err)
-		}
-		got := carbonUsageV3(t, server, terms)
-		models := map[string]int64{}
-		for _, model := range old.Models {
-			models[model.Model] = model.Tokens
-		}
-		want := carbonUsageRead{Tokens: old.Windows[0].Tokens, Undated: old.Undated, Unclassified: old.Unclassified, Unknown: old.Unknown, Models: models, Choices: old.Choices}
-		if a, b := must(json.Marshal(got)), must(json.Marshal(want)); string(a) != string(b) {
-			t.Fatalf("%s:\n query-v3 %s\n endpoint %s", name, a, b)
-		}
-		if name != "no match" && name != "no repository" && len(got.Tokens) == 0 {
-			t.Fatalf("%s: no usage compared", name)
-		}
+	execTx(t, server.Catalog.DB, `UPDATE agent_session_usage SET usage_hour='' WHERE output_tokens=30`)
+	if read := carbonUsageV3(t, server, nil); tokens(read) != all || read.Undated != 2030 {
+		t.Fatalf("undated: %+v", read)
+	}
+	if read := carbonUsageV3(t, server, []qt.WhereTerm{{Field: "day", Op: "=", Value: "2026-09-21"}}); read.Undated != 0 || read.Tokens["small"] != nil {
+		t.Fatalf("a day leaves out undated usage: %+v", read)
 	}
 }
