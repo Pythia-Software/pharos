@@ -93,6 +93,55 @@ func TestQueryAdmissionFIFOAndCancellation(t *testing.T) {
 	}
 }
 
+// Work whose kind last ran slowly leaves the last slot to quicker work, which
+// passes it in the queue; it still starts as soon as a second slot is free.
+func TestQueryAdmissionKeepsASlotForQuickWork(t *testing.T) {
+	gate := &queryAdmission{limit: 2, lasted: map[string]time.Duration{"slow": time.Hour}}
+	first, err := gate.acquireKind(t.Context(), "slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := make(chan func(), 1)
+	go func() {
+		finish, err := gate.acquireKind(t.Context(), "slow")
+		if err != nil {
+			t.Error(err)
+		}
+		second <- finish
+	}()
+	waitForQueryQueue(t, gate, 1)
+	// The free slot goes to quick work, ahead of the slow waiter.
+	quick, err := gate.acquireKind(t.Context(), "quick")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-second:
+		t.Fatal("slow work took the last slot")
+	default:
+	}
+	quick()
+	waitForQueryQueue(t, gate, 1)
+	first()
+	// Each run is remembered: a kind that turns out quick is no longer held back.
+	(<-second)()
+	a, err := gate.acquireKind(t.Context(), "slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := gate.acquireKind(t.Context(), "slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a()
+	b()
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.active != 0 || gate.slow != 0 || gate.wait.Len() != 0 {
+		t.Fatalf("admission leaked: active=%d slow=%d queued=%d", gate.active, gate.slow, gate.wait.Len())
+	}
+}
+
 func TestQueryAdmissionBoundsConcurrentWork(t *testing.T) {
 	gate := &queryAdmission{limit: 3}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)

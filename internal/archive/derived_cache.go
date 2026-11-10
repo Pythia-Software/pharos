@@ -263,7 +263,7 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 		parent.release()
 		ctx = context.WithValue(ctx, derivedAdmissionKey{}, (*derivedAdmission)(nil))
 		value, err := c.derivedValueUnadmitted(ctx, key, compute, request)
-		release, admissionErr := parent.gate.acquire(ctx)
+		release, admissionErr := parent.gate.acquireKind(ctx, parent.kind)
 		if admissionErr != nil {
 			return nil, admissionErr
 		}
@@ -304,7 +304,7 @@ func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, comput
 			if isWarmOnly(ctx) {
 				return nil, errDerivedCold
 			}
-			return computeDerived(ctx, compute)
+			return computeDerived(ctx, key, compute)
 		}
 		cache.version = version
 		if isWarmOnly(ctx) {
@@ -443,7 +443,7 @@ func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, comput
 					cache.pruneDelegationEntries(cache.version, time.Now())
 					cache.pruneThinkingEntries(cache.version, time.Now())
 				}()
-				value, err = computeDerived(work, compute)
+				value, err = computeDerived(work, key, compute)
 			}()
 		} else if request {
 			entry.usedAt = time.Now()
