@@ -9255,11 +9255,11 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "700edc4b2becb461:0",
+      "key": "c202d5e5f4e27369:0",
       "file": "web/src/usage-chart.tsx",
       "owner": "CustomPeriod",
       "tag": "input",
-      "control": "aria-label={`Number of ${period}`} value={draft} onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber)) onChange(event.target.valueAsNumber); }} onBlur={() => setDraft(String(value))}",
+      "control": "aria-label={`Number of ${period}`} value={draft} onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber) && event.target.valueAsNumber <= max) onChange(event.target.valueAsNumber); }} onBlur={() => setDraft(String(value))}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
@@ -9280,6 +9280,15 @@
       "control": "onClick={onExpand}",
       "contract": "dashboard",
       "reason": "The shared legend delegates expansion to AnalysisTrend, which writes analyze_chart.seriesLimit through changeState and the dashboard URL owner. Group outlines add no independent state."
+    },
+    {
+      "key": "1875b96cf86486ff:0",
+      "file": "web/src/usage-chart.tsx",
+      "owner": "PeriodControl",
+      "tag": "ChartSelect",
+      "control": "value={String(view.hours)} onChange={value => onChange({ hours: Number(value) })}",
+      "contract": "dashboard",
+      "reason": "The page's applied view (analyze_chart, or view.thinking on Thinking) carries the chosen hours; the select offers only hour counts the page's engine supports."
     },
     {
       "key": "5c8d176e8700d3fd:0",

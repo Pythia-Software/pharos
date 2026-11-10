@@ -22,7 +22,7 @@ globalThis.location??=new URL("http://localhost/");
 const urlOrigin='http://localhost';
 test('every Thinking view and breakdown restores through the shared URL contract',()=>{
  for(const [view]of thinkingViews)for(const [groupBy]of thinkingBreakdowns){
-  const state={...defaultThinking,view,groupBy,model:'model with / characters',range:'custom',from:'2026-10-15T06:00:00.000Z',to:'2026-10-29T06:00:00.000Z',timezone:'America/Denver',hiddenPercentiles:['p75','p95'],calendarRows:'week',calendarMetric:'ratio',hours:7,days:4};
+  const state={...defaultThinking,view,groupBy,model:'model with / characters',range:'custom',from:'2026-10-15T06:00:00.000Z',to:'2026-10-29T06:00:00.000Z',timezone:'America/Denver',hiddenPercentiles:['p75','p95'],calendarRows:'week',calendarMetric:'ratio',hours:8,days:4};
   const params=new URLSearchParams({thinking:encodeViewValue(viewFields.thinking,state)});
   for(const overview of [false,true])assert.equal(new URL(thinkingRequest(state,overview),urlOrigin).searchParams.get('groupBy'),overview&&groupBy==='none'?'model':groupBy);
   for(const topic of ['thinking-overview','thinking-detail']){const url=new URL(usageWorkspaceURL({mode:'dashboards',topic,dataset:'model_requests'},params),urlOrigin);assert.deepEqual(parseViewValue(viewFields.thinking,url.searchParams.get('thinking')),state);assert.deepEqual(initialThinking(url.searchParams),{...state,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone});assert.equal(readUsageWorkspace(url.searchParams).topic,topic)}
@@ -121,4 +121,113 @@ test("ribbon query cards retain selected identity, zoom and counting assumptions
   const settings=dashboardQuerySettings('parallelism',new URL(item.href,urlOrigin).searchParams);
   assert.deepEqual(JSON.parse(settings.parallelism_settings),{counting:'workspace',gap:30});
  }
+});
+
+// query-v3 reads (thinking-query.ts), evaluated here by Query Table's own
+// engine over rows shaped like model_requests'.
+import {evaluateMetrics} from '@pythia-software/query-table-core';
+import modelRequestsDocument from '../../../../schemas/model_requests.schema.json';
+import groupKeys from '../../../../testdata/thinking-group-keys.json';
+import {thinkingClauses,thinkingFromMetrics,thinkingGroupIdentity,thinkingBreakdownFields,thinkingPeriodKey,thinkingStamp,withThinkingFit,sortThinkingGroups,supportedThinkingPeriod,thinkingQueryState} from '../../../src/thinking-query';
+const requestsSchema=loadSchema(modelRequestsDocument);
+const evaluate=(rows,state,overview=false,now=Date.parse('2026-11-10T00:00:00Z'))=>{
+ const q=thinkingQueryState(state,overview),where=thinkingWhere(q,now);
+ const metrics=evaluateMetrics(rows,{...EMPTY_QUERY,where,aggregations:thinkingClauses(q,overview)},requestsSchema,{now}).metrics;
+ for(const m of metrics)assert.equal(m.error,undefined,m.id+': '+m.error);
+ const options=evaluateMetrics(rows,{...EMPTY_QUERY,aggregations:[{id:'models',op:'count',groupBy:['model']},{id:'efforts',op:'count',groupBy:['effort']}]},requestsSchema,{now}).metrics;
+ return thinkingFromMetrics(q,overview,metrics,options,now);
+};
+// A request as model_requests has it; gap_bin and the calendar fields are
+// given, as the service derives them, in UTC.
+const request=(id,at,gap,{model='m-a',effort='high',conversation='c1',reasoning=0,bin=null,...rest}={})=>({id,conversation_id:conversation,model,effort,speed:'standard',
+ provider:'anthropic',harness:'claude-code',project_name:null,machine:'mac',preceding_tool:'shell',agent_depth:0,requested_at:at,gap_seconds:gap,gap_bin:bin,
+ reasoning_output_tokens:reasoning,day:at.slice(0,10),month:at.slice(0,7),hour_of_day:Number(at.slice(11,13)),...rest});
+
+test('Thinking group keys match the fitted estimates the service keys',()=>{
+ for(const c of groupKeys.cases){
+  const keys=thinkingBreakdownFields[c.groupBy].map(field=>c.row[field]??null);
+  const id=thinkingGroupIdentity(c.groupBy,keys);
+  assert.deepEqual([id.key,id.label],[c.key,c.label],c.groupBy+' '+JSON.stringify(c.row));
+ }
+});
+
+test('query-v3 Thinking keeps missing waits in the denominator and summarises observed ones exactly',()=>{
+ const rows=[
+  ...[1,2,3,4,5].map((gap,i)=>request('a'+i,`2026-11-0${i+1}T10:00:00Z`,gap+0.5,{conversation:'c'+(i%2),bin:gap<2?4:gap<3?5:gap<5?6:7,reasoning:i*10})),
+  request('a-null',`2026-11-02T11:00:00Z`,null,{conversation:'c9',reasoning:5}),
+  request('b0','2026-11-03T12:00:00Z',.15,{model:'m-b',effort:'low',bin:0}),
+ ];
+ const state={...defaultThinking,timezone:'UTC',view:'histogram',groupBy:'model'};
+ const data=evaluate(rows,state);
+ assert.equal(data.Retained,7);assert.equal(data.Timed,6);assert.equal(data.Conversations,3);
+ assert.deepEqual(data.Models,['m-a','m-b']);assert.deepEqual(data.Efforts,['low','high']);
+ const a=data.groups.find(g=>g.key==='m-a');
+ assert.equal(a.Retained,6);assert.equal(a.Timed,5);assert.equal(a.RetainedConversations,3);assert.equal(a.Conversations,2);
+ // Exact-linear percentiles of 1.5…5.5, as Go's thinkingQuantile.
+ assert.equal(a.stats.n,5);assert.equal(a.stats.median,3.5);assert.ok(Math.abs(a.stats.p95-5.3)<1e-12);assert.ok(Math.abs(a.stats.low-1.9)<1e-12);
+ assert.deepEqual(a.counts.slice(4,8),[1,1,2,1]);assert.equal(a.counts.reduce((x,y)=>x+y),5);
+ // Sorted by median, slowest first.
+ assert.deepEqual(data.groups.map(g=>g.key),['m-a','m-b']);
+ // Reported reasoning counts positive reports, timed or not.
+ const tokens=evaluate(rows,{...state,view:'reasoning'});
+ const r=tokens.groups.find(g=>g.key==='m-a');
+ assert.equal(r.stats.n,5);assert.equal(r.stats.median,20);assert.equal(r.Conversations,3);
+ assert.equal(tokens.groups.find(g=>g.key==='m-b').stats.n,0);
+ // The Waiting overview adds curves and coverage, untimed models included.
+ const overview=evaluate(rows,{...state,groupBy:'none'},true);
+ assert.equal(overview.groups[0].cdf.length,101);assert.deepEqual(overview.groups[0].cdf[50],[3.5,.5]);
+ assert.deepEqual(overview.coverage.map(g=>[g.key,g.Retained,g.stats.n]),[['m-a',6,5],['m-b',1,1]]);
+ assert.deepEqual(overview.agentCoverage.map(g=>g.key),['claude-code']);
+});
+
+test('query-v3 Thinking periods hold every observation across clock changes and name buckets as before',()=>{
+ for(const [zone,date] of [['America/Denver','2026-03-08'],['America/Denver','2026-11-01'],['Europe/Berlin','2026-10-25'],['Australia/Lord_Howe','2026-10-04']])
+  for(const hours of [1,6,24]){
+   const start=parseRangeInput(date,zone).getTime()-86_400_000,end=start+3*86_400_000,rows=[];
+   for(let t=start;t<end;t+=15*60_000)rows.push(request('r'+t,new Date(t).toISOString(),2,{bin:5,conversation:'c'+(t%7)}));
+   const state={...defaultThinking,timezone:zone,view:'time',period:hours===24?'day':'hours',hours,range:'custom',from:new Date(start).toISOString(),to:new Date(end).toISOString()};
+   const data=evaluate(rows,state),g=data.groups[0];
+   assert.equal(data.periods.reduce((n,key)=>n+(g.periods[key]?.stats.n??0),0),rows.length,`${zone} ${date} ${hours}h`);
+   for(const key of Object.keys(g.periods))assert.ok(data.periods.includes(key),key);
+   for(const row of rows){
+    const key=data.periods.find(k=>Date.parse(data.periodBounds[k].From)<=Date.parse(row.requested_at)&&Date.parse(row.requested_at)<Date.parse(data.periodBounds[k].To));
+    assert.ok(key&&g.periods[key],`${row.requested_at} outside its bucket`);
+   }
+  }
+ // Both occurrences of the repeated 1 a.m. keep their own offset.
+ assert.equal(thinkingPeriodKey(Date.parse('2026-11-01T07:00:00Z'),'hour','America/Denver'),'2026-11-01T01:00:00-06:00');
+ assert.equal(thinkingPeriodKey(Date.parse('2026-11-01T08:00:00Z'),'hour','America/Denver'),'2026-11-01T01:00:00-07:00');
+ assert.equal(thinkingPeriodKey(Date.parse('2026-11-01T12:00:00Z'),'hours','UTC'),'2026-11-01T12:00:00Z');
+ assert.equal(thinkingPeriodKey(Date.parse('2026-11-01T12:00:00Z'),'month','UTC'),'2026-11');
+ assert.equal(thinkingStamp(Date.parse('2026-11-01T12:00:00.500Z')),'2026-11-01T12:00:00.5Z');assert.equal(thinkingStamp(Date.parse('2026-11-01T12:00:00Z')),'2026-11-01T12:00:00Z');
+});
+
+test('Thinking reads older hour and day buckets as the nearest query-v3 supports',()=>{
+ assert.deepEqual(supportedThinkingPeriod({hours:5,days:5000}),{hours:4,days:1000});
+ assert.deepEqual(supportedThinkingPeriod({hours:10000,days:3}),{hours:24,days:3});
+ const kept={hours:6,days:3};assert.equal(supportedThinkingPeriod(kept),kept);
+ const legacy=initialThinking(new URLSearchParams({thinking:JSON.stringify({period:'hours',hours:7,days:2000})}));
+ assert.equal(legacy.hours,6);assert.equal(legacy.days,1000);
+});
+
+test('time-of-day cells need twenty waits from three conversations and take fitted ratios by key',()=>{
+ const rows=[];
+ for(let i=0;i<24;i++)rows.push(request('x'+i,`2026-11-02T09:${String(i).padStart(2,'0')}:00Z`,2,{bin:5,conversation:'c'+(i%3)}));
+ for(let i=0;i<5;i++)rows.push(request('y'+i,`2026-11-02T18:0${i}:00Z`,4,{bin:6,conversation:'c'+(i%3)}));
+ const state={...defaultThinking,timezone:'UTC',view:'calendar',groupBy:'model',calendarMetric:'ratio'};
+ const data=evaluate(rows,state),g=data.groups[0];
+ assert.deepEqual(data.calendarPeriods,['2026-11-02']);
+ assert.deepEqual(g.calendar.map(c=>[c.day,c.hour,c.N,c.Raw,c.Conversations]),[['2026-11-02',9,24,2,3],['2026-11-02',18,5,null,3]]);
+ const fit={Adjusted:24,timezone:'UTC',groups:[{key:'m-a',Adjusted:24,stats:{...g.stats,median:.8},Conversations:3,bands:[{hour:9,days:1,n:24,Ratio:.8,Low:null,High:null}],comparison:{days:0,Ratio:null,Low:null,High:null},
+  calendar:[{day:'2026-11-02',hour:9,Ratio:.8,Adjusted:24,AdjustedConversations:3}]},{key:'absent',Adjusted:1,bands:[],comparison:{days:0},calendar:[]}],factors:[]};
+ const merged=withThinkingFit(data,fit,state),m=merged.groups[0];
+ assert.equal(merged.Adjusted,24);assert.equal(m.stats.median,.8);assert.equal(m.calendar[0].Ratio,.8);assert.equal(m.calendar[1].Ratio,null);assert.equal(m.calendar[0].Raw,2);
+ assert.equal(merged.groups.length,1);assert.deepEqual(merged.factors,[]);
+});
+
+test('Thinking groups sort by the chosen statistic with missing values last',()=>{
+ const g=(label,median,n=1)=>({key:label,label,model:'',effort:'',stats:{n,median,p95:median}});
+ const groups=[g('b',2),g('a',null,0),g('c',5),g('d',2)];
+ assert.deepEqual(sortThinkingGroups(groups,{groupBy:'model',sortBy:'median',sortDirection:'desc'}).map(x=>x.label),['c','b','d','a']);
+ assert.deepEqual(sortThinkingGroups(groups,{groupBy:'model',sortBy:'median',sortDirection:'asc'}).map(x=>x.label),['b','d','c','a']);
 });

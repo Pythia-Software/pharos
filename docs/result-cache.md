@@ -163,8 +163,10 @@ answers a row request live whatever it asks for, unless it is a first page
 of at most 50 rows (a card's short list). Session Shape's list of sessions
 to read is loaded live for the same reason.
 
-Dashboard content that does not come from `query-v3` (Thinking, Habits,
-Parallelism, Usage history) is not stored yet.
+Dashboard content that does not come from `query-v3` (Thinking's fitted
+estimates, factors, compactions and traces; Habits, Parallelism, Usage
+history) is not stored yet. Thinking's counts, percentiles, periods and curves
+come from `query-v3` and are stored like any dashboard's.
 
 ## Adding a domain
 

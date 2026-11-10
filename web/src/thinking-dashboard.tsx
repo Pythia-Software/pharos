@@ -48,20 +48,13 @@ import {
   ThinkingHourly,
   ThinkingScatter,
 } from "./thinking-charts";
+import { loadThinkingData, loadThinkingFit, supportedThinkingPeriod, thinkingHourChoices, maxThinkingDays } from "./thinking-query";
+import { loadFollowing } from "./result-cache";
 import "./thinking.css";
 
 // The page's address is its cards' definition (thinking-card.ts).
 const cardSource = { page: true as const, schema: loadSchema(modelRequestDocument) };
 
-async function loadThinking(
-  url: string,
-  signal: AbortSignal,
-): Promise<ThinkingResponse> {
-  const response = await fetch(url, { signal });
-  const body = await response.json();
-  if (!response.ok) throw Error(body.error ?? "Unable to load request timing.");
-  return body;
-}
 const amount = (value: number | null) =>
   value === null ? "—" : value.toFixed(2) + "×";
 export function thinkingDashboardURL(
@@ -347,12 +340,14 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
     () => initialThinking(new URLSearchParams(location.search)),
   );
   const initial = initialThinking(new URLSearchParams(location.search));
-  const state: ThinkingState = {
+  // Hour and day buckets are those query-v3 supports; older links read as
+  // the nearest one.
+  const state: ThinkingState = supportedThinkingPeriod({
       ...initial,
       ...linked,
       minimum: 0,
       timezone: initial.timezone,
-    },
+    }),
     [data, setData] = useState<ThinkingResponse | null>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true),
@@ -364,7 +359,8 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
   // Capture effective viewer defaults even for partial card links.
   useEffect(() => {
     if (Object.keys(defaultThinking).some((key) => !Object.hasOwn(linked, key)) ||
-        linked.timezone !== state.timezone || linked.minimum !== 0)
+        linked.timezone !== state.timezone || linked.minimum !== 0 ||
+        linked.hours !== state.hours || linked.days !== state.days)
       setLinked(state);
   }, [JSON.stringify(linked)]);
   const brushOrigin = useRef<Pick<
@@ -398,22 +394,26 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
       brushOrigin.current = null;
     setLinked((p) => ({ ...state, ...p, ...next }));
   };
-  const request = thinkingRequest(state, !detail, false, nativeFilters);
+  // The page's reads, as a key: the state's query inputs and its filters.
+  const request = JSON.stringify([thinkingRequest(state, !detail, false, nativeFilters), nativeFilters]);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setError("");
-    void loadThinking(request, controller.signal)
-      .then((value) => {
+    void loadFollowing(
+      (signal) => loadThinkingData({ state, overview: !detail, where: nativeQuery.where, filters: nativeFilters }, signal),
+      (value) => {
         setData({ ...value, groups: orderThinkingGroups(value.groups, state) });
         setLoading(false);
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted) {
-          setError(String(e.message ?? e));
-          setLoading(false);
-        }
-      });
+      },
+      controller.signal,
+      "cached",
+    ).catch((e) => {
+      if (!controller.signal.aborted) {
+        setError(String(e.message ?? e));
+        setLoading(false);
+      }
+    });
     return () => controller.abort();
   }, [request, refresh]);
   useEffect(() => {
@@ -436,7 +436,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
     const controller = new AbortController();
     setValidation(undefined);
     setValidationError("");
-    void loadThinking(evidenceRequest, controller.signal)
+    void loadThinkingFit(evidenceRequest, controller.signal)
       .then((d) => setValidation(d.validation))
       .catch((e) => {
         if (!controller.signal.aborted) setValidationError(e.message);
@@ -598,7 +598,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
           }
         />
         {detail && state.view === "time" ? (
-          <PeriodControl view={state} onChange={(next) => change(next)} />
+          <PeriodControl view={state} onChange={(next) => change(next)} every={{ hours: thinkingHourChoices, maxDays: maxThinkingDays }} />
         ) : null}
         {detail && state.view === "calendar" ? (
           <>

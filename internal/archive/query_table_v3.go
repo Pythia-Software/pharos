@@ -157,6 +157,11 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			return qt.QueryResultV3{}, nil, err
 		}
 	}
+	if zone := params.Get("timezone"); dataset == "model_requests" && zone != "" {
+		if _, err := thinkingLocation(zone); err != nil {
+			return qt.QueryResultV3{}, nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidQuery, Message: "invalid timezone"}
+		}
+	}
 	if dataset == "usage" {
 		var err error
 		ctx, err = withCarbonPreferences(ctx, params.Get("carbon_settings"))
@@ -195,6 +200,9 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		}
 		if dataset == "tool_calls" {
 			table.toolSearchIndexed, err = s.Catalog.toolSearchReady(ctx)
+		}
+		if err == nil && dataset == "model_requests" {
+			table, err = thinkingZonedDataset(table, params.Get("timezone"))
 		}
 		if err == nil && dataset == "writing_messages" {
 			table, find, err = s.Catalog.messageFindDataset(ctx, params, table)

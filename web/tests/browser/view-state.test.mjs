@@ -1558,9 +1558,10 @@ test('Thinking custom date editor follows the viewer zone and writes absolute da
  const state=JSON.parse(new URL(page.url()).searchParams.get('thinking'));
  assert.equal(state.from,'2026-10-20T06:00:00.000Z');assert.equal(state.to,'2026-10-22T06:00:00.000Z');
  assert.equal(state.timezone,'America/Denver');assert.equal(state.minimum,0);
- const calls=app.calls.filter(c=>c.path==='/api/thinking');
- assert.equal(calls.at(-1).query.get('from'),state.from);assert.equal(calls.at(-1).query.get('to'),state.to);
- assert.equal(calls.at(-1).query.get('timezone'),'America/Denver');assert.equal(calls.at(-1).query.get('minimum'),'0');
+ // The page reads model_requests through query-v3 with the Range and the viewer's zone.
+ const read=app.calls.filter(c=>c.path==='/api/query/model_requests/query-v3'&&c.body?.metrics?.some(m=>m.id==='retained')).at(-1);
+ assert.ok(JSON.stringify(read.body).includes(state.from)&&JSON.stringify(read.body).includes(state.to));
+ assert.equal(read.query.get('timezone'),'America/Denver');
  await range.selectOption('custom-times');await app.settled();
  assert.equal(await page.getByLabel('From date and time',{exact:true}).inputValue(),'2026-10-20T00:00');
  await page.getByLabel('From date and time',{exact:true}).fill('2026-10-21T12:30');await app.settled();

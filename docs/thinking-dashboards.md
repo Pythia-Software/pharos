@@ -110,17 +110,36 @@ cross-stream links, stale anchors and nonpositive gaps remain retained requests
 with a timing-quality reason. Missing timing never becomes zero. Model Requests
 is also a native query dataset for inspecting these exclusions.
 
-`GET /api/thinking` returns numerical aggregates under normal API authorization.
-It is read-only, cancellable and has a two-minute execution
-budget for full-library distributions and fits. Covering timing indexes avoid
-reading conversation/tool bodies and sorting wide request rows. Evidence joins
-stream in request order and the server scans directly into numeric records,
-avoiding a full-library intermediate map collection. A leased 64 MiB SQLite
-scratch cache retains disk spill and restores connection settings afterward.
-Counts and quantiles use
-all selected observations. Timing edges repeat
-1, 2, 3, 5, 10 across decades. Fine-grained requests exceeding 5,000 time buckets
-fail visibly and ask for a coarser interval. No top-N truncation is applied to
+The dashboards read the Model Requests dataset through
+`POST /api/query/model_requests/query-v3` (`web/src/thinking-query.ts`): the
+population and its counts, each group's retained requests, usable gaps,
+conversations and exact-linear percentiles (Query Table quantiles: p10, q1,
+median, p75, p90, p95), wait bands (`gap_bin`, the edges above), the
+distributions-over-time periods (calendar `every` buckets in the viewer's zone,
+one `PERCENTILE` metric per drawn line, since date grouping takes scalar
+metrics), raw time-of-day cells (`day`/`week`/`month` × `hour_of_day`), the
+Waiting curves (101 quantiles) and its coverage by model and agent app, and the
+Model and Effort choices. A `timezone` parameter reads the calendar fields in
+the viewer's zone (`pharos_zoned_time`); without one they use the service's.
+Missing provider, agent app, repository, project and machine labels are one
+missing bucket, shown as Unreported (No project for projects). These answers
+go through the result cache like other query-v3 reads. Hour buckets divide a
+day (1, 2, 3, 4, 6, 8, 12 or 24 hours) and day buckets count at most 1,000
+days, as Query Table's `every` supports; older links read as the nearest.
+
+`GET /api/thinking` keeps what needs whole conversations in order: the
+workload fit's supported estimates by time of day (cells, three-hour bands and
+paired comparisons), the Waiting factors, compaction pairs and traces, and
+validation. It is read-only, cancellable and has a two-minute execution
+budget for fits. The page merges its groups onto the query-v3 groups by key;
+`testdata/thinking-group-keys.json` pins both sides' keys. Covering timing
+indexes avoid reading conversation/tool bodies and sorting wide request rows.
+Evidence joins stream in request order and the server scans directly into
+numeric records, avoiding a full-library intermediate map collection. A leased
+64 MiB SQLite scratch cache retains disk spill and restores connection settings
+afterward. Counts and quantiles use all selected observations. Timing edges
+repeat 1, 2, 3, 5, 10 across decades. Requests exceeding 5,000 time buckets fail
+visibly and ask for a coarser interval. No top-N truncation is applied to
 groups.
 
 All dashboard views share one immutable full-library request population through
@@ -132,21 +151,20 @@ fits and numeric validation results each retain at most four completed cohorts,
 expire after five idle minutes, and are rebuilt on demand. Completed entries
 release closures holding request slices. Fits run one cohort at a time per
 catalog, fitting models in parallel, and include all fitted inputs in the cohort
-identity. The Overview's coverage, compaction and trace sections are computed
-concurrently with its main aggregate. Ratios are attached only to
+identity. The Overview's compaction and trace sections are computed concurrently. Ratios are attached only to
 request-local copies, so calendar normalization cannot contaminate another view.
-The fixed population/options can be warmed after a source change.
+The fixed population can be warmed after a source change.
 
-`Server-Timing` reports records, filtering, fitting, aggregation, metadata and
-optional validation phases. The in-memory population is rebuilt from the stored
+`Server-Timing` reports records, filtering, fitting, aggregation and optional
+validation phases. The in-memory population is rebuilt from the stored
 projection in about 5 seconds on a 1.3-million-request library, after startup or
 a change to any cached-data dependency (the shared catalog generation); the warm
 loop rebuilds it in the background when it was used recently. See
 [the performance investigation](thinking-performance.md) for real-library
 measurements and remaining costs.
 
-The specialized domain aggregation and SVGs are host-owned. Native evidence
-queries and compact cards use published Query Table 0.9.9 APIs. No local package
+The fits and SVGs are host-owned. Counts, percentiles, periods and curves,
+native evidence queries and compact cards use published Query Table 1.0.5 APIs. No local package
 patches, generated-bundle edits or dependency replacements are used.
 
 ## Statistical support and limits

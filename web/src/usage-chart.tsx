@@ -202,23 +202,27 @@ function ControlNote({ label, children }: { label: string; children: React.React
 }
 
 export type PeriodView = { period: ChartPeriod; hours: number; days: number };
-export function PeriodControl({ view, onChange, disabled }: { view: PeriodView; onChange: (next: Partial<PeriodView>) => void; disabled?: Partial<Record<ChartPeriod, string>> }) {
+// every, when given, limits custom buckets to what the page's engine
+// supports: hour counts from a list, and at most maxDays days.
+export function PeriodControl({ view, onChange, disabled, every }: { view: PeriodView; onChange: (next: Partial<PeriodView>) => void; disabled?: Partial<Record<ChartPeriod, string>>; every?: { hours: readonly number[]; maxDays: number } }) {
   const custom = view.period === "hours" || view.period === "days" ? view.period : null;
   return <div className="usage-chart-field usage-period-control" role="group" aria-label="Time Bucket">
     <ChartSelect label="Time Bucket" value={view.period}
       options={([["hour", "Hour"], ["day", "Day"], ["week", "Week"], ["month", "Month"], ["hours", "Custom hours…"], ["days", "Custom days…"]] as Array<[ChartPeriod, string]>).map(([period, text]): [ChartPeriod, string, string?] => [period, text, disabled?.[period]])}
       title="Time covered by each chart bucket" onChange={period => onChange({ period })} />
-    {custom ? <CustomPeriod key={custom} period={custom} value={view[custom]} onChange={value => onChange({ [custom]: value })} /> : null}
+    {custom === "hours" && every ? <ChartSelect label="Hours" value={String(view.hours)} options={every.hours.map(n => [String(n), `${n} hours`])}
+      title="Number of hours per interval; they divide a day" onChange={value => onChange({ hours: Number(value) })} />
+      : custom ? <CustomPeriod key={custom} period={custom} value={view[custom]} max={custom === "days" ? every?.maxDays : undefined} onChange={value => onChange({ [custom]: value })} /> : null}
   </div>;
 }
 
-function CustomPeriod({ period, value, onChange }: { period: "hours" | "days"; value: number; onChange: (value: number) => void }) {
+function CustomPeriod({ period, value, onChange, max = 10000 }: { period: "hours" | "days"; value: number; onChange: (value: number) => void; max?: number }) {
   const [draft, setDraft] = useState(String(value));
   useEffect(() => setDraft(String(value)), [value]);
   return <label className="usage-period-custom">
-    <input type="number" aria-label={`Number of ${period}`} min={1} max={10000} step={1} value={draft}
+    <input type="number" aria-label={`Number of ${period}`} min={1} max={max} step={1} value={draft}
       title={`Number of ${period} per interval`}
-      onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber)) onChange(event.target.valueAsNumber); }}
+      onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber) && event.target.valueAsNumber <= max) onChange(event.target.valueAsNumber); }}
       onBlur={() => setDraft(String(value))} />
   </label>;
 }

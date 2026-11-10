@@ -1,0 +1,21 @@
+{
+  "description": "Thinking breakdown groups: a model_requests row (null is a missing value) and the key and label both /api/thinking (thinkingGroupKey) and thinking-query.ts give it, so the page can merge fitted estimates onto query-v3 groups.",
+  "cases": [
+    { "groupBy": "none", "row": { "model": "m" }, "key": "All requests", "label": "All requests" },
+    { "groupBy": "model", "row": { "model": "claude-x" }, "key": "claude-x", "label": "claude-x" },
+    { "groupBy": "effort", "row": { "effort": "high" }, "key": "high", "label": "high" },
+    { "groupBy": "speed", "row": { "speed": "fast" }, "key": "fast", "label": "Fast" },
+    { "groupBy": "speed", "row": { "speed": "standard" }, "key": "standard", "label": "Standard" },
+    { "groupBy": "model_effort", "row": { "model": "a<b>&\"c\" é", "effort": "high" }, "key": "[\"a<b>&\\\"c\\\" é\",\"high\"]", "label": "a<b>&\"c\" é · high" },
+    { "groupBy": "model_speed", "row": { "model": "claude-x", "speed": "fast" }, "key": "[\"claude-x\",\"Fast\"]", "label": "claude-x · Fast" },
+    { "groupBy": "model_effort_speed", "row": { "model": "claude-x", "effort": "Unreported", "speed": "standard" }, "key": "[\"claude-x\",\"Unreported\",\"Standard\"]", "label": "claude-x · Unreported · Standard" },
+    { "groupBy": "provider", "row": { "provider": null }, "key": "Unreported", "label": "Unreported" },
+    { "groupBy": "provider", "row": { "provider": "anthropic" }, "key": "anthropic", "label": "anthropic" },
+    { "groupBy": "harness", "row": { "harness": null }, "key": "Unreported", "label": "Unreported" },
+    { "groupBy": "project", "row": { "project_name": null }, "key": "No project", "label": "No project" },
+    { "groupBy": "project", "row": { "project_name": "pharos" }, "key": "pharos", "label": "pharos" },
+    { "groupBy": "machine", "row": { "machine": null }, "key": "Unreported", "label": "Unreported" },
+    { "groupBy": "preceding_tool", "row": { "preceding_tool": "none" }, "key": "none", "label": "none" },
+    { "groupBy": "agent_depth", "row": { "agent_depth": 2 }, "key": "2", "label": "2" }
+  ]
+}

@@ -14,7 +14,8 @@ import type { ConcurrencyData } from "./concurrency-data";
 import { ribbonCardTitle, ribbonCover } from "./parallelism-ribbon-card";
 import { habitsCardPreview, isHabitsCardTarget, loadHabitsSummary, readHabitsCard } from "./habits-card";
 import type { HabitsSummary } from "./habits-model";
-import { orderThinkingGroups, thinkingRequest, type ThinkingResponse } from "./thinking-model";
+import { orderThinkingGroups, type ThinkingResponse } from "./thinking-model";
+import { loadThinkingData } from "./thinking-query";
 import { gridCoverHeight } from "./grid-cover";
 import { isOriginDimension, loadOriginMetadata, originLabel } from "./origin-dimensions";
 import { optionLabels } from "./option-labels";
@@ -43,9 +44,10 @@ export async function loadDashboardCardPreview(address: string, schema: FieldSch
 }
 
 async function thinkingPreview(address: string, schema: FieldSchema, target: ThinkingCardTarget, signal: AbortSignal | undefined, now: number, thinking?: ThinkingResponse): Promise<QueryPreview> {
-  const { state, where, filters } = readThinkingCard(address, new Date(now));
+  const { state, where, native, filters } = readThinkingCard(address, new Date(now));
+  const load = () => loadThinkingData({ state, overview: false, where: native, filters, now }, signal);
   if (thinkingGridView(target, state)) {
-    const data = thinking ?? await loadThinkingResponse(thinkingRequest(state, false, false, filters), signal);
+    const data = thinking ?? await load();
     const grid = thinkingGrid(data, state), ready = Boolean(grid?.cells.some(row => row.some(cell => cell !== null)));
     return { state: ready ? "ready" : "empty", total: data.Timed, summary: thinkingCardTitle(target, state), action: DASHBOARD_CARD_ACTION, emptyLabel: "No observations in this range",
       note: `${data.Timed.toLocaleString()} usable timing gaps from ${data.Retained.toLocaleString()} retained requests.`, ...grid && ready ? { grid, coverHeight: gridCoverHeight(grid) } : {} };
@@ -58,7 +60,7 @@ async function thinkingPreview(address: string, schema: FieldSchema, target: Thi
   if (!drawn) throw failure instanceof Error ? failure : new Error(String(failure ?? "The dashboard returned no chart result."));
   const result = drawn.metrics?.[0]?.result;
   if (result && thinkingPageOrder(target, state)) {
-    const groups = orderThinkingGroups((thinking ?? await loadThinkingResponse(thinkingRequest(state, false, false, filters), signal)).groups, state);
+    const groups = orderThinkingGroups((thinking ?? await load()).groups, state);
     drawn = { ...drawn, metrics: drawn.metrics!.map((metric, i) => i ? metric : { ...metric, result: orderedBoxes(result, groups) }) };
   }
   if (target !== "thinking-compactions" || !result) return fittedPreview({ ...drawn, action: DASHBOARD_CARD_ACTION, preserveScale: true });
@@ -67,11 +69,6 @@ async function thinkingPreview(address: string, schema: FieldSchema, target: Thi
     emptyLabel: "No compactions in this range", buckets, series, dashboardTrend: { prepared: true, xLabel: "day", yLabel: "Compactions", unit: "" } });
 }
 
-async function loadThinkingResponse(url: string, signal?: AbortSignal): Promise<ThinkingResponse> {
-  const response = await fetch(url, { signal }), body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? "Unable to load request timing.");
-  return body;
-}
 
 function ribbonPreview(address: string, data: ConcurrencyData, now: number): QueryPreview {
   readDashboardCard(address, new Date(now));
