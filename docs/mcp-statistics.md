@@ -177,10 +177,39 @@ report `population_complete: false` with their retrieval limitations.
 An entity count omits `metric`; numeric count counts usable values. Numeric
 reductions report usable-value denominators and quality breakdowns. With no
 usable values, numeric count is zero and other aggregates, including sum, are
-null. Grouping supports project, repository and source, up to two dimensions and 2,000
-groups; groups page or fail explicitly rather than silently becoming top-N.
+null. Grouping supports project, outcome label, repository, source and the
+origin dimensions, up to three dimensions and 2,000 groups; groups page or
+fail explicitly rather than silently becoming top-N.
 Per-model grouping is excluded because workspaces can contain several models.
 Text-based aggregate populations retain the same incomplete-retrieval flag.
+
+## Projects, outcomes and files
+
+`project` filters and groups by project: a repository, or a plain folder for
+work outside one (`list_projects`). `outcome_label` filters, selects and
+groups by what became of a session's changes (landed, committed,
+changed_kept, changed_recent, reworked, no_changes, unknown;
+docs/projects-and-outcomes.md). Every session has one, with or without Git,
+so the cost of reworked sessions in a folder project is one aggregate:
+
+```json
+{
+  "entity": "workspace",
+  "result_type": "aggregate",
+  "project": "~/notes",
+  "aggregations": [{"id": "sessions", "op": "count"}, {"id": "cost", "op": "sum", "metric": "cost_usd"}],
+  "group_by": ["outcome_label"]
+}
+```
+
+The older `outcome` filter is text a source reported about the work, not the
+label. `file` matches text in the path of a file the work changed: a change
+set's file, or a file a session edited through its tool calls, which every
+harness with file tools records, by its path in its repository or a folder
+file's `~` or absolute path. An absolute path also finds a repository's file
+through a checkout Pharos knows. `list_outcomes` gives each label's evidence;
+`get_file_history` and `get_branch_spend` cover a file's history and spend
+per branch.
 
 Aggregates return groups, not entity rows. Use `retain_snapshot: true` when a
 later compatible rows request should retrieve IDs from the same snapshot.

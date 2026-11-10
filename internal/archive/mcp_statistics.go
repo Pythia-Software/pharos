@@ -179,9 +179,13 @@ func (c *Catalog) buildStatisticsSnapshot(ctx context.Context, r statisticsReque
 	if err != nil {
 		return snapshot, err
 	}
-	clauses, values := statisticsContext(r)
+	roots, err := fileFilterRoots(ctx, tx, r.File)
+	if err != nil {
+		return snapshot, err
+	}
+	clauses, values := statisticsContext(r, roots)
 	entityID, from, projectionID, entity := "w.id", `workspaces w LEFT JOIN repositories repo ON repo.id=w.repository_id`+projectJoin("w"), "w.id", "workspace"
-	fields := `w.id workspace_id,w.source_kind source,w.activity_at,repo.display_name repository,` + projectNameSQL("w") + ` project,w.indexed_at,
+	fields := `w.id workspace_id,w.source_kind source,w.activity_at,repo.display_name repository,` + projectNameSQL("w") + ` project,` + outcomeLabelSQL("w") + ` outcome_label,w.indexed_at,
 	CASE WHEN EXISTS(SELECT 1 FROM conversations ac WHERE ac.workspace_id=w.id AND ac.coverage<>'complete') THEN 'partial' ELSE 'complete' END archive_coverage`
 	if r.Entity == "conversation" {
 		entityID = "c.id"
@@ -341,7 +345,9 @@ func (c *Catalog) buildStatisticsSnapshot(ctx context.Context, r statisticsReque
 	return snapshot, nil
 }
 
-func statisticsContext(r statisticsRequest) ([]string, []any) {
+// statisticsContext is the request's filters; roots resolve an absolute
+// file filter (fileFilterRoots).
+func statisticsContext(r statisticsRequest, roots []projectRoot) ([]string, []any) {
 	where := []string{"1=1"}
 	args := []any{}
 	if r.Entity == "conversation" {
@@ -375,6 +381,10 @@ func statisticsContext(r statisticsRequest) ([]string, []any) {
 			args = append(args, "%"+field.value+"%")
 		}
 	}
+	if r.OutcomeLabel != "" {
+		where = append(where, outcomeLabelSQL("w")+"=?")
+		args = append(args, r.OutcomeLabel)
+	}
 	if r.Error != "" {
 		where = append(where, "EXISTS(SELECT 1 FROM metric_ledger ml WHERE ml.workspace_id=w.id AND ml.error_type LIKE ?)")
 		args = append(args, "%"+r.Error+"%")
@@ -401,8 +411,8 @@ func statisticsContext(r statisticsRequest) ([]string, []any) {
 		}
 	}
 	if r.File != "" {
-		where = append(where, "EXISTS(SELECT 1 FROM change_sets cs JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=w.id AND cf.path LIKE ?)")
-		args = append(args, "%"+r.File+"%")
+		where = append(where, fileFilterSQL("w"))
+		args = append(args, fileFilterArgs(r.File, roots)...)
 	}
 	if r.PR != nil {
 		where = append(where, "EXISTS(SELECT 1 FROM work_pr_links l JOIN pull_requests pr ON pr.id=l.pr_id WHERE l.workspace_id=w.id AND pr.number=?)")
@@ -1126,7 +1136,7 @@ func statisticsCursorPosition(s statisticsSnapshot, r statisticsRequest) (int, e
 
 func compatibleStatisticsRequest(original, r statisticsRequest, membership bool) error {
 	if original.Entity == "workspace" && r.Entity == "conversation" && membership && len(r.Metrics) == 0 && len(r.Filters) == 0 && r.Query == "" && r.Scope == "conversation" {
-		if r.Type != "rows" || r.Repository != "" || r.Project != "" || r.Source != "" || r.Model != "" || r.Provider != "" || r.Channel != "" || r.MachineID != "" || r.ExecutionMachineID != "" || r.Effort != "" || r.File != "" || r.PR != nil || r.From != "" || r.To != "" || r.Owner != "" || r.Flavor != "" || r.Version != "" || r.Outcome != "" || r.Error != "" {
+		if r.Type != "rows" || r.Repository != "" || r.Project != "" || r.Source != "" || r.Model != "" || r.Provider != "" || r.Channel != "" || r.MachineID != "" || r.ExecutionMachineID != "" || r.Effort != "" || r.File != "" || r.PR != nil || r.From != "" || r.To != "" || r.Owner != "" || r.Flavor != "" || r.Version != "" || r.Outcome != "" || r.OutcomeLabel != "" || r.Error != "" {
 			return fmt.Errorf("membership snapshot only supports IDs/coverage and workspace_ids selection")
 		}
 		return nil

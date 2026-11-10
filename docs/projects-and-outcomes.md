@@ -770,8 +770,49 @@ A budget too small for one session, or one file with one session and one
 commit, is an error naming `max_output_tokens`, never an empty page whose
 `next_offset` does not advance.
 
-Both read stored facts only and answer as fully for folders as for
-repositories. The no-git parity test calls both on the folder fixture.
+- `get_branch_spend`: cost, tokens and sessions per branch, with the
+  coverage split (on a branch per turn or per session, unknown, no branch
+  data), from the same rows as Analyze → Spend by Branch. Where no repository
+  session has spend, it says so and points to `query_statistics` per project.
+  Spend is placed in the hour it was used: `from` and `to` select the
+  hours starting in [`from`, `to`), compared as instants. A date is a day in
+  the Mac's time zone, as the page counts days, and a date `to` includes its
+  day.
+
+Every other tool takes the new facts too:
+
+- `list_projects` takes `path`, an agent's working directory, and returns the
+  project it is in: the nearest repository checked out at or above it, else
+  the nearest folder project, even below where any session ran. A temporary
+  directory is in `/tmp`, as the project rule places its sessions. As a
+  checkout there does for repositories, a folder project at the home
+  directory or `/` holds only itself, so a new folder below it has no
+  project yet and the caller looks further (the skill tries the remote).
+- A `file` filter (`search_conversations`, `search_work`, `trace`,
+  `query_statistics`) matches files sessions edited through their tool
+  calls (`session_files`), not only change sets, so it finds Claude Code,
+  Codex and Antigravity work. It matches a session's file by its path in its
+  repository, or by a folder file's `~` or absolute path, never by the rest of
+  its `file_key`, whose prefixes and repository ID every file shares. An
+  absolute path also finds a repository's files at that path in a checkout
+  Pharos knows (`repositories.local_locations_json`); a new worktree Pharos
+  has not seen needs the repository-relative path.
+- `query_statistics`, `search_work` and `search_conversations` take
+  `outcome_label` as a filter; `query_statistics` also selects it and groups
+  by it, with `project`. The search tools hand a call with it to
+  `query_statistics`, as they do metric filters, so it returns that tool's
+  cards rather than search cards; both schemas say so. The older `outcome`
+  filter is reported text.
+- `get_work_detail` has `session_outcome` (label, evidence, tier, local Git
+  state and facts), `edited_files` and `commit_links` sections.
+- The bundled skill (`assets/skills/search-prior-coding-sessions`) starts
+  from `list_projects` with the working directory, and leads to the file,
+  outcome and spend tools; a test keeps every tool it names registered. Ask
+  Pharos's instructions do the same.
+
+These read stored facts only and answer as fully for folders as for
+repositories. The no-git parity test calls each of them on the folder
+fixture.
 
 ## What Pharos never does with git
 

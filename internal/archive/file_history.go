@@ -82,6 +82,54 @@ func fileHistoryNote(files []map[string]any, found fileHistoryKeys, project stri
 	return note
 }
 
+// fileFilterSQL matches workspace w when it changed a file whose path
+// contains the pattern's text: a change set's file (change_files), or a file
+// a session edited through its tool calls (session_files), which every
+// harness with file tools records. A session's file matches by its path in
+// its repository, or a folder file by its ~ path or absolute path; never by
+// the rest of its key, whose repository: and path: prefixes and repository
+// ID every file would share. An absolute path also matches a repository file
+// at that path in a checkout Pharos knows (fileFilterArgs resolves it). Use
+// fileFilterArgs for its arguments.
+func fileFilterSQL(w string) string {
+	return `(EXISTS(SELECT 1 FROM change_sets cs JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=` + w + `.id AND cf.path LIKE ?)
+		OR EXISTS(SELECT 1 FROM session_files sf WHERE sf.workspace_id=` + w + `.id AND (sf.path LIKE ?
+			OR substr(sf.file_key,1,5)='path:' AND substr(sf.file_key,6) LIKE ?
+			OR sf.repository_id IS NOT NULL AND EXISTS(SELECT 1 FROM json_each(?) j
+				WHERE json_extract(j.value,'$.repository')=sf.repository_id AND sf.path LIKE json_extract(j.value,'$.path')))))`
+}
+
+// fileFilterRoots are the checkouts fileFilterArgs resolves a file filter
+// against: every repository's, for an absolute (or ~) path, else none.
+func fileFilterRoots(ctx context.Context, q queryer, file string) ([]projectRoot, error) {
+	if folderKey(file) == "" || strings.Contains(file, "%") {
+		return nil, nil
+	}
+	return projectRoots(ctx, q)
+}
+
+// fileFilterArgs are fileFilterSQL's arguments for a file filter: text a
+// path contains, or a LIKE pattern when it has %. An absolute path inside a
+// checkout in roots (fileFilterRoots) is also the repository's files at or
+// below its path in the repository, as session_files records them.
+func fileFilterArgs(file string, roots []projectRoot) []any {
+	pattern := file
+	if !strings.Contains(pattern, "%") {
+		pattern = "%" + pattern + "%"
+	}
+	checkouts := []map[string]string{}
+	if key := folderKey(file); key != "" && !strings.Contains(file, "%") {
+		for _, root := range roots {
+			if key == root.folder {
+				checkouts = append(checkouts, map[string]string{"repository": root.repository, "path": "%"})
+			} else if rest, ok := strings.CutPrefix(key, strings.TrimSuffix(root.folder, "/")+"/"); ok {
+				checkouts = append(checkouts, map[string]string{"repository": root.repository, "path": rest + "%"})
+			}
+		}
+	}
+	return []any{pattern, pattern, pattern, jsonText(checkouts)}
+}
+
 // findFileHistoryKeys finds the session_files keys a query names. An exact
 // match wins: the path itself, a folder path (~/… or absolute), or an
 // absolute path in a checkout this Mac recorded, which maps to its
