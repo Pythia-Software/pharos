@@ -154,6 +154,11 @@ func messageLabelStoredDataset(ledger bool, unmarked string) sqlDataset {
 	}, timestamps: map[string]string{"occurred_at": "f.occurred_at"}, lookups: map[string]bool{"message_id": true, "conversation_id": true, "workspace_id": true},
 		// The physical facts themselves are narrow; this index supplies range access,
 		// and the covered population budget doesn't permit transcript-body scans.
+		newestBounds: map[string]newestBound{"occurred_at": {
+			nth:    "SELECT occurred_at FROM message_label_facts ORDER BY occurred_at DESC LIMIT 1 OFFSET ?",
+			column: "f.occurred_at",
+			join:   [2]string{" JOIN message_label_memberships membership", " CROSS JOIN message_label_memberships membership"},
+		}},
 		pageFrom: "FROM message_label_facts stored", coveringIndex: "message_label_facts_trends_idx", rangeCoveringIndex: "message_label_facts_trends_idx", coveredFields: covered}
 }
 
@@ -185,7 +190,7 @@ func (c *Catalog) ensureMessageLabelFacts(ctx context.Context) error {
 			var generation int
 			err = tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name='query_cache_generation'").Scan(&generation)
 			if err == nil && generation > 0 {
-				_, err = tx.ExecContext(ctx, "UPDATE query_cache_generation SET value=value+1 WHERE id=1")
+				err = advanceCacheGeneration(ctx, tx, "labels")
 			}
 		}
 		return err
@@ -383,7 +388,7 @@ func publishMessageLabelFacts(ctx context.Context, tx *sql.Tx, build messageLabe
 		}
 		n, err := result.RowsAffected()
 		if err == nil && n > 0 {
-			_, err = tx.ExecContext(ctx, "UPDATE query_cache_generation SET value=value+1 WHERE id=1")
+			err = advanceCacheGeneration(ctx, tx, "labels")
 		}
 		return err
 	}

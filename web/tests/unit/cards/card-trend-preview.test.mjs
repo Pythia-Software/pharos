@@ -38,11 +38,12 @@ test("an observed history of zero emissions is a ready trend, not an empty card"
     assert.ok(path.endsWith("/usage/query-v3"), path);
     // Every day has usage records whose estimated CO₂e is exactly zero (custom grid 0).
     const days = request.result.where.at(-1).any?.map(term => term.value) ?? [request.result.where.at(-1).value];
-    return Response.json({ metrics: request.metrics.map(metric => ({ id: metric.id, coverage: "exact", buckets: days.map(day => ({ keys: [day], value: metric.id === "trend-rows" ? 3 : 0, count: 3 })) })) });
+    return Response.json({ metrics: request.metrics.map(metric => ({ id: metric.id, coverage: "exact", buckets: days.map(day => ({ keys: [day], value: metric.id === "trend-rows" ? 3 : 0, count: 3 })) })) }, { headers: { "X-Pharos-Cache": "stale", "X-Pharos-Cache-Built": "2026-11-10T10:00:00Z" } });
   };
   const item = instantiateRecipe(recipe, 7);
   const preview = await loadQueryPreview("usage", item.query, schema, { recipe, window: item.window, cover: item.cover, url: item.url, suggested: true });
   assert.equal(preview.state, "ready");
   assert.equal(preview.study.value, 0);
   assert.ok(preview.study.points.every(point => point === 0));
+  assert.deepEqual(preview.served, { state: "stale", built: Date.parse("2026-11-10T10:00:00Z") }, "a trend drawn from stored answers says so, so the card shows its age and asks again");
 });

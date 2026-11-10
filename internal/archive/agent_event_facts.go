@@ -465,9 +465,14 @@ var agentEventRateDataset = func() sqlDataset {
 		"day": "date(f.occurred_at,'localtime')", "week": "date(f.occurred_at,'localtime','-6 days','weekday 1')", "month": "strftime('%Y-%m',f.occurred_at,'localtime')",
 	}
 	return sqlDataset{
-		from: `FROM agent_event_facts f CROSS JOIN ` + agentEventKindsSQL() + ` k LEFT JOIN agent_event_fact_kinds x ON x.message_id=f.message_id AND x.family=k.family` +
-			` LEFT JOIN conversations c ON c.id=f.conversation_id LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id`,
-		lookups:    map[string]bool{"message_id": true, "conversation_id": true},
+		// The conversation, workspace and repository are found once per
+		// message read, before its kinds multiply the rows.
+		from: `FROM agent_event_facts f LEFT JOIN conversations c ON c.id=f.conversation_id LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id` +
+			` CROSS JOIN ` + agentEventKindsSQL() + ` k LEFT JOIN agent_event_fact_kinds x ON x.message_id=f.message_id AND x.family=k.family`,
+		lookups: map[string]bool{"message_id": true, "conversation_id": true},
+		// A filter on the kind leaves that kind's rows out before the join
+		// to its events; one on who prompted leaves the message out of all.
+		exact:      map[string]bool{"family": true, "family_group": true, "prompted_by": true},
 		columns:    columns,
 		timestamps: map[string]string{"occurred_at": "f.occurred_at"},
 		optionalJoins: map[string]string{
@@ -476,6 +481,7 @@ var agentEventRateDataset = func() sqlDataset {
 			"w": " LEFT JOIN workspaces w ON w.id=c.workspace_id",
 			"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
 		},
-		pageFrom: "FROM agent_event_facts f",
+		pageFrom:    "FROM agent_event_facts f",
+		newestFirst: map[string]string{"occurred_at": "agent_event_facts_time_idx"},
 	}
 }()

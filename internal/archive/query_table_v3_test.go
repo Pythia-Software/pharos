@@ -227,6 +227,30 @@ func TestQueryV3UsageFiltersSessionsAndCalendar(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Rows[0]["tokens"] != float64(3050) {
 		t.Fatal("hour query mutated the cached daily population", w.Code, w.Body.String())
 	}
+	// A bound on first_usage_at pre-selects the days staged; the answer and
+	// the cached population stay the same.
+	for _, c := range []struct {
+		op     string
+		tokens float64
+	}{{">=", 2030}, {"<", 1020}} {
+		q.Source.Where = []qt.WhereTerm{{Field: "first_usage_at", Op: c.op, Value: "2026-09-21T00:00:00Z"}}
+		w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || len(result.Rows) != 1 || result.Rows[0]["tokens"] != c.tokens {
+			t.Fatal(c.op, w.Code, w.Body.String())
+		}
+	}
+	q.Source.Where = nil
+	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Rows[0]["tokens"] != float64(3050) {
+		t.Fatal("a windowed query mutated the cached daily population", w.Code, w.Body.String())
+	}
+	days := []map[string]any{{"first_usage_at": "2026-06-01T00:00:00Z"}, {"first_usage_at": "2026-09-20T23:00:00Z"}, {"first_usage_at": "2026-09-21T05:00:00Z"}, {"first_usage_at": nil}}
+	if kept := usageRowsWithin(days, [][]qt.WhereTerm{{{Field: "first_usage_at", Op: ">=", Value: "2026-09-21T00:00:00Z"}}}); len(kept) != 3 {
+		t.Fatal("want the days near or inside the window, and the one without a time", kept)
+	}
+	if kept := usageRowsWithin(days, [][]qt.WhereTerm{{{Field: "first_usage_at", Op: ">=", Value: "2026-09-21T00:00:00Z", Negated: true}}}); len(kept) != 4 {
+		t.Fatal("a negated bound narrows nothing", kept)
+	}
 	calendar := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Result: qt.WireQuery{Select: []string{"id"}, Limit: 50},
 		Metrics: []qt.AggSpec{{ID: "days", Op: "sum", Field: "total_tokens", GroupBy: []string{"first_usage_at"}, DateGrouping: &qt.MetricDateGrouping{Field: "first_usage_at", Interval: "day", TimeZone: "UTC", Range: "observed"}}}}
 	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", calendar)
@@ -842,6 +866,24 @@ func TestQueryV3ReusesPopulationCountsWithinAGeneration(t *testing.T) {
 	if got := len(rememberedCounts(c, nil)); got != before+4 {
 		t.Fatalf("a later clock reused a relative count: %d counts", got)
 	}
+	// Tool calls read no label or agent-event table, so the passes that write
+	// those leave its counts in place; a source that may read them recounts.
+	if err := c.ensureLabelsSchema(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	run("agent_events", ungroupedRowsRequest(noon))
+	held := len(rememberedCounts(c, nil))
+	execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('labelled','t')`)
+	if got := run("tool_calls", slow); got != total+1000 {
+		t.Fatalf("a label write recounted tool calls: %d, want the remembered %d", got, total+1000)
+	}
+	run("agent_events", ungroupedRowsRequest(noon))
+	if got := len(rememberedCounts(c, nil)); got != held {
+		t.Fatalf("after a label write: %d counts, want %d (tool calls kept, agent events replaced)", got, held)
+	}
+	if stats := c.queryCounts.snapshot(); stats.Generations != 1 {
+		t.Fatalf("a label write should move only the whole generation's counts: %+v", stats)
+	}
 	// A write advances the generation inside the next request's transaction.
 	if _, err := c.DB.Exec("DELETE FROM tool_calls WHERE id=(SELECT id FROM tool_calls WHERE duration_ms>100 LIMIT 1)"); err != nil {
 		t.Fatal(err)
@@ -878,6 +920,50 @@ func TestQueryV3ReusesPopulationCountsWithinAGeneration(t *testing.T) {
 	var stats queryCountStats
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &stats) != nil || stats != c.queryCounts.snapshot() || stats.Counted == 0 || stats.Generation == 0 {
 		t.Fatalf("query count diagnostics: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A Tool calls page sorted newest first reads the time index and counts
+// over a source narrowed to its filter (newestFirstScan, narrowCount): the
+// same rows and total as the page in any other order.
+func TestQueryV3NewestFirstToolCallsMatchOldestFirst(t *testing.T) {
+	c, config := testCatalog(t)
+	seedToolCalls(t, c, 40)
+	c.maintainQueryTextIndexes(t.Context())
+	if err := c.ensureToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, c)
+	noon := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	page := func(dir string, where ...qt.WhereTerm) ([]string, int64) {
+		t.Helper()
+		q := ungroupedRowsRequest(noon, where...)
+		q.Result.Select, q.Result.Limit = []string{"id", "started_at", "conversation_id"}, 100
+		q.Result.OrderBy = []qt.OrderBy{{Field: "started_at", Dir: dir}}
+		schema, _ := sqliteQuerySchema("tool_calls")
+		result, _, err := server.executeQueryV3(t.Context(), "tool_calls", nil, schema, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []string{}
+		for i, row := range result.Rows {
+			if i > 0 && firstString(row["started_at"]) != firstString(result.Rows[i-1]["started_at"]) &&
+				(firstString(row["started_at"]) > firstString(result.Rows[i-1]["started_at"])) == (dir == "desc") {
+				t.Fatalf("%s page out of order at row %d", dir, i)
+			}
+			ids = append(ids, firstString(row["id"]))
+		}
+		slices.Sort(ids)
+		return ids, result.Total
+	}
+	for _, where := range [][]qt.WhereTerm{nil, {{Field: "started_at", Op: ">=", Value: "-30d"}}} {
+		c.queryCounts = queryCountCache{}
+		newest, total := page("desc", where...)
+		c.queryCounts = queryCountCache{}
+		oldest, plain := page("asc", where...)
+		if len(newest) == 0 || total != plain || !slices.Equal(newest, oldest) {
+			t.Fatalf("newest first %d rows of %d, oldest first %d of %d, for %v", len(newest), total, len(oldest), plain, where)
+		}
 	}
 }
 

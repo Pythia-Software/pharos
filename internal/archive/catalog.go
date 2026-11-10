@@ -39,6 +39,9 @@ type Catalog struct {
 	find         libraryFindCache
 	transcripts  transcriptFindCache
 	derived      derivedCache
+	// resultStore is the side-file cache of responses (result_cache.go).
+	resultsOnce sync.Once
+	resultStore *resultCache
 	// execution caches execution resolution per source generation (execution_revision.go).
 	execution    executionCache
 	fingerprints fingerprintWorker
@@ -166,6 +169,7 @@ func (c *Catalog) Close() error {
 	cliWriteCheck("close")
 	c.closeSessionPreferences()
 	c.closeDerivedCache()
+	c.closeResults()
 	if c.labelers != nil {
 		c.labelers.Close()
 	}

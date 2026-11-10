@@ -103,7 +103,11 @@ var thinkingRequestDataset = func() sqlDataset {
 	columns["day"] = "date(d.requested_at,'localtime')"
 	columns["week"] = "date(d.requested_at,'localtime','-6 days','weekday 1')"
 	columns["month"] = "strftime('%Y-%m',d.requested_at,'localtime')"
-	return sqlDataset{from: "FROM (" + thinkingSource + ") d", columns: columns, timestamps: map[string]string{"requested_at": "d.requested_at"}}
+	return sqlDataset{from: "FROM (" + thinkingSource + ") d", columns: columns, timestamps: map[string]string{"requested_at": "d.requested_at"},
+		newestBounds: map[string]newestBound{"requested_at": {
+			nth:    "SELECT requested_at FROM model_request_timings ORDER BY requested_at DESC LIMIT 1 OFFSET ?",
+			column: "d.requested_at",
+		}}}
 }()
 
 // ensureRequestTimings installs the stored timing projection. Triggers mark a

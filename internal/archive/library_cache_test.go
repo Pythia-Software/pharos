@@ -262,8 +262,9 @@ func TestWarmCachesRebuildsWhatPagesUse(t *testing.T) {
 	catalog.derived.mu.Lock()
 	defer catalog.derived.mu.Unlock()
 	for key, entry := range catalog.derived.entries {
-		if strings.HasPrefix(key, "usage:") && entry.version != version {
-			t.Fatalf("usage rows were not rewarmed: version %d, want %d", entry.version, version)
+		// Usage follows the core generation, which leaves label and event commits out.
+		if want := catalog.derived.versions.generations.of(derivedKeyGeneration(key)); strings.HasPrefix(key, "usage:") && (entry.version != want || want > version) {
+			t.Fatalf("usage rows were not rewarmed: version %d, want %d of %d", entry.version, want, version)
 		}
 		if strings.HasPrefix(key, "writing:") {
 			t.Fatal("warmed a value no page asked for")

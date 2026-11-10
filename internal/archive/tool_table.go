@@ -70,6 +70,7 @@ var toolCallDataset = sqlDataset{
 		"a": "LEFT JOIN agent_sessions a ON a.id=t.agent_session_id",
 	},
 	pageFrom:           "FROM tool_calls t",
+	newestFirst:        map[string]string{"started_at": "tool_calls_page_idx"},
 	pageIndexes:        map[string]string{"started_at": "tool_calls_page_idx", "duration_ms": "tool_calls_duration_page_idx", "result_tokens": "tool_calls_result_tokens_page_idx", "carried_tokens": "tool_calls_carried_page_idx"},
 	coveringIndex:      "tool_calls_analytics_idx",
 	rangeCoveringIndex: "tool_calls_analytics_time_idx",

@@ -2,24 +2,24 @@
   "version": 1,
   "dependencies": {
     "@pythia-software/query-table-core": {
-      "version": "1.0.3",
+      "version": "1.0.4",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.3 against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes. Query Table 1.0.3 also adds an optional Go population counter, which Pharos does not use. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.4 against 1.0.3: the published npm files are identical apart from package.json versions; the release only speeds up the Go SQLite executor (native text COUNT/COUNT_DISTINCT reduction). 1.0.3 review against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes; the Go population counter backs Pharos's count cache and has no view controls. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-react": {
-      "version": "1.0.3",
+      "version": "1.0.4",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.3 against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes. Query Table 1.0.3 also adds an optional Go population counter, which Pharos does not use. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.4 against 1.0.3: the published npm files are identical apart from package.json versions; the release only speeds up the Go SQLite executor (native text COUNT/COUNT_DISTINCT reduction). 1.0.3 review against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes; the Go population counter backs Pharos's count cache and has no view controls. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-ui": {
-      "version": "1.0.3",
+      "version": "1.0.4",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.3 against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes. Query Table 1.0.3 also adds an optional Go population counter, which Pharos does not use. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.4 against 1.0.3: the published npm files are identical apart from package.json versions; the release only speeds up the Go SQLite executor (native text COUNT/COUNT_DISTINCT reduction). 1.0.3 review against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes; the Go population counter backs Pharos's count cache and has no view controls. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-codegen": {
-      "version": "1.0.3",
+      "version": "1.0.4",
       "status": "reviewed",
-      "reason": "Reviewed Query Table 1.0.3 against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes. Query Table 1.0.3 also adds an optional Go population counter, which Pharos does not use. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.4 against 1.0.3: the published npm files are identical apart from package.json versions; the release only speeds up the Go SQLite executor (native text COUNT/COUNT_DISTINCT reduction). 1.0.3 review against 1.0.1: the UI adds runActionsBeforeActivity and responsive action wrapping; the host readiness button keeps its existing readiness_scope binding. Core, React and codegen have no control changes; the Go population counter backs Pharos's count cache and has no view controls. The 1.0.0 review remains applicable: native query state owns grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share; the host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     }
   },
   "bindings": [
@@ -2201,6 +2201,33 @@
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
+      "key": "0e2730981692c4d8:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderClaudeWatch",
+      "tag": "select",
+      "control": "'select'",
+      "contract": "settings",
+      "reason": "Per-Mac browser profile that opens Claude export download links; saved outside the library and independent of URL view state."
+    },
+    {
+      "key": "8d9ed6b2fb0f0f79:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderClaudeWatch",
+      "tag": "button",
+      "control": "'button', 'toggle'",
+      "contract": "settings",
+      "reason": "Per-Mac opt-in to watch Downloads for Claude export manifests; saved outside the library and independent of URL view state."
+    },
+    {
+      "key": "fdbb6f776b362556:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderClaudeWatch",
+      "tag": "button",
+      "control": "'button', '', 'Check Downloads now'",
+      "contract": "action",
+      "reason": "Asks the service to check Downloads for a Claude export now; an immediate command with no view state."
+    },
+    {
       "key": "8165dad42aa683a0:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "renderImport",
@@ -2271,6 +2298,24 @@
       "control": "'summary', '', 'What each tool records'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
+    },
+    {
+      "key": "7390be4d645bfa9a:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "showClaudeWatch",
+      "tag": "button",
+      "control": "'button', '', action==='retry'?'Try again':'Stop'",
+      "contract": "action",
+      "reason": "Retries or stops one watched Claude export's downloads; an immediate command with no view state."
+    },
+    {
+      "key": "8cb887a2cf3be862:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "showClaudeWatch",
+      "tag": "select",
+      "control": "'select'",
+      "contract": "editing",
+      "reason": "Unapplied browser profile for one paused export's Try again action; applied only when the person retries."
     },
     {
       "key": "419f51bddce9c1c1:0",
@@ -3776,6 +3821,26 @@
       "control": "'button', '', `Load full output · ${formatBytes(clippedBytes(clipped))}`",
       "contract": "reader",
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
+    },
+    {
+      "key": "33619209c2062df5:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "workSection",
+      "tag": "details",
+      "control": "'details', `work-section ${className}`",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Work page heading sections (Code activity, Related work) use stable work:<id>:<section> keys in the shared disclosures map; the remembered open/closed preference only supplies data-view-default."
+    },
+    {
+      "key": "6595bb79365a0acf:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "workSection",
+      "tag": "summary",
+      "control": "'summary', 'work-section-summary', label",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Summary of a keyed work heading section; a deliberate click also remembers the section open or closed as an interface preference for other work pages."
     },
     {
       "key": "0e18c887173fcc9b:0",
@@ -7831,13 +7896,31 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "ddd1928c7e12ab89:0",
+      "key": "25fcb341aea73913:0",
       "file": "web/src/session-identity.tsx",
       "owner": "SessionIdentity",
       "tag": "button",
-      "control": "aria-label={`Open session ${name}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}",
+      "control": "aria-label={`Open session ${name}`} onClick={open}",
       "contract": "delegation",
       "reason": "Session navigation writes the canonical conversation route and delegation_session through the shared explorer openNode handler; the current session has no navigation control."
+    },
+    {
+      "key": "25fcb341aea73913:1",
+      "file": "web/src/session-identity.tsx",
+      "owner": "SessionIdentity",
+      "tag": "button",
+      "control": "aria-label={`Open session ${name}`} onClick={open}",
+      "contract": "delegation",
+      "reason": "Session navigation beside a SessionNotice writes the canonical conversation route and delegation_session through the shared explorer openNode handler."
+    },
+    {
+      "key": "5dcce287268322d2:0",
+      "file": "web/src/session-identity.tsx",
+      "owner": "SessionNotice",
+      "tag": "button",
+      "control": "aria-label={`${notes.length === 1 ? \"Note\" : `${notes.length} notes`} about what ${name} does not show`} onPointerEnter={event => inspector.show(event.currentTarget, card)} onPointerLeave={inspector.leave} onClick={event => { event.preventDefault(); event.stopPropagation(); inspector.pin(event.currentTarget, card, undefined, event.detail === 0); }}",
+      "contract": "transient",
+      "reason": "Hover previews and a click pins the session notes popover without changing the URL; owner-session links inside it navigate through openNode."
     },
     {
       "key": "3c0938979a8182b4:0",
@@ -9065,11 +9148,11 @@
       "reason": "Native item properties and source navigation; retained payload disclosures use stable dataset/row/field keys."
     },
     {
-      "key": "1ec13b514454e60a:0",
+      "key": "1ad56c88977ac9a4:0",
       "file": "web/src/usage-workspace.tsx",
       "owner": "UsageWorkspace",
       "tag": "button",
-      "control": "onClick={() => window.dispatchEvent(new Event(\"pharos:usage-refresh\"))}",
+      "control": "onClick={() => window.dispatchEvent(askedRefresh())}",
       "contract": "action",
       "reason": "Refresh reruns the open dashboard's queries; it changes no view state."
     },

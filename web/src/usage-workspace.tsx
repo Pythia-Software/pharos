@@ -1,5 +1,6 @@
 import { dataSources } from "./data-taxonomy-model";
 import { analyzePages } from "./app-navigation-model";
+import { askedRefresh } from "./dataset-refresh";
 import React, { createContext, useContext, useEffect, useState } from "react";
 import {EMPTY_QUERY,encodeQuery,type FieldSchema,type QueryState } from "@pythia-software/query-table-core";
 import { dashboardQueryLinks } from "./dashboard-query-links";
@@ -77,7 +78,7 @@ export function UsageWorkspace({ renderDashboard, renderTable }: { renderDashboa
   return <NestedPageLayout className="pharos-query-page usage-workspace" contentClassName="usage-workspace-content"
     label="Analyze" pages={pages} current={`${mode}:${mode === "dashboards" ? topic : dataset}`} title={title} titleSlot={setHeadline}
     description={mode === "dashboards" ? "" : `${dataSources[dataset].grain}. Choose a query idea, or explore the records with your own filters and grouping.`}
-    actions={<><ResetPage />{mode==='dashboards'&&['human','thinking-detail'].includes(topic)?<UsageWorkspaceLink href={'/analyze?analyze_mode=dashboards&analyze_topic=labels&analyze_data=message_labels&analyze_filters='+encodeURIComponent(encodeQuery({...EMPTY_QUERY,where:[{field:'source',op:'=',value:topic==='human'?'human':'thinking'}]}))}>Explore {topic==='human'?'human words':'thinking'} labels<Icon name="arrow-right"/></UsageWorkspaceLink>:null}{mode === "dashboards" ? <button type="button" className="usage-dashboard-refresh" onClick={() => window.dispatchEvent(new Event("pharos:usage-refresh"))}>Refresh</button> : null}{mode !== "dashboards" && (params.has("analyze_opened") || params.has("analyze_chart")) ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
+    actions={<><ResetPage />{mode==='dashboards'&&['human','thinking-detail'].includes(topic)?<UsageWorkspaceLink href={'/analyze?analyze_mode=dashboards&analyze_topic=labels&analyze_data=message_labels&analyze_filters='+encodeURIComponent(encodeQuery({...EMPTY_QUERY,where:[{field:'source',op:'=',value:topic==='human'?'human':'thinking'}]}))}>Explore {topic==='human'?'human words':'thinking'} labels<Icon name="arrow-right"/></UsageWorkspaceLink>:null}{mode === "dashboards" ? <button type="button" className="usage-dashboard-refresh" onClick={() => window.dispatchEvent(askedRefresh())}>Refresh</button> : null}{mode !== "dashboards" && (params.has("analyze_opened") || params.has("analyze_chart")) ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
     {mode === "dashboards" ? <div className="usage-dashboard" key={topic}>
       <DashboardHeadline.Provider value={headline}>{renderDashboard(topic)}</DashboardHeadline.Provider></div>
       : <div className="usage-workspace-table" key={dataset}>{renderTable(dataset)}</div>}

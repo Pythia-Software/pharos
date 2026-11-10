@@ -1,4 +1,5 @@
 import { formatUSD } from "./currency";
+import { combineServed, noteServed, resultPolicyHeaders, resultScope, resultServed, servedOf, type ResultPolicy, type ResultServed } from "./result-cache";
 import { agentEventDatasetOf, agentEventsFreshnessMark, agentEventsFreshnessNote, reportQueryCoverage, type AgentEventsCoverage } from "./agent-events-freshness";
 import { cardQualification } from "./card-qualifier";
 import { isOriginDimension, originLabel, loadOriginMetadata } from "./origin-dimensions";
@@ -30,6 +31,8 @@ import type { CompactTimelineOptions } from "./column-marks";
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
   refreshing?: boolean; refreshError?: string; updatedAt?: number;
+  // What the server's result cache answered with (result-cache.ts).
+  served?: ResultServed;
   state: "ready" | "empty"; emptyLabel?: string; density?: "compact"; stackBy?: string; coverHeight?: number; legendColumns?: 1 | 2; total: number; summary: string; note?: string;
   headline?: string; action?: string; evidence?: string;
   headlineMetric?: { value: string; unit: string; label?: string };
@@ -50,7 +53,7 @@ export type QueryPreview = {
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget; groups?: number };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
 type Context = { schema: FieldSchema; execution: ComputedExecution; queryCapabilities: QueryCapabilitiesV3 };
-type Payload = { now?: number; coverage?: AgentEventsCoverage; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
+type Payload = { served?: ResultServed; now?: number; coverage?: AgentEventsCoverage; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
 const cache = new Map<string, Cached>();
 export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); invalidateConcurrencyData(); }
@@ -63,20 +66,27 @@ export function formatPreviewValue(value: number, unit: string): string {
   return Intl.NumberFormat(undefined, { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
 }
 
+// A stored answer was computed for the same request at an earlier clock, and
+// echoes that clock; it is checked against the request as it was asked then.
+function asServed(request: QueryRequestV3, result: { now?: number }): QueryRequestV3 {
+  const served = servedOf(result);
+  return served && served.state !== "live" && typeof result.now === "number" ? { ...request, now: result.now } : request;
+}
+
 class PreviewHTTPError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
-async function fetchPreview<T>(url: string, signal?: AbortSignal, request?: unknown): Promise<T> {
+async function fetchPreview<T>(url: string, signal?: AbortSignal, request?: unknown, policy?: ResultPolicy): Promise<T> {
   const controller = new AbortController(), abort = () => controller.abort(signal?.reason);
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   const timer = setTimeout(() => controller.abort(new Error("Preview timed out. Open the view to explore it directly.")), 15_000);
   try {
-    const response = await fetch(url, { signal: controller.signal, ...(request === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) }) });
+    const response = await fetch(url, { signal: controller.signal, ...(request === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json", ...resultPolicyHeaders(policy) }, body: JSON.stringify(request) }) });
     const body = await response.json();
     if (!response.ok) throw new PreviewHTTPError(typeof body.error === "string" ? body.error : body.error?.message ?? "Preview unavailable", response.status);
     reportQueryCoverage(url, body);
-    return body;
+    return noteServed(body, resultServed(response.headers));
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
 }
 
@@ -382,7 +392,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
 
 // Metadata lives for this execution only. A refresh always reads the current
 // canonical revisions; an aborted caller never lends its signal to another run.
-export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal): Promise<void> {
+export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal, policy?: ResultPolicy): Promise<void> {
   if (signal?.aborted) return;
   // A Habits template draws as the dashboard card at its address.
   jobs = jobs.map(job => job.options?.recipe?.habits && !job.options.dashboard ? { ...job, options: { ...job.options, dashboard: job.options.url, dashboardTarget: job.options.recipe.habits.target } } : job);
@@ -398,11 +408,18 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     const work = async () => {
       while (pending.length && !signal?.aborted) {
         const job = pending.shift()!;
-        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal, undefined, undefined, job.options!.dashboardTarget, undefined, undefined, undefined, job.options!.groups); if (!signal?.aborted) publish(job.id, preview); }
+        // The card's chart is drawn by the dashboard's own code, which only
+        // passes the signal down: the scope carries the policy with it.
+        const scope = policy ? resultScope(signal, policy) : undefined;
+        try {
+          const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, scope?.signal ?? signal, undefined, undefined, job.options!.dashboardTarget, undefined, undefined, undefined, job.options!.groups);
+          const served = scope?.served();
+          if (!signal?.aborted) publish(job.id, served ? { ...preview, served } : preview);
+        }
         catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
       }
     };
-    await Promise.all([work(), work(), work(), loadQueryPreviews(jobs.filter(job => !job.options?.dashboard), publish, signal)]);
+    await Promise.all([work(), work(), work(), loadQueryPreviews(jobs.filter(job => !job.options?.dashboard), publish, signal, policy)]);
     return;
   }
   if (jobs.some(job => [...(job.query.grouping?.keys ?? []), ...(job.query.aggregations ?? []).flatMap(metric => metric.groupBy), ...(job.options?.recipe?.exploration?.keys ?? [])].some(field => field === "machine_id" || field === "execution_machine_id"))) await loadOriginMetadata();
@@ -439,18 +456,20 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const costJobs = jobs.filter(job => usesApiCostTrend(job) && !searchContext(job));
-  const costStudies = new Set(costJobs), costLoads = new Map<number, Promise<HumanStudyPreview>>();
+  // A study drawn from several answers is as stale and as old as its worst.
+  const costStudies = new Set(costJobs), costLoads = new Map<number, Promise<{ study: HumanStudyPreview; served?: ResultServed }>>();
   const costWork = Promise.all(costJobs.map(async job => {
     try {
       const days = job.options!.window!.days;
       let pending = costLoads.get(days);
       if (!pending) {
         pending = (async () => {
-          const ctx = await context(job);
+          const ctx = await context(job), answers: (ResultServed | undefined)[] = [];
           async function history(from: number, to: number): Promise<CostTimeBucket[]> {
             const query = apiCostTrendQuery(job.query.grouping!.source, from, to);
             const request = toQueryRequestV3(query, sourceExecutionSchema(ctx.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { rows: false });
-            const body = await fetchPreview<AggregationResult>("/api/query/usage/query-v3", signal, request);
+            const body = await fetchPreview<AggregationResult>("/api/query/usage/query-v3", signal, request, policy);
+            answers.push(servedOf(body));
             const facts = apiCostTrendFacts(body.metrics.find(metric => metric.id === "cost-history"));
             if (facts) return facts;
             // Partition only truncated timestamp reductions; exact half-open
@@ -459,12 +478,13 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
             if (middle <= from || middle >= to) throw new Error("API cost history exceeds the timestamp group limit.");
             return [...await history(from, middle), ...await history(middle, to)];
           }
-          return buildApiCostTrend(await history(clock.getTime() - Math.max(37, days) * 86400000, clock.getTime()), days, clock.getTime());
+          const study = buildApiCostTrend(await history(clock.getTime() - Math.max(37, days) * 86400000, clock.getTime()), days, clock.getTime());
+          return { study, served: combineServed(...answers) };
         })();
         costLoads.set(days, pending);
       }
-      const study = await pending;
-      if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? job.options!.recipe!.cover)?.height, state: study.value === undefined ? "empty" : "ready", total: study.value ?? 0, summary: study.sampleLabel, note: [job.options!.recipe!.note, study.detail].filter(Boolean).join(" · "), action: job.options!.recipe!.action, study });
+      const { study, served } = await pending;
+      if (!signal?.aborted) publish(job.id, { served, coverHeight: (job.options!.cover ?? job.options!.recipe!.cover)?.height, state: study.value === undefined ? "empty" : "ready", total: study.value ?? 0, summary: study.sampleLabel, note: [job.options!.recipe!.note, study.detail].filter(Boolean).join(" · "), action: job.options!.recipe!.action, study });
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const trendJobs = jobs.filter(job => !costStudies.has(job) && usesCardTrend(job) && !searchContext(job));
@@ -473,12 +493,15 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     try {
       const recipe = job.options!.recipe!, trend = recipe.trend!, lookback = trend.lookback ?? job.options!.window!.days;
       const source = trend.dataset ? { ...job, dataset: trend.dataset, schema: trendSchemas[trend.dataset] } : job, ctx = await context(source);
+      const answers: (ResultServed | undefined)[] = [];
       const results = await Promise.all(cardTrendQueries(recipe.where ?? [], trend, cardTrendDays(lookback, Boolean(trend.completeDays), clock.getTime()).days).map(async query => {
         const request = toQueryRequestV3(query, sourceExecutionSchema(ctx.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { rows: false });
-        return (await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/query-v3`, signal, request)).metrics;
+        const body = await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/query-v3`, signal, request, policy);
+        answers.push(servedOf(body));
+        return body.metrics;
       }));
       const { study, observations } = buildCardTrend(trend, lookback, results, clock.getTime()), ready = observations > 0 && Boolean(study.points?.some(point => point !== null));
-      if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study });
+      if (!signal?.aborted) publish(job.id, { served: combineServed(...answers), coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study });
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const resolved: { job: PreviewJob; query: QueryState; search: string }[] = [];
@@ -518,7 +541,8 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       if (done || signal?.aborted || !visible || historyQuery && !history) return;
       try {
         const preview = withAgentEventsFreshness(previewOf(item.job, item.query, visible.payload, visible.schema, historyQuery && history ? { query: historyQuery, payload: history.payload } : undefined), item.job.dataset, visible.payload);
-        done = true; publish(item.job.id, preview);
+        const served = combineServed(visible.payload.served, history?.payload.served);
+        done = true; publish(item.job.id, served ? { ...preview, served } : preview);
       } catch (error) { fail(error); }
     };
     enqueue({ ...item, now, fail, accept: data => { visible = data; complete(); } });
@@ -556,8 +580,8 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
           request.hostState = query.hostState;
           if (query.grouping || request.rows || request.distinct) {
             const schema = query.grouping ? createGroupingModel(sourceExecutionSchema(item.job.schema, ctx.execution)).resultSchema(query.grouping.keys, query.grouping.summaries) : ctx.schema;
-            const result = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${item.job.dataset}/query-v3${item.search}`, signal, request);
-            validateQueryResultV3(result, request, schema);
+            const result = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${item.job.dataset}/query-v3${item.search}`, signal, request, policy);
+            validateQueryResultV3(result, asServed(request, result), schema);
             finish(item, result, schema);
           } else valid.push({ item, request });
         } catch (error) { item.fail(error); }
@@ -565,14 +589,14 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       if (!valid.length || signal?.aborted) return;
       const request = { ...valid[0].request, expectedRevisions: Object.assign({}, ...valid.map(({ request }) => request.expectedRevisions)), metrics: valid.flatMap(({ request }, i) => request.metrics.map((metric, j) => ({ ...metric, id: `preview:${i}:${j}` }))) };
       try {
-        const body = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${valid[0].item.job.dataset}/query-v3${valid[0].item.search}`, signal, request);
-        validateQueryResultV3(body, request, ctx.schema);
+        const body = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${valid[0].item.job.dataset}/query-v3${valid[0].item.search}`, signal, request, policy);
+        validateQueryResultV3(body, asServed(request, body), ctx.schema);
         valid.forEach(({ item, request }, i) => {
           const metrics = request.metrics.map((metric, j) => {
             const result = body.metrics.find(result => result.id === `preview:${i}:${j}`);
             return result ? { ...result, id: metric.id } : undefined;
           }).filter((result): result is AggregationResultEntry => Boolean(result));
-          finish(item, { ...body, metrics }, ctx.schema);
+          finish(item, { ...body, metrics, served: servedOf(body) }, ctx.schema);
         });
       } catch (error) {
         if (valid.length > 1 && error instanceof PreviewHTTPError && [400, 409, 422].includes(error.status)) {
@@ -584,8 +608,9 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   function finish(item: Item, payload: Payload, schema: FieldSchema) {
     if (signal?.aborted) return;
     if (cache.size >= 200) cache.delete(cache.keys().next().value!);
-    payload = { ...payload, now: payload.now ?? item.now };
-    cache.set(JSON.stringify([item.job.dataset, item.query, item.search]), { at: Date.now(), payload, schema });
+    payload = { ...payload, served: payload.served ?? servedOf(payload), now: payload.now ?? item.now };
+    // A stale answer is asked for again; holding it here would answer that.
+    if (payload.served?.state !== "stale") cache.set(JSON.stringify([item.job.dataset, item.query, item.search]), { at: Date.now(), payload, schema });
     item.accept({ at: Date.now(), payload, schema });
   }
   async function work() {

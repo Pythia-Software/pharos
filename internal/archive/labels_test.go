@@ -1559,6 +1559,38 @@ func TestMessageLabelFacts(t *testing.T) {
 	if scalar("SELECT count(*) FROM message_label_facts") != 3 || scalar("SELECT count(*) FROM message_label_memberships") != 5 {
 		t.Fatal("fact/membership grain differs")
 	}
+	// A page sorted newest first reads only the newest stored facts
+	// (newestBound), and all of them when those do not fill it. Either way
+	// it has the rows and total of the whole source.
+	newestPageOf := func(limit int, where ...qt.WhereTerm) ([]string, int64) {
+		t.Helper()
+		// Without text the stored facts' index covers the page; with it, not.
+		selected := []string{"id", "occurred_at", "label", "text"}[:3+limit%2]
+		q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true, Source: qt.WireQuery{Limit: 1},
+			Result: qt.WireQuery{Select: selected, Where: where, OrderBy: []qt.OrderBy{{Field: "occurred_at", Dir: "desc"}, {Field: "id", Dir: "asc"}}, Limit: limit}}
+		result, _, err := srv.executeQueryV3(ctx, "message_labels", nil, PharosMessageLabelsSchema(), q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []string{}
+		for _, row := range result.Rows {
+			ids = append(ids, firstString(row["id"]))
+		}
+		return ids, result.Total
+	}
+	for _, c := range []struct {
+		limit int
+		where []qt.WhereTerm
+	}{{1, nil}, {2, nil}, {3, nil}, {50, nil}, {1, []qt.WhereTerm{{Field: "label", Op: "starts_with", Value: "P.request"}}}, {2, []qt.WhereTerm{{Field: "label", Op: "=", Value: "no.such.label"}}}} {
+		override(t, &newestDepth, func(through int) int { return through })
+		override(t, &maxNewestPage, 500)
+		bounded, total := newestPageOf(c.limit, c.where...)
+		override(t, &maxNewestPage, 0)
+		whole, all := newestPageOf(c.limit, c.where...)
+		if total != all || !slices.Equal(bounded, whole) || len(whole) == 0 && len(c.where) == 0 {
+			t.Fatalf("newest %d of %v: bounded %v of %d, whole %v of %d", c.limit, c.where, bounded, total, whole, all)
+		}
+	}
 	identities := func() map[string]int64 {
 		t.Helper()
 		rows, err := queryMapsContext(ctx, c.DB, "SELECT message_id,rowid FROM message_label_facts")

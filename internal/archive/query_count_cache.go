@@ -3,8 +3,12 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
@@ -14,6 +18,8 @@ import (
 var queryCountLimit = 256
 
 type queryCountKey struct {
+	// scope is which writes advance generation (cacheGenerations.of).
+	scope      string
 	generation int64
 	// timezone is the process's local zone: day, week and month fields
 	// convert with SQLite's 'localtime', which the statement's text does
@@ -29,8 +35,9 @@ type queryCountKey struct {
 // snapshot of the page it is returned with. It lives in memory: requests
 // never write.
 type queryCountCache struct {
-	mu     sync.Mutex
-	newest int64
+	mu sync.Mutex
+	// newest is each scope's latest generation; counts hold only those.
+	newest map[string]int64
 	counts map[queryCountKey]int64
 	// stats tally how counts were answered since the service started, so
 	// the hit rate under real use can be read from /api/diagnostics/query-counts.
@@ -44,7 +51,8 @@ type queryCountStats struct {
 	Fast    int64 `json:"fast"`
 	Counted int64 `json:"counted"`
 	// Generations is how many times a newer data generation cleared the
-	// cache; Remembered is how many counts it holds now.
+	// cache; Remembered is how many counts it holds now. Generation is the
+	// newest counted in any scope (queryCountKey.scope).
 	Generations int64 `json:"generations"`
 	Remembered  int   `json:"remembered"`
 	Generation  int64 `json:"generation"`
@@ -74,21 +82,33 @@ func (c *queryCountCache) snapshot() queryCountStats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	stats := c.stats
-	stats.Remembered, stats.Generation = len(c.counts), c.newest
+	stats.Remembered = len(c.counts)
+	for _, generation := range c.newest {
+		stats.Generation = max(stats.Generation, generation)
+	}
 	return stats
 }
 
 func (c *queryCountCache) put(key queryCountKey, n int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if key.generation < c.newest {
+	newest := c.newest[key.scope]
+	if key.generation < newest {
 		return // a reader of an older snapshot; no later request reads it
 	}
-	if key.generation > c.newest {
-		if c.newest != 0 {
+	if key.generation > newest {
+		if newest != 0 {
 			c.stats.Generations++
 		}
-		c.newest, c.counts = key.generation, nil
+		if c.newest == nil {
+			c.newest = map[string]int64{}
+		}
+		c.newest[key.scope] = key.generation
+		for old := range c.counts {
+			if old.scope == key.scope {
+				delete(c.counts, old)
+			}
+		}
 	} else if len(c.counts) >= queryCountLimit {
 		c.counts = nil
 	}
@@ -101,9 +121,24 @@ func (c *queryCountCache) put(key queryCountKey, n int64) {
 // queryGeneration is the data generation tx reads: every write to a table
 // that a cached query reads advances it (see queryCacheTables).
 func queryGeneration(ctx context.Context, tx *sql.Tx) (int64, error) {
-	var generation int64
-	err := tx.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&generation)
-	return generation, err
+	generations, err := readCacheGenerations(ctx, tx)
+	return generations.all, err
+}
+
+// queryCoreDatasets are the SQL-backed sources whose rows no label or
+// agent-event write changes (queryCacheDomains): their counts outlast those
+// writes. A source that joins such a table must not be listed.
+var queryCoreDatasets = map[string]bool{
+	"tool_calls": true, "tools": true, "messages": true, "writing_messages": true, "skill_usages": true,
+}
+
+// queryDatasetGeneration is the generation scope dataset's counts are
+// current for.
+func queryDatasetGeneration(dataset string) string {
+	if queryCoreDatasets[dataset] {
+		return generationCore
+	}
+	return generationAll
 }
 
 // queryPopulationCount answers what it can of a population count without
@@ -112,16 +147,16 @@ func queryGeneration(ctx context.Context, tx *sql.Tx) (int64, error) {
 type queryPopulationCount func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount) (total int64, ok bool, err error)
 
 // populationCounter reuses exact counts within a data generation, trying
-// fast before running the executor's statement. Use it only for a source
+// fast before running the executor's statement (over narrow, when it applies). Use it only for a source
 // whose rows are a function of its SQL, its arguments, the local timezone
 // and tables that advance the generation (see queryCacheTables).
-func (c *Catalog) populationCounter(fast ...queryPopulationCount) qt.PopulationCounter {
+func (c *Catalog) populationCounter(scope string, narrow queryPopulationCount, fast ...queryPopulationCount) qt.PopulationCounter {
 	return qt.PopulationCounterFunc(func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount, count func(context.Context) (int64, error)) (int64, error) {
-		generation, err := queryGeneration(ctx, tx)
+		generations, err := readCacheGenerations(ctx, tx)
 		if err != nil {
 			return 0, err
 		}
-		key := queryCountKey{generation, toolRollupTimezone(), p.Key}
+		key := queryCountKey{scope, generations.of(scope), toolRollupTimezone(), p.Key}
 		if total, ok := c.queryCounts.get(key); ok {
 			return total, nil
 		}
@@ -136,7 +171,13 @@ func (c *Catalog) populationCounter(fast ...queryPopulationCount) qt.PopulationC
 				return total, nil
 			}
 		}
-		total, err := count(ctx)
+		total, counted := int64(0), false
+		if narrow != nil {
+			total, counted, err = narrow(ctx, tx, p)
+		}
+		if err == nil && !counted {
+			total, err = count(ctx)
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -214,9 +255,132 @@ func toolCubeCount(schema qt.Schema) queryPopulationCount {
 
 // queryPopulationFastCounts are the counts a dataset can answer from a
 // maintained rollup instead of its rows.
-func queryPopulationFastCounts(dataset string, schema qt.Schema) []queryPopulationCount {
-	if dataset == "tool_calls" {
+func queryPopulationFastCounts(dataset string, schema qt.Schema, table sqlDataset) []queryPopulationCount {
+	switch dataset {
+	case "tool_calls":
 		return []queryPopulationCount{toolCubeCount(schema)}
+	case "agent_event_rates":
+		return []queryPopulationCount{agentEventRateCount(table.base)}
 	}
 	return nil
+}
+
+// countedField is a source column the executor's count statement reads.
+var countedField = regexp.MustCompile(`\br\."([^"]+)" AS f\d+`)
+
+// narrowCount runs the executor's count over narrow, the request's source
+// projected to fields (its identity and what its filter reads) with no read
+// order fixed. SQLite keeps every LEFT JOIN of a plain COUNT(*), so the page's
+// own source pays for joins that only fill columns the count never reads. It
+// stands aside when the statement reads any other column.
+func narrowCount(source, narrow string, fields []string) queryPopulationCount {
+	return func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount) (int64, bool, error) {
+		at := strings.Index(p.SQL, source)
+		if at < 0 || source == narrow {
+			return 0, false, nil
+		}
+		read := countedField.FindAllStringSubmatch(p.SQL[:at], -1)
+		for _, match := range read {
+			if !slices.Contains(fields, match[1]) {
+				return 0, false, nil
+			}
+		}
+		if len(read) == 0 || strings.Contains(p.SQL[at+len(source):], source) {
+			return 0, false, nil
+		}
+		var total int64
+		err := tx.QueryRowContext(ctx, p.SQL[:at]+narrow+p.SQL[at+len(source):], p.Args...).Scan(&total)
+		return total, err == nil, err
+	}
+}
+
+// maxNewestPage is how far into a newest-first listing a page may end and
+// still read only the newest rows (newestBound).
+var maxNewestPage = 500
+
+// newestDepth is how many stored rows back a page ending at row through
+// reads: deep enough that rows a filter or the source leaves out rarely
+// empty the page.
+var newestDepth = func(through int) int { return max(1000, 20*through) }
+
+// wholeSourceCount counts for a request whose source was bounded to its
+// newest rows: over whole, the source without the bound, narrowed when
+// narrow applies. It fails rather than let the executor count the bounded
+// source, whose total would be the bound's.
+func wholeSourceCount(bounded, whole string, narrow queryPopulationCount) queryPopulationCount {
+	return func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount) (int64, bool, error) {
+		at := strings.Index(p.SQL, bounded)
+		if at < 0 {
+			return 0, false, fmt.Errorf("count statement does not read the bounded source")
+		}
+		p.SQL = p.SQL[:at] + whole + p.SQL[at+len(bounded):]
+		if narrow != nil {
+			if total, ok, err := narrow(ctx, tx, p); ok || err != nil {
+				return total, ok, err
+			}
+		}
+		var total int64
+		err := tx.QueryRowContext(ctx, p.SQL, p.Args...).Scan(&total)
+		return total, err == nil, err
+	}
+}
+
+// wholeSourceReads counts page reads that fell back to the whole source.
+var wholeSourceReads atomic.Int64
+
+// countedOnce shares the whole source's totals between a read of its newest
+// rows and the read of the whole source that follows when those do not fill
+// the page: both count the same rows, under statements that differ only in
+// the source they name. It returns the two reads' counters.
+func countedOnce(bounded, whole string, counts map[string]int64, first, second qt.PopulationCounter) (qt.PopulationCounter, qt.PopulationCounter) {
+	key := func(p qt.PopulationCount) string {
+		return strings.Replace(p.SQL, bounded, whole, 1) + "\x00" + fmt.Sprint(p.Args...)
+	}
+	return qt.PopulationCounterFunc(func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount, count func(context.Context) (int64, error)) (int64, error) {
+			total, err := first.CountPopulation(ctx, tx, p, count)
+			if err == nil {
+				counts[key(p)] = total
+			}
+			return total, err
+		}), qt.PopulationCounterFunc(func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount, count func(context.Context) (int64, error)) (int64, error) {
+			if total, ok := counts[key(p)]; ok {
+				return total, nil
+			}
+			return second.CountPopulation(ctx, tx, p, count)
+		})
+}
+
+// agentEventRateCount answers an Agent event rates count filtered by kind
+// alone. Every message read has one row for every kind
+// (agentEventRateDataset), so the count is the messages the dataset serves
+// (base is its predicate over agent_event_facts f) times the kinds the
+// filter keeps, without visiting a row per pair.
+func agentEventRateCount(base string) queryPopulationCount {
+	return func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount) (int64, bool, error) {
+		kinds := int64(0)
+	families:
+		for _, family := range agentEventFamilies {
+			for _, term := range p.Where {
+				value := family.Key
+				if term.Field == "family_group" {
+					value = family.Group
+				}
+				if (term.Field != "family" && term.Field != "family_group") || term.IsGroup() || term.Negated || term.Value == "" ||
+					(term.Op != "=" && term.Op != "!=") {
+					return 0, false, nil
+				}
+				if (value == term.Value) != (term.Op == "=") {
+					continue families
+				}
+			}
+			kinds++
+		}
+		statement := "SELECT COUNT(*) FROM agent_event_facts f"
+		if base != "" {
+			statement += " WHERE " + base
+		}
+		var messages int64
+		err := tx.QueryRowContext(ctx, statement).Scan(&messages)
+		return messages * kinds, err == nil, err
+	}
 }

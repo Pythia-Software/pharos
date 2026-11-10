@@ -757,7 +757,21 @@ const askSuggestionTexts = [
 // A seeded rotation, as the service varies its slate for Refresh.
 const askSuggestionFixture = seed => askSuggestionTexts.map((_, i) => askSuggestionTexts[(i + seed * 2) % askSuggestionTexts.length]).map(([id, text]) => ({ id, text }));
 
+export const claudeImportFixture = {
+  version:1,id:'f'.repeat(64),name:'claude-ai-imports',state:'incomplete',completeness:'manifest',
+  parts:[{id:'part-one',filename:'conversations-000.zip',state:'collected',conversations:4,messages:12},
+    {id:'part-two',filename:'projects-000-with-a-long-name-to-exercise-the-export-list-at-a-narrow-window-width.zip',state:'missing',error:'Download this file in your signed-in browser, then check the folder again.',download_available:true}],warnings:[],source:null,
+};
+
+// A paused and an imported export; nothing in progress, so the page does not poll.
+export const claudeWatchFixture = {enabled:true,available:true,folder:'/Users/example/Downloads',problem:'',browser:'chrome:Default',
+  browsers:[{key:'chrome:Default',label:'Google Chrome — Personal (someone@example.com)'},{key:'chrome:Profile 2',label:'Google Chrome — Work account with a long profile name for narrow windows'}],exports:[
+  {id:'a'.repeat(64),state:'paused',browser:'chrome:Default',exported_at:'2026-11-10T15:01:48Z',collected:3,expected:7,message:'Pharos opened frames-000-with-a-long-name-for-narrow-windows.zip in Google Chrome — Personal (someone@example.com), but no file arrived. If another browser or profile is signed in to this Claude account, choose it and try again. The browser must save to Downloads.'},
+  {id:'b'.repeat(64),state:'imported',exported_at:'2026-11-09T15:01:48Z',collected:7,expected:7}]};
+
 export const defaultApi = {
+  "GET /api/claude-imports":{jobs:[],run:{running:false},watch:claudeWatchFixture},
+  "POST /api/claude-imports/watch":{...claudeWatchFixture,enabled:false},
   "GET /api/thinking": ({query}) => thinkingFixture(query),
   "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},
   // No remote image bytes in fixtures; the renderer uses its globe fallback.
