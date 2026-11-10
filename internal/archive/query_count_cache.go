@@ -3,10 +3,12 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
@@ -290,6 +292,62 @@ func narrowCount(source, narrow string, fields []string) queryPopulationCount {
 		err := tx.QueryRowContext(ctx, p.SQL[:at]+narrow+p.SQL[at+len(source):], p.Args...).Scan(&total)
 		return total, err == nil, err
 	}
+}
+
+// maxNewestPage is how far into a newest-first listing a page may end and
+// still read only the newest rows (newestBound).
+var maxNewestPage = 500
+
+// newestDepth is how many stored rows back a page ending at row through
+// reads: deep enough that rows a filter or the source leaves out rarely
+// empty the page.
+var newestDepth = func(through int) int { return max(1000, 20*through) }
+
+// wholeSourceCount counts for a request whose source was bounded to its
+// newest rows: over whole, the source without the bound, narrowed when
+// narrow applies. It fails rather than let the executor count the bounded
+// source, whose total would be the bound's.
+func wholeSourceCount(bounded, whole string, narrow queryPopulationCount) queryPopulationCount {
+	return func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount) (int64, bool, error) {
+		at := strings.Index(p.SQL, bounded)
+		if at < 0 {
+			return 0, false, fmt.Errorf("count statement does not read the bounded source")
+		}
+		p.SQL = p.SQL[:at] + whole + p.SQL[at+len(bounded):]
+		if narrow != nil {
+			if total, ok, err := narrow(ctx, tx, p); ok || err != nil {
+				return total, ok, err
+			}
+		}
+		var total int64
+		err := tx.QueryRowContext(ctx, p.SQL, p.Args...).Scan(&total)
+		return total, err == nil, err
+	}
+}
+
+// wholeSourceReads counts page reads that fell back to the whole source.
+var wholeSourceReads atomic.Int64
+
+// countedOnce shares the whole source's totals between a read of its newest
+// rows and the read of the whole source that follows when those do not fill
+// the page: both count the same rows, under statements that differ only in
+// the source they name. It returns the two reads' counters.
+func countedOnce(bounded, whole string, counts map[string]int64, first, second qt.PopulationCounter) (qt.PopulationCounter, qt.PopulationCounter) {
+	key := func(p qt.PopulationCount) string {
+		return strings.Replace(p.SQL, bounded, whole, 1) + "\x00" + fmt.Sprint(p.Args...)
+	}
+	return qt.PopulationCounterFunc(func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount, count func(context.Context) (int64, error)) (int64, error) {
+			total, err := first.CountPopulation(ctx, tx, p, count)
+			if err == nil {
+				counts[key(p)] = total
+			}
+			return total, err
+		}), qt.PopulationCounterFunc(func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount, count func(context.Context) (int64, error)) (int64, error) {
+			if total, ok := counts[key(p)]; ok {
+				return total, nil
+			}
+			return second.CountPopulation(ctx, tx, p, count)
+		})
 }
 
 // agentEventRateCount answers an Agent event rates count filtered by kind

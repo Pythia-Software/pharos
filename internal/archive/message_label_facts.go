@@ -154,6 +154,11 @@ func messageLabelStoredDataset(ledger bool, unmarked string) sqlDataset {
 	}, timestamps: map[string]string{"occurred_at": "f.occurred_at"}, lookups: map[string]bool{"message_id": true, "conversation_id": true, "workspace_id": true},
 		// The physical facts themselves are narrow; this index supplies range access,
 		// and the covered population budget doesn't permit transcript-body scans.
+		newestBounds: map[string]newestBound{"occurred_at": {
+			nth:    "SELECT occurred_at FROM message_label_facts ORDER BY occurred_at DESC LIMIT 1 OFFSET ?",
+			column: "f.occurred_at",
+			join:   [2]string{" JOIN message_label_memberships membership", " CROSS JOIN message_label_memberships membership"},
+		}},
 		pageFrom: "FROM message_label_facts stored", coveringIndex: "message_label_facts_trends_idx", rangeCoveringIndex: "message_label_facts_trends_idx", coveredFields: covered}
 }
 

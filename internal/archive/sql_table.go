@@ -59,7 +59,10 @@ type sqlDataset struct {
 	pageIndexes map[string]string
 	// newestFirst maps a timestamp field to an index on pageFrom's table
 	// that begins with its column, for pages sorted by it (see newestFirstScan).
-	newestFirst        map[string]string
+	newestFirst map[string]string
+	// newestBounds maps a timestamp field to how a page sorted by it reads
+	// only the dataset's newest rows (see newestBound).
+	newestBounds       map[string]newestBound
 	coveringIndex      string
 	rangeCoveringIndex string
 	coveredFields      map[string]bool
@@ -105,6 +108,46 @@ func (d sqlDataset) preferCoveringScan(terms []querytable.WhereTerm) (sqlDataset
 	return d, true
 }
 
+// newestBound is for a source that cannot be read in a timestamp's order: a
+// UNION of stored rows and ones derived live. A page sorted newest first
+// needs only the newest stored rows, so the source is bounded at the
+// timestamp nth returns for the stored row ?1 places from the newest, on
+// column. join, when set, is a join in from and the form of it that reads
+// the stored table first. The caller checks that the page came back full
+// and reads the whole source otherwise (executeQueryV3).
+type newestBound struct {
+	nth, column string
+	join        [2]string
+}
+
+// newestPage reports the field a request pages by, newest first, and the
+// row its page ends at. NULLs sort lowest in SQLite, so only descending with
+// NULLs last is a timestamp index's own order read backwards.
+func newestPage(q qt.QueryRequestV3) (field string, through int, ok bool) {
+	if !q.Rows || q.Grouping != nil || q.Distinct != nil || len(q.Metrics) > 0 || len(q.Result.OrderBy) == 0 {
+		return "", 0, false
+	}
+	order := q.Result.OrderBy[0]
+	if order.Dir != "desc" || order.Nulls == "first" || order.Extract != nil {
+		return "", 0, false
+	}
+	return order.Field, q.Result.Offset + q.Result.Limit, true
+}
+
+// boundedNewest is d without the rows before cutoff on field.
+func (d sqlDataset) boundedNewest(field, cutoff string) sqlDataset {
+	bound := d.newestBounds[field]
+	if bound.join[0] != "" {
+		d.from = strings.Replace(d.from, bound.join[0], bound.join[1], 1)
+	}
+	condition := bound.column + ">=" + quoteSQLText(cutoff)
+	if d.base != "" {
+		condition = "(" + d.base + ") AND " + condition
+	}
+	d.base = condition
+	return d
+}
+
 var innerJoin = regexp.MustCompile(`(\s)(LEFT |CROSS )?JOIN `)
 
 // newestFirstScan is d reading its rows in a timestamp's order, for a page
@@ -117,18 +160,13 @@ var innerJoin = regexp.MustCompile(`(\s)(LEFT |CROSS )?JOIN `)
 // A count over this source would visit every row in index order, so the
 // caller counts over a source with no order fixed (narrowCount).
 func (d sqlDataset) newestFirstScan(q qt.QueryRequestV3, where []qt.WhereTerm) (ordered sqlDataset, ok bool) {
-	if !q.Rows || q.Grouping != nil || q.Distinct != nil || len(q.Metrics) > 0 || len(q.Result.OrderBy) == 0 {
-		return d, false
-	}
-	// NULLs sort lowest in SQLite, so only descending with NULLs last is
-	// the index's own order read backwards.
-	order := q.Result.OrderBy[0]
-	index := d.newestFirst[order.Field]
-	if index == "" || order.Dir != "desc" || order.Nulls == "first" || order.Extract != nil {
+	field, _, ok := newestPage(q)
+	index := d.newestFirst[field]
+	if !ok || index == "" {
 		return d, false
 	}
 	for _, term := range where {
-		if term.IsGroup() || term.Negated || term.Field != order.Field || !slices.Contains([]string{">", ">=", "<", "<="}, term.Op) {
+		if term.IsGroup() || term.Negated || term.Field != field || !slices.Contains([]string{">", ">=", "<", "<="}, term.Op) {
 			return d, false
 		}
 	}

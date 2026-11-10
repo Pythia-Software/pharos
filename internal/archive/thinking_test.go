@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -230,6 +231,45 @@ func TestThinkingProjection(t *testing.T) {
 	}
 	if validation.Pairs != 1 || *validation.MedianRatio != 1 || validation.CounterCount != 1 || validation.CounterOverlap != 1 {
 		t.Fatal("timers must deduplicate and counters use latest", validation)
+	}
+	// A page sorted newest first reads only the newest stored requests
+	// (newestBound), and all of them when those do not fill it. Either way
+	// it has the rows and total of the whole source.
+	if err := c.refreshRequestTimings(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	page := func(limit int, where ...qt.WhereTerm) ([]string, int64) {
+		t.Helper()
+		q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true, Source: qt.WireQuery{Limit: 1},
+			Result: qt.WireQuery{Select: []string{"id", "requested_at", "speed"}, Where: where, OrderBy: []qt.OrderBy{{Field: "requested_at", Dir: "desc"}, {Field: "id", Dir: "asc"}}, Limit: limit}}
+		result, _, err := server.executeQueryV3(t.Context(), "model_requests", nil, v3Schema, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []string{}
+		for _, row := range result.Rows {
+			ids = append(ids, firstString(row["id"]))
+		}
+		return ids, result.Total
+	}
+	for _, c := range []struct {
+		limit int
+		where []qt.WhereTerm
+	}{{2, nil}, {50, nil}, {50, []qt.WhereTerm{{Field: "speed", Op: "=", Value: "no such speed"}}}, {2, []qt.WhereTerm{{Field: "speed", Op: "=", Value: "fast"}}}, {2, []qt.WhereTerm{{Field: "speed", Op: "!=", Value: "fast"}}}} {
+		override(t, &newestDepth, func(through int) int { return through })
+		override(t, &maxNewestPage, 500)
+		before := wholeSourceReads.Load()
+		bounded, total := page(c.limit, c.where...)
+		// The whole source is read only when it has rows the newest lack: a
+		// short page that holds every match, or none, has nothing more to find.
+		if again := wholeSourceReads.Load() - before; again != 0 && c.limit == 50 {
+			t.Fatalf("newest %d of %v: read the whole source for a page that already held all %d rows", c.limit, c.where, total)
+		}
+		override(t, &maxNewestPage, 0)
+		whole, all := page(c.limit, c.where...)
+		if len(whole) == 0 && c.limit != 50 || total != all || !slices.Equal(bounded, whole) {
+			t.Fatalf("newest %d of %v: bounded %v of %d, whole %v of %d", c.limit, c.where, bounded, total, whole, all)
+		}
 	}
 }
 func TestThinkingAggregation(t *testing.T) {
