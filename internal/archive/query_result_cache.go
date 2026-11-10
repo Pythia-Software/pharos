@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
@@ -18,6 +20,30 @@ import (
 // ("-7d" to "+0s") stays fresh while the catalog does not change: its rows
 // only age out of the window meanwhile.
 var queryResultMaxAge = 10 * time.Minute
+
+// localZoneIdentity tells the service's time zones apart. The system zone
+// has no name in Go ("Local"), so it is known by its abbreviation and
+// offset in midwinter and midsummer of the current year: the same all year
+// in one zone, and different between zones that keep different time.
+func localZoneIdentity(now time.Time) string {
+	var parts []string
+	for _, month := range []time.Month{time.January, time.July} {
+		name, offset := time.Date(now.Year(), month, 1, 12, 0, 0, 0, time.Local).Zone()
+		parts = append(parts, name+strconv.Itoa(offset))
+	}
+	return strings.Join(parts, "/")
+}
+
+// buildIdentity names the running program: its executable's size and
+// modification time, which an update changes.
+var buildIdentity = sync.OnceValue(func() string {
+	if path, err := os.Executable(); err == nil {
+		if info, err := os.Stat(path); err == nil {
+			return strconv.FormatInt(info.Size(), 36) + "." + strconv.FormatInt(info.ModTime().UnixNano(), 36)
+		}
+	}
+	return "unknown"
+})
 
 // queryResults caches query-v3 responses: a card's or a dashboard's request,
 // keyed by its dataset, URL parameters and body without the client's clock.
@@ -31,8 +57,11 @@ var queryResults = registerResultDomain(&resultDomain{
 	name: "query-v3", version: "1", maxAge: queryResultMaxAge,
 	stamp: func(ctx context.Context, s *Server, scope string) (string, error) {
 		generation, err := s.Catalog.storedGeneration(ctx, scope)
-		// Day and hour fields are computed in the service's time zone.
-		return strconv.FormatInt(generation, 10) + " " + time.Local.String(), err
+		// Day and hour fields are computed in the service's time zone, and
+		// another build may answer the same request differently (a fixed
+		// query, new pricing, a migration's backfill) without any row
+		// changing afterwards.
+		return strconv.FormatInt(generation, 10) + " " + localZoneIdentity(time.Now()) + " " + buildIdentity(), err
 	},
 	build: func(ctx context.Context, s *Server, replay []byte, now time.Time) ([]byte, error) {
 		var stored queryReplay

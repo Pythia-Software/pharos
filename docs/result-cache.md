@@ -45,7 +45,10 @@ clock, so every page load of one card is the same entry. Each entry records
 the *stamp* of the data it was computed from and when it was computed.
 
 **3. An entry is added whenever a response is computed under a policy.** It
-is written after the response has been sent. Errors are never stored.
+is written after the response has been sent. Errors are never stored. A
+request whose browser gave up before its answer was computed is remembered
+and computed in the background, so the next load of that view has an answer
+however long its query takes.
 
 **4. An entry is *fresh* while its stamp is the current one**, and, if its
 request reads the clock (a window ending now), while it is younger than the
@@ -65,7 +68,9 @@ The response header `X-Pharos-Cache` says what happened (`fresh`, `stale` or
 
 **6. Stale entries are refreshed when there is capacity.** One background
 refresher recomputes them, two at a time, and starts one only while no
-interactive query is running or waiting. Entries a request was just answered with go first, in
+interactive query is running or waiting (its own queries are marked as
+background and not counted). Entries stored under another domain version
+are rebuilt the same way. Entries a request was just answered with go first, in
 the order they were asked for; after those, entries asked for in the last
 three days that have gone stale since, but only those someone came back to
 (asked for again an hour or more after they were first stored). A filter
@@ -105,7 +110,7 @@ A domain is one kind of response. Today there is one:
 
 | Domain | What it stores | Stamp | Maximum age for clock-relative requests |
 |---|---|---|---|
-| `query-v3` | `POST /api/query/{dataset}/query-v3` responses | the dataset's cached-view generation (core, events or all; see `queryDatasetGeneration`) and the service's time zone | 10 minutes |
+| `query-v3` | `POST /api/query/{dataset}/query-v3` responses | the dataset's cached-view generation (core, events or all; see `queryDatasetGeneration`), the service's time zone and the running build (an update can change an answer without changing a row) | 10 minutes |
 
 Query requests are made independent of the clock in two ways. `now` is left
 out of the key. A filter value that is an instant a whole number of hours

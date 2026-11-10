@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
@@ -322,6 +323,31 @@ func wholeSourceCount(bounded, whole string, narrow queryPopulationCount) queryP
 		err := tx.QueryRowContext(ctx, p.SQL, p.Args...).Scan(&total)
 		return total, err == nil, err
 	}
+}
+
+// wholeSourceReads counts page reads that fell back to the whole source.
+var wholeSourceReads atomic.Int64
+
+// countedOnce shares the whole source's totals between a read of its newest
+// rows and the read of the whole source that follows when those do not fill
+// the page: both count the same rows, under statements that differ only in
+// the source they name. It returns the two reads' counters.
+func countedOnce(bounded, whole string, counts map[string]int64, first, second qt.PopulationCounter) (qt.PopulationCounter, qt.PopulationCounter) {
+	key := func(p qt.PopulationCount) string {
+		return strings.Replace(p.SQL, bounded, whole, 1) + "\x00" + fmt.Sprint(p.Args...)
+	}
+	return qt.PopulationCounterFunc(func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount, count func(context.Context) (int64, error)) (int64, error) {
+			total, err := first.CountPopulation(ctx, tx, p, count)
+			if err == nil {
+				counts[key(p)] = total
+			}
+			return total, err
+		}), qt.PopulationCounterFunc(func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount, count func(context.Context) (int64, error)) (int64, error) {
+			if total, ok := counts[key(p)]; ok {
+				return total, nil
+			}
+			return second.CountPopulation(ctx, tx, p, count)
+		})
 }
 
 // agentEventRateCount answers an Agent event rates count filtered by kind

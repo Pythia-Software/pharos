@@ -40,7 +40,10 @@ func TestResultCachePolicies(t *testing.T) {
 	stamp, builds, broken := "1", 0, false
 	domain := registerResultDomain(&resultDomain{name: "test", version: "1", maxAge: time.Hour,
 		stamp: func(context.Context, *Server, string) (string, error) { return stamp, nil },
-		build: func(_ context.Context, _ *Server, replay []byte, _ time.Time) ([]byte, error) {
+		build: func(ctx context.Context, _ *Server, replay []byte, _ time.Time) ([]byte, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if broken {
 				return nil, errors.New("cannot compute")
 			}
@@ -141,6 +144,53 @@ func TestResultCachePolicies(t *testing.T) {
 	expect("reopened", resultCached, "a", "fresh", stored)
 	override(t, &domain.version, "2")
 	expect("new version", resultCached, "b", "live", fmt.Sprint(builds+1))
+	// The sweep rebuilds the other version's entries, which no longer count
+	// as stale, so that they are ready before they are asked for.
+	server.sweepResults(t.Context())
+	for server.refreshResult(t.Context()) {
+	}
+	expect("rebuilt for the new version", resultCached, "a", "fresh", fmt.Sprint(builds))
+	// A build its request gave up on is finished when there is capacity:
+	// nothing was stored to refresh, so the request itself is remembered.
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	abandoned := httptest.NewRequest(http.MethodPost, "/test", nil).WithContext(gone)
+	abandoned.Header.Set(resultCacheHeader, resultCached)
+	server.serveResult(httptest.NewRecorder(), abandoned, domain, resultRequest{replay: []byte("slow"), scope: "all"})
+	if !server.refreshResult(t.Context()) {
+		t.Fatal("an abandoned build was not queued")
+	}
+	expect("abandoned, then built", resultCached, "slow", "fresh", fmt.Sprint(builds))
+	// A wake-up is passed on only while entries wait, so idle refreshers sleep.
+	cache := server.results()
+	select {
+	case <-cache.wake:
+	default:
+	}
+	if cache.woke(); len(cache.wake) != 0 {
+		t.Fatal("a refresher with nothing queued woke the next one")
+	}
+	cache.refreshSoon(domain.name, "a", true)
+	<-cache.wake
+	if cache.woke(); len(cache.wake) != 1 {
+		t.Fatal("a refresher did not pass on a wake-up with entries waiting")
+	}
+	<-cache.wake
+	server.refreshResult(t.Context())
+	// Refreshes do not count as work someone is waiting for.
+	release, err := heavyQueries.acquire(backgroundQuery(t.Context()))
+	if err != nil || heavyQueries.interactive() != 0 {
+		t.Fatal(err, heavyQueries.interactive())
+	}
+	asked, err := heavyQueries.acquire(t.Context())
+	if err != nil || heavyQueries.interactive() != 1 {
+		t.Fatal(err, heavyQueries.interactive())
+	}
+	release()
+	asked()
+	if heavyQueries.interactive() != 0 {
+		t.Fatal(heavyQueries.interactive())
+	}
 	// The file belongs to one library: each has its own, and a file found
 	// holding another library's entries is emptied rather than served.
 	if own, other := resultCachePath(resultCacheIdentity(config)), resultCachePath("library:other:instance"); own == other || own != server.results().path {
@@ -164,6 +214,29 @@ func TestResultCachePolicies(t *testing.T) {
 
 // A card's query is one entry however often the page loads, is served
 // without touching the catalog, and is recomputed after the data changes.
+func TestQueryResultStampNamesZoneAndBuild(t *testing.T) {
+	at := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	zones := map[string]string{}
+	for _, name := range []string{"America/Denver", "America/Phoenix", "Europe/London", "UTC"} {
+		zone, err := time.LoadLocation(name)
+		if err != nil {
+			t.Skip(err)
+		}
+		override(t, &time.Local, zone)
+		id := localZoneIdentity(at)
+		if id != localZoneIdentity(at.AddDate(0, 5, 0)) {
+			t.Fatalf("%s is another zone in summer: %s", name, id)
+		}
+		if other, taken := zones[id]; taken {
+			t.Fatalf("%s and %s are both %s", name, other, id)
+		}
+		zones[id] = name
+	}
+	if buildIdentity() == "" || buildIdentity() == "unknown" {
+		t.Fatal("the running program has no identity")
+	}
+}
+
 func TestQueryResultsAreCached(t *testing.T) {
 	catalog, config := libraryFixture(t)
 	server := testServer(t, config, catalog)

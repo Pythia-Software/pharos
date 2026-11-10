@@ -370,8 +370,10 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	if err = record.restrictSource(ctx, tx, &d, q); err != nil {
 		return qt.QueryResultV3{}, nil, err
 	}
-	// whole is d before its source was bounded to its newest rows.
+	// whole is d before its source was bounded to its newest rows, and
+	// counts the whole source's totals the bounded read has already found.
 	var whole qt.QueryDatasetV3
+	counts := map[string]int64{}
 	if sqlBacked && record == nil {
 		// A SQL-backed source reads only catalog tables that advance the
 		// query generation (or stay in step with ones that do), so its
@@ -388,7 +390,8 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			var cutoff sql.NullString
 			if e := tx.QueryRowContext(ctx, newestNth, newestRows).Scan(&cutoff); e == nil && cutoff.String != "" {
 				d.SourceSQL = newest(cutoff.String)
-				d.PopulationCounter = s.Catalog.populationCounter(queryDatasetGeneration(dataset), wholeSourceCount(d.SourceSQL, whole.SourceSQL, narrow), fast...)
+				d.PopulationCounter, whole.PopulationCounter = countedOnce(d.SourceSQL, whole.SourceSQL, counts,
+					s.Catalog.populationCounter(queryDatasetGeneration(dataset), wholeSourceCount(d.SourceSQL, whole.SourceSQL, narrow), fast...), whole.PopulationCounter)
 			}
 		}
 	}
@@ -397,8 +400,11 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		result, err = s.executeUsageQueryV3(ctx, tx, d, q, hours, required)
 	} else {
 		result, err = d.ExecuteIn(ctx, tx, q, qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name})
-		// The newest stored rows fill the page, or the page is of the whole source.
-		if d.SourceSQL != whole.SourceSQL && whole.SourceSQL != "" && (err != nil || len(result.Rows) < q.Result.Limit) && ctx.Err() == nil {
+		// The newest stored rows fill the page, or hold every row there is
+		// (the whole source's total says so), or the page is of the whole source.
+		short := len(result.Rows) < q.Result.Limit && (len(counts) == 0 || result.Total > int64(q.Result.Offset+len(result.Rows)))
+		if d.SourceSQL != whole.SourceSQL && whole.SourceSQL != "" && (err != nil || short) && ctx.Err() == nil {
+			wholeSourceReads.Add(1)
 			result, err = whole.ExecuteIn(ctx, tx, q, qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name})
 		}
 	}

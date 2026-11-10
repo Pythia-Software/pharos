@@ -19,6 +19,9 @@ type queryAdmission struct {
 	limit  int
 	active int
 	wait   list.List
+	// background counts the running and waiting work that only improves
+	// later answers (backgroundQuery), which interactive() leaves out.
+	background int
 }
 
 type queryWaiter struct {
@@ -26,11 +29,25 @@ type queryWaiter struct {
 	granted bool
 }
 
+type backgroundQueryKey struct{}
+
+// backgroundQuery marks ctx's work as competing with nobody: admission
+// still queues and counts it, but it does not make the service look busy
+// to other background work deciding whether to start.
+func backgroundQuery(ctx context.Context) context.Context {
+	return context.WithValue(ctx, backgroundQueryKey{}, true)
+}
+
 func (a *queryAdmission) acquire(ctx context.Context) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	background := 0
+	if ctx.Value(backgroundQueryKey{}) != nil {
+		background = 1
+	}
 	a.mu.Lock()
+	a.background += background
 	if a.active < a.limit && a.wait.Len() == 0 {
 		a.active++
 		a.mu.Unlock()
@@ -47,6 +64,7 @@ func (a *queryAdmission) acquire(ctx context.Context) (func(), error) {
 			} else {
 				a.wait.Remove(e)
 			}
+			a.background -= background
 			a.mu.Unlock()
 			return nil, ctx.Err()
 		}
@@ -57,6 +75,7 @@ func (a *queryAdmission) acquire(ctx context.Context) (func(), error) {
 			a.mu.Lock()
 			defer a.mu.Unlock()
 			a.releaseLocked()
+			a.background -= background
 		})
 	}
 	// If cancellation raced with a grant, give the slot back before returning.
@@ -86,13 +105,13 @@ func (a *queryAdmission) busy() bool {
 	return a.wait.Len() > 0 || a.active >= a.limit
 }
 
-// runningBeyond is how much work is running or waiting besides own
-// executions the caller accounts for: zero means that background work which
-// only improves later answers competes with nothing.
-func (a *queryAdmission) runningBeyond(own int) int {
+// interactive is how much work is running or waiting that someone is
+// waiting for: zero means that background work competes with nothing. Work
+// is counted from when it asks for a slot, not while it prepares to.
+func (a *queryAdmission) interactive() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return max(0, a.active-own) + a.wait.Len()
+	return a.active + a.wait.Len() - a.background
 }
 
 type derivedAdmissionKey struct{}

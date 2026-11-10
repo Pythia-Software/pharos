@@ -151,9 +151,14 @@ type resultCache struct {
 	queued       map[resultKey]bool // true: in asked
 	wake         chan struct{}
 	stores       int
-	// refreshing is how many entries the refresher is recomputing now.
-	refreshing atomic.Int32
+	// missing holds requests whose build was abandoned before anything was
+	// stored (the browser gave up), for the refresher to build: without an
+	// entry there is nothing else to refresh from.
+	missing map[resultKey]*resultEntry
 }
+
+// resultMissingLimit bounds the abandoned requests remembered at once.
+var resultMissingLimit = 256
 
 // resultCacheLayout is the file's table layout; a file of another layout
 // has its entries dropped, since a cache is always safe to lose.
@@ -200,7 +205,7 @@ func (s *Server) results() *resultCache {
 	c := s.Catalog
 	c.resultsOnce.Do(func() {
 		identity := resultCacheIdentity(s.config)
-		c.resultStore = &resultCache{identity: identity, path: resultCachePath(identity), queued: map[resultKey]bool{}, wake: make(chan struct{}, 1)}
+		c.resultStore = &resultCache{identity: identity, path: resultCachePath(identity), queued: map[resultKey]bool{}, missing: map[resultKey]*resultEntry{}, wake: make(chan struct{}, 1)}
 	})
 	cache := c.resultStore
 	if cache.identity == "" {
@@ -242,9 +247,18 @@ func (c *Catalog) closeResults() {
 }
 
 func (cache *resultCache) get(ctx context.Context, domain, key string) *resultEntry {
+	return cache.read(ctx, domain, key, "body")
+}
+
+// request is an entry without its body: what a rebuild needs.
+func (cache *resultCache) request(ctx context.Context, domain, key string) *resultEntry {
+	return cache.read(ctx, domain, key, "NULL")
+}
+
+func (cache *resultCache) read(ctx context.Context, domain, key, body string) *resultEntry {
 	e := &resultEntry{domain: domain, key: key}
 	var built, used, first int64
-	err := cache.db.QueryRowContext(ctx, `SELECT version,scope,stamp,clock,replay,body,built_at,used_at,first_at,returned FROM entries WHERE domain=? AND key=?`, domain, key).
+	err := cache.db.QueryRowContext(ctx, `SELECT version,scope,stamp,clock,replay,`+body+`,built_at,used_at,first_at,returned FROM entries WHERE domain=? AND key=?`, domain, key).
 		Scan(&e.version, &e.scope, &e.stamp, &e.clock, &e.replay, &e.body, &built, &used, &first, &e.returned)
 	if err != nil {
 		return nil
@@ -319,6 +333,32 @@ func (cache *resultCache) refreshSoon(domain, key string, asked bool) {
 	}
 	cache.mu.Unlock()
 	cache.signal()
+}
+
+// buildSoon queues a request that has no entry, as refreshSoon queues one
+// that has.
+func (cache *resultCache) buildSoon(e *resultEntry) {
+	id := resultKey{e.domain, e.key}
+	cache.mu.Lock()
+	if _, known := cache.missing[id]; !known && len(cache.missing) >= resultMissingLimit {
+		cache.mu.Unlock()
+		return
+	}
+	cache.missing[id] = e
+	cache.mu.Unlock()
+	cache.refreshSoon(e.domain, e.key, true)
+}
+
+// woke passes a wake-up on while entries wait: one may stand for many, and
+// there is another refresher to share them with. With nothing queued it
+// passes nothing, so idle refreshers sleep.
+func (cache *resultCache) woke() {
+	cache.mu.Lock()
+	queued := len(cache.asked)+len(cache.swept) > 0
+	cache.mu.Unlock()
+	if queued {
+		cache.signal()
+	}
 }
 
 func (cache *resultCache) signal() {
@@ -408,6 +448,16 @@ func (s *Server) serveResult(w http.ResponseWriter, r *http.Request, d *resultDo
 	built := time.Now()
 	body, err := d.build(ctx, s, request.replay, request.now)
 	if err != nil {
+		if ctx.Err() != nil {
+			// Whoever asked has gone, and took the build with them. It is
+			// built when there is capacity, so that the next load of the
+			// same view has an answer however long the query takes.
+			if state == "stale" {
+				cache.refreshSoon(d.name, key, true)
+			} else {
+				cache.buildSoon(&resultEntry{domain: d.name, key: key, scope: request.scope, clock: request.clock, replay: request.replay})
+			}
+		}
 		if state == "stale" {
 			serve()
 		} else {
@@ -432,15 +482,28 @@ func (s *Server) refreshResult(ctx context.Context) bool {
 		return false
 	}
 	d := resultDomains[id.domain]
-	entry := cache.get(ctx, id.domain, id.key)
-	if d == nil || entry == nil {
+	cache.mu.Lock()
+	missing := cache.missing[id]
+	delete(cache.missing, id)
+	cache.mu.Unlock()
+	if d == nil {
+		return true
+	}
+	// The body is not needed to rebuild it, and may be large.
+	entry := cache.request(ctx, id.domain, id.key)
+	if entry == nil {
+		entry = missing
+	}
+	if entry == nil {
 		return true
 	}
 	stamp, err := d.stamp(ctx, s, entry.scope)
-	if err != nil || d.state(entry, stamp, time.Now()) != "stale" {
+	// An entry is rebuilt when it is stale, was stored by another version
+	// of its domain, or was never stored at all.
+	if err != nil || entry.version == d.version && d.state(entry, stamp, time.Now()) != "stale" {
 		return true
 	}
-	build, cancel := context.WithTimeout(ctx, resultBuildDeadline)
+	build, cancel := context.WithTimeout(backgroundQuery(ctx), resultBuildDeadline)
 	defer cancel()
 	built := time.Now()
 	body, err := d.build(build, s, entry.replay, time.Time{})
@@ -506,9 +569,9 @@ func (s *Server) refreshResults(ctx context.Context, sweeps bool) {
 	if cache == nil {
 		return
 	}
-	// A refresh usually holds a heavy-query slot itself: capacity is what
-	// the refreshers do not account for.
-	free := func() bool { return heavyQueries.runningBeyond(int(cache.refreshing.Load())) == 0 }
+	// A refresh marks its own queries as background, so what is counted
+	// here is only the work someone is waiting for.
+	free := func() bool { return heavyQueries.interactive() == 0 }
 	var sweep *time.Timer
 	if sweeps {
 		sweep = time.NewTimer(0)
@@ -527,8 +590,7 @@ func (s *Server) refreshResultsWhile(ctx context.Context, cache *resultCache, fr
 		case <-ctx.Done():
 			return
 		case <-cache.wake:
-			// Pass the word on: one wake-up may stand for many entries.
-			cache.signal()
+			cache.woke()
 		case <-swept:
 			s.sweepResults(ctx)
 			sweep.Reset(resultSweepEvery)
@@ -541,10 +603,7 @@ func (s *Server) refreshResultsWhile(ctx context.Context, cache *resultCache, fr
 				}
 				continue
 			}
-			cache.refreshing.Add(1)
-			found := s.refreshResult(ctx)
-			cache.refreshing.Add(-1)
-			if !found {
+			if !s.refreshResult(ctx) {
 				break
 			}
 		}
