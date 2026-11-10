@@ -108,6 +108,7 @@ func (c *Catalog) datasetRows(ctx context.Context, dataset string, fields librar
 		} else {
 			rows, err = c.localUsageRows(ctx)
 		}
+		rows = usageRowsWithin(rows, where)
 	case "people_message_labels":
 		rows, err = c.peopleMessageLabelRows(ctx, fields, where...)
 	case "conversation_activity":
