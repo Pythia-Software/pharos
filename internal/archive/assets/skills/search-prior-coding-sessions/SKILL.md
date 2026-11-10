@@ -42,7 +42,8 @@ works the same for both.
    returns the project that directory is in, from a repository checkout or a
    folder, even below where any past session ran. If the user named a project,
    call `list_projects` with `query` set to that name instead. If nothing comes
-   back in a Git checkout, a new worktree may not be known yet: run
+   back, or only a folder while you are in a Git checkout, a new worktree may
+   not be known yet: run
    `git remote get-url origin` and call `list_projects` with `query` set to
    the repository's name from the remote. The directory name isn't reliable,
    since tools like Conductor name worktrees after cities.

@@ -784,7 +784,10 @@ Every other tool takes the new facts too:
 - `list_projects` takes `path`, an agent's working directory, and returns the
   project it is in: the nearest repository checked out at or above it, else
   the nearest folder project, even below where any session ran. A temporary
-  directory is in `/tmp`, as the project rule places its sessions.
+  directory is in `/tmp`, as the project rule places its sessions. As a
+  checkout there does for repositories, a folder project at the home
+  directory or `/` holds only itself, so a new folder below it has no
+  project yet and the caller looks further (the skill tries the remote).
 - A `file` filter (`search_conversations`, `search_work`, `trace`,
   `query_statistics`) matches files sessions edited through their tool
   calls (`session_files`), not only change sets, so it finds Claude Code,

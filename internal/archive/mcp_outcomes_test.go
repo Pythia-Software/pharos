@@ -20,6 +20,9 @@ func TestOutcomeToolsForAgents(t *testing.T) {
 	// treated so.
 	override(t, &temporaryFolders, []string{"/private/tmp"})
 	writeClaudeSession(t, library.claude, "s-scratch", claudeSession("s-scratch", "/private/tmp/pharos-scratch", "", "Try it in scratch", 32))
+	// Sessions once run in a home directory and at /.
+	writeClaudeSession(t, library.claude, "s-home", claudeSession("s-home", "/Users/pharos-test", "", "Look around home", 33))
+	writeClaudeSession(t, library.claude, "s-root", claudeSession("s-root", "/", "", "Look around the disk", 34))
 	library.ingestClaude(t)
 	ctx := context.Background()
 	if err := library.catalog.ensureToolRollup(ctx); err != nil {
@@ -39,6 +42,13 @@ func TestOutcomeToolsForAgents(t *testing.T) {
 	for path, want := range map[string]string{filepath.Join(app, "cmd", "deeper"): "app", filepath.Join(notes, "drafts"): folderKey(notes), "/private/tmp/pharos-scratch/sub": "/tmp"} {
 		found := callProjectTool(t, library.catalog, "list_projects", map[string]any{"path": path})
 		if items := projectItems(found); len(items) != 1 || items[want] == nil {
+			t.Fatalf("list_projects path=%s: %#v", path, found)
+		}
+	}
+	// A home directory or / is the project only of work run there, not of
+	// every folder below it: a new folder has none yet.
+	for path, want := range map[string]int{"/Users/pharos-test": 1, "/Users/pharos-test/new-thing": 0, "/": 1, "/opt/new-thing": 0} {
+		if found := callProjectTool(t, library.catalog, "list_projects", map[string]any{"path": path}); len(projectItems(found)) != want {
 			t.Fatalf("list_projects path=%s: %#v", path, found)
 		}
 	}

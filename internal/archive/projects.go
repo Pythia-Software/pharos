@@ -339,8 +339,11 @@ func (c *Catalog) listProjects(args map[string]any) (map[string]any, error) {
 			where, values = " AND pj.id=?", []any{repository}
 		} else {
 			// A folder is its project folder, so temporary folders are /tmp.
+			// As in folderRepository, the home directory and / hold only
+			// themselves: a session once run in ~ does not make ~ the project
+			// of every new folder, which leaves the caller to look further.
 			folder := projectFolder(path)
-			where, values, nearest = " AND pj.id IS NULL AND (w.project_folder=? OR substr(?,1,length(w.project_folder)+1)=w.project_folder||'/')", []any{folder, folder}, true
+			where, values, nearest = " AND pj.id IS NULL AND (w.project_folder=? OR w.project_folder NOT IN ('~','/') AND substr(?,1,length(w.project_folder)+1)=w.project_folder||'/')", []any{folder, folder}, true
 		}
 	}
 	rows, err := queryMaps(c.DB, `SELECT `+projectNameSQL("w")+` project,`+projectKindSQL("w")+` kind,MAX(pj.canonical_remote) remote,
