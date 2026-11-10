@@ -469,6 +469,9 @@ each branch. It follows CodeBurn's by-branch lens (see References).
 - **Session-level branches.** Codex records one branch per session, and
   Conductor one per workspace; their messages carry no per-turn branch. A
   session without per-turn branches is on that branch for all its usage.
+- **Mirrors count once.** A Conductor workspace that mirrors a Claude Code
+  session carries the same usage. As in Tokens and Cost, only the native
+  session counts, with its per-turn branches.
 - **Coverage split.** It sums to the repository sessions' whole spend:
 
   | Coverage | Meaning |
@@ -488,18 +491,20 @@ each branch. It follows CodeBurn's by-branch lens (see References).
   `branch_usage_probe_test.go`):
   - It has 18,629 Claude-model conversations in repositories. Claude Code's
     own sessions recorded per-turn branches in 5,186 of 5,198. Conductor's
-    5,020 use its workspace branch. TL1's 8,411 mostly have no branch data.
+    5,020 use its workspace branch, except those that mirror a Claude Code
+    session: 49 billion tokens of mirrored usage count once, on the
+    native session. TL1's 8,411 mostly have no branch data.
   - A first pass read 1.5 million kept events in 2 min 24 s; the slowest
     conversation took 1.1 s. A pass with nothing new runs only the
     change-detection query, which took 0.37 s.
-  - Coverage, by tokens:
+  - Coverage, by tokens, mirrors counted once:
 
     | Coverage | Share |
     |---|---|
-    | On a branch, per session | 85.0% |
-    | On a branch, per turn | 13.0% |
+    | On a branch, per session | 83.8% |
+    | On a branch, per turn | 13.8% |
     | Unknown branch | 0.1% |
-    | No branch data | 1.9% |
+    | No branch data | 2.3% |
 - **Approximation.** Within one hour, a session's cost is split by tokens.
   If a session switched branches mid-hour, the two branches' token types
   (cache reads and output, for example) are priced as that hour's mix.

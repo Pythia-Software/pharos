@@ -14,7 +14,7 @@ import (
 // shares (branch_usage.go) is split by them, turn by turn; one without is
 // on the branch its source recorded for the whole session, or has no
 // branch data. Folders and sessions without a project have no branch and
-// are not in it.
+// are not in it, nor are mirrors, which the Usage dataset also counts once.
 
 // Coverage of a row's branch, the split the dashboard reports:
 //   - on_branch: on a recorded branch;
@@ -54,7 +54,9 @@ func (c *Catalog) branchUsageRows(ctx context.Context) ([]map[string]any, error)
 			}
 			shares[session][key][firstString(row["branch"])] += integer(row["tokens"])
 		}
-		ledger, err := c.usageLedger(ctx, nil)
+		// The Usage dataset's ledger: a mirror (a Conductor workspace of a
+		// Claude Code session) counts once, as its native session.
+		ledger, err := c.localUsageLedger(ctx)
 		if err != nil {
 			return nil, err
 		}
