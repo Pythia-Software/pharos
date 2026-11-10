@@ -14,6 +14,7 @@ import { agentEventRatesCatalog } from "./agent-event-rates-catalog";
 import { carbonAnalysisCatalog, carbonCatalogShape, type CarbonAssumptions } from "./carbon-analysis-catalog";
 import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { sessionShapeAnalysisCatalog } from "./session-shape-analysis-catalog";
+import { outcomesAnalysisCatalog } from "./outcomes-analysis-catalog";
 import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCounting } from "./parallelism-analysis-catalog";
 
 // The engine dashboards, by Analyze topic. Carbon and Parallelism build
@@ -23,7 +24,7 @@ export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
   scatter: scatterAnalysisCatalog,
   compaction: compactionAnalysisCatalog, labels:messageLabelsCatalog,
   calls: toolTimeAnalysisCatalog, activity: conversationAnalysisCatalog, tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: toolTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
-  human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape, work_hours: habitsAnalysisCatalog, agent_experience: agentEventsAnalysisCatalog, session_shape: sessionShapeAnalysisCatalog,
+  human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape, work_hours: habitsAnalysisCatalog, agent_experience: agentEventsAnalysisCatalog, session_shape: sessionShapeAnalysisCatalog, outcomes: outcomesAnalysisCatalog,
   agent_event_rates: agentEventRatesCatalog,
 };
 

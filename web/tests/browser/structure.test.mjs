@@ -549,6 +549,12 @@ const ROUTES = [
   { name: "Analyze binned distribution", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "distribution", metric: "active_time", split: "none" }))}`, ready: '.usage-analysis-dashboard[aria-busy="false"]' },
   { name: "Analyze trend heatmap", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "sessions", split: "autonomy_band", display: "heatmap", period: "day" }))}`, ready: '.usage-session-shape-dashboard section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
   { name: "Human Words conversation heatmap", url: `/analyze?analyze_topic=human&analyze_days=30&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "typed", split: "none", display: "heatmap", period: "day" }))}`, ready: 'section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
+  // Outcomes: the chart and its panels, each read from the outcomes dataset.
+  { name: "Analyze outcomes dashboard", url: "/analyze?analyze_topic=outcomes", ready: `.usage-outcomes-dashboard ${overTimeReady}`,
+    check: async page => {
+      await page.locator(".usage-outcomes-dashboard .outcome-panel[aria-busy=false]").nth(2).waitFor();
+      assert.deepEqual(await page.locator(".usage-outcomes-dashboard [role=alert], .usage-outcomes-dashboard .query-table-error").allTextContents(), [], "the dashboard reports an error");
+    } },
   // A card's relative range, replaced by custom dates and times in the
   // dashboard's inline range picker.
   { name: "Dashboard custom date and time range", url: `/analyze?${new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "tokens",

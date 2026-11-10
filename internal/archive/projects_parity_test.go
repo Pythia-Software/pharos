@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,7 +24,7 @@ import (
 // projectDatasets are the query tables that carry project_name.
 var projectDatasets = []string{"library", "usage", "agent_events", "agent_event_messages", "conversation_activity", "skill_usages",
 	"writing", "writing_messages", "tool_calls", "tools", "rhythm", "parallelism", "model_requests", "messages", "compactions",
-	"agent_event_rates", "session_shape", "message_labels", "people_message_labels"}
+	"agent_event_rates", "session_shape", "message_labels", "people_message_labels", "outcomes"}
 
 // projectDatasetsWithoutRows are the project datasets the fixtures' short
 // sessions leave empty: they need skills, or the agent event pass.
@@ -186,6 +187,26 @@ func TestProjectParityWithoutGit(t *testing.T) {
 		if _, ok := row["project_kind"]; !ok || row["git_check"] != "not_applicable" {
 			t.Fatalf("a linked commit count without what it reads: %#v", row)
 		}
+	}
+	// Analyze → Outcomes counts the same sessions with the same labels, from
+	// their transcripts: no branch, and no session at the local Git tier.
+	analyzed := map[string]int{}
+	for _, row := range queryProjects(t, server, "outcomes", "source_kind", "outcome_label", "evidence_tier", "git_check", "branch") {
+		if row["branch"] != nil || row["git_check"] != "not_applicable" || row["evidence_tier"] == "local_git" {
+			t.Fatalf("Git facts outside a repository: %#v", row)
+		}
+		analyzed[firstString(row["source_kind"])+"|"+firstString(row["outcome_label"])]++
+	}
+	if !maps.Equal(analyzed, outcomes) {
+		t.Fatalf("outcomes dataset %#v, library %#v", analyzed, outcomes)
+	}
+	// Agents reach the dashboard and its values through the site tools.
+	link, _, err := callSiteMCP(context.Background(), library.catalog, "site_link", map[string]any{"page": "analyze/outcomes", "options": map[string]any{"view": "compare", "metric": "cost_per_kept_change", "split": "evidence_tier"}})
+	if err != nil || !strings.Contains(link.(map[string]any)["url"].(string), "analyze_topic=outcomes") {
+		t.Fatalf("site_link outcomes: %v %v", link, err)
+	}
+	if values, _ := browseText(t, library.catalog, map[string]any{"path": "analyze/outcomes/filters/outcome_label"}); len(values["items"].([]any)) == 0 {
+		t.Fatalf("outcome_label values: %v", values)
 	}
 	usage := map[string]bool{}
 	for _, row := range queryProjects(t, server, "rhythm") {

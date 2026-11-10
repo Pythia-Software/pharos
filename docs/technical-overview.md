@@ -108,6 +108,7 @@ Past Work also shows when an archived commit appears on the local `origin/main` 
 - **Library drive** in the header shows live indexing progress and the latest completed index result, including updated workspace and conversation counts and any error.
 - **Your writing** (in Analyze) estimates how much text you typed or dictated into agent chats. Each user message is split into typed text, harness instructions, one-click templates, attachments, agent output copied from the previous 48 hours, re-sent text, likely pastes, and prompts sent by scripts or other agents. A query table lists one row per conversation, sortable and filterable by each kind of input and by tokens and cost, so "deepest conversations" is one click; the chart and breakdown above it follow the filters. The chart splits words by kind of input, repository, app, or provider; its key and a dragged time range filter the table the same way as on Tokens, and a time filter counts only the words sent inside it. A second query table lists one row per user message, filterable by the categories and rules that labelled its text, and shows messages either as rows or as text highlighted span by span, each span explaining on hover why it counted as what. The transcript reader shows the split for each message, and Settings has cards that open each Analyze view. Definitions are in [`docs/human-authorship.md`](human-authorship.md).
 - **Analyze → Agent Experience** (preview, turned on in Settings → Background Processing) shows what agents ran into while they worked, found in their replies and thinking: obstacles, surprises, discoveries, workarounds, unchecked claims and more. A query card opens matching events with links into the reader; the Agent Events dashboard compares rates per 1,000 agent messages. See [`docs/agent-events.md`](agent-events.md).
+- **Analyze → Outcomes** shows what became of sessions' changes: spend by outcome label over time, rework rate by project, cost per kept change by model, and how many sessions reached each evidence tier. A library without Git draws all of it from transcripts. See [`docs/projects-and-outcomes.md`](projects-and-outcomes.md#analyze--outcomes).
 - **Analyze → Carbon Impact** estimates the electricity and CO₂e behind your token usage, all time or the last 30 days, split by token type (uncached input, cache writes, cache reads, output) and model tier. Energy per token comes from published inference measurements, with cache reads charged far less than recomputed input; you choose the electricity grid, data-center overhead (PUE), and a low, central, or high estimate. It is an estimate, not a measurement: factors and sources are in [`carbon/`](../carbon/README.md).
 - **Library upgrade** appears when a catalog indexed by an older version needs its derived data brought up to date: repository merges, token attribution, harness versions, loaded instructions, and the tool ledger, run in that order as one resumable background job. See [Upgrading an existing library](releases-and-updates.md#upgrading-an-existing-library).
 - **Health** shows retrieval coverage/freshness, index size, and external-storage health. Retrieval-only is shown as an intentional capability.
@@ -281,6 +282,12 @@ are unchanged (`git_repository_scans`). It stores facts, not content, in
 another Mac's links to commits this Mac's clones lack; the Library reads
 `git_check`, `linked_commits` and `landed_commits`, and a repository Git
 could not check reads "Not checked" with the reason.
+
+Analyze → Outcomes reads the `outcomes` dataset (`outcomes_table.go`): one
+row per Library session, with its label, evidence tier, branch, main model
+and the cost the Library gives it, counted at its start. Its catalog
+(`web/src/outcomes-analysis-catalog.ts`) disables, with the reason, a
+breakdown needing a tier no session reached.
 
 ## UI feedback
 

@@ -119,8 +119,9 @@ A **catalog** describes one dashboard topic: Tokens and Cost
 (`web/src/token-analysis-catalog.ts`), Tools (`tools-analysis-catalog.ts`),
 Pharos MCP (`mcp-analysis-catalog.ts`), Tool Time and Skills
 (`record-analysis-catalogs.ts`), Human Words (`human-analysis-catalog.ts`),
-Carbon (`carbon-analysis-catalog.ts`) and Parallelism
-(`parallelism-analysis-catalog.ts`). See [The catalogs](#the-catalogs) for
+Carbon (`carbon-analysis-catalog.ts`), Parallelism
+(`parallelism-analysis-catalog.ts`) and Outcomes
+(`outcomes-analysis-catalog.ts`). See [The catalogs](#the-catalogs) for
 what each offers and why.
 
 - **Measures.** Each has a label and format, and a record-level aggregate:
@@ -380,6 +381,10 @@ can:
   and its test runs over every catalog. It also reports a component
   breakdown that shares a breakdown's id, splits a measure that is not
   additive, or falls back to an unknown breakdown.
+- **Unavailable breakdowns.** A breakdown with `unavailable` is listed with
+  that reason and cannot be chosen; a state naming it draws without it, as
+  for an unknown breakdown. A dashboard sets it from the data, as Outcomes
+  does for a Git breakdown in a library local Git never checked.
 - **Implied filters and units.** A breakdown with an implied `where` is never
   offered for units. The filter would remove records from inside each unit,
   changing every unit's own value rather than only choosing which units
@@ -924,6 +929,7 @@ around it. Its default view is the one it always opened on.
 | Carbon | `usage`, estimated under the user's assumptions | conversation, agent session, delegated run | `co2`, `energy`, `tokens` | usage `hour`, `day` | Over time |
 | Parallelism | `parallelism`: one local hour of one agent at one level of agents at once, under the saved settings | agent | `agent_hours`, `active_hours`, `parallel_hours` | `started_at` (timestamp) | Over time, below the ribbon |
 | Session Shape | `session_shape`: one agent session | agent session; root conversation (no breakdowns) | `active_time` (`active_seconds`), `turn_cycle`, `context_peak`, `autonomy` | `started_at` (timestamp), or `last_message_at` placed by last message | Over time: sessions by length band, weekly shares |
+| Outcomes | `outcomes`: one Library workspace, at its start | none | `cost`, `tokens`, `files_changed`, lines | `started_at` (timestamp) | Over time |
 
 - **Tools** (`tools-analysis-catalog.ts`). Calls, failed calls, failure
   rate (`error_count` / `call_count`), truncation rate (`truncated_count` /
@@ -1077,6 +1083,25 @@ around it. Its default view is the one it always opened on.
   Sessions to read and the definitions. Its common views are Card Library
   cards. See
   [Session shape](session-shape.md#the-dashboard).
+- **Outcomes** (`outcomes-analysis-catalog.ts`). Workspaces, cost, tokens,
+  files changed and lines added and removed, rework rate (rework-removed
+  lines over kept lines, pooled, once the rework window has closed), cost
+  per kept change (the cost of judged workspaces over kept ones that have a
+  price) and kept share (kept over judged: Landed, Committed, Changed and
+  kept, or Reworked), by outcome label, evidence tier, project, main
+  provider and model, source, branch (repository workspaces only, an
+  implied population) and the local Git check. A workspace counts at its
+  start: its first usage hour, else its first edit. Its whole cost goes to
+  the model that took most of it. The
+  dashboard draws `outcomeCatalogFor(tiers)`: a breakdown that needs a tier
+  no session reached (the local Git check, when local Git checked nothing)
+  is offered disabled with the reason, never drawn empty. Until the tiers
+  are read, or if reading them fails, the full catalog stands. A link
+  naming a disabled breakdown is read with the full catalog and draws the
+  default breakdown. Three
+  panels follow the chart: rework rate by project, cost per kept change by
+  main model, and how many sessions reached each evidence tier. See
+  [projects and outcomes](projects-and-outcomes.md#analyze--outcomes).
 
 Every engine dashboard, Tokens and Cost included, has a Refresh action,
 which reruns its queries (Pharos MCP's own requests arrive while it is open).

@@ -32,6 +32,8 @@ export const dashboardDefaults: Record<string, AnalysisState> = {
   agent_experience: { metric: "events", split: "family_group", ...daily },
   agent_event_rates: { metric: "per_thousand", split: "friction_repository", view: "compare", minSamples: 200 },
   session_shape: { metric: "sessions", split: "length_band", period: "day" },
+  // Spend by outcome over time: sessions are sparser than usage, so weeks.
+  outcomes: { metric: "cost", split: "outcome_label", period: "week" },
 } satisfies Record<keyof typeof engineUsageTopics, AnalysisState>;
 
 // The view settings each dashboard drew without a value before version 3,
@@ -46,4 +48,5 @@ export const legacyViewDefaults: Record<keyof typeof engineUsageTopics, LegacyVi
   human: legacyDaily, parallelism: legacyDaily, work_hours: legacyDaily, tools: { values: {} }, mcp: { values: {} }, carbon: legacyDaily,
   time: legacyDaily, skills: legacyDaily, agent_experience: legacyDaily, agent_event_rates: { values: {} },
   session_shape: { values: { rollingPeriods: 7 }, chose: true },
+  outcomes: legacyDaily,
 };

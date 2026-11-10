@@ -64,6 +64,7 @@ export const dataSources = {
   agent_event_rates: { label: "Agent event observations", entity: "messages", grain: "One agent message checked for events, once per kind of event" },
   session_shape: { label: "Agent sessions", entity: "agents", grain: "One agent session (a delegated run is its own), with its length, active time, tool calls, autonomy and the forensic signals that fired" },
   fixes: { label: "Fixes for Recurring Agent Problems", entity: "messages", grain: "One recurring problem agents ran into, grouped from agent events across work items" },
+  outcomes: { label: "Workspace outcomes", entity: "workspaces", grain: "One Library workspace, with its outcome label, evidence tier, main model, cost and changes" },
 } as const satisfies Record<string, { label: string; entity: DataEntity; grain: string }>;
 export type DataSource = keyof typeof dataSources;
 

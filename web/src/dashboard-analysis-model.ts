@@ -92,7 +92,11 @@ export const partField = (part: RatioPart) => { const { op, field } = ratioPart(
 // trend draws its groups as series: in a fixed order where one is given,
 // with labels for known values and for a missing one.
 // A breakdown with an implied where names that population in its note.
-export type AnalysisBreakdown = { views?: AnalysisView[]; measures?: string[]; label: string; fields: string[]; where?: WhereTerm[]; note?: string; order?: string[]; values?: Record<string, string>; empty?: string; bins?: AxisBins };
+// A breakdown is unavailable, with the reason, when the data cannot fill
+// it, such as a Tier 2 breakdown in a library local Git never checked: it is
+// offered disabled rather than drawn empty, and a state asking for it draws
+// without it.
+export type AnalysisBreakdown = { views?: AnalysisView[]; measures?: string[]; label: string; fields: string[]; where?: WhereTerm[]; note?: string; order?: string[]; values?: Record<string, string>; empty?: string; bins?: AxisBins; unavailable?: string };
 // A band of a continuous value may also bin that value finely (value-bins.ts):
 // field holds each record's bin, as its lower edge. The heatmap then draws
 // the value on a continuous axis rather than the band's few groups, with
@@ -388,11 +392,12 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
     && (state.cycleOn === undefined || has(catalog.cycleOn?.options ?? {}, state.cycleOn));
 }
 
+const offered = (catalog: AnalysisCatalog, split: string) => has(catalog.breakdowns, split) && !catalog.breakdowns[split].unavailable;
 export const shareable = (catalog: AnalysisCatalog, state: ResolvedAnalysis) => state.view === "compare" && state.split !== noSplit
   && (state.unit !== records && state.reduce === "count" || catalog.measures[state.metric].additive && state.reduce === "total");
 // The trend draws records by any breakdown, a component breakdown, or none.
-export const trendSplit = (catalog: AnalysisCatalog, split: string) => split === noSplit && catalog.allowNoSplit !== false || has(catalog.breakdowns, split) || has(catalog.components ?? {}, split);
-export const splitValid = (catalog: AnalysisCatalog, unit: string, split: string) => split === noSplit && catalog.allowNoSplit !== false || has(catalog.breakdowns, split) && (unit === records || has(catalog.units[unit]?.breakdowns ?? {}, split));
+export const trendSplit = (catalog: AnalysisCatalog, split: string) => split === noSplit && catalog.allowNoSplit !== false || offered(catalog, split) || has(catalog.components ?? {}, split);
+export const splitValid = (catalog: AnalysisCatalog, unit: string, split: string) => split === noSplit && catalog.allowNoSplit !== false || offered(catalog, split) && (unit === records || has(catalog.units[unit]?.breakdowns ?? {}, split));
 // Calculated components retain their per-period calculation in the trend.
 export function comparisonComponentUnavailable(catalog: AnalysisCatalog, state: Pick<AnalysisState, "metric" | "unit">, split: string): string | undefined {
   const component = catalog.components?.[split];

@@ -100,3 +100,13 @@
 .usage-dashboard-links .usage-query-perspective{--query-purpose:light-dark(#94600c,#edc272)}
 .usage-query-purpose{color:var(--query-purpose);font-size:var(--fs-2xs);font-weight:700;line-height:1.4;letter-spacing:.08em;text-transform:uppercase;margin:1px 0 4px}
 .usage-query-note{color:var(--muted);font-size:var(--fs-2xs);line-height:1.6;margin:4px 0 8px;overflow-wrap:anywhere}
+
+/* Outcomes dashboard panels (OutcomesDashboard). */
+.outcome-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; margin: 16px 0; min-width: 0; }
+.outcome-panel { min-width: 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.outcome-panel h3 { margin: 0 0 4px; font: 650 var(--fs-lg)/1.25 var(--serif); }
+.outcome-panel > p.muted { margin: 0 0 12px; font-size: var(--fs-sm); }
+.outcome-panel table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.outcome-panel :is(th, td) { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: left; overflow-wrap: anywhere; }
+.outcome-panel th { font-weight: 500; }
+.outcome-panel td:nth-child(2) { font-weight: 650; white-space: nowrap; text-align: right; }
