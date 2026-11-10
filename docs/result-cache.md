@@ -164,7 +164,7 @@ of at most 50 rows (a card's short list). Session Shape's list of sessions
 to read is loaded live for the same reason.
 
 Dashboard content that does not come from `query-v3` (Thinking, Habits,
-Parallelism, Carbon, Usage history) is not stored yet.
+Parallelism, Usage history) is not stored yet.
 
 ## Adding a domain
 
