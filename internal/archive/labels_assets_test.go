@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // tarEntry is one entry of a test archive: a file, a directory (name ends
@@ -267,6 +270,14 @@ func TestLabelsFetchIsOnePerMac(t *testing.T) {
 	archive := testArchive(t, tarEntry{name: "manifest.json", body: "{}"})
 	server := newAssetServer(t, archive)
 	asset := server.asset(archive, "")
+	// Status only opens an existing lock: none means no download, and
+	// asking creates none.
+	if got := labelsAssetStatus(asset); got != "not yet downloaded" {
+		t.Fatalf("status before any download: %q", got)
+	}
+	if _, err := os.Stat(labelsFetchLock()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("status created the fetch lock: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(labelsFetchLock()), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -281,6 +292,30 @@ func TestLabelsFetchIsOnePerMac(t *testing.T) {
 		t.Fatalf("a second download: %v", err)
 	}
 	lease.Close()
+	if labelsFetchActive() {
+		t.Fatal("status after the download lock was released")
+	}
+	for _, tc := range leaseLockFailures() {
+		t.Run(tc.name, func(t *testing.T) {
+			// Status is a hint, not a safety verdict: a lock it cannot take
+			// for any reason reads as downloading.
+			override(t, &lockLabelsFetchProbe, func(*os.File, filelock.Mode, filelock.WaitMode) error { return tc.err })
+			if !labelsFetchActive() {
+				t.Fatal("a failed status probe read as no download")
+			}
+			// The download says another is running only for contention, and
+			// downloads nothing without the lock.
+			refused := failFileLease(t, labelsFetchLock(), tc.err)
+			err := fetchLabelsAssets(t.Context(), []labelsAsset{asset}, nil, nil)
+			if contended := errors.Is(tc.err, filelock.ErrContended); contended != (err == errLabelsFetching) || !contended && !errors.Is(err, tc.err) {
+				t.Fatalf("download lock failure: %v", err)
+			}
+			requireLeasesClosed(t, *refused, 1)
+			if asset.present() || asset.downloaded() != 0 {
+				t.Fatal("downloaded without the lock")
+			}
+		})
+	}
 	if err := fetchLabelsAssets(t.Context(), []labelsAsset{asset}, nil, nil); err != nil || !asset.present() {
 		t.Fatalf("after the first ended: %v", err)
 	}

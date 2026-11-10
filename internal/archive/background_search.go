@@ -52,6 +52,9 @@ type searchBatch struct {
 // backgroundSearch catches up the same projections and index backfills the
 // continuous daemons maintain, for an Hourly/Daily pass or an explicit Run now.
 func (c *Catalog) backgroundSearch(ctx context.Context) error {
+	if c.work != nil {
+		return c.work.backgroundSearchWork(ctx, c)
+	}
 	// Stop holds projection work and cancels a batch already in progress.
 	// The independent search-index backfills still run, as their daemons do.
 	if projection, done, running := c.libraryPass(ctx); running {
@@ -82,6 +85,7 @@ func (c *Catalog) backgroundSearchView(ctx context.Context) error {
 		return func(ctx context.Context) (bool, error) { count, err := fn(ctx); return count > 0, err }
 	}
 	return c.runSearchBatches(ctx, []searchBatch{
+		{kindNames, countBatch(func(ctx context.Context) (int, error) { return c.refreshConversationNames(ctx, 25) })},
 		{"maintenance.origins", func(ctx context.Context) (bool, error) { return c.publishOrigins(ctx) }},
 		{"maintenance.library-view", countBatch(func(ctx context.Context) (int, error) {
 			count, err := c.RefreshLibrary(ctx, 10)
@@ -90,6 +94,7 @@ func (c *Catalog) backgroundSearchView(ctx context.Context) error {
 		})},
 		{"maintenance.previews", countBatch(func(ctx context.Context) (int, error) { return c.refreshPreviews(ctx, 25) })},
 		{"maintenance.parallelism", countBatch(func(ctx context.Context) (int, error) { return c.refreshParallelism(ctx, parallelismBatch, false) })},
+		{"maintenance.session-shape", countBatch(func(ctx context.Context) (int, error) { return c.refreshSessionShape(ctx, sessionShapeBatch, false) })},
 	})
 }
 

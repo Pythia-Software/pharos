@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,8 +32,6 @@ const (
 	claudeCleanupDays   = 30 // Claude Code's cleanupPeriodDays default
 	probeSmallFileLimit = 32 << 20
 )
-
-var probeEnvNames = []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME"}
 
 // tccFolders are home-relative folders whose contents macOS guards with a
 // privacy prompt (Files and Folders, App Data, iCloud, Mail, and the like).
@@ -186,52 +185,36 @@ func probeTools(home string, config Config) []ProbeTool {
 			found[kind] = ProbeTool{kind, tildeWithin(home, path), reason}
 		}
 	}
-	for kind, paths := range map[string][]string{
-		"claude": {".claude", ".config/claude"}, "codex": {".codex"},
-		"conductor": {"Library/Application Support/com.conductor.app"}, "tl1": {".tl1"},
-		"antigravity": {".gemini/antigravity", ".gemini/antigravity-cli", ".gemini/antigravity-ide"},
-	} {
-		for _, path := range paths {
-			check(kind, filepath.Join(home, filepath.FromSlash(path)), "data folder")
-		}
-	}
-	// Alternate profiles need only a bounded listing of names, never a walk.
-	for _, root := range []struct{ dir, prefix, kind string }{{home, ".claude", "claude"}, {filepath.Join(home, ".gemini"), "antigravity", "antigravity"}} {
-		if _, exists := found[root.kind]; exists {
-			continue
-		}
-		resolved, err := resolveUnprotected(home, root.dir)
-		if err != nil {
-			continue
-		}
-		dir, err := os.Open(resolved)
-		if err != nil {
-			continue
-		}
-		entries, _ := dir.ReadDir(512)
-		dir.Close()
-		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), root.prefix) && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) {
-				check(root.kind, filepath.Join(root.dir, entry.Name()), "profile folder")
+	host := hostEnv{Home: home, Getenv: os.Getenv, Applications: probeApplicationDirs(home),
+		// Alternate profiles need only a bounded listing of names, never a walk.
+		List: func(dir string) []fs.DirEntry {
+			resolved, err := resolveUnprotected(home, dir)
+			if err != nil {
+				return nil
 			}
-		}
-	}
-	for _, root := range probeApplicationDirs(home) {
-		for kind, bundle := range map[string]string{"claude": "Claude Code.app", "codex": "Codex.app", "conductor": "Conductor.app", "tl1": "TL1.app", "antigravity": "Antigravity.app"} {
-			check(kind, filepath.Join(root, bundle), "application")
-		}
-	}
-	for name, kind := range map[string]string{"CLAUDE_CONFIG_DIR": "claude", "CODEX_HOME": "codex"} {
-		if path := os.Getenv(name); path != "" {
-			check(kind, resolvePath(home, path), name)
+			listing, err := os.Open(resolved)
+			if err != nil {
+				return nil
+			}
+			defer listing.Close()
+			entries, _ := listing.ReadDir(512)
+			return entries
+		}}
+	for index := range providerRegistry {
+		spec := &providerRegistry[index]
+		for root := range resolveRoots(spec, host) {
+			check(spec.Kind, root.Path, root.FoundBy)
+			if _, exists := found[spec.Kind]; exists {
+				break
+			}
 		}
 	}
 	for _, source := range config.Sources {
 		check(source.Kind, source.Path, "configured source")
 	}
 	tools := []ProbeTool{}
-	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity"} {
-		if tool, exists := found[kind]; exists {
+	for _, spec := range setupProviders() {
+		if tool, exists := found[spec.Kind]; exists {
 			tools = append(tools, tool)
 		}
 	}
@@ -244,6 +227,23 @@ var probeTempDirs = func() []string {
 	dirs := []string{temporary}
 	if resolved, err := filepath.EvalSymlinks(temporary); err == nil && resolved != temporary {
 		dirs = append(dirs, resolved)
+	}
+	return dirs
+}
+
+// probeFolderDirs are where the status looks for a tool not yet chosen: its
+// default folder under home, and those its variables move it to, when
+// Pharos was started with them set. The status runs on every page load, so
+// it reads its own environment rather than starting a login shell; a guided
+// probe reads the shell's too.
+func probeFolderDirs(home, folder string, env []probeEnv) []string {
+	dirs := []string{filepath.Join(home, filepath.FromSlash(folder))}
+	for _, variable := range env {
+		if value := os.Getenv(variable.Name); value != "" {
+			if dir := filepath.Join(resolvePath(home, value), variable.Sub); !slices.Contains(dirs, dir) {
+				dirs = append(dirs, dir)
+			}
+		}
 	}
 	return dirs
 }
@@ -268,12 +268,9 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 			status.SharedSources++
 		}
 	}
-	if status.HostFileExists && (kinds == nil || kinds["antigravity"]) {
-		for _, dir := range antigravityDirs(home) {
-			resolved, err := resolveUnprotected(home, dir)
-			if err == nil && configuredSource(config, home, "antigravity", resolved) == nil {
-				status.NewSources++
-			}
+	for _, spec := range providerRegistry {
+		if status.HostFileExists && spec.Probe != nil && spec.Probe.NewSources != nil && (kinds == nil || kinds[spec.Kind]) {
+			status.NewSources += spec.Probe.NewSources(home, config)
 		}
 	}
 	if catalog != nil {
@@ -290,14 +287,21 @@ func ProbeSources(config Config, catalog *Catalog) ProbeReport {
 }
 
 func probeSources(home string, config Config, catalog *Catalog) ProbeReport {
-	return probeSelectedSources(home, config, catalog, nil, nil)
+	return probeSelectedSources(home, config, catalog, nil, nil, false)
 }
 
 // A nil kinds map preserves the CLI's full probe. A non-nil map, including an
 // empty one, limits all discovery and environment reads to explicit choices.
-func probeSelectedSources(home string, config Config, catalog *Catalog, kinds map[string]bool, locations []ProbeLocation) ProbeReport {
+// onlyLocations goes further: it reads no usual places and no variables,
+// only the folders the person named.
+func probeSelectedSources(home string, config Config, catalog *Catalog, kinds map[string]bool, locations []ProbeLocation, onlyLocations bool) ProbeReport {
 	started := time.Now()
-	report := ProbeReport{ProbeStatus: probeStatusForKinds(home, config, catalog, kinds), Home: home, Environment: []ProbeVariable{},
+	statusKinds := kinds
+	if onlyLocations {
+		// Counting new history reads the usual places.
+		statusKinds = map[string]bool{}
+	}
+	report := ProbeReport{ProbeStatus: probeStatusForKinds(home, config, catalog, statusKinds), Home: home, Environment: []ProbeVariable{},
 		Candidates: []ProbeCandidate{}, Checked: []ProbeLocation{}, TimingsMS: map[string]int64{}}
 	run := &probeRun{home: home, config: config, report: &report, seen: map[string]*ProbeCandidate{}, deadline: started.Add(probeWalkBudget)}
 	type shellResult struct {
@@ -307,10 +311,23 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	// The login shell takes about half a second to start; read it while the
 	// default locations are walked.
 	shell := make(chan shellResult, 1)
-	envNames := []string{}
-	for _, name := range probeEnvNames {
-		if kinds == nil || (name == "CLAUDE_CONFIG_DIR" && kinds["claude"]) || (name == "CODEX_HOME" && kinds["codex"]) {
-			envNames = append(envNames, name)
+	type variable struct {
+		spec *providerSpec
+		probeEnv
+	}
+	// Providers may share a variable (XDG_DATA_HOME); each reads its own
+	// folder below it.
+	envNames, variables := []string{}, map[string][]variable{}
+	for index := range providerRegistry {
+		spec := &providerRegistry[index]
+		if spec.Probe == nil || kinds != nil && !kinds[spec.Kind] || onlyLocations {
+			continue
+		}
+		for _, env := range spec.Probe.Env {
+			if variables[env.Name] == nil {
+				envNames = append(envNames, env.Name)
+			}
+			variables[env.Name] = append(variables[env.Name], variable{spec, env})
 		}
 	}
 	go func() {
@@ -329,37 +346,11 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 		probe()
 		report.TimingsMS[name] += time.Since(begin).Milliseconds()
 	}
-	timed("claude", func() {
-		run.claude(filepath.Join(home, ".claude"), "default location", false)
-		run.claude(filepath.Join(home, ".config", "claude"), "default location", false)
-		// Alternate profiles such as ~/.claude-work are usually selected with
-		// CLAUDE_CONFIG_DIR from a shell alias, which no environment reveals.
-		if entries, err := os.ReadDir(home); err == nil {
-			for _, entry := range entries {
-				if strings.HasPrefix(entry.Name(), ".claude") && entry.Name() != ".claude" && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) {
-					run.claude(filepath.Join(home, entry.Name()), "~/.claude* directory", true)
-				}
-			}
+	for _, spec := range providerRegistry {
+		if spec.Probe != nil && spec.Probe.Defaults != nil && !onlyLocations {
+			timed(spec.Kind, func() { spec.Probe.Defaults(run, home) })
 		}
-	})
-	timed("codex", func() { run.codex(filepath.Join(home, ".codex"), "default location") })
-	timed("antigravity", func() {
-		for _, dir := range antigravityDirs(home) {
-			foundBy := "~/.gemini/antigravity* directory"
-			if antigravityProducts[filepath.Base(dir)] != "" {
-				foundBy = "default location"
-			}
-			run.antigravity(dir, foundBy)
-		}
-	})
-	timed("conductor", func() {
-		run.conductor(filepath.Join(home, "Library", "Application Support", "com.conductor.app"), "default location")
-	})
-	timed("tl1", func() {
-		if !run.tl1(filepath.Join(home, ".tl1", tl1RegistryFile), "default location") {
-			run.tl1(filepath.Join(home, ".tl1", tl1LegacyRegistryFile), "default location (TL1 before registry.json)")
-		}
-	})
+	}
 	environment := func(values map[string]string, from string) {
 		for _, name := range envNames {
 			value := values[name]
@@ -368,11 +359,9 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 			}
 			report.Environment = append(report.Environment, ProbeVariable{Name: name, Value: value, From: from})
 			foundBy := name + " (" + from + ")"
-			path := resolvePath(home, value)
-			if name == "CLAUDE_CONFIG_DIR" {
-				timed("claude", func() { run.claude(path, foundBy, false) })
-			} else {
-				timed("codex", func() { run.codex(path, foundBy) })
+			for _, variable := range variables[name] {
+				path := variable.path(home, value)
+				timed(variable.spec.Kind, func() { variable.spec.Probe.Folder(run, path, foundBy) })
 			}
 		}
 	}
@@ -396,22 +385,11 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	for _, location := range locations {
 		path := resolvePath(home, location.Path)
 		const foundBy = "chosen folder"
-		switch location.Kind {
-		case "claude":
-			if filepath.Base(path) == "projects" {
-				path = filepath.Dir(path)
+		if spec, ok := registeredKind(location.Kind); ok && spec.Probe != nil {
+			if spec.Probe.Chosen != nil {
+				path = spec.Probe.Chosen(path)
 			}
-			run.claude(path, foundBy, false)
-		case "codex":
-			run.codex(path, foundBy)
-		case "antigravity":
-			run.antigravity(path, foundBy)
-		case "conductor":
-			run.conductor(path, foundBy)
-		case "tl1":
-			if !run.tl1(filepath.Join(path, tl1RegistryFile), foundBy) {
-				run.tl1(filepath.Join(path, tl1LegacyRegistryFile), foundBy)
-			}
+			spec.Probe.Folder(run, path, foundBy)
 		}
 	}
 	run.name()
@@ -423,7 +401,9 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	}
 	if kinds == nil {
 		report.Candidates = append(report.Candidates, ProbeCandidate{Name: "chatgpt", Kind: "chatgpt", Status: "manual",
-			Detail: "ChatGPT keeps conversations in the cloud, so there is nothing to find on this Mac. Export them (ChatGPT → Settings → Data controls → Export data), unzip the archive, and add a [[sources]] block with kind = \"chatgpt\" whose path is the folder holding conversations.json. Inside the library a relative path works on every Mac."})
+			Detail: "ChatGPT keeps conversations in the cloud, so there is nothing to find on this Mac. Export them (ChatGPT → Settings → Data controls → Export data), and add a [[sources]] block with kind = \"chatgpt\" whose path is the downloaded ZIP, the folder it unzips to, or its conversations.json. Inside the library a relative path works on every Mac."},
+			ProbeCandidate{Name: "claude-ai", Kind: "claude-ai", Status: "manual",
+				Detail: "Claude.ai keeps chats in the cloud, so there is nothing to find on this Mac. Export them (claude.ai → Settings → Export data) and add a [[sources]] block with kind = \"claude-ai\" whose path is the downloaded ZIP, its conversations.json, or the folder holding it. Inside the library a relative path works on every Mac."})
 	}
 	report.ElapsedMS = time.Since(started).Milliseconds()
 	return report
@@ -535,7 +515,7 @@ func (r *probeRun) codex(dir, foundBy string) {
 			present = true
 			if err == nil {
 				var stats probeStats
-				stats, err = walkTranscripts(root, r.deadline, func(relative string) (string, bool) {
+				stats, err = walkRollouts(root, r.deadline, func(relative string) (string, bool) {
 					ids := sessionUUID.FindAllString(filepath.Base(relative), -1)
 					if len(ids) == 0 {
 						return "", true
@@ -560,9 +540,259 @@ func (r *probeRun) codex(dir, foundBy string) {
 	r.keep(candidate)
 }
 
+// copilot finds GitHub Copilot CLI sessions: session-state/<id>/events.jsonl,
+// or an older release's session-state/<id>.jsonl.
+func (r *probeRun) copilot(dir, foundBy string) {
+	candidate, resolved := r.locate("copilot", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	candidate.Unit, candidate.baseName = "session", filepath.Base(dir)
+	if candidate.Status == "found" {
+		root, err := resolveUnprotected(r.home, filepath.Join(resolved, "session-state"))
+		if errors.Is(err, fs.ErrNotExist) {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"copilot", candidate.DisplayPath, foundBy, "no session-state folder"})
+			return
+		}
+		var stats probeStats
+		if err == nil {
+			stats, err = walkTranscripts(root, r.deadline, func(relative string) (string, bool) {
+				parts := strings.Split(relative, "/")
+				if len(parts) == 2 && parts[1] == "events.jsonl" {
+					return parts[0], true
+				}
+				if len(parts) == 1 {
+					return strings.TrimSuffix(parts[0], ".jsonl"), true
+				}
+				return "", false
+			})
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// cline finds Cline sessions: sessions/<id>/<id>.messages.json under its
+// data folder.
+func (r *probeRun) cline(dir, foundBy string) {
+	candidate, resolved := r.locate("cline", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	// Named for ~/.cline rather than its data folder.
+	candidate.Unit, candidate.baseName = "session", filepath.Base(dir)
+	if candidate.baseName == "data" {
+		candidate.baseName = filepath.Base(filepath.Dir(dir))
+	}
+	if candidate.Status == "found" {
+		root, err := resolveUnprotected(r.home, filepath.Join(resolved, "sessions"))
+		if errors.Is(err, fs.ErrNotExist) {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"cline", candidate.DisplayPath, foundBy, "no sessions folder"})
+			return
+		}
+		var stats probeStats
+		if err == nil {
+			stats, err = walkTranscripts(root, r.deadline, func(relative string) (string, bool) {
+				parts := strings.Split(relative, "/")
+				if len(parts) == 2 && parts[1] == parts[0]+".messages.json" {
+					return parts[0], true
+				}
+				return "", false
+			})
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// vscodeUserDirs are the home-relative user folders of VS Code and the builds
+// that share its chat: Insiders, VSCodium and Positron.
+var vscodeUserDirs = []string{"Library/Application Support/Code/User", "Library/Application Support/Code - Insiders/User",
+	"Library/Application Support/VSCodium/User", "Library/Application Support/VSCodium - Insiders/User", "Library/Application Support/Positron/User"}
+
+// vscodeCopilot finds a VS Code user folder's chat sessions, as the adapter
+// lists them.
+func (r *probeRun) vscodeCopilot(dir, foundBy string) {
+	candidate, resolved := r.locate("vscode-copilot", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	// Named for the build rather than its User folder: vscode-copilot for
+	// VS Code's, vscode-copilot-insiders, -vscodium or -positron for others.
+	candidate.Unit, candidate.baseName = "session", filepath.Base(dir)
+	if candidate.baseName == "User" {
+		candidate.baseName = strings.TrimPrefix(strings.TrimPrefix(strings.ReplaceAll(strings.ToLower(filepath.Base(filepath.Dir(dir))), " ", ""), "code"), "-")
+	}
+	if candidate.Status == "found" {
+		sessions, failures, err := (&vscodeCopilotAdapter{baseAdapter{config: SourceConfig{Path: resolved}}}).sessions()
+		if err == nil {
+			err = errors.Join(failures...)
+		}
+		var stats probeStats
+		for _, session := range sessions {
+			info, statErr := os.Stat(session.file)
+			if statErr != nil {
+				continue
+			}
+			stats.add(probeStats{files: 1, sessions: 1, bytes: info.Size(), oldest: info.ModTime(), newest: info.ModTime(), samples: []probeSession{{session.id, info.ModTime()}}})
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// cursorUserDir is Cursor's home-relative user folder.
+const cursorUserDir = "Library/Application Support/Cursor/User"
+
+// cursorHasChats reports whether a Cursor global database holds a message,
+// without reading any.
+func cursorHasChats(database string) bool {
+	if _, err := os.Stat(database); err != nil {
+		return false
+	}
+	db, err := openSourceSQLite(context.Background(), database)
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+	var found int
+	return db.QueryRow(`SELECT 1 FROM cursorDiskKV WHERE key GLOB 'bubbleId:*' LIMIT 1`).Scan(&found) == nil
+}
+
+// cursor finds Cursor's user folder and counts the chats in its global
+// database.
+func (r *probeRun) cursor(dir, foundBy string) {
+	candidate, resolved := r.locate("cursor", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	candidate.Unit, candidate.baseName = "session", ""
+	if candidate.Status == "found" {
+		database, err := (&cursorAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: resolved}}}).globalDatabase()
+		if _, statErr := os.Stat(database); err == nil && errors.Is(statErr, os.ErrNotExist) {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"cursor", candidate.DisplayPath, foundBy, "no globalStorage/state.vscdb"})
+			return
+		}
+		var stats probeStats
+		if err == nil {
+			stats, err = cursorProbeStats(database)
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// cursorCLI finds the Cursor CLI's folder and counts its chats, each a
+// database, from when the first began to when the last was active.
+func (r *probeRun) cursorCLI(dir, foundBy string) {
+	candidate, resolved := r.locate("cursor-cli", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	candidate.Unit, candidate.baseName = "session", ""
+	if candidate.Status == "found" {
+		chats, err := (&cursorCLIAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: resolved}}}).chats()
+		if err == nil && len(chats) == 0 {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"cursor-cli", candidate.DisplayPath, foundBy, "no chats/*/*/store.db"})
+			return
+		}
+		stats := probeStats{}
+		for _, chat := range chats {
+			info, statErr := os.Stat(chat.store)
+			if statErr != nil {
+				err = errors.Join(err, statErr)
+				continue
+			}
+			stats.sessions++
+			stats.files++
+			stats.bytes += info.Size()
+			started, updated := info.ModTime(), info.ModTime()
+			if chat.meta != "" {
+				if value, err := readJSON(chat.meta); err == nil {
+					meta := mapValueDefault(value)
+					if at, ok := number(meta["createdAtMs"]); ok {
+						started = time.UnixMilli(int64(at))
+					}
+					if at, ok := number(meta["updatedAtMs"]); ok {
+						updated = time.UnixMilli(int64(at))
+					}
+				}
+			}
+			if stats.oldest.IsZero() || started.Before(stats.oldest) {
+				stats.oldest = started
+			}
+			if updated.After(stats.newest) {
+				stats.newest = updated
+			}
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// opencode finds OpenCode's databases and counts the sessions in them.
+func (r *probeRun) opencode(dir, foundBy string) {
+	candidate, resolved := r.locate("opencode", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	candidate.Unit, candidate.baseName = "session", filepath.Base(dir)
+	if candidate.Status == "found" {
+		databases, err := (&opencodeAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: resolved}}}).databases()
+		if err == nil && len(databases) == 0 {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"opencode", candidate.DisplayPath, foundBy, "no opencode.db"})
+			return
+		}
+		var stats probeStats
+		for _, database := range databases {
+			if err != nil {
+				break
+			}
+			var found probeStats
+			found, err = opencodeProbeStats(database)
+			stats.add(found)
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// zed finds Zed's data folder and counts the threads of its agent.
+func (r *probeRun) zed(dir, foundBy string) {
+	candidate, resolved := r.locate("zed", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	candidate.Unit, candidate.baseName = "session", ""
+	if candidate.Status == "found" {
+		database, err := (&zedAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: resolved}}}).database()
+		if err == nil && database == "" {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"zed", candidate.DisplayPath, foundBy, "no threads/threads.db"})
+			return
+		}
+		stats := probeStats{}
+		if err == nil {
+			stats, err = zedProbeStats(database)
+		}
+		if err == nil && stats.sessions == 0 {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"zed", candidate.DisplayPath, foundBy, "no threads"})
+			return
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// antigravityBackup reports whether a ~/.gemini folder is Antigravity's
+// backup copy of an app's data, whose conversations the app's folder holds.
+func antigravityBackup(name string) bool {
+	return strings.HasPrefix(name, "antigravity-backup")
+}
+
 // antigravityDirs lists Google Antigravity's app data directories: those in
 // ~/.gemini named antigravity (the app), antigravity-cli (agy), or
-// antigravity-ide, or any other antigravity* folder holding conversations.
+// antigravity-ide, or any other antigravity* folder holding conversations
+// except the backup copy.
 func antigravityDirs(home string) []string {
 	root := filepath.Join(home, ".gemini")
 	entries, err := os.ReadDir(root)
@@ -571,7 +801,7 @@ func antigravityDirs(home string) []string {
 	}
 	dirs := []string{}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "antigravity") && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) && antigravityDataDir(filepath.Join(root, entry.Name())) {
+		if strings.HasPrefix(entry.Name(), "antigravity") && !antigravityBackup(entry.Name()) && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) && antigravityDataDir(filepath.Join(root, entry.Name())) {
 			dirs = append(dirs, filepath.Join(root, entry.Name()))
 		}
 	}
@@ -805,7 +1035,19 @@ func (s probeStats) apply(candidate *ProbeCandidate, err error) {
 // walkTranscripts measures the *.jsonl files under root. classify maps a
 // root-relative slash path to a session ID and whether the file is a session.
 func walkTranscripts(root string, deadline time.Time, classify func(string) (string, bool)) (probeStats, error) {
+	return walkJSONL(root, deadline, false, classify)
+}
+
+// walkRollouts is walkTranscripts for Codex, which also keeps rollouts as
+// .jsonl.zst. A rollout listed in both forms counts once, as the plain one.
+func walkRollouts(root string, deadline time.Time, classify func(string) (string, bool)) (probeStats, error) {
+	return walkJSONL(root, deadline, true, classify)
+}
+
+func walkJSONL(root string, deadline time.Time, compressed bool, classify func(string) (string, bool)) (probeStats, error) {
 	var stats probeStats
+	// Walks list names in order, so a plain rollout precedes its .zst.
+	plain := map[string]bool{}
 	visited := 0
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -818,7 +1060,13 @@ func walkTranscripts(root string, deadline time.Time, classify func(string) (str
 			stats.truncated = true
 			return filepath.SkipAll
 		}
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl") {
+		isPlain := strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl")
+		if entry.IsDir() || !isPlain && !(compressed && compressedRollout(entry.Name())) {
+			return nil
+		}
+		if compressed && isPlain {
+			plain[path] = true
+		} else if compressed && plain[plainRollout(path)] {
 			return nil
 		}
 		info, err := entry.Info()
@@ -1122,4 +1370,10 @@ func readSmallFile(path string) ([]byte, error) {
 		err = fmt.Errorf("%s is larger than %d bytes", path, probeSmallFileLimit)
 	}
 	return data, err
+}
+
+// readJSON reads a JSON file where probe finds it, live.
+func readJSON(path string) (any, error) {
+	value, _, err := sourceFiles{}.ReadJSONVersion(path)
+	return value, err
 }

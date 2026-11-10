@@ -18,8 +18,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // Capture copies this Mac's raw source data onto the capture root, normally on
@@ -246,10 +247,13 @@ type captureRunRecord struct {
 
 // CaptureSourceResult is one source's progress and outcome.
 type CaptureSourceResult struct {
-	Name  string `json:"name"`
-	Kind  string `json:"kind"`
-	State string `json:"state"`
-	Dir   string `json:"dir,omitempty"`
+	// The successful observation, including an input already delivered. Kept
+	// private so broker progress receipts need no second manifest/source read.
+	inputFingerprint string
+	Name             string `json:"name"`
+	Kind             string `json:"kind"`
+	State            string `json:"state"`
+	Dir              string `json:"dir,omitempty"`
 	captureRunRecord
 }
 
@@ -344,12 +348,33 @@ type captureSession struct {
 	buffers chan []byte
 }
 
+// The capture protocol's flocks, one variable per policy so tests can fail
+// each. Every acquisition is Try; only filelock.ErrContended means another
+// holder, and any other failure is never taken as a held or free lock.
+var (
+	// lockCaptureWriter takes the per-host capture lock for a capture or a
+	// target's reader/publisher: contention is errCaptureBusy.
+	lockCaptureWriter = filelock.Lock
+	// lockCaptureStatus probes the capture lock for status: any failure,
+	// contention or not, reports a capture as active.
+	lockCaptureStatus = filelock.Lock
+	// lockReaderLease takes a new reader lease before it is published.
+	lockReaderLease = filelock.Lock
+	// probeReaderLease tests an existing reader lease: only success shows
+	// its reader is gone, so only success permits removing it.
+	probeReaderLease = filelock.Lock
+	// lockCaptureIndex takes a capture's index lock.
+	lockCaptureIndex = filelock.Lock
+	// lockHistoryJob takes a history job's or output object's lock.
+	lockHistoryJob = filelock.Lock
+)
+
 // beginCapture takes the per-host capture lock, which also keeps a CLI run and
 // the service from capturing at once.
 func beginCapture(config Config) (*captureSession, error) {
 	if d, err := readLibraryDescriptor(config); err == nil {
 		config.PendingCapture = config.PendingCapture || d.RetainPendingEvidence
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if !libraryDescriptorMissing(err) {
 		return nil, err
 	}
 	root := config.CaptureRoot
@@ -376,9 +401,9 @@ func beginCapture(config Config) (*captureSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockCaptureWriter(lock, filelock.Exclusive, filelock.Try); err != nil {
 		lock.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+		if errors.Is(err, filelock.ErrContended) {
 			return nil, errCaptureBusy
 		}
 		return nil, err
@@ -477,6 +502,11 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 // A bounded verification may acquire only one filesystem dependency group.
 // The private plan controls acquisition, never bypasses durable publication.
 func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig, progress func(CaptureSourceResult), selected *capturePlan) CaptureSourceResult {
+	if isCodexSource(source.Kind) {
+		// A single rollout is recorded under its plain path, which compression
+		// and resume leave alone; planning copies whichever form is there.
+		source.Path = plainRollout(source.Path)
+	}
 	c := &sourceCapture{session: s, ctx: ctx, source: source, progress: progress, checkpoint: time.Now(),
 		result:         CaptureSourceResult{Name: source.Name, Kind: source.Kind, State: "running", captureRunRecord: captureRunRecord{StartedAt: now(), Errors: []captureError{}}},
 		verifyDelivery: s.preserveUnindexed || s.deliveryTarget != ""}
@@ -508,7 +538,7 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 	if selected != nil {
 		plan = *selected
 	} else {
-		plan, err = planCapture(source)
+		plan, err = planCapture(ctx, source)
 	}
 	if err == nil && isConductorSource(source.Kind) {
 		includeKnownCaptureDatabases(&plan, manifest, source)
@@ -530,6 +560,7 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 			return c.finish(err)
 		}
 		if delivered.Fingerprint == fingerprint {
+			c.result.inputFingerprint = fingerprint
 			c.result.Phase = "Already delivered; source is unchanged"
 			return c.finish(nil)
 		}
@@ -581,6 +612,7 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 	}
 	err = c.commit(true)
 	if err == nil {
+		c.result.inputFingerprint = c.manifest.DeliveredFingerprint
 		c.removePruned(true)
 	}
 	return c.finish(err)
@@ -662,23 +694,25 @@ func loadCaptureManifest(dir string) (*captureManifest, error) {
 	if manifest.Version > captureManifestUnderstood {
 		return nil, fmt.Errorf("capture manifest %s has version %d; this build understands up to %d", file, manifest.Version, captureManifestUnderstood)
 	}
-	if bad := manifest.unsafePath(); bad != "" {
-		return nil, fmt.Errorf("capture manifest %s names %q, outside its capture directory", file, bad)
+	if bad, unsafe := manifest.unsafePath(); unsafe {
+		return nil, fmt.Errorf("capture manifest %s names unsafe captured path %q", file, bad)
 	}
 	return manifest, nil
 }
 
-// unsafePath returns a captured path that is not clean, relative, and under
-// files/ (latest) or history/ (superseded), so that no manifest can make a
-// capture or an index read, move or delete anything outside its directory.
-func (m *captureManifest) unsafePath() string {
+// unsafePath reports the first captured path that is not a clean, native
+// relative name under files/ (latest) or history/ (superseded). The boolean
+// distinguishes an invalid required empty name from a valid manifest.
+// These are lexical bounds, not symlink-safe I/O checks.
+func (m *captureManifest) unsafePath() (string, bool) {
 	check := func(rel string, root string) bool {
-		return rel == path.Clean(rel) && !strings.Contains(rel, "\\") && (rel == root || strings.HasPrefix(rel, root+"/"))
+		_, err := filepath.Localize(rel)
+		return err == nil && rel == path.Clean(rel) && !strings.ContainsAny(rel, "\\\x00") && (rel == root || strings.HasPrefix(rel, root+"/"))
 	}
-	bad := ""
+	bad, unsafe := "", false
 	test := func(rel, root string) {
-		if bad == "" && !check(rel, root) {
-			bad = rel
+		if !unsafe && !check(rel, root) {
+			bad, unsafe = rel, true
 		}
 	}
 	for _, file := range m.Files {
@@ -702,7 +736,7 @@ func (m *captureManifest) unsafePath() string {
 	for _, mapping := range m.PathMap {
 		test(mapping.Captured, captureFilesDir)
 	}
-	return bad
+	return bad, unsafe
 }
 
 // lastCapturedDataAt ignores no-op captures and later indexing. Individual
@@ -887,13 +921,16 @@ func (c *sourceCapture) ensureSpace(bytes int64) error {
 	if bytes == 0 {
 		return nil
 	}
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(c.dir, &stat); err != nil {
+	space, err := diskCapacity(c.dir)
+	if err != nil {
 		return toDestination(err)
 	}
-	free := int64(stat.Bavail) * int64(stat.Bsize)
-	if free-bytes < captureFreeMargin {
-		return destinationError{fmt.Errorf("needs %d bytes but only %d are free", bytes+captureFreeMargin, free)}
+	need, err := spaceNeeded(bytes, captureFreeMargin)
+	if err != nil {
+		return destinationError{err}
+	}
+	if space.AvailableBytes < need {
+		return destinationError{fmt.Errorf("needs %d bytes but only %d are free", need, space.AvailableBytes)}
 	}
 	return nil
 }
@@ -971,7 +1008,7 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 	if err := os.Chtimes(temporary, mtime, mtime); err != nil {
 		return abandon(toDestination(err))
 	}
-	if err := syscall.Fsync(int(out.Fd())); err != nil {
+	if err := syncFileData(out); err != nil {
 		return abandon(toDestination(err))
 	}
 	if err := out.Close(); err != nil {
@@ -1296,9 +1333,10 @@ func removeCaptureTemporaries(dir string) {
 				}
 				// Active readers hold this lease flock, including audits.
 				// After a crash the lock is released, allowing native space back.
+				// Only a lock it takes removes it; contention or any failure keeps it.
 				lock, e := os.OpenFile(filepath.Join(file, ".reader.lock"), os.O_RDWR|os.O_CREATE, 0600)
 				if e == nil {
-					if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+					if probeReaderLease(lock, filelock.Exclusive, filelock.Try) == nil {
 						_ = os.RemoveAll(file)
 					}
 					lock.Close()
@@ -1324,7 +1362,7 @@ func writeFileDurably(file string, data []byte) error {
 	if err == nil {
 		// os.File.Sync is F_FULLFSYNC on macOS: it flushes the drive's cache,
 		// including every file fsynced earlier, before the rename commits.
-		err = out.Sync()
+		err = syncToDrive(out)
 	}
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
@@ -1337,7 +1375,7 @@ func writeFileDurably(file string, data []byte) error {
 		return err
 	}
 	if dir, err := os.Open(filepath.Dir(file)); err == nil {
-		_ = dir.Sync()
+		_ = syncToDrive(dir)
 		dir.Close()
 	}
 	return nil
@@ -1349,7 +1387,7 @@ func syncPath(file string) (os.FileInfo, error) {
 		return nil, err
 	}
 	defer handle.Close()
-	if err := syscall.Fsync(int(handle.Fd())); err != nil {
+	if err := syncFileData(handle); err != nil {
 		return nil, err
 	}
 	return handle.Stat()

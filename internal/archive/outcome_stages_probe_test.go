@@ -231,7 +231,7 @@ func TestCommitLinkCalibrationProbe(t *testing.T) {
 			score("missed: "+why, 2)
 		}
 		old, _ := inferLinks(ctx, dir, after, editsOnly, members, repository, commits)
-		committers, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, "log", "--branches", "--remotes", "--tags", after, "--format=%H %ce")
+		committers, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, "-c", "log.showSignature=false", "log", "--branches", "--remotes", "--tags", after, "--format=%H %ce")
 		if err != nil {
 			t.Logf("%s: %v", repository, err)
 			continue

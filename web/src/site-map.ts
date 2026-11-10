@@ -1,4 +1,6 @@
-import {messageLabelConversationQuery,messageLabelResultParameters} from "./message-label-results-model";
+import {validHiddenSelection,type SliceSelection} from "./chart-selection";
+import {peopleMessageLabelCatalog} from "./people-message-labels";
+import {messageLabelResultParameters} from "./message-label-results-model";
 import { cardNavigationURL } from "./card-exploration";
 import controlAudit from "../../docs/view-controls.json";
 import { usageDetailsSchema } from "./usage-row-model";
@@ -9,16 +11,16 @@ import { viewContract } from "./view-contract";
 import { supportsToday } from "./curiosity-data";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, isFilterable, loadSchema, opsForField, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
-import { isTrendView, analysisCycles, analysisDefaults, analysisReductions, analysisVersion, allAnalysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { singleSeries, percentileLabel, percentileLevels, type PercentileLevel, type ResolvedAnalysis, isTrendView, analysisCycles, analysisDefaults, analysisReductions, analysisVersion, allAnalysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
 import { defaultThinking, thinkingBreakdowns, thinkingRangeDays, thinkingViews } from "./thinking-model";
 import { chartPeriods } from "./chart-period";
-import { chartDisplays } from "./chart-series";
+import { analysisDisplays, readableVersions } from "./dashboard-analysis-model";
 import { chartScales } from "./chart-scale";
 import { chartRanges, rangeDays, withTimeRange } from "./chart-range";
 import { queryRecipes, instantiateRecipe, describeRecipeText, type QueryRecipe } from "./curiosity-data";
 import { queryURL, resolveRollingQuery, rollingWindowDays, rollingWindowField, type QueryDataset } from "./query-links";
-import { readUsageWorkspace, usageDatasets, usageDatasetTopics, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { readUsageWorkspace, analyzeQueryDatasets, usageDatasets, usageDatasetTopics, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { parallelismRibbon } from "./card-destinations";
 import { concurrencyWindowRange } from "./concurrency-settings";
 import { cardDatasets, cardLibraryParams, cardSorts, cardTopicAll } from "./card-library-model";
@@ -30,7 +32,7 @@ import { emptyTextSearch, newRule, ruleLabels, scopes } from "./text-search-mode
 import { freshSearch } from "./search-composer-state";
 import { libraryHostParameters } from "./host-query-state";
 import { recordKeywordParameter } from "./record-keyword-model";
-import { appSections, findingsPages, safetyPages } from "./app-navigation-model";
+import { appSections, findingsPages, fixesPages, safetyPages } from "./app-navigation-model";
 import { idSources, legacyRoutes, optionalSettingsPages, pageDescriptions, readerParams, siteSections } from "./site-routes";
 import { schemaDocuments } from "./schema-documents";
 
@@ -92,13 +94,13 @@ export function chartVerdict(topic: UsageTopic, chart: Record<string, unknown>):
   const merged = { ...dashboardDefaults[topic], ...chart } as AnalysisState;
   if (!validAnalysisState(catalog, merged)) return "invalid";
   if (merged.v !== analysisVersion || json(canonicalState(catalog, merged)) !== json(merged)) return "coercible";
-  const drawn = normalizeAnalysis(catalog, merged) as Record<string, unknown>;
-  const keys = chartKeys[(merged.view ?? "trend") as AnalysisView];
+  const drawn = normalizeAnalysis(peopleMessageLabelCatalog(catalog,merged), merged) as Record<string, unknown>;
+  const keys = topicChartKeys(topic, (merged.view ?? "trend") as AnalysisView);
   return Object.keys(chart).filter(key => keys.includes(key)).every(key => json(drawn[key]) === json(chart[key])) ? "valid" : "coercible";
 }
 // What Go writes for a chart: its older names read as current ones (as
-// readChart reads them), then only the keys its view draws and a non-empty
-// selection. The keys the merge adds are left to the page, which adds them
+// readChart reads them), then only the keys its view draws (with the view
+// settings the rules leave to the page, kept) and a non-empty selection. The keys the merge adds are left to the page, which adds them
 // again; writing them would turn a valid partial chart coercible where the
 // page moves one. The generator checks that it draws as the whole chart does.
 const legacyByTopic = new Map<UsageTopic, LegacyName[]>();
@@ -113,18 +115,24 @@ export function viewChart(topic: UsageTopic, chart: Record<string, unknown>): Re
 // The keys a canonical analyze_chart holds for each view, in order: the
 // settings that view draws. A non-empty legend selection follows them.
 // Other keys are left out; the page fills them from its defaults.
-const trendKeys = ["v", "view", "metric", "split", "period", "hours", "days", "rollingPeriods", "rollingOp", "display", "scale", "share", "nonzero", "completePeriods", "norm", "normPeriods", "seriesLimit"];
+const trendKeys = ["v", "view", "metric", "split", "period", "hours", "days", "rollingPeriods", "rollingOp", "display", "scale", "share", "nonzero", "completePeriods", "percentiles", "normPeriods", "seriesLimit"];
 export const chartKeys: Record<AnalysisView, string[]> = {
   trend: trendKeys, trend_line: trendKeys, trend_bar: trendKeys,
   compare: ["v", "view", "unit", "metric", "split", "reduce", "compareAs", "minSamples", "scale"],
   distribution: ["v", "view", "unit", "metric", "split", "minSamples", "scale"],
   scatter: ["v", "view", "unit", "metric", "metricY", "split", "scale", "scaleY"],
-  cycle: ["v", "view", "unit", "metric", "split", "cycle", "reduce", "scale"],
+  cycle: ["v", "view", "unit", "metric", "split", "cycle", "cycleOn", "reduce", "scale"],
 };
+// A chart's default view depends on the data asked for (viewDefaults), so
+// there is no one value to fill a missing view setting with: charts neither
+// hold nor check these settings unless the reader chose them. A link the
+// map writes holds data settings, and the page draws it with its defaults.
+const presentedKeys = ["display", "share", "nonzero", "scale", "scaleY", "compareAs"];
+export const topicChartKeys = (_topic: UsageTopic, view: AnalysisView) => chartKeys[view].filter(key => !presentedKeys.includes(key));
 // A chart's keys in canonical order, over the view's defaults.
-export function canonicalChart(defaults: Record<string, unknown>, change: Record<string, unknown> = {}): Record<string, unknown> {
+export function canonicalChart(defaults: Record<string, unknown>, change: Record<string, unknown> = {}, keys = chartKeys): Record<string, unknown> {
   const state = { ...defaults, ...change }, view = state.view as AnalysisView;
-  const chart: Record<string, unknown> = Object.fromEntries(chartKeys[view].filter(key => state[key] !== undefined).map(key => [key, state[key]]));
+  const chart: Record<string, unknown> = Object.fromEntries(keys[view].filter(key => state[key] !== undefined).map(key => [key, state[key]]));
   const selection = state.selection as { values: string[] } | undefined;
   if (selection?.values.length) chart.selection = selection;
   return chart;
@@ -143,31 +151,44 @@ export function canonicalChart(defaults: Record<string, unknown>, change: Record
 // A given option's value is its drawn value when its rule comes earlier, its
 // merged value (or "(absent)") otherwise. multiple_periods is derived from the
 // merge over fill_defaults: period hours with hours > 1, or days with
-// days > 1; "self" is the option's own merged value.
+// days > 1. single_selection is whether the legend selection draws one
+// group alone (selection.values holds one value and excluded is not true),
+// so a measure without a total across groups has its levels; "self" is the
+// option's own merged value.
 // The generator enumerates every combination of option values, absent ones
 // included, and checks that the rules reproduce the page's drawing and
 // verdict on each.
 
 export const absent = "(absent)", viaFallback = "(fallback)";
 type Scalar = string | number | boolean;
-type Rule = { option: string; fill?: Scalar; constraints: Array<{ given: string[]; allowed: unknown }>; fallback?: { given: string[]; values: unknown } };
+// A list rule (list: true) holds a list of its domain's values, such as the
+// %ile control's levels: each value stays when every constraint allows it,
+// in the domain's order, and the rest are dropped. A missing list is left to
+// the page.
+type Rule = { option: string; list?: true; fill?: Scalar; constraints: Array<{ given: string[]; allowed: unknown }>; fallback?: { given: string[]; values: unknown } };
 type Shape = { option: string; constraints: string[][]; fallback: string[] };
 const shape = (option: string, constraints: string[][], fallback: string[] = []): Shape => ({ option, constraints, fallback });
-const trendShapes = [shape("metric", [[]]), shape("split", [["metric"]], ["metric", "self"]), shape("share", [["metric"], ["split"]]), shape("display", [["metric"]]),
-  shape("rollingOp", [["metric"]]), shape("period", [["metric", "multiple_periods"]], ["metric", "multiple_periods", "self"]), shape("norm", [["display"], ["share"], ["metric", "split"]])];
-const drawShapes: Record<AnalysisView, Shape[]> = {
+const trendShapes = [shape("metric", [[]]), shape("split", [["metric"]], ["metric", "self"]), shape("display", [["metric", "split"]]), shape("share", [["metric"], ["split"], ["display"]]),
+  shape("rollingOp", [["metric", "split"]]), shape("period", [["metric", "split", "multiple_periods"]], ["metric", "split", "multiple_periods", "self"])];
+const allShapes: Record<AnalysisView, Shape[]> = {
   trend: trendShapes, trend_line: trendShapes, trend_bar: trendShapes,
-  compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split"], ["unit", "metric", "reduce"]])],
-  distribution: [shape("unit", [["metric"]], ["metric"]), shape("metric", [["unit"]], ["unit"]), shape("split", [["unit"]])],
-  scatter: [shape("unit", [[]]), shape("metric", [[]]), shape("metricY", [["metric"]], ["metric"]), shape("split", [["unit"]])],
-  cycle: [shape("unit", [[]]), shape("split", [[]]), shape("metric", [[]]), shape("cycle", [[]], ["self"]), shape("reduce", [["metric"]], ["metric", "self"])],
+  compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit","metric"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split", "unit", "metric", "reduce"]])],
+  distribution: [shape("unit", [["metric"]], ["metric"]), shape("metric", [["unit"]], ["unit"]), shape("split", [["unit","metric"]])],
+  scatter: [shape("unit", [[]]), shape("metric", [[]]), shape("metricY", [["metric"]], ["metric"]), shape("split", [["unit","metric"]])],
+  cycle: [shape("unit", [[]]), shape("split", [[]]), shape("metric", [[]]), shape("cycle", [[]], ["self"]), shape("cycleOn", [["cycle"]]), shape("reduce", [["metric"]], ["metric", "self"])],
 };
+const drawShapes = (topic: UsageTopic, view: AnalysisView) => topic === "scatter" && view === "scatter" ? [shape("unit", [[]]), shape("metric", [["unit"]], ["unit"]), shape("metricY", [["unit", "metric"]], ["unit", "metric"]), shape("split", [["unit", "metric"]])] : allShapes[view].filter(item => !presentedKeys.includes(item.option));
+// A topic's chart keys by view, for canonicalChart.
+const topicKeys = (topic: UsageTopic) => Object.fromEntries(Object.keys(chartKeys).map(view => [view, topicChartKeys(topic, view as AnalysisView)])) as Record<AnalysisView, string[]>;
 // The defaults normalizeAnalysis fills multiple_periods' inputs with.
 export const fillDefaults: Record<string, unknown> = { period: analysisDefaults.period, hours: analysisDefaults.hours, days: analysisDefaults.days };
 const multiple = (merged: Record<string, unknown>) => {
   const state = { ...fillDefaults, ...merged };
   return state.period === "hours" && Number(state.hours) > 1 || state.period === "days" && Number(state.days) > 1;
 };
+const single = (merged: Record<string, unknown>) => singleSeries(merged as AnalysisState);
+// Derived givens: settings a rule reads that are not options of their own.
+const derived = (name: string, merged: Record<string, unknown>) => name === "multiple_periods" ? key(multiple(merged)) : name === "single_selection" ? key(single(merged)) : undefined;
 
 function candidates(catalog: AnalysisCatalog, option: string): Scalar[] {
   const measures = Object.keys(catalog.measures);
@@ -178,18 +199,20 @@ function candidates(catalog: AnalysisCatalog, option: string): Scalar[] {
     case "reduce": return analysisReductions.map(([id]) => id);
     case "compareAs": return [...compareModes];
     case "cycle": return [...analysisCycles];
+    case "cycleOn": return Object.keys(catalog.cycleOn?.options ?? {});
     case "period": return Object.keys(chartPeriods);
-    case "display": return [...chartDisplays];
+    case "display": return [...analysisDisplays];
     case "rollingOp": return [...rollingOps];
     case "scale": case "scaleY": return [...chartScales];
-    case "share": case "nonzero": case "norm": case "completePeriods": return [false, true];
+    case "share": case "nonzero": case "completePeriods": return [false, true];
+    case "percentiles": return [...percentileLevels];
     default: return fail(`no candidates for ${option}`);
   }
 }
 // Values validAnalysisState accepts for one option, the rest as defaults.
 function domainOf(topic: UsageTopic, base: Record<string, unknown>, option: string): Scalar[] {
   const catalog = analysisCatalogs[topic]!;
-  return candidates(catalog, option).filter(value => validAnalysisState(catalog, { ...dashboardDefaults[topic], ...base, [option]: value } as AnalysisState));
+  return candidates(catalog, option).filter(value => validAnalysisState(catalog, { ...dashboardDefaults[topic], ...base, [option]: listKeys.includes(option) ? [value] : value } as AnalysisState));
 }
 const key = (value: unknown) => value === undefined ? absent : String(value);
 const nest = (table: Record<string, unknown>, keys: string[], leaf: (node: unknown) => unknown) => {
@@ -204,8 +227,14 @@ const lookup = (table: unknown, keys: string[]) => keys.reduce<unknown>((node, n
 export type ViewRules = { keys: string[]; domains: Record<string, Scalar[]>; numeric: Record<string, { min: number; max?: number; integer: boolean } | { max_values: number }>; rules: Rule[] };
 export function drawChart(view: ViewRules, merged: Record<string, unknown>): Record<string, unknown> {
   const drawn: Record<string, unknown> = {};
-  const value = (name: string, self: unknown) => name === "self" ? key(self) : name === "multiple_periods" ? key(multiple(merged)) : key(name in drawn ? drawn[name] : merged[name]);
+  const value = (name: string, self: unknown) => name === "self" ? key(self) : derived(name, merged) ?? key(name in drawn ? drawn[name] : merged[name]);
   for (const rule of view.rules) {
+    if (rule.list) {
+      const asked = merged[rule.option];
+      if (Array.isArray(asked)) drawn[rule.option] = view.domains[rule.option].filter(item => asked.includes(item)
+        && rule.constraints.every(constraint => (lookup(constraint.allowed, constraint.given.map(name => value(name, undefined))) as Scalar[] | undefined)?.includes(item) ?? false));
+      continue;
+    }
     let own: unknown = merged[rule.option];
     const fallback = () => rule.fallback ? rule.fallback.given.length ? lookup(rule.fallback.values, rule.fallback.given.map(name => value(name, own))) : rule.fallback.values : undefined;
     if (own === undefined && rule.fill === viaFallback) { drawn[rule.option] = fallback(); continue; }
@@ -226,14 +255,17 @@ export function readChart(facts: ChartFacts, chart: Record<string, unknown>) {
 export function judgeChart(facts: ChartFacts, version: number, chart: Record<string, unknown>): Verdict {
   // A renamed chart opens, but not as it was written.
   const { merged, renamed } = readChart(facts, chart), view = facts.views[String(merged.view ?? "trend")];
-  // A chart without v is an older link, which the page migrates.
-  if (!view || merged.v !== undefined && merged.v !== version) return "invalid";
+  // A chart without v, or of an earlier readable version, is an older link,
+  // which the page migrates.
+  if (!view || merged.v !== undefined && !readableVersions.includes(merged.v as number)) return "invalid";
   for (const [name, value] of Object.entries(merged)) {
     if (name === "v" || name === "view") continue;
     const range = view.numeric[name];
     if (name === "selection") {
       const selection = value as { values?: unknown; excluded?: unknown };
-      if (!selection || typeof selection.excluded !== "boolean" || !Array.isArray(selection.values) || selection.values.length > (range as { max_values: number }).max_values || selection.values.some(item => typeof item !== "string")) return "invalid";
+      if (!selection || typeof selection.excluded !== "boolean" || !Array.isArray(selection.values) || selection.values.length > (range as { max_values: number }).max_values || selection.values.some(item => typeof item !== "string") || !validHiddenSelection(selection as SliceSelection<unknown>)) return "invalid";
+    } else if (view.rules.some(rule => rule.list && rule.option === name)) {
+      if (!Array.isArray(value) || value.some(item => !view.domains[name].includes(item)) || new Set(value).size !== value.length) return "invalid";
     } else if (range && "min" in range) {
       if (typeof value !== "number" || value < range.min || range.max !== undefined && value > range.max || range.integer && !Number.isInteger(value)) return "invalid";
     } else if (view.domains[name]) {
@@ -241,15 +273,15 @@ export function judgeChart(facts: ChartFacts, version: number, chart: Record<str
     }
     // Keys the view neither draws nor checks, the page ignores.
   }
-  if (merged.v === undefined || renamed) return "coercible";
+  if (merged.v !== version || renamed) return "coercible";
   const drawn = drawChart(view, merged);
-  return Object.keys(chart).every(name => !view.keys.includes(name) || !(name in drawn) || drawn[name] === chart[name]) ? "valid" : "coercible";
+  return Object.keys(chart).every(name => !view.keys.includes(name) || !(name in drawn) || json(drawn[name]) === json(chart[name])) ? "valid" : "coercible";
 }
 
 // Every combination of a view's drawn options over its defaults, each
 // option also left out where the topic's defaults do not set it.
 export function enumerateView(topic: UsageTopic, view: AnalysisView, defaults: Record<string, unknown>, domains: Record<string, Scalar[]>) {
-  const options = drawShapes[view].map(rule => rule.option), merge = dashboardDefaults[topic] as Record<string, unknown>;
+  const options = drawShapes(topic, view).map(rule => rule.option), merge = dashboardDefaults[topic] as Record<string, unknown>;
   const base = Object.fromEntries(Object.entries(defaults).filter(([name]) => !options.includes(name)));
   const choices: Array<[string, Array<Scalar | undefined>]> = options.map(option => [option, [...domains[option], ...option in merge ? [] : [undefined]]]);
   if (isTrendView(view)) choices.push(["multiple_periods", [false, true]]);
@@ -273,15 +305,20 @@ export function enumerateView(topic: UsageTopic, view: AnalysisView, defaults: R
   return states;
 }
 
-type ViewFacts = ViewRules & { label: string; defaults: Record<string, unknown> };
+// A chart holds a display only where the reader chose one; chosen_display
+// says which one the page draws for each measure and breakdown otherwise,
+// so a reader can describe the chart.
+// kept: view settings a chart may hold, as the reader chose them, that the
+// rules neither check nor fill (topicChartKeys); Go keeps them where it writes.
+type ViewFacts = ViewRules & { label: string; defaults: Record<string, unknown>; kept?: string[]; chosen_display?: { given: string[]; values: Record<string, unknown> } };
 function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFacts {
   const catalog = analysisCatalogs[topic]!, merge = dashboardDefaults[topic] as Record<string, unknown>;
   const start = { ...merge, v: analysisVersion } as AnalysisState;
   const moved = normalizeAnalysis(catalog, switchView(catalog, normalizeAnalysis(catalog, start), view)) as Record<string, unknown>;
   // Outside the trend a missing scale draws linear, as normalizedDashboardChart reads it.
-  const defaults = canonicalChart({ ...moved, v: analysisVersion, view, ...isTrendView(view) ? {} : { scale: moved.scale ?? "linear" } });
+  const defaults = canonicalChart({ ...moved, v: analysisVersion, view, ...isTrendView(view) ? {} : { scale: moved.scale ?? "linear" } }, {}, topicKeys(topic));
   if (chartVerdict(topic, defaults) !== "valid") fail(`${topic} ${view} defaults are not drawn as given: ${json(defaults)}`);
-  const keys = chartKeys[view];
+  const keys = topicChartKeys(topic, view);
   // Every key validAnalysisState checks in this view, drawn or not: a value
   // it would accept for no key means the view does not check that key.
   const accepts = (name: string, value: unknown) => validAnalysisState(catalog, { ...merge, ...defaults, [name]: value } as AnalysisState);
@@ -289,12 +326,12 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
   const domains: Record<string, Scalar[]> = Object.fromEntries(allChartKeys.filter(name => !numericKeys.includes(name) && (keys.includes(name) || checked(name))).map(option => [option, domainOf(topic, defaults, option)]));
   const numeric = numericOptions(topic, view, defaults);
   const states = enumerateView(topic, view, defaults, domains).map(item => ({ ...item, merged: { ...merge, ...item.chart } as Record<string, unknown> }))
-    .map(item => ({ ...item, drawn: item.verdict === "invalid" ? {} : normalizeAnalysis(catalog, item.merged as AnalysisState) as Record<string, unknown> }));
+    .map(item => ({ ...item, drawn: item.verdict === "invalid" ? {} : normalizeAnalysis(peopleMessageLabelCatalog(catalog,item.merged as AnalysisState), item.merged as AnalysisState) as Record<string, unknown> }));
   const drawing = states.filter(item => item.verdict !== "invalid");
   // Each rule from the drawings: what stays, what replaces it, and the fill.
   const rules: Rule[] = [];
-  for (const { option, constraints: givens, fallback: fallbackGiven } of drawShapes[view]) {
-    const context = (item: typeof drawing[number], name: string) => name === "self" ? key(item.merged[option]) : name === "multiple_periods" ? key(multiple(item.merged)) : key(rules.some(rule => rule.option === name) ? item.drawn[name] : item.merged[name]);
+  for (const { option, constraints: givens, fallback: fallbackGiven } of drawShapes(topic, view)) {
+    const context = (item: typeof drawing[number], name: string) => name === "self" ? key(item.merged[option]) : derived(name, item.merged) ?? key(rules.some(rule => rule.option === name) ? item.drawn[name] : item.merged[name]);
     const allowed = givens.map(() => ({} as Record<string, unknown>)), fallbacks: Record<string, unknown> = {};
     let coerced = false;
     for (const item of drawing) {
@@ -319,19 +356,75 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
       rule.fill = [...domains[option], viaFallback].find(draws) ?? fail(`${topic} ${view}: no fill draws a missing ${option} as the page does`);
     }
   }
-  // A rule that never changes its option says nothing.
-  const facts: ViewFacts = { label, keys, defaults, domains, numeric, rules: rules.filter(rule => rule.constraints.length || rule.fallback || rule.fill !== undefined) };
+  // The %ile levels: which levels each context draws, from every drawing
+  // asked for each level alone, and checked below with several at once.
+  // Another view still checks the list's values, as the page does.
+  if (keys.includes("percentiles")) rules.push(levelRule(topic, drawing, rules));
+  else if (domains.percentiles) rules.push({ option: "percentiles", list: true, constraints: [] });
+  // A rule that never changes its option says nothing; a list rule always
+  // says which values its list may hold.
+  const facts: ViewFacts = { label, keys, defaults, domains, numeric, rules: rules.filter(rule => rule.list || rule.constraints.length || rule.fallback || rule.fill !== undefined) };
+  facts.kept = chartKeys[view].filter(key => presentedKeys.includes(key));
+  if (isTrendView(view)) {
+    const values: Record<string, unknown> = {};
+    for (const item of drawing) {
+      const path = ["metric", "split"].map(name => key(item.drawn[name])), before = lookup(values, path), display = item.drawn.display;
+      if (before !== undefined && before !== display) fail(`${topic} ${view}: the chosen display depends on more than the measure and breakdown`);
+      nest(values, path, () => display);
+    }
+    facts.chosen_display = { given: ["metric", "split"], values };
+  }
   for (const item of states) {
     const verdict = judgeChart({ merge_defaults: merge, views: { [view]: facts } }, analysisVersion, item.chart);
     if (verdict !== item.verdict) fail(`${topic} ${view}: the rules judge ${json(item.chart)} ${verdict}, the page ${item.verdict}`);
     if (item.verdict === "invalid") continue;
     const drawn = drawChart(facts, item.merged);
-    for (const { option } of rules) {
+    for (const { option, list } of rules) {
+      if (list && item.merged[option] === undefined) continue;
       const value = option in drawn ? drawn[option] : item.merged[option];
       if (json(value) !== json(item.drawn[option])) fail(`${topic} ${view}: the rules draw ${option} of ${json(item.chart)} as ${json(value)}, the page as ${json(item.drawn[option])}`);
     }
   }
+  for (const item of drawing) for (const variant of levelVariants(item)) for (const probe of levelProbes) {
+    const chart = { ...item.chart, ...variant.extra, percentiles: probe }, merged = { ...variant.merged, percentiles: probe };
+    if (!keys.includes("percentiles")) break;
+    const page = (normalizeAnalysis(peopleMessageLabelCatalog(catalog, merged as AnalysisState), merged as AnalysisState) as Record<string, unknown>).percentiles, drawn = drawChart(facts, merged).percentiles;
+    if (json(page) !== json(drawn)) fail(`${topic} ${view}: the rules draw percentiles ${json(probe)} of ${json(chart)} as ${json(drawn)}, the page as ${json(page)}`);
+    const verdict = judgeChart({ merge_defaults: merge, views: { [view]: facts } }, analysisVersion, chart);
+    if (verdict !== chartVerdict(topic, chart)) fail(`${topic} ${view}: the rules judge ${json(chart)} ${verdict}, the page ${chartVerdict(topic, chart)}`);
+  }
   return facts;
+}
+
+// Keys whose value is a list of their domain's values.
+const listKeys = ["percentiles"];
+const levelProbes: PercentileLevel[][] = [["mean", "p50", "p90"], ["p99", "p75"], ["mean"], ["p95"], []];
+// The levels each context draws: by the display or shares a chart asks for
+// with its measure and breakdown (a display the measure cannot draw draws
+// another), and by measure and breakdown. A measure without a total across groups draws them for one
+// group the legend selects (single_selection). Built from every drawing
+// asked for each level alone, with and without one group selected.
+export const singleSelectionProbe = { values: ["(one group)"], excluded: false };
+// Each drawing as it is, with one group selected, and with the view settings
+// a reader may choose that decide whether levels draw (kept): shares, and a
+// cumulative or heatmap display.
+const keptVariants: Array<Record<string, unknown>> = [{}, { share: true }, { display: "cumulative" }, { display: "heatmap" }];
+const levelVariants = <T extends { merged: Record<string, unknown> }>(item: T) => keptVariants.flatMap(kept => [{}, { selection: singleSelectionProbe }]
+  .map(selection => ({ ...item, extra: { ...kept, ...selection }, merged: { ...item.merged, ...kept, ...selection } })));
+function levelRule(topic: UsageTopic, drawing: Array<{ merged: Record<string, unknown>; drawn: Record<string, unknown> }>, rules: Rule[]): Rule {
+  const catalog = analysisCatalogs[topic]!, givens = [["display", "metric", "split"], ["share", "metric", "split"], ["metric", "split", "single_selection"]];
+  const context = (item: { merged: Record<string, unknown>; drawn: Record<string, unknown> }, name: string) => derived(name, item.merged) ?? key(rules.some(rule => rule.option === name) ? item.drawn[name] : item.merged[name]);
+  const allowed = givens.map(() => ({} as Record<string, unknown>));
+  const probed = drawing.flatMap(levelVariants);
+  for (const item of probed) for (const level of percentileLevels) {
+    const probe = { ...item.merged, percentiles: [level] } as AnalysisState, drawn = (normalizeAnalysis(peopleMessageLabelCatalog(catalog, probe), probe) as ResolvedAnalysis).percentiles;
+    if (!drawn.includes(level)) continue;
+    givens.forEach((given, index) => nest(allowed[index], ["all", ...given.map(name => context(item, name))], leaf => (leaf as Scalar[] | undefined)?.includes(level) ? leaf : [...(leaf as Scalar[] ?? []), level]));
+  }
+  const rule: Rule = { option: "percentiles", list: true, constraints: givens.map((given, index) => ({ given, allowed: allowed[index].all ?? [] })) };
+  // Keep a constraint only where it removes a level somewhere.
+  rule.constraints = rule.constraints.filter(constraint => probed.some(item => percentileLevels.some(level => !((lookup(constraint.allowed, constraint.given.map(name => context(item, name))) as Scalar[] | undefined)?.includes(level) ?? false))));
+  return rule;
 }
 
 // The integer range validAnalysisState accepts for one setting.
@@ -352,7 +445,7 @@ const allChartKeys = [...new Set(Object.values(chartKeys).flat())].filter(name =
 function numericOptions(topic: UsageTopic, view: AnalysisView, base: Record<string, unknown>) {
   const catalog = analysisCatalogs[topic]!;
   const accepts = (key: string) => (value: unknown) => validAnalysisState(catalog, { ...dashboardDefaults[topic], ...base, [key]: value } as AnalysisState);
-  const options = Object.fromEntries(numericKeys.filter(key => chartKeys[view].includes(key) || !accepts(key)("not a number")).map(key => [key, integerRange(accepts(key))]));
+  const options = Object.fromEntries(numericKeys.filter(key => topicChartKeys(topic, view).includes(key) || !accepts(key)("not a number")).map(key => [key, integerRange(accepts(key))]));
   const selection = (count: number) => accepts("selection")({ values: Array.from({ length: count }, (_, index) => String(index)), excluded: false });
   return { ...options, selection: { max_values: integerRange(selection, 1_000_000).max ?? fail("a selection has no maximum") } };
 }
@@ -362,15 +455,16 @@ function numericOptions(topic: UsageTopic, view: AnalysisView, base: Record<stri
 // positions older metrics used. Other older vocabulary is outside the map.
 function legacyNames(topic: UsageTopic): { legacy?: LegacyName[] } {
   const catalog = analysisCatalogs[topic]!, base = { ...dashboardDefaults[topic], v: analysisVersion } as Record<string, unknown>;
-  if (!catalog.legacy) return {};
   const probes = new Map<string, unknown[]>();
   const add = (key: string, value: unknown) => { if (!probes.has(key)) probes.set(key, []); if (!probes.get(key)!.some(item => json(item) === json(value))) probes.get(key)!.push(value); };
   for (const recipe of queryRecipes) if (recipe.destination?.topic === topic) for (const [key, value] of Object.entries(recipe.destination.chart)) add(key, value);
   for (let position = 0; position < Object.keys(catalog.measures).length; position++) add("metric", position);
   for (const [key, values] of Object.entries(catalog.legacyValues ?? {})) for (const value of values) add(key, value);
+  // The engine's own older name: norm, the single reference line.
+  add("norm", true); add("norm", false);
   const names: LegacyName[] = [];
   for (const [key, values] of probes) for (const value of values) {
-    const state = { ...base, [key]: value }, read = catalog.legacy(state as AnalysisState) as Record<string, unknown>;
+    const state = { ...base, [key]: value }, read = canonicalState(catalog, state as AnalysisState) as Record<string, unknown>;
     const set = Object.fromEntries(Object.keys({ ...state, ...read }).filter(name => json(read[name]) !== json(state[name])).map(name => [name, read[name]]));
     if (Object.keys(set).length) names.push({ key, value, set });
   }
@@ -379,15 +473,15 @@ function legacyNames(topic: UsageTopic): { legacy?: LegacyName[] } {
 function dashboardFacts(topic: UsageTopic) {
   const catalog = analysisCatalogs[topic] ?? fail(`no catalog for ${topic}`);
   if (catalog.dataset !== usageTopicDatasets[topic]) fail(`${topic} draws ${catalog.dataset} but opens ${usageTopicDatasets[topic]}`);
-  const views = Object.fromEntries(availableViews(catalog).map(([view, label]) => [view, viewFacts(topic, view, label)]));
+  const views = Object.fromEntries(availableViews(catalog).filter(([view]) => view !== "scatter" || topic === "scatter").map(([view, label]) => [view, viewFacts(topic, view, label)]));
   const unavailable = Object.fromEntries(allAnalysisViews.flatMap(([view]) => viewUnavailable(catalog, view) ? [[view, viewUnavailable(catalog, view)!]] : []));
   return {
     dataset: catalog.dataset, time: catalog.time, merge_defaults: dashboardDefaults[topic], ...legacyNames(topic),
     ...catalog.trend.allSeries ? { series: { mode: "all", note: "Every matching label is shown; saved seriesLimit values do not fold labels into Other. Legend selections still apply." } } : {},
-    defaults: canonicalChart(views[(dashboardDefaults[topic].view ?? "trend")].defaults),
+    defaults: canonicalChart(views[(dashboardDefaults[topic].view ?? "trend")].defaults, {}, topicKeys(topic)),
     views, ...Object.keys(unavailable).length ? { unavailable_views: unavailable } : {},
     measures: Object.fromEntries(Object.entries(catalog.measures).map(([id, measure]) => [id, { label: measure.label, unit: measure.unit, kind: trendKind(measure), additive: measure.additive, per_record_value: Boolean(measure.value), note: measure.note }])),
-    breakdowns: Object.fromEntries(Object.entries(catalog.breakdowns).map(([id, breakdown]) => [id, { label: breakdown.label, fields: breakdown.fields, ...breakdown.note ? { note: breakdown.note } : {} }])),
+    breakdowns: Object.fromEntries(Object.entries(catalog.breakdowns).map(([id, breakdown]) => [id, { label: breakdown.label, fields: breakdown.fields, ...breakdown.measures ? {measures:breakdown.measures,views:breakdown.views,source_dataset:"people_message_labels",note:"Each message counts once under its highest-confidence accepted specific label or that label's family. Groups add up to the message total. Only message-count metrics use this source."} : {}, ...breakdown.note ? { note: breakdown.note } : {} }])),
     components: Object.fromEntries(Object.entries(catalog.components ?? {}).map(([id, components]) => [id, { label: components.label, measures: components.measures, fallback: components.fallback, parts: components.parts.map(part => part.label) }])),
     units: {
       [records]: { label: catalog.records.label, plural: catalog.records.plural, note: catalog.records.note },
@@ -401,6 +495,7 @@ function dashboardFacts(topic: UsageTopic) {
 const optionLabels = {
   view: Object.fromEntries(allAnalysisViews),
   reduce: Object.fromEntries(analysisReductions),
+  percentiles: Object.fromEntries(percentileLevels.map(level => [level, percentileLabel(level)])),
   window: Object.fromEntries(chartRanges.filter(([range]) => range !== "today").map(([range, label]) => [String(rangeDays(range)), range === "1d" ? "1 day" : label])),
 };
 
@@ -473,7 +568,7 @@ type SiteCard = {
   url: { path: string; params: Array<[string, ParamSpec]> };
 };
 export const recipeTextWindows = Object.fromEntries(rollingWindowDays.map(days => [String(days), Object.fromEntries(["{days}", "{period}", "{lastDays}"].map(token => [token, describeRecipeText(token, days)]))]));
-const cardPage = (recipe: QueryRecipe) => recipe.habits ? "analyze/habits" : recipe.thinking ? `analyze/${recipe.thinking.overview?"thinking-overview":"thinking-detail"}` : recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : `analyze/query/${recipe.dataset}`;
+const cardPage = (recipe: QueryRecipe, queryDataset = recipe.dataset) => recipe.habits ? "analyze/habits" : recipe.thinking ? `analyze/${recipe.thinking.overview?"thinking-overview":"thinking-detail"}` : recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : recipe.dataset === "safety" || recipe.dataset === "fixes" ? `findings/${recipe.dataset}/table` : `analyze/query/${queryDataset}`;
 
 export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const windows = recipe.period ? [] : [...rollingWindowDays];
@@ -481,13 +576,13 @@ export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const at = (days: number | null) => new URL(cardNavigationURL(instantiateRecipe(recipe, days, clock).url), origin);
   const sample = at(probe), plain = recipe.period ? sample : at(null);
   if ([recipe.title, recipe.description, sample.search].some(text => decodeURIComponent(text).includes(placeholder))) fail(`${recipe.id} already holds ${placeholder}`);
-  const card: SiteCard = { id: recipe.id, title: recipe.title, description: recipe.description, category: recipe.category, dataset: recipe.dataset, kind: cardKind(recipe), page: cardPage(recipe), url: { path: sample.pathname, params: [] } };
+  const card: SiteCard = { id: recipe.id, title: recipe.title, description: recipe.description, category: recipe.category, dataset: recipe.dataset, kind: cardKind(recipe), page: cardPage(recipe, (sample.searchParams.get("analyze_data") ?? recipe.dataset) as QueryDataset), url: { path: sample.pathname, params: [] } };
   if(recipe.thinking) card.filters=decode(plain.searchParams.get("analyze_filters")!).where;
   if (recipe.destination) {
     const chart = JSON.parse(plain.searchParams.get("analyze_chart")!), topic = recipe.destination.topic;
     const drawn = normalizeAnalysis(analysisCatalogs[topic]!, canonicalState(analysisCatalogs[topic]!, { ...dashboardDefaults[topic], ...chart })) as Record<string, unknown>;
     card.chart = chart;
-    card.state = canonicalChart({ ...drawn, v: analysisVersion, ...isTrendView(drawn.view) ? {} : { scale: drawn.scale ?? "linear" } });
+    card.state = canonicalChart({ ...drawn, v: analysisVersion, ...isTrendView(drawn.view) ? {} : { scale: drawn.scale ?? "linear" } }, {}, topicKeys(topic));
     if (chartVerdict(topic, card.state) !== "valid") fail(`${recipe.id}'s dashboard state is not drawn as given: ${json(card.state)}`);
     card.filters = decode(plain.searchParams.get("analyze_filters")!).where;
   }
@@ -580,8 +675,8 @@ const thinkingOptions = (detail: boolean): Option[] => [
   ...detail ? [thinkingOption("view", "The chart. Box-plot views split by model + effort when breakdown is none.", thinkingViews)] : [],
   thinkingOption("model", "A recorded model name (model_requests.model), or all."),
   thinkingOption("effort", "A recorded effort (model_requests.effort), or all."),
+  thinkingOption("groupBy", "The breakdown: one curve, panel, box or row per group. Waiting defaults to model.", thinkingBreakdowns),
   ...detail ? [
-    thinkingOption("groupBy", "The breakdown: one panel, box or row per group.", thinkingBreakdowns),
     thinkingOption("normalization", "Distributions as shares of each group or as counts.", ["share", "count"]),
     thinkingOption("sortBy", "Group order. Effort keeps low to high, Unreported last.", [["median", "Median wait"], ["p95", "95th percentile"], ["volume", "Requests"]]),
     thinkingOption("sortDirection", "Group order direction.", [["desc", "Descending"], ["asc", "Ascending"]]),
@@ -597,18 +692,22 @@ const thinkingDaysOption: Option = { name: "days", param: "thinking", key: "rang
 // catalog's chart and window, or options keyed into the parameter that holds
 // its state, with days for its range. Every topic must say, so that a new
 // dashboard cannot become a page that takes only filters.
-type DashboardLinks = { catalog: true } | { options: Option[]; days: Option };
+type DashboardLinks = { standalone: true } | { catalog: true } | { options: Option[]; days: Option };
 const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
-  labels:{catalog:true},
+  scatter: { catalog: true },
+  compaction: { catalog: true }, labels:{catalog:true},
   activity: { catalog: true }, human: { catalog: true }, tokens: { catalog: true }, skills: { catalog: true }, calls: { catalog: true },
-  tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, habits: { catalog: true }, mcp: { catalog: true }, carbon: { catalog: true },
-  agent_experience: { catalog: true }, outcomes: { catalog: true }, branches: { catalog: true },
+  tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, work_hours: { catalog: true }, habits: { standalone: true }, mcp: { catalog: true }, carbon: { catalog: true },
+  agent_experience: { catalog: true },
+  agent_event_rates: { catalog: true },
+  session_shape: { catalog: true },
+  outcomes: { catalog: true }, branches: { catalog: true },
   "thinking-overview": { options: thinkingOptions(false), days: thinkingDaysOption },
   "thinking-detail": { options: thinkingOptions(true), days: thinkingDaysOption },
 };
 function checkDashboardLinks(topic: UsageTopic, links: DashboardLinks) {
   if ("catalog" in links !== Boolean(analysisCatalogs[topic])) fail(`${topic}: dashboardLinks says catalog ${"catalog" in links}, but analysisCatalogs ${analysisCatalogs[topic] ? "has" : "lacks"} it`);
-  if ("catalog" in links) return;
+  if ("catalog" in links || "standalone" in links) return;
   if (!links.options.length) fail(`${topic}: a dashboard without a catalog needs options for its controls`);
   for (const option of [...links.options, links.days]) if (!option.key || option.param !== links.days.param) fail(`${topic}: option ${option.name} is not a key of ${links.days.param}`);
   if (links.days.name !== "days" || links.days.kind !== "days") fail(`${topic}: its range is the days option`);
@@ -627,11 +726,15 @@ export function buildSiteMap(inputs: SiteInputs) {
   const nodes: SiteNode[] = [];
   const add = (node: SiteNode) => { nodes.push(node); return node; };
   const opSets = new Map<string, { types: Set<string>; ops: string[] }>();
+  // A column without a type is text, and one without a label is its name in
+  // words ("messages_bin" is "Messages bin"): browse_site's query page lists
+  // every column within one answer's budget.
+  const inWords = (name: string) => name.charAt(0).toUpperCase() + name.slice(1).replaceAll("_", " ");
   const datasets = Object.fromEntries((Object.keys(schemaDocuments) as QueryDataset[]).map(name => {
     const schema = siteSchemas[name], detail = usageDetailsSchema(schema, name) ?? schema;
     return [name, { ...datasetLabel(name), schema_name: detail.name,
       properties: detail.fields.filter(field => field.property?.enabled !== false).map(field => ({ name: field.name, label: field.label ?? field.name, type: field.type, default: field.property?.default ?? false })),
-      ...rollingWindowField(name) ? { window_field: rollingWindowField(name) } : {}, columns: (Object.hasOwn(usageDatasets,name)?usageQuerySchema(schema,name as UsageDataset):schema).fields.map(field=>({name:field.name,label:field.label??field.name,type:field.type})), fields: datasetFields(schema, opSets) }];
+      ...rollingWindowField(name) ? { window_field: rollingWindowField(name) } : {}, columns: (Object.hasOwn(usageDatasets,name)?usageQuerySchema(schema,name as UsageDataset):schema).fields.map(field=>({name:field.name,...field.label && field.label!==inWords(field.name)?{label:field.label}:{},...field.type==="text"?{}:{type:field.type}})), fields: datasetFields(schema, opSets) }];
   }));
   const opKey = (signature: string) => [...opSets.get(signature)!.types].sort().join("|");
   for (const dataset of Object.values(datasets)) for (const field of dataset.fields) field.ops = opKey(field.ops);
@@ -641,10 +744,13 @@ export function buildSiteMap(inputs: SiteInputs) {
   // host_params: the parameters the page's table keeps as host query state
   // (host-query-state.ts). The app's query tokens carry that state, mirrored
   // in these parameters; a link's token may carry it only as they say it.
-  const whereOption = (param: string, dataset: string, hostParams?: string[]): Option => ({ name: "filters", param, kind: "where", description: `Where terms on ${dataset}'s filterable fields (datasets.${dataset}.fields), encoded with encodeQuery as a where-only query. Browse <node>/filters/<field> for one field.`, ...(hostParams ? { host_params: hostParams } : {}) });
+  const whereOption = (param: string, dataset: string, hostParams?: string[], lead = ""): Option => ({ name: "filters", param, kind: "where", description: `${lead}Where terms on ${dataset}'s filterable fields (datasets.${dataset}.fields), encoded with encodeQuery as a where-only query. Browse <node>/filters/<field> for one field.`, ...(hostParams ? { host_params: hostParams } : {}) });
+  // A catalog dashboard's filters other than its range are its population.
+  const populationLead = (topic: UsageTopic) => analysisCatalogs[topic]?.population
+    ? "The population every view, breakdown and panel counts, shown as Population chips. Leave a breakdown value out with {any: [{field, op: \"!=\", value}, {field, op: \"is_null\"}]}, or count only it with {field, op: \"=\", value}, as the legend does. " : "";
 
   for (const section of siteSections) {
-    const title = inputs.titles[section.route === "/" ? "" : section.path] ?? (section.path === "work" ? "Work" : sectionTitle(section.path)) ?? fail(`no title for ${section.path}`);
+    const title = inputs.titles[section.route === "/" ? "" : section.path] ?? (section.path === "work" ? "Workspace" : sectionTitle(section.path)) ?? fail(`no title for ${section.path}`);
     const node = add({ path: section.path, title, description: section.description, route: section.route, children: [] });
     const child = (page: SiteNode) => { node.children!.push(page.path); return add(page); };
     if (section.path === "cards") {
@@ -689,18 +795,18 @@ export function buildSiteMap(inputs: SiteInputs) {
         if ("catalog" in links) continue;
         child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
           fixed: { analyze_mode: "dashboards", analyze_topic: topic, analyze_data: usageTopicDatasets[topic] }, dataset: usageTopicDatasets[topic],
-          options: [...links.options, whereOption("analyze_filters", usageTopicDatasets[topic]), links.days] });
+          options: "standalone" in links ? [] : [...links.options, whereOption("analyze_filters", usageTopicDatasets[topic]), links.days] });
       }
       for (const topic of topics.filter(topic => "catalog" in dashboardLinks[topic])) child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
         fixed: { analyze_mode: "dashboards", analyze_topic: topic, analyze_data: usageTopicDatasets[topic] }, dataset: usageTopicDatasets[topic], dashboard: topic,
-        ...topic === "carbon" ? { settings: "Carbon assumptions can be carried as view.carbon; saving defaults is separate." } : topic === "parallelism" ? { settings: "Ribbon and source-query counting assumptions travel as view.parallelism; the Provider and Model breakdowns need agent counting.", ribbon: { param: "analyze_parallelism", ...ribbonTemplate() } } : {},
+        ...topic === "carbon" ? { settings: "Carbon assumptions can be carried as view.carbon; saving defaults is separate." } : topic === "parallelism" ? { settings: "Ribbon and source-query counting assumptions travel as view.parallelism; the Provider and Model breakdowns require Count by Conversations.", ribbon: { param: "analyze_parallelism", ...ribbonTemplate() } } : {},
         options: [
           { name: "chart", param: "analyze_chart", kind: "dashboard_chart", description: `The chart: dashboards.${topic}.views lists each view's options and valid combinations.` },
-          whereOption("analyze_filters", usageTopicDatasets[topic]),
+          whereOption("analyze_filters", usageTopicDatasets[topic], undefined, populationLead(topic)),
           windowOption("analyze_filters", dashboardWindows, "The dashboard's range: window_terms appended to the filters, or no terms for all time. analyze_days repeats the selected elapsed-day window."),
         ] });
-      const query = child({ path: "analyze/query", title: "Query", description: pageDescriptions["analyze/query"], route: "/analyze", fixed: { analyze_mode: "query" }, children: [] });
-      for (const dataset of Object.keys(usageDatasets) as UsageDataset[]) {
+      const query = child({ path: "analyze/query", title: "Query tables", description: pageDescriptions["analyze/query"], route: "/analyze", fixed: { analyze_mode: "query" }, children: [] });
+      for (const dataset of analyzeQueryDatasets) {
         const page = add({ path: `analyze/query/${dataset}`, title: usageDatasets[dataset].label, description: usageDatasets[dataset].description, route: "/analyze",
           fixed: { analyze_mode: "query", analyze_data: dataset }, dataset, builder: "queryURL",
           options: [{ name: "return_topic", param: "analyze_topic", kind: "enum", default: usageDatasetTopics[dataset], values: Object.entries(usageTopics).map(([value, item]) => ({ value, label: item.label })), description: "Dashboard topic retained for return navigation, independent of the source dataset." }, whereOption(`q_${dataset}`, dataset, [recordKeywordParameter(dataset),...(dataset==="message_labels"?messageLabelResultParameters:[])]), ...rollingWindowField(dataset) ? [windowOption("window_days", rollingWindowDays, `A rolling window on ${dataset}.window_field: its terms appended to the where terms, and window_mode=relative, window_days, window_field and window_dataset.`)] : []] });
@@ -727,17 +833,23 @@ export function buildSiteMap(inputs: SiteInputs) {
           ...view === "table" ? { dataset: "safety", builder: "queryURL", options: [whereOption("q_safety", "safety")] } : {} });
         safety.children!.push(node.path);
       }
+      const fixes = child({ path: "findings/fixes", title: "Fixes", description: "Recurring problems agents run into that a change to guidance, environment, tools, setup or docs could prevent, grouped from agent events, with where each fix belongs, prompt baskets per place and handoff history.", route: "/findings", fixed: { optimize_area: "fixes" }, children: [] });
+      for (const page of fixesPages.slice(1)) {
+        const view = new URL(page.href!, origin).searchParams.get("view")!;
+        fixes.children!.push(add({ path: `findings/fixes/${view}`, title: page.label, description: pageDescriptions[`findings/fixes/${view}`], route: "/findings", fixed: { optimize_area: "fixes", view },
+          ...view === "table" ? { dataset: "fixes", builder: "queryURL", options: [whereOption("q_fixes", "fixes")] } : {} }).path);
+      }
     }
     if (section.path === "work") {
       node.builder = "conversationRowURL, then the delegation explorer's parameters (delegationRouteValues, empty ones left out), then explorer.";
       node.options = [
-        { name: "work_id", param: "{work_id}", kind: "id", id: "work_id", description: "The work item (workspace) in the path." },
+        { name: "work_id", param: "{work_id}", kind: "id", id: "work_id", description: "The workspace in the path." },
         ...readerParams.map(param => ({ name: param.name, param: param.name, kind: param.id ? "id" : param.name === "at" ? "datetime" : "text", ...param.id ? { id: param.id } : {},
           ..."requires" in param ? { requires: param.requires.map(name => needs(name)) } : {}, ..."conflicts" in param ? { conflicts: [...param.conflicts] } : {}, description: param.description })),
-        { name: "explorer", param: "explorer", kind: "enum", values: values(delegationTabs), default: delegationTabs[0], description: "How the delegation explorer shows sessions. Legacy explorer=parallel links open Timeline." },
-        { name: "mode", param: "delegation_mode", kind: "enum", values: values(delegationModes), default: delegationModes[0], description: "Sessions as a hierarchy, or ranked by one metric." },
+        { name: "explorer", param: "explorer", kind: "enum", values: values(delegationTabs), default: delegationTabs[0], description: "How the delegation explorer shows agent sessions. Legacy explorer=parallel links open Timeline." },
+        { name: "mode", param: "delegation_mode", kind: "enum", values: values(delegationModes), default: delegationModes[0], description: "Agent sessions as a hierarchy, or ranked by one metric." },
         { name: "sort", param: "delegation_sort", kind: "text", default: defaultDelegationSort, requires: [needs("mode", "rank")], description: "In rank mode, the metric id to rank by (the work's analysis lists them: tokens, cost, calls, errors …)." },
-        { name: "scope", param: "delegation_scope", kind: "enum", values: values(delegationScopes), default: delegationScopes[0], requires: [needs("mode", "rank")], description: "In rank mode, the session's own metric (self) or with everything below it (all)." },
+        { name: "scope", param: "delegation_scope", kind: "enum", values: values(delegationScopes), default: delegationScopes[0], description: "The hierarchy and ranking show the session's own metrics (self) or with everything below it (all)." },
         { name: "direction", param: "delegation_direction", kind: "enum", values: values(delegationDirections), default: delegationDirections[0], requires: [needs("mode", "rank")], description: "In rank mode." },
         { name: "collapsed", param: "delegation_collapsed", kind: "text", description: "Comma-separated session ids to collapse, sorted." },
         { name: "session", param: "delegation_session", kind: "text", description: "The selected session id." },
@@ -757,7 +869,7 @@ export function buildSiteMap(inputs: SiteInputs) {
   for(const node of Object.values(nodes))if(node.dataset&&node.options?.some(option=>option.kind==="where"&&option.param.startsWith("q_"))){
     const schema=siteSchemas[node.dataset as QueryDataset];
     const initial=fittedDefaultQuery(schema);
-    Object.assign(node,{query_default:node.path==="library"?freshSearch(schema).query:Object.hasOwn(usageDatasets,node.dataset)?usageActionQuery(node.dataset==="message_labels"?messageLabelConversationQuery(initial):initial,usageQuerySchema(schema,node.dataset as UsageDataset),node.dataset as UsageDataset):initial});
+    Object.assign(node,{query_default:node.path==="library"?freshSearch(schema).query:Object.hasOwn(usageDatasets,node.dataset)?usageActionQuery(initial,usageQuerySchema(schema,node.dataset as UsageDataset),node.dataset as UsageDataset):initial});
   }
   return {
     version: siteMapVersion,
@@ -769,8 +881,8 @@ export function buildSiteMap(inputs: SiteInputs) {
     excluded: { legacy_routes: legacyRoutes, params: ["ask_chat", "token", "fresh"] },
     windows: { days: rollingWindowDays, dashboard: dashboardWindows, analyze_days: analyzeDays, analyze_days_default: readUsageWorkspace(new URLSearchParams()).days, labels: optionLabels.window, tables: windowTables, ...windowTemplates() },
     analyze: {
-      version: analysisVersion, fill_defaults: fillDefaults, absent, fallback: viaFallback, labels: { view: optionLabels.view, reduce: optionLabels.reduce },
-      options: { period: Object.keys(chartPeriods), display: chartDisplays, scale: chartScales, rollingOp: rollingOps, compareAs: compareModes, cycle: analysisCycles, split_none: noSplit, unit_records: records },
+      version: analysisVersion, readable_versions: readableVersions, fill_defaults: fillDefaults, absent, fallback: viaFallback, labels: { view: optionLabels.view, reduce: optionLabels.reduce, percentiles: optionLabels.percentiles },
+      options: { period: Object.keys(chartPeriods), display: analysisDisplays, scale: chartScales, rollingOp: rollingOps, compareAs: compareModes, cycle: analysisCycles, split_none: noSplit, unit_records: records },
       dashboards,
     },
     datasets, op_sets: Object.fromEntries([...opSets.keys()].map(signature => [opKey(signature), opSets.get(signature)!.ops])),

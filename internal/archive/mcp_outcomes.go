@@ -26,7 +26,7 @@ var outcomeMCPTools = []map[string]any{
 			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
 			"offset":            map[string]any{"type": "integer", "minimum": 0},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
-	{"name": "get_file_history", "description": "Why is this file like this? Every session that edited a file, newest first: its edits, lines added and removed, outcome label with its evidence, and a reader link at its first edit of the file. In a repository local Git checked, also the commits that changed the file, each with the sessions linked to it. Works for files in plain folders from transcripts alone. path is repository-relative (src/main.go), a folder path (~/notes/plan.md) or an absolute path.",
+	{"name": "get_file_history", "description": "Why is this file like this? Every session that edited a file, newest first: its edits, lines added and removed, outcome label with its evidence, and a reader link at its first edit of the file. In a repository local Git checked, also the commits that changed the file, each with the sessions linked to it. Works for files in plain folders from transcripts alone. path is repository-relative (src/main.go), a folder path (~/notes/plan.md) or an absolute path; a path that matches exactly wins, and only otherwise does a path ending match. files_truncated means more files matched than were returned: give a longer path or a project.",
 		"inputSchema": map[string]any{"type": "object", "required": []string{"path"}, "properties": map[string]any{
 			"path":              map[string]any{"type": "string"},
 			"project":           map[string]any{"type": "string", "description": "Only the file in this project, when several projects hold the path."},
@@ -36,8 +36,8 @@ var outcomeMCPTools = []map[string]any{
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"project":           map[string]any{"type": "string", "description": "A repository from list_projects."},
 			"branch":            map[string]any{"type": "string", "description": "Only branches whose name contains this text."},
-			"from":              map[string]any{"type": "string", "description": "Usage in UTC hours starting at or after this time: an RFC 3339 timestamp or a UTC date. Spend is placed in the hour it was used."},
-			"to":                map[string]any{"type": "string", "description": "Usage in UTC hours starting before this time; a date includes its whole day."},
+			"from":              map[string]any{"type": "string", "description": "Usage in hours starting at or after this time: an RFC 3339 timestamp, or a date, which starts at midnight in this Mac's time zone as the Spend by Branch page counts days. Spend is placed in the hour it was used."},
+			"to":                map[string]any{"type": "string", "description": "Usage in hours starting before this time; a date includes its whole local day."},
 			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "description": "Branches listed; default 20."},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 }
@@ -51,16 +51,20 @@ func (c *Catalog) getBranchSpend(ctx context.Context, args map[string]any) (map[
 	budget := mcpBudget(args, 1500)
 	project, branchText := firstString(args["project"]), strings.ToLower(firstString(args["branch"]))
 	// Rows are hourly: the bounds select the hours starting in [from, to),
-	// compared as instants, so a bound's offset counts.
+	// compared as instants, so a bound's offset counts. A date is a day in
+	// this Mac's time zone, as Spend by Branch counts days (localMidnight).
 	var from, to time.Time
 	for key, bound := range map[string]*time.Time{"from": &from, "to": &to} {
 		if value := strings.TrimSpace(firstString(args[key])); value != "" {
 			parsed, ok := parseTime(value)
+			if day, err := time.ParseInLocation("2006-01-02", value, time.Local); err == nil {
+				parsed, ok = day, true
+				if key == "to" {
+					parsed = day.AddDate(0, 0, 1)
+				}
+			}
 			if !ok {
 				return nil, fmt.Errorf("%s must be a valid timestamp or date", key)
-			}
-			if key == "to" && len(value) == len("2006-01-02") {
-				parsed = parsed.Add(24 * time.Hour)
 			}
 			*bound = parsed
 		}

@@ -1,8 +1,15 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ChartSeries } from "./chart-series";
-import type { LegendAction } from "./chart-selection";
+import { legendMenuItems, type LegendAction } from "./chart-selection";
+import { Icon } from "./icons";
 
-export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSelection, onAction, groupSize, mixed = false }: { item: ChartSeries; active: boolean; dimmed: boolean; selectionActive: boolean; soleSelection: boolean; onAction: (action: LegendAction) => void; groupSize?: number; mixed?: boolean }) {
+// Shared positioning, dismissal and keyboard navigation for value and preset menus.
+export function LegendMenu({ name, label, menuLabel, title, heading, marker, suffix, active, dimmed = false, mixed = false, category = false, iconOnly = false, description, readOnly = false, onActivate, children }: {
+  name: string; label: React.ReactNode; menuLabel: string; title: string; heading: React.ReactNode;
+  marker?: React.ReactNode; suffix?: React.ReactNode; active?: boolean; dimmed?: boolean; mixed?: boolean; category?: boolean;
+  iconOnly?: boolean; description?: string; readOnly?: boolean; onActivate?: () => void;
+  children: (choose: (action: () => void) => void) => React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLDivElement>(null);
   const firstFocus = useRef(0);
@@ -20,7 +27,7 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
     const top = Math.max(8, Math.min(preferredTop, window.innerHeight - panel.offsetHeight - 8));
     panel.style.left = `${left - anchor.left}px`;
     panel.style.top = `${top - anchor.top}px`;
-    const entries = panel.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)');
+    const entries = panel.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)');
     entries[firstFocus.current === -1 ? entries.length - 1 : 0]?.focus();
   }, [open]);
   useEffect(() => {
@@ -51,24 +58,20 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
       window.removeEventListener("scroll", dismiss, true);
     };
   }, [open]);
-  function choose(action: LegendAction) {
-    close(true);
-    onAction(action);
-  }
-  const remove = selectionActive && active;
-  const category = groupSize !== undefined, name = category ? `${item.label} category` : item.label;
-  return <span className={`usage-legend-chip${category ? " is-category" : ""}`}>
-    <button ref={trigger} type="button" className={`usage-legend-item${category ? " usage-legend-category" : ""}${dimmed ? " dimmed" : ""}`} aria-label={name} aria-pressed={mixed ? "mixed" : active} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined}
-      title={`Filter ${item.label}`} onClick={() => { firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => {
+  function choose(action: () => void) { close(true); action(); }
+  return <span className={`usage-legend-chip${category ? " is-category" : ""}${iconOnly ? " is-icon-only" : ""}`}>
+    <button ref={trigger} type="button" className={`usage-legend-item${category ? " usage-legend-category" : ""}${dimmed ? " dimmed" : ""}`} aria-label={name} aria-pressed={mixed ? "mixed" : active} aria-haspopup={readOnly ? undefined : "menu"} aria-expanded={readOnly ? undefined : open} aria-controls={!readOnly && open ? menuId : undefined}
+      title={iconOnly ? undefined : title} aria-description={description} data-chart-tooltip={iconOnly && !open ? [typeof label === "string" ? label : name,description].filter(Boolean).join("\n") : undefined} onClick={() => { if(readOnly){onActivate?.();return;} firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => {
+        if(readOnly)return;
         if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
         event.preventDefault();
         firstFocus.current = event.key === "ArrowUp" ? -1 : 0;
         setOpen(true);
       }}>
-      {!category ? <span className="usage-swatch" style={{ background: item.color }} /> : null}{item.label}<span className="usage-legend-caret" aria-hidden="true">▾</span>
+      {marker}{iconOnly ? null : <>{label}{suffix}<Icon name="chevron-down" className="usage-legend-caret" /></>}
     </button>
-    {open ? <div ref={menu} id={menuId} className="usage-legend-menu" role="menu" aria-label={`Filter ${name}`} onKeyDown={event => {
-      const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    {!readOnly && open ? <div ref={menu} id={menuId} className="usage-legend-menu" role="menu" aria-label={menuLabel} onKeyDown={event => {
+      const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)') ?? [])];
       const index = entries.indexOf(document.activeElement as HTMLButtonElement);
       if (event.key === "Tab") { close(true); return; }
       if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
@@ -76,11 +79,28 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
       const next = event.key === "Home" ? 0 : event.key === "End" ? entries.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + entries.length) % entries.length;
       entries[next]?.focus();
     }}>
-      <div className="usage-legend-menu-heading" title={item.label}>{!category ? <span className="usage-swatch" style={{ background: item.color }} /> : null}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</div>
-      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("only")}><span>{category ? "Show only this category" : "Show only this value"}</span><small>Replace the current selection</small></button>
-      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("toggle")}><span>{category ? remove ? "Remove all from selection" : "Add all to selection" : remove ? "Remove from selection" : "Add to selection"}</span><small>{soleSelection ? "Show all values again" : selectionActive ? "Keep the rest of your selection" : "Start a multi-value selection"}</small></button>
-      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("exclude")}><span>{category ? "Show all except this category" : "Show all except this value"}</span><small>{category ? "Include every label outside this category" : "Include every other value, even in Other"}</small></button>
-      <button type="button" role="menuitem" tabIndex={-1} className="usage-legend-menu-reset" disabled={!selectionActive} onClick={() => choose("clear")}>Show all values</button>
+      <div className="usage-legend-menu-heading" data-overflow-title="">{heading}</div>
+      {children(choose)}
     </div> : null}
   </span>;
+}
+
+// Shared visibility actions, with the same counts and read-only icon behavior as Timeline.
+export function ChartLegendChip({ item, active, dimmed, selectionActive, onAction, groupSize, mixed = false, swatch, suffix, visibleCount, hiddenCount, iconOnly = false, description, readOnly = false, onActivate }: {
+  item: ChartSeries; active: boolean; dimmed: boolean; selectionActive: boolean; onAction: (action: LegendAction) => void;
+  groupSize?: number; mixed?: boolean; swatch?: React.ReactNode; suffix?: React.ReactNode; visibleCount?: number; hiddenCount?: number;
+  iconOnly?: boolean; description?: string; readOnly?: boolean; onActivate?: () => void;
+}) {
+  const options = legendMenuItems(visibleCount ?? (dimmed ? 0 : 1), hiddenCount ?? (dimmed ? 1 : 0), selectionActive);
+  const category = groupSize !== undefined, name = category ? `${item.label} category` : item.label;
+  const marker = swatch === undefined ? !category ? <span className="usage-swatch" style={{ background: item.color }} /> : null : swatch;
+  return <LegendMenu name={name} label={item.label} menuLabel={`Filter ${name}`} title="Filter this series"
+    heading={<>{marker}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</>}
+    marker={marker} suffix={suffix} active={active} dimmed={dimmed} mixed={mixed} category={category}
+    iconOnly={iconOnly} description={description} readOnly={readOnly} onActivate={onActivate}>
+    {choose => <>{options.map(option => <React.Fragment key={option.action}>
+      {option.separator ? <hr className="usage-legend-menu-separator" role="separator" /> : null}
+      <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose(() => onAction(option.action))}>{option.label}</button>
+    </React.Fragment>)}</>}
+  </LegendMenu>;
 }

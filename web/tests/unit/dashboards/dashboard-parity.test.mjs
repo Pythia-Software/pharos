@@ -1,3 +1,4 @@
+import { scatterAnalysisCatalog } from "../../../src/scatter-analysis-catalog";
 // Exemplar cards expressed as Tokens and Cost dashboard states. Each pair runs
 // the card's own chart query and the dashboard's analysis query over the same
 // usage ledger with Query Table's in-process evaluation, grouping stages
@@ -71,12 +72,14 @@ test("model-session-costs: per-conversation cost distributions by root model, fi
   assert.equal(dashboard.hiddenGroups, 3, "Sonnet, GPT-5 and Antigravity Opus are reported as hidden");
 });
 
-test("session-token-cost: one point per conversation, tokens against cost", () => {
-  const { card, dashboard, clause } = pair("session-token-cost", { view: "scatter", unit: "conversation", metric: "tokens", metricY: "cost", split: "provider_model" });
-  assert.equal(clause.display.kind, "scatter");
-  const points = buckets => byKeys(buckets, bucket => [round(bucket.value), round(bucket.y)]);
-  assert.ok(Object.keys(points(card.buckets)).length >= 10);
-  assert.deepEqual(points(dashboard.buckets), points(card.buckets), "same keys: top-level provider, model, conversation");
+test("session-token-cost: standalone card and dashboard draw identical matched entity measurements", () => {
+  const recipe=recipeById("session-token-cost"),item=instantiateRecipe(recipe,30,new Date(now));
+  const entities=Array.from({length:12},(_,index)=>({id:`conversation:${index}`,entity_id:String(index),point_kind:"conversation",provider:index%2?"claude":"codex",first_at:now-1000,last_at:now-1000,tokens_tokens:(index+1)*100,tokens_cost:index*.01}));
+  const card=cardCoverQuery(item.query,recipe),dashboard=analysisQuery(scatterAnalysisCatalog,recipe.destination.chart,(item.query.grouping?.source??item.query).where);
+  const result=query=>core.evaluateMetrics(entities,query,schemas.scatter,{now}).metrics[0];
+  const points=buckets=>byKeys(buckets,bucket=>[round(bucket.value),round(bucket.y)]);
+  assert.equal(dashboard.clause.display.kind,"scatter");
+  assert.deepEqual(points(result(dashboard.query).buckets),points(result(card.query).buckets.filter(bucket=>bucket.value>0&&bucket.y>0)));
 });
 
 // Trend cards. Each opens its destination chart on Over time; the card's own
@@ -196,7 +199,8 @@ for (const [name, filter, selected] of [["all usage", [], false], ["one provider
   const { days, ends } = cardTrendDays(7, true, at);
   const card = buildCardTrend(trend, 7, cardTrendQueries(filter, trend, days).map(query => core.evaluateMetrics(rows, query, schema, { now: at }).metrics), at).study;
   const where = [...withTimeRange([], usageTime, undefined, undefined, "30d"), ...selected ? [] : filter];
-  const state = { metric: "tokens", split: filter.length ? "provider" : "none", period: "day", hours: 6, days: 3, rollingPeriods: 7, rollingOp: "mean", completePeriods: true, norm: true, ...selected ? { selection: { values: ["codex"], excluded: false } } : {} };
+  // With its zeroes, as the card's dashboard (card-destinations) draws it.
+  const state = { metric: "tokens", split: filter.length ? "provider" : "none", period: "day", hours: 6, days: 3, rollingPeriods: 7, rollingOp: "mean", completePeriods: true, norm: true, nonzero: false, ...selected ? { selection: { values: ["codex"], excluded: false } } : {} };
   const query = trendQuery(tokenAnalysisSource, state, where, { now: at });
   const built = trendSeries(tokenAnalysisSource, state, query, core.evaluateMetrics(rows, query.query, schema, { now: at }).metrics, { where, now: at });
   assert.deepEqual(built.buckets.map(bucket => bucket.key), ends.slice(2), "29 whole days through yesterday: the partial first day is left out");
@@ -204,7 +208,7 @@ for (const [name, filter, selected] of [["all usage", [], false], ["one provider
   close(Object.fromEntries(built.buckets.map(bucket => [bucket.key, drawn(bucket)])), Object.fromEntries(ends.slice(2).map((end, index) => [end, card.points[index + 2]])), "points");
   assert.ok(card.points.some(point => point > 0));
   assert.equal(built.normPoints, 30);
-  assert.ok(Math.abs(built.norm - card.baseline) < 1e-9, `norm ${built.norm} != baseline ${card.baseline}`);
+  assert.ok(Math.abs(built.references?.[0]?.value - card.baseline) < 1e-9, `norm ${built.references?.[0]?.value} != baseline ${card.baseline}`);
 });
 
 

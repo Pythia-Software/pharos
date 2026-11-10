@@ -54,7 +54,7 @@ values; counts require integers. Presence operators omit `value`. Contradictory
 predicates and unsupported names fail explicitly. Aliases include `token_count`,
 `turn_count`, `tool_use_count`, and `wall_clock_span`.
 
-Context filters include repository, source, provider, model, effort, file, PR,
+Context filters include project, repository, source, provider, model, effort, file, PR,
 from/to, and up to 100 `workspace_ids`. Repository text is a case-insensitive
 literal substring of a repository name or remote; `%` and `_` are ordinary
 characters. Date filters select entity lifetimes, not usage inside a date
@@ -67,7 +67,7 @@ that configuration.
 `select` chooses up to 20 allowlisted metrics or small context fields. An empty
 array returns IDs only. Filter/sort metrics are included automatically. Workspace
 rows always include `workspace_id`; conversation rows include both IDs. Optional
-context fields include repository, source, activity time, and conversation model,
+context fields include project, repository, source, activity time, and conversation model,
 provider, effort, start time, and coverage. Large descriptive fields are rejected.
 Alias handles are separately available as `mirrored_workspace_ids` or
 `linked_conversation_ids` for the corresponding entity type.
@@ -205,7 +205,9 @@ so the cost of reworked sessions in a folder project is one aggregate:
 The older `outcome` filter is text a source reported about the work, not the
 label. `file` matches text in the path of a file the work changed: a change
 set's file, or a file a session edited through its tool calls, which every
-harness with file tools records. `list_outcomes` gives each label's evidence;
+harness with file tools records, by its path in its repository or a folder
+file's `~` or absolute path. An absolute path also finds a repository's file
+through a checkout Pharos knows. `list_outcomes` gives each label's evidence;
 `get_file_history` and `get_branch_spend` cover a file's history and spend
 per branch.
 

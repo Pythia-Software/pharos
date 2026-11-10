@@ -127,6 +127,10 @@ func TestSessionGitProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	identities, err := catalog.gitIdentities(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	outcome := map[string]int{}
 	// Why inference disagrees: where the commit falls against the printing
 	// session's window, whether it shares a file, and how the session it
@@ -143,10 +147,11 @@ func TestSessionGitProbe(t *testing.T) {
 	samples := map[string]int{}
 	signal := map[string]int{}
 	for _, repository := range slices.Sorted(maps.Keys(byRepository)) {
-		dir, _ := gitCheckout(locations[repository])
-		if dir == "" {
+		clones, _ := gitCheckouts(ctx, locations[repository], identities[repository])
+		if len(clones) == 0 {
 			continue
 		}
+		dir := clones[0].Dir
 		members := byRepository[repository]
 		since := time.Time{}
 		for _, id := range members {
@@ -161,7 +166,11 @@ func TestSessionGitProbe(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		after := "--since=" + since.Add(-24*time.Hour).Format(time.RFC3339)
+		clones = clones[:1]
+		clones[0].Has = map[string]bool{}
+		for hash := range commits {
+			clones[0].Has[hash] = true
+		}
 		withPrinted, _ := linkCommits(sessions, members, repository, commits, nil)
 		blind := map[string]*gitSession{}
 		for id, session := range sessions {
@@ -171,7 +180,7 @@ func TestSessionGitProbe(t *testing.T) {
 		}
 		inferred := map[string][]string{}
 		confidence := map[string]float64{}
-		blindLinks, signals := inferLinks(ctx, dir, after, blind, members, repository, commits)
+		blindLinks, signals := inferLinks(ctx, clones, blind, members, repository, commits)
 		for _, link := range blindLinks {
 			inferred[link.Hash] = append(inferred[link.Hash], link.Session)
 			confidence[link.Hash] = link.Confidence

@@ -1,0 +1,24 @@
+{
+  "prefixes": [
+    {
+      "value": "[]",
+      "encoded_bytes": 4
+    },
+    {
+      "value": "[{\"url\":\"/library?search=<&>\u2028\u2029🧭\\\"\\\\0\",\"title\":\"Café\",\"at\":0}]",
+      "encoded_bytes": 106
+    },
+    {
+      "value": "[{\"url\":\"/library?search=<&>\u2028\u2029🧭\\\"\\\\0\",\"title\":\"Café\",\"at\":0},{\"url\":\"/library?search=<&>\u2028\u2029🧭\\\"\\\\1\",\"title\":\"Café\",\"at\":1}]",
+      "encoded_bytes": 209
+    },
+    {
+      "value": "[{\"url\":\"/library?search=<&>\u2028\u2029🧭\\\"\\\\0\",\"title\":\"Café\",\"at\":0},{\"url\":\"/library?search=<&>\u2028\u2029🧭\\\"\\\\1\",\"title\":\"Café\",\"at\":1},{\"url\":\"/library?search=<&>\u2028\u2029🧭\\\"\\\\2\",\"title\":\"Café\",\"at\":2}]",
+      "encoded_bytes": 312
+    },
+    {
+      "value": "[{\"url\":\"/library?search=<&>\u2028\u2029🧭\\\"\\\\0\",\"title\":\"Café\",\"at\":0},{\"url\":\"/library?search=<&>\u2028\u2029🧭\\\"\\\\1\",\"title\":\"Café\",\"at\":1},{\"url\":\"/library?search=<&>\u2028\u2029🧭\\\"\\\\2\",\"title\":\"Café\",\"at\":2},{\"url\":\"/library?search=<&>\u2028\u2029🧭\\\"\\\\3\",\"title\":\"Café\",\"at\":3}]",
+      "encoded_bytes": 415
+    }
+  ]
+}

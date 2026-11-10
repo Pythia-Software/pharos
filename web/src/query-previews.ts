@@ -1,4 +1,7 @@
 import { formatUSD } from "./currency";
+import { combineServed, noteServed, resultPolicyHeaders, resultScope, resultServed, servedOf, type ResultPolicy, type ResultServed } from "./result-cache";
+import { agentEventDatasetOf, agentEventsFreshnessMark, agentEventsFreshnessNote, reportQueryCoverage, type AgentEventsCoverage } from "./agent-events-freshness";
+import { cardQualification } from "./card-qualifier";
 import { isOriginDimension, originLabel, loadOriginMetadata } from "./origin-dimensions";
 import { apiCostTrendQuery, apiCostTrendFacts, buildApiCostTrend, usesApiCostTrend, type CostTimeBucket } from "./api-cost-trend";
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
@@ -19,13 +22,17 @@ import { usesWeekdayCover, weekdayMetric } from "./weekday-cover";
 import { loadDashboardCardPreview } from "./dashboard-card-preview";
 import type { DashboardCardTarget } from "./dashboard-card-model";
 import type { HabitsCover } from "./habits-card";
-import type { GridCover } from "./grid-cover";
+import { gridCoverHeight, type GridCover } from "./grid-cover";
+import { heatmapGrid, trendHeatmap } from "./dashboard-heatmap-model";
+import { binnedFields } from "./session-shape-bands";
 import { invalidateConcurrencyData } from "./concurrency-store";
 import type { CompactTimelineOptions } from "./column-marks";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
   refreshing?: boolean; refreshError?: string; updatedAt?: number;
+  // What the server's result cache answered with (result-cache.ts).
+  served?: ResultServed;
   state: "ready" | "empty"; emptyLabel?: string; density?: "compact"; stackBy?: string; coverHeight?: number; legendColumns?: 1 | 2; total: number; summary: string; note?: string;
   headline?: string; action?: string; evidence?: string;
   headlineMetric?: { value: string; unit: string; label?: string };
@@ -46,7 +53,7 @@ export type QueryPreview = {
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget; groups?: number };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
 type Context = { schema: FieldSchema; execution: ComputedExecution; queryCapabilities: QueryCapabilitiesV3 };
-type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
+type Payload = { served?: ResultServed; now?: number; coverage?: AgentEventsCoverage; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
 const cache = new Map<string, Cached>();
 export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); invalidateConcurrencyData(); }
@@ -59,19 +66,27 @@ export function formatPreviewValue(value: number, unit: string): string {
   return Intl.NumberFormat(undefined, { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
 }
 
+// A stored answer was computed for the same request at an earlier clock, and
+// echoes that clock; it is checked against the request as it was asked then.
+function asServed(request: QueryRequestV3, result: { now?: number }): QueryRequestV3 {
+  const served = servedOf(result);
+  return served && served.state !== "live" && typeof result.now === "number" ? { ...request, now: result.now } : request;
+}
+
 class PreviewHTTPError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
-async function fetchPreview<T>(url: string, signal?: AbortSignal, request?: unknown): Promise<T> {
+async function fetchPreview<T>(url: string, signal?: AbortSignal, request?: unknown, policy?: ResultPolicy): Promise<T> {
   const controller = new AbortController(), abort = () => controller.abort(signal?.reason);
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   const timer = setTimeout(() => controller.abort(new Error("Preview timed out. Open the view to explore it directly.")), 15_000);
   try {
-    const response = await fetch(url, { signal: controller.signal, ...(request === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) }) });
+    const response = await fetch(url, { signal: controller.signal, ...(request === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json", ...resultPolicyHeaders(policy) }, body: JSON.stringify(request) }) });
     const body = await response.json();
     if (!response.ok) throw new PreviewHTTPError(typeof body.error === "string" ? body.error : body.error?.message ?? "Preview unavailable", response.status);
-    return body;
+    reportQueryCoverage(url, body);
+    return noteServed(body, resultServed(response.headers));
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
 }
 
@@ -129,7 +144,7 @@ function keyLabel(schema: FieldSchema, field: string): ((key: unknown) => string
   return key => { const option = values.options.find(option => typeof option === "object" && option.value === key); return typeof option === "object" ? option.label : String(key ?? "Unspecified"); };
 }
 
-const dailyColumns = (clause: AggregationClause) => !clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && clause.op === "sum";
+const dailyColumns = (clause: AggregationClause) => !clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && (clause.op === "sum" || clause.op === "count" && !clause.field);
 function smoothingPeriods(job: PreviewJob, query: QueryState): number {
   const options = job.options, clause = query.aggregations?.find(metric => metric.id === options?.coverMetricId) ?? query.aggregations?.[0];
   const periods = (options?.cover ?? options?.recipe?.cover)?.timeline?.rollingPeriods;
@@ -161,6 +176,15 @@ function smoothingQuery(job: PreviewJob, query: QueryState, now: number): QueryS
 }
 
 type SmoothingHistory = { query: QueryState; payload: Payload };
+// An agent-event card whose rows the server withheld or is rebuilding is not a
+// confirmed count: mark its summary and say why (agentEventsCoverage).
+export function withAgentEventsFreshness(preview: QueryPreview, dataset: string, payload: { coverage?: AgentEventsCoverage }): QueryPreview {
+  if (!agentEventDatasetOf(`/api/query/${dataset}/query-v3`)) return preview;
+  const note = agentEventsFreshnessNote(payload.coverage);
+  if (!note) return preview;
+  return { ...preview, summary: `${agentEventsFreshnessMark(payload.coverage)}${preview.summary}`, note: [note, preview.note].filter(Boolean).join(" · ") };
+}
+
 function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema: FieldSchema, history?: SmoothingHistory): QueryPreview {
   const options = job.options ?? {}, recipe = options.recipe;
   const searchNote = payload.find?.search ? payload.find.search.complete ? "This search batch" : "Partial search batch; open the search to continue" : undefined;
@@ -235,7 +259,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   // distribution medians or paired axes to manufacture a grand total.
   const additive = !clause.expression && !clause.expressionY && !clause.distribution && ["sum", "count"].includes(clause.op);
   const total = additive ? numeric.reduce((sum, bucket) => sum + Number(bucket.value), 0) : result.processedRows ?? values.reduce((sum, bucket) => sum + bucket.count, 0);
-  const countUnit = ({ tool_calls: "calls", writing_messages: "messages", skill_usages: "records", tl1_attempts: "attempts", findings: "findings" } as Partial<Record<QueryDataset, string>>)[job.dataset] ?? "rows";
+  const countUnit = ({ tool_calls: "calls", messages: "messages", writing_messages: "messages", skill_usages: "records", tl1_attempts: "attempts", findings: "findings" } as Partial<Record<QueryDataset, string>>)[job.dataset] ?? "rows";
   const unit = clause.display?.format ? "" : clause.op === "count" ? countUnit : clause.field?.includes("cost") ? "USD" : clause.field?.includes("tokens") ? "tokens" : clause.field?.includes("words") ? "words" : clause.field === "duration_ms" ? "ms" : clause.field?.endsWith("_count") ? countUnit : recipe?.unit ?? "";
   const scalar = !clause.groupBy.length && values.length === 1 && !clause.distribution;
   // Groups hidden by minCount are outside groupCount and Other, so the shown buckets are not the whole population.
@@ -256,9 +280,14 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     ready &&= eligible;
   }
   const preview: QueryPreview = { density: (options.cover ?? recipe?.cover)?.density, stackBy: (options.cover ?? recipe?.cover)?.stackBy, coverHeight: (options.cover ?? recipe?.cover)?.height, legendColumns: (options.cover ?? recipe?.cover)?.legendColumns, state: ready ? "ready" : "empty", total, summary, note: notes.filter(Boolean).join(" · ") || undefined, metrics, fields: schema.fields, coverMetricId: clause.id };
+  const qualified = query.grouping ? cardQualification(payload.rows, recipe?.exploration?.qualifier, (payload.rows?.length ?? 0) >= (Number(payload.total) || 0)) : null;
+  if (qualified) {
+    preview.summary = `${qualified.mark}${preview.summary}`;
+    preview.note = [qualified.note, preview.note].filter(Boolean).join(" · ");
+  }
   const minimum = (options.cover ?? recipe?.cover)?.minSamples;
   if (!ready && recipe?.emptyLabel) preview.emptyLabel = recipe.emptyLabel;
-  if (!ready && minimum && (clause.distribution?.kind === "box" || clause.expressionY)) preview.emptyLabel = `No cohorts with at least ${minimum} ${(options.cover ?? recipe?.cover)?.sampleUnit ?? (!query.grouping && ["tool_calls", "mcp_calls"].includes(job.dataset) ? "calls" : "conversations")}`;
+  if (!ready && minimum && (clause.distribution?.kind === "box" || clause.expressionY)) preview.emptyLabel = `No groups with at least ${minimum} ${(options.cover ?? recipe?.cover)?.sampleUnit ?? (!query.grouping && ["tool_calls", "mcp_calls"].includes(job.dataset) ? "calls" : "conversations")}`;
   if (query.grouping && recipe?.exploration?.context && payload.rows?.length) {
     preview.groupEvidence = Object.fromEntries(payload.rows.map(row => [JSON.stringify(groupKeyFields(query.grouping!.keys).map(key => row[key] ?? null)), recipe.exploration!.context!.map(item => typeof row[item.field] === "number" ? `${formatPreviewValue(row[item.field] as number, item.unit ?? "")} ${item.label}` : "").filter(Boolean).join(" · ")]));
   }
@@ -322,6 +351,23 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     if (clause.display?.showOther === false) preview.series = preview.series.filter(item => !item.hiddenCount);
     if (clause.groupBy.length === 1 && preview.series[0]) preview.series[0].color = tone;
     if (!ready && eligible && periods && rollingAverageBuckets(chart, periods, { period: "day" }).some(bucket => !bucket.history && Object.values(bucket.values).some(value => value > 0))) preview.state = "ready";
+    // A heatmap cover draws the day's sessions by their value's fine bin, as
+    // the dashboard's heatmap does: every bin, none folded into Other.
+    const bins = preview.timeline?.display === "heatmap" ? binnedFields[clause.groupBy.at(-1) ?? ""] : undefined;
+    if (bins) {
+      const days = chart.map(bucket => ({ ...bucket, values: {} as Record<string, number> })), byDay = new Map(days.map(bucket => [bucket.key, bucket])), edges = new Set<number>();
+      for (const bucket of chartValues) {
+        const day = byDay.get(String(bucket.keys[0])), edge = Number(bucket.keys[1]);
+        if (!day || bucket.keys[1] === null || !Number.isFinite(edge)) continue;
+        day.values[`b:${edge}`] = (day.values[`b:${edge}`] ?? 0) + Number(bucket.value);
+        edges.add(edge);
+      }
+      const drawn = periods ? rollingAverageBuckets(days, periods, { period: "day" }).filter(bucket => !bucket.history) : days;
+      const value = (amount: number) => formatMetricOutput(amount, bins.format).text;
+      preview.grid = heatmapGrid(trendHeatmap(drawn, [...edges].map(edge => ({ key: `b:${edge}`, label: String(edge), value: String(edge), color: "" })), bins.scheme),
+        { period: "day", noun: recipe?.unit ?? countUnit, label: bins.label, format: value, rollingPeriods: periods ?? 0 });
+      preview.coverHeight = gridCoverHeight(preview.grid);
+    }
   }
   if (query.grouping && recipe?.exploration && !clause.distribution && !clause.expressionY && (!additive || !recipe.exploration.coverMetric)) {
     const count = result.groupCount ?? result.processedRows ?? values.length;
@@ -346,7 +392,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
 
 // Metadata lives for this execution only. A refresh always reads the current
 // canonical revisions; an aborted caller never lends its signal to another run.
-export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal): Promise<void> {
+export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal, policy?: ResultPolicy): Promise<void> {
   if (signal?.aborted) return;
   // A Habits template draws as the dashboard card at its address.
   jobs = jobs.map(job => job.options?.recipe?.habits && !job.options.dashboard ? { ...job, options: { ...job.options, dashboard: job.options.url, dashboardTarget: job.options.recipe.habits.target } } : job);
@@ -362,11 +408,18 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     const work = async () => {
       while (pending.length && !signal?.aborted) {
         const job = pending.shift()!;
-        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal, undefined, undefined, job.options!.dashboardTarget, undefined, undefined, undefined, job.options!.groups); if (!signal?.aborted) publish(job.id, preview); }
+        // The card's chart is drawn by the dashboard's own code, which only
+        // passes the signal down: the scope carries the policy with it.
+        const scope = policy ? resultScope(signal, policy) : undefined;
+        try {
+          const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, scope?.signal ?? signal, undefined, undefined, job.options!.dashboardTarget, undefined, undefined, undefined, job.options!.groups);
+          const served = scope?.served();
+          if (!signal?.aborted) publish(job.id, served ? { ...preview, served } : preview);
+        }
         catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
       }
     };
-    await Promise.all([work(), work(), work(), loadQueryPreviews(jobs.filter(job => !job.options?.dashboard), publish, signal)]);
+    await Promise.all([work(), work(), work(), loadQueryPreviews(jobs.filter(job => !job.options?.dashboard), publish, signal, policy)]);
     return;
   }
   if (jobs.some(job => [...(job.query.grouping?.keys ?? []), ...(job.query.aggregations ?? []).flatMap(metric => metric.groupBy), ...(job.options?.recipe?.exploration?.keys ?? [])].some(field => field === "machine_id" || field === "execution_machine_id"))) await loadOriginMetadata();
@@ -403,18 +456,20 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const costJobs = jobs.filter(job => usesApiCostTrend(job) && !searchContext(job));
-  const costStudies = new Set(costJobs), costLoads = new Map<number, Promise<HumanStudyPreview>>();
+  // A study drawn from several answers is as stale and as old as its worst.
+  const costStudies = new Set(costJobs), costLoads = new Map<number, Promise<{ study: HumanStudyPreview; served?: ResultServed }>>();
   const costWork = Promise.all(costJobs.map(async job => {
     try {
       const days = job.options!.window!.days;
       let pending = costLoads.get(days);
       if (!pending) {
         pending = (async () => {
-          const ctx = await context(job);
+          const ctx = await context(job), answers: (ResultServed | undefined)[] = [];
           async function history(from: number, to: number): Promise<CostTimeBucket[]> {
             const query = apiCostTrendQuery(job.query.grouping!.source, from, to);
             const request = toQueryRequestV3(query, sourceExecutionSchema(ctx.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { rows: false });
-            const body = await fetchPreview<AggregationResult>("/api/query/usage/query-v3", signal, request);
+            const body = await fetchPreview<AggregationResult>("/api/query/usage/query-v3", signal, request, policy);
+            answers.push(servedOf(body));
             const facts = apiCostTrendFacts(body.metrics.find(metric => metric.id === "cost-history"));
             if (facts) return facts;
             // Partition only truncated timestamp reductions; exact half-open
@@ -423,12 +478,13 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
             if (middle <= from || middle >= to) throw new Error("API cost history exceeds the timestamp group limit.");
             return [...await history(from, middle), ...await history(middle, to)];
           }
-          return buildApiCostTrend(await history(clock.getTime() - Math.max(37, days) * 86400000, clock.getTime()), days, clock.getTime());
+          const study = buildApiCostTrend(await history(clock.getTime() - Math.max(37, days) * 86400000, clock.getTime()), days, clock.getTime());
+          return { study, served: combineServed(...answers) };
         })();
         costLoads.set(days, pending);
       }
-      const study = await pending;
-      if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? job.options!.recipe!.cover)?.height, state: study.value === undefined ? "empty" : "ready", total: study.value ?? 0, summary: study.sampleLabel, note: [job.options!.recipe!.note, study.detail].filter(Boolean).join(" · "), action: job.options!.recipe!.action, study });
+      const { study, served } = await pending;
+      if (!signal?.aborted) publish(job.id, { served, coverHeight: (job.options!.cover ?? job.options!.recipe!.cover)?.height, state: study.value === undefined ? "empty" : "ready", total: study.value ?? 0, summary: study.sampleLabel, note: [job.options!.recipe!.note, study.detail].filter(Boolean).join(" · "), action: job.options!.recipe!.action, study });
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const trendJobs = jobs.filter(job => !costStudies.has(job) && usesCardTrend(job) && !searchContext(job));
@@ -437,12 +493,15 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     try {
       const recipe = job.options!.recipe!, trend = recipe.trend!, lookback = trend.lookback ?? job.options!.window!.days;
       const source = trend.dataset ? { ...job, dataset: trend.dataset, schema: trendSchemas[trend.dataset] } : job, ctx = await context(source);
+      const answers: (ResultServed | undefined)[] = [];
       const results = await Promise.all(cardTrendQueries(recipe.where ?? [], trend, cardTrendDays(lookback, Boolean(trend.completeDays), clock.getTime()).days).map(async query => {
         const request = toQueryRequestV3(query, sourceExecutionSchema(ctx.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { rows: false });
-        return (await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/query-v3`, signal, request)).metrics;
+        const body = await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/query-v3`, signal, request, policy);
+        answers.push(servedOf(body));
+        return body.metrics;
       }));
       const { study, observations } = buildCardTrend(trend, lookback, results, clock.getTime()), ready = observations > 0 && Boolean(study.points?.some(point => point !== null));
-      if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study });
+      if (!signal?.aborted) publish(job.id, { served: combineServed(...answers), coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study });
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const resolved: { job: PreviewJob; query: QueryState; search: string }[] = [];
@@ -481,8 +540,9 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     const complete = () => {
       if (done || signal?.aborted || !visible || historyQuery && !history) return;
       try {
-        const preview = previewOf(item.job, item.query, visible.payload, visible.schema, historyQuery && history ? { query: historyQuery, payload: history.payload } : undefined);
-        done = true; publish(item.job.id, preview);
+        const preview = withAgentEventsFreshness(previewOf(item.job, item.query, visible.payload, visible.schema, historyQuery && history ? { query: historyQuery, payload: history.payload } : undefined), item.job.dataset, visible.payload);
+        const served = combineServed(visible.payload.served, history?.payload.served);
+        done = true; publish(item.job.id, served ? { ...preview, served } : preview);
       } catch (error) { fail(error); }
     };
     enqueue({ ...item, now, fail, accept: data => { visible = data; complete(); } });
@@ -520,8 +580,8 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
           request.hostState = query.hostState;
           if (query.grouping || request.rows || request.distinct) {
             const schema = query.grouping ? createGroupingModel(sourceExecutionSchema(item.job.schema, ctx.execution)).resultSchema(query.grouping.keys, query.grouping.summaries) : ctx.schema;
-            const result = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${item.job.dataset}/query-v3${item.search}`, signal, request);
-            validateQueryResultV3(result, request, schema);
+            const result = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${item.job.dataset}/query-v3${item.search}`, signal, request, policy);
+            validateQueryResultV3(result, asServed(request, result), schema);
             finish(item, result, schema);
           } else valid.push({ item, request });
         } catch (error) { item.fail(error); }
@@ -529,14 +589,14 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       if (!valid.length || signal?.aborted) return;
       const request = { ...valid[0].request, expectedRevisions: Object.assign({}, ...valid.map(({ request }) => request.expectedRevisions)), metrics: valid.flatMap(({ request }, i) => request.metrics.map((metric, j) => ({ ...metric, id: `preview:${i}:${j}` }))) };
       try {
-        const body = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${valid[0].item.job.dataset}/query-v3${valid[0].item.search}`, signal, request);
-        validateQueryResultV3(body, request, ctx.schema);
+        const body = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${valid[0].item.job.dataset}/query-v3${valid[0].item.search}`, signal, request, policy);
+        validateQueryResultV3(body, asServed(request, body), ctx.schema);
         valid.forEach(({ item, request }, i) => {
           const metrics = request.metrics.map((metric, j) => {
             const result = body.metrics.find(result => result.id === `preview:${i}:${j}`);
             return result ? { ...result, id: metric.id } : undefined;
           }).filter((result): result is AggregationResultEntry => Boolean(result));
-          finish(item, { ...body, metrics }, ctx.schema);
+          finish(item, { ...body, metrics, served: servedOf(body) }, ctx.schema);
         });
       } catch (error) {
         if (valid.length > 1 && error instanceof PreviewHTTPError && [400, 409, 422].includes(error.status)) {
@@ -548,8 +608,9 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   function finish(item: Item, payload: Payload, schema: FieldSchema) {
     if (signal?.aborted) return;
     if (cache.size >= 200) cache.delete(cache.keys().next().value!);
-    payload = { ...payload, now: payload.now ?? item.now };
-    cache.set(JSON.stringify([item.job.dataset, item.query, item.search]), { at: Date.now(), payload, schema });
+    payload = { ...payload, served: payload.served ?? servedOf(payload), now: payload.now ?? item.now };
+    // A stale answer is asked for again; holding it here would answer that.
+    if (payload.served?.state !== "stale") cache.set(JSON.stringify([item.job.dataset, item.query, item.search]), { at: Date.now(), payload, schema });
     item.accept({ at: Date.now(), payload, schema });
   }
   async function work() {

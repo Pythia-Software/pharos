@@ -38,9 +38,10 @@ func reflogMadeCommit(action string) bool {
 }
 
 // readGitSignals reads the signals for contested commits, each with the
-// sessions that could have made it. A signal that cannot be read is left
-// out, and the commit falls back to the edit windows.
-func readGitSignals(ctx context.Context, dir string, sessions map[string]*gitSession, contested map[string][]string) *gitSignals {
+// sessions that could have made it, reading each commit's diff from a clone
+// that has it. A signal that cannot be read is left out, and the commit
+// falls back to the edit windows.
+func readGitSignals(ctx context.Context, clones []*gitClone, sessions map[string]*gitSession, contested map[string][]string) *gitSignals {
 	signals := &gitSignals{MadeIn: map[string][]string{}, Added: map[string]map[string]lineSet{}}
 	if len(contested) == 0 {
 		return signals
@@ -83,11 +84,22 @@ func readGitSignals(ctx context.Context, dir string, sessions map[string]*gitSes
 		}
 	}
 
-	if output, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, []byte(strings.Join(hashes, "\n")+"\n"),
-		append([]string{"-c", "core.quotePath=false", "log", "--no-walk=unsorted", "--stdin", "-p", "--no-prefix", "--no-renames", "--no-color", "--format=%x1e%H"}, gitRawDiff...)...); err == nil {
-		for hash, files := range readAddedLines(string(output)) {
-			if wanted[hash] {
-				signals.Added[hash] = files
+	for _, clone := range clones {
+		held := []string{}
+		for _, hash := range hashes {
+			if clone.Has[hash] && signals.Added[hash] == nil {
+				held = append(held, hash)
+			}
+		}
+		if len(held) == 0 {
+			continue
+		}
+		if output, err := outcomeGitCommand(ctx, clone.Dir, outcomeGitLogTimeout, []byte(strings.Join(held, "\n")+"\n"),
+			append([]string{"-c", "core.quotePath=false", "log", "--no-walk=unsorted", "--stdin", "-p", "--no-prefix", "--no-renames", "--no-color", "--format=%x1e%H"}, gitRawDiff...)...); err == nil {
+			for hash, files := range readAddedLines(string(output)) {
+				if wanted[hash] {
+					signals.Added[hash] = files
+				}
 			}
 		}
 	}

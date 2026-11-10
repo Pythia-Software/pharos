@@ -72,9 +72,7 @@ func (c *Catalog) ensureMessageCount() error {
 
 // PricingHealth reports how much usage has a known price.
 func (c *Catalog) PricingHealth(ctx context.Context) (map[string]any, error) {
-	return cachedValue(ctx, c, "health:pricing", func(context.Context) (map[string]any, error) {
-		return c.pricingHealth(), nil
-	})
+	return cachedValue(ctx, c, "health:pricing", c.pricingHealthContext)
 }
 
 // UsageAttributionHealth compares root sessions with the retained request
@@ -106,7 +104,7 @@ func (c *Catalog) indexBytes() int64 {
 // the sections separately.
 func (c *Catalog) Health() map[string]any {
 	ctx := context.Background()
-	usage, _ := cachedValue(ctx, c, "health:token-usage", func(context.Context) ([]map[string]any, error) { return c.tokenUsageByModel(), nil })
+	usage, _ := cachedValue(ctx, c, "health:token-usage", c.tokenUsageByModelContext)
 	health := map[string]any{"freshness": c.Freshness(), "workspaces": int64(0), "messages": int64(0),
 		"index_bytes": c.indexBytes(), "token_usage": usage}
 	if counts, err := c.HealthCounts(ctx); err == nil {
@@ -118,7 +116,12 @@ func (c *Catalog) Health() map[string]any {
 }
 
 func (c *Catalog) tokenUsageByModel() []map[string]any {
-	rows, err := queryMaps(c.reader(), `WITH metric_totals AS (
+	rows, _ := c.tokenUsageByModelContext(context.Background())
+	return rows
+}
+
+func (c *Catalog) tokenUsageByModelContext(ctx context.Context) ([]map[string]any, error) {
+	rows, err := queryMapsContext(ctx, c.reader(), `WITH metric_totals AS (
 		SELECT workspace_id,conversation_id,
 			COALESCE(
 				MAX(CASE WHEN name='total_tokens' THEN value END),
@@ -167,7 +170,7 @@ func (c *Catalog) tokenUsageByModel() []map[string]any {
 	GROUP BY COALESCE(cx.provider,wi.service),COALESCE(NULLIF(TRIM(cx.model),''),wi.model,'Unknown model')
 	ORDER BY tokens DESC,service,model`)
 	if err != nil {
-		return []map[string]any{}
+		return []map[string]any{}, err
 	}
-	return rows
+	return rows, nil
 }

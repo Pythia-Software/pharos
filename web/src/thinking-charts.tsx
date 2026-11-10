@@ -745,10 +745,12 @@ export function ThinkingCDF({
   groups,
   action,
   title = "How long are the waits?",
+  groupBy = "model",
 }: {
   groups: ThinkingGroup[];
   action?: React.ReactNode;
   title?: string;
+  groupBy?: string;
 }) {
   return (
     <ThinkingFigure
@@ -792,7 +794,7 @@ export function ThinkingCDF({
                       (g.cdf ?? []).map(([a, b]) => [xs(a), y + h - b * h]),
                     )}
                     fill="none"
-                    stroke={chartSeriesStyle("model_family", g.label).color}
+                    stroke={thinkingStyle(g, groupBy).color}
                     strokeWidth="2"
                   >
                     <title>
@@ -808,7 +810,7 @@ export function ThinkingCDF({
                   <span
                     key={g.key}
                     style={{
-                      color: chartSeriesStyle("model_family", g.label).color,
+                      color: thinkingStyle(g, groupBy).color,
                     }}
                   >
                     ● {g.label}

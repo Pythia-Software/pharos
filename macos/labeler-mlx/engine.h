@@ -15,6 +15,8 @@ typedef struct {
     void (*close)(void* model);
 } pharos_mlx_api;
 const pharos_mlx_api* pharos_mlx_api_v1(void);
+// Optional capability symbol, independent of the stable inference ABI.
+int pharos_mlx_available_v1(void);
 #ifdef __cplusplus
 }
 #endif

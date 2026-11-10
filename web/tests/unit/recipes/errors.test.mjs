@@ -66,11 +66,11 @@ test("conversation boxes condition on errors, share tool cohorts, and filter sam
 });
 
 test("test signals remain independent of tool error status and edit paths preserve repository identity", () => {
-  const rows = [call("flag", {error_count: 0, status: "ok", test_failure: true}), call("error", {test_failure: false}), call("edit-a", {tool_category: "edit"}), call("edit-b", {tool_category: "edit", project_name: "other"}), call("unmapped", {tool_category: "edit", repo_path: null}), call("blank-path", {tool_category: "edit", repo_path: ""})];
+  const rows = [call("flag", {error_count: 0, status: "ok", test_failure: true}), call("error", {test_failure: false}), call("edit-a", {tool_category: "edit", path_repository: "repo"}), call("edit-b", {tool_category: "edit", path_repository: "other"}), call("unmapped", {tool_category: "edit", repo_path: null}), call("blank-path", {tool_category: "edit", repo_path: ""})];
   const tests = destination("test-failures", rows), edits = destination("edit-failures", rows);
   assert.equal(tests.length, 1);
   assert.equal(tests[0].card_count, 1, "a successful tool call can still contain a test-failure signal");
   assert.equal(edits.length, 2);
   assert.ok(edits.every(row => row.card_count === 1));
-  assert.deepEqual(edits.map(row => row.project_name).sort(), ["other", "repo"]);
+  assert.deepEqual(edits.map(row => row.path_repository).sort(), ["other", "repo"]);
 });

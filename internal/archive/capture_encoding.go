@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -472,7 +473,7 @@ func lockedLease(dir string) (string, *os.File, error) {
 		_ = os.RemoveAll(staged)
 		return "", nil, err
 	}
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err = lockReaderLease(lock, filelock.Exclusive, filelock.Try); err != nil {
 		lock.Close()
 		_ = os.RemoveAll(staged)
 		return "", nil, err
@@ -541,7 +542,8 @@ func sweepAbandonedLeases(root string) {
 				if err != nil {
 					continue
 				}
-				if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+				// Contention or an unknown failure keeps the lease.
+				if probeReaderLease(lock, filelock.Exclusive, filelock.Try) == nil {
 					_ = os.RemoveAll(lease)
 				}
 				lock.Close()
