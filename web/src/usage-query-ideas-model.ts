@@ -156,7 +156,7 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("agent_event_messages", "sources", "Compare", "Replies and thinking", "Compare events per message in visible replies and thinking", ["source"], agentEventMessages),
   ],
   branch_usage: [
-    idea("branch_usage", "branches", "Compare", "By branch", "Compare spend and sessions across branches", ["branch"], branchSpend),
+    idea("branch_usage", "branches", "Compare", "By branch", "Compare spend and sessions across branches, each within its project", ["project_branch"], branchSpend),
     idea("branch_usage", "coverage", "Compare", "Coverage", "How much spend has a recorded branch, an unknown one, or no branch data", ["coverage"], branchSpend),
     idea("branch_usage", "repos", "Compare", "By project and branch", "Compare spend across each project's branches", ["project_name", "branch"], branchSpend),
   ],

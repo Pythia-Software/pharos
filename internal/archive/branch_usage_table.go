@@ -71,9 +71,14 @@ func (c *Catalog) branchUsageRows(ctx context.Context) ([]map[string]any, error)
 			if row == nil {
 				row = map[string]any{"id": stableID("branch-usage", key.workspace, key.branch, key.coverage, key.source, key.model, key.hour),
 					"workspace_id": key.workspace, "title": entry["title"], "source_kind": entry["source_kind"], "project_name": entry["project_name"],
-					"branch": nilIfEmpty(key.branch), "coverage": key.coverage, "branch_source": nilIfEmpty(key.source),
+					"branch": nilIfEmpty(key.branch), "project_branch": nil, "coverage": key.coverage, "branch_source": nilIfEmpty(key.source),
 					"provider": nilIfEmpty(firstString(entry["provider"])), "model": key.model, "model_family": nilIfEmpty(modelFamily(key.model)),
 					"day": day, "usage_at": key.hour, "cost_usd": nil, "tokens": int64(0), "price_status": ""}
+				// Branch names repeat across projects (main, say): a branch is
+				// counted and compared within its project.
+				if key.branch != "" {
+					row["project_branch"] = firstString(entry["project_name"]) + " · " + key.branch
+				}
 				rows[key] = row
 			}
 			row["cost_usd"] = addCost(row["cost_usd"], cost)

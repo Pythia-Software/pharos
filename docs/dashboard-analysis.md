@@ -1107,8 +1107,10 @@ around it. Its default view is the one it always opened on.
 - **Spend by Branch** (`branch-analysis-catalog.ts`). Cost, tokens and
   distinct sessions, by branch, coverage, project, provider, model, harness
   and whether the branch was recorded per turn or per session. Branch and
-  how it was recorded imply the population "on a branch". The summary row
-  is the coverage split. A library with no usage in a repository shows a
+  how it was recorded imply the population "on a branch". It opens on
+  spend by project and branch, so `main` in each repository is its own
+  bar. The summary row is the coverage split and the count of branches,
+  each within its project. A library with no usage in a repository shows a
   note instead of the views. See
   [spend by branch](projects-and-outcomes.md#spend-by-branch).
 

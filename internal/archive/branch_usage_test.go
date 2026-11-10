@@ -93,6 +93,13 @@ func TestBranchUsageRows(t *testing.T) {
 		if session == "s-notes-usage" {
 			t.Fatalf("a folder session has spend by branch: %#v", row)
 		}
+		// A branch is named within its project; main in ten repositories is ten.
+		if want := "app · " + firstString(row["branch"]); row["branch"] != nil && row["project_branch"] != want {
+			t.Fatalf("project and branch %v, want %q", row["project_branch"], want)
+		}
+		if row["branch"] == nil && row["project_branch"] != nil {
+			t.Fatalf("a row without a branch has one in its project: %#v", row)
+		}
 		hour := strings.TrimPrefix(firstString(row["usage_at"]), "2026-09-02T")
 		tokens[fmt.Sprintf("%s %v %v %v %s", session, row["branch"], row["coverage"], row["branch_source"], hour)] += integer(row["tokens"])
 	}

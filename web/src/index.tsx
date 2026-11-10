@@ -135,7 +135,7 @@ import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
-import { branchAnalysisCatalog, branchCoverage, branchUsageDisplay } from "./branch-analysis-catalog";
+import { branchAnalysisCatalog, branchCoverage, branchSummaryMetrics, branchUsageDisplay } from "./branch-analysis-catalog";
 import { outcomeCatalogFor, outcomeCostText, outcomeGroupLabel, outcomeKeptCostCell, outcomeRatioRows, outcomeTierCoverage, outcomeTiersReached, outcomesAnalysisCatalog } from "./outcomes-analysis-catalog";
 import { agentEventFixLinks, agentEventRatesCatalog } from "./agent-event-rates-catalog";
 import { agentEventReadWhere } from "./agent-event-rates-model";
@@ -1545,10 +1545,6 @@ function OutcomesDashboard() {
 // Spend by Branch: priced usage of sessions in Git repositories, per branch,
 // turn by turn (branch_usage). Its summary is the coverage split. A library
 // with no session in a repository has nothing to split and says so.
-const branchSummaryMetrics: AggregationClause[] = [
-  { id: "cost", op: "sum", field: "cost_usd", groupBy: ["coverage"] },
-  { id: "branches", op: "count_distinct", field: "branch", groupBy: [] },
-];
 const branchPresenceMetrics: AggregationClause[] = [{ id: "rows", op: "count", groupBy: [] }];
 function BranchesSummary({ where }: { where: WhereTerm[] }) {
   const result = useMetrics("branch_usage", where, branchSummaryMetrics);
@@ -1557,7 +1553,7 @@ function BranchesSummary({ where }: { where: WhereTerm[] }) {
   const detail: Record<string, string> = { on_branch: "on a recorded branch", unknown: "before a session's first branch, or on a detached HEAD", no_branch_data: "in sessions that recorded no branch" };
   return <div className="mcp-metrics dashboard-stats" aria-label="Spend by branch coverage" aria-busy={result.loading}>
     {coverage.map(item => card(item.label, formatUSD(item.cost), `${outcomePercent(item.share)} of spend ${detail[item.coverage]}`))}
-    {card("Branches", (Number(metricBuckets(result, "branches")[0]?.value) || 0).toLocaleString(), "with recorded spend")}
+    {card("Branches", (Number(metricBuckets(result, "branches")[0]?.value) || 0).toLocaleString(), "with recorded spend, counted per project")}
   </div>;
 }
 function BranchesDashboard() {

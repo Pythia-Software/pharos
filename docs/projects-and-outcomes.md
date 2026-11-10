@@ -472,6 +472,10 @@ each branch. It follows CodeBurn's by-branch lens (see References).
 - **Mirrors count once.** A Conductor workspace that mirrors a Claude Code
   session carries the same usage. As in Tokens and Cost, only the native
   session counts, with its per-turn branches.
+- **Branches are per project.** The default view compares spend by project
+  and branch (`project_branch`), and the Branches count counts each
+  project's branches, so `main` in ten repositories is ten branches. The
+  "Branch name" breakdown adds same-named branches together.
 - **Coverage split.** It sums to the repository sessions' whole spend:
 
   | Coverage | Meaning |

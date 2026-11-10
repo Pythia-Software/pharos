@@ -34,8 +34,9 @@ export const dashboardDefaults: Record<string, AnalysisState> = {
   session_shape: { metric: "sessions", split: "length_band", period: "day" },
   // Spend by outcome over time: sessions are sparser than usage, so weeks.
   outcomes: { metric: "cost", split: "outcome_label", period: "week" },
-  // The branches that took the most spend, compared.
-  branches: { view: "compare", metric: "cost", split: "branch" },
+  // The branches that took the most spend, compared, each within its
+  // project: main in ten repositories is ten branches.
+  branches: { view: "compare", metric: "cost", split: "project_branch" },
 } satisfies Record<keyof typeof engineUsageTopics, AnalysisState>;
 
 // The view settings each dashboard drew without a value before version 3,
