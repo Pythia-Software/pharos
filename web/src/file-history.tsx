@@ -526,10 +526,12 @@ function ChangesPage({ project, path, offset, last, onMore }: { project: string;
   if (!loaded) return <Loading />;
   if (loaded.error) return <Failure error={loaded.error} />;
   const value = loaded.value!;
-  if (!value.changes.length && !offset) return <p className="muted">{value.note ?? "No session edited this file with an edit tool. Sessions that changed it another way (a script, a generator) show in its history, through the commits."}</p>;
+  if (value.choices) return <Choices choices={value.choices} target={{ file: path, view: "changes" }} />;
+  const changes = value.changes ?? [];
+  if (!changes.length && !offset) return <p className="muted">{value.note ?? "No session edited this file with an edit tool. Sessions that changed it another way (a script, a generator) show in its history, through the commits."}</p>;
   return <>
     {offset ? null : <p className="muted files-summary">Each edit as the session's call made it, read from its transcript. Replacements do not know the file's line numbers.</p>}
-    {value.changes.map((change, index) => <article key={`${offset}-${index}`} className="files-change">
+    {changes.map((change, index) => <article key={`${offset}-${index}`} className="files-change">
       <div className="files-change-head">
         <PageLink href={change.session_url} className="files-change-session">{change.title || change.workspace_id}</PageLink>
         <span className="muted">{changeText(change)}</span>

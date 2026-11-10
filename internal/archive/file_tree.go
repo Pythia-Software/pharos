@@ -121,6 +121,10 @@ func folderProject(folder string) fileProject {
 // repository's name or remote, or a folder project's key or path.
 func (projects *fileProjects) resolve(ctx context.Context, value string) ([]fileProject, error) {
 	value = strings.TrimSpace(value)
+	if value == "" {
+		// An empty name would match every repository without a remote.
+		return nil, fmt.Errorf("a project is required; list_projects names them")
+	}
 	if id, ok := strings.CutPrefix(value, "repository:"); ok {
 		var found int
 		if err := projects.catalog.reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM repositories WHERE id=?`, id).Scan(&found); err != nil || found == 0 {

@@ -293,7 +293,7 @@ export type FileChange = {
   lines_added?: number | null; lines_removed?: number | null; url: string; session_url: string;
   kind: string; hunks: { header?: string; lines: [string, string][] }[]; truncated?: boolean; note?: string;
 };
-export type FileChanges = { project?: FileProject; choices?: FileProject[]; path: string; changes: FileChange[]; more?: boolean; offset?: number; note?: string };
+export type FileChanges = { project?: FileProject; choices?: FileProject[]; path: string; changes?: FileChange[]; more?: boolean; offset?: number; note?: string };
 export type FileFind = { project?: FileProject; choices?: FileProject[]; files: { path: string; in_tree: boolean; url: string }[]; more?: boolean };
 
 // checkoutText says where Git views read from, or why they cannot yet.

@@ -251,6 +251,9 @@ func TestFileHistoryWithGit(t *testing.T) {
 		len(detail["sessions"].([]map[string]any)) != 1 || detail["sessions"].([]map[string]any)[0]["workspace_id"] != "second" {
 		t.Fatalf("commit: %#v", commit)
 	}
+	if none, err := f.catalog.FileCommit(t.Context(), FileCommitOptions{Commit: second[:7]}); err == nil {
+		t.Fatalf("an empty project chose a repository without a remote: %#v", none)
+	}
 	if missing, err := f.catalog.FileCommit(t.Context(), FileCommitOptions{Project: "app", Commit: "abcdef0"}); err != nil || missing["commit"] != nil || missing["note"] == nil {
 		t.Fatalf("an unread commit: %#v %v", missing, err)
 	}
@@ -319,6 +322,9 @@ func TestFileHistoryWithoutGit(t *testing.T) {
 	f.write("drafter", plan, 20, code("plan", 0, 6))
 	f.edit("editor", plan, "", "", 10, code("plan", 0, 2), code("plan", 100, 4))
 	execTx(t, f.catalog.DB, `UPDATE workspaces SET project_folder='`+folderKey(folder)+`' WHERE id IN ('drafter','editor')`)
+	// A session in no project edits a file of no project.
+	f.session("loose", "claude")
+	f.write("loose", filepath.Join(t.TempDir(), "loose.md"), 5, code("loose", 0, 2))
 	f.refresh()
 
 	for _, path := range []string{plan, folderKey(plan), "plan.md", "notes/plan.md"} {
@@ -366,6 +372,20 @@ func TestFileHistoryWithoutGit(t *testing.T) {
 	}
 	if _, err := f.catalog.FileCommit(t.Context(), FileCommitOptions{Project: folderKey(folder), Commit: "abcdef0"}); err == nil {
 		t.Fatal("a folder has no commits")
+	}
+	// A file of no project links by its path, and its page's changes are
+	// its own edits; an empty project names none.
+	loose, err := f.catalog.WorkFiles(t.Context(), "loose")
+	if err != nil || len(loose["files"].([]map[string]any)) != 1 || loose["files"].([]map[string]any)[0]["project_ref"] != nil {
+		t.Fatalf("a file of no project: %#v %v", loose, err)
+	}
+	loosePath := firstString(loose["files"].([]map[string]any)[0]["path"])
+	if changes, err := f.catalog.FileChanges(t.Context(), FileChangesOptions{Path: loosePath}); err != nil || len(changes["changes"].([]map[string]any)) != 1 ||
+		changes["changes"].([]map[string]any)[0]["workspace_id"] != "loose" {
+		t.Fatalf("a file of no project's changes: %#v %v", changes, err)
+	}
+	if _, err := f.catalog.FileFind(t.Context(), "", "plan"); err == nil {
+		t.Fatal("an empty project should name none")
 	}
 	// Library file search finds the file the sessions edited, each at the
 	// conversation of its first edit, and names its project.
