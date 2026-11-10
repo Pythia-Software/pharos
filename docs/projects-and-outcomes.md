@@ -685,7 +685,9 @@ them; then the commits each pipeline links were counted.
   session's in that repository (a cherry-pick, a script, or a `cd` into a
   checkout Pharos files under another repository); 32 just outside a
   command's window (13 within a minute, 9 within an hour). A printed hash
-  links all of them.
+  links all of them. Without it, edit inference linked some of them
+  instead, mostly wrongly: those are the table's edit-inference rows, 10
+  right and 22 wrong at counted confidence and 5 wrong candidates.
 - **Coverage.** Of the non-merge commits made while the copy's sessions
   were active, leaving out GitHub's squash merges:
 
