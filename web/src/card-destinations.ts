@@ -21,13 +21,16 @@ const daily: DailyChart = { period: "day", rollingPeriods: 0, display: "interval
 const tokens = (metric: string, split: string, extra: Partial<AnalysisState> = {}): CardDashboard => ({
   topic: "tokens", chart: { ...daily, v: analysisVersion, metric, split, hours: 6, days: 3, selection: { values: [], excluded: false }, ...extra },
 });
-const engine = (topic: UsageTopic, view: AnalysisState["view"]) => (metric: string, split: string, extra: Partial<AnalysisState> = {}): CardDashboard => ({
-  // Card charts were linear before the engine; their states say so, since
-  // a trend without a scale draws the linear + log split.
-  topic, chart: { v: analysisVersion, view, metric, split, period: "day", scale: "linear", nonzero: false, ...extra },
+// Card charts were linear before the engine; their states say so, since
+// a trend without a scale draws the linear + log split. A chart that holds
+// a view setting chose it, so a dashboard whose default view follows its
+// data (Session Shape) is opened without one.
+const linear = { scale: "linear", nonzero: false } as const;
+const engine = (topic: UsageTopic, view: AnalysisState["view"], pinned: Partial<AnalysisState> = linear) => (metric: string, split: string, extra: Partial<AnalysisState> = {}): CardDashboard => ({
+  topic, chart: { v: analysisVersion, view, metric, split, period: "day", ...pinned, ...extra },
 });
 const scatter = (metric: string, metricY: string, unit = "conversation", split = "none"): CardDashboard => ({ topic: "scatter", chart: { v: analysisVersion, view: "scatter", metric, metricY, unit, split, scale: "logarithmic", scaleY: "logarithmic" } });
-const sessions = engine("session_shape", "compare");
+const sessions = engine("session_shape", "compare", {});
 const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = engine("skills", "trend"), human = engine("human", "trend"), carbon = engine("carbon", "compare"), parallel = engine("parallelism", "trend");
 // A card's trailing window with whole days and a mean reference level (buildCardTrend).
 const trailing = { rollingPeriods: 7, completePeriods: true, percentiles: ["mean"] as PercentileLevel[] };

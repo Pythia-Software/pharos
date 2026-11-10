@@ -3,7 +3,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { createPortal } from "react-dom";
 import { chartPeriods, isHourly, nextPeriod, periodKey, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { chartRanges, rangeStart, rangeInputValue, parseRangeInput, rangeHasTime, withTimeRange, type ChartRange, type FilterChange, type RangeChange, type TimeBounds, type TimeFields } from "./chart-range";
-import { defaultChartScale, type ChartScale } from "./chart-scale";
+import { defaultChartScale, type AxisUnit, type ChartScale } from "./chart-scale";
 import { cumulativeBuckets, legendGroups, legendGroupSeries, rollingAverageBuckets, timelineGeometry, timelinePath, validRollingPeriods, type ChartBucket, type ChartDisplay, type ChartSeries, type LegendGroup } from "./chart-series";
 import { ColumnMarks } from "./column-marks";
 import { ChartLegendChip } from "./chart-legend-chip";
@@ -14,6 +14,7 @@ import { chartGesture, chartInspectionRange, type ChartInspectionRange } from ".
 import { ChartPopover, ChartPopoverRow } from "./chart-popover";
 import { DashboardSelect } from "./dashboard-select";
 import { SearchHelp } from "./search-help";
+import { ViewDisclosure } from "./view-disclosure";
 import { DashboardLoading } from "./card-loading";
 
 export { chartSpan, smoothingWhere, timeBounds, usageTime, withTimeRange, writingTime, type ChartRange, type FilterChange, type TimeBounds, type TimeFields } from "./chart-range";
@@ -174,6 +175,27 @@ export function ChartSelect<T extends string>({ label, ariaLabel = label, value,
   </label>;
 }
 
+// A dashboard's controls: Data, then View. Data chooses what the chart holds:
+// the analysis, measure, groups, records and periods. View chooses how the
+// same groups, records and periods are drawn: chart form, shares, scale,
+// smoothing and reference levels. The chart draws sensible defaults, so View
+// is a disclosure at the end of the controls, closed unless the reader opens
+// it (the URL keeps it open), and left out when none of its controls apply. A
+// fragment's children are counted, so a fragment of nulls is no section.
+// onReset, where the reader has chosen a view setting, returns them all to
+// the chart's defaults; the closed summary says so.
+export function ControlSections({ data, view, onReset }: { data: React.ReactNode; view?: React.ReactNode; onReset?: () => void }) {
+  const shown = (node: React.ReactNode) => React.Children.toArray(React.isValidElement(node) && node.type === React.Fragment ? (node.props as { children?: React.ReactNode }).children : node).length > 0;
+  return <>
+    {data}
+    {shown(view) ? <ViewDisclosure viewKey="dashboard:view" className="dashboard-controls-view" summaryTarget="control:chart:view"
+      summary={<><span className="dashboard-controls-heading">View</span>{onReset ? <span className="dashboard-controls-changed">changed</span> : null}</>}>
+      <div className="dashboard-controls-view-body" role="group" aria-label="View">{view}
+        {onReset ? <button type="button" className="usage-preset-clear dashboard-controls-reset" title="Draw this chart as its data suggests" onClick={onReset}>Reset view</button> : null}</div>
+    </ViewDisclosure> : null}
+  </>;
+}
+
 // A control's caveat sits in an info circle beside its label.
 function ControlNote({ label, children }: { label: string; children: React.ReactNode }) {
   return <span className="usage-chart-control-note"><SearchHelp label={label}>{children}</SearchHelp></span>;
@@ -252,9 +274,9 @@ export function RollingControl({ value, period, count = 1, onChange, disabled, n
 // lines with no total, and a reference value draws a labelled level line.
 // Without zeroes (nonzero), prepared buckets hold no zero values, and lines
 // pass over a series' missing points.
-export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, allHidden = false, percent = false, prepared = false, lines = false, bars: forceBars = false, additive = true, nonzero = false, rolling = "average", references = [], action, titleSlot, onSelect, onSelectGroup, onExpand, onRange, seriesHref }: {
+export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, allHidden = false, percent = false, prepared = false, lines = false, bars: forceBars = false, additive = true, nonzero = false, rolling = "average", references = [], axisUnit, action, titleSlot, onSelect, onSelectGroup, onExpand, onRange, seriesHref }: {
   title: string; controls: React.ReactNode; action?: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
-  format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
+  format: (value: number) => string; tickFormat?: (value: number) => string; axisUnit?: AxisUnit; noun: string; loading: boolean; error: string; legend?: boolean;
   selected?: string[]; excluded?: boolean; allHidden?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onSelectGroup?: (keys: string[], action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
   prepared?: boolean; lines?: boolean; bars?: boolean; additive?: boolean; nonzero?: boolean; rolling?: "average" | "sum" | "pooled"; references?: Array<{ value: number; label: string; level?: string }>;
   seriesHref?: (range: ChartInspectionRange, series: ChartSeries) => string | undefined;
@@ -286,7 +308,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   }) : averagedBuckets;
   const total = (bucket: ChartBucket) => drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
   const grouped = forceBars && (!additive || scale === "logarithmic" && !percent);
-  const geometry = timelineGeometry(buckets, drawn, { scale, lines: cumulative || lines, bars: forceBars, grouped, percent, reference: references.length ? Math.max(...references.map(item => item.value)) : 0 });
+  const geometry = timelineGeometry(buckets, drawn, { scale, lines: cumulative || lines, bars: forceBars, grouped, percent, unit: axisUnit, reference: references.length ? Math.max(...references.map(item => item.value)) : 0 });
   const lineChart = geometry.lines;
   const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : geometry;
   const unit = periodUnit(period, periodCount), stacked = drawn.length > 1 && additive;

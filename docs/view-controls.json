@@ -4695,15 +4695,6 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "5db087ced6991612:0",
-      "file": "web/src/dashboard-analysis.tsx",
-      "owner": "AnalysisControls",
-      "tag": "ChartSelect",
-      "control": "value={view.unit} onChange={next => set(catalog.dataset === \"scatter\" ? normalizeAnalysis(catalog, { ...view, unit: next }) : { unit: next })}",
-      "contract": "dashboard",
-      "reason": "The shared dashboard state writes committed point and axis choices into analyze_chart, restored by useUsageDashboardState. Metric suggestions filter by point type."
-    },
-    {
       "key": "5f05fa83a56ab3a5:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",
@@ -4828,6 +4819,15 @@
       "control": "value={view.scale!} onChange={scale => set({ scale })}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+    },
+    {
+      "key": "f7ca9a4ce5da25a0:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "AnalysisControls",
+      "tag": "ChartSelect",
+      "control": "value={view.unit} onChange={next => set(catalog.dataset === \"scatter\" ? scatterUnitChange(catalog, asked, next) : { unit: next })}",
+      "contract": "dashboard",
+      "reason": "The shared dashboard state writes committed point and axis choices into analyze_chart, restored by useUsageDashboardState. Metric suggestions filter by point type."
     },
     {
       "key": "4725800412da7d36:0",
@@ -8947,6 +8947,26 @@
       "control": "aria-label={ariaLabel} value={value} onChange={event => onChange(event.target.value as T)}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+    },
+    {
+      "key": "2a1942d91e55682a:0",
+      "file": "web/src/usage-chart.tsx",
+      "owner": "ControlSections",
+      "tag": "button",
+      "control": "onClick={onReset}",
+      "contract": "dashboard",
+      "reason": "Reset view unsets every view setting in analyze_chart (clearView), so the chart is drawn with its defaults; analyze_chart carries what remains."
+    },
+    {
+      "key": "49b695dda1960388:0",
+      "file": "web/src/usage-chart.tsx",
+      "owner": "ControlSections",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"dashboard:view\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "6dc6679bcdf3c20d:0",

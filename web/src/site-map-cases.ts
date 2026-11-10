@@ -1,7 +1,7 @@
 import { decodeQueryStrict, encodeQuery, EMPTY_QUERY, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
 import { topicChartKeys, chartVerdict, canonicalChart, judgeChart, readChart, viewChart, cardURL, compact, dashboardURL, dashboardWindows, datasetURL, enumerateView, siteSchemas, type SiteMap, type Verdict } from "./site-map";
-import { isTrendView, normalizeAnalysis, switchView, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { analysisVersion, isTrendView, normalizeAnalysis, switchView, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { analyzeQueryDatasets, usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { rollingWindowDays, type QueryDataset } from "./query-links";
 import { cardLibraryParams } from "./card-library-model";
@@ -90,9 +90,12 @@ function chartCases(map: SiteMap): ChartCase[] {
         const item: ChartCase = { topic, view, partial: true, chart, verdict: chartVerdict(topic, chart) };
         cases.push(item.verdict === "valid" && "view" in chart && partialLinks++ < 1 ? linked(item) : item);
       }
+      // A version 2 chart opens as an older link (coercible).
+      const older = { ...canonicalChart(info.defaults), v: 2 };
+      cases.push({ topic, view, chart: older, verdict: chartVerdict(topic, older) });
       // Charts the page rejects: an unknown or ill-typed value per option.
       const invalid: Record<string, unknown>[] = [
-        { v: 3 }, { metric: "no_such_measure" }, { split: "no_such_breakdown" }, { scale: "huge" }, { selection: { values: [1], excluded: false } },
+        { v: analysisVersion + 1 }, { metric: "no_such_measure" }, { split: "no_such_breakdown" }, { scale: "huge" }, { selection: { values: [1], excluded: false } },
         ...isTrendView(view) ? [{ period: "fortnight" }, { hours: 0 }, { rollingPeriods: -1 }, { normPeriods: 1001 }, { share: "yes" }]
           : [{ unit: "no_such_unit" }, { minSamples: -1 }, { reduce: "sum" }, { compareAs: "pie" }, { cycle: "month" }, { metricY: "no_such_measure" }],
       ];
@@ -109,7 +112,8 @@ function chartCases(map: SiteMap): ChartCase[] {
     const catalog = analysisCatalogs[topic]!, merge = facts.merge_defaults as Record<string, unknown>;
     for (const [from, info] of Object.entries(facts.views)) for (const to of Object.keys(facts.views)) {
       const current = { ...merge, ...info.defaults } as AnalysisState;
-      const chart = { ...current, ...switchView(catalog, current, to as AnalysisView) } as Record<string, unknown>;
+      // As the URL holds it: a setting the switch unset (clearView) is left out.
+      const chart = JSON.parse(json({ ...current, ...switchView(catalog, current, to as AnalysisView) })) as Record<string, unknown>;
       cases.push({ topic, view: to, written: `switchView ${from} to ${to}`, chart, verdict: chartVerdict(topic, chart) });
     }
     // (Habits section cards carry the page's selectors, not a chart.)
