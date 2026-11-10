@@ -94,6 +94,8 @@
    "habits_punchcard_days": {"param":"habits_punchcard_days","pages":["analyze/habits","analyze/query/rhythm"],"kind":"enum","description":"Days the Habits punchcard and automation table cover, through today, or all for every day captured.","values":["7","30","90","365","all"],"default":"90"},
    "habits_shape_days": {"param":"habits_shape_days","pages":["analyze/habits","analyze/query/rhythm"],"kind":"enum","description":"Number of recent days shown in the Habits Your days chart.","values":["7","14","28","56","90"],"default":"28"},
    "habits_day": {"param":"habits_day","pages":["analyze/habits","analyze/query/rhythm"],"kind":"text","description":"The calendar day selected on the Habits page (YYYY-MM-DD): its details, and the control that marks it as a vacation day."},
+   "file_history_path": {"param":"file","pages":["files"],"kind":"text","description":"File History: the file whose workspaces and commits to show. A repository-relative path (src/main.go), a folder path (~/notes/plan.md) or an absolute path; when no path matches exactly, a path ending matches in every project."},
+   "file_history_project": {"param":"file_project","pages":["files"],"kind":"text","description":"File History: only the file in this project (a list_projects name), when several projects hold the path."},
    "record_keyword": {"param":"record_{dataset}","pages":["analyze/query/*"],"kind":"json","description":"Record keyword clause: {field:<text field ID>,draft:<TextSearchDraft>}.","details":{"field":"Source text field ID from the dataset columns","draft":{"template":{"editor":"visual","match":"rules","root":{"id":"group-1","kind":"group","join":"all","children":[],"exclude":false},"text":"","mode":"advanced","scope":{"surface":"prose","roles":[],"kinds":[],"repository":"","provider":"","source":"","from":"","to":"","conversation_id":"","workspace_id":""},"fuzzy":false,"caseSensitive":false,"separators":false},"rule_template":{"id":"rule-1","kind":"words","text":"","other":"","distance":"8","exclude":false},"rule_kinds":["words","anyWords","phrase","prefix","near","pre"],"editor":["visual","syntax"],"match":["rules","literal","regex"],"mode":["advanced","terms","phrase","literal","regex"],"groups":"{id,kind:group,join:all|any,exclude:boolean,children:(rule|group)[]}; root is not excluded. At most 32 conditions, depth 4.","dates":"scope.from/to are ISO bounds or dates. For last N days retain dateWindow:{duration:7d,from:<same bound as scope.from>} and an empty scope.to. Today also retains to. Omit dateWindow for fixed custom dates.","literal_example":{"editor":"visual","match":"literal","root":{"id":"group-1","kind":"group","join":"all","children":[],"exclude":false},"text":"failure","mode":"advanced","scope":{"surface":"prose","roles":[],"kinds":[],"repository":"","provider":"","source":"","from":"","to":"","conversation_id":"","workspace_id":""},"fuzzy":false,"caseSensitive":false,"separators":false}},"note":"Record keywords do not support fuzzy matching or message scope filters."}},
    "sync_operations": {"param":"q_sync_operations","pages":["settings/sync"],"kind":"text","description":"Native Query Table definition for sync_operations: filters, sorting, columns, grouping, metrics and pagination over the retained snapshot."},
    "sync_history": {"param":"q_sync_history","pages":["settings/sync"],"kind":"text","description":"Native Query Table definition for sync_history: filters, sorting, columns, grouping, metrics and pagination over the retained snapshot."},
@@ -139,7 +141,7 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 960
+   "controls": 963
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],
@@ -205,6 +207,7 @@
    "analyze/query/agent_events": ["section:analyze","section:queryTableUsage"],
    "analyze/query/agent_event_messages": ["section:analyze","section:queryTableUsage"],
    "analyze/query/agent_event_rates": ["section:analyze","section:queryTableUsage"],
+   "files": ["section:fileHistoryPage","section:files"],
    "ask": ["section:ask","section:askPage"]
   }
  },
@@ -729,6 +732,12 @@
    "description": "Bounds that rank quiet fixes lower and hide stale or rare ones, how Fixes and Risky actions divide agent events, and refresh.",
    "route": "/findings",
    "fixed": {"optimize_area":"fixes","view":"settings"}
+  },
+  "files": {
+   "path": "files",
+   "title": "File history",
+   "description": "File history: every workspace whose agents edited a file, with its lines and outcome and a link to its edit, and in a Git repository the commits that changed the file. Set file (and file_project).",
+   "route": "/files"
   },
   "ask": {
    "path": "ask",
