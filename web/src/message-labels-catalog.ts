@@ -23,5 +23,4 @@ export const messageLabelsCatalog:AnalysisCatalog={
  periods:{day:"day",week:"week",month:"month"},timestamp:'occurred_at',trend:{metric:'messages',split:'family',allSeries:true},scatter:['messages','labels'],
  // Each family's share of the labelled messages over time, unless the View
  // controls ask for values.
- defaultView:{share:true},
 };

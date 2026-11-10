@@ -1,7 +1,6 @@
 import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 import { tokenTypes } from "./token-chart-request";
-import { dailyView } from "./dashboard-analysis-model";
 
 // Tokens and Cost over the usage ledger. One record is one agent session's
 // usage of one model and effort on one recorded day.
@@ -84,5 +83,5 @@ export const tokenAnalysisCatalog: AnalysisCatalog = {
   // The Usage chart's percentage metrics are a measure shown as shares.
   legacySlices: true,
   legacy: state => state.metric === "percent" || state.metric === "percent_cost" ? { ...state, metric: state.metric === "percent" ? "tokens" : "cost", share: true } : state,
-  scatter: ["tokens", "cost"], defaultView: dailyView,
+  scatter: ["tokens", "cost"],
 };

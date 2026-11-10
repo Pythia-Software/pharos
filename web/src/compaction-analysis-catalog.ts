@@ -1,6 +1,5 @@
 import type { AnalysisCatalog } from "./dashboard-analysis-model";
 import { originLabel } from "./origin-dimensions";
-import { dailyView } from "./dashboard-analysis-model";
 
 // One boundary is one observation, even without a following model request.
 export const compactionAnalysisCatalog: AnalysisCatalog = {
@@ -31,6 +30,6 @@ export const compactionAnalysisCatalog: AnalysisCatalog = {
   },
   units: {}, periods: { day: "day", week: "week", month: "month" }, timestamp: "occurred_at",
   cycle: { hour: { kind: "timestamp", field: "occurred_at" }, weekday: { kind: "timestamp", field: "occurred_at" } },
-  trend: { metric: "compactions", split: "trigger" }, scatter: ["compactions", "conversations"], defaultView: dailyView,
+  trend: { metric: "compactions", split: "trigger" }, scatter: ["compactions", "conversations"],
   views: ["trend", "trend_line", "trend_bar", "compare", "cycle"],
 };

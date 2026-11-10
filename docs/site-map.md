@@ -253,7 +253,7 @@ with. `absent` and `fallback` are the markers the rules use.
 | `domains` | For each non-numeric key, the values the page accepts |
 | `numeric` | Integer ranges (`min`, optional `max`, `integer`) and the legend selection's `max_values` |
 | `rules` | How the page draws each option of the merged chart, in order |
-| `kept` | Only for a catalog whose default view depends on the data asked for (a `defaultView` function: Session Shape). Its view settings (`display`, `share`, `nonzero`, `scale`, `scaleY`, `compareAs`) are not among `keys` and no rule fills or checks them, since no one value fills a missing one; a chart may hold them as the reader chose them, and Go keeps them where it writes (`viewChart`) and accepts them as options |
+| `kept` | Every dashboard's default view depends on the data asked for ([Default views](dashboard-analysis.md#default-views)). Its view settings (`display`, `share`, `nonzero`, `scale`, `scaleY`, `compareAs`) are not among `keys` and no rule fills or checks them, since no one value fills a missing one; a chart may hold them as the reader chose them, and Go keeps them where it writes (`viewChart`) and accepts them as options |
 | `chosen_display` | For the same catalogs: the display the page draws by default, walked by `given` (`metric`, `split`); a chart's own `display` is drawn instead |
 
 #### Valid combinations
@@ -336,7 +336,9 @@ implementation:
      percentile). The constraints say which levels each context draws: none
      with shares or a cumulative display, or for a measure without a total
      across groups unless the legend selects one group (`single_selection`);
-     no mean on a heatmap.
+     no mean on a heatmap. Since shares and the display are left to the
+     page, the level rule reads them jointly with the measure and breakdown,
+     and the generator checks it with each of them chosen.
 5. **Valid or coercible.** The chart is valid if every key it names among the
    view's `keys` is drawn as given, and coercible otherwise.
 

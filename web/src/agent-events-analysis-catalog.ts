@@ -1,7 +1,6 @@
 import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 import kinds from "./agent-event-kinds.json";
-import { dailyView } from "./dashboard-analysis-model";
 
 // Agent Experience over agent_events: one record is one event, a sentence in
 // an agent's visible reply or thinking that a model judged to express one kind
@@ -59,5 +58,5 @@ export const agentEventsAnalysisCatalog: AnalysisCatalog = {
   cycle: { hour: { kind: "timestamp", field: "occurred_at" }, weekday: { kind: "timestamp", field: "occurred_at" } },
   periods: { day: "day", week: "week", month: "month" }, timestamp: "occurred_at",
   trend: { metric: "events", split: "family_group" },
-  scatter: ["events", "conversations"], defaultView: dailyView,
+  scatter: ["events", "conversations"],
 };

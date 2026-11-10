@@ -1,5 +1,5 @@
 import type { WhereTerm } from "@pythia-software/query-table-core";
-import { heatmapAxis, isTrendView, noSplit, type AnalysisCatalog, type AnalysisMeasure, type ViewDefaults, type ViewInputs, type RatioPart } from "./dashboard-analysis-model";
+import { type AnalysisCatalog, type AnalysisMeasure, type RatioPart } from "./dashboard-analysis-model";
 import { archetypes, bandBins, bandBreakdowns } from "./session-shape-bands";
 
 // Session shape over the session_shape dataset: one record is one agent
@@ -31,9 +31,9 @@ const measures: Record<string, AnalysisMeasure> = {
   tool_calls: { label: "Tool calls", unit: "calls", format: count, op: "sum", field: "tool_calls", value: "tool_calls", additive: true, valueBins: "tool_band", where: toolData, note: "The session's own tool calls, in sessions the tool ledger covers." },
   // How much the agent did per thing you wrote: per typed message, and per
   // 100 typed words. The id stays "autonomy" for links made before.
-  autonomy: { label: "Tool calls per typed message", unit: "calls per typed message", format: mean, op: "sum", ratio: ["tool_calls", "autonomy_prompts"], value: "autonomy", additive: false, where: [...toolData, ...authorship], band: "autonomy_band",
+  autonomy: { label: "Tool calls per typed message", unit: "calls per typed message", format: mean, op: "sum", ratio: ["tool_calls", "autonomy_prompts"], value: "autonomy", additive: false, spread: "long", where: [...toolData, ...authorship], band: "autonomy_band",
     note: "Tool calls per message holding text you typed (a session with none counts one), pooled: summed calls over summed messages. Pasted or quoted text alone does not count as a message." },
-  calls_per_words: { label: "Tool calls per 100 typed words", unit: "calls per 100 words", format: mean, op: "sum", ratio: [{ op: "sum", expression: "[tool_calls]*100", label: "Tool calls × 100" }, "typed_words"], additive: false,
+  calls_per_words: { label: "Tool calls per 100 typed words", unit: "calls per 100 words", format: mean, op: "sum", ratio: [{ op: "sum", expression: "[tool_calls]*100", label: "Tool calls × 100" }, "typed_words"], additive: false, spread: "long",
     where: [...toolData, ...authorship, { field: "typed_words", op: ">", value: "0" }],
     note: "Tool calls per 100 words you typed, pooled: summed calls over summed typed words. Only sessions where you typed something; pasted and quoted text is not typed." },
   turn_cycle: { label: "Turn cycle (session median)", unit: "seconds", format: seconds, op: "sum", ratio: ["turn_cycle_p50_seconds", counted("turn_cycle_p50_seconds", "sessions with a turn cycle")], value: "turn_cycle_p50_seconds", additive: false, band: "turn_cycle_band",
@@ -82,31 +82,6 @@ const sessionBreakdowns: AnalysisCatalog["breakdowns"] = {
   execution_machine_id: { label: "Execution machine", fields: ["execution_machine_id"] },
 };
 
-// Each chart's default view (docs/session-shape.md#charts); the View
-// controls change any of it. Over time, a
-// total by a band (or the archetypes) is a heatmap of the band's own value
-// on a continuous axis, the band's edges as guides; a per-session measure
-// with a band of its own is, without a breakdown, the same heatmap of its
-// sessions. Totals by any other breakdown stack as columns, rates draw a
-// line per group, and a single series is a line with its mean, until the %ile control asks for other levels. Long-tailed
-// times and counts are on a log axis outside Over time. A day's sessions are
-// smoothed over a trailing week, which reads the bands best.
-const longTailed = new Set(["active_time", "turn_cycle", "autonomy", "calls_per_words", "messages", "typed_messages", "tool_calls", "active_hours"]);
-const axis = (metric: string) => longTailed.has(metric) ? "logarithmic" as const : "linear" as const;
-function defaultView({ view, metric, metricY, split, period }: ViewInputs): ViewDefaults {
-  const measure = measures[metric], scale = axis(metric);
-  if (isTrendView(view)) {
-    const smoothing = { rollingPeriods: period === "day" ? 7 : 0 };
-    if (heatmapAxis(sessionShapeAnalysisCatalog, { metric, split })) return { ...smoothing, view: "trend", display: "heatmap", share: false, nonzero: false };
-    const lines = { ...smoothing, display: "interval", share: false, nonzero: false, scale: "linear" } as const;
-    if (split === noSplit) return { ...lines, view: "trend_line", percentiles: ["mean"] };
-    return { ...lines, view: measure.additive ? "trend" : "trend_line" };
-  }
-  if (view === "compare") return { compareAs: "bars", scale };
-  if (view === "scatter") return { scale, scaleY: axis(metricY) };
-  return { scale: view === "cycle" ? "linear" : scale };
-}
-
 export const sessionShapeAnalysisCatalog: AnalysisCatalog = {
   dataset: "session_shape", time: { first: "started_at", last: "started_at" }, measures, breakdowns: sessionBreakdowns,
   records: { label: "Session", plural: "Sessions", note: "A record is one agent session: a conversation, with a delegated run as its own session.", count: "sessions" },
@@ -128,5 +103,4 @@ export const sessionShapeAnalysisCatalog: AnalysisCatalog = {
   trend: { metric: "sessions", split: "length_band" },
   scatter: ["active_time", "tool_calls"],
   population: true,
-  defaultView,
 };

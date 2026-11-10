@@ -1,6 +1,5 @@
 import {peopleLabelBreakdowns} from "./people-message-labels";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
-import { dailyView } from "./dashboard-analysis-model";
 
 // Habits over the rhythm dataset: one record is one local hour of one actor in
 // one top-level conversation. You are your engaged time, estimated from the
@@ -51,5 +50,5 @@ export const habitsAnalysisCatalog: AnalysisCatalog = {
   cycle: { hour: { kind: "timestamp", field: "started_at" }, weekday: { kind: "timestamp", field: "started_at" } },
   periods: { day: "day", week: "week", month: "month" }, timestamp: "started_at",
   trend: { metric: "wall_hours", split: "actor" },
-  scatter: ["wall_hours", "turns"], defaultView: dailyView,
+  scatter: ["wall_hours", "turns"],
 };

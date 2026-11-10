@@ -105,6 +105,37 @@ test('log timelines compare independent series on the same axis, regardless of s
   }
 });
 
+test('linear + log lines break above the typical value of every series, not of each period\'s highest', () => {
+  // One series far above fifteen others on a third of the days, as a burst
+  // of automated conversations draws on Activity.
+  const buckets = Array.from({ length: 30 }, (_, day) => ({ key: String(day), values: Object.fromEntries([['burst', day >= 20 ? 1000 : 0], ...Array.from({ length: 15 }, (_, index) => [`s${index}`, 5 + index * 4])]) }));
+  const series = Object.keys(buckets[0].values).map(key => ({ key }));
+  const plot = timelineGeometry(buckets, series, { scale: 'half', lines: true });
+  assert.ok(plot.split && plot.split < 1000, 'the burst is compressed above the break');
+  assert.ok(plot.y(61) > 4 * timelineGeometry(buckets, series, { scale: 'linear', lines: true }).y(61), 'the other series keep the lower half');
+  assert.equal(timelineGeometry(buckets, series, { scale: 'half' }).split, undefined, 'a stack of the same values compares its totals');
+});
+
+test('duration axes count by round times, and hours of milliseconds by round hours', () => {
+  const ms = { per: 1000, clock: true }, hour = 3_600_000;
+  // Session Shape's active time (seconds) peaking near 7 h: 10,000 s would read 2 h 47 min.
+  assert.deepEqual(columnScale([0, 25_000], 'linear', { per: 1, clock: true }).ticks, [10_800, 21_600], '3 h and 6 h');
+  assert.deepEqual(columnScale([0, 700_000], 'linear', ms).ticks, [300_000, 600_000], 'five minutes, not 200 s');
+  assert.deepEqual(columnScale([0, 1_500], 'linear', ms).ticks, [1_000], 'a second');
+  assert.deepEqual(columnScale([0, 500], 'linear', ms).ticks, [200, 400], 'under a second, round milliseconds');
+  // Recorded tool time, milliseconds shown as hours, peaking near 95 h.
+  assert.deepEqual(columnScale([0, 95 * hour], 'linear', { per: hour }).ticks, [50 * hour], 'round hours, not 56');
+  const half = columnScale([...Array.from({ length: 20 }, (_, index) => 60_000 * (index + 1)), 40 * hour], 'half', ms);
+  assert.equal(half.split, 1_800_000, 'the break is a round time');
+  assert.ok(half.ticks.every(tick => [1, 60, 3600, 86400].some(step => (tick / 1000) % step === 0)), 'every mark is a round time');
+  const log = columnScale([1_000, 60_000, 30 * hour], 'logarithmic', ms);
+  assert.ok(log.ticks.length >= 4 && log.ticks.every(tick => [1, 60, 3600].some(step => (tick / 1000) % step === 0 || tick < 1000)), 'log marks are round times');
+  for (const mode of modes) {
+    const plain = columnScale([1, 120, 5000, 7, 9, 11], mode), unit = columnScale([1, 120, 5000, 7, 9, 11], mode, { per: 1 });
+    assert.deepEqual([unit.ticks, unit.split], [plain.ticks, plain.split], `${mode}: a plain unit keeps 1-2-5 steps`);
+  }
+});
+
 test('timeline lines preserve gaps in non-additive measures and remain visible for a single period', () => {
   const y = value => value;
   assert.equal(timelinePath([], 'a', y), '');

@@ -3,7 +3,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { createPortal } from "react-dom";
 import { chartPeriods, isHourly, nextPeriod, periodKey, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { chartRanges, rangeStart, rangeInputValue, parseRangeInput, rangeHasTime, withTimeRange, type ChartRange, type FilterChange, type RangeChange, type TimeBounds, type TimeFields } from "./chart-range";
-import { defaultChartScale, type ChartScale } from "./chart-scale";
+import { defaultChartScale, type AxisUnit, type ChartScale } from "./chart-scale";
 import { cumulativeBuckets, legendGroups, legendGroupSeries, rollingAverageBuckets, timelineGeometry, timelinePath, validRollingPeriods, type ChartBucket, type ChartDisplay, type ChartSeries, type LegendGroup } from "./chart-series";
 import { ColumnMarks } from "./column-marks";
 import { ChartLegendChip } from "./chart-legend-chip";
@@ -274,9 +274,9 @@ export function RollingControl({ value, period, count = 1, onChange, disabled, n
 // lines with no total, and a reference value draws a labelled level line.
 // Without zeroes (nonzero), prepared buckets hold no zero values, and lines
 // pass over a series' missing points.
-export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, allHidden = false, percent = false, prepared = false, lines = false, bars: forceBars = false, additive = true, nonzero = false, rolling = "average", references = [], action, titleSlot, onSelect, onSelectGroup, onExpand, onRange, seriesHref }: {
+export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, allHidden = false, percent = false, prepared = false, lines = false, bars: forceBars = false, additive = true, nonzero = false, rolling = "average", references = [], axisUnit, action, titleSlot, onSelect, onSelectGroup, onExpand, onRange, seriesHref }: {
   title: string; controls: React.ReactNode; action?: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
-  format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
+  format: (value: number) => string; tickFormat?: (value: number) => string; axisUnit?: AxisUnit; noun: string; loading: boolean; error: string; legend?: boolean;
   selected?: string[]; excluded?: boolean; allHidden?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onSelectGroup?: (keys: string[], action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
   prepared?: boolean; lines?: boolean; bars?: boolean; additive?: boolean; nonzero?: boolean; rolling?: "average" | "sum" | "pooled"; references?: Array<{ value: number; label: string; level?: string }>;
   seriesHref?: (range: ChartInspectionRange, series: ChartSeries) => string | undefined;
@@ -308,7 +308,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   }) : averagedBuckets;
   const total = (bucket: ChartBucket) => drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
   const grouped = forceBars && (!additive || scale === "logarithmic" && !percent);
-  const geometry = timelineGeometry(buckets, drawn, { scale, lines: cumulative || lines, bars: forceBars, grouped, percent, reference: references.length ? Math.max(...references.map(item => item.value)) : 0 });
+  const geometry = timelineGeometry(buckets, drawn, { scale, lines: cumulative || lines, bars: forceBars, grouped, percent, unit: axisUnit, reference: references.length ? Math.max(...references.map(item => item.value)) : 0 });
   const lineChart = geometry.lines;
   const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : geometry;
   const unit = periodUnit(period, periodCount), stacked = drawn.length > 1 && additive;

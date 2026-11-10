@@ -1,5 +1,4 @@
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
-import { dailyView } from "./dashboard-analysis-model";
 
 // Parallelism over the parallelism dataset: one record is one local hour of
 // one workspace or top-level conversation (the user's counting) at
@@ -54,7 +53,7 @@ export function parallelismAnalysisCatalog(counting?: ParallelismCounting): Anal
     cycle: { hour: { kind: "timestamp", field: "started_at" }, weekday: { kind: "timestamp", field: "started_at" } },
     periods: { day: "day", week: "week", month: "month" }, timestamp: "started_at",
     trend: { metric: "agent_hours", split: "level_band" },
-    scatter: ["agent_hours", "active_hours"], defaultView: dailyView,
+    scatter: ["agent_hours", "active_hours"],
   };
   if (catalog.breakdowns.provider) catalog.breakdowns.provider.order = ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"];
   return catalog;

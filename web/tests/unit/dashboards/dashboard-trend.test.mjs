@@ -616,8 +616,11 @@ test("a trend without a scale resolves it once, for the Scale control and the ch
   }
   // An older link without a scale keeps the split axis it always drew.
   assert.equal(normalizeAnalysis(catalog, { metric: "percent", split: "provider", period: "day" }).scale, defaultChartScale);
-  // Other views keep their own axis default (linear).
-  assert.equal(normalizeAnalysis(catalog, { view: "compare", metric: "tokens", split: "provider" }).scale, undefined);
+  // Other views draw their own: Compare puts a long-tailed total split into
+  // more than a few groups on a log axis, and a few groups on a linear one.
+  assert.equal(normalizeAnalysis(catalog, { view: "compare", metric: "tokens", split: "provider" }).scale, "logarithmic");
+  assert.equal(normalizeAnalysis(catalog, { view: "compare", metric: "tokens", split: "session_kind" }).scale, "linear");
+  assert.equal(normalizeAnalysis(catalog, { view: "compare", metric: "cache_read_share", split: "provider" }).scale, "linear");
 });
 
 

@@ -639,7 +639,9 @@ test('percentage-valued dashboard trends retain their selected scale independent
   fixture(t);
   const local = usageLedger();
   for (const scale of ['linear', 'logarithmic', 'half']) {
-    const url = makeURL({ ...dashboardDefaults.tokens, metric:'cache_read_share', split:'provider', scale }, []);
+    // A current chart (v 3) holds the scale its reader chose; an older one's
+    // scale equal to its page's old default (half) is redrawn by the new.
+    const url = makeURL({ ...dashboardDefaults.tokens, v: 3, metric:'cache_read_share', split:'provider', scale }, []);
     const preview = await loadDashboardCardPreview(url,schemas.usage,undefined,local,now);
     assert.equal(preview.dashboardTrend.percent, false);
     assert.equal(preview.dashboardTrend.unit, 'percent');
@@ -662,7 +664,8 @@ test('percentage-valued dashboard trends retain their selected scale independent
     const active = { ...switchView(catalog, selected, view), scale: 'logarithmic' };
     assert.match(dashboardCardDescription(makeURL(active, [])), /Logarithmic scale/, `${view} still reports an active logarithmic axis`);
   }
-  assert.doesNotMatch(dashboardCardDescription(makeURL(switchView(catalog, selected, 'compare'), [])), /Logarithmic scale/, 'the trend\'s scale is no choice about Compare');
+  // Compare draws its own default: linear for a rate, whatever the trend chose.
+  assert.doesNotMatch(dashboardCardDescription(makeURL(switchView(catalog, { ...selected, metric: 'cache_read_share' }, 'compare'), [])), /Logarithmic scale/, 'the trend\'s scale is no choice about Compare');
   assert.doesNotMatch(dashboardCardDescription(makeURL({ ...selected, view: 'compare', split: 'none' }, [])), /Logarithmic scale/, 'a scalar comparison has no axis');
 });
 

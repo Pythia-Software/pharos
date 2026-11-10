@@ -134,7 +134,9 @@ test("a bucket opens its records, or its units' grouped rows", () => {
   const units = analysisQuery(catalog, { view: "distribution", unit: "conversation", metric: "cost", split: "model_family" }, []);
   const group = analysisInspectQuery(units, { keys: ["opus"], value: 1, count: 6 }, units.clause, schema, "distribution");
   assert.deepEqual(group.grouping.keys, units.query.grouping.keys);
-  assert.deepEqual(group.where, [{ field: "analysis_value", op: "is_not_null", value: "" }, { field: "root_model_family", op: "=", value: "opus" }], "the plotted conversations of that group");
+  // Cost per conversation is long-tailed, so its default axis is log, which
+  // plots only conversations with a cost.
+  assert.deepEqual(group.where, [{ field: "analysis_value", op: ">", value: "0" }, { field: "root_model_family", op: "=", value: "opus" }], "the plotted conversations of that group");
   assert.equal(group.aggregations?.length ?? 0, 0);
   assert.equal(core.applyQuery(rows, group, schema, { now }).total, 8, "eight Opus conversations, from both providers");
   assert.equal(analysisInspectQuery(units, { keys: ["Monday"], value: 1, count: 1 }, units.clause, schema, "cycle"), null);

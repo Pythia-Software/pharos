@@ -80,7 +80,7 @@ test("rates pool their parts over the sessions with the evidence they need, neve
 
 // Each chart's default view follows its data; the View controls change any
 // of it, and a choice holds until the breakdown or analysis changes.
-test("Session Shape's default views: heatmaps of a band's value, distributions of banded measures, lines for rates and single series, stacks for totals", () => {
+test("Session Shape's default views: heatmaps of a band's value, lines for rates, columns for totals", () => {
   const drawn = change => { const state = normalizeAnalysis(catalog, { view: "trend", ...change }); return [state.display, state.share, trendDrawing(catalog, state)]; };
   assert.deepEqual(drawn({ metric: "sessions", split: "length_band" }), ["heatmap", false, "trend"]);
   assert.deepEqual(drawn({ metric: "active_hours", split: "archetype" }), ["heatmap", false, "trend"]);
@@ -89,14 +89,19 @@ test("Session Shape's default views: heatmaps of a band's value, distributions o
   assert.equal(heatmapAxis(catalog, { metric: "failure_rate", split: "archetype" }), undefined);
   for (const metric of ["autonomy", "active_time", "turn_cycle", "context_peak"]) assert.deepEqual(drawn({ metric, split: "none" }), ["heatmap", false, "trend"], metric);
   assert.deepEqual(drawn({ metric: "failure_rate", split: "none" }), ["interval", false, "trend_line"]);
-  assert.equal(normalizeAnalysis(catalog, { view: "trend", metric: "sessions", split: "none" }).norm, true);
+  // A single smoothed line draws its mean; columns draw each day as counted.
+  assert.equal(normalizeAnalysis(catalog, { view: "trend", metric: "failure_rate", split: "none" }).norm, true);
+  assert.equal(normalizeAnalysis(catalog, { view: "trend", metric: "sessions", split: "none" }).norm, false);
   assert.deepEqual(drawn({ metric: "active_hours", split: "repository_name" }), ["interval", false, "trend"]);
   assert.deepEqual(drawn({ metric: "failure_rate", split: "model_family" }), ["interval", false, "trend_line"]);
-  // A day's sessions are smoothed over a week; a week's are not.
-  assert.deepEqual([normalizeAnalysis(catalog, { view: "trend", metric: "sessions", split: "repository_name", period: "day" }).rollingPeriods, normalizeAnalysis(catalog, { view: "trend", metric: "sessions", split: "repository_name", period: "week" }).rollingPeriods], [7, 0]);
-  // Outside Over time, long-tailed times and counts are on a log axis.
-  const scale = (view, metric) => normalizeAnalysis(catalog, { view, metric, split: "provider" }).scale;
-  assert.deepEqual([scale("distribution", "turn_cycle"), scale("distribution", "context_peak"), scale("compare", "sessions")], ["logarithmic", "linear", "linear"]);
+  // A day's rates are smoothed over a week, and a band's heatmap; a week's
+  // are not, nor are a day's columns.
+  const rolling = (metric, split, period) => normalizeAnalysis(catalog, { view: "trend", metric, split, period }).rollingPeriods;
+  assert.deepEqual([rolling("failure_rate", "model_family", "day"), rolling("failure_rate", "model_family", "week"), rolling("sessions", "length_band", "day"), rolling("sessions", "repository_name", "day")], [7, 0, 7, 0]);
+  // Outside Over time, long-tailed times and counts are on a log axis; a
+  // count split into a few groups is not.
+  const scale = (view, metric, split = "provider") => normalizeAnalysis(catalog, { view, metric, split }).scale;
+  assert.deepEqual([scale("distribution", "turn_cycle"), scale("distribution", "context_peak"), scale("compare", "sessions"), scale("compare", "sessions", "agent_kind"), scale("compare", "failure_rate")], ["logarithmic", "linear", "logarithmic", "linear", "linear"]);
   // What the reader chooses is drawn instead, where the chart can draw it.
   const chosen = normalizeAnalysis(catalog, { view: "trend", metric: "sessions", split: "repository_name", display: "cumulative", share: true, scale: "logarithmic", rollingPeriods: 0 });
   assert.deepEqual([chosen.display, chosen.share, chosen.scale, chosen.rollingPeriods], ["cumulative", true, "logarithmic", 0]);
