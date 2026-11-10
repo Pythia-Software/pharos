@@ -27,7 +27,7 @@ import (
 	"time"
 )
 
-const fixesVersion = "fixes-v2"
+const fixesVersion = "fixes-v3"
 
 // fixesWindowDays bounds the events the projection reads.
 const fixesWindowDays = 90
@@ -1235,6 +1235,19 @@ func fixesBuild(input fixesInput) ([]fixItem, map[string]int, error) {
 		}
 	}
 	items = fixesMergeSame(input, items)
+	// A group whose every member reports work already done ("I fixed the
+	// review finding and handed it back") names nothing left to fix in the
+	// setup. Dropping it after grouping leaves every other item, and its ID,
+	// as it was.
+	kept := items[:0]
+	for _, item := range items {
+		if fixesDoneOnly(item.events) {
+			excluded["done"] += len(item.events)
+			continue
+		}
+		kept = append(kept, item)
+	}
+	items = kept
 	items = append(items, fixesStaleFileItems(input, inScope, taken)...)
 	// Time lost and failed calls need the members' conversations in order.
 	conversations := map[string]bool{}
@@ -1603,10 +1616,17 @@ var (
 		without with clean dashboard's itself note noted opening open pr current currently today verify verified against confirm confirmed
 		previously reproduced reproduces identified isolated including alone hit hits
 		broader summary lines line known output truncated lost list probably maybe might`)
-	fixesNoticing    = regexp.MustCompile(`(?i)^\W*(?:actually,?\s*|so,?\s*|now,?\s*)?(?:i'?m|i’m|i am|i(?:'ve| have)?|i’ve)\s+(?:realizing|noticing|seeing|realize[sd]?|notice[sd]?|see|saw|found|confirmed|spotted)\s+(?:that\s+|now\s+)?`)
-	fixesReportLabel = regexp.MustCompile(`(?i)^\W*(?:test status|status|verification|tests?|testing|result|results|note|blocker|caveat)[\s*_]*:[\s*_]*`)
-	fixesProhibits   = regexp.MustCompile(`(?i)\b(?:never|must not|mustn.t|not to|don.t|do not|forbids?|forbidden|avoid|without)\b`)
-	fixesFollowsRule = regexp.MustCompile(`(?i)\bper (?:my|the|our|your) (?:notes|rules?|instructions|guidance|memory|memories|preferences?)\b|` +
+	fixesNoticing = regexp.MustCompile(`(?i)^\W*(?:actually,?\s*|so,?\s*|now,?\s*)?(?:i'?m|i’m|i am|i(?:'ve| have)?|i’ve)\s+(?:realizing|noticing|seeing|realize[sd]?|notice[sd]?|see|saw|found|confirmed|spotted)\s+(?:that\s+|now\s+)?`)
+	// "Actually,", "Wait," and "Confirmed:" add nothing to the problem that
+	// follows; nor does a review's "Minor —".
+	fixesLeadOpener = regexp.MustCompile(`(?i)^\W*(?:actually|confirmed|indeed|interesting(?:ly)?|right|aha|ah|oh|wait|hmm+|ok(?:ay)?|well|minor|major|nit)\s*[,:—–!]\s*`)
+	// What the agent did or does next, after a semicolon or dash ("; I
+	// rebuilt it from web/src", " -- I need a…", "; running through bash:").
+	// "— i.e. …" goes on explaining the problem.
+	fixesTrailingOutcome = regexp.MustCompile(`(?i)\s*(?:[;—–]|\s--?\s)\s*(?:(?:so|then|now)\s+)?(?:(?:i|we)(?:\s|$)|i'[a-z]+|i’[a-z]+|we'[a-z]+|let me|let's|(?:re-?)?[a-z]+ing\b[^.;]*:\s*$|(?:use|run|try|switch|fix)\b).*$`)
+	fixesReportLabel     = regexp.MustCompile(`(?i)^\W*(?:test status|status|verification|tests?|testing|result|results|note|blocker|caveat)[\s*_]*:[\s*_]*`)
+	fixesProhibits       = regexp.MustCompile(`(?i)\b(?:never|must not|mustn.t|not to|don.t|do not|forbids?|forbidden|avoid|without)\b`)
+	fixesFollowsRule     = regexp.MustCompile(`(?i)\bper (?:my|the|our|your) (?:notes|rules?|instructions|guidance|memory|memories|preferences?)\b|` +
 		`\b(?:my|the) (?:notes|rules?|memory|memories|instructions|guidance) (?:say|says|advise|advises|tell|tells|require|requires|forbid|forbids)\b|` +
 		`\bas (?:my|the) (?:notes|rules?|instructions|guidance) (?:say|advise|require)|\bi (?:recall|remember) (?:never|not to|to avoid)\b|` +
 		`\baccording to (?:my|the) (?:notes|rules?|instructions|guidance|memory)\b|\b(?:claude|agents)\.md (?:says|requires|forbids)\b`)
@@ -1644,6 +1664,21 @@ func fixesRepresentative(events []fixesEvent, similarity map[int64]float64, term
 		if fixesPlan.MatchString(text) {
 			score -= 0.2
 		}
+		// The title is written from the lead: it should state the problem,
+		// not how it was solved.
+		switch {
+		case fixesOutcomeOnly(text):
+			score -= 2
+		case fixesPlanOpener.MatchString(text) || fixesWillDo.MatchString(text):
+			// "I'll wait for the notification — since sleep is blocked…"
+			// says what the agent did about a problem another member states.
+			score -= 0.5
+		case fixesAdvice.MatchString(text) && !fixesObstacleWord.MatchString(text):
+			score -= 0.4
+		}
+		if fixesObstacleWord.MatchString(text) {
+			score += 0.2
+		}
 		if n := len([]rune(text)); n < 35 || n > 220 {
 			score -= 0.4
 		}
@@ -1652,6 +1687,64 @@ func fixesRepresentative(events []fixesEvent, similarity map[int64]float64, term
 		}
 	}
 	return best
+}
+
+// A sentence that says how a problem should be solved, that it was solved,
+// or that something now works states an outcome, not the problem: "The fix
+// is to…", "Actually, the right approach is…", "my best move is…" (a
+// remedy); "Fixed the parser and handed it back", "Carbon now passes",
+// "…display correctly after fixing…" (done). A later clause that says
+// something still fails keeps it a problem.
+var (
+	fixesRemedy = regexp.MustCompile(`(?i)` +
+		`\b(?:the|a|my|our|one)\s+(?:(?:right|better|best|correct|proper|simplest|simple|cleanest|clean|safest|easiest|only|real|obvious|sanctioned|actual)\s+)*` +
+		`(?:fix|approach|solution|answer|move|way forward|workaround|remedy|cure|option)\s+(?:here\s+|then\s+)?(?:is|was|would be|will be)\b`)
+	fixesDone = regexp.MustCompile(`(?i)` +
+		`^\W*(?:(?:so|ok(?:ay)?|now|actually|good),?\s+)*(?:` +
+		`(?:(?:i|we)\s+|i've\s+|i’ve\s+|we've\s+|we’ve\s+|i have\s+|we have\s+)(?:just\s+|now\s+|also\s+)?(?:fixed|resolved|solved|repaired|corrected|patched|worked around)\b|` +
+		`(?:just\s+|now\s+|also\s+)?(?:fixed|resolved|solved|repaired|corrected|patched|worked around)\s+(?:the|a|an|it|this|that|these|those|both|all|each|every|my|our|its|their)\b|` +
+		`(?:(?:i|we)\s+|i've\s+|i’ve\s+|we've\s+|we’ve\s+)?(?:just\s+|also\s+)?handed (?:it|them|the \w+) (?:back|off)\b)|` +
+		`\b(?:was|were|been|is|are|got|has been|have been)\s+(?:found\s+and\s+|now\s+|since\s+)?(?:fixed|resolved|solved)` +
+		`(?:\s*(?:[.,;:!)]|$)|\s+(?:in|by|upstream|already|now|and|with|on|for|via|after|since|before|properly|correctly|too)\b)|` +
+		`\|\s*\**fixed\b|\bafter (?:fixing|the fix)\b|` +
+		`\bnow\s+(?:works?|passe[sd]|pass|succeeds?|succeeded)\b|` +
+		`\bnow\s+(?:compiles?|builds?)(?:\s+(?:cleanly|fine|again|successfully|correctly))?\s*(?:[.,;:!)]|$)|` +
+		`\b(?:pass|passes|passed|works?|worked)\s+(?:now|again|after (?:the|my|this)\b)|` +
+		`\bnow\s+(?:displays?|shows?|renders?|loads?|runs?|appears?)\s+(?:\S+\s+){0,4}?(?:correctly|properly|fine|as expected|cleanly)\b`)
+	// Advice says what ought to happen, not what went wrong.
+	fixesAdvice     = regexp.MustCompile(`(?i)\b(?:should|ought to|better to|best to|recommend|instead of|the trick is)\b`)
+	fixesWillDo     = regexp.MustCompile(`(?i)\b(?:i'll|i’ll|we'll|we’ll|i will|we will|let me|let's|let’s|i'm going to|i’m going to|my best move)\b`)
+	fixesStillWrong = regexp.MustCompile(`(?i)\b(?:but|however|yet|though|although|except|still)\b`)
+)
+
+// fixesOutcomeOnly says whether a sentence states a remedy or done work and
+// nothing still wrong.
+func fixesOutcomeOnly(sentence string) bool {
+	return fixesStates(fixesRemedy, sentence) || fixesStates(fixesDone, sentence)
+}
+
+// fixesStates says whether a sentence matches an outcome pattern with no
+// later "but … still fails".
+func fixesStates(pattern *regexp.Regexp, sentence string) bool {
+	text := fixesListMarker.ReplaceAllString(strings.TrimSpace(sentence), "")
+	loc := pattern.FindStringIndex(text)
+	if loc == nil {
+		return false
+	}
+	still := fixesStillWrong.FindStringIndex(text[loc[1]:])
+	return still == nil || !fixesObstacleWord.MatchString(text[loc[1]+still[1]:])
+}
+
+// fixesDoneOnly says whether every event reports work already done. A
+// recurring remedy ("the fix is to regenerate the schema") is still a fact
+// worth writing down; a run of "I fixed it and handed it back" is not.
+func fixesDoneOnly(events []fixesEvent) bool {
+	for _, e := range events {
+		if !fixesStates(fixesDone, e.Sentence) {
+			return false
+		}
+	}
+	return len(events) > 0
 }
 
 // fixesCommonTerms are the key terms at least 30% of the events name. A term
@@ -1846,6 +1939,12 @@ func fixesProblemTitle(item *fixItem) string {
 // no trailing plan ("…, so I'll …"), and short.
 func fixesLeadTitle(text string) string {
 	text = fixesPlan.ReplaceAllString(text, "")
+	if cut := fixesTrailingOutcome.ReplaceAllString(text, ""); len(cut) > 12 {
+		text = cut
+	}
+	if loc := fixesLeadOpener.FindStringIndex(text); loc != nil && len(text)-loc[1] > 20 {
+		text = text[loc[1]:]
+	}
 	if loc := fixesNoticing.FindStringIndex(text); loc != nil && len(text)-loc[1] > 20 {
 		text = text[loc[1]:]
 	}
@@ -1853,14 +1952,15 @@ func fixesLeadTitle(text string) string {
 		text = text[loc[1]:]
 	}
 	for i := 0; i < 2; i++ {
-		if loc := fixesAntecedent.FindStringIndex(text); loc != nil && loc[1] < len(text) {
+		// "there's" and "it's" are the sentence, not a back-reference.
+		if loc := fixesAntecedent.FindStringIndex(text); loc != nil && loc[1] < len(text) && !strings.ContainsRune("'’", rune(text[loc[1]])) && !strings.HasPrefix(text[loc[1]:], "’") {
 			rest := strings.TrimLeft(text[loc[1]:], " ,:—–-")
 			if len(rest) > 20 {
 				text = rest
 			}
 		}
 	}
-	text = strings.TrimRight(strings.TrimSpace(text), ".")
+	text = strings.TrimRight(strings.TrimLeft(strings.TrimSpace(text), " ,;:—–"), ".")
 	return fixesTitle(fixesClip(text, 120))
 }
 

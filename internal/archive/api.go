@@ -105,11 +105,16 @@ type Server struct {
 	workError           error
 	resourceBrokerOwned bool
 	historyLeases       resourceLeaseCache // owned only by the history collector
+	claudeImports       claudeImportRun
+	claudeWatch         *claudeDownloads
+	claudeWatchWake     chan struct{}
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
 	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
 	server.background.wake = make(chan struct{}, 1)
+	server.claudeWatchWake = make(chan struct{}, 1)
+	server.claudeWatch = server.newClaudeDownloads()
 	server.life.init()
 	server.ops = newOpRegistry("service")
 	server.ops.releasing = server.releasing
@@ -210,6 +215,7 @@ func (s *Server) Serve() error {
 	for i := range resultRefreshers {
 		s.daemon("refreshResults", func(ctx context.Context) { s.refreshResults(ctx, i == 0) })
 	}
+	s.daemon("claudeDownloads", s.claudeDownloadsLoop)
 	s.refreshGitInBackground(true)
 	s.countUpgradeInBackground()
 	s.warmAskModelsOnStart()
@@ -396,6 +402,8 @@ var uiAssets = map[string]struct{ name, contentType string }{
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
+	case path == "/api/claude-imports":
+		s.getClaudeImports(w, r)
 	case path == "/api/markdown-link":
 		s.markdownLink(w, r)
 	case path == "/api/markdown-favicon":
@@ -923,6 +931,10 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.acceptProbe(w, body)
 	case path == "/api/sources/import":
 		s.importSource(w, body)
+	case path == "/api/claude-imports/watch":
+		s.postClaudeWatch(w, body)
+	case path == "/api/claude-imports" || path == "/api/claude-imports/links" || path == "/api/claude-imports/cancel":
+		s.postClaudeImports(w, r, body)
 	case path == "/api/probe":
 		s.probeSelected(w, body)
 	case path == "/api/sources/sync":

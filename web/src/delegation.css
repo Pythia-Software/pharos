@@ -94,9 +94,13 @@
   grid-column: 1;
   grid-row: 2;
 }
-.work-heading:has(.delegation-workspace-stats:not(:empty)) > .work-controls {
+.work-heading:has(.delegation-workspace-stats:not(:empty)) > .work-activity {
   grid-column: 1 / -1;
   grid-row: 3;
+}
+/* Below the stats and Code activity, across both columns. */
+.work-heading:has(.delegation-workspace-stats:not(:empty)) > .peer-strip {
+  grid-column: 1 / -1;
 }
 .delegation-workspace-stats {
   grid-column: 2;
@@ -121,7 +125,7 @@
     border-left: 0;
     padding: 9px 0 3px;
   }
-  .work-heading:has(.delegation-workspace-stats:not(:empty)) > .work-controls {
+  .work-heading:has(.delegation-workspace-stats:not(:empty)) > .work-activity {
     grid-row: 4;
   }
 }
@@ -1155,3 +1159,18 @@ button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--
 .delegation-relatives{position:absolute;right:0;bottom:2px;z-index:3;padding-left:4px;background:var(--panel);color:var(--muted);font-size:var(--fs-xs)}
 
 .delegation-token-evidence { color: var(--muted); font-size: var(--fs-sm); margin: 8px 0; max-width: 85ch; }
+/* A session with notes (SessionNotice): its open button stretches over the
+   identity cell, under the notice icon beside the model. */
+.lt-session-identity.has-notice .lt-session-open{all:unset;display:block;min-width:0;cursor:pointer}
+.lt-session-identity.has-notice .lt-session-open::after{content:"";position:absolute;inset:0}
+.lt-session-identity.has-notice .lt-session-open strong{color:var(--accent)}
+.lt-session-identity.has-notice .lt-session-open:hover strong,.lt-session-identity.has-notice .lt-session-open:focus-visible strong{text-decoration:underline}
+.lt-session-identity.has-notice .lt-session-open:focus-visible::after{outline:2px solid var(--focus-ring, var(--accent));outline-offset:-2px}
+.is-preview .lt-session-identity.has-notice.is-interactive{z-index:11}
+.lt-session-identity small.lt-session-metadata{display:flex;align-items:center;gap:4px}
+.lt-session-metadata>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lt-session-notice{position:relative;z-index:1;flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--bad);cursor:pointer}
+.lt-session-notice svg{width:12px;height:12px}
+.lt-session-notice:hover,.lt-session-notice:focus-visible{background:color-mix(in srgb,var(--bad) 18%,transparent);outline:0}
+.lt-session-notice-card ul{margin:6px 0 0;padding-left:16px;font-size:11px}
+.lt-session-notice-card li+li{margin-top:4px}

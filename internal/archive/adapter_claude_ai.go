@@ -18,101 +18,185 @@ import (
 type claudeAIAdapter struct{ baseAdapter }
 
 // claudeAIExtractor versions the parser; bump it when parsing changes.
-const claudeAIExtractor = "claude-ai-v1"
+const claudeAIExtractor = "claude-ai-v2"
 
 // claudeAIRoot is the parent a conversation's first message names.
 const claudeAIRoot = "00000000-0000-4000-8000-000000000000"
 
 func (a *claudeAIAdapter) indexVersion() string { return claudeAIExtractor }
 
-func (a *claudeAIAdapter) exportFile() string {
-	info, err := a.files().Stat(a.config.Path)
-	if err == nil && info.IsDir() {
-		return filepath.Join(a.config.Path, "conversations.json")
-	}
-	return a.config.Path
-}
-
 func (a *claudeAIAdapter) Fingerprint() (string, error) {
-	file := a.exportFile()
-	if _, err := a.files().Stat(file); err != nil {
-		return "", fmt.Errorf("Claude.ai export is missing %s", file)
+	inputs, err := claudeExportInputs(a.files(), a.config.Path)
+	if err != nil {
+		return "", err
 	}
-	fingerprint, err := a.files().pathFingerprint(file, func(string, os.DirEntry) bool { return true })
-	return a.indexVersion() + ":" + fingerprint, err
+	if len(inputs) == 0 {
+		return "", errors.New("choose the Claude.ai export: no conversation files or collected export inventories were found")
+	}
+	var values []string
+	for _, input := range inputs {
+		value, err := a.files().pathFingerprint(input.path, func(string, os.DirEntry) bool { return true })
+		if err != nil {
+			return "", err
+		}
+		values = append(values, a.original(input.path)+":"+value)
+	}
+	return a.indexVersion() + ":" + hashBytes([]byte(strings.Join(values, "\n"))), nil
 }
 
 type claudeAIConversation struct {
-	UUID        string           `json:"uuid"`
-	Name        string           `json:"name"`
-	Summary     string           `json:"summary"`
-	CreatedAt   string           `json:"created_at"`
-	UpdatedAt   string           `json:"updated_at"`
-	CurrentLeaf string           `json:"current_leaf_message_uuid"`
-	Messages    []map[string]any `json:"chat_messages"`
+	UUID        string `json:"uuid"`
+	Name        string `json:"name"`
+	Summary     string `json:"summary"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+	CurrentLeaf string `json:"current_leaf_message_uuid"`
+	Account     struct {
+		UUID string `json:"uuid"`
+	} `json:"account"`
+	Messages []map[string]any `json:"chat_messages"`
 }
 
 func (a *claudeAIAdapter) Discover(emit func(WorkspaceRecord) error) error {
-	file := a.exportFile()
-	source, err := a.files().Open(file)
+	inputs, err := claudeExportInputs(a.files(), a.config.Path)
 	if err != nil {
-		return fmt.Errorf("cannot read Claude.ai export %s: %w", file, err)
+		return err
 	}
-	defer source.Close()
-	info, _ := source.Stat()
-	version := info.ModTime().UnixNano()
-	var content io.Reader = source
-	if strings.EqualFold(filepath.Ext(file), ".zip") {
-		if content, err = claudeAIZipConversations(source, info.Size()); err != nil {
-			return fmt.Errorf("cannot read Claude.ai export %s: %w", file, err)
-		}
-	}
-	// Conversations are decoded one at a time; an export can be large.
-	decoder := json.NewDecoder(content)
-	decoder.UseNumber()
-	if token, err := decoder.Token(); err != nil || token != json.Delim('[') {
-		return fmt.Errorf("Claude.ai export %s must contain an array", file)
-	}
-	for index := 0; decoder.More(); index++ {
-		var conversation claudeAIConversation
-		if err := decoder.Decode(&conversation); err != nil {
-			return fmt.Errorf("Claude.ai export %s conversation %d: %w", file, index, err)
-		}
-		if conversation.UUID == "" {
-			return fmt.Errorf("Claude.ai export %s conversation %d has no ID", file, index)
-		}
-		// An empty conversation is an empty list; a missing one is damage,
-		// and would replace the conversation with nothing.
-		if conversation.Messages == nil {
-			return fmt.Errorf("Claude.ai export %s conversation %s has no messages list", file, conversation.UUID)
-		}
-		if err := emit(a.record(conversation, a.original(file), version)); err != nil {
+	// Validate every conversation input before publishing any of this source's
+	// records. A damaged late shard must not partially replace a previous index.
+	seen := map[string]string{}
+	for _, input := range inputs {
+		if err := verifyClaudeExportInput(a.files(), input); err != nil {
 			return err
 		}
+		if input.conversations {
+			check := func(c claudeAIConversation) error {
+				key := input.snapshot + "\x00" + c.UUID
+				digest := hashBytes([]byte(jsonText(c)))
+				if old, ok := seen[key]; ok && old != digest {
+					return fmt.Errorf("Claude export has conflicting copies of conversation %s", c.UUID)
+				}
+				seen[key] = digest
+				return nil
+			}
+			if err := a.readExport(input, nil, check); err != nil {
+				return err
+			}
+		}
 	}
-	// More also stops at the end of the input or a read error, so only the
-	// closing bracket shows the whole export was read.
-	if token, err := decoder.Token(); err != nil || token != json.Delim(']') {
-		return fmt.Errorf("Claude.ai export %s ends early", file)
-	}
-	if err := ensureEOF(decoder); err != nil {
-		return fmt.Errorf("Claude.ai export %s: %w", file, err)
+	for _, input := range inputs {
+		if input.conversations {
+			if err := a.readExport(input, emit, nil); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
-// claudeAIZipConversations opens conversations.json inside the export's ZIP.
-func claudeAIZipConversations(source *sourceFile, size int64) (io.Reader, error) {
-	archive, err := exportZip(source, size)
-	if err != nil {
-		return nil, err
+func (a *claudeAIAdapter) readExport(input claudeExportInput, emit func(WorkspaceRecord) error, check func(claudeAIConversation) error) error {
+	if err := a.context().Err(); err != nil {
+		return err
 	}
-	for _, entry := range archive.File {
-		if entry.Name == "conversations.json" {
-			return entry.Open()
+	if strings.EqualFold(filepath.Ext(input.path), ".zip") {
+		if _, err := a.files().Database(input.path); err != nil {
+			return err
 		}
 	}
-	return nil, errors.New("the ZIP holds no conversations.json")
+	source, err := a.files().Open(input.path)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return err
+	}
+	version := input.version
+	if version == 0 {
+		version = info.ModTime().UnixNano()
+	}
+	origin := a.original(input.path)
+	decode := func(reader io.Reader) error {
+		return decodeClaudeConversations(reader, func(conversation claudeAIConversation) error {
+			if err := a.context().Err(); err != nil {
+				return err
+			}
+			if emit == nil {
+				if check != nil {
+					return check(conversation)
+				}
+				return nil
+			}
+			return emit(a.record(conversation, origin, version))
+		})
+	}
+	if strings.EqualFold(filepath.Ext(input.path), ".zip") {
+		// Materialize only an encoded capture. exportZip otherwise uses ReadAt.
+		archive, err := exportZip(source, info.Size())
+		if err != nil {
+			return fmt.Errorf("Claude ZIP %s: %w", input.path, err)
+		}
+		entries, err := claudeZipListing(archive)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			content, err := entry.Open()
+			if err != nil {
+				return err
+			}
+			err = decode(content)
+			closeErr := content.Close()
+			if err != nil || closeErr != nil {
+				return fmt.Errorf("Claude export %s, %s: %w", input.path, entry.Name, errors.Join(err, closeErr))
+			}
+		}
+		return nil
+	}
+	if err := decode(source); err != nil {
+		return fmt.Errorf("Claude export %s: %w", input.path, err)
+	}
+	return nil
+}
+
+func decodeClaudeConversations(content io.Reader, emit func(claudeAIConversation) error) error {
+	decoder := json.NewDecoder(content)
+	decoder.UseNumber()
+	if token, err := decoder.Token(); err != nil || token != json.Delim('[') {
+		return errors.New("Claude.ai conversations must contain an array")
+	}
+	seen := map[string]bool{}
+	for index := 0; decoder.More(); index++ {
+		var conversation claudeAIConversation
+		if err := decoder.Decode(&conversation); err != nil {
+			return fmt.Errorf("conversation %d: %w", index, err)
+		}
+		if conversation.UUID == "" || seen[conversation.UUID] {
+			return fmt.Errorf("conversation %d has a missing or duplicate ID", index)
+		}
+		seen[conversation.UUID] = true
+		if conversation.Messages == nil {
+			return fmt.Errorf("conversation %s has no messages list", conversation.UUID)
+		}
+		messages := map[string]bool{}
+		for _, message := range conversation.Messages {
+			id := firstString(message["uuid"])
+			if id == "" || messages[id] {
+				return fmt.Errorf("conversation %s has a missing or duplicate message ID", conversation.UUID)
+			}
+			messages[id] = true
+		}
+		if emit != nil {
+			if err := emit(conversation); err != nil {
+				return err
+			}
+		}
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim(']') {
+		return errors.New("Claude.ai conversations end early")
+	}
+	return ensureEOF(decoder)
 }
 
 func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin string, version int64) WorkspaceRecord {
@@ -155,7 +239,7 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 			switch blockType := firstString(block["type"]); blockType {
 			case "text", "voice_note":
 				// A voice note holds what the person said, transcribed.
-				if text := firstString(block["text"]); strings.TrimSpace(text) != "" {
+				if text := asString(block["text"]); strings.TrimSpace(text) != "" {
 					// The first text is the message's own, by its ID alone,
 					// wherever an export puts it among the blocks.
 					if texts == 0 {
@@ -204,6 +288,8 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 				// Claude.ai adds the date, memory and tool instructions to the
 				// person's turn; they are context, not what the person wrote.
 				messages = append(messages, injectedContext(item, defaultString(block["injection_source"], "claude_ai"), firstString(block["prompt"])))
+			default:
+				messages = append(messages, injectedContext(item, "claude_ai_unknown_block", jsonText(block)))
 			case "document", "image":
 				item.Kind = "attachment"
 				item.Text = jsonText(map[string]any{"type": blockType, "title": block["title"], "file_uuid": block["file_uuid"]})
@@ -213,7 +299,7 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 		// A message without text blocks keeps its flattened text, as the
 		// message's own text. Exports from before content blocks hold only
 		// that, which a later export holds as its first text block.
-		if text := firstString(message["text"]); texts == 0 && strings.TrimSpace(text) != "" {
+		if text := asString(message["text"]); texts == 0 && strings.TrimSpace(text) != "" {
 			item := base("")
 			item.Kind, item.Text, item.RawText = "message", text, jsonText(map[string]any{"text": text})
 			messages = append(messages, item)
@@ -248,8 +334,16 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 	purpose, outcome := agentPurposeOutcome(active)
 	title := defaultString(conversation.Name, "Claude.ai "+short(conversation.UUID))
 	created, updated := iso(conversation.CreatedAt), iso(conversation.UpdatedAt)
-	return WorkspaceRecord{Observed: version, SourceID: conversation.UUID, SourceKind: "claude-ai", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Metadata: map[string]any{"summary": conversation.Summary},
+	return WorkspaceRecord{Observed: version, SourceID: conversation.UUID, SourceKind: "claude-ai", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Metadata: claudeConversationMetadata(conversation),
 		Conversations: []ConversationRecord{{NativeID: conversation.UUID, Provider: "claude", Account: a.config.Account, Origin: "user-export", Harness: "claude-ai-export", Coverage: "complete", Messages: messages, StartedAt: created, EndedAt: updated, Observed: version}}}
+}
+
+func claudeConversationMetadata(c claudeAIConversation) map[string]any {
+	metadata := map[string]any{"summary": c.Summary}
+	if c.Account.UUID != "" {
+		metadata["claude_account_uuid"] = c.Account.UUID
+	}
+	return metadata
 }
 
 // claudeAISelected marks the messages on the conversation's active branch:
