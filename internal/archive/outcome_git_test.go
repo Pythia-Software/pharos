@@ -740,9 +740,10 @@ func TestSessionGitCommandLinks(t *testing.T) {
 	repo.git(at(4, 1), "stash", "apply", "-q")
 	scripted := repo.commitAt(at(4, 2), "From a file", nil)
 	// A command that wrote another subject did not make the commit: it was
-	// made by hand, and the session editing its file is linked.
+	// made by hand, and the session editing its file is linked. The git
+	// revert its message names ran nothing.
 	f.edit("hand", "hand.go", time.Since(at(6, -600)).Hours()/24)
-	f.command("wrong", `git commit -m "A subject nobody used"`, "", at(6, 0), 2*time.Second)
+	f.command("wrong", "git commit -q -F - <<'EOF'\nA subject nobody used\n\nExplain why `git revert` is wrong here.\nEOF", "", at(6, 0), 2*time.Second)
 	hand := repo.commitAt(at(6, 1), "Hand made at that moment", map[string]string{"hand.go": "package hand\n"})
 	// A command run in another repository's checkout links there, and not
 	// the commit made in its own at that moment.

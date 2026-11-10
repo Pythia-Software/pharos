@@ -219,7 +219,11 @@ is this document's shorthand and the stored names' (`session_outcomes`,
   invocations that can make a commit (`commit`, `merge`, `rebase`,
   `cherry-pick`, `revert`, `am`, `pull`, after git's own options such as
   `-C` and `-c`) and for `gh pr create`
-  (`internal/archive/outcome_git_ops.go`). Each is kept with:
+  (`internal/archive/outcome_git_ops.go`). Only a `git` or `gh` that starts
+  a command counts: at the start, after `;`, `&`, `|`, `(`, a line break or
+  an opening `$(` or backtick, past assignments and words such as `env`,
+  `sudo`, `if` or `then`. One in quoted text (a `-m` message or a `--body`),
+  a comment or a here document's body runs nothing. Each is kept with:
   - the call's start and end;
   - the repository it ran in: the directory `git -C` or the last `cd`
     before it names, when that is absolute or under `~` and inside a

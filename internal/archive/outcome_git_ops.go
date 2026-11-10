@@ -44,11 +44,17 @@ var (
 )
 
 // readGitOps reads the git commands one shell call ran. resolve gives the
-// repository a directory the command named is in, if it names one.
+// repository a directory the command named is in, if it names one. Only a
+// git or gh that starts a command counts: one in quoted text, a message or a
+// pull request body say, or in a here document runs nothing.
 func readGitOps(call outcomeCall, resolve func(directory string) string) []gitOp {
 	command := call.Command
+	starts := commandStarts(command)
 	ops := []gitOp{}
 	for _, match := range gitCommitInvocation.FindAllStringSubmatchIndex(command, -1) {
+		if !starts[match[0]+strings.Index(command[match[0]:], "git")] {
+			continue
+		}
 		op := gitOp{Kind: command[match[4]:match[5]], At: call.StartedAt, Until: call.EndedAt}
 		directory := ""
 		if option := gitDirectoryOption.FindStringSubmatch(command[match[2]:match[3]]); option != nil {
@@ -77,7 +83,9 @@ func readGitOps(call outcomeCall, resolve func(directory string) string) []gitOp
 			break
 		}
 	}
-	if ghPullRequestCreate.MatchString(command) {
+	if slices.ContainsFunc(ghPullRequestCreate.FindAllStringIndex(command, -1), func(match []int) bool {
+		return starts[match[0]+strings.Index(command[match[0]:], "gh")]
+	}) {
 		for _, found := range pullRequestURL.FindAllStringSubmatch(call.Result, -1) {
 			number, _ := strconv.Atoi(found[2])
 			ops = append(ops, gitOp{Kind: "pull_request", At: call.StartedAt, Until: call.EndedAt, PullRequest: number, Forge: strings.ToLower(found[1])})
@@ -145,6 +153,134 @@ func shellDirectory(command string, end int) string {
 		}
 	}
 	return ""
+}
+
+// commandPrefixes are words after which the next word still starts a
+// command: they open a compound command's body or run the command after
+// them.
+var commandPrefixes = []string{"!", "{", "if", "then", "else", "elif", "while", "until", "do", "time", "env", "command", "exec", "nohup", "sudo"}
+
+var (
+	shellAssignment = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*\+?=`)
+	heredocOperator = regexp.MustCompile(`^<<-?[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|\\?([\w.-]+))`)
+)
+
+// commandStarts are the indexes in a shell command line where a simple
+// command's name begins: at the start, after a separator (; & | ( or a line
+// break) and inside a $( … ) or ` … ` substitution, past any assignments and
+// commandPrefixes. Quoted text outside a substitution, comments and here
+// documents' bodies start none.
+func commandStarts(command string) map[int]bool {
+	starts := map[int]bool{}
+	// What each open $( … ) returns to: the quote it opened inside, and
+	// whether it is an assignment's value.
+	type substitution struct {
+		quote     byte
+		assigning bool
+	}
+	open := []substitution{}
+	quote, backtick := byte(0), false
+	// start: the next word is a command's name; assigning: the current word
+	// is an assignment, after which one still is.
+	start, assigning := true, false
+	// The delimiters of the here documents opened on this line.
+	delimiters := []string{}
+	for index := 0; index < len(command); index++ {
+		char := command[index]
+		substitutionOpens := char == '$' && index+1 < len(command) && command[index+1] == '('
+		switch {
+		case quote == '\'':
+			if char == '\'' {
+				quote = 0
+			}
+		case quote == '"' && !substitutionOpens:
+			if char == '\\' {
+				index++
+			} else if char == '"' {
+				quote = 0
+			}
+		case substitutionOpens:
+			open = append(open, substitution{quote, assigning})
+			quote, start, assigning = 0, true, false
+			index++
+		case char == ')' && len(open) > 0:
+			quote, assigning = open[len(open)-1].quote, open[len(open)-1].assigning
+			open, start = open[:len(open)-1], false
+		case char == '\n':
+			if len(delimiters) > 0 {
+				index, delimiters = hereDocumentsEnd(command, index+1, delimiters), nil
+			}
+			start, assigning = true, false
+		case char == ' ' || char == '\t':
+			if assigning {
+				start, assigning = true, false
+			}
+		case char == '#' && (index == 0 || strings.IndexByte(" \t\n;&|(", command[index-1]) >= 0):
+			for index+1 < len(command) && command[index+1] != '\n' {
+				index++
+			}
+		case char == '\\':
+			// A line continuation joins the lines; any other escape is a word.
+			start = start && index+1 < len(command) && command[index+1] == '\n'
+			index++
+		case char == '\'' || char == '"':
+			quote, start = char, false
+		case char == '`':
+			backtick = !backtick
+			start, assigning = backtick, false
+		case strings.HasPrefix(command[index:], "<<<"):
+			index += 2
+		case char == '<' && heredocOperator.MatchString(command[index:]):
+			operator := heredocOperator.FindStringSubmatch(command[index:])
+			delimiters = append(delimiters, operator[1]+operator[2]+operator[3])
+			index += len(operator[0]) - 1
+		case char == '&' && index > 0 && strings.IndexByte("<>", command[index-1]) >= 0:
+			// A redirection, as in 2>&1.
+		case strings.IndexByte(";&|(", char) >= 0:
+			start, assigning = true, false
+		case char == ')':
+			start = false
+		case start:
+			rest := command[index:]
+			if assignment := shellAssignment.FindString(rest); assignment != "" {
+				start, assigning = false, true
+				index += len(assignment) - 1
+				continue
+			}
+			word := rest
+			if end := strings.IndexAny(rest, " \t\n;&|()<>"); end >= 0 {
+				word = rest[:end]
+			}
+			if slices.Contains(commandPrefixes, word) {
+				index += len(word) - 1
+				continue
+			}
+			starts[index], start = true, false
+		}
+	}
+	return starts
+}
+
+// hereDocumentsEnd is where the bodies of here documents beginning at at
+// end: the line break after the last one's delimiter line, else the end.
+func hereDocumentsEnd(command string, at int, delimiters []string) int {
+	for number, delimiter := range delimiters {
+		for {
+			end := strings.IndexByte(command[at:], '\n')
+			if end < 0 {
+				return len(command)
+			}
+			line := command[at : at+end]
+			at += end + 1
+			if strings.TrimSpace(line) == delimiter {
+				if number == len(delimiters)-1 {
+					return at - 1
+				}
+				break
+			}
+		}
+	}
+	return len(command)
 }
 
 // commitSubjects fingerprints the subject a git invocation writes, from its
