@@ -3395,7 +3395,7 @@
       "category": "errors",
       "idea": "tools-07",
       "title": "Failed edit paths",
-      "description": "Error-marked edit calls started in the last {days} days, grouped by project and mapped relative path.",
+      "description": "Error-marked edit calls started in the last {days} days, grouped by the file's repository and its relative path.",
       "where": [
         {
           "field": "error_count",
@@ -3447,7 +3447,7 @@
       ],
       "exploration": {
         "keys": [
-          "project_name",
+          "path_repository",
           "repo_path"
         ],
         "summaries": [
@@ -3482,7 +3482,7 @@
       },
       "action": "Explore Tool Calls",
       "emptyLabel": "No recorded edit errors with mapped paths",
-      "note": "Each tool-call row is one recorded call, selected by its start time. error_count is one for status=error and zero otherwise. Recorded errors include rejected, interrupted, blocked, and timed-out calls as well as execution errors; these are not automatically mistakes or avoidable failures. Calls with no recorded result remain in all-call denominators and are not asserted errors. Counts do not measure wasted time, model quality, or whether the overall task succeeded. Only edit-category calls with a mapped, nonempty repository-relative path contribute. Identical paths in different projects stay separate. Unmapped paths are excluded. Expanding a group shows the recorded calls and error types; counts do not establish that edits were ultimately abandoned.",
+      "note": "Each tool-call row is one recorded call, selected by its start time. error_count is one for status=error and zero otherwise. Recorded errors include rejected, interrupted, blocked, and timed-out calls as well as execution errors; these are not automatically mistakes or avoidable failures. Calls with no recorded result remain in all-call denominators and are not asserted errors. Counts do not measure wasted time, model quality, or whether the overall task succeeded. Only edit-category calls with a mapped, nonempty repository-relative path contribute, which only files in a Git checkout have. Identical paths in different repositories stay separate. Unmapped paths are excluded. Expanding a group shows the recorded calls and error types; counts do not establish that edits were ultimately abandoned.",
       "days": [
         7
       ],
@@ -3499,7 +3499,7 @@
           "v": 3,
           "view": "compare",
           "metric": "calls",
-          "split": "project_path",
+          "split": "repository_path",
           "period": "day",
           "scale": "linear",
           "nonzero": false
@@ -3865,7 +3865,7 @@
       "measures": [],
       "exploration": {
         "keys": [
-          "project_name",
+          "path_repository",
           "repo_path"
         ],
         "summaries": [
@@ -3893,7 +3893,7 @@
         "action": "Explore frequently read paths",
         "labelFields": [
           "repo_path",
-          "project_name"
+          "path_repository"
         ],
         "context": [
           {
@@ -3909,7 +3909,7 @@
         "maxGroups": 6
       },
       "action": "Explore Tool Calls",
-      "note": "Count all retained read calls with a mapped repository-relative path. Project and path remain separate keys; identical paths in different projects are not merged. This shows frequency across conversations, not repeated reads within one conversation. Missing paths and non-read tools are excluded. A recorded call can refer to a partial file; frequency does not establish unchanged content or redundant work.",
+      "note": "Count all retained read calls with a mapped repository-relative path, which only files in a Git checkout have. The file's repository and path remain separate keys; identical paths in different repositories are not merged. This shows frequency across conversations, not repeated reads within one conversation. Missing paths and non-read tools are excluded. A recorded call can refer to a partial file; frequency does not establish unchanged content or redundant work.",
       "where": [
         {
           "field": "tool_category",
@@ -3928,7 +3928,7 @@
           "v": 3,
           "view": "compare",
           "metric": "calls",
-          "split": "project_path",
+          "split": "repository_path",
           "period": "day",
           "scale": "linear",
           "nonzero": false
@@ -6599,7 +6599,7 @@
       "measures": [],
       "exploration": {
         "keys": [
-          "project_name",
+          "path_repository",
           "repo_path",
           "conversation_id"
         ],
@@ -6629,7 +6629,7 @@
         "action": "Inspect repeated conversation reads",
         "labelFields": [
           "repo_path",
-          "project_name",
+          "path_repository",
           "conversation_id"
         ],
         "context": [
@@ -6671,7 +6671,7 @@
           "v": 3,
           "view": "compare",
           "metric": "calls",
-          "split": "project_path",
+          "split": "repository_path",
           "period": "day",
           "scale": "linear",
           "nonzero": false,
@@ -8642,7 +8642,7 @@
           "id": "file-edits",
           "op": "count",
           "groupBy": [
-            "project_name",
+            "path_repository",
             "repo_path"
           ],
           "label": "Edit calls by path"
@@ -8650,7 +8650,7 @@
       ],
       "exploration": {
         "keys": [
-          "project_name",
+          "path_repository",
           "repo_path"
         ],
         "summaries": [
@@ -8697,7 +8697,7 @@
         ],
         "labelFields": [
           "repo_path",
-          "project_name"
+          "path_repository"
         ],
         "context": [
           {
@@ -8706,7 +8706,7 @@
           }
         ]
       },
-      "note": "Count edit-category calls by project and mapped nonempty relative path, requiring two calls in the window. Counts include failed attempts and the first edit. A call’s mapped path need not describe every file it touched. Identical paths in different projects stay separate. Conversation reach and retained line additions/removals remain inspectable; these are not net Git changes, distinct modifications, reversals, or quality scores.",
+      "note": "Count edit-category calls by the file's repository and mapped nonempty relative path, which only files in a Git checkout have, requiring two calls in the window. Counts include failed attempts and the first edit. A call’s mapped path need not describe every file it touched. Identical paths in different repositories stay separate. Conversation reach and retained line additions/removals remain inspectable; these are not net Git changes, distinct modifications, reversals, or quality scores.",
       "retired": true,
       "action": "Inspect repeated path edits",
       "days": [
@@ -13244,7 +13244,7 @@
             "id": "tf_repository",
             "op": "row",
             "field": "project_name",
-            "label": "Repository"
+            "label": "Project"
           },
           {
             "id": "tf_started",
@@ -15255,8 +15255,8 @@
     },
     {
       "id": "work-volume-cost",
-      "title": "Conversations with usage vs API cost (USD) per workspace by repository",
-      "description": "Conversations with usage vs API cost (USD) per workspace by repository over the last {days} days.",
+      "title": "Conversations with usage vs API cost (USD) per workspace by project",
+      "description": "Conversations with usage vs API cost (USD) per workspace by project over the last {days} days.",
       "category": "cost",
       "idea": "cost-02",
       "dataset": "scatter",
@@ -15293,11 +15293,11 @@
             }
           ],
           "groupBy": [
-            "repository_name",
+            "project_name",
             "entity_id"
           ],
           "groupLimit": 2000,
-          "label": "Conversations with usage vs API cost (USD) per workspace by repository",
+          "label": "Conversations with usage vs API cost (USD) per workspace by project",
           "display": {
             "kind": "scatter",
             "xLabel": "Conversations with usage",
@@ -15336,7 +15336,7 @@
           "metric": "tokens_conversations",
           "metricY": "tokens_cost",
           "unit": "work",
-          "split": "repository_name",
+          "split": "project_name",
           "scale": "logarithmic",
           "scaleY": "logarithmic"
         },

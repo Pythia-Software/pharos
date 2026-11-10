@@ -26,6 +26,7 @@ func PharosAgentEventRatesSchema() querytable.Schema {
 			"turn_id":          {Name: "turn_id", Kind: querytable.FieldText, Expr: "r.\"turn_id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"turn_id\""},
 			"title":            {Name: "title", Kind: querytable.FieldText, Expr: "r.\"title\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"title\""},
 			"repository_name":  {Name: "repository_name", Kind: querytable.FieldText, Expr: "r.\"repository_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"repository_name\""},
+			"project_name":     {Name: "project_name", Kind: querytable.FieldText, Expr: "r.\"project_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"project_name\""},
 			"provider":         {Name: "provider", Kind: querytable.FieldEnum, Expr: "r.\"provider\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"provider\""},
 			"model":            {Name: "model", Kind: querytable.FieldText, Expr: "r.\"model\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"model\""},
 			"effort":           {Name: "effort", Kind: querytable.FieldText, Expr: "r.\"effort\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"effort\""},
