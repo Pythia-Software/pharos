@@ -138,15 +138,17 @@ func (p *capturePlan) chatGPT(ctx context.Context, source SourceConfig, info fs.
 
 // claudeAI plans a Claude.ai export source's capture.
 func (p *capturePlan) claudeAI(ctx context.Context, source SourceConfig, info fs.FileInfo) error {
-	file := (&claudeAIAdapter{baseAdapter{config: source}}).exportFile()
-	if _, err := os.Stat(file); err != nil {
+	inputs, err := claudeExportInputs(sourceFiles{ctx: ctx}, source.Path)
+	if err != nil {
 		return fmt.Errorf("Claude.ai export is unavailable: %w", err)
 	}
-	rel, _ := filepath.Rel(source.Path, file)
-	if !info.IsDir() {
-		rel = filepath.Base(file)
+	for _, input := range inputs {
+		rel, _ := filepath.Rel(source.Path, input.path)
+		if !info.IsDir() {
+			rel = filepath.Base(input.path)
+		}
+		p.files = append(p.files, captureItem{input.path, filepath.ToSlash(rel)})
 	}
-	p.files = []captureItem{{file, filepath.ToSlash(rel)}}
 	return nil
 }
 
