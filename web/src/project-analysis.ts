@@ -15,12 +15,14 @@ export const projectsReached = (subject: string): AnalysisMeasure => ({ label: `
 // same groups for repositories and adds the folders that had none.
 const legacyIds: Record<string, string> = {
   repository_name: "project_name", root_repository_name: "root_project_name", repository_provider_model: "project_provider_model",
-  repository_path: "project_path", repository_error: "project_error", repository_command: "project_command", family_repository: "family_project",
+  repository_error: "project_error", repository_command: "project_command", family_repository: "family_project",
   repository: "project", repositories: "projects",
 };
 
 // projectLegacy reads those older ids, after the catalog's own legacy mapping
-// when it has one.
+// when it has one. The empty group meant "No repository", every folder
+// session as well as chat exports; as "No project" it would mean only the
+// latter, so a legend selection of it is dropped rather than narrowed.
 export function projectLegacy(legacy?: (state: AnalysisState) => AnalysisState): (state: AnalysisState) => AnalysisState {
   return state => {
     const read = legacy ? legacy(state) : state;
@@ -29,6 +31,13 @@ export function projectLegacy(legacy?: (state: AnalysisState) => AnalysisState):
       const value = read[key];
       if (value !== undefined && Object.hasOwn(legacyIds, value)) change[key] = legacyIds[value];
     }
-    return Object.keys(change).length ? { ...read, ...change } : read;
+    if (!Object.keys(change).length) return read;
+    const next = { ...read, ...change };
+    if (change.split && read.selection?.values.includes("")) {
+      const values = read.selection.values.filter(value => value !== "");
+      if (values.length || read.selection.allHidden) next.selection = { ...read.selection, values };
+      else delete next.selection;
+    }
+    return next;
   };
 }

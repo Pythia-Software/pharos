@@ -98,7 +98,11 @@ type brokerOperations struct {
 	unavailable map[string]int
 	// resources samples the broker, each library's service and the
 	// Terminal commands writing them, for /api/app/status (§10).
-	resources *resourceSampler
+	resources     *resourceSampler
+	history       *resourceHistory
+	leases        resourceLeaseCache
+	nativePID     int
+	nativeStarted uint64
 }
 
 func brokerOperationsPath(installation string) string {
@@ -111,6 +115,9 @@ func newBrokerOperations(path string) *brokerOperations {
 	b := &brokerOperations{reg: newOpRegistry("broker"), path: path, client: &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}},
 		resources: newResourceSampler()}
 	b.reg.wake = make(chan struct{}, 1)
+	if os.Getenv("PHAROS_WORK_ENGINE") == "scheduled" {
+		b.configureResourceHistory()
+	}
 	// Broker work in the background, such as deliveries, runs its IO at the
 	// utility tier (§10), as the services' does.
 	b.reg.lowerIO = true
@@ -364,7 +371,15 @@ func (b *brokerOperations) start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		var collected chan struct{}
+		if b.history != nil {
+			collected = make(chan struct{})
+			go func() { defer close(collected); b.history.run(ctx) }()
+		}
 		b.run(ctx)
+		if collected != nil {
+			<-collected
+		}
 	}()
 	return done
 }
@@ -479,13 +494,19 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 		// Without a service to ask, the broker reads the leases of Terminal
 		// commands writing this library itself (lease files, never a capture
 		// or index lock), and those of app-level commands naming it.
-		leases := []leaseProbe{}
+		leases, owned := []leaseProbe{}, []leaseProbe{}
+		if own == nil || withResources && b.history != nil {
+			// A managed service delegates sampling, so its snapshot has no
+			// process readings. Status still needs fresh CLI ownership.
+			owned = probeLeases(library.LeaseDirs)
+		}
 		if own == nil {
-			leases = probeLeases(library.LeaseDirs)
+			leases = append(leases, owned...)
 		}
 		for _, probe := range appLeases {
 			if probe.Info != nil && slices.ContainsFunc(probe.Info.Libraries, func(path string) bool { return sameConfig(path, library) }) {
 				leases = append(leases, probe)
+				owned = append(owned, probe)
 			}
 		}
 		verdict := brokerLibraryVerdict(own, records, library.ID, unreachable, leases)
@@ -507,7 +528,7 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 			if snapshots[index] != nil {
 				processes = append(processes, snapshotProcesses(snapshots[index], library.ID, library.Name)...)
 			}
-			processes = append(processes, leaseProcesses(leases, library.ID, library.Name)...)
+			processes = append(processes, leaseProcesses(owned, library.ID, library.Name)...)
 			entry["resources"] = processes
 			sampled = append(sampled, processes...)
 		}
@@ -556,6 +577,17 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 // same readings; it returns the machine's total: the broker, every library's
 // processes and the app-level Terminal commands, each process counted once.
 func (b *brokerOperations) libraryResources(entries []map[string]any, processes []resourceProcess) *resourceSummary {
+	if b.history != nil {
+		if summary, ok := b.history.latest(""); ok && coversResourceRoots(summary, processes) {
+			for _, entry := range entries {
+				id, _ := entry["id"].(string)
+				entry["resources"], _ = b.history.latest(id)
+			}
+			return summary
+		}
+		b.leases.stale.Store(true)
+		b.history.poke()
+	}
 	readings := b.resources.sample(processes)
 	byPID := map[int]resourceReading{}
 	for _, reading := range readings {

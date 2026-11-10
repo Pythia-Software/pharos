@@ -31,6 +31,13 @@ type siteCases struct {
 		URL     string                  `json:"url"`
 		Decoded map[string]qt.LinkQuery `json:"decoded"`
 	} `json:"example"`
+	Population struct {
+		Page    string         `json:"page"`
+		Chart   map[string]any `json:"chart"`
+		Filters []qt.WhereTerm `json:"filters"`
+		Days    int            `json:"days"`
+		URL     string         `json:"url"`
+	} `json:"population"`
 	Analyze map[string][]struct {
 		Chart   map[string]any `json:"chart"`
 		Verdict string         `json:"verdict"`
@@ -70,6 +77,39 @@ func testSiteMap(t *testing.T) *siteMap {
 		t.Fatal(err)
 	}
 	return site
+}
+
+func TestSiteLinkClassifiedMessagesUseCanonicalDataset(t *testing.T) {
+	site := testSiteMap(t)
+	for _, hidden := range []string{"writing_messages", "writing", "tools", "people_message_labels"} {
+		if site.Nodes["analyze/query/"+hidden] != nil {
+			t.Errorf("internal dataset %s has a generated Query page", hidden)
+		}
+	}
+	result, err := site.linkTool(linkArgs(t, `{"page":"analyze/query/messages","query":{"where":[{"field":"role","op":"=","value":"user"},{"field":"has_authorship","op":"=","value":"true"},{"field":"typed_words","op":">","value":"0"}]},"days":30}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := result["url"].(string)
+	address, err := url.Parse(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := address.Query().Get("analyze_data"); got != "messages" {
+		t.Errorf("dataset = %q, want messages", got)
+	}
+	if address.Query().Get("q_messages") == "" || address.Query().Has("q_writing_messages") || address.Query().Get("window_dataset") != "messages" {
+		t.Errorf("canonical message query/window missing: %s", link)
+	}
+	state := roundTrip(t, site, "classified messages", link)
+	want := []qt.WhereTerm{
+		{Field: "role", Op: "=", Value: "user"},
+		{Field: "has_authorship", Op: "=", Value: "true"},
+		{Field: "typed_words", Op: ">", Value: "0"},
+	}
+	if !reflect.DeepEqual(state.Filters, want) || state.Days != 30 {
+		t.Errorf("authorship population/window = %+v/%d, want %+v/30", state.Filters, state.Days, want)
+	}
 }
 
 func TestSiteMapJudgesEveryChartCaseAsThePageDoes(t *testing.T) {
@@ -220,6 +260,29 @@ func linkArgs(t *testing.T, text string) map[string]any {
 	return args
 }
 
+// A dashboard's population is its filters other than the range: an agent
+// writes the legend's exclusion and an inclusion as site_link filters and
+// gets the page's link, and the link reads back as the same terms.
+func TestSiteLinkBuildsAPartialPopulation(t *testing.T) {
+	site, cases := testSiteMap(t), readSiteCases(t)
+	example := cases.Population
+	args := linkArgs(t, `{"page": "analyze/session_shape", "days": 30,
+		"filters": [{"any": [{"field": "harness", "op": "!=", "value": "antigravity-cli"}, {"field": "harness", "op": "is_null", "value": ""}]}, {"field": "agent_kind", "op": "=", "value": "root"}]}`)
+	args["options"] = linkArgs(t, compactJSON(example.Chart))
+	result, err := site.linkTool(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameLink(t, "population", result["url"].(string), example.URL)
+	read := roundTrip(t, site, "population", example.URL)
+	if compactJSON(read.Filters) != compactJSON(example.Filters) || read.Days != example.Days {
+		t.Errorf("population read filters %s days %d", compactJSON(read.Filters), read.Days)
+	}
+	if summary, _ := result["summary"].(string); !strings.Contains(summary, "antigravity-cli") || !strings.Contains(summary, "root") {
+		t.Errorf("summary %q does not name the population", summary)
+	}
+}
+
 func TestSiteLinkBuildsTheMotivatingExample(t *testing.T) {
 	site, cases := testSiteMap(t), readSiteCases(t)
 	example := cases.Example
@@ -280,6 +343,9 @@ func TestSiteLinkErrorsNameTheArgumentAndListTheChoices(t *testing.T) {
 		{`{"page": "analyze/tokens", "options": {"view": "compare", "unit": "agent_session", "split": "model_family"}}`, "options.split", "session_kind"},
 		{`{"page": "analyze/tokens", "options": {"view": "trend", "unit": "conversation"}}`, "options.unit", "rollingPeriods"},
 		{`{"page": "analyze/tokens", "options": {"view": "pie"}}`, "options.view", "compare"},
+		{`{"page": "analyze/tokens", "options": {"view": "trend", "percentiles": ["p42"]}}`, "options.percentiles", "p50"},
+		{`{"page": "analyze/tokens", "options": {"view": "trend", "percentiles": "p50"}}`, "options.percentiles", "p90"},
+		{`{"page": "analyze/session_shape", "options": {"view": "trend", "metric": "sessions", "split": "length_band", "percentiles": ["mean", "p90"]}}`, "options.percentiles", "p99"},
 		{`{"page": "analyze/tokens", "options": {"hours": 0}}`, "options.hours", ""},
 		{`{"page": "analyze/tokens", "filters": [{"field": "provider", "op": "=", "value": "anthropic"}]}`, "filters[0].value", "claude"},
 		{`{"page": "analyze/tokens", "filters": [{"field": "provider", "op": "contains", "value": "c"}]}`, "filters[0].op", "is_not_null"},
@@ -311,6 +377,53 @@ func TestSiteLinkErrorsNameTheArgumentAndListTheChoices(t *testing.T) {
 	}
 }
 
+// The %ile control's levels reach a link as the page draws them: lines at
+// levels of earlier points, a heatmap's traced percentiles, and the older
+// norm read as the mean.
+func TestSiteLinkDrawsTheChosenPercentiles(t *testing.T) {
+	site := testSiteMap(t)
+	chart := func(result map[string]any) map[string]any {
+		state, err := site.parseURL(result["url"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state.Chart.toMap()
+	}
+	lines, err := site.linkTool(linkArgs(t, `{"page": "analyze/tokens", "options": {"view": "trend", "metric": "tokens", "split": "none", "percentiles": ["p50", "p90"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := chart(lines)["percentiles"]; compactJSON(got) != `["p50","p90"]` {
+		t.Errorf("percentiles %s", compactJSON(got))
+	}
+	if !strings.Contains(lines["summary"].(string), "against the median and 90th %ile of the previous 30 periods") {
+		t.Errorf("summary %q", lines["summary"])
+	}
+	heatmap, err := site.linkTool(linkArgs(t, `{"page": "analyze/session_shape", "options": {"view": "trend", "metric": "sessions", "split": "length_band", "percentiles": ["p75", "p99"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(heatmap["summary"].(string), "tracing each period's 75th %ile and 99th %ile") {
+		t.Errorf("summary %q", heatmap["summary"])
+	}
+	// Shares have no reference level: the link says which levels it draws.
+	_, err = site.linkTool(linkArgs(t, `{"page": "analyze/tokens", "options": {"view": "trend", "metric": "tokens", "split": "provider", "share": true, "percentiles": ["p90"]}}`))
+	var linkErr *siteLinkError
+	if !errors.As(err, &linkErr) || linkErr.Arg != "options.percentiles" || !strings.Contains(err.Error(), "[]") {
+		t.Errorf("shares with a level: %v", err)
+	}
+	// An older link's norm opens as the mean, written under its current name.
+	dashboard := site.Analyze.Dashboards["tokens"]
+	old := map[string]any{"v": float64(site.Analyze.Version), "view": "trend", "metric": "tokens", "split": "none", "norm": true}
+	if verdict, _ := site.judge(dashboard, old); verdict != verdictCoercible {
+		t.Errorf("norm judged %s", verdict)
+	}
+	written := dashboard.viewChart(old).toMap()
+	if _, kept := written["norm"]; kept || compactJSON(written["percentiles"]) != `["mean"]` {
+		t.Errorf("norm written as %s", compactJSON(written))
+	}
+}
+
 func TestSiteLinkRejectsWhatTheSiteMapCannotExpress(t *testing.T) {
 	site, cases := testSiteMap(t), readSiteCases(t)
 	example, _ := url.Parse(cases.Example.URL)
@@ -327,9 +440,10 @@ func TestSiteLinkRejectsWhatTheSiteMapCannotExpress(t *testing.T) {
 		"legacy alias":         "/tools",
 		"unknown page":         "/nowhere",
 		"other origin":         "https://example.com" + cases.Example.URL,
-		"coerced chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"cost","split":"type"}`) }),
+		"coerced chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":3,"view":"trend","metric":"cost","split":"type"}`) }),
 		"older chart":          with(func(v url.Values) { v.Set("analyze_chart", `{"view":"trend","metric":"tokens"}`) }),
-		"invalid chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"metric":"bogus"}`) }),
+		"version 2 chart":      with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"tokens","split":"provider"}`) }),
+		"invalid chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":3,"metric":"bogus"}`) }),
 		"window disagreement":  with(func(v url.Values) { v.Set("analyze_days", "90") }),
 		"unknown filter field": "/analyze?analyze_mode=query&analyze_topic=tokens&analyze_data=usage&q_usage=" + mustToken(t, site, `[{"field":"nope","op":"=","value":"x"}]`),
 		"tab without finding":  "/findings?tab=evidence",
@@ -346,12 +460,12 @@ func TestSiteLinkRejectsWhatTheSiteMapCannotExpress(t *testing.T) {
 	}
 	// A link in older names opens as the current chart, and comes back in them.
 	result, err := site.linkTool(map[string]any{"url": with(func(v url.Values) {
-		v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"percent","split":"model_family"}`)
+		v.Set("analyze_chart", `{"v":3,"view":"trend","metric":"percent","split":"model_family"}`)
 	})})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state, _ := site.parseURL(result["url"].(string)); compactJSON(state.Chart) != `{"v":2,"view":"trend","metric":"tokens","split":"model_family","share":true}` || result["canonical"] != false {
+	if state, _ := site.parseURL(result["url"].(string)); compactJSON(state.Chart) != `{"v":3,"view":"trend","metric":"tokens","split":"model_family","share":true}` || result["canonical"] != false {
 		t.Errorf("older names read as %s", compactJSON(state.Chart))
 	}
 }
@@ -701,9 +815,13 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		t.Fatal("non-timestamp window accepted")
 	}
 	for _, input := range []string{
+		`{"page":"analyze/tokens","options":{"selection":{"values":[],"excluded":false,"allHidden":true}}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"disclosures":{"timeline-key":false}},"reveal":"section:timeline-key"}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"disclosures":{"timeline-key":true}},"reveal":"section:timeline-key"}`,
 		`{"page":"analyze/thinking-detail","view":{"thinking":{"view":"calendar","groupBy":"model_effort","timezone":"America/Denver","range":"30d","hiddenPercentiles":["p95"],"hours":6}}}`,
 		`{"page":"cards","view":{"card_window":"today","card_filters":false},"highlight":["card:tool-failures"],"reveal":"text:failed command"}`,
-		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"find":"failed command","find_case":true,"reader_expanded":["message:m"],"reader_filter":["prompts","response"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
+		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"find":"failed command","find_case":true,"reader_expanded":["message:m"],"reader_filter":["prompts","response"],"reader_highlight_hidden":["events:event-friction","labels:C.report"],"reader_navigator":["timeline","context","turns"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"timeline_visibility":{"modes":{"values":["C.report.finding","?"],"excluded":false},"events":{"values":["friction"],"excluded":true},"tools":{"values":["error"],"excluded":true},"origins":{"values":["typed"],"excluded":false}}}}`,
 	} {
 		result, err := site.linkTool(linkArgs(t, input))
 		if err != nil {
@@ -733,10 +851,10 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 	}
 }
 
-// Every Analyze dashboard takes site_link's days and each of its options, and
-// reads them back as the same arguments. A dashboard that agents can reach
-// only through raw view state, or without its range, fails here.
-func TestSiteLinkEveryDashboardTakesItsOptionsAndDays(t *testing.T) {
+// Catalog dashboards accept options and days. Bespoke dashboards with
+// per-view ranges expose their registered view controls instead. Each control
+// must be discoverable and round-trip through site_link.
+func TestSiteLinkEveryDashboardTakesItsControls(t *testing.T) {
 	site := testSiteMap(t)
 	dashboards := 0
 	for _, path := range site.nodeOrder {
@@ -770,7 +888,20 @@ func TestSiteLinkEveryDashboardTakesItsOptionsAndDays(t *testing.T) {
 				}
 			}
 		}
-		if len(links) == 2 {
+		if len(node.Options) == 0 {
+			links = nil
+			for key, field := range site.viewFields(path) {
+				if field.Kind != "enum" || !slices.Contains(field.Pages, path) {
+					continue
+				}
+				for _, value := range field.Values {
+					links = append(links, map[string]any{"page": path, "view": map[string]any{key: value}})
+				}
+			}
+			if len(links) == 0 {
+				t.Errorf("%s has no registered dashboard controls", path)
+			}
+		} else if len(links) == 2 {
 			t.Errorf("%s takes no options: give it a catalog or options keyed into its state (dashboardLinks in site-map.ts)", path)
 		}
 		for _, args := range links {
@@ -782,6 +913,13 @@ func TestSiteLinkEveryDashboardTakesItsOptionsAndDays(t *testing.T) {
 			}
 			roundTrip(t, site, name, result["url"].(string))
 			read := result["arguments"].(map[string]any)
+			if view, given := args["view"].(map[string]any); given {
+				for key, value := range view {
+					if got, _ := read["view"].(map[string]any); got == nil || siteString(got[key]) != siteString(value) {
+						t.Errorf("%s: reads back view %s", name, compactJSON(read["view"]))
+					}
+				}
+			}
 			if days, given := args["days"]; given && siteString(read["days"]) != siteString(days) {
 				t.Errorf("%s: reads back days %v", name, read["days"])
 			}
@@ -968,6 +1106,58 @@ func TestSiteLinkJSONInspectionsAndDetailTargets(t *testing.T) {
 
 func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 	site := testSiteMap(t)
+	for _, raw := range []string{`[]`, `["timeline","context","turns"]`, `["turns"]`, `["unknown"]`, `["turns","turns"]`, `{}`} {
+		valid := raw == `[]` || raw == `["timeline","context","turns"]` || raw == `["turns"]`
+		_, err := site.linkTool(map[string]any{"url": "/work/w?reader_navigator=" + url.QueryEscape(raw)})
+		if (err == nil) != valid {
+			t.Fatalf("navigator %s: valid=%v: %v", raw, valid, err)
+		}
+	}
+	visibilityData, err := os.ReadFile(filepath.Join("..", "..", "testdata", "timeline-visibility-cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visibilityCases []struct {
+		Name  string
+		State any
+		Valid bool
+	}
+	if err := json.Unmarshal(visibilityData, &visibilityCases); err != nil {
+		t.Fatal(err)
+	}
+	checkVisibility := func(t *testing.T, value any, valid bool) {
+		t.Helper()
+		args := map[string]any{"page": "work", "options": map[string]any{"work_id": "w"}, "view": map[string]any{"timeline_visibility": value}}
+		result, err := site.linkTool(args)
+		if (err == nil) != valid {
+			t.Fatalf("structured arguments: valid=%v: %v", valid, err)
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = site.linkTool(map[string]any{"url": "/work/w?timeline_visibility=" + url.QueryEscape(string(raw))})
+		if (err == nil) != valid {
+			t.Fatalf("URL arguments: valid=%v: %v", valid, err)
+		}
+		if valid {
+			roundTrip(t, site, "timeline visibility", result["url"].(string))
+		}
+	}
+	for _, sample := range visibilityCases {
+		t.Run("timeline visibility "+sample.Name, func(t *testing.T) {
+			checkVisibility(t, sample.State, sample.Valid)
+		})
+	}
+	for _, count := range []int{1000, 1001} {
+		t.Run(fmt.Sprintf("timeline visibility %d values", count), func(t *testing.T) {
+			values := make([]string, count)
+			for i := range values {
+				values[i] = "?"
+			}
+			checkVisibility(t, map[string]any{"modes": map[string]any{"values": values, "excluded": false}}, count <= 1000)
+		})
+	}
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "search-draft-cases.json"))
 	if err != nil {
 		t.Fatal(err)

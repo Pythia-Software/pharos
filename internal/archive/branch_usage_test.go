@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // usageEvent is a Claude Code assistant event in a session with usage, on
@@ -92,6 +93,13 @@ func TestBranchUsageRows(t *testing.T) {
 		if session == "s-notes-usage" {
 			t.Fatalf("a folder session has spend by branch: %#v", row)
 		}
+		// A branch is named within its project; main in ten repositories is ten.
+		if want := "app · " + firstString(row["branch"]); row["branch"] != nil && row["project_branch"] != want {
+			t.Fatalf("project and branch %v, want %q", row["project_branch"], want)
+		}
+		if row["branch"] == nil && row["project_branch"] != nil {
+			t.Fatalf("a row without a branch has one in its project: %#v", row)
+		}
 		hour := strings.TrimPrefix(firstString(row["usage_at"]), "2026-09-02T")
 		tokens[fmt.Sprintf("%s %v %v %v %s", session, row["branch"], row["coverage"], row["branch_source"], hour)] += integer(row["tokens"])
 	}
@@ -145,6 +153,68 @@ func TestBranchUsageRows(t *testing.T) {
 	}
 	if after := queryRows(t, library.catalog, `SELECT * FROM agent_session_branch_shares ORDER BY 1,2,3,4`); fmt.Sprint(after) != fmt.Sprint(before) {
 		t.Fatalf("shares changed without new usage")
+	}
+	// A forced index writes the sessions again, with the same totals; their
+	// shares are read again too.
+	adapter, err := MakeAdapter(SourceConfig{Name: "claude", Kind: "claude", Path: library.claude, Account: "local", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := library.catalog.IngestContext(withIngestMode(ctx, ingestMode{force: true}), adapter, nil); result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	if err := library.catalog.refreshBranchUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := queryRows(t, library.catalog, `SELECT * FROM agent_session_branch_shares ORDER BY 1,2,3,4`); fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatalf("shares after a forced index\n got %v\nwant %v", after, before)
+	}
+
+	// A mirror of the switching session, a Conductor workspace on its last
+	// branch, counts once: the totals are the Usage dataset's.
+	var switching, conversation string
+	for id, session := range ids {
+		if session == "s-switch" {
+			switching = id
+		}
+	}
+	if err := library.catalog.DB.QueryRow(`SELECT id FROM conversations WHERE workspace_id=?`, switching).Scan(&conversation); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, library.catalog.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at,repository_id,branch)
+			SELECT 'mirror','conductor','local','mirror','Mirror',indexed_at,repository_id,'feature/b' FROM workspaces WHERE id='`+switching+`'`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('mirror-c','mirror','conductor','local','mirror-c')`,
+		`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,model,total_tokens) VALUES('mirror-s','mirror','mirror-c','main','root','conductor','claude-test',7000)`,
+		`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,effort,attribution,input_tokens,uncached_input_tokens,total_tokens)
+			VALUES('mirror-s','2026-09-02T10:00:00Z','claude-test','','request',7000,7000,7000)`,
+		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('`+conversation+`','mirror-c','mirror',1,'{}')`)
+	rows, err = library.catalog.branchUsageRows(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage, err := library.catalog.usageRows(time.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inRepository := map[string]bool{}
+	for _, row := range queryRows(t, library.catalog, `SELECT w.id FROM workspaces w`+projectJoin("w")+` WHERE pj.id IS NOT NULL`) {
+		inRepository[firstString(row["id"])] = true
+	}
+	var branchTotal, usageTotal int64
+	for _, row := range rows {
+		if row["workspace_id"] == "mirror" {
+			t.Fatalf("a mirror has spend by branch: %#v", row)
+		}
+		branchTotal += integer(row["tokens"])
+	}
+	for _, row := range usage {
+		if inRepository[firstString(row["workspace_id"])] {
+			usageTotal += integer(row["total_tokens"])
+		}
+	}
+	if branchTotal != usageTotal || usageTotal == 0 {
+		t.Fatalf("spend by branch %d tokens, usage in repositories %d", branchTotal, usageTotal)
 	}
 }
 

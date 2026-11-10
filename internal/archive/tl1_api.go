@@ -186,21 +186,23 @@ func (c *Catalog) TL1Candidate(selection tl1Selection, candidateID string) (map[
 
 // cachedTL1AttemptRows returns tl1AttemptRows, kept until the next commit.
 func (c *Catalog) cachedTL1AttemptRows(ctx context.Context) ([]map[string]any, error) {
-	return cachedValue(ctx, c, "tl1-attempts:"+time.Local.String(), func(context.Context) ([]map[string]any, error) {
-		return c.tl1AttemptRows()
-	})
+	return cachedValue(ctx, c, "tl1-attempts:"+time.Local.String(), c.tl1AttemptRowsContext)
 }
 
 // tl1AttemptRows backs the tl1_attempts query table: one row per attempt in
 // every project, on every Mac.
 func (c *Catalog) tl1AttemptRows() ([]map[string]any, error) {
-	installations, err := c.tl1Installations()
+	return c.tl1AttemptRowsContext(context.Background())
+}
+
+func (c *Catalog) tl1AttemptRowsContext(ctx context.Context) ([]map[string]any, error) {
+	installations, err := c.tl1InstallationsContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	rows := []map[string]any{}
 	for _, project := range tl1Projects(installations) {
-		data, err := c.loadTL1(project["installations"].([]map[string]any), tl1Window{})
+		data, err := c.loadTL1Context(ctx, project["installations"].([]map[string]any), tl1Window{})
 		if err != nil {
 			return nil, err
 		}

@@ -57,3 +57,10 @@ func TestResolveMLXRuntime(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestProbeMLXMissingRuntime(t *testing.T) {
+	available, err := probeMLX(filepath.Join(t.TempDir(), "missing-mlx.dylib"))
+	if available == nil || *available || err == nil {
+		t.Fatalf("missing native runtime: %v %v", available, err)
+	}
+}

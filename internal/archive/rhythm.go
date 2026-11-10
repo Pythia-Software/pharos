@@ -73,6 +73,7 @@ var rhythmKinds = []struct{ rule, initiator, label string }{
 }
 
 type rhythmMessage struct {
+	id                    string
 	at                    int64
 	conversation          string
 	typed                 int64
@@ -99,7 +100,7 @@ func (c *Catalog) rhythmMessages(ctx context.Context, cutoff string) ([]rhythmMe
 		if !ok {
 			continue
 		}
-		message := rhythmMessage{at: at.UnixMilli(), conversation: conversation, typed: typed, initiator: "human"}
+		message := rhythmMessage{id: id, at: at.UnixMilli(), conversation: conversation, typed: typed, initiator: "human"}
 		if typed == 0 && automated > 0 {
 			var held []string
 			_ = json.Unmarshal([]byte(rules), &held)
@@ -235,15 +236,22 @@ type rhythmRow struct {
 	starts, typedWords int64
 }
 
+type rhythmMessageSource struct {
+	message rhythmMessage
+	unit    int
+}
+
 // rhythmTable is the dataset under one engaged gap: units, their hourly
-// rows, and the engaged blocks.
+// rows, and the engaged blocks. messageSources retain exact prompts for
+// message-count breakdowns without assigning the hour's time to a label.
 type rhythmTable struct {
-	gap      int64 // minutes
-	units    []rhythmUnit
-	rows     []rhythmRow // by hour
-	blocks   []rhythmBlock
-	start    int64
-	coverage struct {
+	messageSources []rhythmMessageSource
+	gap            int64 // minutes
+	units          []rhythmUnit
+	rows           []rhythmRow // by hour
+	blocks         []rhythmBlock
+	start          int64
+	coverage       struct {
 		Turns, UnmatchedTurns, TypedMessages, Messages int
 	}
 }
@@ -342,6 +350,7 @@ func newRhythmTable(data *concurrencyData, messages []rhythmMessage, gap int64) 
 			conversation = defaultString(thread.RootConversationID, thread.ID)
 		}
 		at := unitFor(actorYou, "human", "", conversation, thread)
+		table.messageSources = append(table.messageSources, rhythmMessageSource{message, at})
 		table.units[at].starts = append(table.units[at].starts, message.at)
 		table.units[at].typedWords = append(table.units[at].typedWords, message.typed)
 	}

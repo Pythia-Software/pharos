@@ -8,7 +8,10 @@ thinking, with what it was about and what the agent did about it, linked to the 
 It is a preview. Settings → Background Processing → **Agent events (preview)**, beside message labels, turns it on for a library: it lists the
 pages in Analyze and starts the pass that finds events on this Mac (below). `agent_events_enabled = true` in the
 library's configuration does both too, and locks the switch on; `/assets/preferences.js` tells the page so
-(`window.pharosConfiguredFlags`), since no preference records it. Direct links work either way.
+(`window.pharosConfiguredFlags`), since no preference records it. Direct links work either way. The **Agent Events**
+dashboard (Analyze → Dashboards → Agents) and its four cards are listed whether or not the preview is on, as Fixes
+is: until the pass has read messages they say so and point to Settings → Background Processing. The lab's Agent
+Experience dashboard and the raw event tables wait on the switch (`agent-events-flag.ts`).
 
 ## How events are found
 
@@ -45,9 +48,78 @@ colours are checked against it (`TestAgentEventKindsAgreeEverywhere`, `PHAROS_UP
 the file).
 
 They back two query datasets, `agent_events` (events at or above the threshold) and `agent_event_messages`, and the
-dashboard's catalog (`web/src/agent-events-analysis-catalog.ts`). The dashboard also draws **events per 1,000 agent
-messages** by day or week, dividing by the messages read in each period under the same filters: the engine's parts
-split only additive measures, so this panel computes the rate from two grouped counts.
+Agent Experience dashboard's catalog (`web/src/agent-events-analysis-catalog.ts`). For rates per message read, use
+the Agent Events dashboard described below. The **Events to read** query card opens the matching event records,
+ordered by the model’s confidence, with links to their messages in the reader.
+
+### Agent Events dashboard
+
+`agent_event_facts` (`agent_event_facts.go`) gives each message the pass read the context its rates are broken down
+by, so a breakdown never reads the conversation history at query time:
+
+- `agent_event_facts`: one row per message read, with its turn (`turn_id`, the prompt it answered, found from the
+  prompts' source order), who prompted the turn (`prompted_by`: `person` when the prompt has typed words, `automated`
+  when it has none, `agent` for a delegated subagent's run, `unclassified` before authorship has run, `none` before
+  the first prompt), the prompt's typed words, model, effort, provider, harness, whether it is a subagent, and its
+  events at the threshold. A message without a time takes its conversation's start (`time_source`).
+- `agent_event_fact_kinds`: the message's events per reported kind.
+
+The facts are rebuilt per conversation when its stamp changes (messages read, their events, authorship, model or
+parent), in batches of 200 conversations: while the events pass runs (at most every ten minutes), when its backlog is done,
+after an import (`refreshAgentEventFactsLogged`), and by `pharos agent-events facts`. Opening the dashboard never runs the pass or rebuilds the facts.
+
+They back the `agent_event_rates` dataset: one row per (message read, reported kind), with that kind's events in the
+message (usually none). Every message read is in every kind, so a rate's denominator, the distinct messages, turns
+or conversations read under the filters, stays the same whichever kinds are filtered or broken down; only the
+numerator follows the kinds. Its queries use memory scratch storage (`executeQueryV3`), since the rows are narrow and
+file scratch made a distinct share take seconds.
+
+The catalog (`web/src/agent-event-rates-catalog.ts`) offers events per 1,000 messages read and the shares of messages,
+turns and conversations with an event, by kind group, kind, reply or thinking, who prompted, prompt length (person
+prompts only), main agent or subagent, model, model and effort, effort, provider, harness, repository, week, and
+pairs of these. Compare hides groups under 200 messages read by default. A bar opens the messages behind it that
+have an event of its kind, each linking into the reader with its events marked (`reader_events=1`). The rates
+describe what agents wrote; nothing scores a person, a prompt or a model. The first view answers "where are my
+agents struggling?": friction per 1,000 messages by repository and kind, without plain obstacles (most of every repository's friction; Friction kind shows them), with links to the Fixes kinds that turn
+recurring friction into a change (`agentEventFixLinks`). Breakdowns whose differences come from the text read rather
+than the work (reply or thinking, model, provider, harness, main agent or subagent) carry a note saying so: thinking
+narrates far more than a reply, nearly all thinking read is from Claude models, and a subagent's messages read are
+mostly thinking.
+
+The dashboard uses the shared population controls (`population: true`, [dashboard
+analysis](dashboard-analysis.md#population)): its filters, such as a kind group, a kind, a repository or who
+prompted, are chips beside Range, removable one by one, with Edit for any other term; a trend legend entry's menu
+counts only that kind or leaves it out, and a kind's entry sits under its group, whose chip selects the group's
+kinds. Distribution counts each **conversation**: its events under the population, as a histogram or, by
+repository, provider, harness or role, as box plots. It shows whether a bar rests on many conversations or one:
+over two weeks the top 10% of conversations held about half of the friction without plain obstacles, and one
+conversation held 14 of grady.dev's 21 environment-friction events. Query Table draws unit histograms in even
+steps, so the long tail crowds the first bar on a log axis; Session Shape's fine bins need a per-record value,
+which a conversation's total is not.
+
+The friction and unseen-choice breakdowns, and the cards, leave out scripted runs: turns whose `prompted_by` is
+`automated` or `none` (a corpus generator, an SDK script). They were 37% of the messages read over two weeks, with
+rates of their own; Who prompted still shows them. The unseen-choice breakdown and card count replies only: in
+thinking the same kinds mostly narrate ordinary steps, at about three times the reply rate.
+
+Four cards (`web/src/agent-event-card-recipes.ts`) open the dashboard at their views, each about something in the
+person's repositories they can change or review: where agents hit friction (repository × friction kind, without plain
+obstacles), docs agents found out of date, failures agents stepped around, and choices agents made without asking
+(replies). Cards on thinking against replies, models, who prompted, prompt length and
+subagents were dropped: each difference came mostly from how much text a source narrates or from turn size, not from
+anything the person controls. Intervals for small groups wait on Query Table
+([handoff](handoffs/query-table-rate-intervals.md)), as does colouring a repository × kind bar by its kind
+([handoff](handoffs/query-table-tuple-colors.md)): Query Table colours a two-field bar by the whole pair, so the same
+kind takes a different colour on each repository's row.
+
+The Weekly digest cards (`web/src/digest-card-recipes.ts`) are the lab digest's "this week against the ones before",
+drawn from what already exists: new problems to fix (open Fixes first seen in the window), problems that keep coming
+back (open Fixes seen again in the last 7 days but first seen before them), safeguards agents got around (Risky
+actions notices of the `safeguard-*` checks), and friction week by week (this dashboard's compare by Week). The Fixes
+cards filter on `first_seen_at` and `last_seen_at`, the start of the local day in `first_seen` and `last_seen`, so a
+relative date range can select them. The returning card keeps one 7-day window: its "first seen before" bound is a
+fixed relative date in the where, which the card's window control does not move. Choices made without asking stay the
+Agent Events card above.
 
 ### In the reader
 
@@ -72,19 +144,25 @@ With the Settings switch on (preference `pharos-agent-events-v1`, read as a feat
 `agent_events_enabled = true` in a library's configuration, the analysis chain runs an **agent events** stage after
 labels, its own background item (Agent events, hourly and adaptive). It uses the message labeler's worker, ONNX
 Runtime and budget (`labels_worker`, `labels_runtime`, `labels_thread_budget`, …) with its own threads per worker,
-`agent_events_threads` (Settings → Agent events → Cores; unset, `labels_threads`), and the same power rules: each chain
+`agent_events_threads` (Settings → Agent events → CPU threads, shown for CPU execution; unset, `labels_threads`), and the same power rules: each chain
 pass scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events`
 `backlog` run when plugged in and stops if this Mac goes onto battery.
 
 Either backlog run (this one and message labels') can be stopped: Stop in its Background Processing item, or in the
 status panel, cancels it (`Op.setStopper`). Committed conversations remain; unfinished conversations are read again
-on the next run. Agent events prepares upcoming conversations while the model scores the current window and a
-writer saves earlier results, one atomic transaction per conversation. A shared budget bounds queued candidates
-and message bookkeeping to three windows of about 512 rows, plus the conversation currently being built. A large
-conversation stays whole and occupies the budget until saved. Partial windows run as soon as preparation pauses,
-so the worker need not wait for 512 candidates. Preparation uses the separate read-only catalog pool. Active runs
-check the Cores target every two minutes and replace their workers after the current scoring chunk finishes,
-keeping its results. Changing cores needs no stop or app relaunch; the shared budget and battery cap still apply.
+on the next run. Agent events prepares upcoming conversations with up to four CPU workers while the model
+scores the current window and a writer saves earlier results, one atomic transaction per conversation.
+A shared budget bounds queued candidates
+and message bookkeeping to three windows of about 512 rows, plus at most one conversation per preparation worker.
+Each preparation worker owns its builder state; results are handed off in conversation order, and a blocked
+scoring queue stops dispatching new conversations. A large conversation stays whole; its token credits are
+released after scoring, before waiting for the writer. Partial windows run as soon as preparation pauses,
+so the worker need not wait for 512 candidates. Preparation uses the separate read-only catalog pool and the
+[preparation concurrency limits](local-labeler.md#device-status-and-gpu-capacity); limited chain runs remain serial. Active runs
+check the CPU thread target every two minutes and replace CPU workers after the current scoring chunk finishes,
+keeping its results. Changing threads needs no stop or app relaunch; the shared budget and battery cap still apply.
+GPU workers keep running when the saved CPU target changes. Settings shows the expected or confirmed device
+for each model, with automatic GPU capacity; see [device status](local-labeler.md#device-status-and-gpu-capacity).
 
 - **The verifier** is a pinned download, `agent_events_model` in `internal/archive/labels/assets.json`
   (`jayhawk-68m`, version 1: the manifest, the int8 ONNX file and the tokenizer, 146 MB), unpacked into
@@ -124,10 +202,21 @@ dirty mark of its own, so a limited run that stops before it keeps it pending. C
   their rows.
 - **How it stores.** Preparation, scoring windows and saving overlap (`agent_events_pipeline.go`). Candidates are
   scored in batches packed by length, and each conversation's results, ledger row and original dirty token are
-  saved in one transaction. A stop keeps committed conversations and kills the verifier's workers, so batches queued
+  saved in one transaction. Preparation credits are released after scoring, separately from the bounded save queue:
+  even a conversation larger than a scoring window can be followed by inference while its save waits. Scored windows
+  release their token arrays before entering that queue; sentence spans and results remain until the transaction commits.
+  There are at most three unscored windows plus one conversation being built, and three scored windows (being saved,
+  queued, and waiting for handoff); a whole conversation may exceed one window. A stop keeps committed conversations and kills the verifier's workers, so batches queued
   at them do not run on; the next run resumes. A finished run leaves them warm for `labels_idle_seconds`. Run stats
   and the final progress line include preparation, inference and save time; these overlap rather than adding to
-  elapsed time.
+  elapsed time. Background passes now retain those summary lines in the service log too.
+- **Progress.** The conversation count advances only after its transaction commits. The activity panel also shows
+  saved messages, successfully scored candidates, overall candidate throughput and the active preparation, scoring
+  or saving phase. Scoring identifies CPU or GPU only after the worker confirms it; GPU idle gaps retain that device
+  identity without claiming ongoing GPU use. Candidate counts update as batches return, including within a large
+  conversation, and are distinct from saved results. Counts and the throughput clock carry across the initial limited
+  pass into its backlog. After a service restart, the next pass counts the remaining work; committed results are kept.
+  No candidate-total estimate or conversation-based ETA is invented before inputs are prepared.
 - **What it refuses.** A verifier trained on another lexicon, deciding at another threshold than the datasets'
   (0.5), lacking a kind's definition or the `verdict` and `sentences` outputs.
 

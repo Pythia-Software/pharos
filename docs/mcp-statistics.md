@@ -54,7 +54,7 @@ values; counts require integers. Presence operators omit `value`. Contradictory
 predicates and unsupported names fail explicitly. Aliases include `token_count`,
 `turn_count`, `tool_use_count`, and `wall_clock_span`.
 
-Context filters include repository, source, provider, model, effort, file, PR,
+Context filters include project, repository, source, provider, model, effort, file, PR,
 from/to, and up to 100 `workspace_ids`. Repository text is a case-insensitive
 literal substring of a repository name or remote; `%` and `_` are ordinary
 characters. Date filters select entity lifetimes, not usage inside a date
@@ -67,7 +67,7 @@ that configuration.
 `select` chooses up to 20 allowlisted metrics or small context fields. An empty
 array returns IDs only. Filter/sort metrics are included automatically. Workspace
 rows always include `workspace_id`; conversation rows include both IDs. Optional
-context fields include repository, source, activity time, and conversation model,
+context fields include project, repository, source, activity time, and conversation model,
 provider, effort, start time, and coverage. Large descriptive fields are rejected.
 Alias handles are separately available as `mirrored_workspace_ids` or
 `linked_conversation_ids` for the corresponding entity type.
@@ -177,7 +177,7 @@ report `population_complete: false` with their retrieval limitations.
 An entity count omits `metric`; numeric count counts usable values. Numeric
 reductions report usable-value denominators and quality breakdowns. With no
 usable values, numeric count is zero and other aggregates, including sum, are
-null. Grouping supports repository and source, up to two dimensions and 2,000
+null. Grouping supports project, repository and source, up to two dimensions and 2,000
 groups; groups page or fail explicitly rather than silently becoming top-N.
 Per-model grouping is excluded because workspaces can contain several models.
 Text-based aggregate populations retain the same incomplete-retrieval flag.

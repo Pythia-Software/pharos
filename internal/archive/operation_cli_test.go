@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,24 +15,30 @@ import (
 var cliCommandCoverage = map[string]string{
 	"library-transfer": "", "library-recover": "", "add-this-mac": "", "capture": "", "index": "", "history-backfill": "",
 	"sqlite-records": "", "backup": "", "cloud-backup": "", "ingest": "", "repositories": "", "repair-existing": "",
-	"refine-usage": "", "repair-usage-attribution": "", "upgrade": "", "build-tools": "", "agent-events": "", "findings": "",
-	"app":           "the broker itself: its operations are in its registry",
-	"mcp-app":       "relays MCP calls to the broker; writes nothing",
-	"init":          "writes a new configuration file, not library data",
-	"init-library":  "creates the library it writes, so nothing can be watching it; --adopt is a known gap (§6.5)",
-	"serve":         "the library service, which runs the registry",
-	"cloud-restore": "restores to a new location, out of status scope (§3.6)",
-	"pricing":       "a read; leased for its open, Initialize and close (runLeasedCatalogCommand)",
-	"search":        "a read; leased for its open, Initialize and close",
-	"tl1":           "a read; leased for its open, Initialize and close",
-	"health":        "a read; leased for its open, Initialize and close",
-	"doctor":        "reads the configuration and sources; never opens the catalog",
-	"dev-ui":        "talks to the running service; never opens the catalog",
-	"mcp":           "an MCP stdio server: query-only opens (§3.4 metrics are in memory only); not yet leased",
-	"probe":         "a read; leased for its open, Initialize and close",
-	"volume-id":     "a read of the volume; never opens the catalog",
-	"labels":        "labels run is the leased analysis.labels operation (cliCatalogOperation); status and explain only read; fetch writes only this Mac's support directory, never a library",
-	"labeling":      "reads only a static backup copy of a catalog (immutable) and writes only its own dataset directory; never opens a live catalog",
+	"claude-import": "",
+	"refine-usage":  "", "repair-usage-attribution": "", "upgrade": "", "build-tools": "", "agent-events": "", "findings": "",
+	"app":                   "the broker itself: its operations are in its registry",
+	"mcp-app":               "relays MCP calls to the broker; writes nothing",
+	"init":                  "writes a new configuration file, not library data",
+	"init-library":          "creates the library it writes, so nothing can be watching it; --adopt is a known gap (§6.5)",
+	"serve":                 "the library service, which runs the registry",
+	"cloud-restore":         "restores to a new location, out of status scope (§3.6)",
+	"capture-export":        "reads a capture under its own capture lock and writes only a new outbox directory; never loads a configuration or opens a catalog",
+	"capture-export-verify": "a read of an export directory; never loads a configuration or opens a catalog",
+	"pricing":               "a read; leased for its open, Initialize and close (runLeasedCatalogCommand)",
+	"search":                "a read; leased for its open, Initialize and close",
+	"tl1":                   "a read; leased for its open, Initialize and close",
+	"health":                "a read; leased for its open, Initialize and close",
+	"doctor":                "reads the configuration and sources; never opens the catalog",
+	"dev-ui":                "talks to the running service; never opens the catalog",
+	"mcp":                   "an MCP stdio server: query-only opens (§3.4 metrics are in memory only); not yet leased",
+	"probe":                 "a read; leased for its open, Initialize and close",
+	"volume-id":             "a read of the volume; never opens the catalog",
+	"labels":                "labels run is the leased analysis.labels operation (cliCatalogOperation); status and explain only read; fetch writes only this Mac's support directory, never a library",
+	"labeling":              "reads only a static backup copy of a catalog (immutable) and writes only its own dataset directory; never opens a live catalog",
+
+	"execution-evidence": "execution-evidence run is the leased catalog.execution-evidence operation (cliCatalogOperation); status only reads",
+	"conversation-names": "audits through a query-only catalog open; never initializes or writes library data",
 }
 
 // Every writing Terminal command takes a lease and registers its
@@ -109,5 +116,53 @@ func TestTerminalCommandsTouchTheCatalogOnlyUnderTheirLease(t *testing.T) {
 		if probes := probeLeases(leaseDirs(config)); len(probes) != 0 {
 			t.Errorf("%v left leases: %+v", args, probes)
 		}
+	}
+}
+
+// A scheduled Terminal command has one CPU authority for everything it
+// runs: background work its catalog starts (from context.Background()) and
+// a leased catalog command's operations, which also record resource
+// telemetry. Classic commands get none.
+func TestScheduledCommandAuthorityReachesBackgroundWork(t *testing.T) {
+	override(t, &cliAuthority, nil)
+	catalog, config := testCatalog(t)
+	backgroundAuthority := func(engine string) *workAuthority {
+		t.Helper()
+		config.WorkEngine, config.BackgroundCPUs = engine, 2
+		ops, err := beginCLIOperations(config, catalog, "test", "analysis.labels")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ops.close()
+		if workAuthorityFor(context.Background(), catalog) != ops.authority {
+			t.Fatal("detached catalog work lost the command's authority")
+		}
+		got := make(chan *workAuthority, 1)
+		catalog.startBackground(OperationSpec{Kind: "analysis.labels"}, func(ctx context.Context, op *Op) error {
+			got <- workAuthorityFor(ctx, catalog)
+			return nil
+		})
+		catalog.unowned.Wait()
+		return <-got
+	}
+	if got := backgroundAuthority("classic"); got != nil {
+		t.Fatal("classic background work got an authority")
+	}
+	if got := backgroundAuthority("scheduled"); got == nil || got != cliWorkAuthority(config) {
+		t.Fatalf("scheduled background work ran outside the process's authority: %p", got)
+	}
+
+	open := func(path string) (*Catalog, error) { return openTestCatalog(t, path), nil }
+	err := runLeasedCatalog(config, "test", OperationSpec{Kind: "analysis.labels"}, open, func(ctx context.Context, op *Op, leased *Catalog) error {
+		if op.reg.resourceLedger == nil || !op.reg.telemetry {
+			t.Error("a scheduled leased command records no resource telemetry")
+		}
+		if leased.commandCPUs.Load() == nil || workAuthorityFor(ctx, leased) != leased.commandCPUs.Load() {
+			t.Error("a leased command's catalog lacks its authority")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1,8 +1,10 @@
 # Risky action notices in Optimize
 
-Optimize has two sections: **Efficiency** and **Risky actions**. Both collect ideas in
-persistent prompt baskets. Each basket is for a repository or Mac; safety and
-efficiency can never share a prompt, even when they name the same repository.
+Optimize has **Efficiency**, **Risky actions** and, with the agent events preview,
+[**Fixes**](fixes.md). Each collects ideas in persistent prompt baskets. Each basket
+is for a repository or Mac; the areas never share a prompt, even when they name the
+same repository. Agents getting around a safeguard are risky action notices, not
+fixes (see [the boundary](fixes.md#boundary-with-risky-actions)).
 
 Each section has **Dashboard**, **Table**, and **Settings** pages. The Risky actions
 Dashboard keeps the compact cards and baskets. Its Query Table lists the same

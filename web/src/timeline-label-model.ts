@@ -1,13 +1,14 @@
 // Shared production message-label and conversation data.
 import {type LabelMessage} from './conversation-labels';
 export type TimeRange=[number,number];
-type SessionTreeRow={id:string;outline:string;depth:number;parent_id?:string};
+// Depth is layout indentation; branches join only resolved parent IDs.
+type SessionTreeRow={id:string;depth:number;parent_id?:string};
 export type TimelineSessionBranch={parentDepth?:number;rails:number[];children:boolean};
 export function timelineSessionBranches(rows:SessionTreeRow[]){
-  const ids=new Map(rows.map(row=>[row.id,row])),outlines=new Map(rows.map(row=>[row.outline,row]));
+  const ids=new Map(rows.map(row=>[row.id,row]));
   const parents=new Map<string,SessionTreeRow>(),siblings=new Map<string,SessionTreeRow[]>();
   for(const row of rows){
-    const parent=ids.get(row.parent_id??'')??outlines.get(row.outline.split('.').slice(0,-1).join('.'));
+    const parent=ids.get(row.parent_id??'');
     if(!parent||parent.id===row.id||parent.depth>=row.depth)continue;
     parents.set(row.id,parent);siblings.set(parent.id,[...(siblings.get(parent.id)??[]),row]);
   }

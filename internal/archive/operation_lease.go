@@ -9,8 +9,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // Process leases (docs/background-work.md §6.5). Every Pharos process other
@@ -21,6 +22,10 @@ import (
 // replaced by a rename, since a new inode at the path would be unlocked.
 
 const leaseDirName = ".pharos-leases"
+
+// lockOperationLease keeps lease policy here while filelock owns the mechanism.
+// Tests may replace it serially to exercise identity races and lock failures.
+var lockOperationLease = filelock.Lock
 
 // leaseInfo is a lease file's contents.
 type leaseInfo struct {
@@ -98,7 +103,7 @@ func acquireProcessLease(dir string, info leaseInfo) (*processLease, error) {
 			return nil, err
 		}
 		// Blocking is fine: only a deleter holds it, briefly.
-		if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		if err := lockOperationLease(file, filelock.Exclusive, filelock.Wait); err != nil {
 			file.Close()
 			return nil, err
 		}
@@ -143,7 +148,7 @@ func (l *processLease) writeLocked() error {
 	if l.info.volatile && len(l.info.Outcomes) == 0 {
 		return nil
 	}
-	return l.file.Sync()
+	return syncToDrive(l.file)
 }
 
 // update rewrites the lease in place.
@@ -217,14 +222,14 @@ func probeLease(path string) leaseProbe {
 		return probe
 	}
 	defer file.Close()
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
+	if err := lockOperationLease(file, filelock.Shared, filelock.Try); err != nil {
+		if !errors.Is(err, filelock.ErrContended) {
 			probe.Err = err
 			return probe
 		}
 		probe.Live = true
 	} else {
-		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = filelock.Unlock(file)
 	}
 	// A live lease may be mid-update (truncated, then written); read again.
 	var info leaseInfo
@@ -298,7 +303,7 @@ func claimDeadLease(path string) (info *leaseInfo, done func(remove bool), ok bo
 	if err != nil {
 		return nil, nil, false
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockOperationLease(file, filelock.Exclusive, filelock.Try); err != nil {
 		file.Close()
 		return nil, nil, false
 	}

@@ -1,8 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decodeQueryStrict } from "@pythia-software/query-table-core";
-import { safetyResourceName, safetyShortName, safetyCommonDirectory, safetyDashboardPlaces, safetyDashboardChecks, safetySelectionPlan, safetyCartChecks } from "../../../src/safety-dashboard-model";
+import { EMPTY_QUERY, decodeQueryStrict, loadSchema } from "@pythia-software/query-table-core";
+import { safetyResourceName, safetyShortName, safetyCommonDirectory, safetyDashboardPlaces, safetyDashboardChecks, safetySelectionPlan, safetyCartChecks, safetyEventRule, safetyEventsFreshness } from "../../../src/safety-dashboard-model";
 import { safetyCheckTableURL, safetyTableFocus } from "../../../src/safety-route";
+import fixesDocument from "../../../../schemas/fixes.schema.json";
+import safetyDocument from "../../../../schemas/safety.schema.json";
+import { optimizeTableTitle, optimizeTableRemainder, optimizeTableSchemas } from "../../../src/optimize-table-title";
 
 const notice = (id, patch = {}) => ({ id, state: "open", target: "repo:a", target_label: "Alpha", calls: 1, material_change: false, last_seen_at: "2026-11-01T12:00:00Z", ...patch });
 const cases = [
@@ -140,4 +143,74 @@ test("a dashboard prompt lists each check once with its notices", () => {
   assert.deepEqual(safetyCartChecks({ items: [item("a", "credentials", true), item("b", "process", true), item("c", "credentials", false)] }),
     [{ rule: "credentials", title: "credentials", danger: "high", ids: ["a", "c"], ticked: 1 }, { rule: "process", title: "process", danger: "high", ids: ["b"], ticked: 1 }]);
   assert.deepEqual(safetyCartChecks({ items: [] }), []);
+});
+
+
+test("Optimize table headings describe the active source and group filters", () => {
+  const schema = { fields: [
+    { name: "state", label: "State", type: "text", filter: { values: { source: "static", options: [{ value: "handed_off", label: "Handed off" }] } } },
+    { name: "target", label: "Location", type: "text" },
+  ] };
+  for (const noun of ["Risky action notices", "Efficiency findings", "Fixes"]) {
+    assert.equal(optimizeTableTitle(noun, schema, EMPTY_QUERY), noun);
+    const source = { ...EMPTY_QUERY, where: [{ field: "state", op: "=", value: "handed_off" }] };
+    assert.equal(optimizeTableTitle(noun, schema, source), `${noun} where State is Handed off`);
+    const grouped = { ...EMPTY_QUERY, grouping: { source, keys: ["target"], summaries: [{ id: "count", op: "count", label: "Notices" }], representative: null }, where: [{ field: "count", op: ">", value: "2" }] };
+    assert.equal(optimizeTableTitle(noun, schema, grouped), `${noun} where State is Handed off grouped by Location, keeping groups where Notices is greater than 2`);
+    assert.equal(optimizeTableTitle(noun, schema, { ...grouped, grouping: { ...grouped.grouping, source: EMPTY_QUERY } }), `${noun} grouped by Location, keeping groups where Notices is greater than 2`);
+  }
+});
+
+
+test("focused table headings retain additional source and group restrictions", () => {
+  const schema = { fields: [{ name: "rule", label: "Check", type: "text" }, { name: "state", label: "State", type: "text" }, { name: "target", label: "Location", type: "text" }] };
+  const named = [{ field: "rule", op: "=", value: "credentials" }, { field: "state", op: "=", value: "open" }];
+  const source = { ...EMPTY_QUERY, where: [...named, { any: [{ field: "target", op: "=", value: "a" }, { field: "target", op: "=", value: "b" }] }] };
+  assert.equal(optimizeTableRemainder(schema, source, named), "where (Location is a or b)");
+  const grouped = { ...EMPTY_QUERY, grouping: { source, keys: ["target"], summaries: [{ id: "n", op: "count", label: "Notices" }], representative: null }, where: [{ field: "n", op: ">", value: "2" }] };
+  assert.equal(optimizeTableRemainder(schema, grouped, named), "where (Location is a or b) grouped by Location, keeping groups where Notices is greater than 2");
+  assert.equal(source.where.length, 3, "the table query is unchanged");
+});
+
+
+test("grouped Optimize headings use source and result catalogues for their filters", () => {
+  const fixes = loadSchema(fixesDocument);
+  const place = fixes.fields.find(field => field.name === "target_label");
+  const resultFields = [place, { name: "recent", label: "Latest seen", type: "datetime" }];
+  const source = { ...EMPTY_QUERY, where: [
+    { field: "shown", op: "=", value: "stale" },
+    { field: "category", op: "=", value: "env" },
+    { field: "last_seen_at", op: ">=", value: "2026-01-01" },
+  ] };
+  const grouped = { ...EMPTY_QUERY, grouping: { source, keys: ["target_label"], summaries: [{ id: "recent", op: "max", field: "last_seen_at", label: "Latest seen" }], representative: null }, where: [{ field: "recent", op: ">=", value: "2026-02-01" }] };
+  // This is the runtime shape: grouped result fields omit source-only columns.
+  const api = { query: grouped, computed: { catalogue: resultFields }, grouping: { source: { schema: fixes } } };
+  const schemas = optimizeTableSchemas(api);
+  const title = optimizeTableTitle("Fixes", schemas.source, grouped, schemas.result);
+  assert.match(title, /On the menu is Hidden: quiet too long/);
+  assert.match(title, /Kind of fix is Environment or setup/);
+  assert.match(title, /Last seen date is on or after 2026-01-01/);
+  assert.match(title, /keeping groups where Latest seen is on or after 2026-02-01/);
+
+  const hidden = { ...grouped, grouping: { ...grouped.grouping, source: { ...source, where: [{ field: "state", op: "=", value: "open" }, { field: "shown", op: "!=", value: "shown" }, { field: "category", op: "=", value: "env" }] } } };
+  const named = [{ field: "state", op: "=", value: "open" }, { field: "shown", op: "!=", value: "shown" }];
+  assert.match(optimizeTableRemainder(schemas.source, hidden, named, schemas.result), /Kind of fix is Environment or setup/);
+
+  const safety = loadSchema(safetyDocument);
+  const safetyQuery = { ...grouped, grouping: { ...grouped.grouping, source: { ...EMPTY_QUERY, where: [{ field: "rule", op: "=", value: "credentials" }, { field: "danger", op: "=", value: "high" }] } } };
+  const safetySchemas = optimizeTableSchemas({ ...api, query: safetyQuery, grouping: { source: { schema: safety } } });
+  assert.match(optimizeTableRemainder(safetySchemas.source, safetyQuery, [{ field: "rule", op: "=", value: "credentials" }], safetySchemas.result), /Danger is Dangerous/);
+  const plain = optimizeTableSchemas({ ...api, query: source });
+  assert.equal(plain.source, plain.result, "ungrouped tables use their computed catalogue");
+});
+
+test("only safeguard checks, which read agent events, are qualified while those events wait for a rebuild", () => {
+  assert.deepEqual(safetyEventsFreshness({ state: "current", pending_conversations: 0 }), { mark: "", note: "" });
+  const pending = safetyEventsFreshness({ state: "pending", pending_conversations: 1, withheld_conversations: 0 });
+  assert.equal(pending.mark, "≈");
+  assert.match(pending.note, /^Safeguard notices come from agent events\. Events for 1 conversation are waiting .* These counts may change\.$/);
+  assert.equal(safetyEventRule("safeguard-test"), true);
+  assert.equal(safetyEventRule("safeguard-other"), true);
+  // Command checks never read events, so their counts stay unmarked.
+  assert.equal(safetyEventRule("credential-copy"), false);
 });

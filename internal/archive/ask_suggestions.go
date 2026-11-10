@@ -733,8 +733,15 @@ func (run *askSignalRun) agentEvents(ctx context.Context, kinds []string) (askSi
 	}
 	top, _ := askTop(byKind)
 	repository := askConcentrated(byRepository)
-	return askSignal{Score: saturate(float64(conversations), 20), Support: conversations, Repository: repository,
-		Lead: fmt.Sprintf("Agent events of these kinds appeared in %d conversations in the last 28 days; the most common was %s%s.", conversations, top, askInRepository(repository))}, nil
+	lead := fmt.Sprintf("Agent events of these kinds appeared in %d conversations in the last 28 days; the most common was %s%s.", conversations, top, askInRepository(repository))
+	// Events built against a superseded transcript or execution evidence
+	// count until the next events run; say so rather than state them as current.
+	note, err := agentEventsFreshnessNote(ctx, run.c.reader())
+	if err != nil {
+		return askSignal{}, err
+	}
+	lead += note
+	return askSignal{Score: saturate(float64(conversations), 20), Support: conversations, Repository: repository, Lead: lead}, nil
 }
 
 func askAgentFriction(ctx context.Context, run *askSignalRun) (askSignal, error) {
@@ -1398,7 +1405,8 @@ func askLabelCoverage(ctx context.Context, run *askSignalRun) (askSignal, error)
 		return askSignal{}, nil
 	}
 	var count int
-	err := run.c.reader().QueryRowContext(ctx, `SELECT count(*) FROM message_labels_conversations c WHERE c.units>0 AND NOT EXISTS(SELECT 1 FROM message_labels_dirty d WHERE d.conversation_id=c.conversation_id)`).Scan(&count)
+	err := run.c.reader().QueryRowContext(ctx, `SELECT count(*) FROM message_labels_conversations c WHERE c.units>0 AND NOT EXISTS(SELECT 1 FROM message_labels_dirty d WHERE d.conversation_id=c.conversation_id)
+	 AND c.conversation_id NOT IN (`+executionUnmarkedSQL(ctx, run.c.reader(), "message_labels_conversations")+`)`).Scan(&count)
 	if err != nil || count == 0 {
 		return askSignal{}, err
 	}

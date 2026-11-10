@@ -306,7 +306,7 @@ func (s *recordStore) put(r io.Reader) (recordObject, error) {
 		e = closeErr
 	}
 	if e == nil {
-		e = f.Sync()
+		e = syncToDrive(f)
 	}
 	if closeErr := f.Close(); e == nil {
 		e = closeErr
@@ -418,7 +418,7 @@ func (s *recordStore) loadRevision(ref recordObject) (sqliteRevision, error) {
 		return v, errors.New("unsupported SQLite evidence format; upgrade Pharos")
 	}
 	probe := captureManifest{PathMap: v.Mappings, Installations: v.Installations}
-	if probe.unsafePath() != "" {
+	if _, unsafe := probe.unsafePath(); unsafe {
 		return v, errors.New("unsafe record path mapping")
 	}
 	if v.Identity != sqliteEvidenceIdentity(v) {
@@ -693,6 +693,10 @@ func (s *recordStore) table(tx *sql.Tx, name, where, order string, args []any) (
 	return t, flush()
 }
 
+// recordExportReading is called once an export's transaction has begun
+// reading; tests write to the source there.
+var recordExportReading = func(file string) {}
+
 // exportSQLite reads exactly one consistent transaction. Selection is used
 // only by the Conductor fast path; unknown tables are covered by full scans.
 func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSourceState, selected string, dependencies []recordDependency) (recordObject, error) {
@@ -714,7 +718,7 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	oldCtx := s.c.ctx
 	s.c.ctx = ctx
 	defer func() { s.c.ctx = oldCtx }()
-	db, e := openReadOnlySQLite(file)
+	db, e := openSourceSQLite(ctx, file)
 	if e != nil {
 		return recordObject{}, e
 	}
@@ -747,6 +751,10 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	}
 	var schema bytes.Buffer
 	var tables []string
+	// A kind that keeps only some tables (captureTables) records only those,
+	// whether read live or from the copy a capture holds, and without the
+	// pages the copy places them on, so the two read the same.
+	keep := captureTables(s.c.source.Kind)
 	for schemaRows.Next() {
 		var kind, name, table string
 		var page int64
@@ -754,6 +762,12 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 		if e = schemaRows.Scan(&kind, &name, &table, &page, &ddl); e != nil {
 			schemaRows.Close()
 			return recordObject{}, e
+		}
+		if keep != nil {
+			if _, kept := keep[table]; !kept {
+				continue
+			}
+			page = 0
 		}
 		values := []sqliteValue{}
 		for _, v := range []any{kind, name, table, page, ddl} {
@@ -778,11 +792,13 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	if e != nil {
 		return recordObject{}, e
 	}
+	recordExportReading(file)
 	if !strings.HasPrefix(input, s.c.dir+string(filepath.Separator)) {
-		state, e = sqliteDependencyState(file)
-		if e != nil {
-			return recordObject{}, e
-		}
+		// The live file as it was before this transaction first read: its
+		// rows are no older, so a write during the read makes the state
+		// differ next time and the rows are copied again, never kept as the
+		// newer file's.
+		state = before
 	}
 	var user, app, encoding any
 	if e = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&user); e != nil {
@@ -820,6 +836,9 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 		names[n] = true
 	}
 	st, mt := firstPresent(names, "sessions", "workspaces", "threads"), firstPresent(names, "messages", "session_messages")
+	// A kind that keeps only some of a table's rows (Cursor) is exported only
+	// from its snapshot (exportSnapshot), which holds no others, never from
+	// the source.
 	for _, name := range tables {
 		where, order := "", ""
 		var args []any
@@ -1264,6 +1283,8 @@ func knownRecordTable(kind, name string) bool {
 		"antigravity": {"conversation_summaries", "gen_metadata"},
 		"tl1":         {"tasks", "task_attempts", "transcript_summaries", "resource_usage", "tool_usage", "handoffs", "candidates", "task_flavors", "task_events", "review_findings", "human_responses", "human_comments"},
 		"codex":       {"threads"},
+		"opencode":    {"session_v2", "session_message", "session_part", "project"},
+		"zed":         {"threads"},
 	}
 	return slices.Contains(known[strings.ToLower(kind)], name)
 }
@@ -1345,3 +1366,4 @@ func (s *recordStore) conductorEntityIdentities(v sqliteRevision, sessionTable s
 }
 
 func isConductorSource(kind string) bool { return strings.EqualFold(kind, "conductor") }
+func isCodexSource(kind string) bool     { return strings.EqualFold(kind, "codex") }

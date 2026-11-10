@@ -82,7 +82,7 @@ function AskChartPreview({ job, card, openings, eager, onOpen }: { job: PreviewJ
   const { preview, error } = result;
   return <figure ref={host} className="pharos-chart-preview" aria-label={`Chart preview: ${card.title}`} aria-busy={!preview && !error || Boolean(preview?.refreshing)}>
     <QueryCard discovery id={`ask:${job.id}`} title={card.title} description={card.description} url={card.href} windowLabel={windowLabel} category={category}
-      preview={preview} error={error && unavailable} loadingSpec={loading} onOpen={onOpen} onKeep={collected ? undefined : keep} onReload={() => setRevision(value => value + 1)} />
+      readinessSource={{dataset:job.dataset,query:job.query}} preview={preview} error={error && unavailable} loadingSpec={loading} onOpen={onOpen} onKeep={collected ? undefined : keep} onReload={() => setRevision(value => value + 1)} />
     {collected ? <figcaption className="card-library-collected" role="status"><Icon name="check" /> Added to your collection</figcaption> : null}
     {failure ? <p role="alert">{failure}</p> : null}
   </figure>;

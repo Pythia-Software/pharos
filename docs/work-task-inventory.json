@@ -1,0 +1,56 @@
+{
+  "baseline_commit": "108c0367bab0b94466fb0f1c8114029e8d4d4a3d",
+  "catalog_compatibility_floor": 24,
+  "comparison_window": "open",
+  "interactive_reads": "Outside background admission; existing query admission remains authoritative. Structural writes initiated by reads use the classified domain owner.",
+  "classes": {
+    "source": {
+      "scope": "source/evidence group",
+      "boundary": "existing capture/provider transaction",
+      "inputs": "accepted source evidence and recovery checkpoints",
+      "accepted_quality": "accepted evidence / committed indexed inputs / audit outcome"
+    },
+    "coordinator": {
+      "scope": "plan",
+      "boundary": "child boundary",
+      "inputs": "child scopes",
+      "accepted_quality": "child accepted qualities"
+    },
+    "specialized": {
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    "global": {
+      "scope": "library",
+      "boundary": "existing coarse pass with safe writes",
+      "inputs": "complete required relational context",
+      "accepted_quality": "complete domain generation; estimates separate from refinement"
+    },
+    "partition": {
+      "scope": "workspace/repository",
+      "boundary": "existing domain partition and publication",
+      "inputs": "identity/origin/committed workspace context",
+      "accepted_quality": "domain stored outputs"
+    },
+    "population": {
+      "scope": "conversation",
+      "boundary": "whole conversation / bounded dirty batch",
+      "inputs": "committed conversation inputs and domain revisions",
+      "accepted_quality": "domain stored outputs"
+    },
+    "maintenance": {
+      "scope": "domain index/cache",
+      "boundary": "existing bounded cursor or file",
+      "inputs": "domain version and current source generation",
+      "accepted_quality": "domain readiness marker"
+    },
+    "essential": {
+      "scope": "service/library",
+      "boundary": "short persistence/finalization boundary",
+      "inputs": "durability and request ownership",
+      "accepted_quality": "durably committed state"
+    }
+  }
+}

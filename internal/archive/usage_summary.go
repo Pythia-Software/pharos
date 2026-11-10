@@ -263,7 +263,11 @@ func (c *Catalog) usageSummaryLedger(ctx context.Context) ([]usageSummaryEntry, 
 	// Match representativeLedger: choose among workspaces with positive usage
 	// across all time, even when a mirror has no usage in a trailing window.
 	representative := map[string]bool{}
-	for _, workspace := range c.suppressMirrors(workspaces) {
+	representatives, err := c.suppressMirrorsContext(ctx, workspaces)
+	if err != nil {
+		return nil, err
+	}
+	for _, workspace := range representatives {
 		representative[firstString(workspace["id"])] = true
 	}
 	kept := ledger[:0]

@@ -73,6 +73,10 @@ CREATE TABLE IF NOT EXISTS agent_events (
   UNIQUE(message_id, sentence_start, family)
 );
 CREATE INDEX IF NOT EXISTS agent_events_message_idx ON agent_events(message_id);
+-- Conversations whose stored events were built against execution evidence
+-- that no longer holds (markExecutionDependents). The datasets leave their
+-- rows out until the next run publishes them again, and report coverage.
+CREATE TABLE IF NOT EXISTS agent_events_execution_stale (conversation_id TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS agent_events_day_idx ON agent_events(day, family);
 CREATE INDEX IF NOT EXISTS agent_events_conversation_idx ON agent_events(conversation_id);
 -- A message that is deleted, or whose text changes, loses its rows: they
@@ -153,6 +157,116 @@ func (c *Catalog) ensureAgentEventsSchema() error {
 	}
 	_, err := c.DB.Exec(`ALTER TABLE agent_event_messages ADD COLUMN input_hash TEXT`)
 	return err
+}
+
+// agentEventsCoverage is what an aggregate reader of stored agent events
+// states about their freshness, read only: state "pending" while any
+// conversation waits for a rebuild (agent_events_dirty: its own rows
+// changed, or execution evidence elsewhere did, markExecutionDependents; or
+// such a change is not marked yet, executionUnmarked), else "current".
+// pending_conversations counts those; withheld_conversations the ones whose
+// rows the datasets leave out (agentEventsWithheldSQLFor).
+func agentEventsCoverage(ctx context.Context, q queryer) (map[string]any, error) {
+	pending, withheld := int64(0), int64(0)
+	waiting := `SELECT conversation_id FROM agent_events_dirty`
+	ledger, err := agentEventsLedgerPresent(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	if ledger {
+		withheldSQL := agentEventsWithheldSQLFor(ctx, q)
+		waiting += ` UNION ` + withheldSQL
+		rows, err := queryMapsContext(ctx, q, `SELECT COUNT(*) n FROM (`+withheldSQL+`)`)
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) > 0 {
+			withheld = integer(rows[0]["n"])
+		}
+	}
+	rows, err := queryMapsContext(ctx, q, `SELECT COUNT(*) n FROM (`+waiting+`)`)
+	if err != nil && !strings.Contains(err.Error(), "no such table") {
+		return nil, err
+	}
+	if len(rows) > 0 {
+		pending = integer(rows[0]["n"])
+	}
+	state := "current"
+	if pending > 0 || withheld > 0 {
+		state = "pending"
+	}
+	return map[string]any{"state": state, "pending_conversations": pending, "withheld_conversations": withheld}, nil
+}
+
+// agentEventsWithheldSQLFor selects the conversations whose stored events
+// rest on superseded execution evidence: marked so, or what the next mark
+// would mark (executionUnmarked). It needs the events ledger.
+func agentEventsWithheldSQLFor(ctx context.Context, q queryer) string {
+	unmarked := executionUnmarkedSQL(ctx, q, "agent_events_conversations")
+	rows, err := queryMapsContext(ctx, q, `SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_events_execution_stale'`)
+	if err != nil || len(rows) == 0 {
+		// A ledger from before stale marks were kept: its unmarked set
+		// (executionUnmarked) already holds every row.
+		return `SELECT id conversation_id FROM (` + unmarked + `)`
+	}
+	return `SELECT conversation_id FROM agent_events_execution_stale UNION ` + unmarked
+}
+
+// agentEventsWithheld lists agentEventsWithheldSQLFor's conversations.
+func agentEventsWithheld(ctx context.Context, q queryer) ([]string, error) {
+	rows, err := queryMapsContext(ctx, q, agentEventsWithheldSQLFor(ctx, q))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, firstString(row["conversation_id"]))
+	}
+	return out, nil
+}
+
+// agentEventsWithheldSQL is agentEventsWithheldSQLFor for SQL that cannot
+// compute it: while any change is unmarked, every built conversation
+// (executionUnmarkedFallbackSQL), which is broader, never narrower.
+var agentEventsWithheldSQL = `SELECT conversation_id FROM agent_events_execution_stale UNION ` + executionUnmarkedFallbackSQL("agent_events_conversations")
+
+// agentEventsLedgerPresent reports whether agent events were ever built, by
+// any executable: then stored rows may rest on superseded evidence.
+func agentEventsLedgerPresent(ctx context.Context, q queryer) (bool, error) {
+	rows, err := queryMapsContext(ctx, q, `SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name='agent_events_conversations'`)
+	if err != nil {
+		return false, err
+	}
+	return len(rows) > 0 && integer(rows[0]["n"]) == 1, nil
+}
+
+// withheldAgentEvents is a dataset leaving out the rows of conversations
+// whose events rest on superseded execution evidence, so a stale attribution
+// is never shown as current. The rows stay stored (inference is reused), and
+// query responses carry agentEventsCoverage so missing rows read as pending,
+// not as no events. withheld is agentEventsWithheldSQLFor.
+func withheldAgentEvents(table sqlDataset, alias, withheld string) sqlDataset {
+	predicate := alias + ".conversation_id NOT IN (" + withheld + ")"
+	if table.base == "" {
+		table.base = predicate
+	} else {
+		table.base += " AND " + predicate
+	}
+	return table
+}
+
+// agentEventsFreshnessNote is the sentence a count of agent events carries
+// while agentEventsCoverage is not current, or "".
+func agentEventsFreshnessNote(ctx context.Context, q queryer) (string, error) {
+	freshness, err := agentEventsCoverage(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	switch freshness["state"] {
+	case "pending":
+		return fmt.Sprintf(" Events for %d conversations are waiting to be rebuilt, so these counts may change.", integer(freshness["pending_conversations"])), nil
+	}
+	return "", nil
 }
 
 // agentEventDataset serves one row per event: a scored candidate at or above
@@ -542,14 +656,23 @@ func nonNilRanges(ranges [][2]int) [][2]int {
 // UTF-16 code units, JavaScript's string indexes. An event whose sentence is
 // not where it was found (text changed since it was scored) is left out.
 // summary is nil for a conversation the pass never read, so the reader shows
-// no Events control.
-func (c *Catalog) agentEventsAttacher(conversationID any) (attach func(map[string]any), summary func() (map[string]any, error), err error) {
-	rows, err := queryMaps(c.reader(), `SELECT message_id,family,probability,sentence_start,sentence_end,sentence,subject_ranges,response_ranges
+// no Events control. link, called with the conversation's messages in
+// reading order once they are all attached, gives each event its target
+// (agent_event_links.go).
+func (c *Catalog) agentEventsAttacher(conversationID any) (attach func(map[string]any), summary func() (map[string]any, error), link func([]map[string]any), err error) {
+	return c.agentEventsAttacherContext(context.Background(), conversationID)
+}
+
+// agentEventsAttacherContext is agentEventsAttacher whose reads stop with ctx
+// (the request).
+func (c *Catalog) agentEventsAttacherContext(ctx context.Context, conversationID any) (attach func(map[string]any), summary func() (map[string]any, error), link func([]map[string]any), err error) {
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT 'e'||id id,message_id,family,probability,sentence_start,sentence_end,sentence,subject,response,subject_ranges,response_ranges
 		FROM agent_events WHERE conversation_id=? AND probability>=? ORDER BY message_id,sentence_start,probability DESC`, conversationID, agentEventThreshold)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	byMessage := map[string][]map[string]any{}
+	linkEvents, attachedEvents := []eventLinkEvent{}, map[string]map[string]any{}
 	for _, row := range rows {
 		byMessage[firstString(row["message_id"])] = append(byMessage[firstString(row["message_id"])], row)
 	}
@@ -601,8 +724,13 @@ func (c *Catalog) agentEventsAttacher(conversationID any) (attach func(map[strin
 		out := []map[string]any{}
 		for _, event := range kept {
 			probability, _ := event.row["probability"].(float64)
-			out = append(out, map[string]any{"kind": event.family.Key, "label": event.family.Label, "group": event.family.Group, "definition": event.family.Definition,
-				"probability": math.Round(probability*1000) / 1000, "sentence": convert([][2]int{event.sentence})[0], "subject": convert(event.subject), "response": convert(event.response)})
+			id := firstString(event.row["id"])
+			value := map[string]any{"id": id, "kind": event.family.Key, "label": event.family.Label, "group": event.family.Group, "definition": event.family.Definition,
+				"probability": math.Round(probability*1000) / 1000, "sentence": convert([][2]int{event.sentence})[0], "subject": convert(event.subject), "response": convert(event.response)}
+			out = append(out, value)
+			linkEvents = append(linkEvents, eventLinkEvent{ID: id, MessageID: firstString(message["id"]), Family: event.family.Key,
+				Sentence: firstString(event.row["sentence"]), Subject: firstString(event.row["subject"]), Response: firstString(event.row["response"])})
+			attachedEvents[id] = value
 		}
 		if len(out) > 0 {
 			message["agent_events"] = out
@@ -611,15 +739,49 @@ func (c *Catalog) agentEventsAttacher(conversationID any) (attach func(map[strin
 	}
 	summary = func() (map[string]any, error) {
 		var read int
-		if err := c.reader().QueryRow(`SELECT COUNT(*) FROM agent_event_messages WHERE conversation_id=?`, conversationID).Scan(&read); err != nil {
+		if err := c.reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_event_messages WHERE conversation_id=?`, conversationID).Scan(&read); err != nil {
 			return nil, err
 		}
 		if read == 0 {
 			return nil, nil
 		}
-		return map[string]any{"messages_read": read, "messages_with_events": attached, "threshold": agentEventThreshold}, nil
+		out := map[string]any{"messages_read": read, "messages_with_events": attached, "threshold": agentEventThreshold}
+		// Marked for a rebuild (its own rows changed, or evidence elsewhere
+		// did: markExecutionDependents), or built against execution evidence
+		// that changed since (a late acknowledgement elsewhere can change
+		// which messages are its own): pending until the next run rebuilds it.
+		var dirty bool
+		if err := c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agent_events_dirty WHERE conversation_id=?)`, conversationID).Scan(&dirty); err != nil && !strings.Contains(err.Error(), "no such table") {
+			return nil, err
+		}
+		if dirty {
+			out["pending"] = true
+		} else if current, err := agentEventsExecutionCurrent(ctx, c.reader(), firstString(conversationID)); err != nil {
+			return nil, err
+		} else if !current {
+			out["pending"] = true
+		}
+		return out, nil
 	}
-	return attach, summary, nil
+	link = func(messages []map[string]any) {
+		if len(linkEvents) == 0 {
+			return
+		}
+		list, texts := []eventLinkMessage{}, map[string]string{}
+		for _, m := range messages {
+			if kind := firstString(m["kind"]); agentEventLinkKinds[kind] {
+				id, text := firstString(m["id"]), firstString(m["text"])
+				list = append(list, eventLinkMessage{ID: id, Role: firstString(m["role"]), Kind: kind, Text: text})
+				texts[id] = text
+			}
+		}
+		for id, target := range findAgentEventTargets(list, linkEvents) {
+			if value := agentEventTargetJSON(target, texts); value != nil {
+				attachedEvents[id]["target"] = value
+			}
+		}
+	}
+	return attach, summary, link, nil
 }
 
 // utf16Offsets maps UTF-8 byte offsets of text to UTF-16 code unit offsets,

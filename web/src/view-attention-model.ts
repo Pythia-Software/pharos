@@ -51,7 +51,7 @@ export function nativeDetailsReady(table: { visible: boolean; restored: boolean;
 const attentionClasses = ["pharos-highlight", "pharos-reveal"];
 const ordinaryClasses = (value: string) => value.split(/\s+/).filter(name => name && !attentionClasses.includes(name)).sort().join(" ");
 // Find and the status UI must not schedule another attention pass.
-const owned = (node: Node | null) => typeof (node as Element | null)?.closest === "function" && !!(node as Element).closest(".pharos-find,.pharos-attention-status");
+const owned = (node: Node | null) => typeof (node as Element | null)?.closest === "function" && !!(node as Element).closest(".pharos-find,.pharos-attention-status,.pharos-attention-menu");
 export function attentionMutationMatters(record: MutationRecord, marked: ReadonlySet<Element>): boolean {
   if (owned(record.target) || owned(record.target.parentElement)) return false;
   if (record.type === "childList" && [...record.addedNodes, ...record.removedNodes].every(owned)) return false;

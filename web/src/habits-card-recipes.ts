@@ -1,5 +1,5 @@
 import type { QueryRecipe } from "./curiosity-data";
-import { habitsCardDescription, habitsCardPresentation, habitsCardTitle, habitsCardWindow, readHabitsCardView, type HabitsCardTarget } from "./habits-card";
+import { habitsCardDescription, habitsCardPresentation, habitsCardTitle, habitsCardWindow, habitsTargetParams, readHabitsCardView, type HabitsCardTarget } from "./habits-card";
 
 // Card Library entries for the Habits page's sections. Each is the page at an
 // address (its habits_* view fields), drawn and opened as the Habits dashboard
@@ -11,6 +11,7 @@ const kinds: Record<HabitsCardTarget, string> = {
 };
 
 function habits(id: string, target: HabitsCardTarget, view: Record<string, string> = {}): QueryRecipe {
+  view = Object.fromEntries(habitsTargetParams(target, new URLSearchParams(view)));
   const read = readHabitsCardView(new URLSearchParams(view)), { category, loading } = habitsCardPresentation(target, read);
   return {
     id, title: habitsCardTitle(target, read), description: habitsCardDescription(target, read), category, idea: category === "human" ? "rhythm-01" : "rhythm-03",
@@ -28,5 +29,4 @@ export const habitsCardRecipes: QueryRecipe[] = [
   habits("habits-punchcard-away", "habits-punchcard", { habits_punchcard: "unattended" }),
   habits("habits-days", "habits-days"),
   habits("habits-pace", "habits-pace"),
-  habits("habits-automations", "habits-automations", { habits_punchcard_days: "30" }),
 ];

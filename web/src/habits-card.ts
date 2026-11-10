@@ -1,3 +1,4 @@
+import { readUsageWorkspace } from "./usage-workspace-model";
 import { fittedCoverHeight, type CardLoadingSpec } from "./card-loading-model";
 import { initiatorLabels } from "./habits-analysis-catalog";
 import {
@@ -12,6 +13,42 @@ import { readViewState } from "./view-state";
 // The Habits page's sections as Home cards. The page's address (its habits_*
 // view fields) is the card definition, as for any dashboard card; a card
 // reads /api/habits as the page does and draws its section's chart.
+
+export function isHabitsCardAddress(address: string): boolean {
+  const url = new URL(address, location.origin);
+  return url.origin === location.origin && url.pathname === "/analyze" && readUsageWorkspace(url.searchParams).mode === "dashboards" && url.searchParams.get("analyze_topic") === "habits";
+}
+
+export function readHabitsCard(address: string): HabitsCardView {
+  if (!isHabitsCardAddress(address)) throw new Error("This Habits card is unavailable.");
+  return readHabitsCardView(new URL(address, location.origin).searchParams);
+}
+
+export const habitsViews: Array<["calendar" | "punchcard" | "days", string]> = [["calendar", "Activity calendar"], ["punchcard", "Weekday and hour"], ["days", "Daily work schedule"]];
+export type HabitsView = typeof habitsViews[number][0];
+export const habitsViewTarget = (view: HabitsView): HabitsCardTarget => `habits-${view}`;
+
+// Older section links and inspection pins still open the chart they refer to.
+export function readHabitsView(params: URLSearchParams): HabitsView {
+  const explicit = params.get("habits_view");
+  if (habitsViews.some(([id]) => id === explicit)) return explicit as HabitsView;
+  const target = params.get("reveal") ?? params.get("chart_pins") ?? "";
+  if (target.includes("habits-days")) return "days";
+  if (target.includes("habits-punchcard") || target.includes("habits-automations")) return "punchcard";
+  if (target.includes("habits-calendar")) return "calendar";
+  if (params.has("habits_shape_days")) return "days";
+  if (params.has("habits_punchcard") || params.has("habits_punchcard_days")) return "punchcard";
+  if (["habits_calendar", "habits_weekends", "habits_weeks", "habits_day"].some(key => params.has(key))) return "calendar";
+  return "days";
+}
+
+export function habitsTargetParams(target: HabitsCardTarget, params: URLSearchParams): URLSearchParams {
+  const next = new URLSearchParams(params);
+  const view = target === "habits-calendar" ? "calendar" : target === "habits-days" ? "days"
+    : target === "habits-punchcard" || target === "habits-automations" ? "punchcard" : readHabitsView(params);
+  next.set("habits_view", view);
+  return next;
+}
 
 export const habitsCardTargets = ["habits-streaks", "habits-calendar", "habits-punchcard", "habits-days", "habits-pace", "habits-automations"] as const;
 export type HabitsCardTarget = typeof habitsCardTargets[number];

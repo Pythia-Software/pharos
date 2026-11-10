@@ -22,7 +22,7 @@ const date = (name: string, label: string): Column => [name, label, "datetime", 
 const count = (name: string, label: string): Column => [name, label, "number", "number", 120];
 const percent = (name: string, label: string): Column => [name, label, "number", "sync_percent", 140];
 export const syncSchemas = {
-  operations: schema("operations", [date("started_at", "Started"), ["work", "Work", "text", undefined, 210], ["result", "State", "text", "sync_result", 140], ["trigger", "Started by"], duration("seconds", "Elapsed"), ["subject", "Subject", "text", undefined, 170], ["error", "Error", "text", undefined, 240]], "started_at", [
+  operations: schema("operations", [date("started_at", "Started"), ["work", "Operation", "text", undefined, 210], ["result", "State", "text", "sync_result", 140], ["trigger", "Started by"], duration("seconds", "Elapsed"), ["subject", "Subject", "text", undefined, 170], ["error", "Error", "text", undefined, 240]], "started_at", [
     ["kind", "Kind"], ["variant", "Variant"], ["parent_id", "Parent operation"], ["step", "Last step"], date("ended_at", "Finished"),
   ]),
   history: schema("history", [date("finished_at", "When"), ["result", "Result", "text", "sync_result", 140], ["sources", "Sources", "text", undefined, 170], count("conversations", "Conversations"), count("messages_in_changed_groups", "Messages"), duration("seconds", "Elapsed"), duration("cpu_seconds", "CPU time"), memory("rss_observed_peak_bytes", "RAM peak")], "finished_at", [
@@ -32,7 +32,7 @@ export const syncSchemas = {
   costs: schema("costs", [["workload", "Workload"], count("samples", "Runs"), duration("elapsed_median", "Elapsed median"), duration("elapsed_p95", "Elapsed p95"), duration("cpu_median", "CPU median"), duration("cpu_p95", "CPU p95"), memory("ram_last", "Last RAM peak"), percent("cpu_duty", "Estimated CPU duty (% of one core)")]),
   accuracy: schema("accuracy", [["operation", "Operation"], ["checkpoint", "Checkpoint"], count("predicted", "Available"), count("attempts", "Attempts"), count("evaluated", "Evaluated"), duration("error_seconds", "Median error"), percent("error_percent", "Median relative error"), count("covered", "Within range"), duration("width_seconds", "Median range width")]),
   coverage: schema("coverage", [["source_name", "Source"], count("units", "Units"), ["outcome", "Result"], date("last_verification", "Last verified")]),
-  deferred: schema("deferred", [["name", "Work"], date("changed_at", "Changed"), date("completed_at", "Last completed")]),
+  deferred: schema("deferred", [["name", "Source group"], date("changed_at", "Changed"), date("completed_at", "Last completed")]),
   sourceResults: schema("source_results", [["source", "Source"], count("conversations", "Conversations"), count("messages", "Messages"), count("workspaces", "Changed groups"), ["status", "Status"], ["error", "Error", "text", "text", 300]]),
   phases: schema("phases", [["name", "Phase"], duration("seconds", "Elapsed"), duration("cpu_seconds", "CPU time")]),
   stages: schema("stages", [["stage", "Stage", "text", undefined, 200], count("done", "Done"), count("total", "Total"), ["unit", "Unit"], duration("seconds", "Elapsed"), count("conversations", "Input conversations"), count("groups", "Input groups"), memory("bytes", "Input bytes"), ["bytes_basis", "Bytes basis"], count("messages", "Input messages"), duration("since_last_index_seconds", "Since prior index"), count("load_one_minute", "Load (1 min)")]),

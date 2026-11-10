@@ -30,8 +30,9 @@ Every workspace belongs to exactly one **project**, chosen in this order:
    the new checkout. It also covers a session recorded on another Mac in a
    checkout this library knows.
 3. **The working folder.** The location is normalized as a folder key:
-   - The home directory is shown as `~`. For `/Users/<name>/…` and
-     `/home/<name>/…` that applies on any Mac, not only the current one.
+   - A home directory, `/Users/<name>/…` or `/home/<name>/…`, is shown as
+     `~`. The rule reads nothing of the host, so every Mac sharing a
+     library derives the same key; a home elsewhere keeps its full path.
    - Temporary directories (`/tmp`, `/private/tmp`, `/var/folders`) form
      one project, `/tmp`. Otherwise each throwaway directory would be a
      project of its own.
@@ -78,11 +79,15 @@ These columns are derived and are written only by ingest and maintenance,
 never by a request:
 
 - Ingest sets them for each workspace it writes.
-- When a repository gains checkout locations, workspaces in those folders
-  are resolved again.
+- When a repository gains checkout locations, the workspaces without a
+  repository whose folders are at or under them are resolved again (all of
+  `/tmp` when a checkout is in a temporary directory). Other folders cannot
+  change, so ingest's write transaction reads only these, by an index on
+  `project_folder`.
 - A repository merge moves `folder_repository_id` to the survivor.
 - Capture recovery, which restores repositories without that writer,
-  resolves folder workspaces again when it changes any checkout.
+  resolves again the folder workspaces under each checkout it adds or
+  removes.
 - A build from before projects can still write to the catalog (the schema
   version is unchanged), leaving the columns missing or stale. Each build's
   first open derives them for every workspace, and the identities stage of
@@ -92,7 +97,10 @@ never by a request:
 Readers use `projectJoin`/`projectNameSQL` (`projects.go`). They join
 `repositories` on `COALESCE(repository_id, folder_repository_id)` and derive
 `project_id` (`repository:<id>` or `folder:<key>`), `project_name` and
-`project_kind`.
+`project_kind`. Every query dataset with `repository_name` also has
+`project_name` (the library also `project_kind` and `project_id`), except
+Findings, which are computed per repository; Scatter points carry it as
+point metadata.
 
 ### Where projects appear
 
@@ -101,13 +109,23 @@ Readers use `projectJoin`/`projectNameSQL` (`projects.go`). They join
 - **Analyze:** a "Project" breakdown in every catalog that had
   "Repository". Links that name `repository_name` read as the project
   breakdown (the catalog's `legacy` mapping), so saved links and card
-  destinations keep working.
+  destinations keep working. Compactions, Session Shape, Agent Event rates
+  and Scatter keep their Repository breakdown beside Project, since their
+  cards still group by repository. File paths stay Git-only: "Repository path",
+  "Repository + path", the "Path in a conversation" unit and the read-path
+  and edit-path cards pair `repo_path` with the repository holding the file
+  (`path_repository`), which can differ from the session's project. Files
+  outside a Git checkout have no repository path, so a library without Git
+  has none.
 - **Storage:** a By project tab.
 - **MCP:** `list_projects` lists repositories and folders alike, with the
   count of conversations without a project; `list_repositories` is kept
   unchanged as the repository-only view. `search_conversations`,
   `search_work`, `search_messages`, `search_text` and `query_statistics`
   take a `project` filter, and `query_statistics` groups by `project`.
+  A filter that is exactly a project's name, a repository's remote or a
+  folder's key or path (`~`, `~/notes`) names only that project; any other
+  text matches by part of a name, as the `repository` filter does.
   `trace_worktree` and `list_findings` stay repository-only: findings are
   computed per repository.
 
@@ -124,7 +142,10 @@ Each outcome fact is labelled with the tier it came from.
 ### Tier 1: from the transcript
 
 A **session** is a workspace, a Library row: a Claude Code or Codex session,
-a Conductor workspace. Its delegated agents' calls are its own.
+a Conductor workspace. Its delegated agents' calls are its own. "Session"
+is this document's shorthand and the stored names' (`session_outcomes`,
+`session_files`); the page copy, the "why" included, counts workspaces, as
+[the UI vocabulary](ui-vocabulary.md) asks.
 
 - **Files changed.** Each file a successful edit call changed, read from
   `tool_calls` (Claude Code's Edit, Write and MultiEdit, Codex's
@@ -132,8 +153,9 @@ a Conductor workspace. Its delegated agents' calls are its own.
   so a patch's files are read from the patch itself and placed the way the
   ledger places paths, each on its own: a patch whose first file is scratch
   still changes its other files. A patch in a Codex code-mode script, where
-  the script holds it as a string literal, changes the files it names; the
-  ledger (from `tools-v11`) records its first file too. An older Codex
+  the script holds it as a string literal, changes the files it names, as
+  does every other patch the script applies; the ledger (from `tools-v14`)
+  records the first patch's first file too. An older Codex
   patch that lists its files without their lines changes those files.
   Files in temporary directories and the agent's own home (plans, memory)
   are left out. A file in a repository
@@ -141,7 +163,11 @@ a Conductor workspace. Its delegated agents' calls are its own.
   checkout and worktree of a repository shares it; any other file by its
   absolute path. Lines added and removed come from the ledger; Antigravity
   records none, so its counts are empty ("Not recorded"), not zero. Edits a
-  shell command makes (`sed -i`, redirections) are not counted.
+  shell command makes (`sed -i`, redirections) are not counted. A session
+  without edits changed no files when its source records tool calls: its
+  provider declares tool calls, always or when its history holds them, and
+  a working folder (`provider_registry.go`). A chat export cannot tell, so
+  its sessions are Unknown.
 - **Verified after the last edit.** How the last command whose
   `command_category` is `test` or `build` after the session's last edit
   ended: passed, failed, or no result; "not run" when none ran. The ledger
@@ -158,9 +184,10 @@ a Conductor workspace. Its delegated agents' calls are its own.
     removes whatever of the session's lines the new file no longer has.
   - An Edit's text (and Antigravity's, batches included) can start or end
     inside a line, and part of a line never matches the whole line another
-    session adds or removes. So a changed first or last line of a
-    replacement is left out, unless a newline in the text shows where it
-    starts or ends; the lines between are whole. On the real library 2% of
+    session adds or removes. Lines the same on both sides at the start
+    and end of a replacement are unchanged. A changed line left at its
+    very start or end is left out; one after or before an unchanged line
+    is whole, as are the lines between. On the real library 2% of
     Claude Code's edits are a single line and 18% change their first or
     last line. A file only such edits changed is not judged.
   - A line removed and added again (moved or reindented) is unchanged, and
@@ -171,15 +198,18 @@ a Conductor workspace. Its delegated agents' calls are its own.
     workspace's edits and is never rework. When a workspace becomes or stops
     being a mirror, the sessions sharing its files are judged again.
   - A session whose edits cannot be read line by line (an input the
-    transcript did not keep, or only parts of lines) is not judged, and its
-    "why" says so.
+    transcript did not keep, only parts of lines, or a patch recorded as
+    its list of changed files) is not judged: once its window has passed
+    it is Unknown, not kept, and its "why" says so.
 
   Editing the same files again is not rework: continued work on a file
   usually adds to it. The calibration is under
   [Rework calibration](#rework-calibration).
 - **Commit, branch and PR evidence in tool output.** From the output of a
-  successful `git commit` (`[main 1a2b3c4] …`, giving hash and branch),
-  `git push` (`a..b  main -> main`, `* [new branch]`), and `gh pr create`
+  successful `git commit` (`[main 1a2b3c4] …`, giving hash and branch;
+  also of a failed command that runs more after its commit, such as
+  `git commit … && git push` whose push failed, since the commit it printed
+  was made), `git push` (`a..b  main -> main`, `* [new branch]`), and `gh pr create`
   (the pull request URL), as the model read it, out of the stored result's
   envelope. Only these commands' output is read. A hash here
   is Tier 1 evidence: it is stored, but "Committed" waits for local Git to
@@ -211,7 +241,13 @@ transcript it was read from already holds the text.
 
 `internal/archive/outcome_git.go` asks local git about the repositories in
 which sessions changed files or printed a commit, using only checkouts this
-Mac recorded that still exist.
+Mac recorded that still exist and hold the repository: one with its root
+commit, else with one of its remotes as `origin`, else (with neither known)
+a checkout at the recorded folder itself, not in a folder above it, such as
+a home folder kept in git. It reads one such checkout of each clone (each
+git common directory) and combines what they say: a repository's identity
+follows its remote, so `~/code/app` and a Conductor clone of it are one
+repository whose clones hold different branches.
 
 - **When.** In background stages only: after the tool summaries in
   incremental recovery, and as the "linking commits" phase of a library
@@ -219,11 +255,13 @@ Mac recorded that still exist.
   Before each repository it yields to interactive queries, and git runs
   under `nice -n 10` with a 60-second timeout for the log and 10 seconds for
   everything else.
-- **Cache.** A repository's scan key is its refs (heads, remotes, tags and
-  `refs/notes/ai`) and its worktrees' detached HEADs, plus its sessions'
-  edit windows, files (with each file's first and last edit and its kept
+- **Cache.** A repository's scan key is each clone's refs (heads, remotes,
+  tags and `refs/notes/ai`) and its worktrees' detached HEADs, plus its
+  sessions' edit windows, files (with each file's first and last edit and its kept
   line fingerprints) and printed commits. An unchanged key runs no `git log` and writes nothing, so the
-  cached views stay valid. A scan that could not start is keyed by its
+  cached views stay valid. A scan that runs writes only the links, commits
+  and session states that changed; views read the links and commits only
+  through `session_git`'s counts. A scan that could not start is keyed by its
   reason; one that timed out is tried again when the repository changes or
   on the next day.
 - **What it reads.** `git log --branches --remotes --tags --no-renames
@@ -237,7 +275,9 @@ Mac recorded that still exist.
   abort. The diff's added lines are fingerprinted and compared in memory,
   never stored. Every diff is read with `--no-textconv --no-ext-diff`: a
   repository's attributes can name a converter or diff program, which
-  would run, and a converter with a cache writes notes.
+  would run, and a converter with a cache writes notes. Every command sets
+  `log.showSignature=false`, since with it set a log runs the repository's
+  `gpg.program` (or SSH signing program) for each signed commit.
 - **Commits linked to the session.** A link comes either from a hash the
   session's own `git commit` printed (direct, confidence 1.0) or by
   inference: the commit is not a merge, its author time falls in the
@@ -249,7 +289,10 @@ Mac recorded that still exist.
   before it, then to the tightest window (CodeBurn's rule), at 0.5; a tie
   links nothing. A 0.5 link is kept as a candidate but counts toward no
   session's commits or label (see [Commit-linking
-  calibration](#commit-linking-calibration)). Every link stores its
+  calibration](#commit-linking-calibration)). A printed hash does not stop
+  inference when no session that printed it edited one of its files (a
+  session that only committed or opened the pull request): the session
+  whose edits it holds is linked too, as above. Every link stores its
   evidence: the printed hash, or the author time, the window, the shared
   files and the number of candidates.
 - **Mainline.** Mainline is `origin/HEAD`, else `origin/main` or
@@ -261,7 +304,10 @@ Mac recorded that still exist.
   the two (a printed hash still counts when only inference linked the
   copy). Another session's link to the original stays. In a shallow clone a commit
   mainline does not reach is unknown, not "not landed", and so is a commit
-  whose patch could not be read.
+  whose patch could not be read or is empty (an empty commit or a merge).
+  Patches are read with `--no-color`, which a repository can force on, and
+  listed commits are passed on standard input. Each clone answers for the
+  commits it has; one whose mainline has the commit makes it landed.
 - **Reverts.** A later commit reverts a linked one when its message says
   `This reverts commit <hash>`, or when it changes the same files with the
   added and removed counts swapped and its patch-id equals the linked
@@ -276,7 +322,17 @@ What it stores: `git_commits` (one row per linked commit: hash, times,
 parents, counts, mainline and revert evidence), `session_commit_links`
 (method, confidence and evidence per link), `session_git` (each session's
 state and counts) and `git_repository_scans` (each repository's scan key
-and state on this host). The Library reads them as `git_check`,
+and state per Mac).
+
+A library drive moves between Macs, each with its own clones. Each link
+records the Mac whose scan made it (`session_commit_links.host_id`). A scan
+replaces the links to commits it read and its own Mac's earlier links;
+another Mac's link to a commit this Mac cannot see, such as one on a branch
+only that Mac's clone has, stays. A session's repository is checked when
+any Mac checked it, so a Mac with no checkout does not turn another Mac's
+results into "Not checked". The label uses local Git only while its state
+is checked, as the Library's columns do: a failed scan keeps the links it
+found earlier, but they decide nothing until a scan succeeds. The Library reads them as `git_check`,
 `git_check_reason`, `linked_commits` and `landed_commits`, and the outcome
 label as Landed, Committed or, for a revert, Reworked.
 
@@ -298,9 +354,9 @@ decided it and its tier.
 | Committed | Committed, not on mainline (yet). | Not used. |
 | Changed and kept | Edits with no commit evidence, and no later rework within N days. | Edits with no later rework within N days. |
 | Changed, too recent | Edits less than N days ago, so rework cannot be judged yet. | Same. |
-| Reworked | Its changes were reverted, or later sessions removed at least half of the lines it added within N days. | Later sessions removed at least half of the lines it added within N days. |
-| No changes | The session changed no files. Research, review and questions are normal. | Same. |
-| Unknown | Not enough evidence, for example a harness that records no tool calls. | Same. |
+| Reworked | Its changes were reverted, or later workspaces removed at least half of the lines it added within N days. | Later workspaces removed at least half of the lines it added within N days. |
+| No changes | The workspace changed no files. Research, review and questions are normal. | Same. |
+| Unknown | Not enough evidence, for example a harness that records no tool calls, or edits that could not be read line by line. | Same. |
 
 "Changed, too recent" is a revision of the brief's table. Without it, every
 session from the last two weeks would read as "kept" before rework could
@@ -317,7 +373,7 @@ Each git-only fact has three distinct states, both in data and in the UI:
 | State | Meaning | Shown as |
 |---|---|---|
 | Not applicable | The project is a folder or none, or the session changed no file in its repository. | "Not a repository" / "No git data" / "Not applicable" |
-| Not checked | A repository, but Pharos could not inspect it. Reasons: no `git` binary, checkout deleted or recorded only on another Mac, a timeout, or git failing to read it. | "Not checked", with the reason |
+| Not checked | A repository, but Pharos could not inspect it. Reasons: no `git` binary, checkout deleted, holding another repository or recorded only on another Mac, a timeout, or git failing to read it. A repository any Mac checked is checked. | "Not checked", with the reason |
 | None | Inspected, and nothing was found. | "Not on mainline", "No commits" |
 
 A "Not checked" state is never negative evidence.
@@ -325,14 +381,17 @@ A "Not checked" state is never negative evidence.
 ### Analyze → Outcomes
 
 The Outcomes dashboard reads the `outcomes` dataset (`outcomes_table.go`):
-one row per session the Library lists, with mirrors folded the same way.
-A row has the session's outcome label, its evidence tier, project, branch,
-priced usage, main model and Tier 1 facts.
+one row per workspace the Library lists (its session), with mirrors folded
+the same way. The dashboard counts workspaces. A row has the session's
+outcome label, its evidence tier, project, branch, priced usage, main model
+and Tier 1 facts.
 
 - **When a session counts.** At its start: its first usage hour, else its
   first edit, else its last activity. Its whole cost counts then.
 - **Cost** is priced as the Library prices it, from the same usage ledger.
-  So a session's cost here equals its Library cost.
+  So a session's cost here equals its Library cost. A session with usage but
+  no price reads "Unpriced"; one that recorded no usage at all (`has_usage`
+  0) reads "No usage".
 - **Main model.** The model that took most of the session's cost, or of its
   tokens if none was priced. Its provider is the main provider.
 - **Evidence tier.** The strongest evidence the label rests on:
@@ -346,21 +405,29 @@ priced usage, main model and Tier 1 facts.
 
 The measures:
 
-- sessions, cost and tokens;
+- workspaces, cost and tokens;
 - files changed, and lines added and removed;
 - rework rate: lines later sessions removed over lines kept, pooled over
-  every session's lines rather than averaged per session;
-- cost per kept change: all the sessions' cost over the sessions labelled
-  Landed, Committed, or Changed and kept. Sessions that changed nothing and
-  reworked ones count in the cost, because they are part of what a kept
-  change cost;
-- kept share: kept sessions over all sessions.
+  every session's lines rather than averaged per session. A session's
+  `kept_lines` and `rework_removed_lines` are empty while its rework window
+  is open, so the rate counts only rework that has had time to happen;
+- kept share: kept sessions (Landed, Committed, or Changed and kept) over
+  judged ones (`judged`: those plus Reworked). Changed, too recent cannot be
+  judged yet, and No changes and Unknown have nothing to judge, so they
+  count on neither side. Counting them as not kept would make the last two
+  weeks look like half the work was lost, and make "No changes" a penalty;
+- cost per kept change: the cost of judged sessions (`judged_cost_usd`),
+  reworked ones included because they are part of what a kept change cost,
+  over the kept sessions that have a price (`kept_priced`). A kept session
+  without a price adds nothing to the cost, so it does not add to the count
+  either.
 
 The page opens on spend by outcome label over time. Below the chart are
 three panels:
 
 - rework rate by project;
-- cost per kept change by main model;
+- cost per kept change by main model, with how many kept changes have no
+  price;
 - evidence coverage: how many sessions reached each tier.
 
 The tiers a library reached are read over the whole library, not the
@@ -393,13 +460,22 @@ each branch. It follows CodeBurn's by-branch lens (see References).
   `branch_usage.go`) runs after commit linking and never on a request. It
   reads only the events Pharos kept whole, which include every usage event.
   It skips a conversation whose sessions' usage has not changed since it
-  was last read (`branch_usage_scans`). When the rules of outcomes, commit
+  was last read (`branch_usage_scans`). Indexing a conversation's sessions
+  again (a full sync or a capture replay, which write them with the same
+  totals) deletes their shares and that record, so it is read again. When the rules of outcomes, commit
   linking or spend by branch change, opening the library schedules the
   stage (`scheduleToolDerivations`), so a library with nothing new to index
   still derives again.
 - **Session-level branches.** Codex records one branch per session, and
   Conductor one per workspace; their messages carry no per-turn branch. A
   session without per-turn branches is on that branch for all its usage.
+- **Mirrors count once.** A Conductor workspace that mirrors a Claude Code
+  session carries the same usage. As in Tokens and Cost, only the native
+  session counts, with its per-turn branches.
+- **Branches are per project.** The default view compares spend by project
+  and branch (`project_branch`), and the Branches count counts each
+  project's branches, so `main` in ten repositories is ten branches. The
+  "Branch name" breakdown adds same-named branches together.
 - **Coverage split.** It sums to the repository sessions' whole spend:
 
   | Coverage | Meaning |
@@ -408,10 +484,14 @@ each branch. It follows CodeBurn's by-branch lens (see References).
   | Unknown branch | In a session that recorded a branch: usage before its first branch, on a detached HEAD, or not placed on a turn. Never relabelled as `main`. |
   | No branch data | A session that recorded no branch. |
 
+  Usage not placed on a turn is usage the transcript reports for a run or
+  the whole session rather than a request (a Claude Code cost-state, say),
+  usage without a timestamp, which the ledger places at the session's
+  start, and usage in an hour and model in which no turn recorded tokens.
+
   "Unknown branch" is wider than CodeBurn's "unknown, before first branch".
-  It also covers a detached HEAD and usage the transcript reports for the
-  whole session rather than a turn, such as a Claude Code cost-state
-  remainder. Neither can honestly be given a branch.
+  It also covers a detached HEAD and usage not placed on a turn. Neither
+  can honestly be given a branch.
 - **Git sessions only.** Sessions in folders, or without a project, are not
   in the dataset. A library without Git shows a note on the page instead of
   an empty chart.
@@ -419,18 +499,20 @@ each branch. It follows CodeBurn's by-branch lens (see References).
   `branch_usage_probe_test.go`):
   - It has 18,629 Claude-model conversations in repositories. Claude Code's
     own sessions recorded per-turn branches in 5,186 of 5,198. Conductor's
-    5,020 use its workspace branch. TL1's 8,411 mostly have no branch data.
+    5,020 use its workspace branch, except those that mirror a Claude Code
+    session: 49 billion tokens of mirrored usage count once, on the
+    native session. TL1's 8,411 mostly have no branch data.
   - A first pass read 1.5 million kept events in 2 min 24 s; the slowest
     conversation took 1.1 s. A pass with nothing new runs only the
     change-detection query, which took 0.37 s.
-  - Coverage, by tokens:
+  - Coverage, by tokens, mirrors counted once:
 
     | Coverage | Share |
     |---|---|
-    | On a branch, per session | 85.0% |
-    | On a branch, per turn | 13.0% |
+    | On a branch, per session | 83.8% |
+    | On a branch, per turn | 13.8% |
     | Unknown branch | 0.1% |
-    | No branch data | 1.9% |
+    | No branch data | 2.3% |
 - **Approximation.** Within one hour, a session's cost is split by tokens.
   If a session switched branches mid-hour, the two branches' token types
   (cache reads and output, for example) are priced as that hour's mix.
@@ -487,8 +569,9 @@ calibration, with read-only git in this Mac's 47 recorded repositories
   | A merge commit (never inferred) | 77 |
   | Sharing no file the printing session edited | 34 |
 
-  When the printing session made no edits, an inferred link goes to the
-  session that did, which is the session whose work the commit holds.
+  So when no session that printed a commit edited its files, inference
+  still runs for it and links the session that did, whose work the commit
+  holds; the printed link stays too.
 - **Telling contested commits apart.** 577 of the 971 could have been made
   by several sessions. Each way of choosing among them, on its own:
 
@@ -602,11 +685,13 @@ first and rework judged once per marked session (`session_rework_dirty`).
 
 - It never runs `git fetch` or `git pull`, writes notes, installs hooks, or
   changes config, refs or the working tree. Every command is read-only and
-  sets `GIT_NO_LAZY_FETCH=1`, and no diff runs a program the repository
-  names (`--no-textconv --no-ext-diff`).
+  sets `GIT_NO_LAZY_FETCH=1`; no diff runs a program the repository
+  names (`--no-textconv --no-ext-diff`), and no log verifies a signature
+  (`log.showSignature=false`).
 - It never runs git in a path another Mac recorded
   (`workspace_sightings.host_id`), because that path may be an unrelated
-  checkout here.
+  checkout here, nor in a recorded path whose checkout holds another
+  repository.
 - It never runs git on a request. Pages and MCP tools read stored facts.
   Git runs in background stages at low priority, with timeouts and
   cancellation, and caches by the repository's refs.

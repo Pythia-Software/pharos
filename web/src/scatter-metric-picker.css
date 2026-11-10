@@ -1,0 +1,9 @@
+.scatter-metric-picker { position: relative; width: min(21rem, 100%); min-width: 0; }
+.scatter-metric-picker input { box-sizing: border-box; width: 100%; min-width: 0; padding: .5rem .65rem; border: 1px solid var(--line); border-radius: 6px; background: var(--panel, var(--paper)); color: var(--ink); font: inherit; }
+.scatter-metric-options { position: absolute; z-index: 20; top: 100%; left: 0; width: max(100%, 24rem); max-width: calc(100vw - 3rem); max-height: 24rem; overflow-y: auto; background: var(--paper); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px #0002; }
+.scatter-metric-group { padding: .65rem .75rem .3rem; font-weight: 700; color: var(--muted); font-size: .75rem; }
+.scatter-metric-options [role="option"] { padding: .5rem .75rem; cursor: pointer; }
+.scatter-metric-options [role="option"]:hover, .scatter-metric-options .active { background: var(--hover, #8882); }
+.scatter-metric-options strong, .scatter-metric-options small { display: block; }
+.scatter-metric-options small { color: var(--muted); font-size: .75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 600px) { .scatter-metric-options { width: 100%; } }

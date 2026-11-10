@@ -39,6 +39,7 @@ func PharosConversationActivitySchema() querytable.Schema {
 			"conversation_id":          {Name: "conversation_id", Kind: querytable.FieldText, Expr: "r.\"conversation_id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"conversation_id\""},
 			"message_id":               {Name: "message_id", Kind: querytable.FieldText, Expr: "r.\"message_id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"message_id\""},
 			"root_title":               {Name: "root_title", Kind: querytable.FieldText, Expr: "r.\"root_title\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"root_title\""},
+			"root_quality":             {Name: "root_quality", Kind: querytable.FieldEnum, Expr: "r.\"root_quality\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"root_quality\""},
 		},
 		DefaultSort:  []querytable.OrderBy{{Field: "event_at", Dir: "desc"}},
 		TiebreakSort: []querytable.OrderBy{{Field: "id", Dir: "asc"}},

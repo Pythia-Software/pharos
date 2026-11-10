@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -144,7 +143,8 @@ func (c *Catalog) syncSettings(ctx context.Context) (syncSettings, error) {
 }
 
 func automaticProvider(kind string) bool {
-	return slices.Contains([]string{"claude", "codex", "conductor", "antigravity"}, kind)
+	spec, ok := registeredKind(kind)
+	return ok && spec.Automatic
 }
 
 func (s *Server) autoSources(settings syncSettings) []SourceConfig {
@@ -163,6 +163,19 @@ func syncSourceChoices(sources []SourceConfig) []map[string]any {
 		choices = append(choices, map[string]any{"name": source.Name, "kind": source.Kind, "account": source.Account, "enabled": source.Enabled, "preservation_mode": preservationMode(source)})
 	}
 	return choices
+}
+
+// Manual maintenance can interrupt scheduled indexing and background passes
+// through acquireManualIngest. Only capture and other foreground runs block it.
+func (s *Server) maintenanceBusy() bool {
+	if s.captureActive() {
+		return true
+	}
+	s.runsMu.RLock()
+	defer s.runsMu.RUnlock()
+	return slices.ContainsFunc(s.runs, func(run *SyncRun) bool {
+		return run.State == "running" && run.Kind != "automatic-sync" && run.Kind != backgroundRunKind
+	})
 }
 
 func (s *Server) acquireManualIngest() bool {
@@ -455,24 +468,30 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 			}
 		}, written: func(id string) { changedWorkspaces[id] = true }}
 		baseW, baseC, baseM := totals(results)
-		var result IngestResult
-		handle.RunIO(func() {
-			result = s.Catalog.IngestContext(withIngestMode(ctx, mode), adapter, func(phase string, w, c, m, skipped, processed int) {
-				s.updateRun(run.ID, func(run *SyncRun) {
-					run.Phase = phase
-					run.Workspaces = baseW + w
-					run.Conversations = baseC + c
-					run.Messages = baseM + m
-					run.InputsChecked = checked
+		// Each source is one admitted CPU leaf, taken before its ingest opens
+		// anything; the run itself (holding only the TryLock coordinator) is
+		// not admitted.
+		result := s.Catalog.admittedIngest(ctx, source.Name, currentHost().ID, func(ctx context.Context) IngestResult {
+			var result IngestResult
+			handle.RunIO(func() {
+				result = s.Catalog.IngestContext(withIngestMode(ctx, mode), adapter, func(phase string, w, c, m, skipped, processed int) {
+					s.updateRun(run.ID, func(run *SyncRun) {
+						run.Phase = phase
+						run.Workspaces = baseW + w
+						run.Conversations = baseC + c
+						run.Messages = baseM + m
+						run.InputsChecked = checked
+					})
+					work := activityWork{Phase: phase, Source: source.Name}
+					if plan != nil && phase == "indexing" {
+						work = plan.work(phase, source.Name, model, processed)
+						work.Kind = "incremental"
+					}
+					work.Next = "Refresh the Library view and verify changed inputs"
+					workMeter.report(work)
 				})
-				work := activityWork{Phase: phase, Source: source.Name}
-				if plan != nil && phase == "indexing" {
-					work = plan.work(phase, source.Name, model, processed)
-					work.Kind = "incremental"
-				}
-				work.Next = "Refresh the Library view and verify changed inputs"
-				workMeter.report(work)
 			})
+			return result
 		})
 		op.end("source:"+source.Name, result.Error == nil && ctx.Err() == nil)
 		results = append(results, result)
@@ -779,7 +798,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, 500)
 		return
 	}
-	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "library_empty": libraryEmpty, "has_sources": slices.ContainsFunc(s.Config().Sources, func(source SourceConfig) bool { return source.Enabled }), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns, "verification": s.Catalog.verificationStatus(r.Context())}, 200)
+	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "maintenance_busy": s.maintenanceBusy(), "library_empty": libraryEmpty, "has_sources": slices.ContainsFunc(s.Config().Sources, func(source SourceConfig) bool { return source.Enabled }), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns, "verification": s.Catalog.verificationStatus(r.Context())}, 200)
 }
 
 // capturePending is the Sources table's "Needs capture": the source was indexed
@@ -888,13 +907,16 @@ func conductorPreflight(adapter Adapter) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	info, err := os.Stat(adapter.Config().Path)
+	path := adapter.Config().Path
+	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
 	}
-	identity := ""
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		identity = fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
+	// Without the directory's identity, a replaced source could hash as
+	// unchanged, so the check fails rather than hashing an empty identity.
+	identity, err := localIdentityText(info)
+	if err != nil {
+		return "", fmt.Errorf("identify %s: %w", path, err)
 	}
 	return hashBytes([]byte(fingerprint + ":" + identity + ":" + sourceIndexVersion(adapter))), nil
 }
