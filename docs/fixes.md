@@ -83,16 +83,18 @@ lab's "v3" grouping:
      "Merges keep conflicting in generated site map").
 
    Failing that, it is the lead cut to the problem: without first-person or
-   "Actually,"/"Confirmed:" openers, and without a trailing plan or what the
-   agent did next ("…; I rebuilt it", "… -- I need a…", "; fix imports with
-   Python"). The item's best self-contained member sentence is kept as its
-   **lead** and quoted under the title. A member that states the problem wins
-   over one that states an outcome: a remedy ("The fix is to…", "the right
-   approach is…", "my best move is…") or work already done ("Fixed the
-   parser…", "…now passes", "…now displays correctly after fixing…") is ranked
-   far down, unless a later clause says something still fails; plans ("I'll…"
-   anywhere), advice ("should", "instead of") and first person rank down less,
-   and naming an obstacle ranks up. Titles may change between builds; an
+   "Actually,"/"Wait,"/"Confirmed:"/"Minor —" openers, and without a trailing
+   plan or what the agent did next ("…; I rebuilt it", "… -- I need a…", "; fix
+   imports with Python"). The item's best self-contained member sentence is
+   kept as its **lead** and quoted under the title. A member that states the
+   problem wins over one that states an outcome: a remedy ("The fix is to…",
+   "the right approach is…", "my best move is…") or work already done ("Fixed
+   the parser…", "…now passes", "…now displays correctly after fixing…") is
+   ranked far down, unless a later clause says something still fails.
+   "Fixed", "resolved" or "patched" used as adjectives ("The port is fixed at
+   18768", "Resolved symlinks point outside…") and "now builds twice" are not
+   done work. Plans ("I'll…" anywhere), advice ("should", "instead of") and
+   first person rank down less, and naming an obstacle ranks up. Titles may change between builds; an
    item's ID comes from its group's leader or key term, never its title or
    lead, so its state, cart entry and handoffs stay with it.
 8. **Split off and merge known failing checks.** Known-failure sentences in a

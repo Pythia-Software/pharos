@@ -564,6 +564,10 @@ func TestFixesLeadsTitlesAndKnownFailures(t *testing.T) {
 		"Truncating to hour boundaries breaks for offsets like India's +5:30 -- I need a different helper.": "Truncating to hour boundaries breaks for offsets like India's +5:30",
 		"The zsh word-splitting issue in the quiet run again; running through bash:":                        "The zsh word-splitting issue in the quiet run again",
 		"I realize there's an import cycle between labeler and its test helpers.":                           "There's an import cycle between labeler and its test helpers",
+		"Wait, git status shows pkg/execution/execution.go as unmerged.":                                    "Git status shows pkg/execution/execution.go as unmerged",
+		"Minor — the fix only pads HSTACK, not the symmetric VSTACK case.":                                  "The fix only pads HSTACK, not the symmetric VSTACK case",
+		"— the `_xlfn.` prefix issue from the playbook comes back on every export.":                         "The `_xlfn.` prefix issue from the playbook comes back on every export",
+		"The cache key ignores mtime — i.e. edits never invalidate it.":                                     "The cache key ignores mtime — i.e. edits never invalidate it",
 	} {
 		if got := fixesLeadTitle(text); got != want {
 			t.Errorf("%q: got %q, want %q", text, got, want)
@@ -597,6 +601,14 @@ func TestFixesLeadsTitlesAndKnownFailures(t *testing.T) {
 		"Fixed the parser, but the import still fails on empty rows.":                    false,
 		"After keyboard navigation, main now shows the default focus ring.":              false,
 		"The real issue is that conn.Raw returns ErrBadConn.":                            false,
+		// Adjectives and descriptions of what goes wrong are not done work.
+		"The port is fixed at 18768, so parallel harness runs collide.":       false,
+		"Resolved symlinks point outside the sandbox, so the read is denied.": false,
+		"Patched module cache entries are ignored by go build.":               false,
+		"Fixed-width columns clip long workspace names.":                      false,
+		"The bundle now builds twice on every save, doubling CI time.":        false,
+		"The race was fixed in #412.":                                         true,
+		"The schema now compiles cleanly.":                                    true,
 	} {
 		if got := fixesOutcomeOnly(sentence); got != want {
 			t.Errorf("outcome %q: got %v, want %v", sentence, got, want)

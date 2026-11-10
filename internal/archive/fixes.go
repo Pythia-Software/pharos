@@ -1617,11 +1617,13 @@ var (
 		previously reproduced reproduces identified isolated including alone hit hits
 		broader summary lines line known output truncated lost list probably maybe might`)
 	fixesNoticing = regexp.MustCompile(`(?i)^\W*(?:actually,?\s*|so,?\s*|now,?\s*)?(?:i'?m|i’m|i am|i(?:'ve| have)?|i’ve)\s+(?:realizing|noticing|seeing|realize[sd]?|notice[sd]?|see|saw|found|confirmed|spotted)\s+(?:that\s+|now\s+)?`)
-	// "Actually," and "Confirmed:" add nothing to the problem that follows.
-	fixesLeadOpener = regexp.MustCompile(`(?i)^\W*(?:actually|confirmed|indeed|interesting(?:ly)?|right|aha|ah|oh)\s*[,:—–!]\s*`)
+	// "Actually,", "Wait," and "Confirmed:" add nothing to the problem that
+	// follows; nor does a review's "Minor —".
+	fixesLeadOpener = regexp.MustCompile(`(?i)^\W*(?:actually|confirmed|indeed|interesting(?:ly)?|right|aha|ah|oh|wait|hmm+|ok(?:ay)?|well|minor|major|nit)\s*[,:—–!]\s*`)
 	// What the agent did or does next, after a semicolon or dash ("; I
 	// rebuilt it from web/src", " -- I need a…", "; running through bash:").
-	fixesTrailingOutcome = regexp.MustCompile(`(?i)\s*(?:[;—–]|\s--?\s)\s*(?:(?:so|then|now)\s+)?(?:(?:i|we)\b|i'[a-z]+|i’[a-z]+|we'[a-z]+|let me|let's|(?:re-?)?[a-z]+ing\b[^.;]*:\s*$|(?:use|run|try|switch|fix)\b).*$`)
+	// "— i.e. …" goes on explaining the problem.
+	fixesTrailingOutcome = regexp.MustCompile(`(?i)\s*(?:[;—–]|\s--?\s)\s*(?:(?:so|then|now)\s+)?(?:(?:i|we)(?:\s|$)|i'[a-z]+|i’[a-z]+|we'[a-z]+|let me|let's|(?:re-?)?[a-z]+ing\b[^.;]*:\s*$|(?:use|run|try|switch|fix)\b).*$`)
 	fixesReportLabel     = regexp.MustCompile(`(?i)^\W*(?:test status|status|verification|tests?|testing|result|results|note|blocker|caveat)[\s*_]*:[\s*_]*`)
 	fixesProhibits       = regexp.MustCompile(`(?i)\b(?:never|must not|mustn.t|not to|don.t|do not|forbids?|forbidden|avoid|without)\b`)
 	fixesFollowsRule     = regexp.MustCompile(`(?i)\bper (?:my|the|our|your) (?:notes|rules?|instructions|guidance|memory|memories|preferences?)\b|` +
@@ -1698,11 +1700,15 @@ var (
 		`\b(?:the|a|my|our|one)\s+(?:(?:right|better|best|correct|proper|simplest|simple|cleanest|clean|safest|easiest|only|real|obvious|sanctioned|actual)\s+)*` +
 		`(?:fix|approach|solution|answer|move|way forward|workaround|remedy|cure|option)\s+(?:here\s+|then\s+)?(?:is|was|would be|will be)\b`)
 	fixesDone = regexp.MustCompile(`(?i)` +
-		`^\W*(?:(?:so|ok(?:ay)?|now|actually|good),?\s+)*(?:(?:i|we)\s+|i've\s+|i’ve\s+|we've\s+|we’ve\s+|i have\s+|we have\s+)?(?:just\s+|now\s+|also\s+)?` +
-		`(?:fixed|resolved|solved|repaired|corrected|patched|worked around|handed (?:it|them|the \w+) (?:back|off))\b|` +
-		`\b(?:was|were|been|is|are|got|has been|have been)\s+(?:found\s+and\s+|now\s+|since\s+)?(?:fixed|resolved|solved)\b|` +
+		`^\W*(?:(?:so|ok(?:ay)?|now|actually|good),?\s+)*(?:` +
+		`(?:(?:i|we)\s+|i've\s+|i’ve\s+|we've\s+|we’ve\s+|i have\s+|we have\s+)(?:just\s+|now\s+|also\s+)?(?:fixed|resolved|solved|repaired|corrected|patched|worked around)\b|` +
+		`(?:just\s+|now\s+|also\s+)?(?:fixed|resolved|solved|repaired|corrected|patched|worked around)\s+(?:the|a|an|it|this|that|these|those|both|all|each|every|my|our|its|their)\b|` +
+		`(?:(?:i|we)\s+|i've\s+|i’ve\s+|we've\s+|we’ve\s+)?(?:just\s+|also\s+)?handed (?:it|them|the \w+) (?:back|off)\b)|` +
+		`\b(?:was|were|been|is|are|got|has been|have been)\s+(?:found\s+and\s+|now\s+|since\s+)?(?:fixed|resolved|solved)` +
+		`(?:\s*(?:[.,;:!)]|$)|\s+(?:in|by|upstream|already|now|and|with|on|for|via|after|since|before|properly|correctly|too)\b)|` +
 		`\|\s*\**fixed\b|\bafter (?:fixing|the fix)\b|` +
-		`\bnow\s+(?:works?|passe[sd]|pass|succeeds?|succeeded|compiles?|builds?)\b|` +
+		`\bnow\s+(?:works?|passe[sd]|pass|succeeds?|succeeded)\b|` +
+		`\bnow\s+(?:compiles?|builds?)(?:\s+(?:cleanly|fine|again|successfully|correctly))?\s*(?:[.,;:!)]|$)|` +
 		`\b(?:pass|passes|passed|works?|worked)\s+(?:now|again|after (?:the|my|this)\b)|` +
 		`\bnow\s+(?:displays?|shows?|renders?|loads?|runs?|appears?)\s+(?:\S+\s+){0,4}?(?:correctly|properly|fine|as expected|cleanly)\b`)
 	// Advice says what ought to happen, not what went wrong.
@@ -1954,7 +1960,7 @@ func fixesLeadTitle(text string) string {
 			}
 		}
 	}
-	text = strings.TrimRight(strings.TrimSpace(text), ".")
+	text = strings.TrimRight(strings.TrimLeft(strings.TrimSpace(text), " ,;:—–"), ".")
 	return fixesTitle(fixesClip(text, 120))
 }
 
