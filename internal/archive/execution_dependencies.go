@@ -1286,17 +1286,38 @@ type executionUnmarkedEntry struct {
 // from any executable, in execution_dependents_stamp (keyed by the ledger's
 // name): a cached unmarked set is valid only at the stamp it was read at.
 // They move the cached-view generation too, since what readers hold back
-// changes with it (ledgers are created after Initialize installs it).
+// changes with it (ledgers are created after Initialize installs it), and
+// the ledger's domain with it: only views that read that pass's output can
+// change, and a pass publishes one conversation at a time for hours.
 func executionDependentsStampTriggers(ledger string) []string {
 	bump := `BEGIN INSERT INTO execution_dependents_stamp(id,value) VALUES('` + ledger + `',1) ON CONFLICT(id) DO UPDATE SET value=value+1;
- UPDATE query_cache_generation SET value=value+1 WHERE id=1; END`
+ UPDATE query_cache_generation SET value=value+1 WHERE id=1;
+ UPDATE query_cache_domains SET value=value+1 WHERE name='` + queryCacheDomains[ledger] + `'; END`
 	return []string{
 		`CREATE TABLE IF NOT EXISTS execution_dependents_stamp (id TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID`,
 		`INSERT INTO execution_dependents_stamp(id,value) VALUES('` + ledger + `',1) ON CONFLICT(id) DO NOTHING`,
+		`CREATE TABLE IF NOT EXISTS query_cache_domains (name TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID`,
+		`INSERT OR IGNORE INTO query_cache_domains(name,value) VALUES('labels',0),('events',0)`,
 		`CREATE TRIGGER IF NOT EXISTS ` + ledger + `_stamp_insert AFTER INSERT ON ` + ledger + ` ` + bump,
 		`CREATE TRIGGER IF NOT EXISTS ` + ledger + `_stamp_delete AFTER DELETE ON ` + ledger + ` ` + bump,
 		`CREATE TRIGGER IF NOT EXISTS ` + ledger + `_stamp_update AFTER UPDATE ON ` + ledger + ` ` + bump,
 	}
+}
+
+// dropUndomainedStampTriggers removes a ledger's stamp triggers installed
+// before they advanced its domain, so that they are created again.
+func dropUndomainedStampTriggers(ctx context.Context, tx *sql.Tx, ledger string) error {
+	rows, err := queryMapsContext(ctx, tx, `SELECT name FROM sqlite_schema WHERE type='trigger' AND tbl_name=? AND name IN (?||'_stamp_insert',?||'_stamp_delete',?||'_stamp_update')
+ AND instr(sql,'query_cache_domains')=0`, ledger, ledger, ledger, ledger)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if _, err := tx.ExecContext(ctx, "DROP TRIGGER "+sqlIdentifier(firstString(row["name"]))); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // executionDependencyMembersDDL records which conversations formed each
@@ -1331,6 +1352,9 @@ func ensureExecutionDependencyMembers(ctx context.Context, tx *sql.Tx) error {
 	stored := map[string]map[string]string{}
 	for _, ledger := range ledgers {
 		if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS `+ledger[0]+`_digest_idx ON `+ledger[0]+`(execution_digest)`); err != nil {
+			return err
+		}
+		if err := dropUndomainedStampTriggers(ctx, tx, ledger[0]); err != nil {
 			return err
 		}
 		for _, statement := range executionDependentsStampTriggers(ledger[0]) {
@@ -1599,13 +1623,18 @@ func markExecutionDependents(ctx context.Context, tx *sql.Tx) error {
 		return nil
 	}
 	// Moving the cursor changes what executionUnmarked reads, which no
-	// cached-view trigger sees when nothing was marked: invalidate cached
-	// views here, as label facts publication does. This touches only the
-	// cached-view generation, never execution_source_generation, so the
-	// resolver's caches are not invalidated by it.
-	_, err = tx.ExecContext(ctx, `UPDATE query_cache_generation SET value=value+1 WHERE id=1`)
-	if err != nil && strings.Contains(err.Error(), "no such table") {
-		err = nil
+	// cached-view trigger sees when nothing was marked: invalidate the views
+	// that read a ledger's output here, as label facts publication does.
+	// Each ledger's domain advances with the generation, so a view that
+	// reads neither is kept. This never touches execution_source_generation,
+	// so the resolver's caches are not invalidated by it.
+	for _, ledger := range ledgers {
+		if err = advanceCacheGeneration(ctx, tx, queryCacheDomains[ledger[0]]); err != nil {
+			if !strings.Contains(err.Error(), "no such table") {
+				return err
+			}
+			err = nil
+		}
 	}
 	return err
 }

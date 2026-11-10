@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -52,6 +53,12 @@ func TestQueryCachesSurviveMaintenanceAndAuditCommits(t *testing.T) {
 	// The labeling and agent-event passes commit to their own tables for
 	// hours. A value that reads neither (derivedCoreFamilies) is kept; any
 	// other is recomputed, as it is by every tracked write.
+	if err := other.ensureLabelsSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.ensureAgentEventsLedger(ctx); err != nil {
+		t.Fatal(err)
+	}
 	start, err := readCacheGenerations(ctx, other.DB)
 	if err != nil {
 		t.Fatal(err)
@@ -60,11 +67,23 @@ func TestQueryCachesSurviveMaintenanceAndAuditCommits(t *testing.T) {
 	everything := func(context.Context) (int, error) { wide++; return 42, nil }
 	var narrow int
 	events := func(context.Context) (*delegationSnapshot, error) { narrow++; return nil, nil }
-	for i, statement := range []string{
-		`SELECT 1`,
-		`INSERT INTO message_labels_dirty(conversation_id,token) VALUES('c','t')`,
-		`INSERT INTO agent_event_fact_conversations(conversation_id,stamp) VALUES('c','s')`,
+	wantNarrow := 1
+	for i, write := range []struct {
+		statement string
+		events    bool
+	}{
+		{`SELECT 1`, false},
+		{`INSERT INTO message_labels_dirty(conversation_id,token) VALUES('c','t')`, false},
+		// Each pass records a conversation's publication in its ledger, whose
+		// stamp triggers advance the generation as well.
+		{`INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('c','s',1,'x')`, false},
+		{`INSERT INTO agent_event_fact_conversations(conversation_id,stamp) VALUES('c','s')`, true},
+		{`INSERT INTO agent_events_conversations(conversation_id,structure,built_at) VALUES('c','s','x')`, true},
 	} {
+		statement := write.statement
+		if write.events {
+			wantNarrow++
+		}
 		if _, err := other.DB.Exec(statement); err != nil {
 			t.Fatal(err)
 		}
@@ -75,7 +94,7 @@ func TestQueryCachesSurviveMaintenanceAndAuditCommits(t *testing.T) {
 			t.Fatalf("after %q: %d builds of a value that reads neither, %v", statement, builds, err)
 		}
 		// A delegation snapshot reads agent events and no label.
-		if _, err := cachedValue(ctx, catalog, "delegation:probe", events); err != nil || narrow != 1+i/2 {
+		if _, err := cachedValue(ctx, catalog, "delegation:probe", events); err != nil || narrow != wantNarrow {
 			t.Fatalf("after %q: %d builds of a value that reads agent events, %v", statement, narrow, err)
 		}
 	}
@@ -83,6 +102,19 @@ func TestQueryCachesSurviveMaintenanceAndAuditCommits(t *testing.T) {
 	if err != nil || generations.labels <= start.labels || generations.events <= start.events ||
 		generations.of(generationCore) != start.of(generationCore) || generations.of(generationEvents) == start.of(generationEvents) {
 		t.Fatalf("generations after a label and an event write: %+v (from %+v), %v", generations, start, err)
+	}
+	// A catalog whose stamp triggers predate domains gets them replaced.
+	if _, err := other.DB.Exec(`DROP TRIGGER agent_events_conversations_stamp_insert;
+ CREATE TRIGGER agent_events_conversations_stamp_insert AFTER INSERT ON agent_events_conversations
+ BEGIN UPDATE query_cache_generation SET value=value+1 WHERE id=1; END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.ensureAgentEventsLedger(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var trigger string
+	if err := other.DB.QueryRow(`SELECT sql FROM sqlite_schema WHERE name='agent_events_conversations_stamp_insert'`).Scan(&trigger); err != nil || !strings.Contains(trigger, "query_cache_domains") {
+		t.Fatalf("stamp trigger after upgrade: %s, %v", trigger, err)
 	}
 	// A real source edit from another process still invalidates both caches.
 	if _, err := other.DB.Exec(`UPDATE workspaces SET title='Updated' WHERE id='c'`); err != nil {
