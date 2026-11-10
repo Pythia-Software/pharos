@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -69,6 +70,46 @@ func TestQueryAdmissionFIFOAndCancellation(t *testing.T) {
 		if got := <-order; got != want {
 			t.Fatalf("admitted %d before %d", got, want)
 		}
+	}
+	// A request's breakdown says how long it queued for a slot.
+	held, err := gate.acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	timed, timing := beginRequestTiming(t.Context(), nil, "POST /api/query/usage/query-v3", true)
+	defer timing.finish()
+	admitted := make(chan struct{})
+	go func() {
+		defer close(admitted)
+		if finish, err := gate.acquire(timed); err == nil {
+			finish()
+		}
+	}()
+	waitForQueryQueue(t, gate, 1)
+	held()
+	<-admitted
+	if got := timing.breakdown(time.Second); timing.queueWait <= 0 || !strings.Contains(got, "query_queue=") {
+		t.Fatalf("queued request's breakdown: %s", got)
+	}
+	// A derived value's build queues within the wait its request counts as
+	// derived_wait, so that queue is not counted a second time.
+	held, err = gate.acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, counted, built := timing.queueWait, timing.pause(), make(chan struct{})
+	go func() {
+		defer close(built)
+		if finish, err := gate.acquire(timed); err == nil {
+			finish()
+		}
+	}()
+	waitForQueryQueue(t, gate, 1)
+	held()
+	<-built
+	counted()
+	if timing.queueWait != own {
+		t.Fatalf("a derived build's queue was counted as the request's: %s, was %s", timing.queueWait, own)
 	}
 }
 

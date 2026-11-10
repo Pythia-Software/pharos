@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"sync"
+	"time"
 )
 
 // SQLite's darwin build shares a page-cache mutex across connections. More
@@ -38,6 +39,9 @@ func (a *queryAdmission) acquire(ctx context.Context) (func(), error) {
 		w := &queryWaiter{ready: make(chan struct{})}
 		e := a.wait.PushBack(w)
 		a.mu.Unlock()
+		// The wait is the request's own, even when it gives up.
+		queued := time.Now()
+		defer func() { timingFrom(ctx).queryQueued(time.Since(queued)) }()
 		select {
 		case <-w.ready:
 		case <-ctx.Done():
