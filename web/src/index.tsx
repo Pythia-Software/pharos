@@ -50,7 +50,8 @@ import { highlightParts, matchFindState, plainSnippetParts, summaryEntries, type
 import { findPattern, writeFindParameters } from "./page-find-model";
 import { queryForSearchResultsView, searchResultsView } from "./search-results-view-model";
 import { newKeywordSearch, searchSentence } from "./text-search-model";
-import { CarbonImpact } from "./carbon-impact";
+import { CarbonImpact, type CarbonImpactUsage } from "./carbon-impact";
+import { carbonChoiceMetrics, carbonChoices, carbonUsage, carbonUsageMetrics } from "./carbon-usage";
 import { carbonCatalogShape } from "./carbon-analysis-catalog";
 import { usageSummaryURL } from "./usage-summary-links";
 import { readConcurrencySettings } from "./concurrency-settings";
@@ -84,6 +85,7 @@ import { acceptDefaultQuery, libraryStorageAdapter, rejectDefaultQuery, retryDef
 import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-request";
 import { PageErrorBoundary, QueryRecovery, tableRecoveryQuery } from "./query-recovery";
 import { createMCPMonitor, type MCPStatus } from "./mcp-monitor";
+import { loadWritingTotals, type WritingTotals } from "./writing-totals";
 import { HomePage } from "./home";
 import { AskPharosSearch, AskPharosSettings } from "./ask-pharos";
 import { CardLibraryPage } from "./card-library";
@@ -207,6 +209,7 @@ declare global {
       filterRepository: (repository: string) => void;
       filterModel: (model: string) => void;
       summaryURL: typeof usageSummaryURL;
+      writingTotals: (publish: (totals: WritingTotals) => void, signal: AbortSignal) => Promise<void>;
     };
   }
 }
@@ -1141,7 +1144,19 @@ const carbonLoading = <p className="muted" role="status">Loading your Carbon ass
 function CarbonDashboard() {
   const carbon = useCarbonCatalog();
   return <CatalogDashboard catalog={carbon.catalog ?? carbonCatalogShape} dataset="usage" name="carbon" defaults={dashboardDefaults.carbon}
-    frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonImpact>} />;
+    frame={(views, where, onFilter) => <CarbonUsageFrame where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonUsageFrame>} />;
+}
+// The estimate's usage and the filters' choices, through query-v3. A
+// retry asks the Usage views again, as a refresh of the dataset does.
+function CarbonUsageFrame({ where, onFilter, children }: { where: WhereTerm[]; onFilter: FilterChange; children: React.ReactNode }) {
+  const usage = useMetrics("usage", where, carbonUsageMetrics), options = useMetrics("usage", [], carbonChoiceMetrics);
+  const read = useMemo(() => {
+    try { return { usage: usage.loading || usage.error ? null : carbonUsage(usage.metrics), error: usage.error };
+    } catch (failure) { return { usage: null, error: failure instanceof Error ? failure.message : String(failure) }; }
+  }, [usage.metrics, usage.loading, usage.error]);
+  const choices = useMemo(() => { try { return options.loading || options.error ? {} : carbonChoices(options.metrics); } catch { return {}; } }, [options.metrics, options.loading, options.error]);
+  const state: CarbonImpactUsage = { ...read, choices, readiness: usage.readiness, retry: () => window.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: "usage" })) };
+  return <CarbonImpact where={where} onFilter={onFilter} usage={state}>{children}</CarbonImpact>;
 }
 
 // Parallelism's views follow the saved counting and gap, with which the
@@ -1672,6 +1687,7 @@ window.pharosQueryTables = {
   filterModel(model) {
     filterLibrary([{ field: "models", op: "contains", value: model }]);
   },
+  writingTotals: (publish, signal) => loadWritingTotals(schemas.writing_messages, publish, signal),
 };
 
 window.dispatchEvent(new Event("pharos:search-ready"));

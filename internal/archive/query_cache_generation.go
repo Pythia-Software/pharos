@@ -69,6 +69,10 @@ const (
 	generationAll    = "all"
 	generationEvents = "events" // everything but label writes
 	generationCore   = "core"   // neither label nor agent-event writes
+	// The whole generation, and the MCP call log, which no trigger counts:
+	// an agent's every call is written there, and counting it would make
+	// every other view stale (queryResultLedgers).
+	generationMCPCalls = "mcp_calls"
 )
 
 func (g cacheGenerations) of(scope string) int64 {

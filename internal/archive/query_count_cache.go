@@ -138,6 +138,9 @@ func queryDatasetGeneration(dataset string) string {
 	if queryCoreDatasets[dataset] {
 		return generationCore
 	}
+	if dataset == "mcp_calls" {
+		return generationMCPCalls
+	}
 	return generationAll
 }
 

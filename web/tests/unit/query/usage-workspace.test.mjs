@@ -30,6 +30,7 @@ import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDashboa
 import { toolSummaryCallFilters } from "../../../src/tools-dashboard-model.ts";
 import { authorshipStatusText, readDashboardLink, readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
 import { trendQuery } from "../../../src/dashboard-trend-model.ts";
+import { readWritingTotals, writingTotalMetrics } from "../../../src/writing-totals.ts";
 import { analysisQuery } from "../../../src/dashboard-analysis-model.ts";
 import { analysisCatalogFor, analysisCatalogs } from "../../../src/analysis-catalogs";
 import { dashboardDefaults } from "../../../src/dashboard-defaults";
@@ -1087,6 +1088,19 @@ test("writing freshness distinguishes a partial turn from caught up", () => {
   assert.doesNotMatch(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 1}), /current as of/);
 });
 
+
+test("Health's writing totals are one query-v3 request on writing_messages", () => {
+  const clauses = writingTotalMetrics(new Date(2026, 10, 10, 15, 30));
+  // Today and the 29 days before it, from local midnight.
+  assert.deepEqual(clauses.find(clause => clause.id === "recent_typed").where, [{ field: "sent_at", op: ">=", value: new Date(2026, 9, 12).toISOString() }]);
+  assert.deepEqual(writingTotalMetrics(new Date(2026, 10, 10, 23, 59)), clauses, "one stored answer per day");
+  const request = toQueryRequestV3({ ...EMPTY_QUERY, aggregations: clauses }, loadSchema(writingMessages), queryCapabilities, undefined, { rows: false });
+  assert.deepEqual(request.metrics.map(metric => metric.id), ["typed", "typed_messages", "recent_typed"]);
+  const result = (typed, messages, recent) => [["typed", typed], ["typed_messages", messages], ["recent_typed", recent]].map(([id, value]) => ({ id, buckets: [{ keys: [], value }] }));
+  assert.deepEqual(readWritingTotals(result(1234, 98, 500)), { typed: 1234, typedMessages: 98, recentTyped: 500 });
+  // A sum over no messages is no words.
+  assert.deepEqual(readWritingTotals(result(null, null, null)), { typed: 0, typedMessages: 0, recentTyped: 0 });
+});
 
 test("a trend's time breakdown and period produce one distinct native group key", () => {
   const query = { ...EMPTY_QUERY, aggregations: [{ id: "tokens", op: "sum", field: "total_tokens", groupBy: ["week", "week"], label: "Tokens" }] };
