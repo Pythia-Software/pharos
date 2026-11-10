@@ -456,18 +456,20 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const costJobs = jobs.filter(job => usesApiCostTrend(job) && !searchContext(job));
-  const costStudies = new Set(costJobs), costLoads = new Map<number, Promise<HumanStudyPreview>>();
+  // A study drawn from several answers is as stale and as old as its worst.
+  const costStudies = new Set(costJobs), costLoads = new Map<number, Promise<{ study: HumanStudyPreview; served?: ResultServed }>>();
   const costWork = Promise.all(costJobs.map(async job => {
     try {
       const days = job.options!.window!.days;
       let pending = costLoads.get(days);
       if (!pending) {
         pending = (async () => {
-          const ctx = await context(job);
+          const ctx = await context(job), answers: (ResultServed | undefined)[] = [];
           async function history(from: number, to: number): Promise<CostTimeBucket[]> {
             const query = apiCostTrendQuery(job.query.grouping!.source, from, to);
             const request = toQueryRequestV3(query, sourceExecutionSchema(ctx.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { rows: false });
             const body = await fetchPreview<AggregationResult>("/api/query/usage/query-v3", signal, request, policy);
+            answers.push(servedOf(body));
             const facts = apiCostTrendFacts(body.metrics.find(metric => metric.id === "cost-history"));
             if (facts) return facts;
             // Partition only truncated timestamp reductions; exact half-open
@@ -476,12 +478,13 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
             if (middle <= from || middle >= to) throw new Error("API cost history exceeds the timestamp group limit.");
             return [...await history(from, middle), ...await history(middle, to)];
           }
-          return buildApiCostTrend(await history(clock.getTime() - Math.max(37, days) * 86400000, clock.getTime()), days, clock.getTime());
+          const study = buildApiCostTrend(await history(clock.getTime() - Math.max(37, days) * 86400000, clock.getTime()), days, clock.getTime());
+          return { study, served: combineServed(...answers) };
         })();
         costLoads.set(days, pending);
       }
-      const study = await pending;
-      if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? job.options!.recipe!.cover)?.height, state: study.value === undefined ? "empty" : "ready", total: study.value ?? 0, summary: study.sampleLabel, note: [job.options!.recipe!.note, study.detail].filter(Boolean).join(" · "), action: job.options!.recipe!.action, study });
+      const { study, served } = await pending;
+      if (!signal?.aborted) publish(job.id, { served, coverHeight: (job.options!.cover ?? job.options!.recipe!.cover)?.height, state: study.value === undefined ? "empty" : "ready", total: study.value ?? 0, summary: study.sampleLabel, note: [job.options!.recipe!.note, study.detail].filter(Boolean).join(" · "), action: job.options!.recipe!.action, study });
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const trendJobs = jobs.filter(job => !costStudies.has(job) && usesCardTrend(job) && !searchContext(job));
@@ -490,12 +493,15 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     try {
       const recipe = job.options!.recipe!, trend = recipe.trend!, lookback = trend.lookback ?? job.options!.window!.days;
       const source = trend.dataset ? { ...job, dataset: trend.dataset, schema: trendSchemas[trend.dataset] } : job, ctx = await context(source);
+      const answers: (ResultServed | undefined)[] = [];
       const results = await Promise.all(cardTrendQueries(recipe.where ?? [], trend, cardTrendDays(lookback, Boolean(trend.completeDays), clock.getTime()).days).map(async query => {
         const request = toQueryRequestV3(query, sourceExecutionSchema(ctx.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { rows: false });
-        return (await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/query-v3`, signal, request, policy)).metrics;
+        const body = await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/query-v3`, signal, request, policy);
+        answers.push(servedOf(body));
+        return body.metrics;
       }));
       const { study, observations } = buildCardTrend(trend, lookback, results, clock.getTime()), ready = observations > 0 && Boolean(study.points?.some(point => point !== null));
-      if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study });
+      if (!signal?.aborted) publish(job.id, { served: combineServed(...answers), coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study });
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const resolved: { job: PreviewJob; query: QueryState; search: string }[] = [];
