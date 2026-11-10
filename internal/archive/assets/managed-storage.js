@@ -1,6 +1,25 @@
 // A managed web view is temporary, but its working state must survive closing
 // the app. Keep only small session values in the library's preferences, scoped
 // to this Mac and application. Covers and other caches stay in the web view.
+function serializePageHistory(entries, {limit = 1000, maxBytes = 512 << 10} = {}) {
+  // preferences.go limits the JSON-encoded string, including Go's HTML and
+  // line-separator escaping. A count alone cannot bound full view-state URLs.
+  const encoder = new TextEncoder(), parts = [];
+  let bytes = 4; // The outer JSON quotes and the history array's brackets.
+  for (const entry of entries.slice(0, limit)) {
+    const part = JSON.stringify(entry);
+    const encoded = JSON.stringify(part).replace(/[<>&\u2028\u2029]/g,
+      character => '\\u' + character.charCodeAt(0).toString(16).padStart(4, '0'));
+    const size = encoder.encode(encoded).length - 2;
+    if (size + 4 > maxBytes) continue; // Never truncate a saved URL.
+    const next = bytes + size + (parts.length ? 1 : 0);
+    if (next > maxBytes) break;
+    parts.push(part);
+    bytes = next;
+  }
+  return '[' + parts.join(',') + ']';
+}
+
 (() => {
   'use strict';
   const scope = window.pharosManagedSession;
@@ -48,7 +67,11 @@
       const body = JSON.stringify({set, delete: remove});
       const response = await fetch(lane === background ? '/api/session-preferences' : '/api/preferences', {method: 'POST',
         headers: {'Content-Type': 'application/json'}, body, keepalive: body.length < 60000});
-      if (!response.ok) throw new Error('Saving session state failed (HTTP ' + response.status + ').');
+      if (!response.ok) {
+        let reason = '';
+        try { const body = await response.json(); if (typeof body.error === 'string') reason = ' ' + body.error; } catch {}
+        throw new Error('Saving session state failed (HTTP ' + response.status + ').' + reason);
+      }
       for (const key of batch.keys()) raw.removeItem(scope.legacy + key);
     })();
     try { await lane.saving; lane.delay = 150; }

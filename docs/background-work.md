@@ -464,6 +464,21 @@ the catalog with its statement and stack, and every goroutine's stack. The
 service's stderr survives only as a tail in the app's memory. It cancels
 nothing.
 
+**Slow requests and contention.** A request (or an MCP tool call) that ran
+for a second or more, or that its client abandoned, leaves one `Slow
+request:` line on stderr with where its time went: waiting for the catalog
+writer and behind which operations, waiting for derived values, in its own
+statements (with the code that ran the slowest), and the rest, plus the read
+pool's use and the WAL's size. The same breakdown is the detail of the
+request's entry in Settings → Logs. The line names the route or tool, never a
+query string, an argument or SQL text. `Catalog writer acquisition:` lines
+name the holders a write waited behind (`behind=[…]`) and whether a request
+or a background operation was waiting. When a request's write has queued for
+5 s, or a data read or tool call has run for 5 s, the process writes
+`logs/catalog-contention-<time>-pid<pid>.txt` (at most one per 5 minutes; the
+last 20 are kept): requests in flight, the writer's holder and queue, pools,
+WAL, operations, open reads with their stacks, and every goroutine's stack.
+
 ### 3.5 E. Transitions
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |

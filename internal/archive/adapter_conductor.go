@@ -364,11 +364,26 @@ func conductorSignals(ctx context.Context, tx queryer, sessionTable, messageTabl
 		} else {
 			cancelWhere += " AND "
 		}
-		rows, err := queryMapsContext(ctx, tx, "SELECT "+fkColumn+" sid,MAX(cancelled_at) cancelled FROM "+messageTable+cancelWhere+"cancelled_at IS NOT NULL GROUP BY "+fkColumn, args...)
+		statement := "SELECT " + fkColumn + " sid,MAX(cancelled_at) cancelled FROM " + messageTable + cancelWhere + "cancelled_at IS NOT NULL GROUP BY " + fkColumn
+		if seeks, err := leadingIndex(tx, messageTable, fkColumn, "cancelled_at"); err != nil {
+			return nil, err
+		} else if seeks {
+			// Few messages are ever cancelled, so the grouped form reads the
+			// whole index to find a handful of rows. One seek to the end of
+			// each session's entries answers the same question.
+			statement = "SELECT s." + sidColumn + " sid,(SELECT MAX(m.cancelled_at) FROM " + messageTable + " m WHERE m." + fkColumn + "=s." + sidColumn + ") cancelled FROM " + sessionTable + " s"
+			if where != "" {
+				statement += " WHERE s." + sidColumn + " IN (" + placeholders(len(args)) + ")"
+			}
+		}
+		rows, err := queryMapsContext(ctx, tx, statement, args...)
 		if err != nil {
 			return nil, err
 		}
 		for _, row := range rows {
+			if row["cancelled"] == nil {
+				continue
+			}
 			sid := firstString(row["sid"])
 			latest[sid] = append(latest[sid], row["cancelled"])
 		}
@@ -435,6 +450,32 @@ func conductorSignals(ctx context.Context, tx queryer, sessionTable, messageTabl
 		signals[sid] = part
 	}
 	return signals, nil
+}
+
+// leadingIndex reports whether table has an index over every row whose first
+// columns are the ones named, in order.
+func leadingIndex(q queryer, table string, columns ...string) (bool, error) {
+	indexes, err := queryMaps(q, "PRAGMA index_list("+table+")")
+	if err != nil {
+		return false, err
+	}
+	for _, index := range indexes {
+		if integer(index["partial"]) != 0 {
+			continue
+		}
+		keys, err := queryMaps(q, "PRAGMA index_info("+quotedIdentifier(firstString(index["name"]))+")")
+		if err != nil {
+			return false, err
+		}
+		leading := len(keys) >= len(columns)
+		for i := 0; leading && i < len(columns); i++ {
+			leading = integer(keys[i]["seqno"]) == int64(i) && strings.EqualFold(firstString(keys[i]["name"]), columns[i])
+		}
+		if leading {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func tableNames(q queryer) (map[string]bool, error) {

@@ -406,7 +406,7 @@ func (j *journalWriter) write(ctx context.Context, wait time.Duration, priority 
 		}
 	} else {
 		gateCtx, cancel := context.WithTimeout(ctx, max(wait, journalPriorityWait))
-		release, err = c.acquireWriteGate(gateCtx)
+		release, _, err = c.queueWriteGate(gateCtx, "operation journal")
 		cancel()
 		if err != nil {
 			return errJournalBusy

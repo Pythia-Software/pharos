@@ -27,6 +27,8 @@
     "haiku-5-5": { "provider": "anthropic", "class": "Haiku", "color": "#ad6129" },
     "fable-5": { "provider": "anthropic", "class": "Fable", "color": "#e2a07a" },
     "fable-5-1": { "provider": "anthropic", "class": "Fable", "color": "#c67a50" },
+    "fable-5-2": { "provider": "anthropic", "class": "Fable", "color": "#a55e35" },
+    "mythos-5-2": { "provider": "anthropic", "class": "Mythos", "color": "#b26d45" },
     "gemini-3.5-flash-lite": { "provider": "google", "class": "Flash", "color": "#86b1f8" },
     "gemini-3.8-flash": { "provider": "google", "class": "Flash", "color": "#669cf6" },
     "gemini-omni-1.2-flash": { "provider": "google", "class": "Flash", "color": "#3d7ce5" },
@@ -49,7 +51,11 @@
     "gpt-image-2.6-flare": { "provider": "openai", "class": "Image", "color": "#4ebd9b" },
     "gpt-6-cyber": { "provider": "openai", "class": "Cyber", "color": "#0d654f" },
     "gpt-rosalind-research": { "provider": "openai", "class": "Rosalind", "color": "#5fb8a8" },
-    "gpt-rosalind-discovery": { "provider": "openai", "class": "Rosalind", "color": "#2c8f7f" }
+    "gpt-rosalind-discovery": { "provider": "openai", "class": "Rosalind", "color": "#2c8f7f" },
+    "reflection/beam-free": { "provider": "other", "class": "Beam", "color": "#8064ad" },
+    "deepseek-v4.1-flash-free": { "provider": "other", "class": "DeepSeek", "color": "#6f57a0" },
+    "big-pickle": { "provider": "other", "class": "Big Pickle", "color": "#9c81c6" },
+    "mai-code-1.1-flash": { "provider": "other", "class": "MAI Code", "color": "#5e468d" }
   },
   "sources": {
     "claude": { "provider": "anthropic", "color": "#d97732" },

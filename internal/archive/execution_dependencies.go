@@ -340,6 +340,34 @@ func dependencyInverseIndex(ctx context.Context, q queryer) (*dependencyInverseE
 	return entry, nil
 }
 
+// primeDependencyInverse brings the cached inverse index up to the committed
+// source generation, outside any write transaction. A write transaction's
+// own read is never cached (its rows may roll back), so a writer that finds
+// no entry reads every conversation's lookups while it holds the catalog's
+// write lock. A writer calls this before it begins, and then patches the
+// entry only for its own rows. It is advisory: a failure leaves the writer
+// to read what it needs itself.
+func (c *Catalog) primeDependencyInverse(ctx context.Context) {
+	reader := c.reader()
+	// Only marking a ledger's derivatives reads the index. A catalog with
+	// neither ledger (a first import) never asks for it, and bringing it
+	// forward after every record would copy its growing maps each time.
+	if ledgers, err := executionLedgersPresent(ctx, reader); err != nil || len(ledgers) == 0 {
+		return
+	}
+	file, generation, err := dependencyCacheKey(ctx, reader)
+	if err != nil || file == "" {
+		return
+	}
+	dependencyInverseCache.Lock()
+	entry := dependencyInverseCache.entries[file]
+	dependencyInverseCache.Unlock()
+	if entry != nil && entry.generation >= generation {
+		return
+	}
+	_, _ = dependencyInverseIndex(ctx, reader)
+}
+
 // dependencyInversePatchLimit is how many changed conversations a cached
 // inverse index is patched for; past it the index is read again.
 var dependencyInversePatchLimit = 5000
@@ -1216,6 +1244,33 @@ func executionUnmarked(ctx context.Context, q queryer, ledger string) ([]string,
 	return ids, nil
 }
 
+// executionUnmarkedCached is executionUnmarked's cached answer for ledger at
+// state, if a committed snapshot has built one that still holds. A lookup is
+// safe from any reader, a write transaction included (dependencyCacheReader).
+func executionUnmarkedCached(ctx context.Context, q queryer, ledger string, state executionPropagation) ([]string, bool, error) {
+	file, _, err := dependencyCacheKey(ctx, q)
+	if err != nil || file == "" {
+		return nil, false, err
+	}
+	rows, err := queryMapsContext(ctx, q, `SELECT value FROM execution_dependents_stamp WHERE id=?`, ledger)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			err = nil
+		}
+		return nil, false, err
+	}
+	if len(rows) == 0 {
+		return nil, false, nil
+	}
+	executionUnmarkedCache.Lock()
+	entry, ok := executionUnmarkedCache.entries[file+"\x00"+ledger]
+	executionUnmarkedCache.Unlock()
+	if !ok || entry.state != state || entry.stamp != integer(rows[0]["value"]) {
+		return nil, false, nil
+	}
+	return entry.ids, true, nil
+}
+
 var executionUnmarkedCache struct {
 	sync.Mutex
 	entries map[string]executionUnmarkedEntry
@@ -1505,9 +1560,27 @@ func markExecutionDependents(ctx context.Context, tx *sql.Tx) error {
 		for _, ledger := range ledgers {
 			names = append(names, ledger[0])
 		}
-		stale, err := executionUnmarkedDependents(ctx, tx, names, state)
-		if err != nil {
-			return err
+		// A writer that has changed nothing yet reads what a committed
+		// snapshot already worked out (propagateExecutionChanges primes it),
+		// rather than walking the changed components while it holds the lock.
+		stale, primed := map[string]map[string]bool{}, true
+		for _, name := range names {
+			ids, ok, err := executionUnmarkedCached(ctx, tx, name, state)
+			if err != nil {
+				return err
+			}
+			if primed = primed && ok; !primed {
+				break
+			}
+			stale[name] = map[string]bool{}
+			for _, id := range ids {
+				stale[name][id] = true
+			}
+		}
+		if !primed {
+			if stale, err = executionUnmarkedDependents(ctx, tx, names, state); err != nil {
+				return err
+			}
 		}
 		for _, ledger := range ledgers {
 			for _, id := range slices.Sorted(maps.Keys(stale[ledger[0]])) {
@@ -1752,6 +1825,16 @@ func (c *Catalog) propagateExecutionChanges(ctx context.Context) error {
 		// what committed since instead of reading the whole catalog.
 		if _, err := executionDependencyDigests(ctx, c.reader()); err != nil {
 			return err
+		}
+	}
+	c.primeDependencyInverse(ctx)
+	// Work out what to mark from a committed snapshot; the writer walks the
+	// changed components itself only if something commits in between.
+	if ledgers, err := executionLedgersPresent(ctx, c.reader()); err == nil && !state.whole {
+		for _, ledger := range ledgers {
+			if _, err := executionUnmarked(ctx, c.reader(), ledger[0]); err != nil {
+				return err
+			}
 		}
 	}
 	return c.writeTransaction(ctx, "propagate execution evidence changes", func(tx *sql.Tx) error { return markExecutionDependents(ctx, tx) })

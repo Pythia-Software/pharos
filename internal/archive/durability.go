@@ -58,7 +58,10 @@ var catalogDurability = durableCatalog
 var syncToDrive = (*os.File).Sync
 
 func catalogDSN(path string) string {
-	pragmas := catalogDurability
+	return catalogDSNWithPragmas(path, catalogDurability)
+}
+
+func catalogDSNWithPragmas(path string, pragmas catalogPragmas) string {
 	fullfsync, checkpointFullfsync := 0, 0
 	if pragmas.fullfsync {
 		fullfsync = 1

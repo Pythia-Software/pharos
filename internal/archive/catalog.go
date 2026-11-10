@@ -69,6 +69,7 @@ type Catalog struct {
 	mcpHistory     mcpHistory
 	wal            walBound
 	writers        catalogWriteTracker
+	contention     contentionReports
 	queries        queryActivity
 	// queryCounts reuses Query Table population counts within a data
 	// generation (see query_count_cache.go).
@@ -104,21 +105,24 @@ func OpenCatalog(path string) (*Catalog, error) {
 	return openCatalog(path, func(c *Catalog) error { return c.initializeLocked(true) })
 }
 
-// newCatalog opens a new library's catalog, or an audit's reference catalog,
-// which normally do not exist yet. Tests replace it to copy one they
-// initialized.
+// newCatalog opens a new library's catalog. Tests replace it to copy one
+// they initialized. Disposable audit catalogs have their own factory.
 var newCatalog = OpenCatalog
 
 // openCatalog opens path's pools, running prepare (Initialize, in
 // OpenCatalog) before the read pool.
 func openCatalog(path string, prepare func(*Catalog) error) (*Catalog, error) {
+	return openCatalogWithDSN(path, catalogDSN(path), prepare)
+}
+
+func openCatalogWithDSN(path, dsn string, prepare func(*Catalog) error) (*Catalog, error) {
 	if err := os.MkdirAll(filepathDir(path), 0o755); err != nil {
 		return nil, err
 	}
 	// SQLite PRAGMAs are connection-local. The DSN applies them to every pooled
-	// connection, so deleting a session always cascades its message links and
-	// every commit is durable (see catalogDSN).
-	db := openCatalogDB(path, catalogDSN(path), "catalog")
+	// connection. Library pools use catalogDSN's durable settings; disposable
+	// audit copies supply their own settings without changing the defaults.
+	db := openCatalogDB(path, dsn, "catalog")
 	// SQLite serializes writes. A small pool still allows UI reads while a source
 	// snapshot is being parsed without creating unbounded lock contention.
 	db.SetMaxOpenConns(4)

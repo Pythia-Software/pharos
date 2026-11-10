@@ -2,9 +2,11 @@ package archive
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -135,6 +137,52 @@ func TestPreferencesRefuseBadNamesAndOversizedValues(t *testing.T) {
 	}
 	if values, err := catalog.UIPreferences(t.Context()); err != nil || len(values) != 0 {
 		t.Fatalf("refused writes stored %v (%v)", values, err)
+	}
+}
+
+func TestPageHistoryPreferenceBudget(t *testing.T) {
+	data, err := os.ReadFile("../../testdata/page-history-budget.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Prefixes []struct {
+			Value        string `json:"value"`
+			EncodedBytes int    `json:"encoded_bytes"`
+		} `json:"prefixes"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, prefix := range fixture.Prefixes {
+		encoded, err := json.Marshal(prefix.Value)
+		if err != nil || len(encoded) != prefix.EncodedBytes {
+			t.Fatalf("history encoding: %d bytes, want %d (%v)", len(encoded), prefix.EncodedBytes, err)
+		}
+	}
+	// Reproduce the rejected history save using a small preference budget.
+	limit := fixture.Prefixes[2]
+	override(t, &maxPreferenceBytes, limit.EncodedBytes)
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	key := "pharos-session:0123456789abcdef0123456789abcdef:pharos-history-v1"
+	for _, prefix := range fixture.Prefixes {
+		body, _ := json.Marshal(map[string]any{"set": map[string]any{key: prefix.Value}})
+		want := http.StatusOK
+		if prefix.EncodedBytes > maxPreferenceBytes {
+			want = http.StatusBadRequest
+		}
+		if response := preferencesCall(t, server, http.MethodPost, "/api/preferences", string(body)); response.Code != want {
+			t.Fatalf("save %d bytes: %d %s, want %d", prefix.EncodedBytes, response.Code, response.Body.String(), want)
+		}
+	}
+	values, err := catalog.UIPreferences(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved string
+	if err := json.Unmarshal(values[key], &saved); err != nil || saved != limit.Value {
+		t.Fatalf("rejected history replaced the last saved visits: %v", err)
 	}
 }
 
