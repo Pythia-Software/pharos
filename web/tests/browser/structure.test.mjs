@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { defaultApi, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
+import { claudeImportFixture, defaultApi, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const missingPrices = { ...defaultApi['GET /api/pricing'], unpriced_tokens: 5000,
@@ -253,6 +253,17 @@ const ROUTES = [
     if(step==='empty')for(const box of await guide.locator('.pharos-candidate input[type=checkbox]').all())await box.uncheck();
     if(step!=='found')await next.click();
   },shown:'#pharosOnboarding'})),
+  {name:'Claude export collection',url:'/settings/sources',ready:'#pharosAddSource',api:{
+    'GET /api/claude-imports':({query})=>query.get('id')?claudeImportFixture:{jobs:[{...claudeImportFixture,collected:1,expected:2}],run:{running:false}},
+    'POST /api/claude-imports/links':{links:{'part-two':'https://claude.ai/export/download/synthetic-token'}},
+  },open:async page=>{
+    await page.evaluate(()=>window.pharosOnboarding.open({mode:'import'}));
+    const guide=page.locator('#pharosOnboarding');
+    await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+    await guide.getByRole('button',{name:/Resume export/}).click();
+    await guide.getByRole('button',{name:'Show missing download links',exact:true}).click();
+    await guide.getByRole('link',{name:/Download projects/}).waitFor();
+  },shown:'#pharosOnboarding'},
   {name:'Source settings guide',url:'/settings/sources',ready:'#pharosFindSources',open:async page=>{
     const trigger=page.locator('#sourceToolbar').getByRole('button',{name:'Data Guide',exact:true});
     await trigger.click();

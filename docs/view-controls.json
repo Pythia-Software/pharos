@@ -2201,6 +2201,33 @@
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
+      "key": "0e2730981692c4d8:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderClaudeWatch",
+      "tag": "select",
+      "control": "'select'",
+      "contract": "settings",
+      "reason": "Per-Mac browser profile that opens Claude export download links; saved outside the library and independent of URL view state."
+    },
+    {
+      "key": "8d9ed6b2fb0f0f79:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderClaudeWatch",
+      "tag": "button",
+      "control": "'button', 'toggle'",
+      "contract": "settings",
+      "reason": "Per-Mac opt-in to watch Downloads for Claude export manifests; saved outside the library and independent of URL view state."
+    },
+    {
+      "key": "fdbb6f776b362556:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderClaudeWatch",
+      "tag": "button",
+      "control": "'button', '', 'Check Downloads now'",
+      "contract": "action",
+      "reason": "Asks the service to check Downloads for a Claude export now; an immediate command with no view state."
+    },
+    {
       "key": "8165dad42aa683a0:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "renderImport",
@@ -2271,6 +2298,24 @@
       "control": "'summary', '', 'What each tool records'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
+    },
+    {
+      "key": "7390be4d645bfa9a:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "showClaudeWatch",
+      "tag": "button",
+      "control": "'button', '', action==='retry'?'Try again':'Stop'",
+      "contract": "action",
+      "reason": "Retries or stops one watched Claude export's downloads; an immediate command with no view state."
+    },
+    {
+      "key": "8cb887a2cf3be862:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "showClaudeWatch",
+      "tag": "select",
+      "control": "'select'",
+      "contract": "editing",
+      "reason": "Unapplied browser profile for one paused export's Try again action; applied only when the person retries."
     },
     {
       "key": "419f51bddce9c1c1:0",
