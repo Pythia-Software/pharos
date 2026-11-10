@@ -149,7 +149,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	f := newGitFixture(t)
 	repo := f.repo
 	for _, id := range []string{"direct", "inferred", "stale", "wide", "narrow", "branch", "picked", "squashed", "reverted", "undone", "late",
-		"early", "printer", "printer-too", "detached", "empty"} {
+		"early", "printer", "printer-too", "detached", "editor", "publisher", "empty"} {
 		f.session(id, "")
 	}
 	// A session that only committed, before every other session's edits.
@@ -232,6 +232,12 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	repo.git(time.Now().Add(-3*24*time.Hour), "cherry-pick", squashed)
 	repo.git(time.Now().Add(-3*24*time.Hour), "commit", "-q", "--amend", "--no-edit", "--reset-author")
 	squash := repo.git(time.Now(), "rev-parse", "HEAD")
+	// A session that only committed another's work (opening the pull
+	// request) keeps the printed hash, and the session that edited its files
+	// is linked too.
+	f.edit("editor", "pr.go", 2.6)
+	pr := repo.commit(2.59, "Pull request", map[string]string{"pr.go": "package pr\n"})
+	f.printed("publisher", pr, 2.59)
 	repo.git(time.Now(), "update-ref", "refs/remotes/origin/main", "HEAD")
 	// A commit in a worktree on a detached HEAD, which no ref holds.
 	tree := filepath.Join(t.TempDir(), "tree")
@@ -246,7 +252,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 		"direct": direct[:7] + " transcript 1", "inferred": inferred[:7] + " inferred 0.7", "narrow": narrow[:7] + " inferred 0.5",
 		"reverted": reverted[:7] + " inferred 0.7", "undone": undone[:7] + " inferred 0.7", "branch": branch[:7] + " inferred 0.7", "picked": copied[:7] + " inferred 0.7", "squashed": squashed[:7] + " inferred 0.7",
 		"early": early[:7] + " transcript 1", "printer": printedCopy[:7] + " transcript 1", "printer-too": printed[:7] + " transcript 1", "detached": detached[:7] + " transcript 1",
-		"empty": empty[:7] + " transcript 1",
+		"editor": pr[:7] + " inferred 0.7", "publisher": pr[:7] + " transcript 1", "empty": empty[:7] + " transcript 1",
 	} {
 		if strings.Join(links[id], ", ") != want {
 			t.Errorf("%s links: %v, want %s", id, links[id], want)
@@ -271,7 +277,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	for id, want := range map[string]string{
 		"direct": "landed", "inferred": "landed", "narrow": "changed_kept", "picked": "landed", "squashed": "landed", "branch": "committed",
 		"reverted": "reworked", "undone": "reworked", "stale": "changed_kept", "wide": "changed_kept", "late": "changed_recent",
-		"empty": "committed",
+		"editor": "landed", "publisher": "landed", "empty": "committed",
 	} {
 		if labels[id][0] != want {
 			t.Errorf("%s: %s, want %s (%s)", id, labels[id][0], want, labels[id][1])

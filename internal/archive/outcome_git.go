@@ -32,7 +32,7 @@ import (
 // how a commit was reverted. No commit message, diff or file content.
 
 // outcomeGitVersion scans every repository again when the rules change.
-const outcomeGitVersion = "1"
+const outcomeGitVersion = "2"
 
 // outcomeGitGrace is how long after a session's last edit a commit can still
 // be inferred to be its own: an agent or person commits soon after the work.
@@ -566,6 +566,9 @@ func inferLinks(ctx context.Context, dir, after string, sessions map[string]*git
 //   - any other commit, outside merges, links to a session whose edit window
 //     (plus outcomeGitGrace) holds its author time and that edited one of its
 //     files: 0.7 when it is the only such session. Time alone links nothing.
+//     So does a printed commit when no session that printed it edited one of
+//     its files (one that only committed or opened the pull request): the
+//     work it holds is the editing session's, which is linked too.
 //
 // A commit several sessions could have made is contested. With signals
 // (outcome_git_signals.go), it goes to the one candidate the checkout that
@@ -576,14 +579,14 @@ func inferLinks(ctx context.Context, dir, after string, sessions map[string]*git
 func linkCommits(sessions map[string]*gitSession, members []string, repository string, commits map[string]*gitCommit, signals *gitSignals) ([]gitLink, map[string][]string) {
 	links := []gitLink{}
 	contested := map[string][]string{}
-	direct := map[string]bool{}
+	direct, printers := map[string]bool{}, map[string][]string{}
 	for _, id := range members {
 		for _, printed := range sessions[id].Printed {
 			hash := resolveAbbreviated(printed.Hash, commits)
 			if hash == "" || direct[id+"\x00"+hash] {
 				continue
 			}
-			direct[id+"\x00"+hash], direct[hash] = true, true
+			direct[id+"\x00"+hash], printers[hash] = true, append(printers[hash], id)
 			evidence := map[string]any{"printed": printed.Hash}
 			if printed.Branch != "" {
 				evidence["branch"] = printed.Branch
@@ -598,7 +601,7 @@ func linkCommits(sessions map[string]*gitSession, members []string, repository s
 	slices.Sort(hashes)
 	for _, hash := range hashes {
 		commit := commits[hash]
-		if direct[hash] || commit.Parents > 1 {
+		if commit.Parents > 1 || slices.ContainsFunc(printers[hash], func(id string) bool { return editedAny(sessions[id], repository, commit) }) {
 			continue
 		}
 		candidates := commitCandidates(sessions, members, repository, commit)
@@ -635,6 +638,16 @@ func linkCommits(sessions map[string]*gitSession, members []string, repository s
 		links = append(links, gitLink{Session: chosen.id, Hash: hash, Method: "inferred", Confidence: confidence, Evidence: evidence})
 	}
 	return links, contested
+}
+
+// editedAny reports whether a session edited any of a commit's files.
+func editedAny(session *gitSession, repository string, commit *gitCommit) bool {
+	for path := range commit.Files {
+		if _, ok := session.Files[repository][path]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // linkCandidate is a session that could have made a commit: how long since

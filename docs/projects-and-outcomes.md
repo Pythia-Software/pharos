@@ -281,7 +281,10 @@ Mac recorded that still exist.
   before it, then to the tightest window (CodeBurn's rule), at 0.5; a tie
   links nothing. A 0.5 link is kept as a candidate but counts toward no
   session's commits or label (see [Commit-linking
-  calibration](#commit-linking-calibration)). Every link stores its
+  calibration](#commit-linking-calibration)). A printed hash does not stop
+  inference when no session that printed it edited one of its files (a
+  session that only committed or opened the pull request): the session
+  whose edits it holds is linked too, as above. Every link stores its
   evidence: the printed hash, or the author time, the window, the shared
   files and the number of candidates.
 - **Mainline.** Mainline is `origin/HEAD`, else `origin/main` or
@@ -408,8 +411,9 @@ calibration, with read-only git in this Mac's 47 recorded repositories
   | A merge commit (never inferred) | 77 |
   | Sharing no file the printing session edited | 34 |
 
-  When the printing session made no edits, an inferred link goes to the
-  session that did, which is the session whose work the commit holds.
+  So when no session that printed a commit edited its files, inference
+  still runs for it and links the session that did, whose work the commit
+  holds; the printed link stays too.
 - **Telling contested commits apart.** 577 of the 971 could have been made
   by several sessions. Each way of choosing among them, on its own:
 
