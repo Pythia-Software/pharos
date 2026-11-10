@@ -72,7 +72,10 @@ interactive query is running or waiting (its own queries are marked as
 background and not counted). Entries stored under another domain version
 are rebuilt the same way. Entries a request was just answered with go first, in
 the order they were asked for; after those, entries asked for in the last
-three days that have gone stale since.
+three days that have gone stale since, but only those someone came back to
+(asked for again an hour or more after they were first stored). A filter
+tried once is stored, and refreshed if it is asked for again, but creates no
+standing background work.
 
 **7. Entries leave by disuse or size.** An entry nobody asks for in 14 days
 is dropped, and the least recently used go first once the file holds more
@@ -90,6 +93,11 @@ served.
   the answer is fresh. A hidden tab waits until it is shown.
 - **A person pressing a page's Refresh asks `fresh`.** Stored answers are used
   only while current; the rest are computed now, unless the service is busy.
+  So does a refresh of one dataset (a saved setting, a finished backfill):
+  something the person did changed what it holds. A tab coming back into
+  focus and a new day ask `cached` (`refreshPolicy` in `dataset-refresh.ts`).
+- **Changing a filter or control asks `cached`.** A combination seen before is
+  drawn at once with its age; a new one is computed.
 - **A person asking for one thing again asks `live`** (a card's own Refresh).
 - **Work that only prepares content nobody is looking at** (prewarming the
   Card Library) asks `cached` and does not follow up.
@@ -103,7 +111,7 @@ A domain is one kind of response. Today there is one:
 
 | Domain | What it stores | Stamp | Maximum age for clock-relative requests |
 |---|---|---|---|
-| `query-v3` | `POST /api/query/{dataset}/query-v3` responses | the dataset's cached-view generation (core, events or all; see `queryDatasetGeneration`), the service's time zone and the running build (an update can change an answer without changing a row) | 10 minutes |
+| `query-v3` | `POST /api/query/{dataset}/query-v3` responses | the dataset's cached-view generation (core, events or all; see `queryDatasetGeneration`), the service's time zone and the running build (an update can change an answer without changing a row) and the saved settings the service applies itself (`queryResultSettings`: the Parallelism and Habits settings) | 10 minutes |
 
 Query requests are made independent of the clock in two ways. `now` is left
 out of the key. A filter value that is an instant a whole number of hours
@@ -115,8 +123,27 @@ are, so those entries turn over once a day.
 Card requests from Home and the Card Library use the cache, including the
 cards drawn by a dashboard's own code: the policy travels on the request's
 abort signal (`resultScope`), so code that only passes a signal down joins
-without knowing about it. Dashboards and tables opened as pages do not yet
-name a policy.
+without knowing about it.
+
+Dashboards opened as pages use it for their charts and summary numbers.
+Their three loading hooks (`useAnalysisResult`, `useMetrics` and Session
+Shape's `useLoad`) load through `loadFollowing`, which asks under a policy,
+shows what was served and replaces a stale answer in place. The readiness
+indicator beside a chart or summary number says how old a stale answer is
+and that it is being updated. When the page stops asking (after the last
+retry, or because the follow-ups failed) the indicator says the results are
+saved ones and to refresh, rather than that an update is coming. A current
+answer counts as checked when it was loaded, whenever it was computed.
+
+**Tables are never stored.** Their pages are large, each is read once, and
+they must agree with each other. Two things keep them out: the table grid
+makes its own abort signals, so it never carries a policy; and the service
+answers a row request live whatever it asks for, unless it is a first page
+of at most 50 rows (a card's short list). Session Shape's list of sessions
+to read is loaded live for the same reason.
+
+Dashboard content that does not come from `query-v3` (Thinking, Habits,
+Parallelism, Carbon, Usage history) is not stored yet.
 
 ## Adding a domain
 

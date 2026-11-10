@@ -52,7 +52,8 @@ func (s *Server) postQueryV3(w http.ResponseWriter, r *http.Request, dataset str
 	}
 	request, err := queryResultRequest(dataset, r.URL.Query(), body)
 	if err != nil {
-		// No object or no clock: answered as it is, outside the cache.
+		// No object, no clock, or a page of table rows: answered as it is,
+		// outside the cache.
 		payload, err := s.queryV3Response(r.Context(), dataset, r.URL.Query(), body)
 		if err != nil {
 			qt.WriteQueryError(w, err)

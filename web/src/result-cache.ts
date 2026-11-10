@@ -85,6 +85,40 @@ export async function followStale(ask: (attempt: number) => Promise<boolean>, si
   }
 }
 
+// What a view says about the answer it shows: when it was known to be
+// current, whether a newer one is on its way, and why none is coming.
+export type ServedReadiness = { updatedAt: number; refreshing?: boolean; refreshError?: string };
+export const stillStale = "These results have not been updated yet.";
+// A current answer was checked against the data just now, whenever it was
+// computed. A stale one is as old as its computation, and is either being
+// followed (refreshing) or not: nothing will replace it until the view is
+// loaded again, which is what refreshError tells the reader.
+export function servedReadiness(served: ResultServed | undefined, following: boolean, failure?: unknown, now = Date.now()): ServedReadiness {
+  if (served?.state !== "stale") return { updatedAt: now };
+  return following ? { updatedAt: served.built, refreshing: true } : { updatedAt: served.built, refreshError: failure instanceof Error ? failure.message : failure ? String(failure) : stillStale };
+}
+
+// Runs load under a policy and publishes its value with its readiness.
+// While the answer is stale it is loaded again (followStale) and published
+// in place, so a view catches up without anyone asking. When following
+// ends with the answer still stale (out of tries, or the follow-ups
+// failed), the value is published once more as no longer refreshing. Only
+// the first load's failure is the caller's.
+export async function loadFollowing<T>(load: (signal: AbortSignal) => Promise<T>, publish: (value: T, readiness: ServedReadiness) => void, signal: AbortSignal, policy: ResultPolicy,
+  follow: typeof followStale = followStale): Promise<void> {
+  let shown: { value: T; served?: ResultServed } | undefined, failure: unknown;
+  const once = async (asked: ResultPolicy) => {
+    const scope = resultScope(signal, asked), value = await load(scope.signal), served = scope.served();
+    if (signal.aborted) return false;
+    shown = { value, served }; failure = undefined;
+    publish(value, servedReadiness(served, true));
+    return served?.state === "stale";
+  };
+  if (!await once(policy)) return;
+  await follow(() => once("cached").catch(error => { failure = error; return !signal.aborted; }), signal);
+  if (!signal.aborted && shown?.served?.state === "stale") publish(shown.value, servedReadiness(shown.served, false, failure));
+}
+
 function pause(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise(resolve => {
     const done = () => { clearTimeout(timer); signal?.removeEventListener("abort", done); resolve(); };

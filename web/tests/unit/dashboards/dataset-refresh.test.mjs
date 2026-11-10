@@ -2,7 +2,7 @@
 // which a saved Carbon or Parallelism setting triggers.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { datasetsForSavedPreferences, onDatasetRefresh, onSafetyChange, findingsDiscoveryChanged } from "../../../src/dataset-refresh";
+import { askedRefresh, datasetsForSavedPreferences, onDatasetRefresh, onSafetyChange, findingsDiscoveryChanged } from "../../../src/dataset-refresh";
 
 test("a saved Parallelism gap or counting refreshes the parallelism dataset, and its results refetch", () => {
   assert.deepEqual(datasetsForSavedPreferences({ set: { "pharos-concurrency-v1": { gap: 15, counting: "workspace" } } }), ["parallelism"]);
@@ -44,4 +44,16 @@ test('scatter plots refresh when an underlying metric source changes',()=>{
  assert.equal(calls,3);
  const unrelated=new Event('pharos:data-refresh');unrelated.detail='mcp_calls';target.dispatchEvent(unrelated);assert.equal(calls,3);
  stop();target.dispatchEvent(new Event('pharos:usage-refresh'));assert.equal(calls,3);
+});
+
+test("a person's Refresh and a refreshed dataset ask for current answers; a focused tab takes what is stored", () => {
+  const target = new EventTarget(), policies = [];
+  const stop = onDatasetRefresh("parallelism", policy => policies.push(policy), target);
+  target.dispatchEvent(new Event("pharos:usage-refresh"));
+  target.dispatchEvent(askedRefresh());
+  // A saved Parallelism setting rebuilt the dataset: stored answers under the old one must not be drawn as current.
+  target.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: "parallelism" }));
+  target.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: "usage" }));
+  stop();
+  assert.deepEqual(policies, ["cached", "fresh", "fresh"]);
 });
