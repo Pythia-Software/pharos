@@ -18,7 +18,13 @@ export type FileHistoryFile = {
   file_key: string; path: string; repository_id?: string; project?: string | null; project_kind?: string;
   sessions: FileHistorySession[]; sessions_truncated?: boolean; commits: FileHistoryCommit[]; git: FileHistoryGit;
 };
-export type FileHistory = { path: string; files: FileHistoryFile[]; note: string };
+export type FileHistory = { path: string; files: FileHistoryFile[]; files_truncated?: boolean; note: string };
+
+// fileHistoryNotice is the service's note where the page needs it: no file
+// matched (or only in another project), or more matched than are listed.
+export function fileHistoryNotice(history: FileHistory): string {
+  return !history.files.length || history.files_truncated ? history.note : "";
+}
 
 // fileHistoryURL opens a file's history, narrowed to one project when given.
 export function fileHistoryURL(path: string, project?: string | null): string {
@@ -42,12 +48,16 @@ export function linesText(added: number | null | undefined, removed: number | nu
 // gitText is what local Git contributes for a file: commits where it checked
 // the repository, and otherwise why there are none. It is never an error:
 // a folder's history comes from transcripts alone. Local Git is read from
-// the repository's first session edit, so commits are counted since then.
+// the repository's first recorded edit, so commits are counted since then.
+// A list cut at its bound names only the commits shown.
 export function gitText(git: FileHistoryGit, commits: number): string {
-  if (git.status === "not_applicable") return "A folder, not a Git repository: this history comes from the sessions' own edits.";
+  if (git.status === "not_applicable") return "A folder, not a Git repository: this history comes from the agents' recorded edits.";
   if (git.status === "checked") {
     const since = git.commits_since ? ` since ${git.commits_since.slice(0, 10)}` : "";
-    const found = commits ? `${commits.toLocaleString("en-US")} commit${commits === 1 ? "" : "s"} changed this file${since}, from local Git.` : `Local Git found no commit of this file${since}.`;
+    const count = `${commits.toLocaleString("en-US")} commit${commits === 1 ? "" : "s"}`;
+    const found = !commits ? `Local Git found no commit of this file${since}.`
+      : git.commits_truncated ? `The ${count} that most recently changed this file, from local Git; older ones are not shown.`
+      : `${count} changed this file${since}, from local Git.`;
     return since ? `${found} Earlier commits are not read.` : found;
   }
   return git.reason || "Local Git has not checked this repository.";
@@ -62,9 +72,9 @@ export function commitState(commit: FileHistoryCommit): string {
   return "";
 }
 
-// linkText is how a session is linked to a commit: counted links are the
-// session's own; below the counting threshold a link is a candidate.
+// linkText is how a workspace is linked to a commit: counted links are the
+// workspace's own; below the counting threshold a link is a candidate.
 export function linkText(link: FileHistoryLink): string {
-  const method = link.method === "transcript" ? "printed by the session" : link.method === "inferred" ? "inferred from its edits" : link.method;
+  const method = link.method === "transcript" ? "printed in its transcript" : link.method === "inferred" ? "inferred from its edits" : link.method;
   return link.counted ? method : `candidate, ${method}`;
 }

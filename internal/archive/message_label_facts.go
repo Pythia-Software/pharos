@@ -73,8 +73,19 @@ func messageLabelWithoutLedger(table sqlDataset) sqlDataset {
 	return table
 }
 
-func messageLabelStoredFrom(ledger bool, fields []string) string {
-	live := messageLabelLiveDataset("SELECT conversation_id FROM message_label_facts_dirty")
+// unmarked is executionUnmarkedSQL for the labels ledger.
+func messageLabelStoredFrom(ledger bool, fields []string, unmarked string) string {
+	// Conversations with unmarked execution changes are projected live like
+	// dirty ones, where their labels read as pending. Without a ledger there
+	// are no labels to hold back.
+	pending, hold := "SELECT conversation_id FROM message_label_facts_dirty", ""
+	if ledger {
+		pending += " UNION " + unmarked
+		hold = "\n AND stored.conversation_id NOT IN (" + unmarked + ")"
+	} else {
+		unmarked = ""
+	}
+	live := messageLabelLiveDatasetFor(pending, unmarked)
 	if !ledger {
 		live = messageLabelWithoutLedger(live)
 	}
@@ -94,15 +105,15 @@ func messageLabelStoredFrom(ledger bool, fields []string) string {
 	return `FROM (SELECT ` + strings.Join(stored, ",") + ` FROM message_label_facts stored
  JOIN message_label_memberships membership ON membership.message_rowid=stored.rowid
  JOIN message_label_names name ON name.id=membership.label_id
- WHERE NOT EXISTS(SELECT 1 FROM message_label_facts_dirty dirty WHERE dirty.conversation_id=stored.conversation_id)
+ WHERE NOT EXISTS(SELECT 1 FROM message_label_facts_dirty dirty WHERE dirty.conversation_id=stored.conversation_id)` + hold + `
  UNION ALL ` + liveSQL + `) f
  LEFT JOIN conversations c ON c.id=f.conversation_id
  LEFT JOIN workspaces w ON w.id=c.workspace_id
- LEFT JOIN repositories repo ON repo.id=w.repository_id
+ LEFT JOIN repositories repo ON repo.id=w.repository_id` + projectJoin("w") + `
  LEFT JOIN messages body ON body.id=f.message_id`
 }
 
-func messageLabelStoredDataset(ledger bool) sqlDataset {
+func messageLabelStoredDataset(ledger bool, unmarked string) sqlDataset {
 	fields := append(slices.Clone(messageLabelFactFields), messageLabelNameFields...)
 	columns := map[string]string{}
 	for _, field := range fields {
@@ -111,7 +122,8 @@ func messageLabelStoredDataset(ledger bool) sqlDataset {
 	for field, expression := range map[string]string{
 		"id": "f.message_id||':'||f.label", "workspace_id": "c.workspace_id", "fingerprint": "f.conversation_id",
 		"title": "COALESCE(NULLIF(c.agent_nickname,''),w.title,c.id)", "repository_name": "repo.display_name",
-		"provider": "c.provider", "subagent": "c.parent_id IS NOT NULL",
+		"project_name": projectNameSQL("w"),
+		"provider":     "c.provider", "subagent": "c.parent_id IS NOT NULL",
 		"week": "date(f.day,'-6 days','weekday 1')", "month": "substr(f.day,1,7)",
 		"text": "substr(" + timelineContentSQL("body.text") + ",1,640)",
 	} {
@@ -121,7 +133,7 @@ func messageLabelStoredDataset(ledger bool) sqlDataset {
 	for field := range columns {
 		covered[field] = field != "text"
 	}
-	return sqlDataset{from: messageLabelStoredFrom(ledger, fields), columns: columns, projectFrom: func(consumed []string) string {
+	return sqlDataset{from: messageLabelStoredFrom(ledger, fields, unmarked), columns: columns, projectFrom: func(consumed []string) string {
 		needed := []string{"conversation_id", "message_id"}
 		for _, field := range fields {
 			if field == "conversation_id" || field == "message_id" {
@@ -134,15 +146,21 @@ func messageLabelStoredDataset(ledger bool) sqlDataset {
 				}
 			}
 		}
-		return messageLabelStoredFrom(ledger, needed)
+		return messageLabelStoredFrom(ledger, needed, unmarked)
 	}, optionalJoins: map[string]string{
 		"c":    " LEFT JOIN conversations c ON c.id=f.conversation_id",
 		"w":    " LEFT JOIN workspaces w ON w.id=c.workspace_id",
 		"repo": " LEFT JOIN repositories repo ON repo.id=w.repository_id",
+		"pj":   projectJoin("w"),
 		"body": " LEFT JOIN messages body ON body.id=f.message_id",
 	}, timestamps: map[string]string{"occurred_at": "f.occurred_at"}, lookups: map[string]bool{"message_id": true, "conversation_id": true, "workspace_id": true},
 		// The physical facts themselves are narrow; this index supplies range access,
 		// and the covered population budget doesn't permit transcript-body scans.
+		newestBounds: map[string]newestBound{"occurred_at": {
+			nth:    "SELECT occurred_at FROM message_label_facts ORDER BY occurred_at DESC LIMIT 1 OFFSET ?",
+			column: "f.occurred_at",
+			join:   [2]string{" JOIN message_label_memberships membership", " CROSS JOIN message_label_memberships membership"},
+		}},
 		pageFrom: "FROM message_label_facts stored", coveringIndex: "message_label_facts_trends_idx", rangeCoveringIndex: "message_label_facts_trends_idx", coveredFields: covered}
 }
 
@@ -174,7 +192,7 @@ func (c *Catalog) ensureMessageLabelFacts(ctx context.Context) error {
 			var generation int
 			err = tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name='query_cache_generation'").Scan(&generation)
 			if err == nil && generation > 0 {
-				_, err = tx.ExecContext(ctx, "UPDATE query_cache_generation SET value=value+1 WHERE id=1")
+				err = advanceCacheGeneration(ctx, tx, "labels")
 			}
 		}
 		return err
@@ -273,7 +291,9 @@ var messageLabelFactsTarget = 250 * time.Millisecond
 var errMessageLabelFactsStale = errors.New("message label query inputs changed during preparation")
 
 func messageLabelFactsSource(selector string, ledger bool) sqlDataset {
-	live := messageLabelLiveDataset(selector)
+	// Stored facts keep the labels as built; readers hold back the
+	// conversations whose execution changes are unmarked (messageLabelStoredFrom).
+	live := messageLabelLiveDatasetFor(selector, "")
 	// These indexes are installed on writable catalogs. Keep the ordinary live
 	// dataset compatible with older read-only snapshots that do not have them.
 	live.from = strings.Replace(live.from, "INDEXED BY messages_conversation_idx", "INDEXED BY messages_label_conversation_idx", 1)
@@ -285,7 +305,11 @@ func messageLabelFactsSource(selector string, ledger bool) sqlDataset {
 	return live
 }
 
-func prepareMessageLabelFacts(ctx context.Context, tx *sql.Tx, messages int) (build messageLabelFactsBuild, err error) {
+// prepareMessageLabelFacts stages the next dirty conversations' facts within
+// a message budget. A nil members list takes them from the whole queue in
+// conversation order; a non-nil one only those conversations, and never
+// reports the facts ready (an empty selection is not the whole queue).
+func prepareMessageLabelFacts(ctx context.Context, tx *sql.Tx, messages int, members []string) (build messageLabelFactsBuild, err error) {
 	if err = tx.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&build.generation); err != nil {
 		return build, err
 	}
@@ -296,20 +320,27 @@ func prepareMessageLabelFacts(ctx context.Context, tx *sql.Tx, messages int) (bu
 			return build, err
 		}
 	}
+	selected, args := "", []any{messageLabelFactsBatch, max(1, messages)}
+	if members != nil {
+		selected, args = " WHERE conversation_id IN (SELECT value FROM json_each(?))", []any{jsonText(members), messageLabelFactsBatch, max(1, messages)}
+	}
 	if _, err = tx.ExecContext(ctx, `CREATE TEMP TABLE message_label_batch(conversation_id TEXT PRIMARY KEY) WITHOUT ROWID;
  INSERT INTO message_label_batch
  WITH candidates AS MATERIALIZED (
  SELECT conversation_id,(SELECT count(*) FROM messages m INDEXED BY messages_label_conversation_idx
  WHERE m.conversation_id=dirty.conversation_id AND `+messageLabelMessagePredicate+`) messages
- FROM message_label_facts_dirty dirty ORDER BY conversation_id LIMIT ?
+ FROM message_label_facts_dirty dirty`+selected+` ORDER BY conversation_id LIMIT ?
  ), budget AS (
  SELECT conversation_id,COALESCE(sum(messages) OVER (ORDER BY conversation_id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) previous
  FROM candidates
- ) SELECT conversation_id FROM budget WHERE previous<?`, messageLabelFactsBatch, max(1, messages)); err != nil {
+ ) SELECT conversation_id FROM budget WHERE previous<?`, args...); err != nil {
 		return build, err
 	}
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM message_label_batch").Scan(&build.conversations); err != nil {
 		return build, err
+	}
+	if build.conversations == 0 && members != nil {
+		return build, nil
 	}
 	if build.conversations == 0 {
 		var version string
@@ -359,7 +390,7 @@ func publishMessageLabelFacts(ctx context.Context, tx *sql.Tx, build messageLabe
 		}
 		n, err := result.RowsAffected()
 		if err == nil && n > 0 {
-			_, err = tx.ExecContext(ctx, "UPDATE query_cache_generation SET value=value+1 WHERE id=1")
+			err = advanceCacheGeneration(ctx, tx, "labels")
 		}
 		return err
 	}
@@ -414,7 +445,22 @@ func (c *Catalog) refreshMessageLabelFacts(ctx context.Context) (int, error) {
 	return count, err
 }
 
+// messageLabelFactsReadyPending is whether the whole queue is empty but the
+// current version's readiness is not yet published.
+func (c *Catalog) messageLabelFactsReadyPending(ctx context.Context) (bool, error) {
+	var pending bool
+	err := c.reader().QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM message_label_facts_dirty)
+ AND COALESCE((SELECT value FROM meta WHERE key='message_label_facts_ready'),'')<>?`, messageLabelFactsVersion()).Scan(&pending)
+	return pending, err
+}
+
 func (c *Catalog) refreshMessageLabelFactsBudget(ctx context.Context, messages int) (int, messageLabelFactsTiming, error) {
+	return c.refreshMessageLabelFactsOf(ctx, messages, nil)
+}
+
+// refreshMessageLabelFactsOf is refreshMessageLabelFactsBudget over members
+// (nil: the whole queue; see prepareMessageLabelFacts).
+func (c *Catalog) refreshMessageLabelFactsOf(ctx context.Context, messages int, members []string) (int, messageLabelFactsTiming, error) {
 	var timing messageLabelFactsTiming
 	conn, err := c.DB.Conn(ctx)
 	if err != nil {
@@ -434,14 +480,14 @@ func (c *Catalog) refreshMessageLabelFactsBudget(ctx context.Context, messages i
 		if err != nil {
 			return 0, timing, err
 		}
-		build, err := prepareMessageLabelFacts(ctx, read, messages)
+		build, err := prepareMessageLabelFacts(ctx, read, messages, members)
 		if err != nil {
 			_ = read.Rollback()
 			return 0, timing, err
 		}
 		err = read.Commit()
 		timing.prepare += time.Since(started)
-		if err != nil || build.conversations == 0 && build.ready {
+		if err != nil || build.conversations == 0 && (build.ready || members != nil) {
 			return 0, timing, err
 		}
 		started = time.Now()
@@ -457,10 +503,12 @@ func (c *Catalog) refreshMessageLabelFactsBudget(ctx context.Context, messages i
 			// Sustained source writes must not starve maintenance. After two
 			// stale snapshots, prepare this bounded batch under the writer.
 			if err == nil && generation != build.generation {
-				build, err = prepareMessageLabelFacts(ctx, tx, messages)
+				build, err = prepareMessageLabelFacts(ctx, tx, messages, members)
 			}
 		}
-		if err == nil {
+		// A selection another writer already published leaves nothing to
+		// store, and is no claim about the whole queue.
+		if err == nil && (members == nil || build.conversations > 0) {
 			err = publishMessageLabelFacts(ctx, tx, build, &timing)
 		}
 		if errors.Is(err, errMessageLabelFactsStale) {

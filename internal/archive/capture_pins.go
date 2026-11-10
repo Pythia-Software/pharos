@@ -16,8 +16,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 const preservationPinsName = "preservation-pins.json"
@@ -115,11 +116,15 @@ func preservationReaderActive(dir, lease string) (bool, error) {
 		return false, err
 	}
 	defer lock.Close()
-	err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-	if errors.Is(err, syscall.EWOULDBLOCK) {
+	// An unknown reader's liveness is an error, so its pin is never reclaimed.
+	err = probeReaderLease(lock, filelock.Exclusive, filelock.Try)
+	if errors.Is(err, filelock.ErrContended) {
 		return true, nil
 	}
-	return false, err
+	if err != nil {
+		return false, fmt.Errorf("probe preservation reader %s: %w", lease, err)
+	}
+	return false, nil
 }
 
 // Caller owns the capture lock. Closed/crashed reader leases form a durable
@@ -169,7 +174,7 @@ func (c *sourceCapture) pinReader(refs []recordObject) (func(), error) {
 	}
 	lease, err := os.OpenFile(filepath.Join(dir, ".reader.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err == nil {
-		err = syscall.Flock(int(lease.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		err = lockReaderLease(lease, filelock.Exclusive, filelock.Try)
 	}
 	if err != nil {
 		if lease != nil {
@@ -388,9 +393,9 @@ func lockCaptureTarget(ctx context.Context, dir string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err = lockCaptureWriter(f, filelock.Exclusive, filelock.Try); err != nil {
 		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+		if errors.Is(err, filelock.ErrContended) {
 			return nil, errCaptureBusy
 		}
 		return nil, err
@@ -588,7 +593,7 @@ func (c *sourceCapture) pinHistoryVersion(v capturedVersion) (capturedVersion, e
 		}
 		_, e = io.Copy(out, &recordCountReader{r: input, ctx: c.ctx})
 		if e == nil {
-			e = out.Sync()
+			e = syncToDrive(out)
 		}
 		if closeErr := out.Close(); e == nil {
 			e = closeErr

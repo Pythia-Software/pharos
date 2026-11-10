@@ -23,8 +23,9 @@ import (
 // session (Codex), or says it has no branch data.
 
 // branchUsageVersion changes when the derivation does, so every
-// conversation is read again.
-const branchUsageVersion = "1"
+// conversation is read again. Version 2 reads again the conversations whose
+// shares a forced index deleted while their scans stayed.
+const branchUsageVersion = "2"
 
 // branchUsageBatch is how many conversations one write commits.
 const branchUsageBatch = 100
@@ -40,6 +41,12 @@ CREATE TABLE IF NOT EXISTS agent_session_branch_shares(
 CREATE TABLE IF NOT EXISTS branch_usage_scans(
   conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
   scan_key TEXT NOT NULL) WITHOUT ROWID;
+-- Shares go with their agent sessions, which a forced index deletes and
+-- writes again with the same totals; the scan goes with them, so the
+-- conversation is read again.
+CREATE TRIGGER IF NOT EXISTS branch_usage_session_deleted AFTER DELETE ON agent_sessions BEGIN
+  DELETE FROM branch_usage_scans WHERE conversation_id=OLD.conversation_id;
+END;
 `
 
 func (c *Catalog) ensureBranchUsage() error {

@@ -69,6 +69,14 @@ func TestMain(m *testing.M) {
 		return nil, fmt.Errorf("%s does not run in tests", name)
 	}
 	catalogDurability = testDurability
+	labelingLedgerSynchronous = "OFF"
+	resultCacheSynchronous = "OFF"
+	syncToDrive = func(file *os.File) error {
+		// Keep invalid/closed-handle failures visible, but do not flush the
+		// whole drive for disposable files. Writes and closes still run.
+		_, err := file.Stat()
+		return err
+	}
 	// New libraries and audit references start as copies of the template.
 	newCatalog = func(path string) (*Catalog, error) {
 		if _, err := os.Lstat(path); err == nil {
@@ -92,10 +100,13 @@ func slowTest(t *testing.T) {
 	}
 }
 
-// useDurableCatalog gives the catalogs t opens the service's durability.
+// useDurableCatalog restores real device flushes for catalogs, labeling
+// ledgers and retained files until t ends.
 func useDurableCatalog(t testing.TB) {
 	t.Helper()
 	override(t, &catalogDurability, durableCatalog)
+	override(t, &labelingLedgerSynchronous, "FULL")
+	override(t, &syncToDrive, (*os.File).Sync)
 }
 
 // override sets a package variable, such as a limit a test lowers so that a

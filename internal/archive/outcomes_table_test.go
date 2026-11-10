@@ -19,6 +19,9 @@ func TestOutcomeRowsCarryCostAndMainModel(t *testing.T) {
 	}
 	ingestUsageFixture(t, catalog)
 	execTx(t, catalog.DB, `UPDATE agent_sessions SET model='gpt-6-sol'`)
+	// Its edits are past the rework window and kept: a priced kept change.
+	execTx(t, catalog.DB, `INSERT INTO session_outcomes(workspace_id,tool_calls_recorded,files_changed,last_edit_at,rework_days,kept_lines,rework_removed_lines)
+		SELECT id,3,1,'2026-01-01T00:00:00Z',14,40,2 FROM workspaces`)
 	rows, err := catalog.outcomeRows(context.Background())
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("%v %v", rows, err)
@@ -31,14 +34,23 @@ func TestOutcomeRowsCarryCostAndMainModel(t *testing.T) {
 	if cost, ok := row["cost_usd"].(float64); !ok || math.Abs(cost-library[0]["cost_usd"].(float64)) > 1e-12 || row["price_status"] != "priced" {
 		t.Fatalf("outcome cost %#v, library %#v", row["cost_usd"], library[0]["cost_usd"])
 	}
-	if row["model_family"] != modelFamily("gpt-6-sol") || row["provider"] == nil || row["started_at"] == "" || integer(row["tokens"]) != 3050 {
+	if row["model_family"] != modelFamily("gpt-6-sol") || row["provider"] == nil || row["started_at"] == "" || integer(row["tokens"]) != 3050 || integer(row["has_usage"]) != 1 {
 		t.Fatalf("outcome usage: %#v", row)
+	}
+	// Cost per kept change reads its cost as judged and counts it as a
+	// priced kept change; its window closed, so its lines are rework's.
+	if row["outcome_label"] != "changed_kept" || row["judged_cost_usd"] != row["cost_usd"] || integer(row["kept_priced"]) != 1 || integer(row["kept_lines"]) != 40 || integer(row["rework_removed_lines"]) != 2 {
+		t.Fatalf("priced kept change: %#v", row)
 	}
 }
 
 // Each session's evidence tier, branch and kept change, across Git and
 // folders: branch belongs to repository sessions only, and a kept change is
-// one whose label says its changes stayed.
+// one whose label says its changes stayed. Only a label that judges its
+// changes counts toward kept share (judged): not a change too recent to
+// judge, whose lines also stay out of the rework rate until its window
+// closes, nor No changes or Unknown. None recorded usage: no cost, no
+// priced kept change, and not unpriced either.
 func TestOutcomeRowsTiersAndBranches(t *testing.T) {
 	f := newGitFixture(t)
 	// On local main, which is mainline without a remote: landed.
@@ -63,14 +75,15 @@ func TestOutcomeRowsTiersAndBranches(t *testing.T) {
 	}
 	got := map[string]string{}
 	for _, row := range rows {
-		got[firstString(row["id"])] = fmt.Sprintf("%v %v %v %v %v %v", row["outcome_label"], row["evidence_tier"], row["git_check"], row["git_check_reason"], row["branch"], row["kept_change"])
+		got[firstString(row["id"])] = fmt.Sprintf("%v %v %v %v %v %v judged=%v lines=%v/%v usage=%v priced=%v %v", row["outcome_label"], row["evidence_tier"], row["git_check"], row["git_check_reason"], row["branch"], row["kept_change"],
+			row["judged"], row["rework_removed_lines"], row["kept_lines"], row["has_usage"], row["kept_priced"], row["judged_cost_usd"])
 	}
 	want := map[string]string{
-		"committed": "landed local_git checked <nil> feature/x 1",
-		"idle":      "no_changes transcript not_applicable <nil> <nil> 0",
-		"notes":     "changed_kept transcript not_applicable <nil> <nil> 1",
-		"chat":      "unknown none not_applicable <nil> <nil> 0",
-		"gone":      "changed_recent transcript not_checked No checkout of this repository was recorded on this Mac. <nil> 0",
+		"committed": "landed local_git checked <nil> feature/x 1 judged=1 lines=<nil>/<nil> usage=0 priced=0 <nil>",
+		"idle":      "no_changes transcript not_applicable <nil> <nil> 0 judged=0 lines=<nil>/<nil> usage=0 priced=0 <nil>",
+		"notes":     "changed_kept transcript not_applicable <nil> <nil> 1 judged=1 lines=0/3 usage=0 priced=0 <nil>",
+		"chat":      "unknown none not_applicable <nil> <nil> 0 judged=0 lines=<nil>/<nil> usage=0 priced=0 <nil>",
+		"gone":      "changed_recent transcript not_checked No checkout of this repository was recorded on this Mac. <nil> 0 judged=0 lines=<nil>/<nil> usage=0 priced=0 <nil>",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("outcome rows:\n got %v\nwant %v", got, want)

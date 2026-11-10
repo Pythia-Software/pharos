@@ -16,6 +16,11 @@ import (
 // and their derivation.
 const toolRollupVersion = "rollup-v7-projects"
 
+// toolQueryFactsVersion names the tool_query_facts layout. It once followed
+// toolRollupVersion; the facts hold no workspace or project columns, so the
+// rollup's later versions leave it, and its complete index, alone.
+const toolQueryFactsVersion = "rollup-v6-origins"
+
 // toolLedgerState tracks the in-process ledger backfill and rollup rebuilds.
 type toolLedgerState struct {
 	backfill    sync.Mutex
@@ -57,10 +62,14 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		return err
 	}
 	if priorVersion != toolLedgerVersion {
-		for _, table := range []string{"skill_usages", "tool_calls", "model_requests", "tool_ledger_inputs"} {
-			if _, err := tx.Exec("DELETE FROM "+table+" WHERE conversation_id=?", conversationID); err != nil {
-				return err
-			}
+		// Another version's rows are all offered again, whatever fingerprints
+		// were kept for them. They are not deleted first: most come out the
+		// same, and a row that is replaced by itself costs every index and
+		// trigger on these tables twice. The upserts below change only rows
+		// that differ, and the rows this version no longer derives are removed
+		// with the others that were not retained.
+		if _, err := tx.Exec("DELETE FROM tool_ledger_inputs WHERE conversation_id=?", conversationID); err != nil {
+			return err
 		}
 	}
 	rows, err := queryMaps(tx, "SELECT row_kind,row_id,fingerprint FROM tool_ledger_inputs WHERE conversation_id=?", conversationID)
@@ -153,9 +162,9 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		return stableID("message", conversationID, nativeID)
 	}
 	if len(requests) > 0 {
-		statement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,effort,
+		statement, err := tx.Prepare(changedUpsertSQL(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,effort,speed,service_tier,speed_source,
 			input_tokens,uncached_input_tokens,cache_read_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,
-			context_growth_tokens,compacted_before,tool_call_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+			context_growth_tokens,compacted_before,tool_call_count,source_message_id,final_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "id"))
 		if err != nil {
 			return err
 		}
@@ -171,10 +180,10 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			counts := request.Counts
 			uncached := max(counts["input_tokens"]-counts["cache_read_input_tokens"]-counts["cache_creation_input_tokens"], 0)
 			if _, err := statement.Exec(requestID(request.Key), conversationID, sessionID(request.Stream), nilIfEmpty(request.NativeID), request.Sequence,
-				nilIfEmpty(request.RequestedAt), nilIfEmpty(request.Model), nilIfEmpty(request.Effort), integer(counts["input_tokens"]), integer(uncached),
+				nilIfEmpty(request.RequestedAt), nilIfEmpty(request.Model), nilIfEmpty(request.Effort), request.Speed, nilIfEmpty(request.ServiceTier), request.SpeedSource, integer(counts["input_tokens"]), integer(uncached),
 				integer(counts["cache_read_input_tokens"]), integer(counts["cache_creation_input_tokens"]), integer(counts["output_tokens"]),
 				integer(counts["reasoning_output_tokens"]), integer(counts["total_tokens"]), nullableInt(request.ContextGrowth),
-				boolInt(request.CompactedBefore), request.ToolCalls); err != nil {
+				boolInt(request.CompactedBefore), request.ToolCalls, messageID(request.SourceNativeID), messageID(request.FinalNativeID)); err != nil {
 				statement.Close()
 				return err
 			}
@@ -182,12 +191,12 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		statement.Close()
 	}
 	if len(calls) > 0 {
-		callStatement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_id,call_message_id,result_message_id,
+		callStatement, err := tx.Prepare(changedUpsertSQL(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_id,call_message_id,result_message_id,
 			sequence,provider,model,effort,kind,tool_name,tool_category,mcp_server,command,program,subcommand,command_category,command_count,
 			has_pipe,has_redirect,has_heredoc,backgrounded,file_path,started_at,ended_at,duration_ms,duration_source,status,error_type,exit_code,
 			interrupted,truncated,input_bytes,result_bytes,result_tokens,result_tokens_source,request_id,next_request_id,parallel_count,
 			output_tokens,carried_requests,carried_tokens,lines_added,lines_removed,url,host,hosts,url_count,search_query,error_signature,test_failure,repo_path,path_repository,path_repository_id,path_scope,path_absolute)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "id"))
 		if err != nil {
 			return err
 		}
@@ -207,6 +216,17 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			return err
 		}
 		defer urlStatement.Close()
+		// A replay of another version's rows keeps their rowids, so related
+		// conversations (RefreshPeerLinks), which look for new rows, would not
+		// see a call whose classification the replay corrected. Its start is
+		// recorded as a result that arrives late is.
+		replay, corrected := priorVersion != "" && priorVersion != toolLedgerVersion, ""
+		changes := func(result sql.Result, err error) (int64, error) {
+			if err != nil {
+				return 0, err
+			}
+			return result.RowsAffected()
+		}
 		for _, call := range calls {
 			id := stableID("tool-call", conversationID, call.Key)
 			write, err := needsWrite("call", id, call)
@@ -216,6 +236,7 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			if !write {
 				continue
 			}
+			var rewritten int64
 			commandPositions, urlPositions := []int{}, []int{}
 			for _, command := range call.Commands {
 				commandPositions = append(commandPositions, command.Position)
@@ -224,11 +245,13 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 				urlPositions = append(urlPositions, address.Position)
 			}
 			for table, positions := range map[string][]int{"tool_commands": commandPositions, "tool_urls": urlPositions} {
-				if _, err := tx.Exec("DELETE FROM "+table+" WHERE tool_call_id=? AND position NOT IN (SELECT value FROM json_each(?))", id, jsonText(positions)); err != nil {
+				n, err := changes(tx.Exec("DELETE FROM "+table+" WHERE tool_call_id=? AND position NOT IN (SELECT value FROM json_each(?))", id, jsonText(positions)))
+				if err != nil {
 					return err
 				}
+				rewritten += n
 			}
-			if _, err := callStatement.Exec(id, workspaceID, conversationID, sessionID(call.Stream), nilIfEmpty(call.CallID),
+			n, err := changes(callStatement.Exec(id, workspaceID, conversationID, sessionID(call.Stream), nilIfEmpty(call.CallID),
 				messageID(call.CallNativeID), messageID(call.ResultNativeID), call.Sequence, conversation.Provider, nilIfEmpty(call.Model), nilIfEmpty(call.Effort),
 				call.Kind, call.ToolName, call.Category, nilIfEmpty(call.MCPServer), nilIfEmpty(call.Command), nilIfEmpty(call.Program),
 				nilIfEmpty(call.Subcommand), nilIfEmpty(call.CommandCategory), call.CommandCount, boolInt(call.HasPipe), boolInt(call.HasRedirect),
@@ -237,14 +260,21 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 				boolInt(call.Interrupted), boolInt(call.Truncated), call.InputBytes, call.ResultBytes, call.ResultTokens,
 				nilIfEmpty(call.ResultTokensSource), requestID(call.RequestKey), requestID(call.NextRequestKey), call.ParallelCount,
 				call.OutputTokens, call.CarriedRequests, call.CarriedTokens, nullableInt(call.LinesAdded), nullableInt(call.LinesRemoved),
-				nilIfEmpty(call.URL), nilIfEmpty(call.Host), nilIfEmpty(call.Hosts), call.URLCount, nilIfEmpty(call.SearchQuery), nilIfEmpty(call.ErrorSignature), boolInt(call.TestFailure), nilIfEmpty(call.RepoPath), nilIfEmpty(call.PathRepository), nilIfEmpty(call.PathRepositoryID), nilIfEmpty(call.PathScope), nilIfEmpty(call.PathAbsolute)); err != nil {
+				nilIfEmpty(call.URL), nilIfEmpty(call.Host), nilIfEmpty(call.Hosts), call.URLCount, nilIfEmpty(call.SearchQuery), nilIfEmpty(call.ErrorSignature), boolInt(call.TestFailure), nilIfEmpty(call.RepoPath), nilIfEmpty(call.PathRepository), nilIfEmpty(call.PathRepositoryID), nilIfEmpty(call.PathScope), nilIfEmpty(call.PathAbsolute)))
+			if err != nil {
 				return err
 			}
+			rewritten += n
 			for _, command := range call.Commands {
-				if _, err := commandStatement.Exec(id, command.Position, nilIfEmpty(command.Operator), command.Command, nilIfEmpty(command.Program),
-					nilIfEmpty(command.Subcommand), nilIfEmpty(command.Category), nullableInt(command.ExitCode), nullableInt(command.DurationMS)); err != nil {
+				n, err := changes(commandStatement.Exec(id, command.Position, nilIfEmpty(command.Operator), command.Command, nilIfEmpty(command.Program),
+					nilIfEmpty(command.Subcommand), nilIfEmpty(command.Category), nullableInt(command.ExitCode), nullableInt(command.DurationMS)))
+				if err != nil {
 					return err
 				}
+				rewritten += n
+			}
+			if replay && rewritten > 0 && call.StartedAt != "" && (corrected == "" || call.StartedAt < corrected) {
+				corrected = call.StartedAt
 			}
 			for _, address := range call.URLs {
 				if _, err := urlStatement.Exec(id, address.Position, address.URL, address.Host, address.Source); err != nil {
@@ -252,11 +282,16 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 				}
 			}
 		}
+		if corrected != "" {
+			if _, err := tx.Exec(`INSERT INTO work_peer_links_dirty VALUES(1,?,hex(randomblob(8))) ON CONFLICT(id) DO UPDATE SET since=min(since,excluded.since),revision=excluded.revision`, corrected); err != nil {
+				return err
+			}
+		}
 	}
 	usages := buildSkillUsages(conversation.Messages, calls)
 	if len(usages) > 0 {
-		statement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO skill_usages(id,workspace_id,conversation_id,tool_call_id,agent_session_id,
-			evidence_message_id,body_message_id,skill_name,skill_path,evidence_type,status,created_at,content_bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+		statement, err := tx.Prepare(changedUpsertSQL(`INSERT INTO skill_usages(id,workspace_id,conversation_id,tool_call_id,agent_session_id,
+			evidence_message_id,body_message_id,skill_name,skill_path,evidence_type,status,created_at,content_bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, "id"))
 		if err != nil {
 			return err
 		}
@@ -336,19 +371,6 @@ func changedUpsertSQL(statement string, key ...string) string {
 	return statement + " ON CONFLICT(" + strings.Join(key, ",") + ") DO UPDATE SET " + strings.Join(updates, ",") + " WHERE " + strings.Join(changed, " OR ")
 }
 
-func derivedUpsertSQL(statement string) string {
-	start, end := strings.Index(statement, "("), strings.Index(statement, ")")
-	columns := strings.Split(statement[start+1:end], ",")
-	updates := []string{}
-	for _, column := range columns {
-		column = strings.TrimSpace(column)
-		if column != "id" {
-			updates = append(updates, column+"=excluded."+column)
-		}
-	}
-	return statement + " ON CONFLICT(id) DO UPDATE SET " + strings.Join(updates, ",")
-}
-
 // storedMessages reads a conversation's retained messages in source order.
 func storedMessages(ctx context.Context, q queryer, conversationID any) ([]MessageRecord, error) {
 	messages, err := queryMapsContext(ctx, q, "SELECT * FROM messages WHERE conversation_id=? ORDER BY source_order IS NULL,source_order,created_at,id", conversationID)
@@ -365,6 +387,7 @@ func storedMessageRecords(messages []map[string]any) []MessageRecord {
 			NativeID: firstString(message["native_id"]), Role: firstString(message["role"]), Kind: firstString(message["kind"]),
 			Text: firstString(message["text"]), RawText: firstString(message["raw_text"]), CreatedAt: firstString(message["created_at"]),
 			Model: firstString(message["model"]), Effort: firstString(message["effort"]),
+			Speed: firstString(message["speed"]), ServiceTier: firstString(message["service_tier"]), SpeedSource: firstString(message["speed_source"]),
 			ParentNativeID: firstString(message["parent_native_id"]), CallID: firstString(message["call_id"]),
 			PreviousNativeID: firstString(message["previous_native_id"]),
 			EvidenceLocator:  firstString(message["evidence_locator"]), SourceOrder: int(integer(message["source_order"])), Selected: integer(message["selected"]) != 0,
@@ -381,7 +404,7 @@ func storedMessageRecords(messages []map[string]any) []MessageRecord {
 func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, total int)) (int, error) {
 	state := &c.tools
 	if !state.backfill.TryLock() {
-		return 0, fmt.Errorf("a tool ledger build is already running")
+		return 0, fmt.Errorf("a tool index build is already running")
 	}
 	defer state.backfill.Unlock()
 	pending, err := queryMapsContext(ctx, c.DB, `SELECT c.id,c.workspace_id,c.provider,c.model FROM conversations c
@@ -406,16 +429,11 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 		if err := ctx.Err(); err != nil {
 			return finish(index, err)
 		}
-		messages, err := storedMessages(ctx, c.DB, row["id"])
-		if err != nil {
-			return finish(index, err)
-		}
-		conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Effort: firstString(row["effort"]), Messages: messages}
 		if err := c.writeTransaction(ctx, "tool-ledger conversation="+firstString(row["id"]), func(tx *sql.Tx) error {
 			// The known checkouts are read in each write transaction: an index
 			// running alongside may add some, and re-resolves only the rows
 			// already written (see reresolveToolPaths).
-			return replaceToolLedger(tx, firstString(row["workspace_id"]), firstString(row["id"]), conversation)
+			return rebuildStoredToolLedger(ctx, tx, firstString(row["id"]))
 		}); err != nil {
 			return finish(index, err)
 		}
@@ -427,6 +445,32 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 		}
 	}
 	return finish(len(pending), nil)
+}
+
+// Read the messages and rebuild their derived ledger in one snapshot, so a
+// concurrent ingest cannot leave a newer transcript with an older ledger.
+func rebuildStoredToolLedger(ctx context.Context, tx *sql.Tx, id string) error {
+	var workspace, provider string
+	var model, effort sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT workspace_id,provider,model,effort FROM conversations WHERE id=?", id).Scan(&workspace, &provider, &model, &effort); err != nil {
+		return err
+	}
+	messages, err := storedMessages(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	record := WorkspaceRecord{Conversations: []ConversationRecord{{Provider: provider, Model: model.String, Effort: effort.String, Messages: messages}}}
+	prepareRecordAccounting(&record)
+	for i := range messages {
+		normalized := normalizeMessageInference(messages[i])
+		if normalized.Speed != messages[i].Speed || normalized.ServiceTier != messages[i].ServiceTier || normalized.SpeedSource != messages[i].SpeedSource {
+			if _, err := tx.ExecContext(ctx, "UPDATE messages SET speed=?,service_tier=?,speed_source=? WHERE conversation_id=? AND native_id=?", normalized.Speed, nilIfEmpty(normalized.ServiceTier), normalized.SpeedSource, id, normalized.NativeID); err != nil {
+				return err
+			}
+		}
+		messages[i] = normalized
+	}
+	return replaceToolLedger(tx, workspace, id, record.Conversations[0])
 }
 
 type toolLedgerBuild struct {
@@ -519,6 +563,13 @@ func (c *Catalog) currentToolRollup(ctx context.Context) error {
 // refreshToolRollup runs ensureToolRollup in the background unless it is
 // already running there.
 func (c *Catalog) refreshToolRollup() {
+	if c.work.declares("analysis.tools") {
+		// One pass, as the classic page refresh ran once per trigger; a page
+		// opened while one is queued shares it. Pause does not hold a read.
+		_, _, _ = c.work.submit(c.work.server.life.ctx, workRequestSpec{Key: "read:analysis.tools", Kinds: []string{"analysis.tools"}, Mode: workModePass,
+			Priority: workPriorityLive, Unpausable: true, Trigger: triggerRead})
+		return
+	}
 	state := &c.tools
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -526,7 +577,9 @@ func (c *Catalog) refreshToolRollup() {
 		return
 	}
 	refresh := func(ctx context.Context, op *Op) error {
-		err := c.ensureToolRollup(withWorkProgress(ctx, op.mirrorWork))
+		err := admitWorkCPU(ctx, c, 1, 1, func(ctx context.Context, _ workAllocation) error {
+			return c.ensureToolRollup(withWorkProgress(ctx, op.mirrorWork))
+		})
 		if err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
 		}
@@ -563,7 +616,11 @@ func (c *Catalog) ensureToolRollup(ctx context.Context) error {
 		return err
 	}
 	// So are session outcomes, which leave mirrors out of rework.
-	return c.refreshSessionOutcomes(ctx)
+	if err := c.refreshSessionOutcomes(ctx); err != nil {
+		return err
+	}
+	// The stored compaction boundaries need a one-time backfill alongside.
+	return c.backfillCompactionBoundaries(ctx)
 }
 
 func (c *Catalog) updateStaleToolRollup(ctx context.Context) error {

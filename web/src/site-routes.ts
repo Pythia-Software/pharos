@@ -13,20 +13,22 @@
 export const siteSections = [
   { path: "home", route: "/", description: "The home page: recent activity and suggested cards." },
   { path: "cards", route: "/cards", description: "The card library: every prebuilt question, each opening a dashboard. Filter by text, data source, topic or kind." },
-  { path: "library", route: "/library", description: "Search conversations and work: text search across messages, or filter the work table." },
+  { path: "library", route: "/library", description: "Search conversations and workspaces: search message text or filter the workspace table." },
   { path: "analyze", route: "/analyze", description: "Dashboards per topic (tokens, tools, human words …) and query tables per dataset." },
-  { path: "findings", route: "/findings", description: "Optimize: Efficiency findings with measured improvements, and Risky action notices, in separate prompt baskets." },
-  { path: "files", route: "/files", description: "File history: every session that edited a file, with its lines and outcome and a link to its edit, and in a Git repository the commits that changed the file. Set file (and file_project)." },
+  { path: "findings", route: "/findings", description: "Optimize: Efficiency findings with measured improvements, Risky action notices, and Fixes for recurring agent problems, in separate prompt baskets." },
+  { path: "files", route: "/files", description: "File history: every workspace whose agents edited a file, with its lines and outcome and a link to its edit, and in a Git repository the commits that changed the file. Set file (and file_project)." },
   { path: "ask", route: "/ask", description: "Ask Pharos full screen: a new chat on its own page, without the rest of the app." },
-  { path: "work", route: "/work/{work_id}", description: "One work item (a workspace) with its conversations, reader and delegation explorer." },
+  { path: "work", route: "/work/{work_id}", description: "One workspace with its conversations, reader and agent sessions." },
   { path: "settings", route: "/settings", description: "Library health and settings pages." },
 ] as const;
 
 // Descriptions of pages below a section, where the page's own module has none.
 export const pageDescriptions: Record<string, string> = {
-  "analyze/query": "Query tables over each Analyze dataset, filtered by where terms.",
+  "analyze/query": "One query table page per dataset. Browse all records or choose an editable query idea with its own filters, columns and grouping.",
   "findings/safety/table": "Every risky action notice, filterable and groupable by resource, check, danger, location, handoff state, or recorded activity.",
   "findings/safety/settings": "Enable or disable safety discovery checks, review coverage and handoff behavior, and refresh reviews.",
+  "findings/fixes/table": "Every fix in every state, hidden ones included, filterable and groupable by kind, place, recurrence, whether the settings hide it, work items or priority.",
+  "findings/fixes/settings": "Bounds that rank quiet fixes lower and hide stale or rare ones, how Fixes and Risky actions divide agent events, and refresh.",
   "findings/table": "Every finding as a filterable table.",
   "findings/settings": "Which detectors run and how findings are ranked.",
 };

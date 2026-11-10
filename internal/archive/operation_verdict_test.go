@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 func runningView(kind string, change func(*opView)) opView {
@@ -195,6 +198,62 @@ func TestFreshLockScanTreatsReadErrorsAsUnsafe(t *testing.T) {
 		if verdict := computeEjectVerdict(verdictInput{scanErrors: failures, fresh: true}); verdict.Verdict != verdictUnsafe || verdict.Checked != "fresh" {
 			t.Fatalf("verdict with an unreadable %s: %+v", path, verdict)
 		}
+	}
+	// Probes open existing lock files only: the source's missing index lock
+	// is not held, and the scan creates none.
+	index := filepath.Join(source, indexLockName)
+	scans, probes := lockScans.Load(), lockProbes.Load()
+	heldCaptureLocks(root)
+	if lockScans.Load()-scans != 1 || lockProbes.Load()-probes != 2 {
+		t.Fatalf("one scan counted %d scans, %d probes", lockScans.Load()-scans, lockProbes.Load()-probes)
+	}
+	if _, err := os.Stat(index); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the scan created %s: %v", index, err)
+	}
+	// Another process's lease is held, not a failure; its close frees it.
+	holder, err := fileLease(lock, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held, failures := heldCaptureLocks(root); len(held) != 1 || held[0].Path != lock || len(failures) != 0 {
+		t.Fatalf("a held capture lock: %v %v", held, failures)
+	}
+	holder.Close()
+	if held, failures := heldCaptureLocks(root); len(held) != 0 || len(failures) != 0 {
+		t.Fatalf("a released capture lock: %v %v", held, failures)
+	}
+	// Only contention is a held lock. A lock the probe cannot take for any
+	// other reason, a platform without locks included, is unsafe: the scan
+	// never takes it for free.
+	for _, tc := range leaseLockFailures() {
+		t.Run(tc.name, func(t *testing.T) {
+			override(t, &lockProbeFile, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+				if mode != filelock.Shared || wait != filelock.Try {
+					t.Errorf("probe lock: %v, %v", mode, wait)
+				}
+				return tc.err
+			})
+			locked, err := probeLockFile(lock)
+			held, failures := heldCaptureLocks(root)
+			if errors.Is(tc.err, filelock.ErrContended) {
+				if !locked || err != nil || len(held) != 1 || len(failures) != 0 {
+					t.Fatalf("contention: locked=%v err=%v held=%v failures=%v", locked, err, held, failures)
+				}
+				return
+			}
+			if locked || !errors.Is(err, tc.err) || !strings.Contains(err.Error(), lock) {
+				t.Fatalf("probe failure: locked=%v err=%v", locked, err)
+			}
+			if len(held) != 0 || len(failures) != 1 {
+				t.Fatalf("scan with a failing probe: %v %v", held, failures)
+			}
+			if verdict := computeEjectVerdict(verdictInput{scanErrors: failures, fresh: true}); verdict.Verdict != verdictUnsafe {
+				t.Fatalf("verdict with a failing probe: %+v", verdict)
+			}
+			if _, err := os.Stat(index); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a failing scan created %s: %v", index, err)
+			}
+		})
 	}
 }
 

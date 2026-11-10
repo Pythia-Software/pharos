@@ -20,6 +20,9 @@ func TestOutcomeToolsForAgents(t *testing.T) {
 	// treated so.
 	override(t, &temporaryFolders, []string{"/private/tmp"})
 	writeClaudeSession(t, library.claude, "s-scratch", claudeSession("s-scratch", "/private/tmp/pharos-scratch", "", "Try it in scratch", 32))
+	// Sessions once run in a home directory and at /.
+	writeClaudeSession(t, library.claude, "s-home", claudeSession("s-home", "/Users/pharos-test", "", "Look around home", 33))
+	writeClaudeSession(t, library.claude, "s-root", claudeSession("s-root", "/", "", "Look around the disk", 34))
 	library.ingestClaude(t)
 	ctx := context.Background()
 	if err := library.catalog.ensureToolRollup(ctx); err != nil {
@@ -42,6 +45,13 @@ func TestOutcomeToolsForAgents(t *testing.T) {
 			t.Fatalf("list_projects path=%s: %#v", path, found)
 		}
 	}
+	// A home directory or / is the project only of work run there, not of
+	// every folder below it: a new folder has none yet.
+	for path, want := range map[string]int{"/Users/pharos-test": 1, "/Users/pharos-test/new-thing": 0, "/": 1, "/opt/new-thing": 0} {
+		if found := callProjectTool(t, library.catalog, "list_projects", map[string]any{"path": path}); len(projectItems(found)) != want {
+			t.Fatalf("list_projects path=%s: %#v", path, found)
+		}
+	}
 
 	// Claude Code records no change sets: every file filter finds its edits
 	// from its tool calls.
@@ -54,10 +64,25 @@ func TestOutcomeToolsForAgents(t *testing.T) {
 		{"trace", map[string]any{"file": "cmd/serve.go"}},
 		{"query_statistics", map[string]any{"file": "cmd/serve.go"}},
 		{"search_conversations", map[string]any{"file": "serve-plan.md", "project": notes}},
+		// An absolute path, as agents have them: a file or folder in a
+		// checkout, or a folder's file.
+		{"search_conversations", map[string]any{"file": filepath.Join(app, "cmd", "serve.go")}},
+		{"query_statistics", map[string]any{"file": filepath.Join(app, "cmd")}},
+		{"search_work", map[string]any{"file": filepath.Join(notes, "serve-plan.md")}},
 	} {
 		result := callProjectTool(t, library.catalog, call.tool, call.args)
 		if items, _ := result["items"].([]any); len(items) != 1 {
 			t.Fatalf("%s %v: %#v", call.tool, call.args, result)
+		}
+	}
+	// Text in a file's key, not its path, matches nothing: every
+	// repository file's key starts repository:, every folder file's path:.
+	for _, file := range []string{"repo", "repository", "path", "tory"} {
+		for _, tool := range []string{"search_conversations", "search_work", "trace", "query_statistics"} {
+			result := callProjectTool(t, library.catalog, tool, map[string]any{"file": file})
+			if items, _ := result["items"].([]any); len(items) != 0 {
+				t.Fatalf("%s file=%s: %#v", tool, file, result)
+			}
 		}
 	}
 
@@ -76,6 +101,14 @@ func TestOutcomeToolsForAgents(t *testing.T) {
 	kept := callProjectTool(t, library.catalog, "search_work", map[string]any{"outcome_label": "changed_kept", "project": "app"})
 	if items := kept["items"].([]any); len(items) != 1 {
 		t.Fatalf("search_work outcome_label: %#v", kept)
+	}
+	// Both search tools declare the filter they take.
+	for _, tool := range mcpTools {
+		if name := firstString(tool["name"]); name == "search_work" || name == "search_conversations" {
+			if tool["inputSchema"].(map[string]any)["properties"].(map[string]any)["outcome_label"] == nil {
+				t.Errorf("%s does not declare outcome_label", name)
+			}
+		}
 	}
 	if _, err := callMCP(library.catalog, "query_statistics", map[string]any{"outcome_label": "merged"}); err == nil {
 		t.Fatal("an unknown outcome label should be an error")

@@ -31,12 +31,14 @@ export function createCardPreviewCache(storage?: CardPreviewStorage, limits = de
       if (!entry || Date.now() - entry.at > lifetime) return;
       return { ...entry, fresh: entry.generation === generation && Date.now() - entry.at < 60_000 };
     },
-    put(key: string, preview: QueryPreview, expectedGeneration = generation) {
+    // at is when the cover's data was computed: a stale answer from the
+    // server's result cache keeps its age, so the next page asks again.
+    put(key: string, preview: QueryPreview, expectedGeneration = generation, at = Date.now()) {
       // A refresh that started before invalidation cannot make an old result fresh.
       if ((entries.get(key)?.generation ?? -1) > expectedGeneration) return;
-      const { refreshing: _refreshing, refreshError: _error, updatedAt: _at, ...cover } = preview;
+      const { refreshing: _refreshing, refreshError: _error, updatedAt: _at, served: _served, ...cover } = preview;
       entries.delete(key);
-      entries.set(key, { key, at: Date.now(), preview: cover, generation: expectedGeneration });
+      entries.set(key, { key, at: Math.min(at, Date.now()), preview: cover, generation: expectedGeneration });
     },
     invalidate() { generation++; },
     generation: () => generation,

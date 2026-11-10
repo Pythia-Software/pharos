@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
@@ -29,6 +28,18 @@ type FileHistoryOptions struct {
 	Limit   int
 }
 
+// fileHistoryFiles bounds the files one path names.
+var fileHistoryFiles = 50
+
+// fileHistoryKeys are what a query names, in the project when one is given.
+type fileHistoryKeys struct {
+	Keys []string
+	// Truncated is set when more files matched than fileHistoryFiles.
+	Truncated bool
+	// Elsewhere is set when the project hid every file the path names.
+	Elsewhere bool
+}
+
 // FileHistory finds the files Path names and returns each one's timeline,
 // newest first.
 func (c *Catalog) FileHistory(ctx context.Context, options FileHistoryOptions) (map[string]any, error) {
@@ -40,118 +51,182 @@ func (c *Catalog) FileHistory(ctx context.Context, options FileHistoryOptions) (
 	if limit <= 0 || limit > fileHistoryLimit {
 		limit = fileHistoryLimit
 	}
-	keys, err := c.fileHistoryKeys(ctx, query)
+	found, err := c.findFileHistoryKeys(ctx, query, options.Project)
 	if err != nil {
 		return nil, err
 	}
 	files := []map[string]any{}
-	for _, key := range keys {
-		if options.Project != "" {
-			// The project filter takes what every project filter takes: a
-			// name, a remote, a folder key or path (projectPredicate).
-			in, err := queryMapsContext(ctx, c.reader(), `SELECT 1 FROM session_files sf JOIN workspaces w ON w.id=sf.workspace_id`+projectJoin("w")+`
-				WHERE sf.file_key=? AND `+projectPredicate("w")+` LIMIT 1`, append([]any{key}, projectArgs(options.Project)...)...)
-			if err != nil {
-				return nil, err
-			}
-			if len(in) == 0 {
-				continue
-			}
-		}
+	for _, key := range found.Keys {
 		file, err := c.fileTimeline(ctx, key, limit)
 		if err != nil {
 			return nil, err
 		}
 		files = append(files, file)
 	}
-	return map[string]any{"path": query, "files": files, "note": fileHistoryNote(files)}, nil
+	return map[string]any{"path": query, "files": files, "files_truncated": found.Truncated, "note": fileHistoryNote(files, found, options.Project)}, nil
 }
 
 // fileHistoryNote says what the timeline covers, for a person or an agent
-// reading an empty or Git-less answer.
-func fileHistoryNote(files []map[string]any) string {
-	if len(files) == 0 {
-		return "No session in this library edited a file at this path. File history lists files sessions edited through their tool calls; try a repository-relative path, a folder path, or Library file search."
+// reading an empty, cut or Git-less answer.
+func fileHistoryNote(files []map[string]any, found fileHistoryKeys, project string) string {
+	if found.Elsewhere {
+		return fmt.Sprintf("No workspace in %s edited a file at this path, but workspaces in other projects did. Clear the project to see them.", project)
 	}
-	return "Sessions are those that edited the file through their tool calls, newest first. Commits are listed where local Git checked the repository, from git.commits_since: Git is read from the repository's first session edit, so earlier commits are not listed."
+	if len(files) == 0 {
+		return "No workspace in this library edited a file at this path. File history lists files that agents edited through their tool calls; try a repository-relative path, a folder path, or Library file search."
+	}
+	note := "Workspaces are those whose agents edited the file through their tool calls, newest first. Commits are listed where local Git checked the repository, from git.commits_since: Git is read from the repository's first recorded edit, so earlier commits are not listed."
+	if found.Truncated {
+		note = fmt.Sprintf("More than %d files match this path; the first %d by path are shown. Give a longer path or a project to narrow it. ", fileHistoryFiles, fileHistoryFiles) + note
+	}
+	return note
 }
 
 // fileFilterSQL matches workspace w when it changed a file whose path
 // contains the pattern's text: a change set's file (change_files), or a file
 // a session edited through its tool calls (session_files), which every
-// harness with file tools records. Use fileFilterArgs for its arguments.
+// harness with file tools records. A session's file matches by its path in
+// its repository, or a folder file by its ~ path or absolute path; never by
+// the rest of its key, whose repository: and path: prefixes and repository
+// ID every file would share. An absolute path also matches a repository file
+// at that path in a checkout Pharos knows (fileFilterArgs resolves it). Use
+// fileFilterArgs for its arguments.
 func fileFilterSQL(w string) string {
 	return `(EXISTS(SELECT 1 FROM change_sets cs JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=` + w + `.id AND cf.path LIKE ?)
-		OR EXISTS(SELECT 1 FROM session_files sf WHERE sf.workspace_id=` + w + `.id AND (sf.path LIKE ? OR sf.file_key LIKE ?)))`
+		OR EXISTS(SELECT 1 FROM session_files sf WHERE sf.workspace_id=` + w + `.id AND (sf.path LIKE ?
+			OR substr(sf.file_key,1,5)='path:' AND substr(sf.file_key,6) LIKE ?
+			OR sf.repository_id IS NOT NULL AND EXISTS(SELECT 1 FROM json_each(?) j
+				WHERE json_extract(j.value,'$.repository')=sf.repository_id AND sf.path LIKE json_extract(j.value,'$.path')))))`
+}
+
+// fileFilterRoots are the checkouts fileFilterArgs resolves a file filter
+// against: every repository's, for an absolute (or ~) path, else none.
+func fileFilterRoots(ctx context.Context, q queryer, file string) ([]projectRoot, error) {
+	if folderKey(file) == "" || strings.Contains(file, "%") {
+		return nil, nil
+	}
+	return projectRoots(ctx, q)
 }
 
 // fileFilterArgs are fileFilterSQL's arguments for a file filter: text a
-// path contains, or a LIKE pattern when it has %.
-func fileFilterArgs(file string) []any {
+// path contains, or a LIKE pattern when it has %. An absolute path inside a
+// checkout in roots (fileFilterRoots) is also the repository's files at or
+// below its path in the repository, as session_files records them.
+func fileFilterArgs(file string, roots []projectRoot) []any {
 	pattern := file
 	if !strings.Contains(pattern, "%") {
 		pattern = "%" + pattern + "%"
 	}
-	return []any{pattern, pattern, pattern}
+	checkouts := []map[string]string{}
+	if key := folderKey(file); key != "" && !strings.Contains(file, "%") {
+		for _, root := range roots {
+			if key == root.folder {
+				checkouts = append(checkouts, map[string]string{"repository": root.repository, "path": "%"})
+			} else if rest, ok := strings.CutPrefix(key, strings.TrimSuffix(root.folder, "/")+"/"); ok {
+				checkouts = append(checkouts, map[string]string{"repository": root.repository, "path": rest + "%"})
+			}
+		}
+	}
+	return []any{pattern, pattern, pattern, jsonText(checkouts)}
 }
 
-// fileHistoryKeys are the session_files keys a query names: an exact path,
-// a path ending in it, a folder path, or an absolute path sessions edited in
-// a repository checkout.
-func (c *Catalog) fileHistoryKeys(ctx context.Context, query string) ([]string, error) {
+// findFileHistoryKeys finds the session_files keys a query names. An exact
+// match wins: the path itself, a folder path (~/… or absolute), or an
+// absolute path in a checkout this Mac recorded, which maps to its
+// repository file. Only when nothing matches exactly does a path ending
+// match, so src/index.ts names that file before every packages/*/src/index.ts.
+// The project narrows the match before it is bounded.
+func (c *Catalog) findFileHistoryKeys(ctx context.Context, query, project string) (fileHistoryKeys, error) {
 	clean := filepath.ToSlash(query)
-	candidates := []any{clean}
-	if folder := folderKey(clean); folder != "" {
-		candidates = append(candidates, folder)
+	absolute := ""
+	if expanded := expandHome(query); filepath.IsAbs(expanded) {
+		absolute = filepath.ToSlash(filepath.Clean(expanded))
 	}
-	rows, err := queryMapsContext(ctx, c.reader(), `SELECT DISTINCT file_key FROM session_files
-		WHERE file_key=? OR path IN (SELECT value FROM json_each(?)) OR substr(path,-length(?)-1)='/'||?
-		ORDER BY file_key LIMIT 50`, "path:"+query, jsonText(candidates), clean, clean)
+	keys := []any{"path:" + query}
+	paths := []any{clean}
+	if absolute != "" {
+		keys = append(keys, "path:"+absolute)
+		repositoryKeys, err := c.checkoutFileKeys(ctx, absolute)
+		if err != nil {
+			return fileHistoryKeys{}, err
+		}
+		keys = append(keys, repositoryKeys...)
+	}
+	if folder := folderKey(clean); folder != "" {
+		paths = append(paths, folder)
+	}
+	exact := `(sf.file_key IN (SELECT value FROM json_each(?)) OR sf.path IN (SELECT value FROM json_each(?)))`
+	ending := `substr(sf.path,-length(?)-1)='/'||?`
+	match := func(where string, project string, args ...any) (fileHistoryKeys, error) {
+		statement := `SELECT DISTINCT sf.file_key FROM session_files sf`
+		if project != "" {
+			statement += ` JOIN workspaces w ON w.id=sf.workspace_id`
+			where += ` AND ` + projectPredicate("w")
+			args = append(args, projectArgs(project)...)
+		}
+		rows, err := queryMapsContext(ctx, c.reader(), statement+` WHERE `+where+` AND sf.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
+			ORDER BY sf.file_key LIMIT ?`, append(args, fileHistoryFiles+1)...)
+		if err != nil {
+			return fileHistoryKeys{}, err
+		}
+		found := fileHistoryKeys{Keys: []string{}, Truncated: len(rows) > fileHistoryFiles}
+		for _, row := range rows[:min(len(rows), fileHistoryFiles)] {
+			found.Keys = append(found.Keys, firstString(row["file_key"]))
+		}
+		return found, nil
+	}
+	find := func(project string) (fileHistoryKeys, error) {
+		found, err := match(exact, project, jsonText(keys), jsonText(paths))
+		if err != nil || len(found.Keys) > 0 || absolute != "" || strings.HasPrefix(clean, "~") {
+			return found, err
+		}
+		return match(ending, project, clean, clean)
+	}
+	found, err := find(project)
+	if err != nil || len(found.Keys) > 0 || project == "" {
+		return found, err
+	}
+	// Nothing in the project: say whether the path is edited elsewhere, so
+	// an empty answer is not read as a file nobody edited.
+	anywhere, err := find("")
+	found.Elsewhere = len(anywhere.Keys) > 0
+	return found, err
+}
+
+// checkoutFileKeys maps an absolute path to the repository file it is in a
+// checkout this Mac recorded: a repository's known location, or the location
+// of a workspace in it, as tool call paths are resolved (resolveAbsolutePath).
+// The checkout need not be one a session edited in.
+func (c *Catalog) checkoutFileKeys(ctx context.Context, absolute string) ([]any, error) {
+	roots, err := toolRepositoryLocations(c.reader())
 	if err != nil {
 		return nil, err
 	}
-	keys := []string{}
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT DISTINCT l.location,r.display_name,r.id FROM (
+			SELECT id workspace_id,location FROM workspaces WHERE COALESCE(location,'')<>''
+			UNION SELECT workspace_id,location FROM workspace_sightings WHERE host_id=? AND COALESCE(location,'')<>'') l
+		JOIN workspaces w ON w.id=l.workspace_id JOIN repositories r ON r.id=w.repository_id`, currentHost().ID)
+	if err != nil {
+		return nil, err
+	}
 	for _, row := range rows {
-		keys = append(keys, firstString(row["file_key"]))
+		roots = append(roots, repoRoot{firstString(row["location"]), firstString(row["display_name"]), firstString(row["id"])})
 	}
-	if filepath.IsAbs(query) {
-		// An absolute path is a repository file at its path in a checkout a
-		// session edited in. Any of the session's edits in the checkout
-		// places it, so a patch's other files, which only session_files
-		// records, are found too.
-		absolute := filepath.ToSlash(filepath.Clean(query))
-		splits := []map[string]string{}
-		for dir := filepath.ToSlash(filepath.Dir(absolute)); ; dir = filepath.ToSlash(filepath.Dir(dir)) {
-			root := strings.TrimSuffix(dir, "/") + "/"
-			splits = append(splits, map[string]string{"root": root, "path": strings.TrimPrefix(absolute, root)})
-			if dir == "/" || dir == "." {
-				break
-			}
-		}
-		rows, err := queryMapsContext(ctx, c.reader(), `SELECT DISTINCT sf.file_key FROM json_each(?) s
-			JOIN session_files sf ON sf.path=json_extract(s.value,'$.path') AND sf.repository_id IS NOT NULL
-			WHERE EXISTS(SELECT 1 FROM tool_calls t WHERE t.workspace_id=sf.workspace_id AND t.path_repository_id=sf.repository_id
-				AND t.tool_category='edit' AND t.path_absolute=json_extract(s.value,'$.root')||t.repo_path)
-			LIMIT 50`, jsonText(splits))
-		if err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			if key := firstString(row["file_key"]); !slices.Contains(keys, key) {
-				keys = append(keys, key)
-			}
-		}
+	rel, repository, scope := resolveAbsolutePath(absolute, roots)
+	if scope != "repo" || repository.ID == "" || rel == "" || rel == "." {
+		return nil, nil
 	}
-	return keys, nil
+	return []any{"repository:" + repository.ID + ":" + rel}, nil
 }
 
 // firstEditCallSQL selects fields of the call where a session first edited
-// the session_files row sf: its first edit call that recorded the file as
-// its own or, for a patch's other files, which only session_files records,
-// its edit call at the file's first edit.
+// the session_files row sf: its first successful edit call that recorded the
+// file as its own or, for a patch's other files, which only session_files
+// records, its edit call at the file's first edit. session_files counts only
+// successful edits, so a failed call is never the first edit.
 func firstEditCallSQL(sf, fields string) string {
 	return `COALESCE((SELECT ` + fields + ` FROM tool_calls t
-			WHERE t.workspace_id=` + sf + `.workspace_id AND t.tool_category='edit'
+			WHERE t.workspace_id=` + sf + `.workspace_id AND t.tool_category='edit' AND t.status='ok'
 			AND (` + sf + `.repository_id IS NOT NULL AND t.path_repository_id=` + sf + `.repository_id AND t.repo_path=` + sf + `.path
 				OR ` + sf + `.repository_id IS NULL AND 'path:'||t.path_absolute=` + sf + `.file_key)
 			ORDER BY COALESCE(t.started_at,''),t.sequence LIMIT 1),

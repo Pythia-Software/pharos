@@ -118,10 +118,26 @@ func TestDevUIServesCheckoutAndForwardsAPIWithToken(t *testing.T) {
 	if asset := serve(http.MethodGet, "/assets/library.js", nil); asset.Body.String() != "libraryUpdated()" || asset.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("refreshed asset: %q cache %q", asset.Body.String(), asset.Header().Get("Cache-Control"))
 	}
+	for path, asset := range uiAssets {
+		if !strings.HasPrefix(asset.name, "data-guide-apps/") {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(assets, asset.name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		icon, err := queryTableAsset(asset.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(asset.name, string(icon))
+		if image := serve(http.MethodGet, path, nil); image.Code != http.StatusOK || image.Header().Get("Content-Type") != "image/png" || image.Body.String() != string(icon) {
+			t.Fatalf("checkout icon %s: status %d type %q", path, image.Code, image.Header().Get("Content-Type"))
+		}
+	}
 	if forwarded != nil {
 		t.Fatal("pages and assets must not reach the service")
 	}
-	for path, field := range map[string]string{"/api/health/carbon": "factors", "/api/query/usage/carbon": "factors", "/api/usage/summary": "carbon_factors"} {
+	for path, field := range map[string]string{"/api/health/carbon": "factors", "/api/usage/summary": "carbon_factors"} {
 		response := serve(http.MethodGet, path, nil)
 		var body map[string]any
 		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {

@@ -132,7 +132,9 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 	reason := "after the last index"
 	// The one-time backfill at startup is a Git lookup; after a legacy source
 	// sync it is the Git, tools and findings refresh (§3.3).
-	spec := OperationSpec{Kind: "analysis.refresh", Trigger: triggerChained}
+	// It follows a sync someone started (syncSources): their action, which
+	// makes its population requests explicit (workCallerExplicit).
+	spec := OperationSpec{Kind: "analysis.refresh", Trigger: triggerUser}
 	if backfill {
 		reason = "first scan of this catalog"
 		spec = OperationSpec{Kind: "analysis.git", Variant: "backfill", Trigger: triggerStartup}
@@ -145,9 +147,25 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		defer func() { meter.release(ctx.Err() == nil) }()
 		ctx = withWorkProgress(ctx, meter.report)
 		meter.report(activityWork{Phase: "waiting for Git refresh"})
+		if s.work != nil && !backfill {
+			// Population execution: Git, tools and findings are the runner's
+			// coarse executions; this operation only asks for them.
+			meter.report(activityWork{Phase: "waiting for analyses"})
+			failure := s.work.refreshAnalysesWork(ctx)
+			meter.finish(ctx.Err() == nil)
+			return failure
+		}
 		refresh, name := s.Catalog.refreshMainIntegrations, "refresh"
 		if backfill {
 			refresh, name = s.Catalog.backfillMainIntegrations, "backfill"
+		}
+		if s.work != nil {
+			// The one-time backfill has no pending ledger to page; it runs
+			// once under an admitted allocation.
+			inner := refresh
+			refresh = func(ctx context.Context) error {
+				return s.work.call(ctx, 1, func(ctx context.Context, _ workAllocation) error { return inner(ctx) })
+			}
 		}
 		failure := refresh(ctx)
 		if failure != nil && ctx.Err() == nil {
@@ -159,7 +177,7 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		}
 		meter.model = "analysis-v1:tools"
 		meter.report(activityWork{Phase: "refreshing tools"})
-		// Rebuild the Tools rollup now rather than on the next page view.
+		// Rebuild tool summaries now rather than on the next page view.
 		if err := s.Catalog.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
 			failure = errors.Join(failure, err)
@@ -392,10 +410,10 @@ func (s *Server) libraryActivitiesProbing(probeLocks bool) []libraryActivity {
 		}
 	}
 	if tools := s.Catalog.toolLedgerProgress(); tools.running && !s.Catalog.upgradeRunning() {
-		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Building the Tools ledger",
-			ID: "tools", Work: &activityWork{Phase: "Building the Tools ledger", Unit: "conversation", Done: float64(tools.done), Total: float64(tools.total)},
+		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Building the tool index",
+			ID: "tools", Work: &activityWork{Phase: "Building the tool index", Unit: "conversation", Done: float64(tools.done), Total: float64(tools.total)},
 			Detail: fmt.Sprintf("%d of %d conversations", tools.done, tools.total), Progress: fraction(float64(tools.done), float64(tools.total)),
-			Writes: true, OnEject: "Stops between conversations; building the ledger again resumes it."})
+			Writes: true, OnEject: "Stops between conversations; building the tool index again resumes it."})
 	}
 	// Coordinated analyses report through their run's step progress. Keep
 	// standalone analyses visible when no run is reporting that work.

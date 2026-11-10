@@ -14,6 +14,121 @@ const { pharosSync, document: syncDocument } = loadClassicScript("sync.js", { Da
 
 const run = (id, state, conversations = 0, workspaces = conversations) => ({ id, kind: "automatic-sync", state, phase: "checking", conversations, workspaces });
 
+test('issue diagnostics copy stays focusable, runs once while pending and settles before reporting', async () => {
+  const elements = root => [root, ...(root.children || []).flatMap(elements)];
+  for (const outcome of ['native', 'native-failure', 'browser-denial']) {
+    const dashboard=syncDocument.createElement('div'),body=syncDocument.createElement('body');
+    dashboard.prepend=(...nodes)=>dashboard.children.unshift(...nodes);
+    const transfers=[],writes=[];let browserCalls=0,refreshes=0;
+    const transfer=()=>{const pending=Promise.withResolvers();transfers.push(pending);return pending.promise;};
+    const details={id:'issue',source_name:'codex',unit:'/Volumes/My drive/資料\nfile'};
+    loadClassicScript('sync.js', {
+      document:{...syncDocument,body,getElementById:id=>id==='syncDashboard'?dashboard:null,createElement:tag=>{
+        const element=syncDocument.createElement(tag),attributes=new Map();element.showModal=()=>{};
+        Object.assign(element,{setAttribute:(name,value)=>attributes.set(name,String(value)),getAttribute:name=>attributes.get(name)??null,removeAttribute:name=>attributes.delete(name)});
+        return element;
+      }},
+      ...(outcome==='browser-denial'?{}:{webkit:{messageHandlers:{pharosClipboard:{postMessage:text=>{writes.push(text);return transfer();}}}}}),
+      navigator:{clipboard:{writeText:()=>{browserCalls++;return outcome==='browser-denial'?transfer():Promise.reject(Error('Browser denied'));}}},
+      fetch:async path=>{if(path==='/api/sync/status')refreshes++;return {ok:true,json:async()=>path==='/api/sync/status'?{settings:{},issues:[details]}:path==='/api/sync/issues'?{issues:[details]}:{runs:[]}};},
+    });
+    await new Promise(resolve=>setImmediate(resolve));
+    await elements(dashboard).find(el=>el.textContent==='View details / copy diagnostics').onclick();
+    const dialog=body.children.find(el=>el.tagName==='DIALOG');
+    const copy=elements(dialog).find(el=>el.textContent==='Copy diagnostics');
+    const status=dialog.children.find(el=>el.tagName==='P');
+    const settledRefreshes=refreshes;
+    // The first attempt settles with the outcome; a retry then succeeds.
+    for (const succeed of outcome==='native'?[true]:[false,true]) {
+      status.textContent='Previous outcome';
+      const pending=copy.onclick();
+      // Native disabled would drop keyboard focus; the pending control stays enabled.
+      assert.ok(!copy.disabled);assert.equal(copy.getAttribute('aria-disabled'),'true');assert.equal(status.textContent,'');
+      await copy.onclick();await copy.onclick();
+      assert.equal(transfers.length,succeed&&outcome!=='native'?2:1,'repeat presses while pending do not start another write');
+      const settle=transfers.at(-1);if(succeed)settle.resolve(true);else settle.reject(Error('Copy denied'));
+      await pending;
+      assert.equal(copy.getAttribute('aria-disabled'),null);
+      assert.match(status.textContent,succeed?/copied/i:/could not copy/i);
+    }
+    const attempts=outcome==='native'?1:2;
+    assert.deepEqual(writes,outcome==='browser-denial'?[]:Array(attempts).fill(JSON.stringify(details,null,2)));
+    assert.equal(browserCalls,outcome==='browser-denial'?attempts:0);
+    assert.equal(refreshes,settledRefreshes,'copying does not refresh the dashboard');
+  }
+});
+
+test("verification summaries distinguish selective repairs from unresolved checks", () => {
+  assert.equal(pharosSync.verificationSummary(null), "");
+  const verification = { checked: 5, passed: 2, reindexed: 1, mismatch: 1, deferred: 1, errors: 1 };
+  const summary = pharosSync.verificationSummary({ state: "complete", verification });
+  for (const text of ["5 inputs checked", "2 passed", "1 reindexed", "1 still mismatch", "1 deferred", "1 errors"]) assert.ok(summary.includes(text));
+  assert.match(pharosSync.verificationSummary({ state: "interrupted", verification }), /stopped/);
+  assert.match(pharosSync.verificationSummary({ state: "running", verification }), /in progress/);
+});
+
+test("mismatch actions request full verification in the selected source scope", async () => {
+  const dashboard = syncDocument.createElement("div");
+  dashboard.prepend = (...nodes) => dashboard.children.unshift(...nodes);
+  const posts = [];
+  const script = loadClassicScript("sync.js", {
+    document: { ...syncDocument, getElementById: id => id === "syncDashboard" ? dashboard : null },
+    fetch: async (path, options) => {
+      if (options?.method === "POST") posts.push({ path, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => path === "/api/sync/status" ? { settings: {}, issues: [{ id: "old-alert", source_name: "codex", unit: "rollout" }] } : { runs: [], issues: [] } };
+    },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  const elements = root => [root, ...(root.children || []).flatMap(elements)];
+  for (const [label, repair] of [["Verify this source again", false], ["Verify & repair this source", true]]) {
+    const button = elements(dashboard).find(el => el.tagName === "BUTTON" && el.textContent === label);
+    assert.ok(button, label);
+    await button.onclick();
+    assert.deepEqual(posts.at(-1), { path: "/api/sync/verify", body: { all: true, repair, sources: ["codex"] } });
+  }
+  const button = elements(dashboard).find(el => el.tagName === "BUTTON" && el.textContent === "Verify all & repair mismatches");
+  assert.ok(button);
+  await button.onclick();
+  assert.deepEqual(posts.at(-1), { path: "/api/sync/verify", body: { all: true, repair: true } });
+  assert.equal(script.window.pharosSync.status().issues.length, 1);
+});
+
+test("maintenance actions yield scheduled work, while diagnostics remain available during foreground work", async () => {
+  const elements = root => [root, ...(root.children || []).flatMap(elements)];
+  for (const state of [
+    { busy: false },
+    { busy: true, maintenance_busy: false },
+    { busy: true, maintenance_busy: true },
+    { busy: true }, // Compatibility with services that only expose busy.
+  ]) {
+    const dashboard = syncDocument.createElement("div"), body = syncDocument.createElement("body");
+    dashboard.prepend = (...nodes) => dashboard.children.unshift(...nodes);
+    let detailsReads = 0;
+    const issue = { id: "mismatch", source_name: "claude", unit: "session.jsonl" };
+    loadClassicScript("sync.js", {
+      document: { ...syncDocument, body, getElementById: id => id === "syncDashboard" ? dashboard : null,
+        createElement: tag => Object.assign(syncDocument.createElement(tag), { showModal() {} }) },
+      fetch: async path => ({ ok: true, json: async () => {
+        if (path === "/api/sync/status") return { ...state, settings: {}, issues: [issue],
+          source_states: [{ source_name: "claude", preservation: { pending_newer_inputs: true } }],
+          recovery_jobs: [{ mode: "full", state: "interrupted", id: "repair" }] };
+        if (path === "/api/sync/issues") { detailsReads++; return { issues: [issue] }; }
+        return { runs: [] };
+      } }),
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    const disabled = state.maintenance_busy ?? state.busy;
+    const buttons = elements(dashboard).filter(el => el.tagName === "BUTTON");
+    for (const button of buttons) {
+      assert.equal(Boolean(button.disabled), button.textContent === "View details / copy diagnostics" ? false : disabled, `${JSON.stringify(state)}: ${button.textContent}`);
+    }
+    const before = detailsReads;
+    await buttons.find(el => el.textContent === "View details / copy diagnostics").onclick();
+    assert.ok(detailsReads > before);
+    assert.ok(body.children.some(el => el.tagName === "DIALOG"));
+  }
+});
+
 test("empty pages distinguish source setup, idle sources and a running sync", () => {
   const message = status => emptyLibraryState(status)?.message ?? null;
   assert.equal(emptyLibraryState(null), null);
@@ -248,6 +363,12 @@ test('diagnostic queries preserve separate numeric distributions and incomplete 
   assert.equal(new Set(tables.coverage.rows.map(row => row.id)).size, 2);
   assert.equal(tables.deferred.rows[0].completed_at, null);
   for (const table of Object.values(syncTables({}))) assert.deepEqual(table.rows, []);
+  // CPU and RSS this platform could not read arrive as null: missing, while
+  // a measured zero stays a zero.
+  const unmeasured = syncTables({ history: [{ run_id: 'a', seconds: 2, cpu_seconds: null, cpu_percent_one_core: null, rss_observed_peak_bytes: null, rss_baseline_bytes: 0 }],
+    statistics: { changes: { samples: 1, elapsed_seconds: { median: 2, p95: 2, last: 2 }, cpu_seconds: null, rss_observed_peak_bytes: null, estimated_cpu_duty_percent_one_core: null } } });
+  assert.deepEqual([unmeasured.history.rows[0].cpu_seconds, unmeasured.history.rows[0].cpu_percent_one_core, unmeasured.history.rows[0].rss_observed_peak_bytes, unmeasured.history.rows[0].rss_baseline_bytes], [null, null, null, 0]);
+  assert.deepEqual([unmeasured.costs.rows[0].cpu_median, unmeasured.costs.rows[0].ram_last, unmeasured.costs.rows[0].cpu_duty, unmeasured.costs.rows[0].elapsed_median], [null, null, null, 2]);
 });
 
 test('run detail queries distinguish unknown work totals and forecasts from measured zeroes', () => {

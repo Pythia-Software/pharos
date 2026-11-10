@@ -17,6 +17,8 @@ tests.
 | [machine-time-all-time-cpu.md](machine-time-all-time-cpu.md) | Machine Time's all-time view may take twice the CPU the legacy route did; confirm or fix |
 | [usage-v3-hour-grouping.md](usage-v3-hour-grouping.md) | `/query-v3` groups usage by `hour` over daily records, where it is null; only `/metrics` reads the hourly ledger |
 | [query-table-schema-reload.md](query-table-schema-reload.md) | Every staged Query Table request makes its connection re-parse the whole catalog schema twice, adding about 6 ms of CPU |
+| [query-table-redundant-tooltips.md](query-table-redundant-tooltips.md) | Native table cells, JSON previews and grouped-column labels repeat visible content on hover; requires an upstream release |
+| [query-table-log-axes.md](query-table-log-axes.md) | Native log axes give the smallest bar zero length and unround ticks, and histograms bin evenly, so long-tailed histograms cannot take a log axis; requires an upstream release |
 
 ## Analysis chain cost
 
@@ -50,6 +52,15 @@ shipped as #271–#273.
 
 ## Upstream Query Table
 
+[`query-table-rate-intervals.md`](query-table-rate-intervals.md) (open, against
+1.0.0): intervals for ratio metrics (Wilson for shares, Poisson for rates) in
+the result and the charts, so the Agent Events dashboard can show how far a
+small group's value could move.
+
+[`query-table-tuple-colors.md`](query-table-tuple-colors.md) (open, against
+1.0.0): colour a grouped bar by one of its keys, so a kind of agent event keeps
+its palette colour on every repository's bar.
+
 Pharos uses the published Query Table module and packages without patches.
 Query Table 0.9.7 delivered every request in
 [`query-table-after-0.9.6.md`](query-table-after-0.9.6.md): chart labels,
@@ -76,6 +87,12 @@ That handoff superseded the requests in
 [`usage-query-upstream-handoff.md`](../usage-query-upstream-handoff.md).
 Each is marked with the release that resolved it and remains the detailed
 record of its request.
+
+[`query-table-row-pipeline-cost.md`](query-table-row-pipeline-cost.md) is
+open: a V3 metric over a large SQL source spends most of its time copying
+rows through one materialized validation stage per field. On 1.5 million
+rows the compiled request takes 8.5 s where the same aggregate written by
+hand takes 2.4 s. It can be sent directly to the Query Table team.
 
 [`query-table-go-link-codec.md`](query-table-go-link-codec.md) asked for Go
 `EncodeQueryLink` and `DecodeQueryLink`, at parity with `encodeQuery` and

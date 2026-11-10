@@ -17,6 +17,8 @@ import { defaultApi } from "./fixtures.mjs";
 
 export const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const assetRoot = join(repo, "internal", "archive", "assets");
+// The standalone feedback inbox: its own page and built bundle, no Pharos shell.
+const inboxRoot = join(repo, "internal", "uifeedback", "assets");
 
 // The page shell, extracted once per process the way assets.go does.
 const source = readFileSync(join(assetRoot, "ui.py"), "utf8");
@@ -31,15 +33,13 @@ function applicationHTML() {
     .replace("</body>", `${asset("application.html")}</body>`);
 }
 
-// Every file under assets/, by path, read once per process.
+// Every file under an asset root, by path, read once per process.
 const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".md": "text/markdown; charset=utf-8" };
 const assetCache = new Map();
-function asset(path) {
-  if (!assetCache.has(path)) {
-    const file = normalize(join(assetRoot, path));
-    assetCache.set(path, file.startsWith(assetRoot + sep) && existsSync(file) ? readFileSync(file) : null);
-  }
-  return assetCache.get(path);
+function asset(path, root = assetRoot) {
+  const file = normalize(join(root, path));
+  if (!assetCache.has(file)) assetCache.set(file, file.startsWith(root + sep) && existsSync(file) ? readFileSync(file) : null);
+  return assetCache.get(file);
 }
 
 // Every browser test skips, with the install hint, when the engine cannot run.
@@ -84,15 +84,19 @@ function serve(routes, state, record) {
       return response.end(`window.pharosPreferenceValues=${JSON.stringify(state.preferences)};window.pharosPreviewScope="browser-fixture";`);
     }
     if (path.startsWith("/assets/")) {
-      const body = asset(path.slice("/assets/".length));
+      const body = asset(path.slice("/assets/".length), state.inbox ? inboxRoot : assetRoot);
       if (!body) return json(response, 404, { error: "no such asset" });
       response.writeHead(200, { "Content-Type": types[extname(path)] ?? "application/octet-stream" });
       return response.end(body);
     }
     if (!path.startsWith("/api/")) {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      if (state.inbox) return response.end(asset("index.html", inboxRoot));
       if (path === "/app") return response.end(applicationHTML());
       let page = state.concurrency ? html.replace("<html", "<html data-concurrency-prototype") : html;
+      // A stand-in for the Mac app's native handlers, installed before any page script.
+      if (state.nativeHost) page = page.replace('<head>', '<head><script>'+state.nativeHost+'</script>');
+      if (state.managedSession) page = page.replace('<head>', '<head><script>window.pharosManagedSession='+JSON.stringify(state.managedSession).replace(/</g, '\\u003c')+';</script>');
       if (state.managedLibrary) {
         page = page.replace('<head>', '<head><script>window.pharosManagedLibrary='+JSON.stringify(state.managedLibrary).replace(/</g, '\\u003c')+';</script>')
           .replace('<div id="settingsContent" class="settings-content">', '<div id="settingsContent" class="settings-content">'+asset('managed-library.html'))
@@ -144,16 +148,18 @@ let shotCount = 0;
 //                { "GET /api/x/:id": body | ({ params, query, body, state }) => body }
 //   concurrency  enable the captured timing snapshot, as the dev UI does
 //   preferences  library preferences served at /assets/preferences.js
+//   inbox        serve the standalone feedback inbox (internal/uifeedback/assets)
+//                instead of the Pharos shell; only `api` stubs answer
 // Returns the page, `settled`, `shot(name)` (a screenshot, only when
 // PHAROS_UI_SCREENSHOTS is set), `problems()` (what will fail the test when
 // it ends), the API `calls` made so far, and `push(path, document)`, which
 // sends an event on the open event streams of path (see eventStream in
 // fixtures.mjs).
-export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, concurrency = false, managedLibrary = null, ready } = {}) {
-  const state = { concurrency, managedLibrary, preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [], streams: {} };
+export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, concurrency = false, managedLibrary = null, managedSession = null, inbox = false, nativeHost = "", ready } = {}) {
+  const state = { concurrency, managedLibrary, managedSession, inbox, nativeHost, preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [], streams: {} };
   const errors = [], failed = [], calls = [], inflight = new Set();
   let wake = () => {};
-  const routes = [...routeTable(api), ...routeTable(defaultApi)];
+  const routes = [...routeTable(api), ...(inbox ? [] : routeTable(defaultApi))];
   const server = serve(routes, state, call => calls.push(call));
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;

@@ -3,14 +3,20 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
+
+// Tests replace the backup source's shared lock to exercise adapter failures.
+// A copied library's lease goes through fileLease instead.
+var lockRecoverySource = filelock.Lock
 
 // RecoverLibrary publishes a separate, inactive candidate. It never writes
 // backup payloads or reuses their writable-instance identity. A
@@ -80,14 +86,18 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 		}
 		lock, err = os.OpenFile(filepath.Join(backup, backupLockName), os.O_RDONLY|os.O_CREATE, 0o600)
 		if err == nil {
-			err = syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+			err = lockRecoverySource(lock, filelock.Shared, filelock.Try)
 		}
 	}
 	if lock != nil {
 		defer lock.Close()
 	}
 	if err != nil {
-		return Config{}, fmt.Errorf("cannot lock recovery source; wait for active operations: %w", err)
+		// Only another holder is an active operation worth waiting for.
+		if errors.Is(err, filelock.ErrContended) {
+			return Config{}, fmt.Errorf("cannot lock recovery source; wait for active operations: %w", err)
+		}
+		return Config{}, fmt.Errorf("cannot open or lock recovery source %s: %w", backup, err)
 	}
 	if manifest.Version != backupManifestVersion || !manifest.Complete || len(manifest.Missing) > 0 || manifest.Catalog == nil {
 		return Config{}, fmt.Errorf("recovery requires a complete, supported backup; this backup is partial or unfinished")
@@ -296,7 +306,7 @@ func syncDirectory(path string) error {
 		return err
 	}
 	defer f.Close()
-	return f.Sync()
+	return syncToDrive(f)
 }
 
 // Every manifest reference is part of the recovery contract, including old

@@ -1,0 +1,465 @@
+{
+  "name": "pharos_compactions",
+  "version": 1,
+  "idField": "id",
+  "defaultLimit": 50,
+  "defaultSort": [
+    {
+      "field": "occurred_at",
+      "dir": "desc"
+    }
+  ],
+  "tiebreakSort": [
+    {
+      "field": "id",
+      "dir": "desc"
+    }
+  ],
+  "defaultSelect": [
+    {
+      "field": "occurred_at"
+    },
+    {
+      "field": "trigger"
+    },
+    {
+      "field": "trigger_evidence"
+    },
+    {
+      "field": "provider"
+    },
+    {
+      "field": "harness"
+    },
+    {
+      "field": "model"
+    },
+    {
+      "field": "repository_name"
+    }
+  ],
+  "fields": [
+    {"name":"agent_session_id","label":"Agent session ID","type":"text","group":"Context","select":{"default":false},"aggregate":{"groupable":true},"bindings":{"sqlite":{"expr":"r.\"agent_session_id\""}},"description":"Recorded owner of this message or ledger record; ambiguous ownership is missing."},
+    {
+      "name": "id",
+      "label": "Id",
+      "type": "text",
+      "group": "Evidence",
+      "bindings": {
+        "postgres": {
+          "expr": "id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "message_id",
+      "label": "Message id",
+      "type": "text",
+      "group": "Evidence",
+      "bindings": {
+        "postgres": {
+          "expr": "message_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"message_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "conversation_id",
+      "label": "Conversation id",
+      "type": "text",
+      "group": "Evidence",
+      "bindings": {
+        "postgres": {
+          "expr": "conversation_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"conversation_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "workspace_id",
+      "label": "Workspace id",
+      "type": "text",
+      "group": "Evidence",
+      "bindings": {
+        "postgres": {
+          "expr": "workspace_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"workspace_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "occurred_at",
+      "label": "Compacted at",
+      "type": "datetime",
+      "group": "Compaction",
+      "bindings": {
+        "postgres": {
+          "expr": "occurred_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"occurred_at\"",
+          "datetimeFormat": "rfc3339"
+        }
+      },
+      "render": "datetime_rel",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "trigger",
+      "label": "Trigger",
+      "type": "text",
+      "group": "Compaction",
+      "bindings": {
+        "postgres": {
+          "expr": "trigger",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"trigger\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "trigger_evidence",
+      "label": "Trigger evidence",
+      "type": "text",
+      "group": "Compaction",
+      "bindings": {
+        "postgres": {
+          "expr": "trigger_evidence",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"trigger_evidence\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "provider",
+      "label": "Provider",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "provider",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"provider\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "harness",
+      "label": "Agent app",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "harness",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"harness\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "model",
+      "label": "Model",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "model",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"model\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "repository_name",
+      "label": "Repository",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "repository_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"repository_name\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "project_name",
+      "label": "Project",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "project_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"project_name\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "description": "The repository, else the working folder (home as ~); empty for a workspace with no working directory (No project)."
+    },
+    {
+      "name": "title",
+      "label": "Workspace",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "title",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"title\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "source_kind",
+      "label": "Source",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "source_kind",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"source_kind\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "agent_depth",
+      "label": "Agent depth",
+      "type": "number",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "agent_depth",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"agent_depth\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "channel",
+      "label": "Channel",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "channel",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"channel\""
+        }
+      },
+      "render": "origin_channel",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "machine_id",
+      "label": "Machine",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "machine_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"machine_id\""
+        }
+      },
+      "render": "origin_machine_id",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "machine",
+      "label": "Machine name",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "machine",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"machine\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "execution_machine_id",
+      "label": "Execution machine",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "execution_machine_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"execution_machine_id\""
+        }
+      },
+      "render": "origin_execution_machine_id",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "execution_machine",
+      "label": "Execution machine name",
+      "type": "text",
+      "group": "Origin",
+      "bindings": {
+        "postgres": {
+          "expr": "execution_machine",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"execution_machine\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "day",
+      "label": "Day",
+      "type": "text",
+      "group": "Time",
+      "bindings": {
+        "postgres": {
+          "expr": "day",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"day\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "week",
+      "label": "Week",
+      "type": "text",
+      "group": "Time",
+      "bindings": {
+        "postgres": {
+          "expr": "week",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"week\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "month",
+      "label": "Month",
+      "type": "text",
+      "group": "Time",
+      "bindings": {
+        "postgres": {
+          "expr": "month",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"month\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    }
+  ]
+}

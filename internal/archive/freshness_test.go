@@ -29,6 +29,13 @@ func newFreshnessFixture(t *testing.T) *freshnessFixture {
 	// has nothing to process: see TestFreshnessOfAnEmptyLibrary).
 	f.exec(append([]string{`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','claude','local','w','Work','2026-10-27')`,
 		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','claude','local','c')`}, f.builtToday()...)...)
+	var revision string
+	if err := catalog.DB.QueryRow("SELECT revision FROM authorship_dirty WHERE id=1").Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	f.exec(setMetaSQL("authorship_state_version", authorshipStateVersion),
+		setMetaSQL("authorship_refinement_inputs", authorshipRefinementKey(revision)),
+		setMetaSQL("authorship_refined_at", "2026-10-27T08:00:00Z"))
 	return f
 }
 
@@ -55,7 +62,7 @@ func (f *freshnessFixture) builtToday() []string {
 		setMetaSQL("tool_ledger_generation", "7"), setMetaSQL("tool_rollup_generation", "7/"+toolRollupVersion),
 		setMetaSQL("tool_rollup_day", c.clock().Format("2006-01-02")), setMetaSQL("tool_rollup_timezone", toolRollupTimezone()),
 		setMetaSQL("tool_rollup_full_revision", "r1"), setMetaSQL("tool_rollup_built_full_revision", "r1"),
-		setMetaSQL("authorship_inputs_generation", "3"), setMetaSQL("authorship_generation", "7:3/"+authorshipVersion), setMetaSQL("authorship_built_at", "2026-10-27T08:00:00Z"),
+		setMetaSQL("authorship_inputs_generation", "3"), setMetaSQL("authorship_generation", "7:3/"+authorshipVersion), setMetaSQL("authorship_built_at", "2026-10-27T08:00:00Z"), setMetaSQL("authorship_complete_at", "2026-10-27T08:00:00Z"),
 		setMetaSQL("findings_generation", c.findingsGeneration()), setMetaSQL("findings_built_at", "2026-10-27T08:05:00Z"),
 		// Each completion was for the library's inputs as they are (7:3).
 		setMetaSQL("findings_inputs_generation", "7:3"), setMetaSQL("analysis_inputs:identities", "records:3"), setMetaSQL("analysis_inputs:git", "records:3"),
@@ -185,6 +192,8 @@ func TestFreshnessConversations(t *testing.T) {
 		state, reason   string
 		catching, next  string
 		asOfFromSeeding bool
+		outputMissing   bool
+		taskID          string
 	}{
 		{name: "current after a scheduled check", schedule: true,
 			seed:  []string{"INSERT INTO automatic_source_states(host_id,source_name,attempted_at,succeeded_at,indexed_at) VALUES(" + host + ",'claude'," + at(time.Minute) + "," + at(time.Minute) + "," + at(time.Hour) + ")"},
@@ -201,9 +210,15 @@ func TestFreshnessConversations(t *testing.T) {
 			seed: []string{"INSERT INTO automatic_source_states(host_id,source_name,succeeded_at) VALUES(" + host + ",'claude'," + at(time.Minute) + ")",
 				"INSERT INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES(" + host + ",'conversations','manual'," + at(-time.Hour) + ")"},
 			state: freshUnknown, reason: "manual-only", next: nextManualIndex, asOfFromSeeding: true},
-		{name: "never indexed", schedule: true, state: freshBehind, reason: "never-indexed", next: nextScheduledIndex},
+		{name: "never indexed", schedule: true, state: freshBehind, reason: "never-indexed", next: nextScheduledIndex, outputMissing: true},
+		{name: "configured incremental source before its first index", schedule: true,
+			in:    freshnessInput{sourceKinds: map[string]string{"claude": "claude"}},
+			state: freshBehind, reason: "never-indexed", next: nextScheduledIndex, outputMissing: true, taskID: "conversations"},
+		{name: "configured whole source before its first import", schedule: true,
+			in:    freshnessInput{sourceKinds: map[string]string{"claude": "tl1"}},
+			state: freshBehind, reason: "never-indexed", next: nextHourlyUpdate, outputMissing: true, taskID: "other-sources"},
 		{name: "catching up while an index runs", schedule: true, in: freshnessInput{ops: []freshnessOp{runningOp("op-index", "index.changes.manual", "")}},
-			state: freshBehind, reason: "indexing", catching: "op-index"},
+			state: freshBehind, reason: "indexing", catching: "op-index", outputMissing: true},
 		{name: "schedule off", schedule: false,
 			seed:  []string{"INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES(" + host + ",'claude','claude','full','complete'," + at(time.Hour) + "," + at(time.Hour) + "," + at(time.Hour) + ")"},
 			state: freshUnknown, reason: "schedule-off", next: nextManualIndex, asOfFromSeeding: true},
@@ -224,14 +239,14 @@ func TestFreshnessConversations(t *testing.T) {
 		// the other-sources background item, on its own cadence.
 		{name: "a source read in full, read within its hourly update", schedule: true,
 			seed:  []string{"INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES(" + host + ",'claude','tl1','full','complete'," + at(time.Hour) + "," + at(time.Hour) + "," + at(time.Hour) + ")"},
-			state: freshCurrent, asOfFromSeeding: true},
+			state: freshCurrent, asOfFromSeeding: true, taskID: "other-sources"},
 		{name: "a source read in full, past its hourly update", schedule: true,
 			seed:  []string{"INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES(" + host + ",'claude','tl1','full','complete'," + at(48*time.Hour) + "," + at(48*time.Hour) + "," + at(48*time.Hour) + ")"},
-			state: freshUnknown, reason: "overdue", next: nextHourlyUpdate, asOfFromSeeding: true},
+			state: freshUnknown, reason: "overdue", next: nextHourlyUpdate, asOfFromSeeding: true, taskID: "other-sources"},
 		{name: "a source read in full, set to only when you ask", schedule: true,
 			seed: []string{"INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES(" + host + ",'claude','tl1','full','complete'," + at(48*time.Hour) + "," + at(48*time.Hour) + "," + at(48*time.Hour) + ")",
 				"INSERT INTO background_settings(host_id,overrides_json) VALUES(" + host + ",'{\"other-sources\":\"manual\"}')"},
-			state: freshUnknown, reason: "manual-only", next: nextManualIndex, asOfFromSeeding: true},
+			state: freshUnknown, reason: "manual-only", next: nextManualIndex, asOfFromSeeding: true, taskID: "other-sources"},
 		{name: "the schedule has not checked for days", schedule: true,
 			seed:  []string{"INSERT INTO automatic_source_states(host_id,source_name,attempted_at,succeeded_at) VALUES(" + host + ",'claude'," + at(48*time.Hour) + "," + at(48*time.Hour) + ")"},
 			state: freshUnknown, reason: "overdue", next: nextScheduledIndex},
@@ -241,6 +256,12 @@ func TestFreshnessConversations(t *testing.T) {
 			f.scheduled(test.schedule)
 			f.exec(test.seed...)
 			row := expectRow(t, f.ledger(test.in), "conv:claude", test.state, test.reason, test.catching)
+			if row.OutputMissing != test.outputMissing {
+				t.Fatalf("first output: want missing=%v, got %+v", test.outputMissing, row)
+			}
+			if test.taskID != "" && row.TaskID != test.taskID {
+				t.Fatalf("source task: want %q, got %+v", test.taskID, row)
+			}
 			if test.next != "" && (row.Next == nil || *row.Next != test.next) {
 				t.Fatalf("next: want %q, got %v", test.next, row.Next)
 			}
@@ -254,12 +275,23 @@ func TestFreshnessConversations(t *testing.T) {
 	f.scheduled(true)
 	f.exec("INSERT INTO automatic_source_states(host_id,source_name,attempted_at,succeeded_at) VALUES(" + host + ",'claude'," + at(time.Minute) + "," + at(time.Minute) + ")")
 	expectRow(t, f.ledger(freshnessInput{ops: []freshnessOp{runningOp("op-auto", "index.changes.automatic", "")}}), "conv:claude", freshCurrent, "", "")
+	if row := f.ledger(freshnessInput{})["conv:claude"]; row.TaskID != "" {
+		t.Fatalf("unknown source kind must not guess a background task: %+v", row)
+	}
+	server := testServer(t, f.config, f.catalog)
+	for _, row := range server.freshness(t.Context(), nil, true) {
+		if row.Domain == "conv:claude" && row.TaskID != "conversations" {
+			t.Fatalf("server must supply configured source ownership: %+v", row)
+		}
+	}
 }
 
 // Every domain the catalog alone decides: current, behind with its reason
 // and count, unknown when the input is missing, and caught up by the
 // operation whose kind affects it.
 func TestFreshnessDomains(t *testing.T) {
+	queuedWriting := runningOp("op-writing", "analysis.authorship", "")
+	queuedWriting.State = opQueued
 	failedJournal := func(kind string) string {
 		return `INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,ended_at)
 			VALUES('j-` + kind + `','j-` + kind + `','` + kind + `','chained',` + sqlQuote(currentHost().ID) + `,'service',1,'old','failed','2026-10-27T09:00:00Z','2026-10-27T09:00:00Z','2026-10-27T09:01:00Z')`
@@ -275,6 +307,7 @@ func TestFreshnessDomains(t *testing.T) {
 		countKnown     bool
 		unit, asOf     string
 		absentOrUnseen bool
+		outputMissing  bool
 	}{
 		{name: "view current", domain: "view", state: freshCurrent},
 		{name: "view behind", domain: "view", seed: []string{"INSERT INTO workspace_library_dirty(workspace_id) VALUES('w1'),('w2')"}, state: freshBehind, reason: "refreshing", count: 2, countKnown: true, unit: "workspace"},
@@ -308,8 +341,20 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "tools rollup current", domain: "an.tools", state: freshCurrent},
 		{name: "tools rollup changed", domain: "an.tools", seed: []string{"INSERT INTO tool_rollup_dirty(workspace_id,revision) VALUES('w1','r'),('w2','r'),('w3','r')"}, state: freshBehind, reason: "changed", count: 3, countKnown: true, unit: "workspace"},
 		{name: "tools rollup of an older layout", domain: "an.tools", seed: []string{setMetaSQL("tool_rollup_generation", "7/old")}, state: freshBehind, reason: "version"},
-		{name: "tools rollup never built", domain: "an.tools", seed: []string{"DELETE FROM meta WHERE key='tool_rollup_generation'"}, state: freshBehind, reason: "never-built"},
+		{name: "tools rollup never built", domain: "an.tools", seed: []string{"DELETE FROM meta WHERE key='tool_rollup_generation'"}, state: freshBehind, reason: "never-built", outputMissing: true},
+		{name: "first writing output waiting", domain: "an.authorship", seed: []string{"DELETE FROM meta WHERE key IN ('authorship_generation','authorship_quick_generation','authorship_complete_at')"}, state: freshBehind, reason: "never-built", outputMissing: true},
+		{name: "first writing output queued", domain: "an.authorship", seed: []string{"DELETE FROM meta WHERE key IN ('authorship_generation','authorship_quick_generation','authorship_complete_at')"}, in: freshnessInput{ops: []freshnessOp{queuedWriting}}, state: freshBehind, reason: "running", catching: "op-writing", outputMissing: true},
+		{name: "first writing output running", domain: "an.authorship", seed: []string{"DELETE FROM meta WHERE key IN ('authorship_generation','authorship_quick_generation','authorship_complete_at')"}, in: freshnessInput{ops: []freshnessOp{runningOp("op-writing", "analysis.authorship", "")}}, state: freshBehind, reason: "running", catching: "op-writing", outputMissing: true},
+		{name: "first writing output scheduled", domain: "an.authorship", seed: []string{"DELETE FROM meta WHERE key IN ('authorship_generation','authorship_quick_generation','authorship_complete_at')", "INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,pending_since) VALUES('authorship',1,0,'2026-10-27T10:00:00Z','2026-10-27T10:00:00Z')"}, in: freshnessInput{now: time.Date(2026, 10, 27, 10, 2, 0, 0, time.UTC)}, state: freshScheduled, reason: "scheduled-frequent", outputMissing: true},
 		{name: "writing classification behind", domain: "an.authorship", seed: []string{setMetaSQL("authorship_inputs_generation", "4")}, state: freshBehind, reason: "changed", asOf: "2026-10-27T08:00:00Z"},
+		{name: "writing progress is not coverage", domain: "an.authorship", seed: []string{
+			setMetaSQL("authorship_quick_at", "2026-10-27T12:00:00Z"),
+			`INSERT INTO authorship_pending(message_id,revision,sent_at,queued_at) VALUES('a','r','2026-10-27T11:00:00Z','2026-10-27T11:01:00Z'),('b','r','2026-07-01T11:00:00Z','2026-10-27T10:01:00Z')`,
+		}, state: freshBehind, reason: "changed", count: 2, countKnown: true, unit: "message", asOf: "2026-10-27T08:00:00Z"},
+		{name: "writing queue predates its scheduled pass", domain: "an.authorship", seed: []string{
+			`INSERT INTO authorship_pending(message_id,revision,sent_at,queued_at) VALUES('a','r','2026-07-01T11:00:00Z','2026-10-27T10:01:00Z')`,
+			`INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at,pending_since) VALUES('authorship',5,3,'2026-10-27T11:01:00Z','2026-10-27T08:00:00Z','2026-10-27T11:01:00Z')`,
+		}, state: freshBehind, reason: "late", count: 1, countKnown: true, unit: "message"},
 		{name: "writing classification caught up", domain: "an.authorship", seed: []string{setMetaSQL("authorship_inputs_generation", "4")},
 			in: freshnessInput{ops: []freshnessOp{runningOp("op-author", "analysis.authorship", "")}}, state: freshBehind, reason: "running", catching: "op-author"},
 		{name: "tools ledger unknown before anything counted it", domain: "an.ledger", seed: []string{"DELETE FROM meta WHERE key='upgrade_count'"}, state: freshUnknown, reason: "not-counted"},
@@ -325,7 +370,7 @@ func TestFreshnessDomains(t *testing.T) {
 			in: freshnessInput{now: todayAt(23)}, state: freshBehind, reason: "daily-pass-due"},
 		{name: "findings daily pass waiting for the daily review", domain: "findings", seed: []string{setMetaSQL("findings_generation", findingsVersion+"/2026-10-26")},
 			in: freshnessInput{now: todayAt(10)}, state: freshScheduled, reason: "scheduled-daily"},
-		{name: "findings never built", domain: "findings", seed: []string{"DELETE FROM meta WHERE key='findings_generation'"}, state: freshBehind, reason: "never-built"},
+		{name: "findings never built", domain: "findings", seed: []string{"DELETE FROM meta WHERE key IN ('findings_generation','findings_built_at')"}, state: freshBehind, reason: "never-built", outputMissing: true},
 		// Within its daily cadence: scheduled, not behind.
 		{name: "findings after a Terminal ingest", domain: "findings", seed: []string{setMetaSQL("authorship_inputs_generation", "4")}, state: freshScheduled, reason: "changed"},
 		{name: "findings with no record of their inputs", domain: "findings", seed: []string{"DELETE FROM meta WHERE key='findings_inputs_generation'"}, state: freshUnknown, reason: "no-record"},
@@ -365,6 +410,9 @@ func TestFreshnessDomains(t *testing.T) {
 				test.setup(f)
 			}
 			row := expectRow(t, f.ledger(test.in), test.domain, test.state, test.reason, test.catching)
+			if row.OutputMissing != test.outputMissing {
+				t.Fatalf("first output: want missing=%v, got %+v", test.outputMissing, row)
+			}
 			if test.countKnown != (row.Behind.Count != nil) || test.count != 0 && *row.Behind.Count != test.count {
 				t.Fatalf("count: want %d (known %v), got %+v", test.count, test.countKnown, row.Behind)
 			}
@@ -373,6 +421,12 @@ func TestFreshnessDomains(t *testing.T) {
 			}
 			if test.asOf != "" && (row.AsOf == nil || *row.AsOf != test.asOf) {
 				t.Fatalf("as_of: want %s, got %v", test.asOf, row.AsOf)
+			}
+			if (test.name == "writing progress is not coverage" || test.name == "writing queue predates its scheduled pass") && (row.PendingSince == nil || *row.PendingSince != "2026-10-27T10:01:00Z") {
+				t.Fatalf("pending_since must be the oldest queued change, not sent_at or last publication: %v", row.PendingSince)
+			}
+			if row.Behind.State == freshCurrent && row.PendingSince != nil {
+				t.Fatalf("current output retains no pending input timestamp: %v", row.PendingSince)
 			}
 		})
 	}
@@ -753,6 +807,32 @@ func TestStatusSnapshotCarriesTheLedger(t *testing.T) {
 	if err := json.Unmarshal(data, &summary); err != nil || len(summary.Groups) == 0 || summary.Groups[0].Group != "conversations" {
 		t.Fatalf("the summary starts with conversations: %s", data)
 	}
+}
+
+// Captures waiting to be indexed name the background tasks that read them,
+// so a surface can say when they will be read: Preserve originals for every
+// Mac's captures, and also Other sources for this Mac's whole-source kinds.
+// Which of those runs first is the background view's to say, so the row
+// lists both rather than guessing from cadences.
+func TestFreshnessCaptureSchedule(t *testing.T) {
+	host := sqlQuote(currentHost().ID)
+	captures := &freshnessFiles{captures: []freshnessCapture{{host: "other-mac", source: "codex", needsIndex: true}, {host: "other-mac", source: "tl1", needsIndex: true}}}
+	in := freshnessInput{files: captures, sourceKinds: map[string]string{"codex": "codex", "tl1": "tl1"}}
+	check := func(rows map[string]freshnessRow, domain, next string, tasks ...string) {
+		t.Helper()
+		row := expectRow(t, rows, domain, freshBehind, "not-indexed", "")
+		if row.TaskID != "preserve" || !slices.Equal(row.TaskIDs, tasks) || row.Next == nil || *row.Next != next {
+			t.Fatalf("%s: want tasks %v next %q, got %q %v %v", domain, tasks, next, row.TaskID, row.TaskIDs, row.Next)
+		}
+	}
+	f := newFreshnessFixture(t)
+	rows := f.ledger(in)
+	check(rows, "capt:other-mac/codex", nextDailyUpdate)
+	check(rows, "capt:other-mac/tl1", nextDailyUpdate, "preserve", "other-sources")
+	f.exec("INSERT INTO background_settings(host_id,overrides_json) VALUES(" + host + `,'{"preserve":"manual"}')`)
+	rows = f.ledger(in)
+	check(rows, "capt:other-mac/codex", nextManualIndex)
+	check(rows, "capt:other-mac/tl1", nextHourlyUpdate, "preserve", "other-sources")
 }
 
 // An unreadable capture folder keeps the captures it last read, unknown;

@@ -335,6 +335,13 @@ func (c *Catalog) SafetyOverview(ctx context.Context) (map[string]any, error) {
 	})
 	built, _ := c.metaValue(ctx, "safety_built_at")
 	scanned, _ := c.metaValue(ctx, "safety_scanned_calls")
+	scannedEvents, _ := c.metaValue(ctx, "safety_scanned_events")
+	// Safeguard notices come from agent events; events waiting for a rebuild
+	// (their transcript or execution evidence changed) still count until it runs.
+	freshness, err := agentEventsCoverage(ctx, c.reader())
+	if err != nil {
+		return nil, err
+	}
 	// The overview stays compact; source commands and investigation questions
 	// are fetched only when Details is opened.
 	cards := []map[string]any{}
@@ -343,7 +350,7 @@ func (c *Catalog) SafetyOverview(ctx context.Context) (map[string]any, error) {
 			"state": item.State, "last_seen_at": item.Last, "first_seen_at": item.First, "cart": item.Cart, "handed_at": item.HandedAt, "material_change": item.Material, "calls": item.Calls})
 	}
 	return map[string]any{"cases": cards, "summary": counts, "cart": carts, "targets": targets, "built_at": nilIfEmpty(built), "scanned_calls": scanned,
-		"coverage": "Supported shell commands in the last 28 days. Embedded interpreter code, indirect scripts, arbitrary native/MCP mutations, dynamic values and filesystem effects are not comprehensively interpreted. No open notices is not a safety assessment.", "version": safetyVersion}, nil
+		"scanned_events": scannedEvents, "events_freshness": freshness, "coverage": "Supported shell commands in the last 28 days, and agents saying they got around a test, restriction, rule or instruction (agent events). Embedded interpreter code, indirect scripts, arbitrary native/MCP mutations, dynamic values and filesystem effects are not comprehensively interpreted. No open notices is not a safety assessment.", "version": safetyVersion}, nil
 }
 
 func (c *Catalog) SafetyDetail(ctx context.Context, id string) (*safetyCase, error) {

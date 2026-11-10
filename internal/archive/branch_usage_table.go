@@ -14,7 +14,7 @@ import (
 // shares (branch_usage.go) is split by them, turn by turn; one without is
 // on the branch its source recorded for the whole session, or has no
 // branch data. Folders and sessions without a project have no branch and
-// are not in it.
+// are not in it, nor are mirrors, which the Usage dataset also counts once.
 
 // Coverage of a row's branch, the split the dashboard reports:
 //   - on_branch: on a recorded branch;
@@ -54,7 +54,9 @@ func (c *Catalog) branchUsageRows(ctx context.Context) ([]map[string]any, error)
 			}
 			shares[session][key][firstString(row["branch"])] += integer(row["tokens"])
 		}
-		ledger, err := c.usageLedger(nil)
+		// The Usage dataset's ledger: a mirror (a Conductor workspace of a
+		// Claude Code session) counts once, as its native session.
+		ledger, err := c.localUsageLedger(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -69,9 +71,14 @@ func (c *Catalog) branchUsageRows(ctx context.Context) ([]map[string]any, error)
 			if row == nil {
 				row = map[string]any{"id": stableID("branch-usage", key.workspace, key.branch, key.coverage, key.source, key.model, key.hour),
 					"workspace_id": key.workspace, "title": entry["title"], "source_kind": entry["source_kind"], "project_name": entry["project_name"],
-					"branch": nilIfEmpty(key.branch), "coverage": key.coverage, "branch_source": nilIfEmpty(key.source),
+					"branch": nilIfEmpty(key.branch), "project_branch": nil, "coverage": key.coverage, "branch_source": nilIfEmpty(key.source),
 					"provider": nilIfEmpty(firstString(entry["provider"])), "model": key.model, "model_family": nilIfEmpty(modelFamily(key.model)),
 					"day": day, "usage_at": key.hour, "cost_usd": nil, "tokens": int64(0), "price_status": ""}
+				// Branch names repeat across projects (main, say): a branch is
+				// counted and compared within its project.
+				if key.branch != "" {
+					row["project_branch"] = firstString(entry["project_name"]) + " · " + key.branch
+				}
 				rows[key] = row
 			}
 			row["cost_usd"] = addCost(row["cost_usd"], cost)

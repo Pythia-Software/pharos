@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -93,6 +95,181 @@ func countRows(t *testing.T, catalog *Catalog, query string, args ...any) int {
 
 func conversationMessages(t *testing.T, catalog *Catalog, nativeID string) int {
 	return countRows(t, catalog, "SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id=?", nativeID)
+}
+
+func TestCaptureViewTranslatesLegacyPaths(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name, root, destination, input, captured, original string
+	}{
+		{"directory", "/Users/alice/logs", "files", "/Users/alice/logs/p/a.jsonl", "files/p/a.jsonl", "/Users/alice/logs/p/a.jsonl"},
+		{"directory exact", "/logs", "files", "/logs", "files", "/logs"},
+		{"empty exact source", "", "files", "", "files", ""},
+		{"single file exact", "/logs/a.jsonl", "files/a.jsonl", "/logs/a.jsonl", "files/a.jsonl", "/logs/a.jsonl"},
+		{"trailing root separator", "/logs/", "files", "/logs/a", "files/a", "/logs/a"},
+		{"trailing input separator", "/logs", "files", "/logs/a/", "files/a", "/logs/a"},
+		{"repeated input separators", "/logs", "files", "/logs///p//a", "files/p/a", "/logs/p/a"},
+		{"repeated root separators", "/logs//", "files", "/logs//p/a", "files/p/a", "/logs/p/a"},
+		{"unclean exact root", "/logs//", "files", "/logs//", "files", "/logs"},
+		{"dot suffix", "/logs", "files", "/logs/.", "files", "/logs"},
+		{"local suffix cleanup", "/logs", "files", "/logs/a/../b", "files/b", "/logs/b"},
+		{"relative source", "relative/logs", "files", "relative/logs/a", "files/a", "relative/logs/a"},
+		{"home stays literal", "~/logs", "files", "~/logs/a", "files/a", "~/logs/a"},
+		{"slash root", "/", "files", "//a", "files/a", "/a"},
+		{"unicode", "/Users/Élodie", "files", "/Users/Élodie/e\u0301", "files/e\u0301", "/Users/Élodie/e\u0301"},
+		{"case preserved", "/Users/Alice", "files", "/Users/Alice/Upper", "files/Upper", "/Users/Alice/Upper"},
+		{"backslash source", `C:\Users\alice`, "files", `C:\Users\alice/a`, "files/a", `C:\Users\alice/a`},
+		{"colon source", "C:/Users/alice", "files", "C:/Users/alice/a", "files/a", "C:/Users/alice/a"},
+		{"UNC-looking source", `\\server\share`, "files", `\\server\share/a`, "files/a", `\\server\share/a`},
+		{"TL1 database", "/tl1/project.db", "files/installations/old/project.db", "/tl1/project.db", "files/installations/old/project.db", "/tl1/project.db"},
+		{"TL1 transcripts", "/tl1/transcripts", "files/installations/old/transcripts", "/tl1/transcripts/task/a.jsonl", "files/installations/old/transcripts/task/a.jsonl", "/tl1/transcripts/task/a.jsonl"},
+		{"temporary source", "/logs", "source", "/logs/p/a", "source/p/a", "/logs/p/a"},
+		{"historical snapshot", "/logs/db", "history/old/db", "/logs/db", "history/old/db", "/logs/db"},
+		{"local mapped root", "/logs", ".", "/logs/p/a", "p/a", "/logs/p/a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := &captureManifest{PathMap: []capturePathMapping{{Original: tc.root, Captured: tc.destination}}}
+			view := newCaptureView(Host{ID: "recorded-host"}, dir, manifest)
+			want := filepath.Join(dir, filepath.FromSlash(tc.captured))
+			if got, ok := view.captured(tc.input); !ok || got != want {
+				t.Fatalf("captured(%q) = (%q, %v), want %q", tc.input, got, ok, want)
+			}
+			if got := view.original(want); got != tc.original {
+				t.Fatalf("original(%q) = %q, want %q", want, got, tc.original)
+			}
+		})
+	}
+	// Older SQLite replay readers supply native paths directly, including a
+	// whole temporary directory and single retained generations.
+	for _, destination := range []string{dir, filepath.Join(dir, "history", "old.db")} {
+		view := &captureView{dir: dir, mappings: []capturePathMapping{{Original: "/old/source", Captured: destination}}}
+		if got, ok := view.captured("/old/source"); !ok || got != destination {
+			t.Fatalf("direct retained mapping = (%q, %v), want %q", got, ok, destination)
+		}
+		if got := view.original(destination); got != "/old/source" {
+			t.Fatalf("direct retained original = %q", got)
+		}
+	}
+}
+
+func TestCaptureViewSelectsLongestPrefixBeforeResolvingSuffix(t *testing.T) {
+	dir := t.TempDir()
+	view := newCaptureView(Host{}, dir, &captureManifest{PathMap: []capturePathMapping{
+		{Original: "/src", Captured: "files"},
+		{Original: "/src/nested", Captured: "files/special"},
+		{Original: "/src", Captured: "files/second"}, // equal original prefix: first wins
+		{Original: "/other", Captured: "files"},      // equal captured prefix: first wins
+		{Original: "/rollouts", Captured: "files/naming"},
+		{Original: "/rollouts/a.jsonl", Captured: "files/single/a.jsonl"},
+		{Original: "/Users/Alice", Captured: "source/Alice"},
+		{Original: "/é", Captured: "source/unicode"},
+		{Original: `C:\logs`, Captured: "source/windows-looking"},
+	}})
+	for _, tc := range []struct{ source, captured string }{
+		{"/src/nested/a", filepath.Join(dir, "files", "special", "a")},
+		{"/src/a", filepath.Join(dir, "files", "a")},
+		{"/rollouts/a.jsonl", filepath.Join(dir, "files", "single", "a.jsonl")},
+		{"/rollouts/sessions-index.json", filepath.Join(dir, "files", "naming", "sessions-index.json")},
+	} {
+		if got, ok := view.captured(tc.source); !ok || got != tc.captured {
+			t.Errorf("captured(%q) = (%q, %v), want %q", tc.source, got, ok, tc.captured)
+		}
+		if got := view.original(tc.captured); got != tc.source {
+			t.Errorf("original(%q) = %q, want %q", tc.captured, got, tc.source)
+		}
+	}
+	for _, name := range []string{"/src-other/a", "/Users/alice/a", "/e\u0301/a", `C:\logs\a`} {
+		if got, ok := view.captured(name); ok || got != "" {
+			t.Errorf("source boundary/identity %q matched: (%q, %v)", name, got, ok)
+		}
+	}
+	for _, name := range []string{filepath.Join(dir, "files-sibling", "a"), filepath.Join(dir+"-sibling", "files", "a")} {
+		if got := view.original(name); got != name {
+			t.Errorf("captured sibling %q matched as %q", name, got)
+		}
+	}
+	if got, ok := view.captured("/src/nested/../outside"); ok || got != "" {
+		t.Errorf("unsafe winning source suffix fell back to parent: (%q, %v)", got, ok)
+	}
+	unsafe := filepath.Join(dir, "files", "special") + string(filepath.Separator) + "../outside"
+	if got := view.original(unsafe); got != unsafe {
+		t.Errorf("unsafe winning captured suffix fell back to parent: %q", got)
+	}
+	// Native separators and repeated separators must match without cleaning
+	// the input before prefix selection.
+	repeated := filepath.Join(dir, "files") + strings.Repeat(string(filepath.Separator), 3) + "a"
+	if got := view.original(repeated); got != "/src/a" {
+		t.Errorf("repeated native separators: %q", got)
+	}
+	// Raw prefix length decides between roots with the same cut boundary.
+	view = newCaptureView(Host{}, dir, &captureManifest{PathMap: []capturePathMapping{
+		{Original: "/src", Captured: "files"},
+		{Original: "/src/", Captured: "source"},
+	}})
+	if got, ok := view.captured("/src/a"); !ok || got != filepath.Join(dir, "source", "a") {
+		t.Errorf("trailing separator lost original prefix length: (%q, %v)", got, ok)
+	}
+	view = &captureView{dir: dir, mappings: []capturePathMapping{
+		{Original: "/src", Captured: filepath.Join(dir, "files")},
+		{Original: "/longer", Captured: filepath.Join(dir, "files") + string(filepath.Separator)},
+	}}
+	if got := view.original(filepath.Join(dir, "files", "a")); got != "/longer/a" {
+		t.Errorf("trailing separator lost captured prefix length: %q", got)
+	}
+	t.Run("invalid destinations preserve precedence", func(t *testing.T) {
+		for _, destination := range []string{"", "/outside", "../outside", "files/../../outside", "files/../outside",
+			"files//a", "files/a/", "./files", "files/./a", `files\a`, "C:/outside", "C:outside", "files/bad\x00name",
+			"files/CON", "files/a:b"} {
+			if runtime.GOOS != "windows" && (destination == "files/CON" || destination == "files/a:b") {
+				continue // These are representable literal names on POSIX hosts.
+			}
+			t.Run(fmt.Sprintf("%q", destination), func(t *testing.T) {
+				manifest := &captureManifest{PathMap: []capturePathMapping{
+					{Original: "/src", Captured: "source/base"},
+					{Original: "/src/longer", Captured: destination},
+					{Original: "/src/nested", Captured: destination},
+					{Original: "/src/nested", Captured: "source/later"},
+					{Original: "/src/nested/valid", Captured: "history/old"},
+					{Original: "/blocked", Captured: destination},
+					{Original: "/blocked/valid", Captured: "source/valid"},
+					{Original: "/equal", Captured: "source/shorter"},
+					{Original: "/equal/", Captured: destination},
+					{Original: "/other", Captured: "source/other"},
+				}}
+				before := jsonText(manifest)
+				view := newCaptureView(Host{}, dir, manifest)
+				for _, source := range []string{"/src/longer", "/src/longer/a", "/src/nested", "/src/nested/a", "/blocked", "/blocked/a", "/equal/a"} {
+					if got, ok := view.captured(source); ok || got != "" {
+						t.Errorf("blocked winner for %q fell back: (%q, %v)", source, got, ok)
+					}
+				}
+				for _, tc := range []struct{ source, captured string }{
+					{"/src/a", "source/base/a"},
+					{"/src/nested/valid", "history/old"},
+					{"/src/nested/valid/a", "history/old/a"},
+					{"/blocked/valid/a", "source/valid/a"},
+					{"/other/a", "source/other/a"},
+				} {
+					want := filepath.Join(dir, filepath.FromSlash(tc.captured))
+					if got, ok := view.captured(tc.source); !ok || got != want {
+						t.Errorf("valid mapping for %q = (%q, %v), want %q", tc.source, got, ok, want)
+					}
+					if got := view.original(want); got != tc.source {
+						t.Errorf("valid reverse mapping for %q = %q, want %q", want, got, tc.source)
+					}
+				}
+				invalidRoot := filepath.Join(dir, filepath.FromSlash(destination))
+				for _, name := range []string{invalidRoot, filepath.Join(invalidRoot, "a")} {
+					if got, ok := view.translate(name, false); ok || got != "" {
+						t.Errorf("invalid destination became reverse root for %q: (%q, %v)", name, got, ok)
+					}
+				}
+				if jsonText(manifest) != before {
+					t.Fatal("view construction or translation changed the manifest")
+				}
+			})
+		}
+	})
 }
 
 func TestIndexAttributesCapturesToTheCapturingHost(t *testing.T) {
@@ -585,6 +762,54 @@ func TestConductorSignalsReadOnlySessionDependencies(t *testing.T) {
 	}
 }
 
+// A database with Conductor's cancellation index answers from it, and must
+// describe every session exactly as one without it does: a signal that moved
+// would reparse the whole source.
+func TestConductorSignalsAgreeWithAndWithoutACancellationIndex(t *testing.T) {
+	dir := t.TempDir()
+	execute := conductorFixture(t, dir)
+	for id, messages := range map[string]int{"quiet": 2, "cancelled": 2, "twice": 2, "empty": 0} {
+		execute(addConductorSession(id, messages)...)
+	}
+	execute("UPDATE session_messages SET cancelled_at='2026-09-02T00:00:00Z' WHERE id='cancelled-m0'",
+		"UPDATE session_messages SET cancelled_at='2026-09-03T00:00:00Z' WHERE id='twice-m0'",
+		"UPDATE session_messages SET cancelled_at='2026-09-04T00:00:00Z' WHERE id='twice-m1'",
+		"INSERT INTO session_messages VALUES('orphan-m0','orphan','user','no session','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z','2026-09-05T00:00:00Z')")
+	read := func(selection map[string]bool) map[string]sourcePart {
+		t.Helper()
+		db, err := openReadOnlySQLite(filepath.Join(dir, "conductor.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		sessions, err := queryMaps(db, "SELECT * FROM sessions")
+		if err != nil {
+			t.Fatal(err)
+		}
+		signals, err := conductorSignals(t.Context(), db, "sessions", "session_messages", "id", "session_id", sessions,
+			map[string]bool{}, map[string]bool{"sent_at": true, "cancelled_at": true}, map[string]bool{}, selection)
+		if err != nil || len(signals) != 4 {
+			t.Fatalf("signals: %+v %v", signals, err)
+		}
+		return signals
+	}
+	selections := []map[string]bool{nil, {"twice": true, "quiet": true}}
+	var grouped []map[string]sourcePart
+	for _, selection := range selections {
+		grouped = append(grouped, read(selection))
+	}
+	execute("CREATE INDEX messages_cancelled ON session_messages(session_id, cancelled_at)")
+	for index, selection := range selections {
+		if sought := read(selection); !reflect.DeepEqual(sought, grouped[index]) {
+			t.Fatalf("selection %v: signals changed with the index:\n%+v\n%+v", selection, grouped[index], sought)
+		}
+	}
+	execute("UPDATE session_messages SET cancelled_at='2026-09-06T00:00:00Z' WHERE id='quiet-m1'")
+	if after := read(nil); after["quiet"].signal == grouped[0]["quiet"].signal || after["twice"].signal != grouped[0]["twice"].signal {
+		t.Fatal("a new cancellation went unnoticed, or moved another session's signal")
+	}
+}
+
 func TestCapturedPlanRefreshesWhenManifestChanges(t *testing.T) {
 	slowTest(t)
 	for _, alreadyIndexed := range []bool{false, true} {
@@ -1037,6 +1262,90 @@ func testIndexTL1CaptureWithoutTheOriginalPaths(t *testing.T, file string) {
 	}
 	if location != repository || origin != transcript || writer != "host-a" || locator != transcript+":1" {
 		t.Fatalf("TL1 paths: location %s origin %s writer %s locator %s", location, origin, writer, locator)
+	}
+}
+
+// A capture's path map names each source path once. An installation that
+// another replaced at the same paths keeps its files in the capture but has
+// no entry in the map: its transcripts still record their original paths,
+// not the temporary directory an index reads the capture from, so indexing
+// the same capture again writes nothing.
+func TestIndexTL1CaptureOfAReplacedInstallationIsStable(t *testing.T) {
+	useHost(t, "host-a")
+	root := t.TempDir()
+	database := filepath.Join(root, "tl1", "project.db")
+	transcripts := filepath.Join(root, "tl1", "project", "transcripts")
+	repository := filepath.Join(root, "repo")
+	writeSourceFile(t, filepath.Join(repository, "tl1.json"), `{"project_name":"project"}`)
+	claude := filepath.Join(transcripts, "task-1", "attempt.jsonl")
+	codex := filepath.Join(transcripts, "task-2", "1-codex.jsonl")
+	writeSourceFile(t, claude, claudeLine("tl1-session", "u1", "do the task", repository, 1))
+	writeSourceFile(t, codex, `{"type":"thread.started","thread_id":"thread-1"}`+"\n"+`{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"done"}}`+"\n")
+	db := openWritableSQLite(t, database)
+	execSQL(t, db, "CREATE TABLE tasks(id TEXT, title TEXT, status TEXT, created_at TEXT)",
+		"CREATE TABLE task_attempts(id TEXT, task_id TEXT, attempt_number INTEGER, model TEXT, executor TEXT)",
+		"CREATE TABLE transcript_summaries(attempt_id TEXT, filename TEXT)",
+		"INSERT INTO tasks VALUES('task-1','The task','completed','2026-09-01T00:00:00Z'),('task-2','Another','completed','2026-09-01T00:00:00Z')",
+		"INSERT INTO task_attempts VALUES('attempt-1','task-1',1,'claude-x','claude'),('attempt-2','task-2',1,'gpt-x','codex')",
+		"INSERT INTO transcript_summaries VALUES('attempt-1','attempt.jsonl'),('attempt-2','1-codex.jsonl')")
+	db.Close()
+	registry := filepath.Join(root, "tl1", tl1RegistryFile)
+	project := "project"
+	register := func(id string) {
+		data, _ := json.Marshal(map[string]any{"installations": []map[string]string{{"installation_id": id, "db_path": database,
+			"config_path": filepath.Join(repository, "tl1.json"), "code_repo": repository, "transcripts_dir": transcripts, "project_name": project}}})
+		writeSourceFile(t, registry, string(data))
+	}
+	config := captureTestConfig(t, SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true})
+	for _, id := range []string{"replaced", "current"} {
+		register(id)
+		if summary := runCapture(t, config); !summary.OK {
+			t.Fatalf("capture of %s: %+v", id, summary)
+		}
+	}
+	catalog, _ := testCatalog(t)
+	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.Workspaces != 4 {
+		t.Fatalf("TL1 capture: %#v", result)
+	}
+	rows, err := queryMaps(catalog.DB, `SELECT w.source_id,c.origin,m.evidence_locator FROM workspaces w JOIN conversations c ON c.workspace_id=w.id
+		JOIN messages m ON m.conversation_id=c.id WHERE w.source_kind='tl1' ORDER BY w.source_id`)
+	if err != nil || len(rows) < 4 {
+		t.Fatalf("TL1 transcripts: %v %v", rows, err)
+	}
+	for _, row := range rows {
+		want := claude
+		if strings.HasSuffix(firstString(row["source_id"]), ":task-2") {
+			want = codex
+		}
+		if firstString(row["origin"]) != want || !strings.HasPrefix(firstString(row["evidence_locator"]), want) {
+			t.Fatalf("%s names %s (%s), not %s", row["source_id"], row["origin"], row["evidence_locator"], want)
+		}
+	}
+	// The same capture is passed over whole; read again, it writes nothing.
+	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; !result.SkippedUnchanged {
+		t.Fatalf("an unchanged TL1 capture was read again: %#v", result)
+	}
+	execSQL(t, catalog.DB, "UPDATE source_states SET fingerprint=NULL WHERE host_id='host-a' AND source_name='tl1'")
+	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.SkippedUnchanged || result.Workspaces != 0 {
+		t.Fatalf("an unchanged TL1 capture was written again: %#v", result)
+	}
+	// Passing over a capture must not hide what indexing reads besides the
+	// transcripts: a script's log, and what the registry says of a project.
+	changes := map[string]func(){
+		"a script log":   func() { writeSourceFile(t, filepath.Join(transcripts, "task-1", "1-script.log"), "boom\n") },
+		"a project name": func() { project = "renamed"; register("current") },
+	}
+	for _, name := range []string{"a script log", "a project name"} {
+		changes[name]()
+		if summary := runCapture(t, config); !summary.OK {
+			t.Fatalf("capture after %s changed: %+v", name, summary)
+		}
+		if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.Error != nil || result.SkippedUnchanged {
+			t.Fatalf("%s changed and the capture was passed over: %#v", name, result)
+		}
+		if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; !result.SkippedUnchanged {
+			t.Fatalf("after %s changed, an unchanged capture was read again: %#v", name, result)
+		}
 	}
 }
 

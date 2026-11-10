@@ -3,11 +3,16 @@ package archive
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -30,7 +35,7 @@ func probeHome(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
-	for _, name := range probeEnvNames {
+	for _, name := range probeEnvNames() {
 		t.Setenv(name, "")
 	}
 	stubShellEnv(t, nil)
@@ -132,6 +137,10 @@ func TestProbeFindsKnownLocationsOnly(t *testing.T) {
 	probePut(t, filepath.Join(home, ".codex", "sessions", "2026", "09", "01", "rollout-2026-09-01T00-00-00-"+probeID4+".jsonl"), "{}\n")
 	probePut(t, filepath.Join(home, ".codex", "history.jsonl"), "{}\n")
 	probePut(t, filepath.Join(home, "alt-claude", "projects", "-x", probeID5+".jsonl"), "{}\n")
+	probePut(t, filepath.Join(home, ".copilot", "session-state", probeID1, "events.jsonl"), "{}\n")
+	probePut(t, filepath.Join(home, ".copilot", "session-state", probeID2+".jsonl"), "{}\n")
+	probePut(t, filepath.Join(home, ".copilot", "logs", "process.jsonl"), "{}\n")
+	probePut(t, filepath.Join(home, "work-copilot", "session-state", probeID3, "events.jsonl"), "{}\n")
 	probePut(t, filepath.Join(home, "work-codex", "archived_sessions", "rollout-2026-09-02T00-00-00-"+probeID6+".jsonl"), "{}\n")
 	conductor := filepath.Join(home, "Library", "Application Support", "com.conductor.app")
 	sqliteFixture(t, filepath.Join(conductor, "conductor.db"), "sessions", "session_messages")
@@ -169,14 +178,14 @@ func TestProbeFindsKnownLocationsOnly(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(documents, 0o755) })
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "alt-claude"))
-	stubShellEnv(t, map[string]string{"CODEX_HOME": "~/work-codex", "CLAUDE_CONFIG_DIR": filepath.Join(documents, "claude")})
+	stubShellEnv(t, map[string]string{"CODEX_HOME": "~/work-codex", "CLAUDE_CONFIG_DIR": filepath.Join(documents, "claude"), "COPILOT_HOME": "~/work-copilot"})
 
 	report := probeSources(home, Config{}, nil)
 	names := []string{}
 	for _, candidate := range report.Candidates {
 		names = append(names, candidate.Name)
 	}
-	if got, want := strings.Join(names, ","), "claude,claude-docs,claude-work,codex,conductor,tl1,claude-alt-claude,codex-work-codex,chatgpt"; got != want {
+	if got, want := strings.Join(names, ","), "claude,claude-docs,claude-work,codex,copilot,conductor,tl1,claude-alt-claude,codex-work-codex,copilot-work-copilot,chatgpt,claude-ai"; got != want {
 		t.Fatalf("candidates = %s, want %s", got, want)
 	}
 	main := candidateNamed(t, report, "claude")
@@ -195,6 +204,13 @@ func TestProbeFindsKnownLocationsOnly(t *testing.T) {
 	}
 	if alt := candidateNamed(t, report, "claude-alt-claude"); alt.Count != 1 || alt.FoundBy != "CLAUDE_CONFIG_DIR (service environment)" {
 		t.Fatalf("CLAUDE_CONFIG_DIR profile = %+v", alt)
+	}
+	// Copilot's sessions, in a folder or an older release's flat log, and not its own logs.
+	if copilot := candidateNamed(t, report, "copilot"); copilot.Count != 2 || copilot.Unit != "session" || !copilot.Recommended {
+		t.Fatalf("copilot = %+v", copilot)
+	}
+	if work := candidateNamed(t, report, "copilot-work-copilot"); work.Count != 1 || work.FoundBy != "COPILOT_HOME (login shell)" {
+		t.Fatalf("COPILOT_HOME = %+v", work)
 	}
 	if codex := candidateNamed(t, report, "codex"); codex.Count != 1 || codex.Files != 1 || codex.Path != filepath.Join(home, ".codex") {
 		t.Fatalf("codex = %+v", codex)
@@ -215,7 +231,7 @@ func TestProbeFindsKnownLocationsOnly(t *testing.T) {
 	for _, location := range report.Checked {
 		empty = empty || (location.Path == "~/.claude-empty/projects" && location.Status == "empty")
 	}
-	if !empty || len(report.Environment) != 3 || report.ShellEnv != "read" {
+	if !empty || len(report.Environment) != 4 || report.ShellEnv != "read" {
 		t.Fatalf("checked = %+v environment = %+v shell = %q", report.Checked, report.Environment, report.ShellEnv)
 	}
 }
@@ -249,46 +265,129 @@ func TestLoginShellEnvToleratesNoiseAndHangs(t *testing.T) {
 		}
 		return path
 	}
+	// A background child records its pid; the test kills any survivor.
+	child := func(name string) int {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		pid, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil || convErr != nil || pid <= 0 {
+			t.Fatalf("background child pid %q: %v %v", data, err, convErr)
+		}
+		t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+		return pid
+	}
 	t.Setenv("CLAUDE_CONFIG_DIR", "/profiles/claude work")
 	t.Setenv("CODEX_HOME", "")
 	// Arguments are -l -i -c SCRIPT.
 	noisy := script("noisy", "echo 'Welcome!'\nprintf 'prompt junk'\neval \"$4\"\necho 'logout junk'\nexit 3\n")
-	values, err := loginShellEnv(noisy, probeEnvNames, 2*time.Second)
+	values, err := loginShellEnv(noisy, probeEnvNames(), 2*time.Second)
 	if err != nil || values["CLAUDE_CONFIG_DIR"] != "/profiles/claude work" || len(values) != 1 {
 		t.Fatalf("noisy shell = %v, %v", values, err)
 	}
-	// Waiting for the shell would take 30 s.
+	// Waiting for the shell would take 30 s; the deadline kills its whole
+	// process group, including the background job. The shell and the job
+	// inherit the write end of a FIFO, whose read end reaches EOF only once
+	// every holder has exited, whether or not anything has reaped them.
+	fifo := filepath.Join(dir, "hangs.fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Opening without blocking lets the shell's write open succeed at once.
+	held, err := os.OpenFile(fifo, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	// Reads then block until the holders write or every one has exited.
+	if err := syscall.SetNonblock(int(held.Fd()), false); err != nil {
+		t.Fatal(err)
+	}
 	started := time.Now()
-	if _, err := loginShellEnv(script("hangs", "sleep 30 &\nsleep 30\n"), probeEnvNames, 300*time.Millisecond); err == nil || time.Since(started) > 10*time.Second {
+	hangs := script("hangs", "exec 3>"+fifo+"\nprintf x >&3\nsleep 30 &\necho $! > "+filepath.Join(dir, "hangs.pid")+"\nsleep 30\n")
+	if _, err := loginShellEnv(hangs, probeEnvNames(), time.Second); err == nil || !strings.Contains(err.Error(), "did not finish within") || time.Since(started) > 10*time.Second {
 		t.Fatalf("hanging shell returned %v after %s", err, time.Since(started))
+	}
+	child("hangs.pid")
+	// The readiness byte shows the holders connected before the deadline.
+	read := make(chan []byte, 1)
+	go func() { data, _ := io.ReadAll(held); read <- data }()
+	select {
+	case data := <-read:
+		if string(data) != "x" {
+			t.Fatalf("the hanging shell never connected to the FIFO (read %q)", data)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the timed-out shell's background job kept the FIFO open")
 	}
 	// A background job holding stdout open must not hold up the probe: waiting
 	// for it would take until the 10 s timeout.
 	started = time.Now()
-	values, err = loginShellEnv(script("holder", "eval \"$4\"\nsleep 15 &\n"), probeEnvNames, 10*time.Second)
+	values, err = loginShellEnv(script("holder", "eval \"$4\"\nsleep 15 &\necho $! > "+filepath.Join(dir, "holder.pid")+"\n"), probeEnvNames(), 10*time.Second)
 	if err != nil || values["CLAUDE_CONFIG_DIR"] == "" || time.Since(started) > 5*time.Second {
 		t.Fatalf("background job: %v, %v after %s", values, err, time.Since(started))
 	}
-	if _, err := loginShellEnv(script("silent", "exit 0\n"), probeEnvNames, time.Second); err == nil {
+	child("holder.pid")
+	if _, err := loginShellEnv(script("silent", "exit 0\n"), probeEnvNames(), time.Second); err == nil {
 		t.Fatal("a shell that printed nothing was accepted")
+	}
+	// Without complete markers, the shell's own failure is the error.
+	failing := script("failing", "echo 'startup error'\nexit 4\n")
+	var exit *exec.ExitError
+	if _, err := loginShellEnv(failing, probeEnvNames(), 2*time.Second); !errors.As(err, &exit) || exit.ExitCode() != 4 || !strings.HasPrefix(err.Error(), failing+": ") {
+		t.Fatalf("failing shell = %v", err)
+	}
+	// Where the process group cannot be isolated, the shell never runs.
+	launched := filepath.Join(dir, "launched")
+	marked := script("marked", "touch "+launched+"\neval \"$4\"\n")
+	t.Run("configuration refusal", func(t *testing.T) {
+		override(t, &loginShellProcessConfig, func(*exec.Cmd) error { return errProcessIsolationUnsupported })
+		if values, err := loginShellEnv(marked, probeEnvNames(), 2*time.Second); values != nil || !errors.Is(err, errProcessIsolationUnsupported) || !strings.HasPrefix(err.Error(), marked+": ") {
+			t.Fatalf("refused shell = %v, %v", values, err)
+		}
+	})
+	t.Run("disabled probing", func(t *testing.T) {
+		t.Setenv("PHAROS_PROBE_SHELL", "0")
+		t.Setenv("SHELL", marked)
+		override(t, &loginShellProcessConfig, func(*exec.Cmd) error {
+			t.Error("disabled probing configured a shell")
+			return errProcessIsolationUnsupported
+		})
+		if values, err := cachedLoginShellEnv(probeEnvNames()); values != nil || err != nil {
+			t.Fatalf("disabled probe = %v, %v", values, err)
+		}
+	})
+	if _, err := os.Stat(launched); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused or disabled shell ran: %v", err)
 	}
 	t.Run("cache follows selected tools", func(t *testing.T) {
 		t.Setenv("PHAROS_PROBE_SHELL", "1")
 		t.Setenv("SHELL", noisy)
 		t.Setenv("CODEX_HOME", "/profiles/codex work")
+		t.Setenv("COPILOT_HOME", "/profiles/copilot")
+		t.Setenv("XDG_DATA_HOME", "/profiles/data")
+		t.Setenv("CLINE_DATA_DIR", "/profiles/cline data")
+		t.Setenv("CLINE_DIR", "/profiles/cline")
+		t.Setenv("OPENCLAW_STATE_DIR", "/profiles/openclaw")
+		t.Setenv("HERMES_HOME", "/profiles/hermes")
 		override(t, &shellEnvCache.key, "")
 		override(t, &shellEnvCache.at, time.Time{})
 		override(t, &shellEnvCache.values, map[string]string{})
 		override(t, &shellEnvCache.err, error(nil))
-		for _, name := range probeEnvNames {
+		for _, name := range probeEnvNames() {
 			values, err := cachedLoginShellEnv([]string{name})
 			if err != nil || len(values) != 1 || values[name] == "" {
 				t.Fatal("previous tool choice hid this tool's override", name, values, err)
 			}
+			if shellEnvCache.key != noisy+"\x00"+name {
+				t.Fatalf("cache key = %q", shellEnvCache.key)
+			}
 		}
-		values, err := cachedLoginShellEnv(probeEnvNames)
-		if err != nil || len(values) != 2 {
+		values, err := cachedLoginShellEnv(probeEnvNames())
+		if err != nil || len(values) != len(probeEnvNames()) {
 			t.Fatal("full CLI discovery reused a partial result", values, err)
+		}
+		if shellEnvCache.key != noisy+"\x00"+strings.Join(probeEnvNames(), "\x00") {
+			t.Fatalf("cache key = %q", shellEnvCache.key)
 		}
 	})
 }
@@ -501,6 +600,100 @@ func TestProbeAcceptWritesHostFileAndReloadsSources(t *testing.T) {
 	if source, _ := server.configuredSource("codex"); !source.Enabled {
 		t.Fatal("codex was not enabled in the running config")
 	}
+	// Sources says which tool each is, and which are this Mac's own.
+	if _, inventory := probeCall(t, server, http.MethodGet, "/api/sources", ""); !strings.Contains(jsonText(inventory["items"]), `"scope":"host"`) ||
+		!strings.Contains(jsonText(inventory["items"]), `"tool":"Claude Code"`) {
+		t.Fatalf("inventory = %v", inventory["items"])
+	}
+	// Removing one of this Mac's sources deletes its block and nothing else.
+	if code, result := probeCall(t, server, http.MethodPost, "/api/sources/claude-work/remove", `{}`); code != 200 || result["removed"] != true {
+		t.Fatalf("remove = %d %v", code, result)
+	}
+	if text := probeReadText(t, host); strings.Contains(text, "claude-work") || strings.Count(text, "\n[[sources]]\n") != 2 || !strings.HasPrefix(text, "# Pharos sources for") {
+		t.Fatalf("host file after removal:\n%s", text)
+	}
+	if _, err := server.configuredSource("claude-work"); err == nil {
+		t.Fatal("the removed source is still running")
+	}
+	if code, result := probeCall(t, server, http.MethodPost, "/api/sources/claude-work/remove", `{}`); code != 400 || !strings.Contains(firstString(result["error"]), "not found") {
+		t.Fatalf("second removal = %d %v", code, result)
+	}
+	// Told to check only a named folder, setup counts no new history in the
+	// usual places, which it would otherwise read.
+	probePut(t, filepath.Join(home, ".copilot", "session-state", probeID1, "events.jsonl"), "{}\n")
+	if _, status := probeCall(t, server, http.MethodGet, "/api/probe/status", ""); status["new_sources"] != float64(1) {
+		t.Fatalf("new Copilot history: %v", status["new_sources"])
+	}
+	named := `{"kinds":["copilot"],"locations":[{"kind":"copilot","path":"` + filepath.Join(home, "elsewhere") + `"}],"only_locations":true}`
+	if code, report := probeCall(t, server, http.MethodPost, "/api/probe", named); code != 200 || report["new_sources"] != float64(0) {
+		t.Fatalf("named folders only = %d %v", code, report["new_sources"])
+	}
+	// A host source that replaces a library.toml one says so, since removing
+	// it brings that one back: here, reading again what was paused.
+	library := probeReadText(t, path) + "\n[[sources]]\nname = \"codex\"\nkind = \"codex\"\npath = \"/shared/codex\"\nenabled = true\n"
+	probePut(t, path, library)
+	if _, inventory := probeCall(t, server, http.MethodGet, "/api/sources", ""); !strings.Contains(jsonText(inventory["items"]), `"replaces":{"enabled":true,"path":"/shared/codex"}`) {
+		t.Fatalf("inventory = %v", inventory["items"])
+	}
+	if code, _ := probeCall(t, server, http.MethodPost, "/api/sources/codex/remove", `{}`); code != 200 {
+		t.Fatal("remove codex", code)
+	}
+	if source, err := server.configuredSource("codex"); err != nil || source.Path != "/shared/codex" || !source.Enabled {
+		t.Fatalf("library codex = %+v %v", source, err)
+	}
+}
+
+// A downloaded export is imported by naming it: checked without parsing,
+// then written as one of this Mac's sources.
+func TestImportSourceChecksTheExport(t *testing.T) {
+	home := probeHome(t)
+	useHost(t, "host-a")
+	path := probeLibrary(t, "")
+	host := filepath.Join(filepath.Dir(path), "hosts", "host-a.toml")
+	server := probeServer(t, path)
+	zipped := filepath.Join(home, "Downloads", "chatgpt.zip")
+	if err := os.MkdirAll(filepath.Dir(zipped), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	chatGPTZip(t, zipped, map[string]string{"conversations.json": "[]", "user.json": "{}"})
+	chatGPTZip(t, filepath.Join(home, "Downloads", "photos.zip"), map[string]string{"cat.jpg": "x"})
+	probePut(t, filepath.Join(home, "claude-export", "conversations.json"), "[]")
+	probePut(t, filepath.Join(home, "notes.txt"), "x")
+	for body, problem := range map[string]string{
+		`{"kind":"claude","path":"~/.claude"}`:                             "not a kind of export",
+		`{"kind":"chatgpt","path":"Downloads/chatgpt.zip"}`:                "absolute path",
+		`{"kind":"chatgpt","path":"~/Downloads/missing.zip"}`:              "nothing is at",
+		`{"kind":"chatgpt","path":"~/Downloads/photos.zip"}`:               "holds no conversations.json",
+		`{"kind":"chatgpt","path":"~/notes.txt"}`:                          "choose the ChatGPT export",
+		`{"kind":"claude-ai","path":"~/Downloads"}`:                        "choose the Claude.ai export",
+		`{"kind":"chatgpt","path":"~/Downloads/chatgpt.zip","name":"a b"}`: "must start with",
+	} {
+		if code, result := probeCall(t, server, http.MethodPost, "/api/sources/import", body); code != 400 || !strings.Contains(firstString(result["error"]), problem) {
+			t.Fatalf("%s: %d %v", body, code, result)
+		}
+	}
+	if _, err := os.Stat(host); !os.IsNotExist(err) {
+		t.Fatalf("a rejected import wrote the host file: %v", err)
+	}
+	for _, body := range []string{`{"kind":"chatgpt","path":"~/Downloads/chatgpt.zip"}`, `{"kind":"claude-ai","path":"~/claude-export"}`, `{"kind":"chatgpt","path":"` + filepath.Join(home, "claude-export", "conversations.json") + `"}`} {
+		if code, result := probeCall(t, server, http.MethodPost, "/api/sources/import", body); code != 200 || len(result["added"].([]any)) != 1 {
+			t.Fatalf("%s: %d %v", body, code, result)
+		}
+	}
+	// The same export again is not added twice; a second ChatGPT export gets
+	// a name of its own.
+	if code, result := probeCall(t, server, http.MethodPost, "/api/sources/import", `{"kind":"chatgpt","path":"~/Downloads/chatgpt.zip"}`); code != 200 || jsonText(result["added"]) != `[]` || !strings.Contains(jsonText(result["skipped"]), "already imported as chatgpt") {
+		t.Fatalf("again = %d %v", code, result)
+	}
+	text := probeReadText(t, host)
+	for _, fragment := range []string{"name = \"chatgpt\"\nkind = \"chatgpt\"\npath = \"~/Downloads/chatgpt.zip\"\nenabled = true", "name = \"claude-ai\"\nkind = \"claude-ai\"\npath = \"~/claude-export\"", "name = \"chatgpt-2\""} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("host file lacks %q:\n%s", fragment, text)
+		}
+	}
+	if source, err := server.configuredSource("claude-ai"); err != nil || !source.Enabled {
+		t.Fatalf("the import is not running: %+v %v", source, err)
+	}
 }
 
 func TestProbeAcceptRefusesPerUserConfig(t *testing.T) {
@@ -547,7 +740,7 @@ func TestProbeToolPresence(t *testing.T) {
 	if len(tools) != 5 {
 		t.Fatal("missed a common application or data folder", tools)
 	}
-	for index, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity"} {
+	for index, kind := range []string{"claude", "codex", "antigravity", "conductor", "tl1"} {
 		if tools[index].Kind != kind || tools[index].Path == "" {
 			t.Fatal("missing detection evidence", tools)
 		}
@@ -633,8 +826,27 @@ func TestProbeSelectedTools(t *testing.T) {
 			t.Fatal(candidate)
 		}
 	}
+	// Told where to look, it looks only there: not the usual places, nor the
+	// variables that move them.
+	request, _ = json.Marshal(ProbeSelection{Kinds: &[]string{"claude"}, Locations: []ProbeLocation{{Kind: "claude", Path: custom}}, OnlyLocations: true})
+	if code, result = probeCall(t, server, http.MethodPost, "/api/probe", string(request)); code != 200 || shellCalls != 1 ||
+		len(result["candidates"].([]any)) != 1 || !strings.Contains(jsonText(result["candidates"]), "chosen profile") || jsonText(result["environment"]) != `[]` {
+		t.Fatal("named folders only", code, shellCalls, result["candidates"])
+	}
+	// A folder picked because it holds the history is read as the folder the
+	// source reads.
+	for kind, chosen := range map[string]string{"claude": ".claude/projects", "zed": zedUserDir + "/threads", "cursor-cli": ".cursor/chats"} {
+		spec, _ := providerFor(kind)
+		if got := spec.Probe.Chosen(filepath.Join(home, chosen)); got != filepath.Dir(filepath.Join(home, chosen)) {
+			t.Fatal(kind, got)
+		}
+	}
 	if code, _ := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"kinds":["claude"],"accept":["codex"]}`); code != 400 {
 		t.Fatal("accepted an unselected tool", code)
+	}
+	calls := shellCalls
+	if code, _ := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"only_locations":true,"accept":[]}`); code != 400 || shellCalls != calls {
+		t.Fatal("named folders only, with no tools, looked everywhere", code, shellCalls)
 	}
 	if _, err := os.Stat(hostConfigPath(server.Config())); !os.IsNotExist(err) {
 		t.Fatal("discovery changed source permissions", err)

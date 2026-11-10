@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,7 +15,9 @@ import (
 // none (a chat export). See docs/projects-and-outcomes.md.
 
 // folderKey is a working directory as a folder project names it: cleaned, with
-// a home directory (this Mac's, or any /Users/<name> or /home/<name>) as ~.
+// a home directory (any /Users/<name> or /home/<name>) as ~. It reads nothing
+// of this host, so every Mac sharing a library derives the same key and none
+// rewrites another's.
 func folderKey(location string) string {
 	location = strings.TrimSpace(location)
 	if location == "" {
@@ -29,14 +30,6 @@ func folderKey(location string) string {
 		return ""
 	}
 	location = filepath.Clean(location)
-	if home, err := os.UserHomeDir(); err == nil && home != "" && home != "/" {
-		if location == home {
-			return "~"
-		}
-		if rest, ok := strings.CutPrefix(location, home+"/"); ok {
-			return "~/" + rest
-		}
-	}
 	parts := strings.SplitN(strings.TrimPrefix(location, "/"), "/", 3)
 	if len(parts) >= 2 && (parts[0] == "Users" || parts[0] == "home") && parts[1] != "" && parts[1] != "Shared" {
 		if len(parts) == 2 {
@@ -152,22 +145,56 @@ func resolveProjects(ctx context.Context, tx *sql.Tx, predicate string, args ...
 }
 
 // resolveFolderProjects resolves again the workspaces without a repository
-// once repositories gained checkouts, since a folder may now be one of them.
-func resolveFolderProjects(ctx context.Context, tx *sql.Tx, added []string) error {
-	if len(added) == 0 {
+// whose folders are at or under the given checkout paths, since a folder may
+// now be in one of those checkouts. A folder elsewhere keeps its nearest
+// checkout, so only these can change. It runs inside ingest's writer, so it
+// reads only those workspaces (by workspaces_project_folder_idx).
+func resolveFolderProjects(ctx context.Context, tx *sql.Tx, paths []string) error {
+	keys := []string{}
+	for _, path := range paths {
+		if key := folderKey(path); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	temporary := false
+	for index, key := range keys {
+		if index > 0 && key == keys[index-1] {
+			continue
+		}
+		// A checkout at the home directory or at / claims only itself.
+		predicate, args := `w.project_folder=?`, []any{key}
+		if key != "~" && key != "/" {
+			predicate, args = `(w.project_folder=? OR w.project_folder>=? AND w.project_folder<?)`, []any{key, key + "/", key + "0"}
+		}
+		if err := resolveProjects(ctx, tx, `w.repository_id IS NULL AND w.location IS NOT NULL AND `+predicate, args...); err != nil {
+			return err
+		}
+		// Every temporary directory is the one /tmp project, which these
+		// ranges cannot see into.
+		for _, folder := range temporaryFolders {
+			temporary = temporary || folder == key || strings.HasPrefix(folder, strings.TrimSuffix(key, "/")+"/") || strings.HasPrefix(key, folder+"/")
+		}
+	}
+	if !temporary {
 		return nil
 	}
-	return resolveProjects(ctx, tx, `w.repository_id IS NULL AND w.location IS NOT NULL`)
+	return resolveProjects(ctx, tx, `w.repository_id IS NULL AND w.location IS NOT NULL AND w.project_folder='/tmp'`)
 }
 
-// repositoryCheckouts is every repository's checkouts, to tell whether a
-// write that bypasses upsertRepositoryChanges added any.
-func repositoryCheckouts(ctx context.Context, q queryer) (string, error) {
-	rows, err := queryMapsContext(ctx, q, `SELECT COALESCE(group_concat(id||'='||COALESCE(local_locations_json,''),char(10)),'') checkouts FROM (SELECT id,local_locations_json FROM repositories ORDER BY id)`)
-	if err != nil || len(rows) == 0 {
-		return "", err
+// changedRoots is the folders of the checkouts in one list of roots and not
+// the other, to tell which folders a write that bypasses
+// upsertRepositoryChanges may have moved into or out of a repository.
+func changedRoots(before, after []projectRoot) []string {
+	changed := []string{}
+	for _, pair := range [][2][]projectRoot{{before, after}, {after, before}} {
+		for _, root := range pair[0] {
+			if !slices.Contains(pair[1], root) {
+				changed = append(changed, root.folder)
+			}
+		}
 	}
-	return firstString(rows[0]["checkouts"]), nil
+	return changed
 }
 
 // migrateProjects adds the project columns and derives them for every
@@ -185,6 +212,10 @@ func (c *Catalog) migrateProjects() error {
 				return err
 			}
 		}
+	}
+	// resolveFolderProjects reads folders of one checkout by this index.
+	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS workspaces_project_folder_idx ON workspaces(project_folder) WHERE repository_id IS NULL`); err != nil {
+		return err
 	}
 	tx, err := c.DB.Begin()
 	if err != nil {
@@ -243,16 +274,25 @@ func projectIDSQL(w string) string {
 }
 
 // projectPredicate selects the workspaces (alias w) of the projects a project
-// filter names: a repository by name or remote, as the repository filter
-// matches, including the folders checked out inside it; or a folder project
-// by its key (~/notes), any part of it, or its absolute path. A workspace in
-// a repository is that repository's project, even inside a folder project's
-// directory, so a folder name matches only workspaces outside any repository,
-// as projectKindSQL tells them. Its arguments are projectArgs.
+// filter names. A value that is exactly a project's name, a repository's
+// remote, or a folder project's key (~/notes, ~, or its absolute path) names
+// only that project. Otherwise it matches as the repository filter does, by
+// any part of a repository's name or remote, including the folders checked
+// out inside it, or any part of a folder project's key. A workspace in a
+// repository is that repository's project, even inside a folder project's
+// directory, so a folder matches only workspaces outside any repository, as
+// projectKindSQL tells them. Its arguments are projectArgs.
 func projectPredicate(w string) string {
 	repository := "COALESCE(" + w + ".repository_id," + w + ".folder_repository_id)"
-	return "(" + repository + " IN (SELECT pr.id FROM repositories pr WHERE " + repositoryNamePredicate("pr") + ")" +
-		" OR instr(lower(" + w + ".project_folder),lower(?))>0 AND NOT EXISTS(SELECT 1 FROM repositories pf WHERE pf.id=" + repository + "))"
+	outside := "NOT EXISTS(SELECT 1 FROM repositories pf WHERE pf.id=" + repository + ")"
+	exactRepository := "(lower(%[1]s.display_name)=lower(?) OR lower(COALESCE(%[1]s.canonical_remote,''))=lower(?))"
+	// Uncorrelated, so SQLite evaluates it once per statement.
+	exact := "(EXISTS(SELECT 1 FROM repositories px WHERE " + fmt.Sprintf(exactRepository, "px") + ")" +
+		" OR EXISTS(SELECT 1 FROM workspaces wx WHERE wx.repository_id IS NULL AND wx.project_folder=? AND NOT EXISTS(SELECT 1 FROM repositories pf WHERE pf.id=wx.folder_repository_id)))"
+	return "(CASE WHEN " + exact + " THEN " +
+		repository + " IN (SELECT pr.id FROM repositories pr WHERE " + fmt.Sprintf(exactRepository, "pr") + ") OR " + w + ".project_folder=? AND " + outside +
+		" ELSE " + repository + " IN (SELECT pr.id FROM repositories pr WHERE " + repositoryNamePredicate("pr") + ")" +
+		" OR instr(lower(" + w + ".project_folder),lower(?))>0 AND " + outside + " END)"
 }
 
 func projectArgs(value string) []any {
@@ -260,7 +300,7 @@ func projectArgs(value string) []any {
 	if key := projectFolder(value); key != "" {
 		folder = key
 	}
-	return []any{value, value, folder}
+	return []any{value, value, folder, value, value, folder, value, value, folder}
 }
 
 // checkProjectFilter reports an error when a project filter matches no
@@ -299,8 +339,11 @@ func (c *Catalog) listProjects(args map[string]any) (map[string]any, error) {
 			where, values = " AND pj.id=?", []any{repository}
 		} else {
 			// A folder is its project folder, so temporary folders are /tmp.
+			// As in folderRepository, the home directory and / hold only
+			// themselves: a session once run in ~ does not make ~ the project
+			// of every new folder, which leaves the caller to look further.
 			folder := projectFolder(path)
-			where, values, nearest = " AND pj.id IS NULL AND (w.project_folder=? OR substr(?,1,length(w.project_folder)+1)=w.project_folder||'/')", []any{folder, folder}, true
+			where, values, nearest = " AND pj.id IS NULL AND (w.project_folder=? OR w.project_folder NOT IN ('~','/') AND substr(?,1,length(w.project_folder)+1)=w.project_folder||'/')", []any{folder, folder}, true
 		}
 	}
 	rows, err := queryMaps(c.DB, `SELECT `+projectNameSQL("w")+` project,`+projectKindSQL("w")+` kind,MAX(pj.canonical_remote) remote,

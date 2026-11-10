@@ -378,17 +378,25 @@ func modelsWithStatus(rows []map[string]any, status string) []map[string]any {
 // pricingHealth reports how much usage has a confirmed price, so gaps in the
 // price history are visible instead of silently lowering cost.
 func (c *Catalog) pricingHealth() map[string]any {
+	health, _ := c.pricingHealthContext(context.Background())
+	return health
+}
+
+func (c *Catalog) pricingHealthContext(ctx context.Context) (map[string]any, error) {
 	health := map[string]any{"priced_tokens": int64(0), "assumed_tokens": int64(0), "partial_tokens": int64(0), "unpriced_tokens": int64(0),
 		"unpriced_models": []map[string]any{}, "assumed_models": []map[string]any{}}
 	for _, status := range []string{"confirmed", "proposed"} {
 		var changes int64
-		_ = c.reader().QueryRow("SELECT COUNT(*) FROM cost_changes WHERE status=?", status).Scan(&changes)
+		if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM cost_changes WHERE status=?", status).Scan(&changes); err != nil {
+			health["error"] = err.Error()
+			return health, err
+		}
 		health[status+"_changes"] = changes
 	}
-	rows, err := c.localUsageRows(context.Background())
+	rows, err := c.localUsageRows(ctx)
 	if err != nil {
 		health["error"] = err.Error()
-		return health
+		return health, err
 	}
 	// Totals for the Settings usage card, overall and for the last 30 days.
 	since := c.clock().AddDate(0, 0, -29).Format("2006-01-02")
@@ -414,7 +422,7 @@ func (c *Catalog) pricingHealth() map[string]any {
 	health["total_tokens"], health["cost_usd"], health["recent_tokens"], health["recent_cost_usd"] = tokens, cost, recentTokens, recentCost
 	health["unpriced_models"] = modelsWithStatus(rows, "unpriced")
 	health["assumed_models"] = modelsWithStatus(rows, "assumed")
-	return health
+	return health, nil
 }
 
 // migratePricingSchema runs before schema.sql: it adds columns that the

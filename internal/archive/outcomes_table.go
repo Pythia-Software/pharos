@@ -22,6 +22,17 @@ func outcomeEvidenceTierSQL(w string) string {
 // cost per kept change divides by them.
 const outcomeKeptLabels = `('landed','committed','changed_kept')`
 
+// outcomeJudgedLabels are the labels that judge whether changes were kept:
+// the kept ones and Reworked. Changed, too recent cannot be judged yet, and
+// No changes and Unknown have nothing to judge, so kept share and cost per
+// kept change leave them out rather than count them as not kept.
+const outcomeJudgedLabels = `('landed','committed','changed_kept','reworked')`
+
+// outcomeReworkOpenSQL is true while a session's rework window is open: the
+// rework seen so far is not yet its rework, so its lines stay out of the
+// rework rate until the window closes.
+const outcomeReworkOpenSQL = `julianday(so.last_edit_at)>julianday('now')-so.rework_days`
+
 func (c *Catalog) outcomeRows(ctx context.Context) ([]map[string]any, error) {
 	return cachedValue(ctx, c, "outcome-rows:"+c.clock().Format("2006-01-02"), func(ctx context.Context) ([]map[string]any, error) {
 		rows, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,w.id workspace_id,w.title,w.source_kind,w.activity_at,
@@ -29,7 +40,10 @@ func (c *Catalog) outcomeRows(ctx context.Context) ([]map[string]any, error) {
 			CASE WHEN `+projectKindSQL("w")+`='repository' THEN NULLIF(TRIM(COALESCE(w.branch,'')),'') END branch,
 			label outcome_label,`+outcomeEvidenceTierSQL("w")+` evidence_tier,`+gitCheckSQL("w")+` git_check,`+gitCheckReasonSQL("w")+` git_check_reason,
 			CASE WHEN label IN `+outcomeKeptLabels+` THEN 1 ELSE 0 END kept_change,
-			so.files_changed,so.lines_added,so.lines_removed,so.kept_lines,so.rework_removed_lines,so.first_edit_at,
+			CASE WHEN label IN `+outcomeJudgedLabels+` THEN 1 ELSE 0 END judged,
+			so.files_changed,so.lines_added,so.lines_removed,so.first_edit_at,
+			CASE WHEN `+outcomeReworkOpenSQL+` THEN NULL ELSE so.kept_lines END kept_lines,
+			CASE WHEN `+outcomeReworkOpenSQL+` THEN NULL ELSE so.rework_removed_lines END rework_removed_lines,
 			(SELECT sg.linked_commits FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') linked_commits,
 			(SELECT sg.landed_commits FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') landed_commits
 			FROM (SELECT w.*,`+outcomeLabelSQL("w")+` label FROM workspaces w) w`+projectJoin("w")+`
@@ -44,13 +58,24 @@ func (c *Catalog) outcomeRows(ctx context.Context) ([]map[string]any, error) {
 		}
 		for _, row := range rows {
 			row["started_at"] = defaultString(firstString(row["first_edit_at"]), firstString(row["activity_at"]))
-			row["cost_usd"], row["tokens"], row["provider"], row["model_family"] = nil, int64(0), nil, nil
+			row["cost_usd"], row["tokens"], row["price_status"], row["provider"], row["model_family"] = nil, int64(0), nil, nil, nil
+			row["has_usage"] = int64(0)
 			if session := usage[firstString(row["id"])]; session != nil {
-				row["cost_usd"], row["tokens"], row["price_status"] = session.cost, session.tokens, session.status
+				row["cost_usd"], row["tokens"], row["price_status"], row["has_usage"] = session.cost, session.tokens, session.status, int64(1)
 				row["provider"], row["model_family"] = nilIfEmpty(session.provider), nilIfEmpty(modelFamily(session.model))
 				if session.first != "" {
 					row["started_at"] = session.first
 				}
+			}
+			// Cost per kept change prices judged sessions over the kept ones
+			// that have a price: an unpriced kept session adds nothing to the
+			// cost, so it must not add to the count either.
+			row["judged_cost_usd"], row["kept_priced"] = nil, int64(0)
+			if integer(row["judged"]) == 1 {
+				row["judged_cost_usd"] = row["cost_usd"]
+			}
+			if integer(row["kept_change"]) == 1 && row["cost_usd"] != nil {
+				row["kept_priced"] = int64(1)
 			}
 			delete(row, "first_edit_at")
 		}
@@ -68,7 +93,7 @@ type sessionUsage struct {
 // sessionModelUsage prices the usage ledger per session as workspaceUsage
 // does, and finds each session's main model and first usage hour.
 func (c *Catalog) sessionModelUsage(ctx context.Context) (map[string]*sessionUsage, error) {
-	ledger, err := c.usageLedger(nil)
+	ledger, err := c.usageLedger(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
