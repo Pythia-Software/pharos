@@ -11,6 +11,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 // The parity check of docs/projects-and-outcomes.md: every route and MCP tool
@@ -170,6 +173,19 @@ func TestProjectParityWithoutGit(t *testing.T) {
 	}
 	if outcomes["claude|no_changes"] != 4 || outcomes["chatgpt|unknown"] != 1 {
 		t.Fatalf("library outcomes: %#v", outcomes)
+	}
+	// A count shown without the columns it is read with still carries them.
+	request := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true,
+		Result: qt.WireQuery{Select: []string{"id", "linked_commits"}, Limit: 50}}
+	w := apiCall(t, server, library.config.APIToken, http.MethodPost, "/api/query/library/query-v3", request)
+	var shown qt.QueryResultV3
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &shown) != nil || len(shown.Rows) == 0 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	for _, row := range shown.Rows {
+		if _, ok := row["project_kind"]; !ok || row["git_check"] != "not_applicable" {
+			t.Fatalf("a linked commit count without what it reads: %#v", row)
+		}
 	}
 	usage := map[string]bool{}
 	for _, row := range queryProjects(t, server, "rhythm") {

@@ -648,6 +648,12 @@ func queryRowActionFields(dataset string, selected []string) []string {
 		required = []string{"source_workspace_id", "source_conversation_id", "message_id"}
 	case "agent_events", "agent_event_messages", "agent_event_rates", "message_labels", "compactions":
 		required = []string{"workspace_id", "conversation_id", "message_id"}
+	case "library":
+		// A local Git count reads "Not checked", with the reason, or "Not a
+		// repository" when it is empty, whichever columns are shown.
+		if slices.ContainsFunc(selected, func(field string) bool { return field == "linked_commits" || field == "landed_commits" }) {
+			required = []string{"project_kind", "git_check", "git_check_reason"}
+		}
 	}
 	if len(required) == 0 {
 		return selected
