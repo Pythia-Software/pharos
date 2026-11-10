@@ -1238,6 +1238,8 @@ window.initPharosAsk = function(root, {previews} = {}) {
   }
   function ask(){submitQuestion(question.value);}
   find('.pharos-send').addEventListener('click',()=>{if(pending)stop();else ask();});
+  const detachDictation=window.pharosDictation?.attach({button:find('.pharos-dictate'),field:question,charBefore:promptEditor.charBefore,onError:error=>report(error,{source:'dictation'})});
+  if(detachDictation)cleanup.push(detachDictation);
   ai.addEventListener('submit', event => {event.preventDefault(); ask();});
   find('#pharos-question').addEventListener('keydown', event => {if(event.target===question&&event.key === 'Enter' && !event.shiftKey && !event.isComposing){event.preventDefault();if(!pending)ask();}});
   question.addEventListener('input', () => {contextURI=promptEditor.chips().find(chip=>chip.id==='page')?.value||'';if(!question.value.trim())chosenIdea=null;if(pending)pending.edited=true;syncSuggestions();autoFit();saveChat();});

@@ -3,7 +3,7 @@
 // protocolVersion describes this JavaScript API, not a verified native version.
 (() => {
   'use strict';
-  const names = {clipboard: 'pharosClipboard', folders: 'pharosLibrary', updates: 'pharosUpdates', menu: 'pharosMenuBar', eject: 'pharosLibrary'};
+  const names = {clipboard: 'pharosClipboard', folders: 'pharosLibrary', updates: 'pharosUpdates', menu: 'pharosMenuBar', eject: 'pharosLibrary', dictation: 'pharosDictation'};
   const handler = name => {
     const value = window.webkit?.messageHandlers?.[names[name]];
     return typeof value?.postMessage === 'function' ? value : null;
@@ -53,6 +53,23 @@
       if (inputSelection) active.setSelectionRange(...inputSelection);
     }
   }
+  // Native dictation reports progress as window events. Each session's handlers
+  // stay registered until it ends, and onEnd runs exactly once per session:
+  // from the native end event or, if that never comes, the failed start.
+  const dictationSessions = new Map();
+  window.addEventListener('pharos:dictation', event => {
+    const detail = event.detail, session = object(detail) ? dictationSessions.get(detail.session) : undefined;
+    if (!session) return;
+    if (detail.type === 'text' && typeof detail.text === 'string') session.onText?.(detail.text, detail.final === true);
+    else if (detail.type === 'state' && typeof detail.state === 'string') session.onState?.(detail.state);
+    else if (detail.type === 'end') endDictation(detail.session, typeof detail.error === 'string' ? detail.error : null);
+  });
+  function endDictation(id, error) {
+    const session = dictationSessions.get(id);
+    if (!session) return;
+    dictationSessions.delete(id);
+    session.onEnd?.(error);
+  }
   const capabilities = {};
   for (const name of Object.keys(names)) Object.defineProperty(capabilities, name, {enumerable: true, get() {
     const supported = name === 'clipboard' || kind() === 'legacy-webkit';
@@ -94,6 +111,20 @@
         return {dispatched: true};
       },
       refreshUsage() { dispatch('menu', {refreshUsage: true}); return {dispatched: true}; },
+    },
+    dictation: {
+      status: () => request('dictation', {action: 'status'}, value => object(value) && typeof value.available === 'boolean'),
+      // Returns at once so a caller can cancel while the speech model loads;
+      // `started` settles when audio is flowing.
+      start(handlers = {}) {
+        if (!object(handlers)) throw failure('invalid-request', 'Dictation handlers must be an object.');
+        const session = crypto.randomUUID();
+        dictationSessions.set(session, handlers);
+        const started = request('dictation', {action: 'start', session}, value => object(value) && value.started === true)
+          .then(() => undefined, error => { endDictation(session, error?.message || String(error)); throw error; });
+        const finish = action => request('dictation', {action, session}, value => value === true);
+        return {started, stop: () => finish('stop'), cancel: () => finish('cancel')};
+      },
     },
     // Released confirms native orchestration accepted the Go release, not that
     // the OS has physically ejected the drive. Never retry this action here.

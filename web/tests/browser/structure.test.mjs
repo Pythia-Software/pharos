@@ -196,6 +196,7 @@ const backgroundTaskStatus = { ...busyStatus,
   },
   attention: [],
 };
+const askFeedbackAPI = {...askAPI,"GET /api/ask/session":{...askSession,conversation:[{...askSession.conversation[0],status:"feedback",cards:[],feedback:{kind:"feature",comment:"Add Markdown export of selected conversations so I can share a review.\nPreserve message order and tool-call context."}}]}};
 const ROUTES = [
   {name:"Scatter Plots",url:"/analyze?analyze_topic=scatter&analyze_data=scatter",ready:".usage-scatter-dashboard"},
   {name:"Compaction comparison",url:"/analyze?"+new URLSearchParams({analyze_topic:"compaction",analyze_data:"compactions",analyze_chart:JSON.stringify({view:"compare",metric:"compactions",split:"trigger_provider"})}),ready:analysisReady},
@@ -321,7 +322,10 @@ const ROUTES = [
   }},
   ...['',' \n '].map(reply=>({name:`Ask Pharos destinations with ${reply?'blank':'empty'} intro`,url:'/?ask_chat=saved-chat',ready:'#pharos-ask .pharos-destinations:not([hidden])',api:{...askAPI,'GET /api/ask/session':{...askSession,conversation:askSession.conversation.map(turn=>({...turn,reply}))}}})),
   {name:"Ask Pharos error activity",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-activity:not([hidden])",api:{...askAPI,"GET /api/ask/session":{...askSession,conversation:askSession.conversation.map(turn=>({...turn,status:'error',cards:[],reply:'Could not finish checking the destination. Try again.',activity:[{message:"Browsing available views…",elapsedMs:1200},{message:"Browsing available views — done",elapsedMs:2500},{message:"Checking a destination link…",elapsedMs:3000}]}))}},open:page=>page.locator('#pharos-ask .pharos-activity summary').click(),shown:'#pharos-ask .pharos-activity[open]'},
-  {name:"Ask Pharos feedback draft",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-feedback:not([hidden])",api:{...askAPI,"GET /api/ask/session":{...askSession,conversation:[{...askSession.conversation[0],status:"feedback",cards:[],feedback:{kind:"feature",comment:"Add Markdown export of selected conversations so I can share a review.\nPreserve message order and tool-call context."}}]}}},
+  {name:"Ask Pharos feedback draft",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-feedback:not([hidden])",api:askFeedbackAPI},
+  // In the Mac app, where it can transcribe, the composer and the feedback text box offer a microphone.
+  {name:"Ask Pharos dictation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-feedback .dictation-button:not([hidden])",api:askFeedbackAPI,
+    nativeHost:"window.webkit={messageHandlers:{pharosDictation:{postMessage:async body=>body.action==='status'?{available:true}:true}}};"},
   {name:"Ask Pharos clarification",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-clarification:not([hidden])",api:{...askAPI,"GET /api/ask/session":askClarificationSession}},
   {name:"Ask Pharos opt-in",url:"/",ready:"#pharos-ask .pharos-invitation:not([hidden])",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:true},providers:askProviders}},open:page=>page.locator("#pharos-ask .pharos-try").click(),shown:"#pharos-ask .pharos-consent[open]"},
   {name:"Ask Pharos settings",url:"/settings/ask",ready:"#askSettingsPage .ask-settings select",api:askAPI},
@@ -1392,7 +1396,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
     for (const viewport of WIDTHS) {
       const name = `${route.name} @ ${viewport.width}`;
       test(name, { skip }, async t => {
-        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, concurrency: route.concurrency, managedLibrary: route.managedLibrary, api: route.api });
+        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, concurrency: route.concurrency, managedLibrary: route.managedLibrary, nativeHost: route.nativeHost, api: route.api });
         // Loading a page leaves initial focus to the user, and its title is
         // ordinary text. A dashboard's chart title stands in for its h1.
         const focus = route.open || route.movesFocus ? [] : await app.page.evaluate(() => {
