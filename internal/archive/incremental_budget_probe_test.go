@@ -181,10 +181,15 @@ func TestIncrementalScheduledResourceBudgets(t *testing.T) {
 			if sample.State != "complete" || sample.Audit.Outcome != "passed" {
 				t.Fatalf("resource budget cannot substitute for correctness: %+v", sample)
 			}
-			if sample.Seconds > wallLimit || sample.CPUSeconds > cpuLimit || sample.Allocated > allocationLimit || sample.RSSPeak-sample.RSSBaseline > memoryLimit {
+			// A budget needs its measurement: an unavailable one cannot pass.
+			if sample.CPUSeconds == nil || sample.RSSPeak == nil || sample.RSSBaseline == nil {
+				t.Fatalf("%s: CPU or RSS was not measured on this platform: %+v", workload, sample)
+			}
+			growth := *sample.RSSPeak - *sample.RSSBaseline
+			if sample.Seconds > wallLimit || *sample.CPUSeconds > cpuLimit || sample.Allocated > allocationLimit || growth > memoryLimit {
 				t.Fatalf("%s exceeded budgets (wall %.1fs, CPU %.1fs, allocations %d, RSS growth %d): %+v", workload, wallLimit, cpuLimit, allocationLimit, memoryLimit, sample)
 			}
-			t.Logf("wall=%.3fs CPU=%.3fs allocated=%d observed-RSS-growth=%d audit=%s", sample.Seconds, sample.CPUSeconds, sample.Allocated, sample.RSSPeak-sample.RSSBaseline, sample.Audit.Outcome)
+			t.Logf("wall=%.3fs CPU=%.3fs allocated=%d observed-RSS-growth=%d audit=%s", sample.Seconds, *sample.CPUSeconds, sample.Allocated, growth, sample.Audit.Outcome)
 		})
 	}
 }

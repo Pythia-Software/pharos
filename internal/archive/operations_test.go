@@ -110,6 +110,36 @@ func TestOperationLifecycleFollowsTheContract(t *testing.T) {
 	}
 }
 
+func TestOperationSkippedResourcesAndSharedReferencesStayFinite(t *testing.T) {
+	clock := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	reg := newOpRegistry("service")
+	reg.now = func() time.Time { return clock }
+	reg.telemetry, reg.resourceLedger = true, newTaskResourceLedger(20, 200)
+	_, op := reg.begin(t.Context(), OperationSpec{Kind: "analysis.labels", Variant: "batch"})
+	if op.resources.identity.Batch != string(op.ID()) {
+		t.Fatal("the profile lost its batch identity")
+	}
+	for range 100 {
+		op.linkWork(newOpID())
+	}
+	if view := op.view(); len(view.SharedWork) != 64 || view.SharedWorkOmitted != 36 {
+		t.Fatalf("unbounded shared references: %d + %d", len(view.SharedWork), view.SharedWorkOmitted)
+	}
+	clock = clock.Add(3 * time.Second)
+	op.Skip("nothing-to-do")
+	clock = clock.Add(time.Hour)
+	op.linkWork(newOpID())
+	op.setNeededBy([]OpID{newOpID()})
+	op.Finish(nil)
+	view := op.view()
+	if view.Resources.Time["elapsed"].Value == nil || *view.Resources.Time["elapsed"].Value != 3 || len(view.SharedWork) != 64 || len(view.NeededBy) != 0 {
+		t.Fatalf("a terminal operation continued accounting: %+v", view.Resources)
+	}
+	if summaries := reg.resourceLedger.export("analysis.labels", clock).Tasks; len(summaries) != 1 || summaries[0].State != opSkipped {
+		t.Fatalf("skip did not finalize its resource record once: %+v", summaries)
+	}
+}
+
 // An invalid transition or an unknown kind fails a test; in production it is
 // logged, the old state is kept, and the unknown kind records as unknown.
 func TestOperationProgrammingErrorsAreLoggedInProduction(t *testing.T) {
@@ -195,6 +225,44 @@ func TestDaemonPassIsForgottenWhenItDidNothing(t *testing.T) {
 	} else if step := operationStep(views[0]); step == nil || step["unit"] == nil || step["done"] != float64(25) {
 		t.Fatalf("a working pass lost its high-level counts: %+v", step)
 	}
+	t.Run("shared waits preserve progress and probe visibility", func(t *testing.T) {
+		timing := catalog.beginPass(t.Context(), "maintenance.parallelism", triggerChained)
+		shape := catalog.beginPass(t.Context(), "maintenance.session-shape", triggerChained)
+		probe := catalog.beginPass(t.Context(), "maintenance.previews", triggerChained)
+		defer timing.end(nil)
+		defer shape.end(nil)
+		defer probe.end(nil)
+		timing.worked(1, "conversation")
+		shape.worked(2, "conversation")
+		before := len(catalog.ops.views())
+		resume := waitForDaemonPasses("ingest-busy", "source indexing and its follow-up analysis to finish", timing, shape, probe, nil)
+		for _, pass := range []*daemonPass{timing, shape} {
+			view := pass.op.view()
+			if view.State != opBlocked || view.Reason != "ingest-busy" || stateDetail(view) == "" {
+				t.Fatalf("a paused pass still claims to run: %+v", view)
+			}
+		}
+		if len(catalog.ops.views()) != before || probe.op.State() != opRunning {
+			t.Fatal("waiting published a probe that found no work")
+		}
+		resume()
+		for _, pass := range []*daemonPass{timing, shape} {
+			if view := pass.op.view(); view.State != opRunning || view.Reason != "" || view.Detail != "" {
+				t.Fatalf("a pass did not resume after indexing: %+v", view)
+			}
+		}
+		if timing.op.view().Step.Done != 1 || shape.op.view().Step.Done != 2 {
+			t.Fatal("waiting discarded committed progress")
+		}
+		// A wait must not clear a different owner's blocker or Stop.
+		shape.op.Block("interactive-query", "interactive queries to finish")
+		resume = waitForDaemonPasses("ingest-busy", "source indexing to finish", timing, shape)
+		timing.op.markStopping()
+		resume()
+		if timing.op.State() != opStopping || shape.op.State() != opBlocked || shape.op.view().Reason != "interactive-query" {
+			t.Fatal("resuming overwrote another owner's state")
+		}
+	})
 }
 
 func TestWorkerProgressReachesOperationAndObserver(t *testing.T) {
@@ -203,11 +271,16 @@ func TestWorkerProgressReachesOperationAndObserver(t *testing.T) {
 	var observed activityWork
 	ctx = withWorkProgress(ctx, func(w activityWork) { observed = w })
 	ctx, child := parent.childFrom(ctx, OperationSpec{Kind: "analysis.git"})
-	reportWork(ctx, "Checking repositories", "repository", 2, 5)
+	reportWork(ctx, "Checking repositories", "repository", 2, 5, "Scanning local Git history")
 	view := reg.views()[slices.IndexFunc(reg.views(), func(v opView) bool { return v.ID == child.ID() })]
 	step := operationStep(view)
-	if step == nil || step["fraction"] != 0.4 || observed.Done != 2 || observed.Total != 5 {
+	if step == nil || step["fraction"] != 0.4 || step["detail"] != observed.Detail || observed.Detail == "" || observed.Done != 2 || observed.Total != 5 {
 		t.Fatalf("worker progress lost its stage or observer: step=%+v observer=%+v", step, observed)
+	}
+	previousIndex := view.Step.Index
+	reportWork(ctx, "Checking repositories", "repository", 2, 5, "Saving repository links")
+	if changed := child.view().Step; changed.Index != previousIndex || changed.Detail != observed.Detail {
+		t.Fatalf("a detail update lost its step: %+v", changed)
 	}
 	child.Finish(nil)
 	revision := reg.currentRevision()
@@ -363,5 +436,98 @@ func TestCloudReconcilePassIsForgottenWhenNothingChanged(t *testing.T) {
 	}
 	if !slices.ContainsFunc(server.ops.views(), func(view opView) bool { return view.Spec.Kind == "cloud.reconcile" && view.State == opSucceeded }) {
 		t.Fatalf("a tick that recorded a lost run left no operation: %+v", server.ops.views())
+	}
+}
+
+// Shared execution uses an independent live root. Retention also defends
+// against a legacy caller finishing a parent before its child has drained.
+func TestOperationRetentionKeepsActiveDescendants(t *testing.T) {
+	reg := newOpRegistry("service")
+	reg.executorRoots = true
+	at := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	reg.now = func() time.Time { return at }
+	reg.keepEnded = time.Minute
+	_, requester := reg.begin(context.Background(), OperationSpec{Kind: "analysis.chain"})
+	_, child := requester.Child(OperationSpec{Kind: "analysis.labels"})
+	requester.Finish(context.Canceled)
+	at = at.Add(2 * time.Hour)
+	// Force the count and age pruning paths, including unwritten-journal caps.
+	for range 205 {
+		_, other := reg.begin(context.Background(), OperationSpec{Kind: "analysis.chain"})
+		other.Finish(nil)
+	}
+	reg.mu.Lock()
+	reg.pruneLocked()
+	reg.mu.Unlock()
+	if reg.find(requester.id) == nil || reg.find(child.id) == nil {
+		t.Fatal("retention forgot active descendant")
+	}
+	views := reg.views()
+	byID := map[OpID]opView{}
+	for _, view := range views {
+		byID[view.ID] = view
+	}
+	root := requester.view()
+	if !root.ActiveDescendants {
+		t.Fatal("terminal root did not disclose its active child")
+	}
+	entry := operationEntry(root, byID, at)
+	if len(entry["children"].([]map[string]any)) != 1 {
+		t.Fatal("activity hid active descendant")
+	}
+	child.Finish(nil)
+	reg.mu.Lock()
+	reg.pruneLocked()
+	reg.mu.Unlock()
+	if reg.find(requester.id) != nil || reg.find(child.id) != nil {
+		t.Fatal("drained tree did not retire")
+	}
+
+	// Classic views are unchanged: an ended root is listed only within the
+	// recent cut, whatever its children are doing.
+	classic := newOpRegistry("service")
+	_, requester = classic.begin(context.Background(), OperationSpec{Kind: "analysis.chain"})
+	_, child = requester.Child(OperationSpec{Kind: "analysis.labels"})
+	requester.Finish(context.Canceled)
+	if requester.view().ActiveDescendants {
+		t.Fatal("classic views gained the execution-root visibility rule")
+	}
+	child.Finish(nil)
+}
+
+func TestOperationBatchChildrenStayBounded(t *testing.T) {
+	override(t, &maxEndedChildren, 4)
+	// Classic pruning is unchanged: a root keeps every child's detail.
+	classic := newOpRegistry("service")
+	_, root := classic.begin(context.Background(), OperationSpec{Kind: "analysis.labels"})
+	for range 20 {
+		_, child := root.Child(OperationSpec{Kind: "analysis.labels"})
+		child.Finish(nil)
+	}
+	classic.mu.Lock()
+	classic.pruneLocked()
+	classic.mu.Unlock()
+	if len(root.view().Children) != 20 {
+		t.Fatalf("classic pruning dropped child detail: %d children", len(root.view().Children))
+	}
+	reg := newOpRegistry("service")
+	reg.executorRoots = true
+	_, root = reg.begin(context.Background(), OperationSpec{Kind: "analysis.labels"})
+	_, active := root.Child(OperationSpec{Kind: "analysis.labels"})
+	for range 20 {
+		_, child := root.Child(OperationSpec{Kind: "analysis.labels"})
+		child.Finish(nil)
+	}
+	reg.mu.Lock()
+	reg.pruneLocked()
+	reg.mu.Unlock()
+	if reg.find(active.id) == nil {
+		t.Fatal("batch pruning lost an active worker")
+	}
+	if len(reg.views()) > 6 {
+		t.Fatal("long-lived execution accumulated every ended batch")
+	}
+	if len(root.view().Children) > 5 {
+		t.Fatal("root retained unbounded batch references")
 	}
 }

@@ -28,7 +28,7 @@ import (
 // since a change stops being too recent to judge without any write.
 
 // outcomesVersion derives every session again when its rules change.
-const outcomesVersion = "3"
+const outcomesVersion = "4"
 
 // defaultReworkDays is how long after a session's last edit a later session's
 // edits to the same files count as rework (outcome_rework_days).
@@ -46,10 +46,19 @@ const reworkShare = 0.5
 // Landed and Committed need Tier 2 evidence (local Git).
 var outcomeLabels = []string{"landed", "committed", "changed_kept", "changed_recent", "reworked", "no_changes", "unknown"}
 
-// toolRecordingSources are the source kinds whose sessions record tool calls,
-// so a session of theirs without an edit changed no files. Any other source,
-// such as a chat export, cannot tell, so its sessions are unknown.
-var toolRecordingSources = []string{"claude", "codex", "conductor", "antigravity", "antigravity-cli", "tl1", "tl1-export"}
+// recordsToolCalls reports whether a source kind's sessions record their tool
+// calls, so one without an edit changed no files: its provider declares tool
+// calls (always, or when its history holds them) and works in a folder. Any
+// other source, such as a chat export, cannot tell, so its sessions are
+// unknown.
+func recordsToolCalls(kind string) bool {
+	spec, ok := providerFor(kind)
+	if !ok {
+		return false
+	}
+	calls := spec.Content.support("tool_calls")
+	return (calls == supported || calls == varies) && spec.Content.support("cwd") != notApplicable
+}
 
 const outcomesSQL = `
 CREATE TABLE IF NOT EXISTS session_files(
@@ -119,10 +128,20 @@ func (c *Catalog) ensureOutcomes() error {
 	return nil
 }
 
-// reworkDays is the library's rework window.
-func (c *Catalog) reworkDays() int {
+// reworkDays is the library's rework window: the catalog's, set from the
+// configuration, else the window stored with the last derivation (stored,
+// "version:days"), else the default. A catalog opened without the
+// configuration so keeps the window its service set, rather than deriving
+// every session again with the default and the service then deriving them
+// back.
+func (c *Catalog) reworkDays(stored string) int {
 	if c.ReworkDays > 0 {
 		return c.ReworkDays
+	}
+	if _, window, ok := strings.Cut(stored, ":"); ok {
+		if days, err := strconv.Atoi(window); err == nil && days > 0 {
+			return days
+		}
 	}
 	return defaultReworkDays
 }
@@ -213,7 +232,7 @@ type fileResolver func(path string) (repoPath, repositoryID, scope string)
 // deriveSessionFacts reads a session's facts from its calls, in call order.
 // Each file an edit call changed counts on its own, so a patch's work files
 // count when its first file is scratch, and a patch whose call has no file (a
-// ledger before tools-v11 found none in a code-mode script) counts by the
+// ledger before tools-v14 found none in a code-mode script) counts by the
 // files it names. A
 // patch's other files than the call's own are placed by resolve.
 func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts {
@@ -287,7 +306,7 @@ func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts 
 				facts.Verification = "unknown"
 			}
 		}
-		if call.Status != "ok" || call.Result == "" {
+		if call.Result == "" || call.Status != "ok" && !(call.Status == "error" && commitChained(call.Command)) {
 			continue
 		}
 		if strings.Contains(call.Command, "git") && strings.Contains(call.Command, "commit") {
@@ -301,6 +320,9 @@ func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts 
 					facts.Commits = append(facts.Commits, outcomeCommit{Hash: match[2], Branch: branch, At: call.StartedAt})
 				}
 			}
+		}
+		if call.Status != "ok" {
+			continue
 		}
 		if strings.Contains(call.Command, "git") && strings.Contains(call.Command, "push") && pushLine.MatchString(call.Result) {
 			facts.Pushed = true
@@ -319,14 +341,23 @@ func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts 
 	return facts
 }
 
+// commitChained reports whether a command runs more after its git commit, so
+// that its failure may be a later command's, such as a push: the commit lines
+// it printed still name commits made.
+func commitChained(command string) bool {
+	at := strings.Index(command, "commit")
+	return strings.Contains(command, "git") && at >= 0 && strings.ContainsAny(command[at:], ";&|\n")
+}
+
 // outcomeCallsSQL reads a session's calls in order: an edit's input, for its
 // lines, and only the output of Git and gh commands, for their commit, push
-// and pull request lines.
+// and pull request lines, and of a failed command that commits, whose failure
+// may be a later command's (commitChained).
 const outcomeCallsSQL = `SELECT t.tool_category,t.status,COALESCE(t.command_category,'') command_category,COALESCE(t.command,'') command,
 	COALESCE(t.started_at,'') started_at,COALESCE(t.path_absolute,'') path_absolute,COALESCE(t.repo_path,'') repo_path,
 	COALESCE(t.path_repository_id,'') path_repository_id,COALESCE(t.path_scope,'') path_scope,t.lines_added,t.lines_removed,
 	CASE WHEN t.status='ok' AND (t.command LIKE '%git%commit%' OR t.command LIKE '%git%push%' OR t.command LIKE '%gh pr create%')
-		THEN (SELECT r.text FROM messages r WHERE r.id=t.result_message_id) END result,
+		OR t.status='error' AND t.command LIKE '%git%commit%' THEN (SELECT r.text FROM messages r WHERE r.id=t.result_message_id) END result,
 	CASE WHEN t.tool_category='edit' AND t.status='ok' THEN (SELECT m.text FROM messages m WHERE m.id=t.call_message_id) END input
 	FROM tool_calls t WHERE t.workspace_id=? ORDER BY COALESCE(t.started_at,''),t.conversation_id,t.sequence`
 
@@ -368,8 +399,7 @@ func readOutcomeCalls(ctx context.Context, tx *sql.Tx, workspace string) ([]outc
 // last pass, and judges rework again for every session that edited one of
 // their files. A new rule version or rework window derives every session.
 func (c *Catalog) refreshSessionOutcomes(ctx context.Context) error {
-	days := c.reworkDays()
-	setting := outcomesVersion + ":" + strconv.Itoa(days)
+	days := 0
 	if err := c.writeTransaction(ctx, "session-outcomes-version", func(tx *sql.Tx) error {
 		// The tool rollup publishes mirrors (tool_mirror_workspaces) whole,
 		// so the workspaces whose membership changed since the last pass
@@ -387,8 +417,13 @@ func (c *Catalog) refreshSessionOutcomes(ctx context.Context) error {
 			}
 		}
 		var stored string
-		if err := tx.QueryRowContext(ctx, "SELECT COALESCE((SELECT value FROM meta WHERE key='session_outcomes_version'),'')").Scan(&stored); err != nil || stored == setting {
+		if err := tx.QueryRowContext(ctx, "SELECT COALESCE((SELECT value FROM meta WHERE key='session_outcomes_version'),'')").Scan(&stored); err != nil {
 			return err
+		}
+		days = c.reworkDays(stored)
+		setting := outcomesVersion + ":" + strconv.Itoa(days)
+		if stored == setting {
+			return nil
 		}
 		for _, statement := range []string{"INSERT OR IGNORE INTO session_outcome_dirty SELECT id FROM workspaces",
 			"INSERT OR IGNORE INTO session_outcome_dirty SELECT workspace_id FROM session_outcomes"} {
@@ -547,7 +582,7 @@ func deriveSessionOutcome(ctx context.Context, tx *sql.Tx, workspace string, day
 			return err
 		}
 	}
-	recorded := len(calls) > 0 || slices.Contains(toolRecordingSources, source)
+	recorded := len(calls) > 0 || recordsToolCalls(source)
 	var first, last any
 	if len(facts.Files) > 0 {
 		// Without call times, the session's last activity stands in, so its
@@ -627,25 +662,27 @@ func bytesValue(value any) []byte {
 }
 
 // outcomeLabelSQL is the label of workspace w's session, from its stored
-// facts: a change younger than its rework window is too recent to judge.
+// facts: a change younger than its rework window is too recent to judge, and
+// one whose edits could not be read line by line (kept_lines NULL) is never
+// judged, so whether it was kept is unknown.
 func outcomeLabelSQL(w string) string {
 	return `COALESCE((SELECT CASE WHEN so.tool_calls_recorded=0 THEN 'unknown' WHEN so.files_changed=0 THEN 'no_changes'
 		WHEN so.heavily_reworked=1 THEN 'reworked' WHEN julianday(so.last_edit_at)>julianday('now')-so.rework_days THEN 'changed_recent'
-		ELSE 'changed_kept' END FROM session_outcomes so WHERE so.workspace_id=` + w + `.id),'unknown')`
+		WHEN so.kept_lines IS NULL THEN 'unknown' ELSE 'changed_kept' END FROM session_outcomes so WHERE so.workspace_id=` + w + `.id),'unknown')`
 }
 
 // outcomeWhySQL says what decided the label, and from which evidence tier.
 func outcomeWhySQL(w string) string {
 	return `COALESCE((SELECT CASE WHEN so.tool_calls_recorded=0 THEN 'This source records no tool calls, so its changes are unknown.'
 		WHEN so.files_changed=0 THEN 'No files edited (transcript).'
-		WHEN so.heavily_reworked=1 THEN printf('Later sessions removed %d of the %d lines it added within %d days (transcript).',so.rework_removed_lines,so.kept_lines,so.rework_days)
+		WHEN so.heavily_reworked=1 THEN printf('Later workspaces removed %d of the %d lines it added within %d days (transcript).',so.rework_removed_lines,so.kept_lines,so.rework_days)
 		WHEN julianday(so.last_edit_at)>julianday('now')-so.rework_days THEN printf('%d %s changed; rework can be judged after %s (transcript).',so.files_changed,
 			CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END,date(so.last_edit_at,printf('+%d days',so.rework_days)))
 		WHEN so.kept_lines IS NULL THEN printf('%d %s changed; its edits could not be read line by line, so rework was not judged (transcript).',so.files_changed,
 			CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END)
-		WHEN so.rework_removed_lines>0 THEN printf('%d %s changed; later sessions removed %d of the %d lines it added within %d days (transcript).',so.files_changed,
+		WHEN so.rework_removed_lines>0 THEN printf('%d %s changed; later workspaces removed %d of the %d lines it added within %d days (transcript).',so.files_changed,
 			CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END,so.rework_removed_lines,so.kept_lines,so.rework_days)
-		ELSE printf('%d %s changed; no later session removed its lines within %d days (transcript).',so.files_changed,CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END,so.rework_days)
+		ELSE printf('%d %s changed; no later workspace removed its lines within %d days (transcript).',so.files_changed,CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END,so.rework_days)
 		END FROM session_outcomes so WHERE so.workspace_id=` + w + `.id),'Not derived yet.')`
 }
 

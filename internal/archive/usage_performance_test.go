@@ -90,7 +90,7 @@ func TestUsagePerformancePreparation(t *testing.T) {
 	}
 	t.Log("ledger", len(ledger), time.Since(start))
 	start = time.Now()
-	_, err = c.usageConversationRoots(ledger)
+	_, err = c.usageConversationRoots(t.Context(), ledger)
 	if err != nil {
 		t.Fatal(err)
 	}

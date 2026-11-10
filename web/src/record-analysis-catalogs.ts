@@ -42,12 +42,14 @@ export const toolTimeAnalysisCatalog: AnalysisCatalog = {
     activity: { label: "Activity", fields: ["activity"] },
     ...single([["tool_category", "Tool category"], ["tool_name", "Tool"], ["operation_name", "Operation"], ["command_name", "Command"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"]]),
     project_name: projectBreakdown(),
-    ...single([["error_signature", "Error signature"], ["error_type", "Failure kind"], ["repo_path", "Path in project"], ["host", "Research host"], ["url", "Source URL"], ["search_query", "Search query"], ["mcp_server", "MCP server"], ["mcp_method", "MCP method"], ["source_kind", "App"]]),
-    project_path: { label: "Project + path", fields: ["project_name", "repo_path"] },
+    ...single([["error_signature", "Error signature"], ["error_type", "Failure kind"], ["repo_path", "Repository path"], ["host", "Research host"], ["url", "Source URL"], ["search_query", "Search query"], ["mcp_server", "MCP server"], ["mcp_method", "MCP method"], ["source_kind", "Source"]]),
+    // A path is relative to the repository holding the file, which can differ
+    // from the session's project; files outside Git have neither.
+    repository_path: { label: "Repository + path", fields: ["path_repository", "repo_path"], note: "Only files in a Git checkout have a repository path, so calls in a folder without Git are left out." },
     project_error: { label: "Project + error", fields: ["project_name", "error_signature"] },
     project_command: { label: "Project + command", fields: ["project_name", "command_name"] },
     mcp_server_method: { label: "MCP server + method", fields: ["mcp_server", "mcp_method"] },
-    app_provider: { label: "App + provider", fields: ["source_kind", "provider"] },
+    app_provider: { label: "Source + provider", fields: ["source_kind", "provider"] },
     // Cards keep evidence sources apart: a reported duration and one derived
     // from timestamps, or a measured and an estimated result size.
     command_source: { label: "Command + timing source", fields: ["command_name", "duration_source"] },
@@ -57,9 +59,9 @@ export const toolTimeAnalysisCatalog: AnalysisCatalog = {
   records: { label: "Tool call", plural: "Tool calls", note: "Calls are placed by their start time and keep their full recorded duration." },
   units: {
     conversation: { label: "Agent conversation", plural: "Agent conversations", key: "conversation_id", where: present("conversation_id"), breakdowns: conversationSplits,
-      note: "An agent conversation is one recorded agent transcript; delegated subagents are conversations of their own. Calls without a conversation are left out." },
-    path_conversation: { label: "Path in a conversation", plural: "Conversation/path pairs", key: ["conversation_id", "project_name", "repo_path"], where: [...present("conversation_id"), ...present("repo_path")],
-      breakdowns: { project_path: ["project_name", "repo_path"], ...conversationSplits }, note: "Calls to one path of a project in one agent conversation form one observation." },
+      note: "An agent conversation is one recorded agent transcript; delegated sub-agents are conversations of their own. Calls without a conversation are left out." },
+    path_conversation: { label: "Path in a conversation", plural: "Conversation/path pairs", key: ["conversation_id", "path_repository", "repo_path"], where: [...present("conversation_id"), ...present("repo_path")],
+      breakdowns: { repository_path: ["path_repository", "repo_path"], ...conversationSplits }, note: "Calls to one repository path in one agent conversation form one observation. Only files in a Git checkout have a repository path, so calls in a folder without Git are left out." },
     tool_conversation: { label: "Tool in a conversation", plural: "Tool/conversation pairs", key: ["conversation_id", "tool_name"], where: present("conversation_id"),
       breakdowns: { tool_name: ["tool_name"], tool_category: ["tool_category"], ...conversationSplits },
       note: "A tool in a conversation is one tool's calls in one recorded agent transcript, so a conversation using several tools is one observation under each." },
@@ -76,8 +78,8 @@ toolTimeAnalysisCatalog.breakdowns.provider.order = providerOrder;
 // ----- Skills: skill_usages, one record per piece of evidence ----------------
 
 const skillMeasures: Record<string, AnalysisMeasure> = {
-  records: { label: "Evidence records", unit: "records", format: count, op: "count", additive: true, note: "Observed invocations, file loads and harness-reported loads. A load does not prove a skill was followed." },
-  body: { label: "Retained body volume", unit: "bytes", format: count, op: "sum", field: "content_bytes", value: "content_bytes", additive: true, where: [{ field: "content_bytes", op: ">", value: "0" }],
+  records: { label: "Evidence records", unit: "records", format: count, op: "count", additive: true, note: "Observed invocations, file loads and app-reported loads. A load does not prove a skill was followed." },
+  body: { label: "Saved instruction size", unit: "bytes", format: count, op: "sum", field: "content_bytes", value: "content_bytes", additive: true, where: [{ field: "content_bytes", op: ">", value: "0" }],
     note: "Body volume sums known positive recorded sizes, including repeated loads; evidence without a recorded size is left out." },
   conversations: { label: "Conversations reached", unit: "conversations", format: count, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct conversations with skill evidence. A conversation with several skills counts once in each, so groups do not add up to the total." },
   projects: projectsReached("holding matching skill evidence"),
@@ -91,7 +93,7 @@ export const skillsAnalysisCatalog: AnalysisCatalog = {
     ...single([["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["status", "Status"]]),
     project_name: projectBreakdown(),
   },
-  records: { label: "Evidence record", plural: "Evidence records", note: "One record is one observed invocation, file load or harness-reported load of a skill." },
+  records: { label: "Evidence record", plural: "Evidence records", note: "One record is one observed invocation, file load or app-reported load of a skill." },
   units: {
     conversation: { label: "Conversation", plural: "Conversations", key: "conversation_id", where: present("conversation_id"), breakdowns: { provider: ["provider"], project_name: ["project_name"], ...origin },
       note: "A conversation is one recorded agent conversation with skill evidence; evidence without a conversation is left out." },

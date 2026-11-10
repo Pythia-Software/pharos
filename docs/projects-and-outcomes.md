@@ -30,8 +30,9 @@ Every workspace belongs to exactly one **project**, chosen in this order:
    the new checkout. It also covers a session recorded on another Mac in a
    checkout this library knows.
 3. **The working folder.** The location is normalized as a folder key:
-   - The home directory is shown as `~`. For `/Users/<name>/…` and
-     `/home/<name>/…` that applies on any Mac, not only the current one.
+   - A home directory, `/Users/<name>/…` or `/home/<name>/…`, is shown as
+     `~`. The rule reads nothing of the host, so every Mac sharing a
+     library derives the same key; a home elsewhere keeps its full path.
    - Temporary directories (`/tmp`, `/private/tmp`, `/var/folders`) form
      one project, `/tmp`. Otherwise each throwaway directory would be a
      project of its own.
@@ -78,11 +79,15 @@ These columns are derived and are written only by ingest and maintenance,
 never by a request:
 
 - Ingest sets them for each workspace it writes.
-- When a repository gains checkout locations, workspaces in those folders
-  are resolved again.
+- When a repository gains checkout locations, the workspaces without a
+  repository whose folders are at or under them are resolved again (all of
+  `/tmp` when a checkout is in a temporary directory). Other folders cannot
+  change, so ingest's write transaction reads only these, by an index on
+  `project_folder`.
 - A repository merge moves `folder_repository_id` to the survivor.
 - Capture recovery, which restores repositories without that writer,
-  resolves folder workspaces again when it changes any checkout.
+  resolves again the folder workspaces under each checkout it adds or
+  removes.
 - A build from before projects can still write to the catalog (the schema
   version is unchanged), leaving the columns missing or stale. Each build's
   first open derives them for every workspace, and the identities stage of
@@ -92,7 +97,10 @@ never by a request:
 Readers use `projectJoin`/`projectNameSQL` (`projects.go`). They join
 `repositories` on `COALESCE(repository_id, folder_repository_id)` and derive
 `project_id` (`repository:<id>` or `folder:<key>`), `project_name` and
-`project_kind`.
+`project_kind`. Every query dataset with `repository_name` also has
+`project_name` (the library also `project_kind` and `project_id`), except
+Findings, which are computed per repository; Scatter points carry it as
+point metadata.
 
 ### Where projects appear
 
@@ -101,13 +109,23 @@ Readers use `projectJoin`/`projectNameSQL` (`projects.go`). They join
 - **Analyze:** a "Project" breakdown in every catalog that had
   "Repository". Links that name `repository_name` read as the project
   breakdown (the catalog's `legacy` mapping), so saved links and card
-  destinations keep working.
+  destinations keep working. Compactions, Session Shape, Agent Event rates
+  and Scatter keep their Repository breakdown beside Project, since their
+  cards still group by repository. File paths stay Git-only: "Repository path",
+  "Repository + path", the "Path in a conversation" unit and the read-path
+  and edit-path cards pair `repo_path` with the repository holding the file
+  (`path_repository`), which can differ from the session's project. Files
+  outside a Git checkout have no repository path, so a library without Git
+  has none.
 - **Storage:** a By project tab.
 - **MCP:** `list_projects` lists repositories and folders alike, with the
   count of conversations without a project; `list_repositories` is kept
   unchanged as the repository-only view. `search_conversations`,
   `search_work`, `search_messages`, `search_text` and `query_statistics`
   take a `project` filter, and `query_statistics` groups by `project`.
+  A filter that is exactly a project's name, a repository's remote or a
+  folder's key or path (`~`, `~/notes`) names only that project; any other
+  text matches by part of a name, as the `repository` filter does.
   `trace_worktree` and `list_findings` stay repository-only: findings are
   computed per repository.
 
@@ -124,7 +142,10 @@ Each outcome fact is labelled with the tier it came from.
 ### Tier 1: from the transcript
 
 A **session** is a workspace, a Library row: a Claude Code or Codex session,
-a Conductor workspace. Its delegated agents' calls are its own.
+a Conductor workspace. Its delegated agents' calls are its own. "Session"
+is this document's shorthand and the stored names' (`session_outcomes`,
+`session_files`); the page copy, the "why" included, counts workspaces, as
+[the UI vocabulary](ui-vocabulary.md) asks.
 
 - **Files changed.** Each file a successful edit call changed, read from
   `tool_calls` (Claude Code's Edit, Write and MultiEdit, Codex's
@@ -132,8 +153,9 @@ a Conductor workspace. Its delegated agents' calls are its own.
   so a patch's files are read from the patch itself and placed the way the
   ledger places paths, each on its own: a patch whose first file is scratch
   still changes its other files. A patch in a Codex code-mode script, where
-  the script holds it as a string literal, changes the files it names; the
-  ledger (from `tools-v11`) records its first file too. An older Codex
+  the script holds it as a string literal, changes the files it names, as
+  does every other patch the script applies; the ledger (from `tools-v14`)
+  records the first patch's first file too. An older Codex
   patch that lists its files without their lines changes those files.
   Files in temporary directories and the agent's own home (plans, memory)
   are left out. A file in a repository
@@ -141,7 +163,11 @@ a Conductor workspace. Its delegated agents' calls are its own.
   checkout and worktree of a repository shares it; any other file by its
   absolute path. Lines added and removed come from the ledger; Antigravity
   records none, so its counts are empty ("Not recorded"), not zero. Edits a
-  shell command makes (`sed -i`, redirections) are not counted.
+  shell command makes (`sed -i`, redirections) are not counted. A session
+  without edits changed no files when its source records tool calls: its
+  provider declares tool calls, always or when its history holds them, and
+  a working folder (`provider_registry.go`). A chat export cannot tell, so
+  its sessions are Unknown.
 - **Verified after the last edit.** How the last command whose
   `command_category` is `test` or `build` after the session's last edit
   ended: passed, failed, or no result; "not run" when none ran. The ledger
@@ -158,9 +184,10 @@ a Conductor workspace. Its delegated agents' calls are its own.
     removes whatever of the session's lines the new file no longer has.
   - An Edit's text (and Antigravity's, batches included) can start or end
     inside a line, and part of a line never matches the whole line another
-    session adds or removes. So a changed first or last line of a
-    replacement is left out, unless a newline in the text shows where it
-    starts or ends; the lines between are whole. On the real library 2% of
+    session adds or removes. Lines the same on both sides at the start
+    and end of a replacement are unchanged. A changed line left at its
+    very start or end is left out; one after or before an unchanged line
+    is whole, as are the lines between. On the real library 2% of
     Claude Code's edits are a single line and 18% change their first or
     last line. A file only such edits changed is not judged.
   - A line removed and added again (moved or reindented) is unchanged, and
@@ -171,15 +198,18 @@ a Conductor workspace. Its delegated agents' calls are its own.
     workspace's edits and is never rework. When a workspace becomes or stops
     being a mirror, the sessions sharing its files are judged again.
   - A session whose edits cannot be read line by line (an input the
-    transcript did not keep, or only parts of lines) is not judged, and its
-    "why" says so.
+    transcript did not keep, only parts of lines, or a patch recorded as
+    its list of changed files) is not judged: once its window has passed
+    it is Unknown, not kept, and its "why" says so.
 
   Editing the same files again is not rework: continued work on a file
   usually adds to it. The calibration is under
   [Rework calibration](#rework-calibration).
 - **Commit, branch and PR evidence in tool output.** From the output of a
-  successful `git commit` (`[main 1a2b3c4] …`, giving hash and branch),
-  `git push` (`a..b  main -> main`, `* [new branch]`), and `gh pr create`
+  successful `git commit` (`[main 1a2b3c4] …`, giving hash and branch;
+  also of a failed command that runs more after its commit, such as
+  `git commit … && git push` whose push failed, since the commit it printed
+  was made), `git push` (`a..b  main -> main`, `* [new branch]`), and `gh pr create`
   (the pull request URL), as the model read it, out of the stored result's
   envelope. Only these commands' output is read. A hash here
   is Tier 1 evidence: it is stored, but "Committed" waits for local Git to
@@ -244,9 +274,9 @@ decided it and its tier.
 | Committed | Committed, not on mainline (yet). | Not used. |
 | Changed and kept | Edits with no commit evidence, and no later rework within N days. | Edits with no later rework within N days. |
 | Changed, too recent | Edits less than N days ago, so rework cannot be judged yet. | Same. |
-| Reworked | Its changes were reverted, or later sessions removed at least half of the lines it added within N days. | Later sessions removed at least half of the lines it added within N days. |
-| No changes | The session changed no files. Research, review and questions are normal. | Same. |
-| Unknown | Not enough evidence, for example a harness that records no tool calls. | Same. |
+| Reworked | Its changes were reverted, or later workspaces removed at least half of the lines it added within N days. | Later workspaces removed at least half of the lines it added within N days. |
+| No changes | The workspace changed no files. Research, review and questions are normal. | Same. |
+| Unknown | Not enough evidence, for example a harness that records no tool calls, or edits that could not be read line by line. | Same. |
 
 "Changed, too recent" is a revision of the brief's table. Without it, every
 session from the last two weeks would read as "kept" before rework could

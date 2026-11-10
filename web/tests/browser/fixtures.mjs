@@ -36,7 +36,14 @@ for (const c of conversationLabelsFixture.conversations) {
     event('grandchild-0','message','fixture-grandchild',0,[]),event('grandchild-1','message','fixture-grandchild',1,[['C.report.product',.95]]),
     event('grandchild-2','message','fixture-grandchild',2,[]),event('grandchild-3','message','fixture-grandchild',3,[['C.report.product',.95]]));
   c.messages.sort((a,b)=>a.order-b.order);
+  // Exercise a completed no-match beside the still-unprocessed grandchild-2.
+  c.messages.find(m=>m.id==='grandchild-0').chunks=1;
 }
+// Agent events on the first conversation's fingerprint: two point back at
+// the same prompt (one arc), one at another, one has no target.
+const linkEvent=(id,message,group,target)=>({id,message_id:message,kind:'assumption',label:'Assumption',group,probability:.9,source:'reply',sentence:'I assume the explorer means the sidebar list.',
+  target:target?{method:'quote',message_id:target,role:'user',kind:'message',start:0,end:8,text:'Invented',strong:true}:null});
+const fingerprintEvents=[linkEvent('e1','first-2','Choices you may not see','first-0'),linkEvent('e2','first-4','Reactions and learning','first-0'),linkEvent('e3','first-6','Friction','first-3'),linkEvent('e4','first-4','Friction',null)];
 for(const c of conversationLabelsFixture.conversations)c.activity=[{id:c.id+':tool',session_id:c.main_session,message_id:c.messages.find(m=>m.kind==='message').id,name:'Read',category:'read',command_category:'',status:'ok',start:'2026-10-30T12:01:15Z',end:'2026-10-30T12:01:30Z',duration_ms:15000}];
 conversationLabelsFixture.version=2;
 export const sourceSetupCandidates = [
@@ -57,6 +64,23 @@ const longTitle = "Investigate why the incremental indexer re-reads every captur
 export const queryFixtureDatasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
 const datasets = queryFixtureDatasets;
+// Invented entity measurements for the standalone cross-dashboard scatter.
+datasets.scatter = ["conversation","work","agent_session","message"].flatMap(point_kind => Array.from({length:8},(_,index)=>({
+  ...datasets.scatter[index], id:`${point_kind}:point-${index}`,entity_id:`point-${index}`,point_kind,
+  title:`Example ${point_kind} ${index + 1}`,provider:index%2?"codex":"claude",repository_name:"pharos",
+  first_at:new Date(now-day).toISOString(),last_at:new Date(now-1000).toISOString(),human_typed:index*120,tokens_cost:index*.4,
+})));
+for (const [index, row] of datasets.messages.entries()) {
+  const role = ["user", "assistant", "assistant", "tool"][index % 4];
+  Object.assign(row, { role, kind: ["message", "message", "thinking", "tool_result"][index % 4], has_authorship: role === "user", selected: true,
+    text: ["Review the query table pages and show every retained message.", "The dataset now includes prompts, replies, thinking and tool messages.", "I should compare recorded timing with coverage before drawing a conclusion.", "Read completed: 24 matching records."][index % 4],
+    model: role === "assistant" ? "gpt-6-sol" : null, effort: role === "assistant" ? "high" : null,
+    typed_words: role === "user" ? 12 + index : null, words: role === "user" ? 18 + index : null,
+    pasted_words: role === "user" ? 6 : null, typed_message: role === "user" ? true : null,
+    main_category: role === "user" ? "typed" : null, work_id: role === "user" ? row.workspace_id : null });
+}
+
+for (const [index, row] of datasets.compactions.entries()) Object.assign(row, { trigger: ["human", "machine", "unknown"][index % 3], trigger_evidence: ["recorded", "inferred", "unknown"][index % 3] });
 for(const [i,row] of datasets.message_labels.entries())Object.assign(row,{fingerprint:row.conversation_id,message_id:"label-message-"+i,label:i%3?"C.report.finding":"P.request.work.implement",family:i%3?"C.report":"P.request",function_role:i%3?"Receiver":"Sender",label_status:"matched",source:["human","output","thinking"][i%3]});
 // Parallelism records are built with the saved counting and gap settings.
 for (const row of datasets.parallelism) Object.assign(row, { counting: "workspace", gap_minutes: 60 });
@@ -97,6 +121,10 @@ for (const row of [...datasets.tools, ...datasets.mcp_calls]) {
 // transcript (long code blocks, a wide table, tool output, an edit, nested
 // agents) and two child sessions.
 export const workID = "work-long", rootConversation = "conv-root";
+datasets.people_message_labels=['human','activity','habits'].flatMap(scope=>datasets.writing_messages.slice(0,24).map((row,i)=>{
+ const label=i%3?'P.request.work.implement':'P.control.redirect';
+ return {...row,id:`${scope}:${row.id}:${label}`,message_id:row.id,people_scope:scope,label,family:label.split('.').slice(0,2).join('.'),label_status:'matched',sent_at:row.sent_at,event_at:row.sent_at,started_at:row.sent_at,typed_words:8,source_conversation_id:rootConversation,source_workspace_id:workID,actor:'you',initiator:'human'};
+}));
 const start = now - 2 * 3600000;
 const at = seconds => new Date(start + seconds * 1000).toISOString();
 let sequence = 0;
@@ -109,18 +137,31 @@ const codeBlock = ["```js", ...Array.from({ length: 30 }, (_, i) => `${"  ".repe
 const wideTable = [`| ${Array.from({ length: 14 }, (_, i) => `Column header ${i}`).join(" | ")} |`, `|${" --- |".repeat(14)}`,
   ...Array.from({ length: 6 }, (_, row) => `| ${Array.from({ length: 14 }, (_, i) => `value-${row}-${i}-${"x".repeat(i)}`).join(" | ")} |`)].join("\n");
 const usage = (input, output = 400) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: input * 4, cache_creation_input_tokens: 200 });
+// Related work (peer_reader.go): a certain review and an uncertain reader.
+export const peerWorkID = "work-review";
+const peerHandoff = (kind, confidence) => ({ kind, confidence, role: "reviewer", workspace_id: peerWorkID, conversation_id: "conv-review", message_id: "conv-review-reply", title: `Review: ${longTitle}` });
+export const relatedWork = {
+  peers: [
+    { workspace_id: peerWorkID, title: `Review: ${longTitle}`, provider: "codex", started_at: at(30), role: "reviewer", confidence: "high",
+      evidence: [{ kind: "read_written_by", confidence: "high", from_workspace_id: workID, to_workspace_id: peerWorkID, details: { basis: "diff", lines: 42, timing: "return" } }, { kind: "copied_into", confidence: "high", from_workspace_id: peerWorkID, to_workspace_id: workID, details: { words: 180 } }] },
+    { workspace_id: "work-maybe", title: "Parallel work in the same checkout that may have read this diff", provider: "claude", started_at: at(60), role: "reviewer", confidence: "low",
+      evidence: [{ kind: "read_written_by", confidence: "low", from_workspace_id: workID, to_workspace_id: "work-maybe", details: { basis: "read", lines: 4 } }] },
+  ],
+  peer_conversations: [{ id: "conv-review", workspace_id: peerWorkID, provider: "codex", native_id: "conv-review", started_at: at(30), title: `Review: ${longTitle}`, peer_role: "reviewer", peer: true }],
+};
 function transcript() {
   sequence = 0;
   const messages = [];
   for (let turn = 0; turn < 12; turn++) {
-    messages.push(event("message", `Turn ${turn}: ${turn % 3 ? "please look at the failing test and fix it" : `${longTitle}. ${"Here is more context that wraps across several lines. ".repeat(8)}`}`, { role: "user" }));
+    // The first prompt quotes a related review; the first edit was read by one.
+    messages.push(event("message", `Turn ${turn}: ${turn % 3 ? "please look at the failing test and fix it" : `${longTitle}. ${"Here is more context that wraps across several lines. ".repeat(8)}`}`, { role: "user", ...(turn === 0 ? { handoffs_in: [peerHandoff("copied_into", "high")] } : {}) }));
     messages.push(event("message", { message: { id: `r-${turn}`, usage: usage(12000 + turn * 9000), content: [{ type: "text", text: turn % 2 ? `Here is the change:\n\n${codeBlock}` : `Findings so far:\n\n${wideTable}\n\nA path to note: /Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive/incremental_sync_recovery_test.go` }] } }));
     const call = `call-${turn}`;
     if (turn % 3 === 0) {
       messages.push(event("tool_call", { name: "Bash", input: { command: `go test -run 'TestIncrementalSyncRecovery|TestCaptureAfterSleep' -count=1 -v ./internal/archive/... 2>&1 | tee /tmp/${"very-long-log-name-".repeat(4)}${turn}.log` } }, { call_id: call }));
       messages.push(event("tool_result", { content: Array.from({ length: 40 }, (_, i) => `=== RUN   TestIncrementalSyncRecovery/case_${i}_${"with_a_long_subtest_name_".repeat(3)}`).join("\n"), is_error: turn === 3 }, { call_id: call }));
     } else if (turn % 3 === 1) {
-      messages.push(event("tool_call", { name: "Edit", input: { file_path: "/repo/internal/archive/incremental_sync.go", old_string: `func recover() {\n${longLine}\n}`, new_string: `func recover(ctx context.Context) error {\n${longLine}\n${longLine}\n\treturn nil\n}` } }, { call_id: call }));
+      messages.push(event("tool_call", { name: "Edit", ...(turn === 1 ? { handoffs_out: [peerHandoff("read_written_by", "low")] } : {}), input: { file_path: "/repo/internal/archive/incremental_sync.go", old_string: `func recover() {\n${longLine}\n}`, new_string: `func recover(ctx context.Context) error {\n${longLine}\n${longLine}\n\treturn nil\n}` } }, { call_id: call }));
       messages.push(event("tool_result", { content: "The file /repo/internal/archive/incremental_sync.go has been updated." }, { call_id: call }));
     } else {
       // A delegation with a nested delegation inside it.
@@ -150,26 +191,26 @@ const work = {
 };
 
 // The delegation explorer's analysis of the workspace's three sessions.
-const metricKeys = ["start", "tokens", "cost", "calls", "errors", "files", "messages", "requests", "turns", "clock", "total", "toolTime", "toolAgent", "toolSum", "wait", "modelTime", "backgroundTime", "episodes", "children", "leaves", "depth", "input", "uncached", "cacheRead", "cacheWrite", "output", "reasoning", "remainder"];
+const metricKeys = ["start", "tokens", "cost", "calls", "events", "errors", "files", "filesRead", "messages", "requests", "turns", "clock", "total", "toolTime", "toolAgent", "toolSum", "wait", "modelTime", "backgroundTime", "episodes", "children", "leaves", "depth", "input", "uncached", "cacheRead", "cacheWrite", "output", "reasoning", "remainder"];
 const durations = new Set(["clock", "total", "toolTime", "toolAgent", "toolSum", "wait", "modelTime", "backgroundTime"]);
-const metricSpecs = metricKeys.map(id => ({ id, label: { start: "First evidence", tokens: "Tokens", cost: "API cost", calls: "Tool calls", errors: "Errors", files: "Files Edited", clock: "Clock span", total: "Session spans", toolTime: "Tool elapsed" }[id] || id,
+const metricSpecs = metricKeys.map(id => ({ id, label: { start: "First evidence", tokens: "Tokens", cost: "API cost", calls: "Tool calls", messages: "Messages", events: "Agent events", filesRead: "Files read", errors: "Errors", files: "Files Edited", clock: "Clock span", total: "Session spans", toolTime: "Tool elapsed" }[id] || id,
   unit: id === "cost" ? "usd" : durations.has(id) ? "ms" : id === "start" ? "date" : "count", definition: `Definition for ${id}` }));
 const metric = (value, quality = "observed") => ({ value, quality, known: value === null ? 0 : 1, total: 1 });
 const sessionEnd = start + 300000;
-function session(id, conversation, parent, provider, outline, depth, label, tokens) {
+function session(id, conversation, parent, provider, depth, label, tokens) {
   const self = Object.fromEntries(metricKeys.map(key => [key, metric(0)]));
-  Object.assign(self, { tokens: metric(tokens), calls: metric(3), files: metric(depth === 0 ? 1 : 2), cost: metric(tokens / 1000), clock: metric(300000), start: metric(start), wait: metric(null, "unknown"), modelTime: metric(null, "unknown"), backgroundTime: metric(null, "unknown") });
-  return { id, workspace_id: workID, conversation_id: conversation, parent_id: parent, provider, outline, depth, label, model: provider === "codex" ? "gpt-test" : "claude-test", effort: "medium", coverage: "complete", usage_status: "reported-reconciled",
+  Object.assign(self, { tokens: metric(tokens), calls: metric(3), files: metric(depth === 0 ? 1 : 2), filesRead: metric(4), messages: metric(12), events: metric(2), cost: metric(tokens / 1000), clock: metric(300000), start: metric(start), wait: metric(null, "unknown"), modelTime: metric(null, "unknown"), backgroundTime: metric(null, "unknown") });
+  return { id, workspace_id: workID, conversation_id: conversation, parent_id: parent, provider, depth, ancestry: { state: parent ? "resolved" : "root", depth }, label, model: provider === "codex" ? "gpt-test" : "claude-test", effort: "medium", coverage: "complete", usage_status: "reported-reconciled",
     order: depth, child_count: depth < 2 ? 1 : 0, start, end: sessionEnd, subtree_start: start, subtree_end: sessionEnd, self, all: { ...self } };
 }
 const sessions = [
-  session("s-root", rootConversation, "", "claude", "1", 0, longTitle, 100000),
-  { ...session("s-child", "conv-child", "s-root", "codex", "1.1", 1, "Review implementation", 60000), message_id: "m-15" },
-  { ...session("s-nested", "conv-nested", "s-child", "claude", "1.1.1", 2, "Review timing", 30000), message_id: "conv-child-reply" },
+  session("s-root", rootConversation, "", "claude", 0, longTitle, 100000),
+  { ...session("s-child", "conv-child", "s-root", "codex", 1, "Review implementation", 60000), message_id: "m-15" },
+  { ...session("s-nested", "conv-nested", "s-child", "claude", 2, "Review timing", 30000), message_id: "conv-child-reply" },
 ];
 function delegation(query) {
   const search = (query.get("search") || "").toLowerCase();
-  const rows = sessions.filter(row => !search || row.label.toLowerCase().includes(search) || row.outline === "1");
+  const rows = sessions.filter(row => !search || row.label.toLowerCase().includes(search) || !row.parent_id);
   return { snapshot: "fixture-v1", rows, ancestors: [], focus: sessions, matched: Object.fromEntries(rows.map(row => [row.id, true])), total: rows.length, session_count: sessions.length, offset: 0, next_cursor: "",
     metrics: metricSpecs, maxima: { self: Object.fromEntries(metricKeys.map(key => [key, key === "tokens" ? 100000 : 300000])), all: Object.fromEntries(metricKeys.map(key => [key, key === "tokens" ? 190000 : 300000])) },
     totals: { ...sessions[0].all, clock: metric(300000), total: metric(900000) }, start, end: sessionEnd, density: Array.from({ length: 120 }, (_, i) => i % 13), warnings: [] };
@@ -185,7 +226,7 @@ function workPreview(id, query) {
 function parallel(query) {
   const from = Number(query.get("start")) || start, to = Number(query.get("end")) || sessionEnd;
   return { snapshot: "fixture-v1", start: from, end: to, inference: "Inferred, not measured", ...(query.get("labels")==="1"?{taxonomy:conversationLabelsFixture.taxonomy}:{}), lanes: (query.get("sessions") || "").split(",").filter(Boolean).map(id => ({ session: id,
-    ...(query.get("labels")==="1"?{messages:[{id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',created_at:new Date(start+10000).toISOString(),text:'Implement this change',authorship:id==='s-root'?[{category:'typed',bytes:12,text:'Implement th',truncated:false},{category:'pasted',bytes:9,text:'is change',truncated:false}]:[{category:'automated',bytes:21}],labels:{ids:['P','P.request','P.request.work','P.request.work.implement'],probs:{'P.request.work.implement':.95},segment:id==='s-root'?'H-typed':'AIUR'}},{id:'thought-'+id,role:'assistant',kind:'reasoning',created_at:new Date(start+20000).toISOString(),text:'Thinking through the work',labels:{ids:['C','C.deliberation','C.deliberation.plan'],probs:{'C.deliberation.plan':.95},segment:'AR'}}],messages_truncated:false,labels_pending:false}:{}),
+    ...(query.get("labels")==="1"?{messages:[{id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',created_at:new Date(start+10000).toISOString(),text:'Implement this change',authorship:id==='s-root'?[{category:'typed',bytes:12,text:'Implement th',truncated:false},{category:'pasted',bytes:9,text:'is change',truncated:false}]:[{category:'automated',bytes:21}],labels:{ids:['P','P.request','P.request.work','P.request.work.implement'],probs:{'P.request.work.implement':.95},segment:id==='s-root'?'H-typed':'AIUR'}},{id:'thought-'+id,role:'assistant',kind:'reasoning',created_at:new Date(start+20000).toISOString(),text:'Thinking through the work',labels:{ids:['C','C.deliberation','C.deliberation.plan'],probs:{'C.deliberation.plan':.95},segment:'AR'}}],messages_truncated:false,labels_pending:false,agent_events:[{id:'e-'+id,message_id:'thought-'+id,kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:.9,source:'thinking',sentence:'I assume the change means the importer.',target:{method:'quote',message_id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',start:0,end:9,text:'Implement',strong:true,at:new Date(start+10000).toISOString()}},{id:'e-'+id+'-open',message_id:'thought-'+id,kind:'obstacle',label:'Obstacle or roadblock',group:'Friction',probability:.8,source:'thinking',sentence:'The build failed once.',target:null}]}:{}),
     model_inferred: [{ start: Math.max(from, start + 1000), end: Math.min(to, sessionEnd - 1000) }], episodes: [{ start, end: sessionEnd }], truncated: false,
     marks: [{ start: start + 1000, end: start + 100000, end_known: true, category: "read", name: "Read", count: 1, tool_id: "tool-read", message_id: "m-1", preview: "/repo/README.md", status: "ok" }, { start: start + 110000, end: start + 125000, end_known: true, category: "run", name: "Test", count: 1, error: true, tool_id: "tool-error", message_id: "m-2", preview: "npm test", status: "error" }] })) };
 }
@@ -216,6 +257,31 @@ const findingDetail = card => ({ ...card, chart: { title: "Codex conversations t
   evidence: [{ at: iso(day), workspace_id: workID, conversation_id: rootConversation, message_id: "m-1", where: "tl1 · Codex", did: "searched for `AGENTS.md`", happened: "found nothing" }],
   attempts: [{ attempt: 1, change: "A shared instructions file", copied_at: iso(12 * day), status: "watching", target_label: "tl1", savings: { usd: 3.2, added_usd: 0 } }],
   steps: [{ label: "A shared instructions file", change: "" }, { label: "A fallback setting", change: "" }], metric: { kind: "rate", unit: "conversations" }, prompt: `Pharos finding ${card.id} …` });
+
+// Synthetic fixes for layout; grouping, bounds and lifecycle are tested in Go and fixes-model.
+const fixStatus = { state: "recurring", label: "Still recurring", detail: "Seen in the last 3 days of the data.", first: iso(9 * day).slice(0, 10), last: iso(day).slice(0, 10), days_quiet: 1 };
+const fixCard = { id: "fix_sample", title: "trimesh isn't installed in this environment, so the mesh check falls back to a slower path", category: "env", category_label: "Environment or setup", source: "friction",
+  target: repoTarget, target_label: "explo", scope: "repo", scope_reason: "All but one event are in explo.", destination_kind: "Environment", destination: "explo's setup (requirements, setup script)",
+  terms: ["trimesh"], files: ["requirements.txt"], work_items: 6, events: 9, conversations: 7, repositories: [{ key: "explo", count: 8 }, { key: "No repository", count: 1 }], status: fixStatus, hours: 1.4, episodes: 3,
+  guidance_hit: { repository: "explo", file: "AGENTS.md", line: 2, term: "trimesh", text: "Install trimesh before running mesh checks." }, groups: 2, tentative: false, safeguards: 1,
+  state: "open", recurred: false, handed_at: null, cart: { target: repoTarget, target_label: "explo", ticked: true }, priority: 8.8, hidden: "", deprioritized: false };
+export const fixesFixtures = {
+  items: [fixCard,
+    { ...fixCard, id: "fix_global", title: "gh pr edit fails with a GraphQL error about Projects (classic)", category: "tool", category_label: "Tool or integration", target: "global", target_label: "Global setup", scope: "global", scope_reason: "Seen in 3 repositories; none holds more than 85%.", destination_kind: "Global guidance", destination: "~/.claude/CLAUDE.md", terms: ["gh pr edit"], files: [], repositories: [{ key: "explo", count: 2 }, { key: "tl1", count: 2 }, { key: "corpus", count: 1 }], guidance_hit: null, groups: 1, safeguards: 0, cart: null, work_items: 4, events: 5, hours: 0, priority: 4 },
+    { ...fixCard, id: "fix_rare", title: "The fixture loader expects UTC timestamps", category: "knowledge", category_label: "Codebase knowledge", tentative: true, work_items: 2, events: 2, hidden: "rare", cart: null, guidance_hit: null, groups: 1, safeguards: 0, priority: 2 },
+    { ...fixCard, id: "fix_handed", title: "The sandbox blocks writes to ~/.cache", category: "harness", category_label: "Harness and shell behaviour", state: "handed_off", handed_at: iso(2 * day), cart: null, groups: 1, status: { ...fixStatus, state: "quiet", label: "Quiet since handoff", days_quiet: 8 }, deprioritized: true }],
+  summary: { open: 2, handed_off: 1, dismissed: 0 }, hidden: { stale: 0, rare: 1, total: 1 },
+  bounds: { quiet_days: 7, hide_days: 30, min_work_items: 3 }, default_bounds: { quiet_days: 7, hide_days: 30, min_work_items: 3 },
+  cart: [{ target: repoTarget, label: "explo", ticked: 1, handoff: "review", handoff_reason: "Investigate and propose, or make the change; you choose before copying.", items: [{ id: "fix_sample", title: fixCard.title, ticked: true, change_label: "Environment or setup", suggested_target: repoTarget }] }],
+  targets: [{ target: "global", label: "Global setup" }, { target: repoTarget, label: "explo" }], built_at: iso(3600000), end: iso(day).slice(0, 10), in_scope_events: "412", excluded_events: 37, safeguard_events: 3, prompt_limit: 12, version: "fixes-v1",
+  coverage: "Agent events from the last 90 days the events pass scanned, grouped by what they say.",
+};
+const fixQuote = { event_id: "e1", sentence: fixCard.title, about: "the mesh check", kind: "friction", kind_label: "Friction", repository: "explo", model: "claude-opus", day: iso(day).slice(0, 10), source: "reply", workspace_id: workID, conversation_id: rootConversation, message_id: "m-1" };
+export const fixDetailFixture = { ...fixCard, suggestion: "Add trimesh to the environment agents run in, pinned, so the check never falls back.", category_explanation: "Something agents need is missing, too slow or the wrong version where they run.",
+  quotes: [fixQuote, { ...fixQuote, event_id: "e2", source: "thinking", about: "" }], members: [fixQuote, { ...fixQuote, event_id: "e2" }, { ...fixQuote, event_id: "e3" }], member_count: 9,
+  guidance_hits: [fixCard.guidance_hit], tool_errors: [{ key: "ModuleNotFoundError: trimesh", count: 4 }], kinds: [{ key: "friction", label: "Friction", count: 7 }, { key: "workaround", label: "Workaround", count: 2 }], models: [{ key: "claude-opus", count: 9 }], thinking: 3,
+  cost: { episodes: 3, hours: 1.4, calls: 22, unresolved: 1 }, status: { ...fixStatus, messages_after: 40 } };
+export const fixesSettingsFixture = { bounds: fixesFixtures.bounds, default_bounds: fixesFixtures.default_bounds, open: 3, hidden_stale: 0, hidden_rare: 1, built_at: fixesFixtures.built_at, end: fixesFixtures.end, window_days: 90, version: "fixes-v1" };
 
 // Synthetic examples for risky action layout; selection and lifecycle are tested in Go.
 const safetyCard = { id: "safety_sample", rule: "credentials", danger: "high", subject: "/Users/example/repo/.build/gcloud", title: "Credentials copied to another location", explanation: "A command copied credential files or cloud configuration somewhere else, where they can outlive the task or be uploaded.", state: "open", target: repoTarget, target_label: "explo", first_seen_at: iso(day), last_seen_at: iso(day), calls: 3, material_change: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
@@ -374,13 +440,17 @@ export const safetySettingsFixture = { rules: [
     "enabled": true
   }
 ], built_at: iso(3600000), scanned_calls: "807", window_days: 28, version: "safety-v3" };
+datasets.fixes = fixesFixtures.items.map(item => ({ id: item.id, title: item.title, lead: item.title, state: item.state, shown: item.state === "open" && item.hidden ? item.hidden : "shown", category: item.category, status: item.status.state,
+  target: item.target, target_label: item.target_label, destination: item.destination, terms: item.terms.join(", "), check_name: null, work_items: item.work_items, events: item.events, conversations: item.conversations,
+  hours: item.hours, priority: item.priority, safeguards: item.safeguards, in_prompt: Boolean(item.cart), first_seen: item.status.first, last_seen: item.status.last, handed_at: item.handed_at, fix_count: 1 }));
 datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.title, danger_rank: card.danger === "high" ? 3 : 2, subject: card.id === "safety_sample" ? "/Users/example/repo/.build/gcloud" : card.id === "safety_delete" ? "/Users/example/archive" : "origin · work", material_change: false, in_prompt: Boolean(card.cart), review_count: 1 }));
 
 // Settings, sync and the header's library status.
 const hosts = [{ id: "studio", label: "Mac Studio", sources: [{ name: "Claude", captured_at: iso(3 * day), indexed_at: iso(3600000) }] }, { id: "air", label: "MacBook Air with a long machine name", sources: [{ name: "Codex", last_data_at: iso(125 * 60000) }] }, { id: "new", label: "New Mac", sources: [] }];
 const sources = { configured: 2, enabled: 2, items: [
-  { name: "claude", enabled: true, path: "/Users/someone/.claude/projects", last_success_at: iso(3600000), last_attempt_at: iso(3600000), coverage: "complete", account: "someone@example.com" },
-  { name: "codex", enabled: false, path: "/Users/someone/.codex/sessions/a/very/long/path/that/should/wrap/inside/its/card", last_success_at: iso(day), last_attempt_at: iso(day), coverage: "partial", error: "The source directory could not be read." },
+  { name: "claude", kind: "claude", tool: "Claude Code", scope: "host", enabled: true, path: "/Users/someone/.claude/projects", last_success_at: iso(3600000), last_attempt_at: iso(3600000), coverage: "complete", account: "someone@example.com",
+    not_recorded: ["Reported cost"], sometimes_recorded: ["Effort", "Title"] },
+  { name: "codex", kind: "codex", tool: "Codex", scope: "library", enabled: false, path: "/Users/someone/.codex/sessions/a/very/long/path/that/should/wrap/inside/its/card", last_success_at: iso(day), last_attempt_at: iso(day), coverage: "partial", error: "The source directory could not be read." },
 ] };
 const syncHistory = Array.from({ length: 6 }, (_, index) => ({ run_id: `run-${index}`, finished_at: iso((index + 1) * 120000), state: index === 2 ? "failed" : "complete", class: index === 1 ? "no_changes" : "changes", changed_groups: 2, conversations: 12, messages_in_changed_groups: 340,
   seconds: 22.1, cpu_seconds: 8.7, cpu_percent_one_core: 39.4, rss_baseline_bytes: 100 * 1048576, rss_observed_peak_bytes: 129 * 1048576, allocated_bytes: 50 * 1048576, sources: ["codex", "claude"],
@@ -402,12 +472,7 @@ const syncStatus = { verification: { available: true, last_verified_at: syncHist
   coverage: [{ source_name: "codex", outcome: "passed", units: 2, last_verification: syncHistory[0].finished_at }], deferred: [{ name: "tools", changed_at: syncHistory[0].finished_at }], recovery_jobs: [], issues: [], measurement_limits: "CPU is process-wide." };
 
 const carbonFactors = JSON.parse(readFileSync(join(repo, "carbon", "co2_factors.json"), "utf8"));
-const carbonTokens = { small: { output: 1000000 }, medium: { uncached_input: 1000000, cache_write: 2000000, cache_read: 20000000, output: 500000 }, large: { output: 250000 } };
-const carbon = { factors: carbonFactors, windows: [{ key: "all", tokens: carbonTokens }, { key: "30d", tokens: carbonTokens }],
-  series: Array.from({ length: 20 }, (_, index) => ({ day: new Date(now - index * day).toLocaleDateString("en-CA"), value: "", tokens: carbonTokens })), choices: { provider: ["codex", "claude"], repository_name: ["pythia-software/pharos"] },
-  default_tier_models: [{ model: "mystery-model", tokens: 500000 }], default_tier_unknown_tokens: 250000, unclassified_tokens: 100000, undated_tokens: 0 };
 
-const mcpCall = { id: 1, called_at: iso(3600000), tool_name: "search_conversations", arguments_json: '{"query":"parser"}', status: "ok", error_text: null, duration_ms: 18, response_bytes: 900, estimated_output_tokens: 300, result_count: 3, truncated: 0 };
 const toolsStatus = { conversations: 10, current_conversations: 10, pending_conversations: 0, tool_calls: 400, backfill: { running: false, done: 0, total: 0, error: null } };
 const writingCounts = (typed, pasted, harness) => ({
   typed_words: typed, pasted_words: pasted, harness_words: harness, words: typed + pasted + harness,
@@ -509,6 +574,7 @@ const idleBackground = backgroundView([
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
   backgroundItem("writing-refine", "Refine writing history", "daily", "current", { cost: { seconds: 240, runs: 7, class: "heavy", text: "about 4 min", typical: "Typically about 4 min" } }),
   backgroundItem("backup", "Back up to /Volumes/Backup Drive With A Long Name/Pharos Backup", "manual", "unavailable", { column: "daily", cost: null }),
+  ...[["labels", "Message labels"], ["agent_events", "Agent events"]].map(([id, label]) => backgroundItem(id, label, "manual", "disabled", { state_label: "Off", column: "hourly", usual_cadence: "hourly", next_at: null, cost: null })),
 ], { tone: "good", title: "Up to date", text: "Everything is on schedule." });
 const busyBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { fixed: true, choices: null }),
@@ -519,8 +585,8 @@ const busyBackground = backgroundView([
   backgroundItem("backup", "Back up to /Users/someone/PharosBackup", "manual", "manual", { column: "daily", state_label: "Only when you ask", as_of: iso(26 * 3600000), next_at: null }),
 ], { tone: "busy", title: "Updating your writing", text: "Human Words cards, and Analyze → Writing update when this finishes.", tech: null });
 export const backgroundDocument = {
-  labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.', threads: 4, thread_choices: [1, 2, 4, 8, 16, 28] },
-  agent_events: { enabled: false, can_change: true, status: 'Off. Turn on to find agent events in this library.', threads: 4, threads_can_change: true, thread_choices: [1, 2, 4, 8, 16, 28] },
+  labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.', notice:'', execution: {device:'gpu', status:'GPU · Automatic', detail:'Confirmed by the last worker. GPU capacity is managed automatically.', confirmed:true}, threads: 4, threads_can_change: false },
+  agent_events: { enabled: false, can_change: true, status: 'Off. Turn on to find agent events in this library.', notice:'', execution: {device:'cpu', status:'CPU · GPU unavailable', detail:'Confirmed by the last worker. Automatic GPU selection fell back to CPU.', confirmed:true}, threads: 4, threads_can_change: true, thread_choices: [1, 2, 4, 8, 16, 28] },
   settings: { mode: "on", paused_until: null, interval_seconds: 300, daily_at: "03:00", hold_when_busy: true, overrides: {},
     battery: { frequent: "slower", hourly: "wait", daily: "wait", low_battery_waits: true }, battery_choices: { frequent: ["same", "slower", "wait"], hourly: ["same", "wait"], daily: ["same", "wait"] },
     battery_slower_minutes: 15, low_battery_percent: 20 },
@@ -539,6 +605,32 @@ export const temporaryBackgroundDocument = {
     note: "Temporary schedule; your usual schedule resumes after one week.",
   } : item), idleBackground.headline),
 };
+// Shared work (docs/work-execution-plan.md §10): a scheduled service's CPU
+// allowance, and GET /api/work with a recent request waiting on a
+// dependency, a running task, a held task with a long failure and a
+// finished request, so the Work card draws every row kind.
+export const workBackgroundDocument = {
+  ...backgroundDocument,
+  work: { available: true, engine: "scheduled", cpu_slots: 4, max_cpu_slots: 10, scope: "this process", can_change: true },
+};
+export const workInspection = () => ({ engine: "scheduled", scope: "this process", state: {
+  at: iso(0), authority: { cpu_cap: 4, cpu_allocated: 2, cpu_waiters: 1, memory_reserved: 0, memory_limit: 134217728, request_memory_limit: 33554432, explicit_request_limit: 8 },
+  requests: [
+    { id: 7, scope: "recent", key: `recent:${(now - 2 * day) * 1e6}:${now * 1e6}:[analysis.authorship analysis.labels]`, trigger: "user", kinds: ["analysis.authorship", "analysis.labels"], priority: "foreground", explicit: true,
+      state: "running", requested_at: iso(300000), membership_frozen_at: iso(290000), members: 40, sealed: 12, failed: 1, unfinished: 27, bytes: 4096,
+      tasks: [{ kind: "analysis.authorship", state: "running", covered: 12 }, { kind: "analysis.labels", state: "blocked", covered: 0, blocker: { reason: "dependency", depends_on: "analysis.authorship" } }] },
+    { id: 8, key: "library", kinds: ["maintenance.parallelism"], priority: "live", state: "queued", library: true, requested_at: iso(60000), members: 0, sealed: 0, unfinished: 0, bytes: 0 },
+  ],
+  ended: [{ id: 5, scope: "backfill", key: "explicit-backfill:[analysis.labels]", kinds: ["analysis.labels"], priority: "backfill", explicit: true, state: "interrupted", reason: "inputs-keep-changing",
+    requested_at: iso(3 * 3600000), members: 900, sealed: 880, unfinished: 20, bytes: 0 }],
+  tasks: [
+    { kind: "analysis.authorship", state: "running", running: { kind: "analysis.authorship", batch: 3, units: 12, cpus: 2, demanders: [7] }, batches: 3, committed_units: 30, work: 30, active_ns: 4e9, select_ns: 1e6 },
+    { kind: "analysis.labels", state: "blocked", blocker: { reason: "held", detail: "stopped until Resume or a service restart" }, batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0, failures: 1,
+      failure_examples: [{ kind: "analysis.labels", unit: { id: "c1", revision: "r1" }, attempts: 3, error: "labeler worker exited: /Users/someone/Library/Application Support/Pharos/models/a-model-with-a-very-long-name-that-has-to-wrap.onnx", exhausted: true }] },
+    { kind: "maintenance.parallelism", batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0 },
+  ],
+  decisions: [], decisions_total: 0,
+} });
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
   eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
@@ -559,7 +651,15 @@ export const busyStatus = {
     statusOperation("op-index", { step: { index: 3, count: 6, name: "Indexing a source with a very long name that has to wrap somewhere", source: "Claude Code", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },
       time: { state: "estimating", low_seconds: 180, high_seconds: 360, label: "about 3–6 min" },
       children: [statusOperation("op-chain", { kind: "analysis.chain", label: "Update analyses", state_label: "Updating analyses", stoppable: false, stop: undefined })], children_count: 2 }),
-    statusOperation("op-view", { kind: "maintenance.library-view", label: "Index the Search view", state_label: "Indexing the Search view", priority: "background", stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-view" } }, step: { index: 1, count: null, name: "Search view", unit: "workspace", done: 2, total: 40, fraction: 0.05 } }),
+    statusOperation("op-view", { kind: "maintenance.library-view", label: "Index the Search view", state_label: "Indexing the Search view", priority: "background", stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-view" } }, step: { index: 1, count: null, name: "Search view", unit: "workspace", done: 2, total: 40, fraction: 0.05 },
+      // A task resource record (docs/work-resource-accounting.md), so the
+      // panel draws the resource line, its export and the profile link.
+      resources: { version: 1, allocation: { current: { cpu_slots: 2, gpu: 0 } }, time: { active: { value: 95, unit: "seconds", basis: "measured" } },
+        waits: { capacity: { value: 12, unit: "seconds", basis: "measured" }, writer: { value: 3, unit: "seconds", basis: "measured" } },
+        cpu: { go_process: { value: null, unit: "cpu_seconds", basis: "shared", coverage: "Go work shares the service process with other tasks." } },
+        memory: { process: { value: null, unit: "bytes", basis: "shared" }, owned_buffers_peak_bytes: { value: 48e6, unit: "bytes", basis: "counted" } },
+        gpu: { time: { value: null, unit: "gpu_seconds", basis: "unavailable" } },
+        io: { logical_read_bytes: { value: 310e6, unit: "bytes", basis: "counted", coverage: "Instrumented logical bytes only; coverage is partial." }, logical_written_bytes: { value: 22e6, unit: "bytes", basis: "counted" } } } }),
     statusOperation("op-backup", { kind: "backup.local", label: "Back up", state: "blocked", state_label: "Waiting", priority: "background", stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-backup" } }, detail: "Waiting for a capture to finish" }),
     statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
   ],
@@ -590,6 +690,27 @@ export const managedStatus = snapshot => ({
     ...snapshot.resources.processes.map(process => ({ ...process, library: "local" })),
     { pid: 4300, role: "service", library: "archive", cpu_percent: 5, memory_bytes: 210e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service (Archive) · ~5% of one core · 210 MB" }]),
 });
+
+// Resource history (docs/work-resource-accounting.md): a few minutes of
+// samples with a gap, irregular GPU samples, a task marker and an omission,
+// so the panel's strip draws every case. A since= request gets the same
+// document; the store merges it without repeating a time.
+export const resourceHistory = (scope = "this library service") => {
+  const t = Array.from({ length: 60 }, (_, index) => now - (240 - index * 4) * 1000).filter((_, index) => index < 30 || index > 34);
+  const wave = index => Math.round((60 + 50 * Math.sin(index / 4)) * 10) / 10;
+  return {
+    version: 1, available: true, scope, instance: "fixture", generated_at: iso(0), now, window_seconds: 900, active: true,
+    cadence: { active_seconds: 2, idle_seconds: 10, gpu_seconds: 5 },
+    series: { cpu: { label: "CPU", unit: "percent_one_core", basis: "proc_pid_rusage", available: true, max: 1000 }, memory: { label: "RAM", unit: "bytes", basis: "proc_pid_rusage", available: true },
+      disk: { label: "I/O", unit: "bytes_per_second", basis: "proc_pid_rusage", available: true }, gpu: { label: "GPU", unit: "percent_driver_time", basis: "IOAccelerator.AppUsage.accumulatedGPUTime", available: true } },
+    samples: { t, cpu: t.map((_, index) => index === 0 ? null : wave(index)), memory: t.map((_, index) => 1.2e9 + index * 4e6), disk: t.map((_, index) => index === 0 ? null : 2e6 + index * 1e5),
+      cpu_partial: t.map((_, index) => index === 1), disk_partial: t.map(() => false), processes: t.map(() => 2) },
+    gpu: { t: Array.from({ length: 40 }, (_, index) => now - (238 - index * 6) * 1000), value: Array.from({ length: 40 }, (_, index) => index === 20 ? null : 20 + index), partial: Array.from({ length: 40 }, () => false) },
+    segments: [{ t: t[0], reason: "started", detail: "fixture" }, { t: t[30], reason: "gap", detail: "No samples for 24 s" }],
+    coverage: [{ t: t[0], covered: [{ pid: 4100, role: "service" }, { pid: 4200, role: "worker:pharos-labeler-ort" }], omitted: ["Pharos Mac app: ownership is not verified, so it is not measured"] }],
+    markers: [{ t: t[10], event: "start", id: "op-index", kind: "index.changes.manual" }, { t: t[40], event: "end", id: "op-index", kind: "index.changes.manual", observed: true }],
+  };
+};
 
 // Synthetic numeric timing fixture: UI/layout tests never read a user library.
 export function thinkingFixture(query) {
@@ -631,7 +752,21 @@ const askSuggestionTexts = [
 // A seeded rotation, as the service varies its slate for Refresh.
 const askSuggestionFixture = seed => askSuggestionTexts.map((_, i) => askSuggestionTexts[(i + seed * 2) % askSuggestionTexts.length]).map(([id, text]) => ({ id, text }));
 
+export const claudeImportFixture = {
+  version:1,id:'f'.repeat(64),name:'claude-ai-imports',state:'incomplete',completeness:'manifest',
+  parts:[{id:'part-one',filename:'conversations-000.zip',state:'collected',conversations:4,messages:12},
+    {id:'part-two',filename:'projects-000-with-a-long-name-to-exercise-the-export-list-at-a-narrow-window-width.zip',state:'missing',error:'Download this file in your signed-in browser, then check the folder again.',download_available:true}],warnings:[],source:null,
+};
+
+// A paused and an imported export; nothing in progress, so the page does not poll.
+export const claudeWatchFixture = {enabled:true,available:true,folder:'/Users/example/Downloads',problem:'',browser:'chrome:Default',
+  browsers:[{key:'chrome:Default',label:'Google Chrome — Personal (someone@example.com)'},{key:'chrome:Profile 2',label:'Google Chrome — Work account with a long profile name for narrow windows'}],exports:[
+  {id:'a'.repeat(64),state:'paused',browser:'chrome:Default',exported_at:'2026-11-10T15:01:48Z',collected:3,expected:7,message:'Pharos opened frames-000-with-a-long-name-for-narrow-windows.zip in Google Chrome — Personal (someone@example.com), but no file arrived. If another browser or profile is signed in to this Claude account, choose it and try again. The browser must save to Downloads.'},
+  {id:'b'.repeat(64),state:'imported',exported_at:'2026-11-09T15:01:48Z',collected:7,expected:7}]};
+
 export const defaultApi = {
+  "GET /api/claude-imports":{jobs:[],run:{running:false},watch:claudeWatchFixture},
+  "POST /api/claude-imports/watch":{...claudeWatchFixture,enabled:false},
   "GET /api/thinking": ({query}) => thinkingFixture(query),
   "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},
   // No remote image bytes in fixtures; the renderer uses its globe fallback.
@@ -643,6 +778,7 @@ export const defaultApi = {
   "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
   // Suggestions the library chose; Refresh asks for the next seed.
   "GET /api/ask/suggestions": ({ query }) => ({ suggestions: askSuggestionFixture(Number(query.get("seed") || 0)) }),
+  "POST /api/ask/read": {ok:true},
   "POST /api/ask/clear-visits": {ok:true},
   "POST /api/ask/visits": {ok:true},
   "POST /api/ask/remove-visit": {ok:true},
@@ -654,6 +790,11 @@ export const defaultApi = {
     for (const key of body?.delete ?? []) delete state.preferences[key];
     return { values: state.preferences };
   },
+  "POST /api/session-preferences": ({ body, state }) => {
+    Object.assign(state.preferences, body?.set);
+    for (const key of body?.delete ?? []) delete state.preferences[key];
+    return { buffered: true };
+  },
   "PUT /api/query-snapshots": ({body,query,state}) => {
     state.querySnapshots ??= {};
     state.querySnapshots[`${query.get("dataset")}:${body.code}`]=body;
@@ -663,10 +804,13 @@ export const defaultApi = {
   "GET /api/query-computed-columns": [],
   "GET /api/query-object-references": { references: [] },
 
-  "GET /api/labels/conversations/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false}),
-  "GET /api/labels/workspaces/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id,work_id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false}),
+  // Synthetic 1-pixel PNG tests image loading; geometry is covered by the
+  // shared model/native renderer tests, with no user library in this fixture.
+  "POST /api/fingerprints": ({body}) => ({items: body.items.map(item => ({...item, state:'ready', href: item.entity==='workspace' ? `/work/${item.id}` : `/work/${workID}/conversation/${rootConversation}`,
+    images:{light:'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="'+(item.profile==='card'?256:128)+'"><rect width="100%" height="100%" fill="#cad6cd"/></svg>'),dark:'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="'+(item.profile==='card'?256:128)+'"><rect width="100%" height="100%" fill="#cad6cd"/></svg>')}}))}),
+  "GET /api/labels/conversations/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id,messages:conversationLabelsFixture.conversations[0].messages.map(message=>({...message,conversation_id:params.id}))},taxonomy:conversationLabelsFixture.taxonomy,truncated:false,agent_events:fingerprintEvents}),
+  "GET /api/labels/workspaces/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id,work_id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false,agent_events:fingerprintEvents}),
   // Query Table, on the production transport.
-  "POST /api/query/usage/carbon": carbon,
   "POST /api/query/writing/series": ({ body }) => ({ works: 2, ...(body?.hourly ? { hourly: [] } : {}),
     daily: Array.from({ length: 14 }, (_, index) => ({ day: new Date(now - index * day).toLocaleDateString("en-CA"), typed_messages: 3, messages: 5, ...writingCounts(120 + index * 10, 40, 900) })),
     totals: { messages: 70, typed_messages: 42, first_day: new Date(now - 13 * day).toLocaleDateString("en-CA"), ...writingCounts(2000, 560, 12600) } }),
@@ -675,11 +819,28 @@ export const defaultApi = {
   "POST /api/query/:dataset": ({ params, body }) => schemas[params.dataset] && answerQuery("rows", body, datasets[params.dataset], schemas[params.dataset], { now }),
 
   // The header, menus and status polling on every page.
+  "GET /api/library/recent-conversations": { items: [
+    ["Trace the incremental indexer", "pharos", "codex", "gpt-5", 2, "Review the recovery path after sleep and preserve the existing index.", "The index resumes after sleep without replaying retained captures."],
+    ["Make search feel faster", "atlas", "claude", "claude-opus-4-1", 1, "Find what slows down the first search in a large library.", "The search now reuses the stored catalog summaries."],
+    ["A simpler release checklist", "pharos", "codex", "gpt-5", 0, "Walk through the release process and flag any duplicate steps.", "The checklist follows signing, verification, and publication in order."],
+    ["Review the conversation reader", "atlas", "claude", "claude-sonnet-4", 3, "Keep each review inside the turn that requested it.", "The outline shows every helper beneath its parent turn."],
+    ["Explore the activity timeline", "observatory", "codex", "gpt-5", 0, "Compare activity across the last week of conversations.", "The timeline makes the quiet gaps and long sessions easier to inspect."],
+    ["Follow nested agent work", "pharos", "claude", "claude-opus-4-1", 2, "Show which sub-agent handled each part of the migration.", "The delegated work is grouped by assignment and depth."],
+    ["Clean up a small parser", "atlas", "codex", "gpt-5", 0, "Handle quoted phrases without changing ordinary word searches.", "Quoted phrases and individual words now keep their intended meanings."],
+    ["Check background recovery", "observatory", "claude", "claude-sonnet-4", 1, "Test what happens when indexing stops halfway through a batch.", "The next pass picks up the remaining records safely."],
+    ["Understand token patterns", "pharos", "codex", "gpt-5", 0, "Compare shorter conversations with the deeper delegated work.", "The comparison separates main-agent and helper activity."],
+    ["Plan the next iteration", "observatory", "claude", "claude-opus-4-1", 1, "Review the open questions and choose the next small improvement.", "The next iteration starts with clearer navigation and a smaller scope."],
+  ].map(([title, repository, provider, model, subagent_depth, first_input, last_response], index) => ({
+    id: index ? `recent-${index}` : rootConversation, workspace_id: workID, title, repository, provider, model, subagent_depth, first_input, last_response,
+    activity_at: new Date(now - index * day).toISOString(), labels_ready: index < 7, events_ready: index < 4,
+  })) },
   "GET /api/activity": { active: 0, runs: [] },
   "GET /api/library/status": { idle: true, portable: true, library_dir: "/Volumes/Pharos SSD/Pharos", drive: { name: "Pharos SSD", mounted: true, ejectable: true }, activities: [] },
-  "GET /api/probe/status": { library: true, needs_onboarding: false, host: { id: "test-mac", label: "This Mac" } },
+  "GET /api/probe/status": { library: true, needs_onboarding: false, host_file_exists: true, host: { id: "test-mac", label: "This Mac" } },
+  "GET /api/providers": JSON.parse(readFileSync(join(repo, "testdata", "providers.json"), "utf8")),
   "GET /api/probe/tools": {tools:[{kind:'claude',path:'~/.claude',found_by:'data folder'}]},
   "POST /api/probe": ({body})=>({candidates:sourceSetupCandidates.filter(candidate=>body.kinds.includes(candidate.kind)),checked:[]}),
+  "POST /api/sources/import": ({body})=>({added:[body.kind],enabled:[],declined:[],skipped:[]}),
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
   "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0, prompt: "Refresh the API price history in pricing/cost_changes.json." },
   "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),
@@ -708,11 +869,14 @@ export const defaultApi = {
   "GET /api/status/stream": eventStream(idleStatus),
   "GET /api/app/status": managedStatus(idleStatus),
   "GET /api/app/status/stream": eventStream(managedStatus(idleStatus)),
+  "GET /api/resources/history": () => resourceHistory(),
+  "GET /api/app/resources/history": () => resourceHistory("Pharos app (covered processes)"),
   "POST /api/operations/stop": { stopping: true },
   "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
   // Settings.
   "GET /api/feedback/diagnostics": { service: "Recent service diagnostics" },
+  "POST /api/feedback/screenshot": { url: "file:///tmp/pharos-annotation-fixture/screenshot.jpg" },
   "POST /api/logs/page": ({ body }) => ({ recorded: body?.events?.length ?? 0 }),
   "GET /api/logs/summary": () => logsSummary,
   "GET /api/logs/source": ({ query }) => logsSource(query.get("id")),
@@ -733,7 +897,7 @@ export const defaultApi = {
   },
   "GET /api/health/freshness": { sources: [], sync_active: false },
   "GET /api/health/drive": { free_bytes: 400_000_000_000, sizes: { library_bytes: 12_000_000_000 } },
-  "GET /api/authorship": { built_at: iso(120000), refined_at: iso(8*3600000), provisional_messages: 12, refinement_pending: true, pending_messages: 0, refining: false, running: false, stale: false, error: null, totals: { typed_words: 1234, typed_messages: 98, messages: 400 }, last_30_days: { typed_words: 500 } },
+  "GET /api/authorship": { built_at: iso(120000), refined_at: iso(8*3600000), provisional_messages: 12, refinement_pending: true, pending_messages: 0, refining: false, running: false, stale: false, error: null },
   "GET /api/index": { active: false, sync_active: false, hosts },
   "GET /api/capture": { active: false, runs: [] },
   "GET /api/sources": sources,
@@ -749,12 +913,26 @@ export const defaultApi = {
   "GET /api/sync/recovery": { jobs: [] },
   "GET /api/background": backgroundDocument,
   "POST /api/background/settings": backgroundDocument,
-  "POST /api/labels/settings": ({ body }) => ({ ...backgroundDocument, labels: { ...backgroundDocument.labels, enabled: body.enabled, status: body.enabled ? 'On, waiting for the labeling model.' : 'Off.' } }),
+  "POST /api/labels/settings": ({ body }) => ({ ...backgroundDocument,
+    labels: { ...backgroundDocument.labels, ...('enabled' in body ? {enabled:body.enabled, status:body.enabled ? 'On, waiting for the labeling model.' : 'Off.'} : {}), ...('threads' in body ? {threads:body.threads} : {}) },
+    agent_events: { ...backgroundDocument.agent_events, ...('agent_events_threads' in body ? {threads:body.agent_events_threads} : {}) } }),
   "POST /api/background/run": ({ body }) => ({ accepted: true, items: [body?.item].filter(Boolean) }),
+  "GET /api/work": { engine: "classic", available: false },
+  "POST /api/work": ({ body }) => ["recent", "backfill"].includes(body?.action) ? { request_id: 9, operation_id: "op-work-9", scope: body.action, state: "queued" }
+    : body?.action === "cancel" ? { cancelled: true } : { changed: true, kind: body?.kind, action: body?.action },
+  "POST /api/work/settings": ({ body }) => ({ ...workBackgroundDocument, work: { ...workBackgroundDocument.work, cpu_slots: body.cpu_slots } }),
   "GET /api/backup": { active: false, run: null, runs: [], last_success: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day) }, record: "/Volumes/Pharos SSD/Pharos/backups.json", suggested_destination: "/Users/someone/Pharos Backup" },
 
   // Findings and MCP.
   "GET /api/findings": findings,
+  "GET /api/findings/fixes": fixesFixtures,
+  "GET /api/findings/fixes/settings": fixesSettingsFixture,
+  "POST /api/findings/fixes/settings": ({ body }) => ({ ...fixesSettingsFixture, bounds: { ...fixesSettingsFixture.bounds, ...Object.fromEntries(Object.entries(body ?? {}).filter(([key]) => key in fixesSettingsFixture.bounds)) } }),
+  "GET /api/findings/fixes/:id": ({ params }) => ({ ...fixDetailFixture, ...fixesFixtures.items.find(item => item.id === params.id) }),
+  "POST /api/findings/fixes/bulk": ({ body }) => ({ ok: true, count: body?.ids?.length ?? 0 }),
+  "POST /api/findings/fixes/cart/prompt": ({ body }) => ({ target: body?.target, label: "explo", prompt: `Improve the guidance, setup and docs agents work with in explo.\n${(body?.ids ?? []).join("\n")}`, count: body?.ids?.length ?? 0, preview_token: "sample-preview" }),
+  "POST /api/findings/fixes/cart/copy": { ok: true },
+  "POST /api/findings/fixes/:id/action": { ok: true },
   "GET /api/findings/safety": safetyFixtures,
   "GET /api/findings/safety/settings": safetySettingsFixture,
   "POST /api/findings/safety/settings": ({ body }) => ({ ...safetySettingsFixture, rules: safetySettingsFixture.rules.map(rule => ({ ...rule, enabled: body?.rule_enabled?.[rule.id] ?? rule.enabled })) }),
@@ -767,7 +945,6 @@ export const defaultApi = {
   "GET /api/findings/:id": ({ params }) => { const card = findingCards.find(item => item.id === params.id); return card && findingDetail(card); },
   "GET /api/mcp": ({ state }) => ({ enabled: state.mcpEnabled ?? true, transport: "stdio", command: "/Applications/Pharos.app/Contents/MacOS/pharos", args: ["--config", "/Users/someone/Library/Application Support/Pharos/archive.toml", "mcp"], note: "Agent clients launch this local command when they connect.", skill: { name: "search-prior-coding-sessions", text: "Search prior coding sessions with Pharos.", paths: { codex: "~/.codex/skills/search-prior-coding-sessions/SKILL.md" } } }),
   "POST /api/mcp/enabled": ({ body, state }) => { state.mcpEnabled = body.enabled; return { enabled: body.enabled }; },
-  "GET /api/mcp/calls": { items: [mcpCall], filtered_total: 1, tool_stats: [{ tool_name: "search_conversations", calls: 1, errors: 0, average_output_tokens: 300, largest_output_tokens: 300, truncated_calls: 0, average_duration_ms: 18 }], stats: { total_calls: 1, failed_calls: 0, average_output_tokens: 300, largest_output_tokens: 300, truncated_calls: 0 } },
 
   // The workspace reader and delegation explorer.
   "GET /api/work/:id": ({ params }) => params.id === workID ? work : undefined,
@@ -779,6 +956,40 @@ export const defaultApi = {
   "GET /api/work/:id/parallel": ({ query }) => parallel(query),
   "GET /api/work/:id/preview": ({ params, query }) => workPreview(params.id, query),
   "GET /api/work/:id/find": { conversations: [] },
+};
+
+// Evidence the explorer and event views cannot settle yet, for layout and URL
+// restoration only (the states themselves are tested in Go and node): an ≈
+// session count, a row whose relatives the family bound left out (loaded by
+// delegation_relatives), and events waiting for a rebuild.
+const eventsPending = { state: "pending", pending_conversations: 4, withheld_conversations: 2 };
+const omittedRelatives = [1, 2].map(n => ({ ...session(`s-relative-${n}`, `conv-relative-${n}`, "s-child", "claude", 2, `Omitted relative ${n} with a long session label`, 10000), order: 2 + n }));
+export const pendingEvidenceApi = {
+  "GET /api/work/:id/delegation": ({ query }) => {
+    const data = delegation(query), loaded = (query.get("relatives") || "").split(",").includes("s-child");
+    // As the server does, a collapse leaves descendants out of rows but not out of the counts.
+    const collapsed = new Set((query.get("collapsed") || "").split(",").filter(Boolean)), all = [...data.rows, ...loaded ? omittedRelatives : []];
+    const parents = new Map(all.map(row => [row.id, row.parent_id])), hidden = row => { for (let id = parents.get(row.id); id; id = parents.get(id)) if (collapsed.has(id)) return true; return false; };
+    const rows = all.filter(row => !hidden(row)).map(row => row.id === "s-child" && !loaded ? { ...row, children_omitted: omittedRelatives.length } : row.id === "s-nested" ? { ...row, events_pending: true } : row);
+    return { ...data, rows, focus: [...data.focus, ...loaded ? omittedRelatives : []], matched: Object.fromEntries(rows.map(row => [row.id, true])), total: rows.length, session_count: sessions.length + omittedRelatives.length, session_count_uncertain: 1, events_pending_sessions: 1 };
+  },
+  "GET /api/work/:id/parallel": ({ query }) => { const data = parallel(query); return { ...data, lanes: data.lanes.map(lane => lane.session === "s-nested" ? { ...lane, events_pending: true } : lane) }; },
+  "GET /api/labels/conversations/:id": async call => ({ ...await defaultApi["GET /api/labels/conversations/:id"](call), events_pending: 1, events_pending_conversations: [call.params.id] }),
+  // Result cards draw the stored image: one whose events are withheld is a
+  // stale image (not current) that says how many conversations wait.
+  "POST /api/fingerprints": async call => {
+    const answer = await defaultApi["POST /api/fingerprints"](call);
+    return { ...answer, items: answer.items.map(item => call.body.events === false ? item : { ...item, state: "pending", stale: true, events_pending: 1 }) };
+  },
+  // Every event conversation is withheld: nothing reads as scanned, yet the
+  // pages say a rebuild is pending rather than that nothing was ever read.
+  "* /api/query/:dataset/:operation": async ({ params, body, query }) => {
+    if (!/^agent_event/.test(params.dataset)) return defaultApi["* /api/query/:dataset/:operation"]({ params, body, query });
+    const answer = schemas[params.dataset] && answerQuery(params.operation, body, [], schemas[params.dataset], { now, id: query.get("id") });
+    return answer && { ...answer, coverage: eventsPending };
+  },
+  "GET /api/findings/fixes": { ...fixesFixtures, events_freshness: eventsPending },
+  "GET /api/findings/safety": { ...safetyFixtures, events_freshness: eventsPending, cases: [...safetyFixtures.cases, { ...safetyFixtures.cases[0], id: "safety_safeguard", rule: "safeguard-test", danger: "medium", title: "A test safeguard was weakened", cart: undefined }] },
 };
 
 // Settings → Logs: a crash in the service's last run and a page error. As

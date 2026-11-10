@@ -21,7 +21,7 @@ import (
 var runningItem = map[string]string{
 	"index.changes.automatic": "conversations", "index.changes.manual": "conversations", "index.sources.legacy": "conversations",
 	"maintenance.library-view": "search", "analysis.github": "repositories", "analysis.identities": "repositories", "analysis.git": "repositories",
-	"analysis.authorship.refine": "writing-refine", "analysis.tools": "tools", "analysis.authorship": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events",
+	"analysis.authorship.refine": "writing-refine", "analysis.tools": "tools", "analysis.authorship": "writing", "analysis.peers": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events",
 	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
 	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup",
 }
@@ -208,7 +208,7 @@ func (s *Server) itemAsOf(item backgroundItem, plan itemPlan, rows map[string]fr
 	case "backup":
 		value = in.lastBackup
 	}
-	if value == "" && !plan.LastDone.IsZero() {
+	if value == "" && !plan.LastDone.IsZero() && item.ID != "writing" {
 		value = formatTime(plan.LastDone)
 	}
 	return value
@@ -249,10 +249,10 @@ func sourceDomains(config Config, other bool) []string {
 
 // stateLabels are the item and cadence states' words.
 var stateLabels = map[string]string{"running": "Updating now", "queued": "Up next", "failed": "Failed", "missed": "Missed its daily time", "paused": "Paused",
-	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "power": "Waits until on outlet power"}
+	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "disabled": "Off", "power": "Waits until on outlet power"}
 
 // stateRank orders states from the one a cadence's row should show first.
-var stateRank = []string{"failed", "running", "missed", "queued", "never", "power", "current", "paused", "manual", "unavailable"}
+var stateRank = []string{"failed", "running", "missed", "queued", "never", "power", "current", "paused", "manual", "unavailable", "disabled"}
 
 // backgroundView is the schedule as surfaces show it.
 func (s *Server) backgroundView(ctx context.Context, views []opView, freshness []freshnessRow, at time.Time) map[string]any {
@@ -263,6 +263,13 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 	costs := s.cachedCosts(ctx)
 	in := s.backgroundInputsFor(ctx, s.peekRequested())
 	plans := backgroundPlan(settings, in, at)
+	// The step details own model settings. Keep disabled models reachable in
+	// the unscheduled column without adding them to the execution plan.
+	for _, item := range backgroundItems {
+		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents {
+			plans = append(plans, itemPlan{ID: item.ID, Cadence: cadenceManual})
+		}
+	}
 	rows := map[string]freshnessRow{}
 	for _, row := range freshness {
 		rows[row.Domain] = row
@@ -286,6 +293,8 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		switch {
 		case live[item.ID]:
 			state = "running"
+		case item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents:
+			state = "disabled"
 		case in.requested[item.ID] || queued[item.ID]:
 			state = "queued"
 		case item.ID == "backup" && in.backupDestination == "":
@@ -304,6 +313,8 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			state = "queued"
 		case plan.Missed:
 			state = "missed"
+		case item.ID == "writing" && plan.Pending:
+			state = "queued"
 		case asOf == "" && plan.Pending:
 			state = "never"
 		}
@@ -333,6 +344,10 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		}
 		if item.Adaptive && settings.placed(item) != cadenceFrequent && entry["temporary_cadence"] == nil {
 			entry["note"] = "Moves to Frequently once a run usually takes under a minute."
+		}
+		if item.ID == "writing" && in.writingBacklog.Pending > 0 {
+			entry["backlog"] = in.writingBacklog
+			entry["note"] = in.writingBacklog.note(at)
 		}
 		if item.ID == "backup" && in.backupDestination != "" {
 			entry["label"] = "Back up to " + in.backupDestination
@@ -571,7 +586,8 @@ func batteryHeadline(policy batteryPolicy, power powerState) map[string]any {
 // projected from the items' measured costs.
 func (s *Server) backgroundDayCost(ctx context.Context, settings backgroundSettings, costs map[string]itemCost, at time.Time) map[string]any {
 	since := at.Add(-24 * time.Hour)
-	frequent, checks, idle, peak := 0.0, 0, 0, int64(0)
+	// peak is null when no run in the window read its RSS.
+	frequent, checks, idle, peak := 0.0, 0, 0, (*int64)(nil)
 	activeHours := map[string]bool{}
 	for _, sample := range s.Catalog.automaticSamples(ctx, 400) {
 		finished, ok := parseTime(sample.FinishedAt)
@@ -580,7 +596,9 @@ func (s *Server) backgroundDayCost(ctx context.Context, settings backgroundSetti
 		}
 		frequent += sample.Seconds
 		checks++
-		peak = max(peak, sample.Peak)
+		if sample.Peak != nil && (peak == nil || *sample.Peak > *peak) {
+			peak = sample.Peak
+		}
 		if sample.Workspaces == 0 {
 			idle++
 		} else {
@@ -650,6 +668,7 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 	_, views := s.operationsDocumentViews(r.Context(), false)
 	freshness := s.freshness(r.Context(), views, false)
 	writeJSON(w, map[string]any{
+		"work":         s.workSettings(),
 		"labels":       s.labelsSettings(),
 		"agent_events": s.agentEventsSettings(r.Context()),
 		"settings": map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "interval_seconds": settings.Interval,
@@ -829,6 +848,9 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		writeError(w, err, 500)
 		return
+	}
+	if s.work != nil {
+		s.work.runner.readPause(context.WithoutCancel(r.Context()))
 	}
 	s.wakeBackground()
 	s.getBackground(w, r)

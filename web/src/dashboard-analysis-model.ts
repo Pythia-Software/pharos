@@ -1,9 +1,10 @@
 import { EMPTY_QUERY, MAX_WHERE_CLAUSES, coerceValue, groupKeyFields, predicatesOf, type GroupKey, type MetricDateGrouping, type WhereClause, inspectBucketQuery, metricDateFloor, metricDateNext, type AggOp, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldSchema, type MetricDisplay, type MetricValueFormat, type QueryState, type SummaryColumn, type WhereTerm } from "@pythia-software/query-table-core";
-import { defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
+import { defaultChartScale, validChartScale, type AxisUnit, type ChartScale } from "./chart-scale";
 import { chartPeriods, validPeriodCount, type ChartPeriod } from "./chart-period";
-import { validChartDisplay, validRollingPeriods, type ChartDisplay } from "./chart-series";
-import { isSliceTerm, readSlice, validChartPresentation, withSlice, type SliceSelection } from "./chart-selection";
+import { chartDisplays, validRollingPeriods } from "./chart-series";
+import { isSliceTerm, readSlice, sliceSelectionActive, validChartPresentation, withSlice, type SliceSelection } from "./chart-selection";
 import { timeBounds, withEnd } from "./chart-range";
+import type { BinScheme } from "./value-bins";
 import { cycleBoxes, cycleFrame, cycleGroups, cycleRangeError, cycleSamples, hoursOfDay, idleIsZero, maxCycleSlots, weekdays, type CalendarCycle, type CycleKey } from "./weekday-cover";
 
 // A dashboard analysis is a view over one catalog: which records count as
@@ -17,6 +18,7 @@ export const isTrendView = (view: unknown): view is "trend" | "trend_line" | "tr
 export type AnalysisReduce = "total" | "mean" | "median" | "max" | "count";
 export type AnalysisMeasure = {
   label: string; unit: string; format: MetricValueFormat;
+  group?: string; units?: string[];
   // The aggregate over any set of records: one group, or one unit. A ratio
   // of two sums names its parts, so units can pool them rather than add
   // their ratios.
@@ -29,6 +31,28 @@ export type AnalysisMeasure = {
   populationShare?: boolean;
   // A population the measure implies, such as fully priced usage.
   where?: WhereTerm[];
+  // The records a drill-down opens, within the point's or bar's population:
+  // those behind the numerator, such as messages with an event. Unlike
+  // where, it never changes the value drawn.
+  drill?: WhereTerm[];
+  // The ordered breakdown that bands each record's value, such as a band of
+  // per-session ratios. Where that band has fine bins, Over time can draw
+  // the measure's distribution as a heatmap (heatmapAxis).
+  band?: string;
+  // The breakdown whose fine bins hold this measure's per-record value, for
+  // a measure without a band of its own: Distribution draws its histogram
+  // on those bins (distributionBins). A band implies it.
+  valueBins?: string;
+  // A distribution of this measure after aggregating records per unit and
+  // period, rather than a value already stored on each record.
+  heatmapUnit?: { unit: string; bins: AxisBins };
+  // Why a distribution of this measure says nothing, such as a count of
+  // rare events that nearly every record has none of. Distribution then
+  // does not offer it.
+  noDistribution?: string;
+  // How its values spread, where longTailed's rule is wrong for it: long
+  // puts it on a log axis by default, even on a linear one.
+  spread?: "long" | "even";
   note: string;
 };
 // A ratio's part is a summed field, or a count of a field's non-empty values,
@@ -36,26 +60,48 @@ export type AnalysisMeasure = {
 // part may instead sum a row expression, which states a condition: zero-result
 // searches are SUM(IF([result_count]=0,1,0)). Pooling still sums each part per
 // period, window or unit. Such a part names what it counts (label).
-export type RatioPart = string | { op: "sum" | "count"; field: string; label?: string } | { op: "sum"; expression: string; label: string };
-type Part = { op: "sum" | "count"; field?: string; expression?: string; label?: string };
+// A part may also count a field's distinct values, optionally only on rows
+// meeting a condition (when) and in units of per: messages with an event are
+// COUNT_DISTINCT(IF([events]>0,[message_id],NULL)), thousands of messages
+// COUNT_DISTINCT([message_id])/1000. Where one record is not one
+// observation (a message read once per kind), only a distinct count states
+// the population. Pooling adds distinct counts too, which is exact where the
+// counted values partition periods and groups (a message has one time and
+// one model) and counts a value once per period or group it reaches where
+// they do not (a conversation over several days).
+export type RatioPart = string | { op: "sum" | "count"; field: string; label?: string } | { op: "sum"; expression: string; label: string }
+  | { op: "count_distinct"; field: string; when?: string; per?: number; label: string };
+type Part = { op: "sum" | "count" | "count_distinct"; field?: string; expression?: string; when?: string; per?: number; label?: string };
 export const ratioPart = (part: RatioPart): Part => typeof part === "string" ? { op: "sum", field: part } : part;
-const partExpression = (part: RatioPart) => { const { op, field, expression } = ratioPart(part); return `${op.toUpperCase()}(${expression ?? `[${field}]`})`; };
+const partExpression = (part: RatioPart) => {
+  const { op, field, expression, when, per } = ratioPart(part);
+  if (op === "count_distinct") return `COUNT_DISTINCT(${when ? `IF(${when},[${field}],NULL)` : `[${field}]`})${per ? `/${per}` : ""}`;
+  return `${op.toUpperCase()}(${expression ?? `[${field}]`})`;
+};
+// A part computed as a formula rather than one aggregate of one field.
+const formulaPart = (part: RatioPart) => { const { expression, when, per } = ratioPart(part); return Boolean(expression || when || per); };
 // A part as an aggregation clause, or a grouped row's summary column.
-export const partClause = (part: RatioPart): Pick<AggregationClause, "op" | "field" | "expression"> => { const { op, field, expression } = ratioPart(part); return expression ? { op: "sum", expression: partExpression(part) } : { op, field }; };
-const partColumn = (part: RatioPart): Pick<SummaryColumn, "op" | "field" | "expression"> => { const { op, field, expression } = ratioPart(part); return expression ? { op: "formula", expression: partExpression(part) } : { op, field }; };
+export const partClause = (part: RatioPart): Pick<AggregationClause, "op" | "field" | "expression"> => { const { op, field } = ratioPart(part); return formulaPart(part) ? { op: "sum", expression: partExpression(part) } : { op, field }; };
+const partColumn = (part: RatioPart): Pick<SummaryColumn, "op" | "field" | "expression"> => { const { op, field } = ratioPart(part); return formulaPart(part) ? { op: "formula", expression: partExpression(part) } : { op, field }; };
 // What a part adds up, in words: "summed input tokens", "the count of duration ms".
 export const partLabel = (part: RatioPart) => { const { op, field, label } = ratioPart(part); return label ?? `${op === "sum" ? "summed" : "the count of"} ${field!.replaceAll("_", " ")}`; };
-// The field a drill-down shows for a part, where it has one.
-export const partField = (part: RatioPart) => ratioPart(part).field;
+// The field a drill-down shows for a part, where it has one: a summed or
+// counted field, not a distinct identity.
+export const partField = (part: RatioPart) => { const { op, field } = ratioPart(part); return op === "count_distinct" ? undefined : field; };
 // A breakdown groups by one or more fields, such as provider and model. The
 // trend draws its groups as series: in a fixed order where one is given,
 // with labels for known values and for a missing one.
 // A breakdown with an implied where names that population in its note.
-export type AnalysisBreakdown = { label: string; fields: string[]; where?: WhereTerm[]; note?: string; order?: string[]; values?: Record<string, string>; empty?: string };
+export type AnalysisBreakdown = { views?: AnalysisView[]; measures?: string[]; label: string; fields: string[]; where?: WhereTerm[]; note?: string; order?: string[]; values?: Record<string, string>; empty?: string; bins?: AxisBins };
+// A band of a continuous value may also bin that value finely (value-bins.ts):
+// field holds each record's bin, as its lower edge. The heatmap then draws
+// the value on a continuous axis rather than the band's few groups, with
+// each band's lower edge (edges, in the band's order) as a guide.
+export type AxisBins = { field: string; scheme: BinScheme; label: string; format: MetricValueFormat; edges?: number[] };
 // A component breakdown splits a measure into its additive parts, such as
 // tokens into uncached input, cache reads and writes, and output. Its series
-// are fields, not groups of records, so only the trend draws it, and only for
-// the measures it lists; any other measure moves to its fallback breakdown.
+// are fields, not groups of records. Trends draw them per period; record
+// comparisons draw their totals across the range, including as pie slices.
 export type AnalysisComponent = { key: string; label: string; field?: string; color: string; optional?: boolean; fields?: string[] };
 // A derived component breakdown computes its parts rather than summing them:
 // the trend queries the summed input fields per period, grouped further by
@@ -84,7 +130,10 @@ export type AnalysisRequest = { params?: Record<string, string>; note?: string }
 // A unit's key may combine fields, such as a conversation and a skill path:
 // one observation is then one pair, and a breakdown constant within the pair
 // (the skill's name) may be one of its fields.
-export type AnalysisUnit = { label: string; plural: string; key: string | string[]; where: WhereTerm[]; breakdowns: Record<string, string[]>; note: string };
+// A unit that is one record each (recordsAlike) distributes exactly as the
+// records do, so Distribution offers only one of them: the records for a
+// measure with a per-record value, the unit otherwise.
+export type AnalysisUnit = { label: string; plural: string; key: string | string[]; where: WhereTerm[]; breakdowns: Record<string, string[]>; note: string; recordsAlike?: boolean };
 export type AnalysisCatalog = {
   dataset: string;
   // A topic may limit its useful views and require a meaningful breakdown.
@@ -95,11 +144,18 @@ export type AnalysisCatalog = {
   measures: Record<string, AnalysisMeasure>;
   breakdowns: Record<string, AnalysisBreakdown>;
   units: Record<string, AnalysisUnit>;
-  records: { label: string; plural: string; note: string };
+  // count names the measure that counts records, which a distribution
+  // heatmap draws (heatmapSource).
+  records: { label: string; plural: string; note: string; count?: string };
+  // Internal source for a heatmap whose observations are grouped units.
+  trendHeatmapUnit?: { scheme: BinScheme };
   // The calendar keys each cycle folds, and how they name their slots
   // (CycleKey). Without any, no cycle view; without one, that cycle is
   // offered disabled.
   cycle?: Partial<Record<CalendarCycle, CycleKey>>;
+  // Other times a cycle can fold records by (state.cycleOn), beside cycle's:
+  // a session's last message as well as its start. label names cycle's own.
+  cycleOn?: { label: string; options: Record<string, { label: string; cycle: Partial<Record<CalendarCycle, CycleKey>> }> };
   components?: Record<string, AnalysisComponents>;
   // A dataset without one of them (no hour field, say) leaves it out, and the
   // trend offers it disabled.
@@ -143,7 +199,48 @@ export type AnalysisCatalog = {
   // (the tools rollup counts whole days).
   rangeNote?: string;
   scatter: [string, string];
+  // Whether the controls show the population (the filters other than the
+  // range) and the legend can change it (dashboard-population.ts).
+  population?: boolean;
+  // How this catalog draws a chart by default, given the engine's
+  // suggestion for the data asked for (suggestedView): most catalogs keep
+  // it. Under the reader's choices (viewDefaults).
+  defaultView?: (state: ViewInputs, suggested: ViewDefaults) => ViewDefaults;
 };
+// The data controls a chart's default view is derived from.
+export type ViewInputs = Pick<ResolvedAnalysis, "view" | "metric" | "metricY" | "split" | "unit" | "period" | "reduce">;
+// A default view. For Over time, view chooses how the trend is drawn (lines
+// or bars, trendDrawing) while the state's view stays as it was; the other
+// analyses ignore it.
+export type ViewDefaults = Partial<Pick<AnalysisState, "view" | "display" | "share" | "nonzero" | "scale" | "scaleY" | "compareAs" | "percentiles" | "rollingPeriods">>;
+// The View controls' settings (ControlSections). A state holds one only when
+// the reader chose it: an absent one is drawn as viewDefaults says, and
+// changing the Breakdown or the Analysis returns every one to its default
+// (changeState, switchView). seriesLimit and selection are the legend's.
+export const viewKeys = ["display", "share", "nonzero", "scale", "scaleY", "compareAs", "rollingPeriods", "rollingOp", "percentiles", "norm", "normPeriods"] as const satisfies ReadonlyArray<keyof AnalysisState>;
+// A change that unsets every view setting, so a state merged with it (the
+// page merges each change over its state) returns to the defaults.
+export const clearView: Partial<AnalysisState> = Object.fromEntries(viewKeys.map(key => [key, undefined]));
+export const withoutView = <T extends AnalysisState>(state: T): T => ({ ...state, ...clearView });
+export const chosenView = (state: AnalysisState): Partial<AnalysisState> => Object.fromEntries(viewKeys.filter(key => state[key] !== undefined).map(key => [key, state[key]]));
+export const viewChosen = (state: AnalysisState) => viewKeys.some(key => state[key] !== undefined);
+// How a chart is drawn where the reader has not chosen: the engine's
+// suggestion (suggestedView) as the catalog adjusts it (defaultView), over
+// the engine's defaults (analysisDefaults), limited to what the state's
+// analysis uses. Only data controls and catalog metadata are read, never
+// results, so a link draws the same way before its data arrives and
+// wherever it is opened.
+export function viewDefaults(catalog: AnalysisCatalog, state: ViewInputs): ViewDefaults {
+  const trend = isTrendView(state.view), suggested = suggestedView(catalog, state);
+  const { view, ...chosen } = catalog.defaultView ? catalog.defaultView(state, suggested) : suggested;
+  if (trend) return { ...chosen, ...isTrendView(view) && view ? { view } : {} };
+  return { ...chosen.scale ? { scale: chosen.scale } : {}, ...chosen.scaleY ? { scaleY: chosen.scaleY } : {}, ...chosen.compareAs ? { compareAs: chosen.compareAs } : {} };
+}
+// Fills each view setting the state asked for no value of with its default.
+function withViewDefaults<T extends AnalysisState>(next: T, asked: AnalysisState, defaults: ViewDefaults): T {
+  for (const [key, value] of Object.entries(defaults)) if (key !== "view" && asked[key as keyof AnalysisState] === undefined) (next as Record<string, unknown>)[key] = value;
+  return next;
+}
 
 export const rollingOps = ["mean", "sum"] as const;
 export type RollingOp = typeof rollingOps[number];
@@ -152,23 +249,40 @@ export const compareModes = ["bars", "share"] as const;
 export const analysisCycles: readonly CalendarCycle[] = ["weekday", "hour"];
 // The analyze_chart format. Version 2 keeps a legend selection in the state
 // (selection) and leaves where to the population; an unversioned link may
-// hold the selection as a filter (readAnalysisLink).
-export const analysisVersion = 2;
+// hold the selection as a filter (readAnalysisLink). Version 3 holds only the
+// view settings the reader chose (viewKeys); a version 2 link also holds the
+// defaults its page wrote into it, which readAnalysisLink leaves out.
+export const analysisVersion = 3;
+export const readableVersions = [2, analysisVersion];
+// The trend draws per interval, cumulative, or as a heatmap: each period's
+// share of records in each group of an ordered breakdown (a band), rows in
+// that order (dashboard-heatmap-model.ts).
+export const analysisDisplays = [...chartDisplays, "heatmap"] as const;
+export type AnalysisDisplay = typeof analysisDisplays[number];
 export type AnalysisState = {
   v?: number;
   view?: AnalysisView; unit?: string; metric: string; metricY?: string; split: string;
   reduce?: AnalysisReduce; compareAs?: "bars" | "share"; minSamples?: number;
-  scale?: ChartScale; scaleY?: ChartScale; cycle?: CalendarCycle;
+  scale?: ChartScale; scaleY?: ChartScale; cycle?: CalendarCycle; cycleOn?: string;
   // The trend's own settings.
-  period?: ChartPeriod; hours?: number; days?: number; rollingPeriods?: number; rollingOp?: RollingOp; display?: ChartDisplay;
-  share?: boolean; nonzero?: boolean; completePeriods?: boolean; norm?: boolean; normPeriods?: number; seriesLimit?: number; selection?: SliceSelection<string>;
+  period?: ChartPeriod; hours?: number; days?: number; rollingPeriods?: number; rollingOp?: RollingOp; display?: AnalysisDisplay;
+  share?: boolean; nonzero?: boolean; completePeriods?: boolean; normPeriods?: number; seriesLimit?: number; selection?: SliceSelection<string>;
+  // Reference levels (percentileLevels). A heatmap traces each across its
+  // periods; a line draws each, over the normPeriods points before the
+  // latest, as a level. norm: true is the older name for ["mean"].
+  percentiles?: PercentileLevel[]; norm?: boolean;
 };
+export const percentileLevels = ["mean", "p50", "p75", "p90", "p95", "p99"] as const;
+export type PercentileLevel = typeof percentileLevels[number];
+export const percentileLabel = (level: PercentileLevel) => level === "mean" ? "Mean" : `${level.slice(1)}th %ile`.replace("50th %ile", "Median");
+// A level as a fraction, for the percentiles; the mean has none.
+export const percentileFraction = (level: PercentileLevel) => level === "mean" ? undefined : Number(level.slice(1)) / 100;
 export type ResolvedAnalysis = AnalysisState & Required<Pick<AnalysisState, "view" | "unit" | "metricY" | "reduce" | "compareAs" | "minSamples" | "scaleY" | "cycle"
-  | "period" | "hours" | "days" | "rollingPeriods" | "rollingOp" | "display" | "share" | "nonzero" | "completePeriods" | "norm" | "normPeriods" | "seriesLimit">>;
+  | "period" | "hours" | "days" | "rollingPeriods" | "rollingOp" | "display" | "share" | "nonzero" | "completePeriods" | "norm" | "normPeriods" | "seriesLimit" | "percentiles">>;
 
 // Reserved ids: no catalog unit may be named records, nor a breakdown none.
 export const records = "records", noSplit = "none";
-export const analysisViews: Array<[AnalysisView, string]> = [["trend", "Over time"], ["compare", "Compare groups"], ["distribution", "Distribution"], ["scatter", "Two measures"], ["cycle", "Hour / weekday cycle"]];
+export const analysisViews: Array<[AnalysisView, string]> = [["trend", "Over time"], ["compare", "Compare groups"], ["distribution", "Distribution"], ["scatter", "Scatter plot"], ["cycle", "Hour / weekday cycle"]];
 const explicitTrendViews: Array<[AnalysisView, string]> = [["trend_line", "Over time - line"], ["trend_bar", "Over time - bar"]];
 export const allAnalysisViews = [...analysisViews, ...explicitTrendViews];
 export const catalogViews = (catalog: AnalysisCatalog) => catalog.views ? catalog.views.map(view => allAnalysisViews.find(([id]) => id === view)!) : analysisViews;
@@ -176,6 +290,8 @@ export const analysisReductions: Array<[AnalysisReduce, string]> = [["total", "T
 export const sampleThresholds = [0, 2, 3, 5, 10, 20, 50, 100];
 export const analysisDefaults = { unit: records, reduce: "total", compareAs: "bars", minSamples: 0, scaleY: "linear", cycle: "weekday",
   period: "day", hours: 6, days: 3, rollingPeriods: 0, rollingOp: "mean", display: "interval", share: false, nonzero: false, completePeriods: false, norm: false, normPeriods: 30, seriesLimit: 15 } as const;
+// A heatmap traces its median and 90th percentile unless asked otherwise.
+export const heatmapPercentiles: PercentileLevel[] = ["p50", "p90"];
 // Groups drawn are fixed per display. The trend's seriesLimit is its own.
 export const barsShown = 12, slicesShown = 8;
 // The groups a view fetches, and the points a scatter draws; a test lowers
@@ -196,6 +312,8 @@ export function viewUnavailable(catalog: AnalysisCatalog, view: AnalysisView): s
   if (view === "cycle" && !Object.keys(catalog.cycle ?? {}).length) return `These ${subject} have no hours or dates to fold into a cycle`;
 }
 export const availableViews = (catalog: AnalysisCatalog) => catalogViews(catalog).filter(([view]) => !viewUnavailable(catalog, view));
+// The cycle keys a state folds by: its cycleOn time's, or the catalog's own.
+export const cycleKeys = (catalog: AnalysisCatalog, state: Pick<AnalysisState, "cycleOn">) => state.cycleOn && catalog.cycleOn?.options[state.cycleOn]?.cycle || catalog.cycle;
 export const cycleUnavailable = (catalog: AnalysisCatalog, cycle: CalendarCycle) => catalog.cycle?.[cycle] ? undefined : `These ${catalog.records.plural.toLowerCase()} have no ${cycle === "hour" ? "time of day" : "dates"} to fold`;
 
 // Why the trend cannot draw this state, if it cannot. The trend draws every
@@ -215,7 +333,7 @@ export function trendUnavailable(catalog: AnalysisCatalog, state: AnalysisState)
 }
 // Each view's option, disabled with its reason where this state cannot move.
 export const viewOptions = (catalog: AnalysisCatalog, state: AnalysisState): Array<[AnalysisView, string, string?]> =>
-  catalogViews(catalog).map(([view, label]) => [view, label, isTrendView(view) ? trendUnavailable(catalog, state) : viewUnavailable(catalog, view)]);
+  catalogViews(catalog).filter(([view]) => view !== "scatter" || catalog.dataset === "scatter").map(([view, label]) => [view, label, isTrendView(view) ? trendUnavailable(catalog, state) : viewUnavailable(catalog, view)]);
 export function catalogProblems(catalog: AnalysisCatalog): string[] {
   const problems: string[] = [];
   if (has(catalog.units, records)) problems.push(`A unit may not be named ${records}.`);
@@ -236,8 +354,8 @@ export function catalogProblems(catalog: AnalysisCatalog): string[] {
     if (components.fallback !== noSplit && !has(catalog.breakdowns, components.fallback)) problems.push(`${id} falls back to unknown breakdown ${components.fallback}.`);
   }
   if (!has(catalog.measures, catalog.trend.metric) || !trendSplit(catalog, catalog.trend.split)) problems.push("The trend's default measure or breakdown is unknown.");
-  if (!catalog.periods.day && !catalog.timestamp) problems.push("The trend needs a day field or a timestamp.");
-  for (const [id, measure] of Object.entries(catalog.measures)) for (const part of measure.ratio ?? []) if (typeof part !== "string" && "expression" in part && !part.label) problems.push(`${id} has an expression part without a label.`);
+  if (catalogViews(catalog).some(([view]) => isTrendView(view)) && !catalog.periods.day && !catalog.timestamp) problems.push("The trend needs a day field or a timestamp.");
+  for (const [id, measure] of Object.entries(catalog.measures)) for (const part of measure.ratio ?? []) if (typeof part !== "string" && ("expression" in part || part.op === "count_distinct") && !part.label) problems.push(`${id} has an expression or distinct part without a label.`);
   return problems;
 }
 
@@ -250,22 +368,24 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
   const trendFields = (state.period === undefined || Object.hasOwn(chartPeriods, state.period))
     && [state.hours, state.days].every(value => value === undefined || validPeriodCount(value))
     && (state.rollingPeriods === undefined || validRollingPeriods(state.rollingPeriods))
-    && validChartDisplay(state.display) && (state.scale === undefined || validChartScale(state.scale)) && validChartPresentation(state)
+    && (state.display === undefined || oneOf(state.display, analysisDisplays)) && (state.scale === undefined || validChartScale(state.scale)) && validChartPresentation(state)
     && (state.rollingOp === undefined || oneOf(state.rollingOp, rollingOps))
     && [state.share, state.nonzero, state.completePeriods, state.norm].every(value => value === undefined || typeof value === "boolean")
-    && (state.normPeriods === undefined || Number.isInteger(state.normPeriods) && state.normPeriods >= 1 && state.normPeriods <= 1000);
-  if (!trendFields || state.v !== undefined && state.v !== analysisVersion) return false;
+    && (state.normPeriods === undefined || Number.isInteger(state.normPeriods) && state.normPeriods >= 1 && state.normPeriods <= 1000)
+    && (state.percentiles === undefined || Array.isArray(state.percentiles) && state.percentiles.every(level => oneOf(level, percentileLevels)) && new Set(state.percentiles).size === state.percentiles.length);
+  if (!trendFields || state.v !== undefined && !readableVersions.includes(state.v)) return false;
   if (isTrendView(state.view)) return (state.view === undefined || !viewUnavailable(catalog, state.view)) && has(catalog.measures, state.metric) && trendSplit(catalog, state.split)
     && (state.unit === undefined || state.unit === records || has(catalog.units, state.unit));
   return oneOf(state.view, availableViews(catalog).map(([view]) => view))
     && (state.unit === undefined || state.unit === records || has(catalog.units, state.unit))
     && has(catalog.measures, state.metric) && (state.metricY === undefined || has(catalog.measures, state.metricY))
-    && (state.split === noSplit || has(catalog.breakdowns, state.split))
+    && (state.split === noSplit || has(catalog.breakdowns, state.split) || state.view === "compare" && has(catalog.components ?? {}, state.split))
     && (state.reduce === undefined || oneOf(state.reduce, analysisReductions.map(([reduce]) => reduce)))
     && (state.compareAs === undefined || oneOf(state.compareAs, compareModes))
     && (state.minSamples === undefined || Number.isInteger(state.minSamples) && state.minSamples >= 0 && state.minSamples <= 1_000_000)
     && (state.scaleY === undefined || validChartScale(state.scaleY))
-    && (state.cycle === undefined || oneOf(state.cycle, analysisCycles));
+    && (state.cycle === undefined || oneOf(state.cycle, analysisCycles))
+    && (state.cycleOn === undefined || has(catalog.cycleOn?.options ?? {}, state.cycleOn));
 }
 
 export const shareable = (catalog: AnalysisCatalog, state: ResolvedAnalysis) => state.view === "compare" && state.split !== noSplit
@@ -273,6 +393,14 @@ export const shareable = (catalog: AnalysisCatalog, state: ResolvedAnalysis) => 
 // The trend draws records by any breakdown, a component breakdown, or none.
 export const trendSplit = (catalog: AnalysisCatalog, split: string) => split === noSplit && catalog.allowNoSplit !== false || has(catalog.breakdowns, split) || has(catalog.components ?? {}, split);
 export const splitValid = (catalog: AnalysisCatalog, unit: string, split: string) => split === noSplit && catalog.allowNoSplit !== false || has(catalog.breakdowns, split) && (unit === records || has(catalog.units[unit]?.breakdowns ?? {}, split));
+// Calculated components retain their per-period calculation in the trend.
+export function comparisonComponentUnavailable(catalog: AnalysisCatalog, state: Pick<AnalysisState, "metric" | "unit">, split: string): string | undefined {
+  const component = catalog.components?.[split];
+  if (!component) return "Unknown component breakdown";
+  if (!component.measures.includes(state.metric)) return `${component.label} splits ${component.measures.map(id => catalog.measures[id].label.toLowerCase()).join(" and ")} only`;
+  if (state.unit && state.unit !== records) return "Component totals count records; choose the records option in Count each";
+  if (component.derived) return "Calculated components are available over time";
+}
 // Units add up an additive measure, and pool a ratio's parts. Distinct counts
 // and other non-additive values have no honest unit total.
 export const unitTotal = (measure: AnalysisMeasure) => measure.additive || Boolean(measure.ratio);
@@ -280,7 +408,7 @@ export const unitTotal = (measure: AnalysisMeasure) => measure.additive || Boole
 // active on two Mondays would otherwise count twice.
 export const cycleTotal = (measure: AnalysisMeasure) => measure.additive;
 // A threshold hides groups; a share display divides by all groups.
-export const thresholded = (state: ResolvedAnalysis) => state.minSamples > 1 && state.split !== noSplit && (state.view === "distribution" || state.view === "compare" && state.compareAs !== "share");
+export const thresholded = (state: ResolvedAnalysis, catalog: AnalysisCatalog) => !catalog.components?.[state.split] && state.minSamples > 1 && state.split !== noSplit && (state.view === "distribution" || state.view === "compare" && state.compareAs !== "share");
 export function reductionLabel(reduce: AnalysisReduce, measure: AnalysisMeasure, unit: AnalysisUnit) {
   if (reduce === "total" && measure.ratio) return `Pooled across ${unit.plural.toLowerCase()}`;
   if (reduce === "mean" && !measure.additive) return `Unweighted mean per ${unit.label.toLowerCase()}`;
@@ -293,35 +421,89 @@ export function reductionLabel(reduce: AnalysisReduce, measure: AnalysisMeasure,
 // A state in the catalog's own terms: older links and saved states are read
 // through its legacy mapping. Controls apply changes to this state, so an
 // old name never overrides a later choice.
-export const canonicalState = <T extends AnalysisState>(catalog: AnalysisCatalog, state: T): T => catalog.legacy ? catalog.legacy(state) as T : state;
+// A catalog's own older names (legacy), then the engine's: norm, the old
+// single reference line, is the %ile control's mean (norm: true is
+// percentiles ["mean"]; norm: false asks for none and is left out). A state
+// that names its percentiles keeps them: a resolved state carries norm as
+// whether it draws them, so reading it again must not turn them into a mean.
+// A setting held as undefined is unset: a control that returns a setting to
+// its default (clearView) leaves it so.
+export function canonicalState<T extends AnalysisState>(catalog: AnalysisCatalog, input: T): T {
+  const state = Object.values(input).some(value => value === undefined) ? Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as T : input;
+  const read = catalog.legacy ? catalog.legacy(state) as T : state;
+  if (typeof read.norm !== "boolean") return read;
+  const { norm, ...rest } = read;
+  if (Array.isArray(read.percentiles)) return rest as T;
+  return (norm ? { ...rest, percentiles: ["mean"] } : rest) as T;
+}
 
 // A link as the dashboard reads it. A link marked with analysisVersion keeps
 // its filters as the population. An older one, on a dashboard whose legend
 // wrote selections as filters (legacySlices), may hold the selection as a
 // filter on the breakdown's single field: that filter becomes the state's
 // selection, and the rest of where stays the population. Either way the
-// result is marked, so it is read the same way again. A breakdown the legacy
-// mapping renamed (repository_name, now project_name) wrote its selection on
-// its old field, named by its old id, so that field is read too.
-// A card's link is marked current where it stops being a card link
-// (stampCardChart), since cards always wrote their filters as the population.
-export function readAnalysisLink<T extends AnalysisState>(catalog: AnalysisCatalog, state: T, where: WhereTerm[]): { state: T; where: WhereTerm[] } {
+// result is marked, so it is read the same way again.
+// A breakdown the legacy mapping renamed (repository_name, now
+// project_name) wrote its selection on its old field, named by its old id,
+// so that field is read too.
+// A card's unversioned link is marked version 2 where it stops being a card
+// link (stampCardChart): cards always wrote their filters as the population,
+// and wrote their page's view defaults like any other old link.
+// Before version 3, a page wrote its defaults into every link it opened:
+// legacyView names the view settings its page drew without a value (the
+// topic's own, over the engine's), and a version 2 or older link's value
+// equal to one of them is left out, so it is drawn by default as it was. A
+// catalog that chose its charts itself (Session Shape) drew none of a link's
+// display, shares, scale or Compare's bars, so those are all left out.
+export type LegacyView = { values: Partial<AnalysisState>; chose?: boolean };
+const legacyEngineView: Partial<AnalysisState> = { display: "interval", share: false, nonzero: false, scaleY: "linear", compareAs: "bars", rollingPeriods: 0, rollingOp: "mean", normPeriods: 30 };
+const legacyChosenKeys = ["display", "share", "nonzero", "scale", "scaleY", "compareAs"];
+export function readLegacyView<T extends AnalysisState>(state: T, legacy: LegacyView = { values: {} }): T {
+  const defaults: Record<string, unknown> = { ...legacyEngineView, scale: isTrendView(state.view) ? defaultChartScale : "linear", ...legacy.values };
+  return Object.fromEntries(Object.entries(state).filter(([key, value]) => !(viewKeys as readonly string[]).includes(key)
+    || !(legacy.chose && legacyChosenKeys.includes(key)) && JSON.stringify(value) !== JSON.stringify(defaults[key]))) as T;
+}
+export function readAnalysisLink<T extends AnalysisState>(catalog: AnalysisCatalog, state: T, where: WhereTerm[], legacy?: LegacyView): { state: T; where: WhereTerm[] } {
   if (state.v === analysisVersion) return { state, where };
+  const read = { ...readLegacyView(state, legacy), v: analysisVersion };
+  if (state.v === 2) return { state: read, where };
   const split = canonicalState(catalog, state).split, fields = catalog.breakdowns[split]?.fields ?? [];
   const field = [fields[0], ...state.split && state.split !== split ? [state.split] : []].find(field => where.some(term => isSliceTerm(term, field)));
-  if (!catalog.legacySlices || fields.length !== 1 || !field) return { state: { ...state, v: analysisVersion }, where };
+  if (!catalog.legacySlices || fields.length !== 1 || !field) return { state: read, where };
   const slice = readSlice(where, field);
-  return { state: { ...state, v: analysisVersion, selection: { values: slice.values.map(value => value ?? ""), excluded: slice.excluded } }, where: where.filter(term => !isSliceTerm(term, field)) };
+  return { state: { ...read, selection: { ...slice, values: slice.values.map(value => value ?? "") } }, where: where.filter(term => !isSliceTerm(term, field)) };
+}
+
+// Scatter's Count each: a new unit may not offer either measure or the
+// colour, so the change takes the data fields a normalized state settles on,
+// and only those; the view stays as the reader left it, chosen or not. A
+// colour the unit forces off is no new breakdown the reader chose, so the
+// view settings they chose (in state as asked) come along rather than being
+// reset by changeState.
+export function scatterUnitChange(catalog: AnalysisCatalog, state: AnalysisState, unit: string): Partial<AnalysisState> {
+  const { metric, metricY, split } = normalizeAnalysis(catalog, { ...state, unit });
+  return { ...chosenView(state), unit, metric, metricY, split };
 }
 
 // A control's change, applied to the state as asked for rather than as drawn.
-export const changeState = <T extends AnalysisState>(catalog: AnalysisCatalog, state: T, change: Partial<AnalysisState>): T => ({ ...canonicalState(catalog, state), ...change });
+// A new breakdown or analysis returns the view to its defaults: a scale or
+// smoothing chosen for one breakdown is no choice about another.
+export function changeState<T extends AnalysisState>(catalog: AnalysisCatalog, state: T, change: Partial<AnalysisState>): T {
+  const asked = canonicalState(catalog, state);
+  const fresh = change.split !== undefined && change.split !== asked.split || change.view !== undefined && newAnalysis(asked.view, change.view);
+  return { ...fresh ? withoutView(asked) : asked, ...change };
+}
+// Over time drawn as lines or as bars is one analysis.
+const newAnalysis = (from: AnalysisView | undefined, to: AnalysisView) => isTrendView(from) ? !isTrendView(to) : from !== to;
 
 export function normalizeAnalysis<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): T & ResolvedAnalysis {
-  const next = { ...analysisDefaults, ...canonicalState(catalog, state) } as T & ResolvedAnalysis;
+  const asked = canonicalState(catalog, state);
+  const next = { ...analysisDefaults, ...asked } as T & ResolvedAnalysis;
+  if(catalog.breakdowns[next.split]?.measures && !catalog.breakdowns[next.split].measures!.includes(next.metric)) next.split=noSplit;
   next.view ??= "trend";
+  if(catalog.breakdowns[next.split]?.views && !catalog.breakdowns[next.split].views!.includes(next.view)) next.split=noSplit;
   if (catalog.views && !catalog.views.includes(next.view)) next.view = catalog.views[0] ?? "trend";
-  if (isTrendView(next.view)) return normalizeTrend(catalog, next);
+  if (isTrendView(next.view)) return normalizeTrend(catalog, next, asked);
   const firstUnit = Object.keys(catalog.units)[0];
   // A view this catalog cannot show at all becomes Compare; viewOptions
   // disables it with the reason.
@@ -329,22 +511,31 @@ export function normalizeAnalysis<T extends AnalysisState>(catalog: AnalysisCata
   if (!has(catalog.measures, next.metric)) next.metric = catalog.scatter[0];
   if (next.unit !== records && !has(catalog.units, next.unit)) next.unit = records;
   if (next.view === "cycle") { next.unit = records; next.split = noSplit; if (cycleUnavailable(catalog, next.cycle)) next.cycle = next.cycle === "hour" ? "weekday" : "hour"; }
+  if (next.view !== "cycle" || !next.cycleOn || !cycleKeys(catalog, next)?.[next.cycle] || !has(catalog.cycleOn?.options ?? {}, next.cycleOn)) delete next.cycleOn;
   if (next.view === "scatter") {
     if (next.unit === records) next.unit = firstUnit;
+    if (catalog.dataset === "scatter") {
+      const eligible = Object.keys(catalog.measures).filter(id => !catalog.measures[id].units || catalog.measures[id].units!.includes(next.unit));
+      if (!eligible.includes(next.metric)) next.metric = eligible[0];
+      if (!eligible.includes(next.metricY) || next.metricY === next.metric) next.metricY = [...catalog.scatter, ...eligible].find(id => id !== next.metric && eligible.includes(id))!;
+    }
     if (!has(catalog.measures, next.metricY) || next.metricY === next.metric) next.metricY = catalog.scatter.find(id => id !== next.metric) ?? Object.keys(catalog.measures).find(id => id !== next.metric)!;
   } else if (!has(catalog.measures, next.metricY)) next.metricY = catalog.scatter[1];
   // A record distribution needs a per-record value: a measure without one
   // moves to the first unit, or where there are no units to the first
   // measure with a value (the Metric control disables the others).
+  if (next.view === "distribution" && catalog.measures[next.metric].noDistribution) next.metric = Object.keys(catalog.measures).find(id => !catalog.measures[id].noDistribution && (catalog.measures[id].value || firstUnit))!;
   if (next.view === "distribution" && next.unit === records && !catalog.measures[next.metric].value) {
     if (firstUnit) next.unit = firstUnit; else next.metric = Object.keys(catalog.measures).find(id => catalog.measures[id].value)!;
   }
-  if (!splitValid(catalog, next.unit, next.split)) next.split = catalog.allowNoSplit === false ? catalog.trend.split : noSplit;
+  if (next.view === "distribution" && next.unit !== records && catalog.units[next.unit].recordsAlike && catalog.measures[next.metric].value) next.unit = records;
+  if (!splitValid(catalog, next.unit, next.split) && !(next.view === "compare" && !comparisonComponentUnavailable(catalog, next, next.split))) next.split = catalog.allowNoSplit === false ? catalog.trend.split : noSplit;
   // A cycle summarizes slot values: a box per slot by default, or their mean,
   // or their total where slot values add up (not ratios or distinct counts).
   if (next.view === "cycle") { if (state.reduce === undefined || !["total", "mean", "median"].includes(next.reduce) || next.reduce === "total" && !cycleTotal(catalog.measures[next.metric])) next.reduce = "median"; }
   else if (next.unit === records) next.reduce = "total";
-  else if (next.reduce === "total" && !unitTotal(catalog.measures[next.metric])) next.reduce = "mean";
+  else if (next.reduce === "total" && (!unitTotal(catalog.measures[next.metric]) || catalog.units[next.unit]?.recordsAlike)) next.reduce = "mean";
+  withViewDefaults(next, asked, viewDefaults(catalog, next));
   if (next.compareAs === "share" && !shareable(catalog, next)) next.compareAs = "bars";
   return next;
 }
@@ -360,10 +551,124 @@ export const periodField = (period: ChartPeriod): TrendPeriodField => period ===
 const baseUnit = (period: ChartPeriod) => period === "hours" ? "hour" : period === "days" ? "day" : period;
 const multiplePeriods = (state: Pick<AnalysisState, "period" | "hours" | "days">) => state.period === "hours" && (state.hours ?? 1) > 1 || state.period === "days" && (state.days ?? 1) > 1;
 
+// The engine's default view for the data asked for, chosen from how real
+// libraries' data is shaped (docs/dashboard-analysis.md#default-views):
+// - Over time draws amounts that add up (additive) as columns, stacked by
+//   the breakdown, each period as it was; it draws rates, distinct counts
+//   and levels as lines, smoothed over a trailing week when daily, since a
+//   day's value swings by about its own size. A total by a binned band (or
+//   a per-record measure with a band of its own) is a heatmap of the value.
+//   Periods with nothing are left out. A single smoothed line draws its
+//   mean as a reference level: it reads earlier periods anyway, where a
+//   level over columns would reach back and count the range's first,
+//   partial period whole. A measure counted over a shared population (a
+//   message with several labels) draws its shares.
+// - Compare draws bars, on a log axis where a long-tailed total or count
+//   is split into more than a few groups: their bars span orders of
+//   magnitude, where a few groups (or rates) sit within a narrow range.
+// - Distribution and Scatter put a long-tailed value on a log axis, where
+//   an even axis puts nearly every record in its first bar or corner; a
+//   histogram Query Table bins evenly stays linear.
+// - A cycle stays linear.
+export function suggestedView(catalog: AnalysisCatalog, state: ViewInputs): ViewDefaults {
+  const measure = catalog.measures[state.metric];
+  if (!measure) return {};
+  if (isTrendView(state.view)) {
+    const daily = state.period === "day", axis = heatmapAxis(catalog, state);
+    if (axis && !axis.unit) return { view: "trend", display: "heatmap", share: false, nonzero: false, rollingPeriods: daily ? 7 : 0 };
+    const lines = trendKind(measure) !== "additive", share = Boolean(measure.populationShare) && state.split !== noSplit;
+    return { view: lines ? "trend_line" : "trend", display: "interval", share, nonzero: true, scale: share || measure.format.kind === "percent" ? "linear" : "half",
+      rollingPeriods: lines && daily ? 7 : 0, percentiles: lines && daily && state.split === noSplit && !share ? ["mean"] : [] };
+  }
+  const axis = (id: string) => catalog.measures[id] && longTailed(catalog.measures[id]) ? "logarithmic" as const : "linear" as const;
+  if (state.view === "compare") {
+    const counted = state.unit === records || state.reduce === "total" || state.reduce === "count";
+    return { compareAs: "bars", scale: state.split !== noSplit && !fewGroups(catalog, state.split) && counted && (state.reduce === "count" || longTailed(measure)) ? "logarithmic" : "linear" };
+  }
+  if (state.view === "scatter") return { scale: axis(state.metric), scaleY: axis(state.metricY) };
+  // Query Table bins a histogram evenly, so a log axis would only stretch
+  // its first bar (docs/handoffs/query-table-log-axes.md): only a box
+  // per group, or Pharos's own fine bins (distributionBins), take a log axis.
+  if (state.view === "distribution") return { scale: state.split === noSplit && !distributionBins(catalog, { ...state, view: "distribution" }) ? "linear" : axis(state.metric) };
+  return { scale: "linear" };
+}
+// Whether a measure's per-record (or per-unit) values span orders of
+// magnitude, a few holding most of the total: sizes, durations and counts.
+// Shares, rates and levels sit within a narrow range. Rare signals, which
+// nearly every record has none of (noDistribution), stay linear: a log axis
+// has no place for their zeroes. A measure says so where the rule is wrong
+// for it (spread).
+// A trend's gridlines fall on round values as the dashboard shows them:
+// hours of milliseconds count by hours, other durations by round times.
+export const measureAxisUnit = (measure: Pick<AnalysisMeasure, "format" | "unit">): AxisUnit | undefined => measure.format.kind !== "duration" ? undefined
+  : measure.unit === "hours" ? { per: 3_600_000 } : { per: measure.format.sourceUnit === "seconds" ? 1 : 1000, clock: true };
+export const longTailed = (measure: AnalysisMeasure) => measure.spread ? measure.spread === "long"
+  : !measure.noDistribution && measure.format.kind !== "percent" && (measure.format.kind === "duration" || trendKind(measure) === "additive" || trendKind(measure) === "count");
+// A breakdown into a known handful of groups, or a measure's components:
+// a log axis would make their differences look smaller than they are.
+const fewGroups = (catalog: AnalysisCatalog, split: string) => Boolean(catalog.components?.[split])
+  || ((catalog.breakdowns[split]?.order?.length ?? Object.keys(catalog.breakdowns[split]?.values ?? {}).length) || Infinity) <= 4;
+
+// How Over time draws a state: as lines or bars where its analysis says so,
+// otherwise as its default view says.
+export const trendDrawing = (catalog: AnalysisCatalog, state: ResolvedAnalysis): AnalysisView => state.view !== "trend" ? state.view : viewDefaults(catalog, state).view ?? state.view;
+
+// The heatmap draws a value on a continuous axis: one column per period, a
+// row per fine bin of the value, each cell shaded by the records (or an
+// additive measure) in it. Without a breakdown, a measure with a binned band
+// of its own draws its records' distribution; by a binned band, an additive
+// measure draws its total over the band's value.
+export type HeatmapAxis = { breakdown: string; bins: AxisBins; counted: boolean; unit?: string };
+export function heatmapAxis(catalog: AnalysisCatalog, state: Pick<AnalysisState, "metric" | "split">): HeatmapAxis | undefined {
+  const measure = catalog.measures[state.metric];
+  if (!measure) return;
+  if (state.split === noSplit) {
+    if (measure.heatmapUnit && typeof catalog.units[measure.heatmapUnit.unit]?.key === "string" && catalog.timestamp && measure.additive && measure.op === "sum" && !measure.ratio) return { breakdown: noSplit, bins: measure.heatmapUnit.bins, counted: true, unit: measure.heatmapUnit.unit };
+    const bins = measure.band ? catalog.breakdowns[measure.band]?.bins : undefined;
+    return bins && catalog.records.count ? { breakdown: measure.band!, bins, counted: true } : undefined;
+  }
+  const bins = catalog.breakdowns[state.split]?.bins;
+  return bins && measure.additive ? { breakdown: state.split, bins, counted: false } : undefined;
+}
+// A record distribution without a breakdown, of a measure whose value has
+// fine bins (its band's, or valueBins), is a histogram over those bins on
+// the value's own axis: a log axis gives a long tail its shape, where even
+// steps would put nearly every record in the first bar. Undefined otherwise.
+export function distributionBins(catalog: AnalysisCatalog, state: Pick<ResolvedAnalysis, "view" | "unit" | "metric" | "split">): AxisBins | undefined {
+  const measure = catalog.measures[state.metric], id = measure?.band ?? measure?.valueBins;
+  if (state.view !== "distribution" || state.unit !== records || state.split !== noSplit || !measure?.value || !id) return;
+  return catalog.breakdowns[id]?.bins;
+}
+// The heatmap's own breakdown: the fine bins, every one of them a series.
+export const heatmapBins = "heatmap:bins";
+// What a heatmap queries: the counted records, or the measure, grouped by
+// the value's fine bins, within the measure's population and with a value.
+export function heatmapSource<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): { catalog: AnalysisCatalog; state: T } {
+  const axis = state.display === "heatmap" ? heatmapAxis(catalog, state) : undefined;
+  if (!axis) return { catalog, state };
+  if (axis.unit) {
+    const unit = catalog.units[axis.unit], key = unit.key;
+    if (typeof key !== "string") return { catalog, state };
+    const measure = catalog.measures[state.metric];
+    return {
+      catalog: { ...catalog, defaultView: () => ({}), trend: { ...catalog.trend, allSeries: true }, trendHeatmapUnit: { scheme: axis.bins.scheme },
+        measures: { ...catalog.measures, [state.metric]: { ...measure, where: [...measure.where ?? [], ...unit.where] } },
+        breakdowns: { ...catalog.breakdowns, [heatmapBins]: { label: axis.bins.label, fields: [key] } } },
+      state: { ...state, split: heatmapBins, selection: undefined, norm: false, percentiles: [], rollingOp: "mean" },
+    };
+  }
+  const measure = catalog.measures[state.metric], valued = { field: axis.bins.field, op: "is_not_null" as const, value: "" };
+  const weight: AnalysisMeasure = axis.counted ? { ...catalog.measures[catalog.records.count!], where: [...measure.where ?? [], valued] } : { ...measure, where: [...measure.where ?? [], valued] };
+  return {
+    catalog: { ...catalog, defaultView: () => ({}), trend: { ...catalog.trend, allSeries: true }, measures: { ...catalog.measures, [state.metric]: weight }, breakdowns: { ...catalog.breakdowns, [heatmapBins]: { label: axis.bins.label, fields: [axis.bins.field] } } },
+    state: { ...state, split: heatmapBins, selection: undefined, norm: false, percentiles: [] },
+  };
+}
+
 // Why each trend option is unavailable for this measure, breakdown and
 // display, if it is. The controls disable the option with this reason, and
 // normalizeTrend moves a state off it.
-export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalysis, "metric" | "split" | "display" | "share">) {
+export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalysis, "metric" | "split" | "display" | "share"> & Pick<AnalysisState, "selection">) {
   const measure = catalog.measures[state.metric], kind = trendKind(measure), name = measure.label.toLowerCase();
   const component = (split: string) => {
     const parts = catalog.components?.[split];
@@ -376,20 +681,32 @@ export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalys
     multiple: kind === "count" ? `Distinct ${measure.unit} are counted per hour, day, week or month; several periods would add their counts`
       : kind === "level" ? `${measure.label} is calculated per hour, day, week or month; several periods would add its values` : undefined,
     period: (period: ChartPeriod) => catalog.periods[periodField(period)] || catalog.timestamp ? undefined : `These records have no ${periodField(period)} to group by`,
-    norm: state.display === "cumulative" ? "A norm compares interval values, not running totals" : state.share ? "Shares have no norm" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a norm` : undefined,
+    heatmap: heatmapAxis(catalog, state) ? undefined : state.split === noSplit ? `${measure.label} has no per-record value to draw as a heatmap`
+      : !catalog.breakdowns[state.split]?.bins ? "A heatmap needs a breakdown over a continuous value, such as a band" : `${measure.label} does not add up across records, so a heatmap cannot total it`,
+    norm: state.display === "cumulative" ? "A reference level compares interval values, not running totals" : state.display === "heatmap" ? undefined : state.share ? "Shares have no reference level" : !measure.additive && state.split !== noSplit && !singleSeries(state) ? `${measure.label} has no total across groups; choose no breakdown, or one group in the legend, for a reference level` : undefined,
     component, name,
   };
 }
+
+// Whether a legend selection draws exactly one group: a measure without a
+// total across groups has reference levels of that group alone.
+export const singleSeries = (state: Pick<AnalysisState, "selection">) => state.selection?.values.length === 1 && !state.selection.excluded;
 
 // Fill the trend's defaults and move each setting the measure cannot use to
 // the nearest one it can. Only drawing and querying use the result; the saved
 // state keeps what was asked for, so a setting returns with a measure that
 // allows it.
-function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next: T & ResolvedAnalysis): T & ResolvedAnalysis {
+function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next: T & ResolvedAnalysis, asked: AnalysisState): T & ResolvedAnalysis {
   if (!Number.isInteger(next.normPeriods) || next.normPeriods < 1) next.normPeriods = analysisDefaults.normPeriods;
   if (!has(catalog.measures, next.metric) || notTrended(catalog.measures[next.metric])) next.metric = catalog.trend.metric;
   if (!trendSplit(catalog, next.split)) next.split = catalog.trend.split;
   if (catalog.components?.[next.split] && !catalog.components[next.split].measures.includes(next.metric)) next.split = catalog.components[next.split].fallback;
+  // The period first: the view's defaults depend on it.
+  const periods = trendLimits(catalog, next);
+  if (multiplePeriods(next) && periods.multiple) next.period = baseUnit(next.period);
+  if (periods.period(next.period)) next.period = "day";
+  const { view: _drawing, percentiles: suggested, ...defaults } = viewDefaults(catalog, next);
+  withViewDefaults(next, asked, defaults);
   next.share = next.share === true; next.nonzero = next.nonzero === true; next.completePeriods = next.completePeriods === true; next.norm = next.norm === true;
   // The trend's scale, resolved once for the control and the chart: a state
   // without one draws the old trend charts' default, the linear + log split.
@@ -398,30 +715,60 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
   let limits = trendLimits(catalog, next);
   if (next.share && limits.share) next.share = false;
   if (next.display === "cumulative" && limits.cumulative) next.display = "interval";
+  if (next.display === "heatmap" && limits.heatmap) next.display = "interval";
+  // A heatmap shades amounts, never shares of a total.
+  if (next.display === "heatmap") next.share = false;
   if (next.rollingOp === "sum" && limits.rollingSum) next.rollingOp = "mean";
-  if (multiplePeriods(next) && limits.multiple) next.period = baseUnit(next.period);
-  if (limits.period(next.period)) next.period = "day";
   limits = trendLimits(catalog, next);
-  if (next.norm && limits.norm) next.norm = false;
+  next.percentiles = drawnPercentiles(next, askedPercentiles(next) ?? suggested ?? (next.display === "heatmap" ? heatmapPercentiles : []), limits.norm);
+  // The norm's query reaches back for the earlier points a level reads; a
+  // heatmap's levels are each period's own.
+  next.norm = next.percentiles.length > 0 && next.display !== "heatmap";
   return next;
+}
+
+// Whether a trend draws reference levels over earlier points: a normalized
+// state says (norm); a link's state, read as given, does when it asks for a
+// level and is not a heatmap.
+export const drawsLevels = (state: Pick<AnalysisState, "norm" | "percentiles" | "display">) =>
+  typeof state.norm === "boolean" ? state.norm : Boolean(state.percentiles?.length) && state.display !== "heatmap";
+// The levels a state asks for, in their order: its own, or the older norm.
+function askedPercentiles(state: AnalysisState): PercentileLevel[] | undefined {
+  if (Array.isArray(state.percentiles)) return state.percentiles;
+  return state.norm === true ? ["mean"] : undefined;
+}
+// A heatmap's bins give percentiles but no mean; a line's levels need one
+// reference value (unavailable says why not).
+function drawnPercentiles(state: Pick<ResolvedAnalysis, "display">, asked: PercentileLevel[], unavailable: string | undefined): PercentileLevel[] {
+  if (state.display === "heatmap") return percentileLevels.filter(level => level !== "mean" && asked.includes(level));
+  return unavailable ? [] : percentileLevels.filter(level => asked.includes(level));
+}
+// Why a level is unavailable for this chart, if it is.
+export function percentileLimit(catalog: AnalysisCatalog, state: ResolvedAnalysis, level: PercentileLevel): string | undefined {
+  if (state.display === "heatmap") return level === "mean" ? "A heatmap's bins give percentiles, not a mean" : undefined;
+  return trendLimits(catalog, state).norm;
 }
 
 // What normalizeTrend changed that the state asked for, in words, so the
 // dashboard can say why the chart differs from the link or the last choice.
 export function trendAdjustments(catalog: AnalysisCatalog, input: AnalysisState): string[] {
   if (!isTrendView(input.view)) return [];
-  const asked = { ...analysisDefaults, ...canonicalState(catalog, input) };
   const state = normalizeAnalysis(catalog, input), measure = catalog.measures[state.metric];
+  // What the catalog chose was never asked for, so it needs no explanation.
+  const asked = withViewDefaults({ ...analysisDefaults, ...canonicalState(catalog, input) }, canonicalState(catalog, input), viewDefaults(catalog, state));
   const limits = trendLimits(catalog, { ...state, split: asked.split, display: asked.display, share: asked.share === true });
   const notes: string[] = [];
   if (has(catalog.measures, asked.metric) && notTrended(catalog.measures[asked.metric])) notes.push(`${notTrended(catalog.measures[asked.metric])}; ${measure.label.toLowerCase()} is shown instead.`);
   const component = catalog.components?.[asked.split];
   if (has(catalog.measures, asked.metric) && component && state.split !== asked.split) notes.push(`${limits.component(asked.split)}; ${measure.label} is shown ${state.split === noSplit ? "as one total" : `by ${catalog.breakdowns[state.split].label.toLowerCase()}`}.`);
-  if (asked.share === true && !state.share) notes.push(`${limits.share}; values are shown instead.`);
+  if (asked.share === true && !state.share && state.display !== "heatmap") notes.push(`${limits.share}; values are shown instead.`);
   if (asked.display === "cumulative" && state.display !== "cumulative") notes.push(`${limits.cumulative}; values are shown per ${chartPeriodUnit(state.period)}.`);
+  if (asked.display === "heatmap" && state.display !== "heatmap") notes.push(`${limits.heatmap}; values are shown per ${chartPeriodUnit(state.period)}.`);
   if (asked.rollingOp === "sum" && state.rollingOp !== "sum") notes.push(`${limits.rollingSum}; the window is pooled instead.`);
   if (asked.period !== state.period) notes.push(`${limits.period(asked.period) ?? limits.multiple}; each bucket is one ${chartPeriodUnit(state.period)}.`);
-  if (asked.norm === true && !state.norm) notes.push(`${trendLimits(catalog, state).norm}.`);
+  const levels = askedPercentiles(input) ?? [];
+  if (levels.length && !state.percentiles.length && trendLimits(catalog, state).norm) notes.push(`${trendLimits(catalog, state).norm}.`);
+  else if (state.display === "heatmap" && levels.includes("mean")) notes.push("A heatmap's bins give percentiles, not a mean; the mean is not drawn.");
   return notes;
 }
 const chartPeriodUnit = (period: ChartPeriod) => baseUnit(period);
@@ -429,27 +776,32 @@ const chartPeriodUnit = (period: ChartPeriod) => baseUnit(period);
 // active on three days is three conversation-days.
 export const rollingSumUnit = (measure: AnalysisMeasure, period: ChartPeriod) => trendKind(measure) === "count" ? `${singular(measure.unit)}-${baseUnit(period)}s` : measure.unit;
 
-// Move between views, carrying what both share: the trend's shares become
-// a share display, and back. A unit reduction the trend cannot draw stays
-// where it is (trendUnavailable says why); nothing is substituted.
-// The trend keeps what was asked for (its own settings survive a visit to
-// another view); the other views are saved as drawn, as in phase 1.
-export function switchView<T extends AnalysisState>(catalog: AnalysisCatalog, input: T, view: AnalysisView): T & ResolvedAnalysis {
+// Move between analyses, carrying the data both share. The view returns to
+// its defaults (viewKeys): Over time's shares are no choice about Compare's.
+// A unit reduction the trend cannot draw stays where it is (trendUnavailable
+// says why); nothing is substituted. The other analyses' data settings are
+// saved as drawn, as in phase 1.
+export function switchView<T extends AnalysisState>(catalog: AnalysisCatalog, input: T, view: AnalysisView): T {
   const state = canonicalState(catalog, input), current = state.view ?? "trend";
+  const data = (next: AnalysisState) => ({ ...withoutView(next), ...newAnalysis(current, view) ? {} : chosenView(input) }) as T;
   if (isTrendView(view)) {
-    if (trendUnavailable(catalog, state)) return normalizeAnalysis(catalog, state);
-    if (isTrendView(current)) return normalizeAnalysis(catalog, { ...state, view });
-    return { ...state, view, share: current === "compare" && state.compareAs === "share" } as T & ResolvedAnalysis;
+    if (trendUnavailable(catalog, state)) return input;
+    // Lines or bars: the same analysis, with the reader's view.
+    if (isTrendView(current)) return { ...input, view };
+    return data({ ...state, view });
   }
   if (isTrendView(current)) {
-    const trend = normalizeTrend(catalog, { ...analysisDefaults, ...state, view: "trend" } as T & ResolvedAnalysis);
-    return normalizeAnalysis(catalog, { ...state, view, metric: trend.metric, compareAs: trend.share ? "share" as const : "bars" as const, ...view === "cycle" ? { reduce: "median" as const } : {},
-      split: has(catalog.breakdowns, trend.split) ? trend.split : noSplit });
+    const trend = normalizeTrend(catalog, { ...analysisDefaults, ...state, view: "trend" } as T & ResolvedAnalysis, state);
+    return data(normalizeAnalysis(catalog, withoutView({ ...state, view, metric: trend.metric, ...view === "cycle" ? { reduce: "median" as const } : {},
+      split: has(catalog.breakdowns, trend.split) || view === "compare" && !comparisonComponentUnavailable(catalog, trend, trend.split) ? trend.split : noSplit })));
   }
-  return normalizeAnalysis(catalog, { ...state, view, ...view === "cycle" ? { reduce: "median" as const } : {} });
+  return data(normalizeAnalysis(catalog, withoutView({ ...state, view, ...view === "cycle" ? { reduce: "median" as const } : {} })));
 }
 
 export const unique = (terms: WhereTerm[]) => terms.filter((term, index) => terms.findIndex(other => JSON.stringify(other) === JSON.stringify(term)) === index);
+// Fine bins a histogram fetches: more than any value spans (binsSpanning).
+const binnedGroups = 400;
+const logDistribution = (state: Pick<ResolvedAnalysis, "view" | "scale">) => state.view === "distribution" && state.scale === "logarithmic";
 const log = (scale?: ChartScale) => ({ mode: scale === "logarithmic" ? "log" as const : "linear" as const });
 export const measureExpression = (measure: AnalysisMeasure) => measure.ratio ? `${partExpression(measure.ratio[0])}/NULLIF(${partExpression(measure.ratio[1])},0)` : measure.expression;
 // Grouped rows show a measure in its own format: a duration as a duration.
@@ -469,8 +821,9 @@ export function aggregate(measure: AnalysisMeasure): Pick<AggregationClause, "op
 }
 
 export type AnalysisQuery = {
-  // The query the chart executes; its first aggregation is the chart's clause.
+  // The query the chart executes. Component totals combine into one chart.
   query: QueryState; clause: AggregationClause;
+  components?: AnalysisComponents;
   // What "View supporting query" opens: the same population and grouping.
   supporting: QueryState;
   grouped: boolean;
@@ -480,6 +833,9 @@ export type AnalysisQuery = {
   // totals. occurrences counts the whole hours or days in a bounded range;
   // problem says why the query does not run (too long a range).
   native?: boolean; occurrences?: number; problem?: string;
+  // The measure's drill-down records (AnalysisMeasure.drill), which a bar
+  // opens within its group.
+  drill?: WhereTerm[];
   // A share is of every group in the population the filters define. A
   // legend selection (the state's selection) only chooses which groups are
   // drawn, so it never enters the executed query and never changes a
@@ -492,7 +848,7 @@ export type AnalysisQuery = {
   // breakdown's keys.
   // late: a selection outside shares too large for the query's predicate
   // budget, so it is drawn from the groups the query returned.
-  selection?: { values: string[]; excluded: boolean; mapped?: string; fields: number; share: boolean; late?: boolean };
+  selection?: SliceSelection<string> & { mapped?: string; fields: number; share: boolean; late?: boolean };
 };
 
 // The executed query for a non-trend view. Records compare and distribute
@@ -526,13 +882,26 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   const state = normalizeAnalysis(catalog, input);
   if (isTrendView(state.view)) throw new Error("The trend view has its own chart.");
   const shares = state.view === "compare" && state.compareAs === "share" && state.split !== noSplit;
+  const components = state.view === "compare" ? catalog.components?.[state.split] : undefined;
+  if (components) {
+    const measure = catalog.measures[state.metric];
+    const where = unique([...inputWhere, ...measure.where ?? []]);
+    const terms = catalog.executable ? catalog.executable(where, now) : where;
+    const aggregations: AggregationClause[] = components.parts.map(part => ({ id: `component:${part.key}`, op: "sum", field: part.field, groupBy: [], label: part.label }));
+    const clause: AggregationClause = { id: "analysis", op: "sum", groupBy: [state.split], label: measure.label,
+      display: shares ? { kind: "pie", maxGroups: components.parts.length, showOther: true, legendPosition: "right", format: measure.format }
+        : { kind: "bar-horizontal", maxGroups: components.parts.length, legendPosition: "none", xLabel: measure.label, xScale: log(state.scale), format: measure.format } };
+    return { query: { ...EMPTY_QUERY, where: terms, aggregations }, clause, components, grouped: false,
+      supporting: { ...EMPTY_QUERY, where: terms },
+      selection: state.selection && sliceSelectionActive(state.selection) ? { ...state.selection, fields: 1, share: shares } : undefined };
+  }
   // The selection is of the breakdown's groups, drawn on the group fields of
   // the current unit.
   const recordFields = state.split === noSplit || state.view === "cycle" ? [] : catalog.breakdowns[state.split].fields;
   const groupFields = state.unit === records ? recordFields : catalog.units[state.unit]?.breakdowns[state.split] ?? [];
   const chosen = recordFields.length ? state.selection : undefined;
-  const selection: AnalysisQuery["selection"] = chosen?.values.length ? { values: chosen.values, excluded: chosen.excluded, fields: recordFields.length, share: shares, ...groupFields[0] !== recordFields[0] ? { mapped: groupFields[0] } : {} } : undefined;
-  const cycleKey = state.view === "cycle" ? catalog.cycle![state.cycle]! : undefined;
+  const selection: AnalysisQuery["selection"] = chosen && sliceSelectionActive(chosen) ? { ...chosen, fields: recordFields.length, share: shares, ...groupFields[0] !== recordFields[0] ? { mapped: groupFields[0] } : {} } : undefined;
+  const cycleKey = state.view === "cycle" ? cycleKeys(catalog, state)![state.cycle]! : undefined;
   const where = cycleKey?.kind === "recorded-date" ? completeStart(inputWhere, catalog.time, zone, now) : inputWhere;
   const run = (terms: WhereTerm[]) => catalog.executable ? catalog.executable(terms, now) : terms;
   const measure = catalog.measures[state.metric], measureY = catalog.measures[state.metricY];
@@ -549,17 +918,25 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   const stated = (fields: string[], base: WhereTerm[]) => selection && fields.length ? selectionWhere(fields, selection, predicateCount(base) + drilled) : undefined;
   // A threshold counts what is plotted: a distribution drops missing values
   // before grouping (records) or as a group filter (units).
-  const valued: WhereTerm[] = !unit && state.view === "distribution" ? [{ field: measure.value!, op: "is_not_null", value: "" }] : [];
+  // A log axis has no place for zero or less, so a log distribution draws
+  // only positive values (analysisNote says so).
+  // A binned histogram draws zero apart instead (distributionBins).
+  const binned = distributionBins(catalog, state), positive = logDistribution(state) && !binned;
+  const valued: WhereTerm[] = !unit && state.view === "distribution" ? [{ field: measure.value!, op: positive ? ">" : "is_not_null", value: positive ? "0" : "" }] : [];
   const recordWhere = [...sourceWhere, ...valued];
   // Outside shares there is no denominator to protect, so the selection
   // filters the executed query: no group or point limit can crowd a selected
   // group out. A share keeps every group and selects afterwards.
-  const unitHaving: WhereTerm[] = unit && (state.view === "distribution" || state.view === "compare" && state.reduce !== "count") ? [{ field: "analysis_value", op: "is_not_null", value: "" }] : [];
+  const unitHaving: WhereTerm[] = unit && state.view === "scatter" ? [
+    { field: "analysis_value", op: state.scale === "logarithmic" ? ">" : "is_not_null", value: state.scale === "logarithmic" ? "0" : "" },
+    { field: "analysis_y", op: state.scaleY === "logarithmic" ? ">" : "is_not_null", value: state.scaleY === "logarithmic" ? "0" : "" },
+  ] : unit && state.view === "distribution" && positive ? [{ field: "analysis_value", op: ">", value: "0" }]
+    : unit && (state.view === "distribution" || state.view === "compare" && state.reduce !== "count") ? [{ field: "analysis_value", op: "is_not_null", value: "" }] : [];
   const filter = selection && !shares ? unit ? stated(groupFields, unitHaving) : stated(recordFields, run(recordWhere)) : undefined;
   if (selection && !shares && !filter) selection.late = true;
   // A records compare counts the catalog's samples; distributions take row
   // minimums only, and each unit row is one unit.
-  const counted = thresholded(state) ? { minCount: !unit && state.view === "compare" ? minimumOf(catalog, state.minSamples) : state.minSamples } : {};
+  const counted = thresholded(state, catalog) ? { minCount: !unit && state.view === "compare" ? minimumOf(catalog, state.minSamples) : state.minSamples } : {};
   const valueLabel = state.view === "compare" && unit && state.reduce !== "total" ? `${reductionLabel(state.reduce, measure, unit)}${state.reduce === "count" ? "" : ` · ${measure.label}`}` : measure.label;
   const format = state.view === "compare" && state.reduce === "count" ? { kind: "number" as const, decimals: 0 } : measure.format;
   const compareDisplay = (groups: boolean): MetricDisplay => !groups ? { kind: "value", format, valueLabel }
@@ -582,7 +959,9 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
 
   if (!unit) {
     const groupBy = breakdown?.fields ?? [];
-    const clause: AggregationClause = state.view === "distribution"
+    const clause: AggregationClause = binned
+      ? { id: "analysis", op: "count", groupBy: [binned.field], groupLimit: binnedGroups, sort: [{ key: "group0", dir: "asc" }], label: measure.label, display: { kind: "bar-vertical", maxGroups: binnedGroups, xLabel: measure.label, yLabel: catalog.records.plural, legendPosition: "none" } }
+      : state.view === "distribution"
       ? { id: "analysis", op: "count", groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "samples", dir: "desc" }], label: measure.label, ...counted,
         distribution: breakdown ? { kind: "box", input: `[${measure.value}]`, whiskers: "tukey" } : { kind: "histogram", input: `[${measure.value}]` }, display: distributionDisplay(Boolean(breakdown)) }
       : { id: "analysis", ...aggregate(measure), groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...counted, display: compareDisplay(Boolean(breakdown)) };
@@ -593,7 +972,7 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
     const summaries = [summary("analysis_value", measure), ...ratioParts(measure), { id: "analysis_records", op: "count" as const, label: catalog.records.plural }, ...samples ? [samplesColumn(samples)] : []];
     if (state.view === "distribution") summaries.splice(1, 0, { id: "analysis_median", op: "formula", expression: `MEDIAN([${measure.value}])`, label: `Median ${measure.label.toLowerCase()} per ${catalog.records.label.toLowerCase()}` });
     const having: WhereTerm[] = "minCount" in counted ? [{ field: samples ? "analysis_samples" : "analysis_records", op: ">=", value: String(state.minSamples) }] : [];
-    return { query, clause, grouped: false, selection, supporting: breakdown ? groupedRecords(supported, groupBy, summaries, having) : { ...EMPTY_QUERY, where: supported } };
+    return { query, clause, grouped: false, selection, supporting: breakdown ? groupedRecords(supported, groupBy, summaries, having) : { ...EMPTY_QUERY, where: supported }, ...measure.drill ? { drill: measure.drill } : {} };
   }
 
   // Breakdown first: a scatter colors its points by the first key.
@@ -694,12 +1073,13 @@ export const predicateCount = (terms: WhereTerm[]) => terms.reduce((count, term)
 // missing). Every predicate counts toward the query's budget: where the
 // selection would take a where list already holding `used` predicates past
 // it, the selection has no filter (undefined) and is drawn after the query.
-export function selectionWhere(fields: string[], selection: { values: string[]; excluded: boolean }, used = 0): WhereTerm[] | undefined {
-  if (!selection.values.length) return [];
+export function selectionWhere(fields: string[], selection: SliceSelection<string>, used = 0): WhereTerm[] | undefined {
+  if (!sliceSelectionActive(selection)) return [];
   const terms = selectionTerms(fields, selection);
   return used + predicateCount(terms) > MAX_WHERE_CLAUSES ? undefined : terms;
 }
-function selectionTerms(fields: string[], selection: { values: string[]; excluded: boolean }): WhereTerm[] {
+function selectionTerms(fields: string[], selection: SliceSelection<string>): WhereTerm[] {
+  if(selection.allHidden)return fields.length?withSlice([],fields[0],{values:[],excluded:false,allHidden:true}):[];
   if (fields.length === 1) return withSlice([], fields[0], { values: selection.values.map(value => value || null), excluded: selection.excluded });
   const groups = selection.values.map(value => (JSON.parse(value) as unknown[]).map((key, index) => ({ field: fields[index], key: key === null || key === undefined || key === "" ? null : String(key) })));
   const equal = ({ field, key }: { field: string; key: string | null }): WhereClause => key === null ? { field, op: "is_null", value: "" } : { field, op: "=", value: key };
@@ -718,6 +1098,7 @@ function selectionTerms(fields: string[], selection: { values: string[]; exclude
 // selected one among them is counted there, or not drawn (missing says how
 // many).
 export function selectGroups(entry: AggregationResultEntry, selection?: AnalysisQuery["selection"]): AggregationResultEntry & { missing?: number } {
+  if(selection?.allHidden)return {...entry,buckets:[],groupCount:0,other:undefined};
   if (!selection?.values.length) return entry;
   const key = (bucket: AggregationBucket) => selection.fields === 1 ? String(bucket.keys[0] ?? "") : JSON.stringify(bucket.keys.slice(0, selection.fields).map(value => value ?? null));
   const truncated = Boolean(entry.other) || (entry.groupCount ?? 0) > entry.buckets.length;
@@ -729,6 +1110,34 @@ export function selectGroups(entry: AggregationResultEntry, selection?: Analysis
   const rest = [...entry.buckets.filter(bucket => !drawn(bucket)), ...entry.other ? [entry.other] : []];
   const value = rest.reduce((sum, bucket) => sum + (Number(bucket.value) || 0), 0), count = rest.reduce((sum, bucket) => sum + bucket.count, 0);
   return { ...shown, ...rest.length ? { other: { keys: [], value, count } } : { other: undefined } };
+}
+
+// A component query returns one complete total per part. Missing or partial
+// totals cannot read as zero: that would change the denominator of 100%.
+export function analysisResult(analysis: AnalysisQuery, results: AggregationResultEntry[]): (AggregationResultEntry & { missing?: number }) | undefined {
+  if (!results.length) return undefined;
+  if (!analysis.components) return selectGroups(results[0], analysis.selection);
+  const buckets: AggregationBucket[] = [];
+  for (const part of analysis.components.parts) {
+    const entry = results.find(result => result.id === `component:${part.key}`);
+    if (!entry || entry.error || entry.coverage === "partial" || entry.other || entry.buckets.some(bucket => bucket.error) || entry.buckets.length > 1 || (entry.groupCount ?? 0) > entry.buckets.length) {
+      return { id: analysis.clause.id, buckets: [], error: entry?.error ?? "The component totals are incomplete. Refresh to try again." };
+    }
+    const value = entry.buckets[0]?.value ?? 0;
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return { id: analysis.clause.id, buckets: [], error: "The component totals contain an invalid value." };
+    buckets.push({ keys: [part.key], value, count: entry.buckets[0]?.count ?? 0 });
+  }
+  return selectGroups({ ...results[0], id: analysis.clause.id, buckets, groupCount: buckets.length }, analysis.selection);
+}
+
+export function analysisLabels(catalog: AnalysisCatalog, state: AnalysisState): AnalysisCatalog["labels"] {
+  const component = catalog.components?.[state.split];
+  return component ? { ...catalog.labels, [state.split]: value => component.parts.find(part => part.key === value)?.label ?? value } : catalog.labels;
+}
+
+export function analysisFields(catalog: AnalysisCatalog, state: AnalysisState, schema: FieldSchema): FieldSchema["fields"] {
+  const component = catalog.components?.[state.split];
+  return component ? [...schema.fields, { name: state.split, label: component.label, type: "text", source: { kind: "derived" } }] : schema.fields;
 }
 
 function groupedRecords(where: WhereTerm[], keys: GroupKey[], summaries: SummaryColumn[], having: WhereTerm[], order = summaries[0].id): QueryState {
@@ -746,9 +1155,15 @@ function groupedRecords(where: WhereTerm[], keys: GroupKey[], summaries: Summary
 // A query past the predicate budget in any where list has none: a link
 // would drop its last predicates, the bucket's own keys, and open more.
 export function analysisInspectQuery(analysis: AnalysisQuery, bucket: AggregationBucket, clause: AggregationClause, schema: FieldSchema, view: AnalysisView): QueryState | null {
+  if (analysis.components) {
+    const part = analysis.components.parts.find(part => part.key === bucket.keys[0]);
+    if (!part?.field) return null;
+    const query = { ...analysis.supporting, where: [...analysis.supporting.where, { field: part.field, op: ">" as const, value: "0" }] };
+    return withinBudget(query) ? query : null;
+  }
   if (view === "cycle" && !analysis.native) return null;
   const { aggregations: _, ...units } = analysis.query;
-  const opened = inspectBucketQuery(analysis.grouped ? units : { ...EMPTY_QUERY, where: analysis.query.where }, bucket, clause, schema);
+  const opened = inspectBucketQuery(analysis.grouped ? units : { ...EMPTY_QUERY, where: [...analysis.query.where, ...analysis.drill ?? []] }, bucket, clause, schema);
   return opened && withinBudget(opened) ? opened : null;
 }
 // Whether every where list of a query, its grouping source's included, fits
@@ -772,7 +1187,7 @@ export function cycleResult(catalog: AnalysisCatalog, input: AnalysisState, resu
   if (result.error || result.coverage === "partial" || result.hiddenGroups || (result.groupCount ?? 0) > result.buckets.length || result.buckets.some(bucket => bucket.error)) {
     throw new Error(result.error ?? "Complete totals are required for an hour or weekday cycle. Choose a shorter range.");
   }
-  const hour = state.cycle === "hour", kind = catalog.cycle![state.cycle]!.kind;
+  const hour = state.cycle === "hour", kind = cycleKeys(catalog, state)![state.cycle]!.kind;
   const frame = cycleFrame(kind, result.buckets.map(bucket => bucket.keys[0]), bounds, zone);
   const values = new Map(result.buckets.map(bucket => [frame.time(bucket.keys[0]), bucket]));
   // A missing key would silently become an idle slot.
@@ -804,14 +1219,19 @@ export function analysisNote(catalog: AnalysisCatalog, input: AnalysisState): st
   const state = normalizeAnalysis(catalog, input), measure = catalog.measures[state.metric];
   const unit = state.unit === records ? undefined : catalog.units[state.unit];
   const subject = unit ? unit.plural.toLowerCase() : catalog.records.plural.toLowerCase();
-  const parts = [measure.note, ...catalog.rangeNote ? [catalog.rangeNote] : [], ...catalog.request?.note ? [catalog.request.note] : []];
-  const idle = idleIsZero(aggregate(measure)) ? " as zero" : ", which have no value", kind = state.view === "cycle" ? catalog.cycle![state.cycle]!.kind : undefined;
+  const parts = [measure.note, ...state.view === "scatter" ? [catalog.measures[state.metricY].note] : [], ...catalog.rangeNote ? [catalog.rangeNote] : [], ...catalog.request?.note ? [catalog.request.note] : []];
+  const idle = idleIsZero(aggregate(measure)) ? " as zero" : ", which have no value", kind = state.view === "cycle" ? cycleKeys(catalog, state)![state.cycle]!.kind : undefined;
   if (state.view === "cycle") {
     const per = state.cycle === "hour" ? "hour" : "day";
+    if (state.cycleOn && catalog.cycleOn) parts.push(`Each ${catalog.records.label.toLowerCase()} is placed by its ${catalog.cycleOn.options[state.cycleOn].label.toLowerCase()}, not its ${catalog.cycleOn.label.toLowerCase()}; the range still picks ${subject} by their ${catalog.cycleOn.label.toLowerCase()}.`);
     parts.push(kind === "timestamp"
       ? `One observation is one whole ${per} in your time zone in the range, idle ${per}s included${idle}. ${per === "hour" ? "Partial first and last hours, and the current hour," : "A partial first day, and the current day,"} are left out. A slot opens the records of its whole ${per}s; in a range without a start, or with more than about 48 of them, it has no single drill-down. The grouped query lists the ${per === "hour" ? "hourly" : "daily"} totals.`
       : state.cycle === "hour" ? `One observation is one complete clock hour in the range, placed at its hour in your time zone, idle hours included${idle}. Partial first and last hours are left out. An hour bar spans many dates, so it has no single drill-down; hourly usage cannot yet open as a grouped query, so the link opens the records.`
       : `One observation is one complete recorded day in the range, idle days included${idle}. Days are the dates the recording Mac assigned in its own time zone. The range starts at your next local midnight; the current day is left out. When the recording Mac's time zone differs from yours, a date just before your first date can be returned with part of its records; it is left out and reported. Select the grouped query for the daily totals; a weekday bar spans many dates, so it has no single drill-down.`);
+  }
+  else if (isTrendView(state.view) && state.display === "heatmap" && measure.heatmapUnit && state.split === noSplit) {
+    const heatUnit = catalog.units[measure.heatmapUnit.unit];
+    parts.push(`Each period counts ${heatUnit.plural.toLowerCase()} by their total ${measure.label.toLowerCase()} in that period, using only matching messages. A ${heatUnit.label.toLowerCase()} active in several periods appears in each.`);
   }
   else if (unit) parts.push(`${unit.note} One observation is one ${unit.label.toLowerCase()}: its ${measure.label.toLowerCase()} over all its matching records in the range.`);
   else parts.push(`One observation is one ${catalog.records.label.toLowerCase()}. ${catalog.records.note}`);
@@ -823,10 +1243,16 @@ export function analysisNote(catalog: AnalysisCatalog, input: AnalysisState): st
     : `Bars show the ${state.reduce === "max" ? "largest" : state.reduce} ${unit.label.toLowerCase()} in each group${state.reduce === "mean" && !measure.additive ? `, every ${unit.label.toLowerCase()} weighted equally` : ""}.`);
   if (state.view === "cycle" && state.reduce === "mean" && !measure.additive) parts.push(`The mean weights every ${state.cycle === "hour" ? "hour" : "day"} equally${measure.ratio ? ", not by tokens" : ""}.`);
   if (state.view === "cycle" && state.reduce === "total") parts.push(`Totals add up every ${state.cycle === "hour" ? "hour" : "day"} that falls on each bar.`);
+  if (state.view === "compare" && catalog.components?.[state.split]) parts.push(`Each ${state.compareAs === "share" ? "slice" : "bar"} adds up one component across every matching record in the range. The components account for 100% of ${measure.label.toLowerCase()}.`);
   const narrowed = state.view === "scatter" ? [[measure, catalog.measures[state.metricY]], [catalog.measures[state.metricY], measure]].filter(([own, other]) => own.where?.length && !other.where?.length).map(([own, other]) => `${other.label} counts only ${own.label.toLowerCase()}'s records here.`) : [];
-  if (state.view === "scatter") parts.push(`Each point is one ${unit!.label.toLowerCase()}; both measures use the records matching both measures' populations.${narrowed.length ? ` ${narrowed.join(" ")}` : ""} Up to ${analysisLimits.points.toLocaleString("en-US")} ${subject} with the largest ${measure.label.toLowerCase()} are drawn; the grouped query lists them all.`);
-  if (state.view === "distribution" || state.view === "compare" && unit && state.reduce !== "count") parts.push(`${unit ? subject[0].toUpperCase() + subject.slice(1) : catalog.records.plural} without a ${measure.label.toLowerCase()} value are left out.`);
-  if (thresholded(state)) parts.push(`Groups with fewer than ${state.minSamples.toLocaleString("en-US")} ${state.view === "distribution" ? "plotted " : ""}${sampleSubject(catalog, state)} are hidden.`);
+  if (state.view === "scatter") parts.push(`Each point is one ${unit!.label.toLowerCase()}; both selected measures must have a recorded value.${narrowed.length ? ` ${narrowed.join(" ")}` : ""} Up to ${analysisLimits.points.toLocaleString("en-US")} ${subject} with the largest ${measure.label.toLowerCase()} are drawn; the grouped query lists them all.`);
+  if (state.view === "scatter") {
+    const logged = [[state.scale, measure], [state.scaleY, catalog.measures[state.metricY]]].filter(([scale]) => scale === "logarithmic").map(([, item]) => (item as AnalysisMeasure).label.toLowerCase());
+    if (logged.length) parts.push(`${subject[0].toUpperCase() + subject.slice(1)} with zero ${logged.join(" or ")} are left out: a log axis has no place for zero.`);
+  }
+  if (state.view === "distribution" || state.view === "compare" && unit && state.reduce !== "count") parts.push(`${unit ? subject[0].toUpperCase() + subject.slice(1) : catalog.records.plural} without a ${measure.label.toLowerCase()} value${logDistribution(state) && !distributionBins(catalog, state) ? ", or with zero, are left out: a log axis has no place for zero" : " are left out"}.`);
+  if (distributionBins(catalog, state)) parts.push(`Each bar is one narrow range of the value, on its own ${distributionBins(catalog, state)!.scheme.scale === "linear" ? "" : "log "}axis${distributionBins(catalog, state)!.scheme.scale === "linear" ? "" : "; zero sits apart at the left"}. Lines mark the median and 90th percentile, read from the bins.`);
+  if (thresholded(state, catalog)) parts.push(`Groups with fewer than ${state.minSamples.toLocaleString("en-US")} ${state.view === "distribution" ? "plotted " : ""}${sampleSubject(catalog, state)} are hidden.`);
   if (state.compareAs === "share" && state.view === "compare") parts.push("Shares divide each group by the total of all groups, including those folded into Other.");
   return parts.join(" ");
 }
@@ -838,5 +1264,5 @@ export const sampleSubject = (catalog: AnalysisCatalog, state: ResolvedAnalysis)
 export function analysisEmptyLabel(catalog: AnalysisCatalog, input: AnalysisState): string {
   const state = normalizeAnalysis(catalog, input);
   const subject = state.unit === records ? catalog.records.plural.toLowerCase() : catalog.units[state.unit].plural.toLowerCase();
-  return thresholded(state) ? `No groups with at least ${state.minSamples.toLocaleString("en-US")} ${sampleSubject(catalog, state)}` : `No matching ${subject}`;
+  return thresholded(state, catalog) ? `No groups with at least ${state.minSamples.toLocaleString("en-US")} ${sampleSubject(catalog, state)}` : `No matching ${subject}`;
 }

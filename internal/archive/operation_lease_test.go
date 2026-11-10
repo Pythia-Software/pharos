@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // A lease is created and updated in place, under its lock, and never
@@ -22,6 +25,7 @@ func TestLeaseIsLockedInPlaceUntilReleased(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(lease.release)
 	path := leasePath(dir, "one")
 	before, _ := os.Stat(path)
 	probe := probeLease(path)
@@ -77,6 +81,54 @@ func TestLeaseIsLockedInPlaceUntilReleased(t *testing.T) {
 // makes the verdict unsafe, and a writing command that cannot take its lease
 // does not run.
 func TestLeasesFailClosed(t *testing.T) {
+	for _, failure := range []error{filelock.ErrUnsupported, syscall.EIO, syscall.ENOLCK, syscall.EINTR, fmt.Errorf("lock: %w", syscall.EACCES)} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), leaseDirName)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := leasePath(dir, "unprobed")
+			contents := []byte(`{"instance":"unprobed","process":"cli:index"}`)
+			if err := os.WriteFile(path, contents, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var opened []*os.File
+			override(t, &lockOperationLease, func(file *os.File, _ filelock.Mode, _ filelock.WaitMode) error {
+				opened = append(opened, file)
+				return failure
+			})
+			probe := probeLease(path)
+			if probe.Live || !errors.Is(probe.Err, failure) {
+				t.Fatalf("non-contention failure was not retained: %+v", probe)
+			}
+			if verdict := computeEjectVerdict(verdictInput{leases: []leaseProbe{probe}}); verdict.Verdict != verdictUnsafe {
+				t.Fatalf("non-contention failure must be unsafe: %+v", verdict)
+			}
+			if _, _, ok := claimDeadLease(path); ok {
+				t.Fatal("claimed a lease despite lock failure")
+			}
+			if lease, err := acquireProcessLease(dir, leaseInfo{Instance: "unprobed"}); lease != nil || !errors.Is(err, failure) {
+				t.Fatalf("creation must retain lock failure: lease=%v err=%v", lease, err)
+			}
+			config := Config{CatalogPath: filepath.Join(t.TempDir(), "catalog.sqlite3")}
+			ran := false
+			err := runLeasedCatalogCommand(config, "ingest", OperationSpec{Kind: "ingest.cli"}, func(context.Context, *Op, *Catalog) error { ran = true; return nil })
+			if ran || !errors.Is(err, failure) || !strings.Contains(err.Error(), "nothing was changed") {
+				t.Fatalf("catalog command ran despite lock failure: ran=%v err=%v", ran, err)
+			}
+			if _, err := os.Stat(config.CatalogPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("catalog opened without a lease: %v", err)
+			}
+			for _, file := range opened {
+				if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+					t.Fatalf("failed lock leaked a borrowed file: %v", err)
+				}
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != string(contents) {
+				t.Fatalf("failed locking modified the lease: %q, %v", got, err)
+			}
+		})
+	}
 	dir := filepath.Join(t.TempDir(), leaseDirName)
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -112,6 +164,116 @@ func TestLeasesFailClosed(t *testing.T) {
 	}
 	if _, err := os.Stat(config.CatalogPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the catalog was opened (and initialized) without a lease: %v", err)
+	}
+}
+
+func TestLeaseIdentityRaces(t *testing.T) {
+	for _, race := range []string{"unlink", "replace"} {
+		for _, changes := range []int{1, 10} {
+			t.Run(fmt.Sprintf("create/%s/%d", race, changes), func(t *testing.T) {
+				dir := t.TempDir()
+				path := leasePath(dir, "racing")
+				var opened []*os.File
+				override(t, &lockOperationLease, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+					if mode != filelock.Exclusive || wait != filelock.Wait {
+						t.Fatalf("creation lock: %v, %v", mode, wait)
+					}
+					if err := filelock.Lock(file, mode, wait); err != nil {
+						return err
+					}
+					opened = append(opened, file)
+					if len(opened) <= changes {
+						changeLeaseIdentity(t, path, race)
+					}
+					return nil
+				})
+				lease, err := acquireProcessLease(dir, leaseInfo{Instance: "racing", volatile: true})
+				lockOperationLease = filelock.Lock
+				closed := opened
+				if changes == 10 {
+					if lease != nil || err == nil || !strings.Contains(err.Error(), "kept changing") || len(opened) != 10 {
+						t.Fatalf("retry bound: lease=%v err=%v attempts=%d", lease, err, len(opened))
+					}
+					checkRacingLeasePath(t, path, race)
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(lease.release)
+					if len(opened) != 2 || !sameOpenFile(lease.file, path) {
+						t.Fatalf("did not retry onto the current file: attempts=%d", len(opened))
+					}
+					closed = opened[:1]
+					if probe := probeLease(path); !probe.Live || probe.Info == nil || probe.Info.Instance != "racing" || probe.Err != nil {
+						t.Fatalf("retried lease is not live: %+v", probe)
+					}
+				}
+				for _, file := range closed {
+					if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+						t.Fatalf("identity retry leaked the old descriptor: %v", err)
+					}
+				}
+			})
+		}
+		t.Run("claim/"+race, func(t *testing.T) {
+			path := leasePath(t.TempDir(), "dead")
+			if err := os.WriteFile(path, []byte(`{"instance":"dead"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var opened *os.File
+			override(t, &lockOperationLease, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+				if mode != filelock.Exclusive || wait != filelock.Try {
+					t.Fatalf("claim lock: %v, %v", mode, wait)
+				}
+				if err := filelock.Lock(file, mode, wait); err != nil {
+					return err
+				}
+				opened = file
+				changeLeaseIdentity(t, path, race)
+				return nil
+			})
+			if _, _, ok := claimDeadLease(path); ok {
+				t.Fatal("claimed a lease whose identity changed")
+			}
+			if opened == nil {
+				t.Fatal("claim did not reach its lock")
+			}
+			if _, err := opened.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("claim leaked the old descriptor: %v", err)
+			}
+			checkRacingLeasePath(t, path, race)
+		})
+	}
+}
+
+func changeLeaseIdentity(t *testing.T, path, race string) {
+	t.Helper()
+	if race == "unlink" {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	// Simulate a competing replacement after open+lock, before the identity
+	// check. Production lease writes must continue to update in place.
+	replacement := filepath.Join(t.TempDir(), "replacement.json")
+	if err := os.WriteFile(replacement, []byte(`{"instance":"replacement"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func checkRacingLeasePath(t *testing.T, path, race string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if race == "unlink" {
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("an unlinked lease was recreated: %q, %v", got, err)
+		}
+	} else if err != nil || string(got) != `{"instance":"replacement"}` {
+		t.Fatalf("a replacement lease was modified/deleted: %q, %v", got, err)
 	}
 }
 
@@ -189,6 +351,13 @@ func TestServiceSeesAnotherProcessThroughItsLease(t *testing.T) {
 			}
 			if !listed {
 				t.Fatalf("the helper's operation is not listed: %#v", document["operations"])
+			}
+			path := leasePath(leaseDirs(config)[0], row.Instance)
+			if _, _, ok := claimDeadLease(path); ok {
+				t.Fatal("a live subprocess lease was claimed")
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("a live subprocess lease was deleted: %v", err)
 			}
 			// The service never ends a live owner's row.
 			server.reconcileOperations(context.Background())

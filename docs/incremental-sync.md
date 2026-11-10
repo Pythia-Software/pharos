@@ -279,11 +279,42 @@ does not dismiss an issue: the repaired unit must pass verification. Sampling
 does not certify the entire library, and a shared parser bug can still agree
 with the reference; provider fixtures remain necessary.
 
+**Verify this source again** on a mismatch checks every available input for
+that source, including retained copies from other Macs. An obsolete warning
+clears when its input passes, without rewriting it. **Verify & repair this
+source**, or **Verify all & repair mismatches** under Repair & maintenance,
+also reindexes inputs that still mismatch. Each repair uses the exact frozen
+record that failed comparison and verifies it again before clearing its issue.
+Outdated tool ledgers are upgraded from the selected conversations' stored
+messages before comparison, so a derivation upgrade does not require a full
+input reindex. Verification still checks the result independently and repairs
+any remaining source mismatch. Ordinary verification defers those upgrades.
+Healthy inputs are untouched; this avoids a full recapture and source-wide
+reindex. Copy authority and evidence-version guards still apply. Unreadable,
+changing or older inputs remain unresolved, with deferred/error counts shown
+separately from passed checks. Full verification can take time; Stop keeps
+committed repairs, and running it again checks the remaining inputs. Derived
+library analyses are marked for their usual background refresh.
+
+Reference comparisons use isolated copies of a process-cached empty schema
+in local temporary storage. Only those disposable catalogs skip device
+flushes; retained inputs and the library catalog keep their durability settings.
+
 Independent verification can discover changes before the next index pass.
 When a known unit's selected parts differ from its indexed input states, its
 check defers until indexing catches up instead of reporting index lag as
 corruption. Entirely untracked inputs are still checked for omissions; older
 captures remain eligible to verify their contribution to retained history.
+Checks also defer while a stored tool ledger awaits a derivation upgrade;
+newly added request fields are not evidence of corruption in an older ledger.
+Explicit verification with repair can rebuild that ledger and verify it again.
+Deferred checks keep existing warnings until verification passes.
+
+Manual verification and repair can interrupt scheduled indexing or background
+analysis. Capture and foreground indexing, verification or repair still block
+another maintenance run. Viewing and copying issue diagnostics stays available
+throughout. Sync status exposes this distinction as `maintenance_busy`, alongside
+the shared `busy` flag.
 
 ## API
 
@@ -299,7 +330,7 @@ Existing authentication applies to all endpoints. POST bodies are JSON.
 | `GET /api/sync/recovery?estimate=true&source=codex` | Retained size/group counts and measured copy/index estimate. |
 | `POST /api/sync/recovery` | `{"mode":"full","sources":["codex"]}`, `{"mode":"retained"}`, or `{"resume":"JOB_ID"}`. |
 | `POST /api/library/update` | Coordinated ordinary capture/index/deferred reconciliation. |
-| `POST /api/sync/verify` | `{"all":true,"sources":["codex"]}`; omitted source scope means all inputs. |
+| `POST /api/sync/verify` | `{"all":true,"sources":["codex"]}`; add `"repair":true` to reindex only fresh mismatches and reverify them. Repair requires `all:true`. Omitted source scope means all inputs. |
 | `GET /api/activity` | Progress, interruption, failures and verification summaries by returned run ID. |
 
 ## Measurement and regression gates
@@ -320,6 +351,31 @@ process-wide including completed child processes and concurrent Pharos work,
 relative to one core. RSS/heap peaks are sampled; sub-second peaks can be
 missed. Allocations are process-wide, and OS I/O counters are **block counts,
 not measured bytes**. Duty-cycle estimates are not a power-consumption SLA.
+
+Where the figures come from depends on the platform (`resources_*.go`): on
+macOS CPU and block counts come from `getrusage` and RSS from
+`proc_pid_rusage`'s resident size, with `ps -o rss` as the fallback; on Linux
+CPU and block counts come from `getrusage` and RSS from `ps`. No other
+platform has OS counters implemented: there CPU, RSS and block counts are
+unavailable, and only Go allocation and heap figures are measured (a Go heap
+figure is never stored as RSS). The `measurement_limits` text says which basis
+applies.
+
+A figure that could not be read is **unavailable, not zero**: `cpu_seconds`,
+`cpu_percent_one_core`, `rss_baseline_bytes`, `rss_observed_peak_bytes`,
+`read_blocks`, `written_blocks` and a phase's `cpu_seconds` are `null` in the
+stored sample and the API. A run or phase has CPU only when both of its ends
+were read (its own CPU and its completed children's) and neither counter went
+backwards. Each is checked on its own, so growth in one cannot hide a reset in
+the other; a failed baseline is never a delta from zero, and a reset is not a
+negative cost. Each phase takes its own baseline. The RSS peak is the
+highest reading that succeeded (a failed reading leaves a known peak alone;
+a run with no reading has none), with the same sampled-peak limitation. Run
+history recorded before this kept its numbers and is not rewritten; a field it
+lacks stays missing. The workload statistics count every run's elapsed time,
+but CPU, RSS and the CPU-duty estimate only from runs that measured them
+(zeros included); each metric's `samples` says how many, `last` is the newest
+measured value, and a metric no run measured is `null`.
 
 Reproduce workloads with scratch catalogs only:
 

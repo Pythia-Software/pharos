@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -18,8 +19,6 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"golang.org/x/sys/unix"
 )
 
 // Link checks run on this Mac: browsers cannot stat a file or reliably check
@@ -154,9 +153,19 @@ func markdownFinderAlias(path string) bool {
 			return true
 		}
 	}
-	finderInfo := make([]byte, 32)
-	n, err := unix.Getxattr(path, "com.apple.FinderInfo", finderInfo)
-	return err == nil && n >= 10 && binary.BigEndian.Uint16(finderInfo[8:10])&0x8000 != 0
+	info, err := markdownFinderInfo(path)
+	return err == nil && finderInfoAlias(info)
+}
+
+var errFinderInfoUnsupported = fmt.Errorf("reading Finder info is not supported on this platform: %w", errors.ErrUnsupported)
+
+// markdownFinderInfo reads a file's Finder info. Tests replace it.
+var markdownFinderInfo = finderInfoNative
+
+// finderInfoAlias reports the alias flag, bit 15 of the big-endian Finder
+// flags at bytes 8-9 of the Finder info. Shorter data has no flags.
+func finderInfoAlias(info []byte) bool {
+	return len(info) >= 10 && binary.BigEndian.Uint16(info[8:10])&0x8000 != 0
 }
 
 func (s *Server) markdownLink(w http.ResponseWriter, r *http.Request) {

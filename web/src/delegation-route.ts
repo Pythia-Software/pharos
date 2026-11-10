@@ -28,15 +28,15 @@ export function readDelegationRoute(params: URLSearchParams): DelegationRoute {
   };
 }
 // The explorer's parameters for a route, as it writes them back: an empty
-// value removes its parameter. A ranking's sort, scope and direction are
-// written only in rank mode; the legacy search parameters are always removed.
+// value removes its parameter. A ranking's sort and direction are
+// written only in rank mode; scope also controls the hierarchy's metrics.
 export function delegationRouteValues(route: Pick<DelegationRoute, "mode" | "sort" | "scope" | "direction" | "collapsed" | "selected" | "range">): Record<string, string> {
   const rank = route.mode === "rank";
   return {
     sessions: "",
     delegation_mode: route.mode,
     delegation_sort: rank ? route.sort : "",
-    delegation_scope: rank ? route.scope : "",
+    delegation_scope: route.scope,
     delegation_direction: rank ? route.direction : "",
     delegation_search: "",
     delegation_collapsed: [...route.collapsed].sort().join(","),

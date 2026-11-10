@@ -21,8 +21,8 @@ const grouped = (label: string, title: string, keys: string[], summaries = total
 const calendar = (label: string, key: string) => ({ ...grouped(label, `Cost, tokens, distinct sessions and cache hit rate per ${label.toLowerCase()}`, [key]), orderBy: [{ field: key, dir: "desc" as const }] });
 // Usage titles come from the same workspace row for every fact. MAX retains
 // that one title without sorting and validating a representative per workspace.
-const workLink: SummaryColumn = { id: "usage_work", op: "link", label: "Work", link: { label: { column: "usage_work_title" }, to: { kind: "template", template: "/work/{field:workspace_id}" } } };
-const work = grouped("Work", "Rank work by cost across days and models; each workspace retains its own identity", ["workspace_id"], [{ id: "usage_work_title", op: "max", field: "title", label: "Title" }, workLink, ...totals]);
+const workLink: SummaryColumn = { id: "usage_work", op: "link", label: "Workspace", link: { label: { column: "usage_work_title" }, to: { kind: "template", template: "/work/{field:workspace_id}" } } };
+const work = grouped("Workspace", "Rank work by cost across days and models; each workspace retains its own identity", ["workspace_id"], [{ id: "usage_work_title", op: "max", field: "title", label: "Title" }, workLink, ...totals]);
 
 export const usageGroupPresets: UsageTablePreset[] = [
   grouped("Projects", "Compare project cost, tokens, sessions and cache reuse", ["project_name"]),
@@ -30,7 +30,7 @@ export const usageGroupPresets: UsageTablePreset[] = [
   grouped("Model + effort", "Keep each provider, model and recorded effort level separate, including missing effort", ["provider", "model_family", "effort"]),
   ...[["channel", "Channels"], ["machine_id", "Machines"], ["execution_machine_id", "Execution machines"]].map(([field,label]) => grouped(label, `Compare usage by ${label.toLowerCase()}`, [field])),
   grouped("Providers", "Compare provider cost, tokens, sessions and cache reuse", ["provider"]),
-  grouped("Agents", "Compare root agents and subagents within each provider", ["provider", "session_kind"]),
+  grouped("Agents", "Compare main agents and sub-agents within each provider", ["provider", "session_kind"]),
   { ...work,
     columns: [workLink.id, "workspace_id", ...totals.map(column => column.id)] },
   calendar("Day", "day"), calendar("Week", "week"), calendar("Month", "month"),

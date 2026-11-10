@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,6 +22,7 @@ import (
 
 	labelrt "github.com/gbdubs/pharos/internal/labeler"
 	"github.com/gbdubs/pharos/internal/labeler/labelertest"
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // agentEventsTestSettings are the fake worker (labelsTestSettings) and a
@@ -90,13 +93,6 @@ func agentEventsCatalog(t *testing.T) *Catalog {
 			t.Fatal(err)
 		}
 	}
-	// A fork without a start time copies its parent's history in order: its
-	// copy of the root's first reply is inherited, not its own.
-	if _, err := tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected,source_order)
-		SELECT 'm-f3-a','c-fork3','m-f3-a','assistant','message','I will look into the export button.','h-f3a','2026-09-01T12:01:00.000Z',1,source_order
-		FROM messages WHERE id='m-f3-1'`); err != nil {
-		t.Fatal(err)
-	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +137,11 @@ func agentEventsStored(t *testing.T, catalog *Catalog, message string) map[strin
 func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 	catalog := agentEventsCatalog(t)
 	labels, settings := agentEventsTestSettings(t)
+	// A fork of c-root whose first reply is a copy of the root's: the
+	// provider recorded the root's event ID on it (m-a1's native ID).
+	execTx(t, catalog.DB, `INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES('c-ev-fork','ws-main','claude','local','c-ev-fork','c-root',0);
+ INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected,source_order)
+ VALUES('m-evf-a','c-ev-fork','m-a1','assistant','message','I will look into the export button.','h-evf-a','2026-09-01T12:01:00.000Z',1,1)`)
 	stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -148,6 +149,31 @@ func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 	if !stats.Complete || stats.MessagesScored == 0 || stats.Candidates == 0 {
 		t.Fatalf("first run: %+v", stats)
 	}
+	t.Run("shared CPU authority", func(t *testing.T) {
+		c := agentEventsCatalog(t)
+		labels, verifier := agentEventsTestSettings(t)
+		labels.Threads, labels.ThreadBudget = 2, 1
+		hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
+		t.Setenv(labelertest.FakeHelloEnv, hellos)
+		authority := newWorkAuthority(4)
+		var discovered atomic.Int32
+		discovered.Store(-1)
+		progress := labelsProgressFunc(func(line string) {
+			if strings.Contains(line, "conversations to look at") {
+				discovered.Store(int32(authority.facts().CPUAllocated))
+			}
+		})
+		stats, err := c.RunAgentEvents(withWorkAuthority(t.Context(), authority), labels, verifier, AgentEventsRunOptions{Progress: progress})
+		if err != nil || !stats.Complete || stats.Candidates == 0 {
+			t.Fatalf("admitted verifier pass: %+v %v", stats, err)
+		}
+		if discovered.Load() != 0 || authority.facts().CPUAllocated != 0 {
+			t.Fatalf("slots held after discovery %d, after pass %d", discovered.Load(), authority.facts().CPUAllocated)
+		}
+		if threads := labelerHelloThreads(t, hellos); !slices.Equal(threads, []int{2}) {
+			t.Fatalf("admitted verifier threads: %v", threads)
+		}
+	})
 	// Every candidate at or above the floor is stored with the verifier's
 	// probability; the fenced log's sentence is never a candidate.
 	for id, source := range map[string]string{"m-ev-reply": "reply", "m-ev-think": "thinking"} {
@@ -224,29 +250,31 @@ func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 		t.Fatalf("a deleted message kept events %v", got)
 	}
 
-	// A parent's corrected reply no longer matches its fork's copy, which
-	// becomes the fork's own reply: the fork is looked at again, even when a
-	// limited run stops before it (its own dirty mark keeps it pending).
+	// The parent's reply's event ID is corrected, so the fork's message no
+	// longer copies it and becomes the fork's own reply. Only the parent's
+	// rows changed; the fork's execution dependencies did, so it is looked
+	// at again, even when a limited run stops before it (the mark at the
+	// run's start keeps it pending).
 	readMessage := func(id string) bool {
 		var n int
 		_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages WHERE message_id=?`, id).Scan(&n)
 		return n > 0
 	}
-	if readMessage("m-f3-a") {
+	if readMessage("m-evf-a") {
 		t.Fatal("the fork's copy of its parent's reply was read as its own")
 	}
-	execTx(t, catalog.DB, `UPDATE messages SET text='I will look into the export button first.' WHERE id='m-a1'`)
+	execTx(t, catalog.DB, `UPDATE messages SET native_id='m-a1-corrected' WHERE id='m-a1'`)
 	if _, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Limit: 1}); err != nil {
 		t.Fatal(err)
 	}
 	var pendingFork int
-	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_events_dirty WHERE conversation_id='c-fork3'`).Scan(&pendingFork)
-	if !readMessage("m-f3-a") && pendingFork == 0 {
+	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_events_dirty WHERE conversation_id='c-ev-fork'`).Scan(&pendingFork)
+	if !readMessage("m-evf-a") && pendingFork == 0 {
 		t.Fatal("a limited run dropped the fork of a changed conversation")
 	}
 	forked, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
-	if err != nil || !forked.Complete || !readMessage("m-f3-a") {
-		t.Fatalf("after the parent's edit: %+v %v; the fork's reply read: %v", forked, err, readMessage("m-f3-a"))
+	if err != nil || !forked.Complete || !readMessage("m-evf-a") {
+		t.Fatalf("after the parent's correction: %+v %v; the fork's reply read: %v", forked, err, readMessage("m-evf-a"))
 	}
 
 	// Rows another verifier made (an import's have no input hash) are
@@ -268,46 +296,66 @@ func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 }
 
 func TestAgentEventsLiveThreadTarget(t *testing.T) {
-	catalog := agentEventsCatalog(t)
-	labels, settings := agentEventsTestSettings(t)
-	override(t, &agentEventsChunkRows, 1)
-	override(t, &labelerThreadCheck, time.Duration(0))
-	hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
-	t.Setenv(labelertest.FakeHelloEnv, hellos)
-	var observed []int
-	stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{ThreadTarget: func() LabelerSettings {
-		if catalog.labelers != nil {
-			threads, _, _ := catalog.labelers.Usage()
-			if len(observed) == 0 || observed[len(observed)-1] != threads {
-				observed = append(observed, threads)
+	for _, device := range []string{"", "cpu", "gpu"} {
+		t.Run("device="+device, func(t *testing.T) {
+			t.Setenv(labelertest.FakeDeviceEnv, device)
+			catalog := agentEventsCatalog(t)
+			labels, settings := agentEventsTestSettings(t)
+			override(t, &agentEventsChunkRows, 1)
+			override(t, &labelerThreadCheck, time.Duration(0))
+			hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
+			t.Setenv(labelertest.FakeHelloEnv, hellos)
+			var observed []int
+			var reportedDevice atomic.Bool
+			ctx := withWorkProgress(t.Context(), func(work activityWork) {
+				if device != "" && strings.Contains(work.Detail, strings.ToUpper(device)) {
+					reportedDevice.Store(true)
+				}
+			})
+			stats, err := catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{ThreadTarget: func() LabelerSettings {
+				if catalog.labelers != nil {
+					threads, _, _ := catalog.labelers.Usage()
+					if len(observed) == 0 || observed[len(observed)-1] != threads {
+						observed = append(observed, threads)
+					}
+				}
+				target := labels
+				target.Threads = 1
+				if slices.Contains(observed, 1) {
+					target.Threads = 4
+				}
+				if slices.Contains(observed, 4) {
+					target.Threads = 2
+				}
+				return target
+			}})
+			if err != nil || !stats.Complete || stats.ConversationsFailed != 0 || stats.Candidates == 0 {
+				t.Fatalf("changing cores: %+v %v", stats, err)
 			}
-		}
-		target := labels
-		target.Threads = 1
-		if slices.Contains(observed, 1) {
-			target.Threads = 4
-		}
-		if slices.Contains(observed, 4) {
-			target.Threads = 2
-		}
-		return target
-	}})
-	if err != nil || !stats.Complete || stats.ConversationsFailed != 0 || stats.Candidates == 0 {
-		t.Fatalf("changing cores: %+v %v", stats, err)
-	}
-	if threads := labelerHelloThreads(t, hellos); !slices.Equal(threads, []int{1, 4, 2}) {
-		t.Fatalf("worker thread targets: %v", threads)
-	}
-	again, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
-	if err != nil || !again.Complete || again.MessagesScored != 0 {
-		t.Fatalf("changing cores left work pending: %+v %v", again, err)
+			want := []int{1, 4, 2}
+			if device == "gpu" {
+				want = []int{1}
+			}
+			if threads := labelerHelloThreads(t, hellos); !slices.Equal(threads, want) {
+				t.Fatalf("worker thread targets: %v", threads)
+			}
+			if device != "" && !reportedDevice.Load() {
+				t.Fatalf("progress never reported the confirmed %s device", device)
+			}
+			again, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+			if err != nil || !again.Complete || again.MessagesScored != 0 {
+				t.Fatalf("changing cores left work pending: %+v %v", again, err)
+			}
+		})
 	}
 }
 
 func TestAgentEventsRunsInLimitedSteps(t *testing.T) {
 	catalog := agentEventsCatalog(t)
 	labels, settings := agentEventsTestSettings(t)
-	first, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Limit: 1})
+	var current atomic.Pointer[activityWork]
+	ctx := withWorkProgress(t.Context(), func(work activityWork) { current.Store(&work) })
+	first, err := catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: 1})
 	if err != nil || !first.Cut || first.Complete {
 		t.Fatalf("a limited run: %+v %v", first, err)
 	}
@@ -316,13 +364,77 @@ func TestAgentEventsRunsInLimitedSteps(t *testing.T) {
 	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages WHERE conversation_id='c-events'`).Scan(&newest); err != nil || newest == 0 {
 		t.Fatalf("the limited run skipped the newest conversation (%v)", err)
 	}
-	rest, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+	initial := *current.Load()
+	var resumed atomic.Pointer[activityWork]
+	ctx = withWorkProgress(t.Context(), func(work activityWork) {
+		resumed.CompareAndSwap(nil, &work)
+		current.Store(&work)
+	})
+	rest, err := catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{progressBase: first.progress})
 	if err != nil || !rest.Complete || rest.MessagesScored == 0 {
 		t.Fatalf("the rest: %+v %v", rest, err)
+	}
+	if start, end := resumed.Load(), current.Load(); start.Done != initial.Done || start.Total != initial.Total || end.Done != end.Total || end.Total != initial.Total {
+		t.Fatalf("handoff reset progress: initial=%+v resumed=%+v end=%+v", initial, start, end)
+	}
+	if rest.progress.messages != first.MessagesScored+rest.MessagesScored || rest.progress.candidates != first.Candidates+rest.Candidates {
+		t.Fatalf("handoff lost message or candidate counts: %+v", rest.progress)
 	}
 	dry, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Full: true, DryRun: true})
 	if err != nil || dry.MessagesScored != 0 || dry.MessagesUnchanged != first.MessagesScored+rest.MessagesScored {
 		t.Fatalf("a dry run of a current ledger: %+v %v", dry, err)
+	}
+}
+
+// The pass's lease: only another holder is "already running", which the
+// analysis chain waits out; any other lock failure keeps its cause. Neither
+// scores anything, and both leave the in-process mutex free. A pass running
+// in this process is refused before any lease is tried.
+func TestAgentEventsLockFailures(t *testing.T) {
+	catalog := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	scored := func() (n int) {
+		_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages`).Scan(&n)
+		return n
+	}
+	var conversation string
+	if err := catalog.DB.QueryRow(`SELECT id FROM conversations LIMIT 1`).Scan(&conversation); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range leaseLockFailures() {
+		t.Run(tc.name, func(t *testing.T) {
+			refused := failFileLease(t, ".agent-events.lock", tc.err)
+			catalog.agentEventsRun.Lock()
+			_, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+			catalog.agentEventsRun.Unlock()
+			if err != errAgentEventsRunning || len(*refused) != 0 {
+				t.Fatalf("beside a pass in this process: %v after %d lease attempts", err, len(*refused))
+			}
+			_, err = catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+			if errors.Is(err, errAgentEventsRunning) != errors.Is(tc.err, filelock.ErrContended) || !errors.Is(err, tc.err) {
+				t.Fatalf("lease failure: %v", err)
+			}
+			requireLeasesClosed(t, *refused, 1)
+			// Population execution waits out another holder as a writer
+			// without charging the selection; any other cause is a failure.
+			_, stepErr := runConversationWork(t.Context(), catalog, workSelection{Units: []workMember{{ID: conversation}}, CPUs: 1}, workAllocation{CPUs: 1},
+				func(context.Context, []string, workAllocation) (workDomainStep, error) { return workDomainStep{}, err })
+			var classified *workError
+			if !errors.As(stepErr, &classified) || (classified.blocker.Reason == workBlockedWriter) != errors.Is(tc.err, filelock.ErrContended) ||
+				(len(classified.units) == 0) != errors.Is(tc.err, filelock.ErrContended) {
+				t.Fatalf("the work step's lock failure: %v", stepErr)
+			}
+			if !catalog.agentEventsRun.TryLock() {
+				t.Fatal("a failed lease kept the pass's mutex")
+			}
+			catalog.agentEventsRun.Unlock()
+			if n := scored(); n != 0 {
+				t.Fatalf("scored %d messages without the lease", n)
+			}
+		})
+	}
+	if stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{}); err != nil || stats.MessagesScored == 0 {
+		t.Fatalf("a pass after the failures: %+v %v", stats, err)
 	}
 }
 
@@ -541,78 +653,97 @@ func TestAgentEventsStopKillsTheWorkers(t *testing.T) {
 // conversation must be prepared during the first inference, and scored while
 // the first save is still blocked. The ledger/model tests above cover outputs.
 func TestAgentEventsPipelineOverlapsStages(t *testing.T) {
-	override(t, &agentEventsChunkRows, 3)
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	inferring, prepared := make(chan struct{}), make(chan struct{})
-	writing, scoredDuringWrite := make(chan struct{}), make(chan struct{})
-	releaseWrite := make(chan struct{})
-	jobs := []*agentEventsConversation{{id: "first"}, {id: "second"}, {id: "third"}}
-	stats := &AgentEventsRunStats{}
-	pipeline := agentEventsPipeline{
-		stats: stats, progress: func(string, ...any) {},
-		build: func(job *agentEventsConversation) (*agentEventsConversation, error) {
-			if job.id == "second" {
-				select {
-				case <-inferring:
-				case <-ctx.Done():
-					return nil, ctx.Err()
+	for _, rows := range []int{1, 20} {
+		t.Run(fmt.Sprintf("rows=%d", rows), func(t *testing.T) {
+			override(t, &agentEventsChunkRows, 3)
+			var committed atomic.Int64
+			ctx, cancel := context.WithTimeout(withWorkProgress(t.Context(), func(w activityWork) { committed.Store(int64(w.Done)) }), 5*time.Second)
+			defer cancel()
+			inferring, prepared := make(chan struct{}), make(chan struct{})
+			writing, scoredDuringWrite := make(chan struct{}), make(chan struct{})
+			releaseWrite := make(chan struct{})
+			jobs := []*agentEventsConversation{{id: "first"}, {id: "second"}, {id: "third"}}
+			stats := &AgentEventsRunStats{}
+			pipeline := agentEventsPipeline{
+				stats: stats, progress: func(string, ...any) {},
+				build: func(_ context.Context, _ int, job *agentEventsConversation) (*agentEventsConversation, error) {
+					if job.id == "second" {
+						select {
+						case <-inferring:
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						}
+						close(prepared)
+					}
+					job.messages = []*agentEventsMessage{{rows: make([]labelrt.Framed, rows)}}
+					for i := range job.messages[0].rows {
+						job.messages[0].rows[i] = labelrt.Framed{IDs: []int32{1, 2}, Extra: map[string][]labelrt.Span{labelrt.SegmentSpans: {{Start: 0, End: 2}}}}
+					}
+					return job, nil
+				},
+				infer: func(conversations []*agentEventsConversation) error {
+					switch conversations[0].id {
+					case "first":
+						close(inferring)
+						select {
+						case <-prepared:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+					case "second":
+						select {
+						case <-writing:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+						close(scoredDuringWrite)
+					}
+					for _, conversation := range conversations {
+						conversation.messages[0].hash = "scored"
+					}
+					return nil
+				},
+				store: func(conversation *agentEventsConversation, written *AgentEventsRunStats) error {
+					for _, row := range conversation.messages[0].rows {
+						if row.IDs != nil || len(row.Extra[labelrt.SegmentSpans]) == 0 {
+							return errors.New("save retained token IDs or lost sentence spans")
+						}
+					}
+					if conversation.messages[0].hash != "scored" {
+						return errors.New("saved an unscored conversation")
+					}
+					if conversation.id == "first" {
+						close(writing)
+						select {
+						case <-releaseWrite:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+					}
+					written.Stored++
+					return nil
+				},
+			}
+			done := make(chan error, 1)
+			go func() { done <- pipeline.run(ctx, cancel, jobs) }()
+			select {
+			case <-scoredDuringWrite:
+				if committed.Load() != 0 {
+					t.Error("progress advanced before the first save committed")
 				}
-				close(prepared)
+				close(releaseWrite)
+			case err := <-done:
+				t.Fatalf("pipeline ended before overlapping stages: %v", err)
+			case <-ctx.Done():
+				t.Fatal("preparation, inference and persistence did not overlap")
 			}
-			job.messages = []*agentEventsMessage{{rows: make([]labelrt.Framed, 1)}}
-			return job, nil
-		},
-		infer: func(conversations []*agentEventsConversation) error {
-			switch conversations[0].id {
-			case "first":
-				close(inferring)
-				select {
-				case <-prepared:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			case "second":
-				select {
-				case <-writing:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-				close(scoredDuringWrite)
+			if err := <-done; err != nil || stats.ConversationsBuilt != 3 || stats.Candidates != 3*rows || stats.Stored != 3 {
+				t.Fatalf("overlapping stages: %+v %v", stats, err)
 			}
-			for _, conversation := range conversations {
-				conversation.messages[0].hash = "scored"
+			if committed.Load() != 3 {
+				t.Fatalf("committed progress = %d, want 3", committed.Load())
 			}
-			return nil
-		},
-		store: func(conversation *agentEventsConversation, written *AgentEventsRunStats) error {
-			if conversation.messages[0].hash != "scored" {
-				return errors.New("saved an unscored conversation")
-			}
-			if conversation.id == "first" {
-				close(writing)
-				select {
-				case <-releaseWrite:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}
-			written.Stored++
-			return nil
-		},
-	}
-	done := make(chan error, 1)
-	go func() { done <- pipeline.run(ctx, cancel, jobs) }()
-	select {
-	case <-scoredDuringWrite:
-		close(releaseWrite)
-	case err := <-done:
-		t.Fatalf("pipeline ended before overlapping stages: %v", err)
-	case <-ctx.Done():
-		t.Fatal("preparation, inference and persistence did not overlap")
-	}
-	if err := <-done; err != nil || stats.ConversationsBuilt != 3 || stats.Candidates != 3 || stats.Stored != 3 {
-		t.Fatalf("overlapping stages: %+v %v", stats, err)
+		})
 	}
 }
 
@@ -629,8 +760,8 @@ func TestAgentEventsPipelineBoundsPreparedWork(t *testing.T) {
 			}
 			stats := &AgentEventsRunStats{}
 			pipeline := agentEventsPipeline{
-				stats: stats, progress: func(string, ...any) {},
-				build: func(job *agentEventsConversation) (*agentEventsConversation, error) {
+				stats: stats, workers: 3, progress: func(string, ...any) {},
+				build: func(_ context.Context, _ int, job *agentEventsConversation) (*agentEventsConversation, error) {
 					n := retained.Add(1)
 					for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
 					}
@@ -652,9 +783,11 @@ func TestAgentEventsPipelineBoundsPreparedWork(t *testing.T) {
 					t.Fatal("the backlog work list retained prepared message rows")
 				}
 			}
-			// Three windows of rows/bookkeeping, plus one conversation being
-			// built. An oversized conversation occupies the whole budget.
-			limit := 12/min(2+rows, 12) + 1
+			// Three unscored windows, three conversations being built, and
+			// three scored windows at the bounded writer. Each scored
+			// window can retain one oversized conversation, without tokens.
+			perWindow := max(1, (4+1+rows)/(2+rows))
+			limit := 12/min(2+rows, 12) + 3 + 3*perWindow
 			if got := peak.Load(); got > int32(limit) || retained.Load() != 0 {
 				t.Fatalf("retained %d conversations (peak %d), limit %d", retained.Load(), got, limit)
 			}
@@ -664,40 +797,57 @@ func TestAgentEventsPipelineBoundsPreparedWork(t *testing.T) {
 
 func TestAgentEventsPipelineFailureCancelsOtherStages(t *testing.T) {
 	override(t, &agentEventsChunkRows, 3)
-	for _, stage := range []string{"inference", "writer", "writer panic", "stop"} {
+	for _, stage := range []string{"inference", "inference while saving", "writer", "writer panic", "stop", "stop rollback"} {
 		t.Run(stage, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			failure := errors.New("injected " + stage + " failure")
+			saving := make(chan struct{})
 			jobs := make([]*agentEventsConversation, 12)
 			for i := range jobs {
 				jobs[i] = &agentEventsConversation{id: strconv.Itoa(i)}
 			}
 			pipeline := agentEventsPipeline{
-				stats: &AgentEventsRunStats{}, progress: func(string, ...any) {},
-				build: func(job *agentEventsConversation) (*agentEventsConversation, error) {
+				stats: &AgentEventsRunStats{}, workers: 3, progress: func(string, ...any) {},
+				build: func(_ context.Context, _ int, job *agentEventsConversation) (*agentEventsConversation, error) {
 					job.messages = []*agentEventsMessage{{rows: make([]labelrt.Framed, 1)}}
 					return job, nil
 				},
-				infer: func([]*agentEventsConversation) error {
+				infer: func(conversations []*agentEventsConversation) error {
 					if stage == "inference" {
 						return failure
+					}
+					if stage == "inference while saving" && conversations[0].id != "0" {
+						select {
+						case <-saving:
+							return failure
+						case <-ctx.Done():
+							return ctx.Err()
+						}
 					}
 					return ctx.Err()
 				},
 				store: func(*agentEventsConversation, *AgentEventsRunStats) error {
+					if stage == "inference while saving" {
+						close(saving)
+						<-ctx.Done()
+						return sql.ErrTxDone
+					}
 					if stage == "writer panic" {
 						panic(failure)
 					}
-					if stage == "stop" {
+					if stage == "stop" || stage == "stop rollback" {
 						cancel()
+						if stage == "stop rollback" {
+							return sql.ErrTxDone
+						}
 						return ctx.Err()
 					}
 					return failure
 				},
 			}
 			want := failure
-			if stage == "stop" {
+			if stage == "stop" || stage == "stop rollback" {
 				want = context.Canceled
 			}
 			err := pipeline.run(ctx, cancel, jobs)
@@ -721,7 +871,7 @@ func TestAgentEventsFailedSaveRollsBackAndResumes(t *testing.T) {
 		SELECT RAISE(ABORT,'injected save failure'); END`)
 	opts := AgentEventsRunOptions{Conversations: []string{"c-events"}}
 	stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, opts)
-	if err == nil || !strings.Contains(err.Error(), "injected save failure") || stats.Stored != 0 || stats.Events != 0 {
+	if err == nil || !strings.Contains(err.Error(), "injected save failure") || stats.Stored != 0 || stats.Events != 0 || stats.progress.conversations != 0 || stats.progress.messages != 0 {
 		t.Fatalf("failed save: %+v %v", stats, err)
 	}
 	for _, table := range []string{"agent_events", "agent_event_messages", "agent_events_conversations"} {
@@ -754,5 +904,338 @@ func TestAgentEventsPipelineUsesOperationIOPriority(t *testing.T) {
 		if got := wrapped.Load() > 0; got != (priority == priorityBackground) {
 			t.Fatalf("%s pipeline ran at utility IO: %v", priority, got)
 		}
+	}
+}
+
+func TestAgentEventsParallelPreparationMatchesSerial(t *testing.T) {
+	labels, settings := agentEventsTestSettings(t)
+	var wantMessages, wantEvents []map[string]any
+	for _, threads := range []int{1, 4} {
+		catalog := agentEventsCatalog(t)
+		labels.Threads = threads
+		stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+		if err != nil || !stats.Complete || stats.ConversationsFailed != 0 {
+			t.Fatalf("threads=%d: %+v %v", threads, stats, err)
+		}
+		messages, err := queryMaps(catalog.DB, `SELECT message_id,conversation_id,source,occurred_at,day,candidates,events,input_hash FROM agent_event_messages ORDER BY message_id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		events, err := queryMaps(catalog.DB, `SELECT message_id,family,probability,sentence_start,sentence_end,sentence,subject,response,subject_ranges,response_ranges FROM agent_events ORDER BY message_id,family,sentence_start`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if threads == 1 {
+			wantMessages, wantEvents = messages, events
+		} else if len(messages) == 0 || !reflect.DeepEqual(messages, wantMessages) || !reflect.DeepEqual(events, wantEvents) {
+			t.Fatalf("parallel preparation changed messages or events:\n%v\n%v", messages, events)
+		}
+	}
+}
+
+// agentEventsStepDone runs a session step and requires every selected
+// conversation done, each current by the ledger alone.
+func agentEventsStepDone(t *testing.T, catalog *Catalog, session *agentEventsSession, ids ...string) {
+	t.Helper()
+	step, err := session.Run(t.Context(), ids, 0)
+	if err != nil || len(step.Done) != len(workDomainIDs(ids)) {
+		t.Fatalf("step over %v: %+v %v", ids, step, err)
+	}
+	current, err := catalog.agentEventsCurrentFor(t.Context(), step.Done, session.Identity(), agentEventsHorizon(session.Since()), true)
+	if err != nil || len(current) != len(step.Done) {
+		t.Fatalf("done but not current: %v of %v (%v)", current, step.Done, err)
+	}
+}
+
+// agentEventsDrain steps through the library queue until it is empty and
+// returns what it scored, in page order.
+func agentEventsDrain(t *testing.T, catalog *Catalog, session *agentEventsSession) []string {
+	t.Helper()
+	drained := []string{}
+	for range 50 {
+		page, err := session.PendingPage(t.Context(), "", 4, nil)
+		if err != nil || page.Rediscover {
+			t.Fatalf("a page: %+v %v", page, err)
+		}
+		if len(page.IDs()) == 0 {
+			return drained
+		}
+		agentEventsStepDone(t, catalog, session, page.IDs()...)
+		drained = append(drained, page.IDs()...)
+	}
+	t.Fatal("the queue never emptied")
+	return nil
+}
+
+// A session scores the library in bounded steps with one context, one
+// discovery and one warm worker, and reaches what a classic run reaches.
+// Changes after discovery mark every live fork first (one created since
+// included), a revision during a step survives it, and a deleted
+// conversation goes back through discovery.
+func TestAgentEventsSessionScoresSelectedConversations(t *testing.T) {
+	catalog := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
+	t.Setenv(labelertest.FakeHelloEnv, hellos)
+	session, err := catalog.newAgentEventsSession(labels, settings, workAllocation{CPUs: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step, err := session.Run(t.Context(), []string{"c-events"}, 0); err != nil || !step.Rediscover {
+		t.Fatalf("a step before discovery: %+v %v", step, err)
+	}
+	if page, err := session.PendingPage(t.Context(), "", 4, nil); err != nil || !page.Rediscover {
+		t.Fatalf("a page before discovery: %+v %v", page, err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if step, err := session.Run(t.Context(), nil, 0); err != nil || len(step.Done)+len(step.Remaining) != 0 {
+		t.Fatalf("an empty selection did work: %+v %v", step, err)
+	}
+	if page, err := session.PendingPage(t.Context(), "", 1, nil); err != nil || !slices.Equal(page.IDs(), []string{"c-events"}) {
+		t.Fatalf("the newest conversation is not first: %+v %v", page, err)
+	}
+	drained := agentEventsDrain(t, catalog, session)
+	if pending, err := session.PendingFor(t.Context(), drained); err != nil || len(pending) != 0 {
+		t.Fatalf("still pending: %v %v", pending, err)
+	}
+	if ready, err := catalog.agentEventsReadyFor(t.Context(), drained, session.Identity(), session.Since()); err != nil || len(ready) != len(drained) {
+		t.Fatalf("ready: %v of %v (%v)", ready, drained, err)
+	}
+	if session.contexts != 1 || session.discoveries != 1 || len(labelerHelloThreads(t, hellos)) != 1 {
+		t.Fatalf("steps rebuilt the context %d times, discovered %d times, started workers %v", session.contexts, session.discoveries, labelerHelloThreads(t, hellos))
+	}
+	classic, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+	if err != nil || !classic.Complete || classic.ConversationsBuilt != 0 || classic.MessagesScored != 0 {
+		t.Fatalf("a classic run after the session: %+v %v", classic, err)
+	}
+
+	// A fork created after discovery and built by a step follows its parent,
+	// as the forks discovery saw do. It joins c-root's execution, which the
+	// context resolved without it, so the step discovers again first.
+	execTx(t, catalog.DB, `INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,started_at) VALUES('c-fork-late','ws-main','codex','local','c-fork-late','c-root',0,'2026-09-02T13:00:00.000Z')`)
+	if step, err := session.Run(t.Context(), []string{"c-fork-late"}, 0); err != nil || !step.Rediscover || session.Discovered() {
+		t.Fatalf("a late fork built with a context that never resolved it: %+v %v", step, err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	agentEventsStepDone(t, catalog, session, "c-fork-late")
+	if token := agentEventsDirtyToken(t, catalog, "c-fork-late"); token != "" {
+		t.Fatalf("the late fork is dirty before its parent changed: %q", token)
+	}
+	execTx(t, catalog.DB, `UPDATE messages SET text='I will look into the export button first.' WHERE id='m-a1'`,
+		`CREATE TRIGGER fail_event_fork_mark BEFORE INSERT ON agent_events_dirty WHEN NEW.conversation_id='c-fork3' BEGIN SELECT RAISE(ABORT,'test fork mark failure'); END`)
+	if _, err := session.Run(t.Context(), []string{"c-root"}, 0); err == nil || session.Discovered() {
+		t.Fatalf("a failed fork mark kept adopted input state: %v", err)
+	}
+	execTx(t, catalog.DB, `DROP TRIGGER fail_event_fork_mark`)
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	agentEventsStepDone(t, catalog, session, "c-root")
+	for _, id := range []string{"c-fork3", "c-fork-late"} {
+		if agentEventsDirtyToken(t, catalog, id) == "" {
+			t.Fatalf("a change of c-root left %s without a mark", id)
+		}
+	}
+	if forks := agentEventsDrain(t, catalog, session); !slices.Contains(forks, "c-fork3") || !slices.Contains(forks, "c-fork-late") {
+		t.Fatalf("the queue did not offer the marked forks: %v", forks)
+	}
+
+	// A revision during a step: its rows are stored, its newer mark stays.
+	execTx(t, catalog.DB, `UPDATE messages SET text='That workaround didn''t help either.' WHERE id='m-ev-reply'`)
+	session.beforeRun = func(context.Context) {
+		execTx(t, catalog.DB, `UPDATE messages SET text='That workaround didn''t help at all.' WHERE id='m-ev-reply'`)
+	}
+	if step, err := session.Run(t.Context(), []string{"c-events"}, 0); err != nil || !slices.Equal(step.Superseded, []string{"c-events"}) || agentEventsDirtyToken(t, catalog, "c-events") == "" {
+		t.Fatalf("a superseded step: %+v %v", step, err)
+	}
+	session.beforeRun = nil
+	agentEventsStepDone(t, catalog, session, "c-events")
+
+	// The locks are taken per call.
+	catalog.agentEventsRun.Lock()
+	if _, err := session.Run(t.Context(), []string{"c-events"}, 0); !errors.Is(err, errAgentEventsRunning) {
+		t.Fatalf("a step while another run holds the pass: %v", err)
+	}
+	catalog.agentEventsRun.Unlock()
+
+	// A deleted conversation: discovery removes its rows first.
+	execTx(t, catalog.DB, `DELETE FROM messages WHERE conversation_id='c-daily1'`, `DELETE FROM conversations WHERE id='c-daily1'`)
+	if step, err := session.Run(t.Context(), []string{"c-daily1"}, 0); err != nil || !step.Rediscover || len(step.Done) != 0 {
+		t.Fatalf("a deleted conversation: %+v %v", step, err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	agentEventsStepDone(t, catalog, session, "c-daily1")
+	var left int
+	if err := catalog.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM agent_events_conversations WHERE conversation_id='c-daily1')+(SELECT COUNT(*) FROM agent_events_dirty WHERE conversation_id='c-daily1')`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("a deleted conversation kept %d ledger rows (%v)", left, err)
+	}
+
+	if full, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Full: true}); err != nil || full.MessagesScored != 0 || full.MessagesRemoved != 0 {
+		t.Fatalf("session steps differ from a full run: %+v %v", full, err)
+	}
+	// Execution evidence alone changes after discovery, by a writer that
+	// marks nothing: a step discovers again, and discovery propagates the
+	// change before it reads the ledger.
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, catalog.DB, `INSERT INTO origin_observations(conversation_id,evidence_key,priority,evidence,parent_native_id,parent_provider,parent_account)
+		SELECT 'c-daily2','late-link',1,'test',native_id,provider,account FROM conversations WHERE id='c-late'`)
+	if step, err := session.Run(t.Context(), []string{"c-daily2"}, 0); err != nil || !step.Rediscover || session.Discovered() {
+		t.Fatalf("a step after its execution evidence changed: %+v %v", step, err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if behind, err := executionDependentsBehind(t.Context(), catalog.reader()); err != nil || behind != 0 || agentEventsDirtyToken(t, catalog, "c-daily2") == "" {
+		t.Fatalf("discovery did not propagate the change (%d behind, %v)", behind, err)
+	}
+	agentEventsStepDone(t, catalog, session, "c-daily2")
+	// A job a step enrolls itself carries its context's digest, so
+	// publication keeps it rather than requeue it.
+	execTx(t, catalog.DB, `UPDATE messages SET text=text||' (edited)' WHERE id='m-d2'`)
+	agentEventsStepDone(t, catalog, session, "c-daily2")
+	if token := agentEventsDirtyToken(t, catalog, "c-daily2"); token != "" {
+		t.Fatalf("a step's own enrollment was requeued: %q", token)
+	}
+	// A changed verifier needs a new session.
+	manifest := filepath.Join(settings.ModelDir, "manifest.json")
+	raw, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, append(raw, ' '), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Run(t.Context(), []string{"c-events"}, 0); !errors.Is(err, errAgentEventsSessionStale) || session.Discovered() {
+		t.Fatalf("a step after the verifier changed: %v", err)
+	}
+}
+
+func agentEventsDirtyToken(t *testing.T, catalog *Catalog, id string) string {
+	t.Helper()
+	var token string
+	if err := catalog.DB.QueryRow(`SELECT COALESCE((SELECT token FROM agent_events_dirty WHERE conversation_id=?),'')`, id).Scan(&token); err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+// The scheduled task derives the pass's labeler settings once, for the
+// power it runs on; the session takes them as given. Deriving them again
+// from agent_events_threads would undo the battery limit (M1).
+func TestAgentEventsSessionKeepsTheBatteryLimit(t *testing.T) {
+	catalog := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	labels.Threads, settings.Threads = 4, 8
+	derived, bulk := labelsForPower(settings.labeler(labels), powerState{Battery: true, OnBattery: true})
+	if bulk || derived.Threads != labelsBatteryThreads {
+		t.Fatalf("battery settings: %+v", derived)
+	}
+	session, err := catalog.newAgentEventsSession(derived, settings, workAllocation{CPUs: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.labels.Threads != labelsBatteryThreads || session.labels.ThreadBudget != derived.ThreadBudget {
+		t.Fatalf("the session re-derived its settings: %+v", session.labels)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if session.labels.Threads > labelsBatteryThreads {
+		t.Fatalf("the worker runs %d threads on battery", session.labels.Threads)
+	}
+}
+
+// One CPU still scores everything: a one-thread worker, preparation and
+// inference in turn, and a message limit that cuts a step between
+// conversations without losing any.
+func TestAgentEventsSessionAtOneCPU(t *testing.T) {
+	catalog := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	labels.Threads = 4
+	hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
+	t.Setenv(labelertest.FakeHelloEnv, hellos)
+	session, err := catalog.newAgentEventsSession(labels, settings, workAllocation{CPUs: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	page, err := session.PendingPage(t.Context(), "", 100, nil)
+	if err != nil || len(page.IDs()) < 2 {
+		t.Fatalf("the queue: %+v %v", page, err)
+	}
+	cut, err := session.Run(t.Context(), page.IDs(), 1)
+	if err != nil || !session.last.Cut || len(cut.Remaining) == 0 || len(cut.Failed) != 0 || len(cut.Done) == 0 {
+		t.Fatalf("a limited step: %+v %v (%+v)", cut, err, session.last)
+	}
+	agentEventsDrain(t, catalog, session)
+	if !session.serial || session.prep != 1 || session.labels.Threads != 1 || !slices.Equal(labelerHelloThreads(t, hellos), []int{1}) {
+		t.Fatalf("one CPU used workers with threads %v (serial %v, prep %d)", labelerHelloThreads(t, hellos), session.serial, session.prep)
+	}
+	if classic, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{}); err != nil || classic.MessagesScored != 0 || !classic.Complete {
+		t.Fatalf("a classic run after the session: %+v %v", classic, err)
+	}
+}
+
+// A stopped step kills its workers before it returns, keeps what it stored,
+// and leaves the rest pending for the next step.
+func TestAgentEventsSessionStopKillsTheWorkers(t *testing.T) {
+	catalog := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	t.Setenv(labelertest.FakeWorkerEnv, "slow")
+	override(t, &agentEventsChunkRows, 1)
+	session, err := catalog.newAgentEventsSession(labels, settings, workAllocation{CPUs: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	page, err := session.PendingPage(t.Context(), "", 100, nil)
+	if err != nil || !slices.Contains(page.IDs(), "c-daily1") || !slices.Contains(page.IDs(), "c-events") {
+		t.Fatalf("the queue: %+v %v", page, err)
+	}
+	// A conversation with nothing to score is stored first, while the next
+	// one's candidates are at the slow worker.
+	ids := append([]string{"c-daily1", "c-events"}, slices.DeleteFunc(slices.Clone(page.IDs()), func(id string) bool { return id == "c-daily1" || id == "c-events" })...)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	type result struct {
+		step workDomainStep
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		step, err := session.Run(ctx, ids, 0)
+		done <- result{step, err}
+	}()
+	var kept int
+	waitUntil(t, 5*time.Second, "the session to save a conversation", func() bool {
+		return catalog.reader().QueryRow(`SELECT COUNT(*) FROM agent_events_conversations WHERE conversation_id='c-daily1'`).Scan(&kept) == nil && kept > 0
+	})
+	cancel()
+	stopped := <-done
+	if !errors.Is(stopped.err, context.Canceled) || len(stopped.step.Done)+len(stopped.step.Remaining) != len(ids) || !slices.Contains(stopped.step.Remaining, "c-events") {
+		t.Fatalf("a stopped step: %+v %v", stopped.step, stopped.err)
+	}
+	if _, _, runners := catalog.labelerManager(labels).Usage(); runners != 0 {
+		t.Fatalf("%d runners kept after a stop", runners)
+	}
+	if err := catalog.reader().QueryRow(`SELECT COUNT(*) FROM agent_events_conversations`).Scan(&kept); err != nil || kept != len(stopped.step.Done) {
+		t.Fatalf("%d conversations stored for %d done (%v)", kept, len(stopped.step.Done), err)
+	}
+	t.Setenv(labelertest.FakeWorkerEnv, "ok")
+	agentEventsStepDone(t, catalog, session, stopped.step.Remaining...)
+	if classic, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{}); err != nil || classic.MessagesScored != 0 || !classic.Complete {
+		t.Fatalf("a classic run after the session: %+v %v", classic, err)
 	}
 }

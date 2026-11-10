@@ -3,11 +3,11 @@ import { sidebarWidth } from "./workspace-inbox-model";
 import { preferences } from "./preferences";
 import { focusPageContent } from "./page-focus";
 import "./workspace-inbox.css";
+import "./sidebar-toggle.css";
 
 type InboxProps = {
   root: HTMLElement;
   workspace: string;
-  title: string;
   overview: HTMLElement[];
   reader: HTMLElement;
   onOverview: () => void;
@@ -18,7 +18,6 @@ export type WorkspaceInbox = {
   element: HTMLElement;
   overview: HTMLElement;
   reader: HTMLElement;
-  heading: HTMLElement;
   // The overview's content, which leads the reader while merged.
   lead: HTMLElement;
   viewing: boolean;
@@ -39,6 +38,23 @@ function button(text: string, label = text) {
   return element;
 }
 
+function sidebarButton(label: string) {
+  const element = button("", label);
+  element.className = "sidebar-toggle workspace-sidebar-toggle";
+  element.title = label;
+  element.dataset.viewField = "sidebar_visible";
+  element.setAttribute("aria-controls", "workspaceSessions");
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add("app-icon");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const use = document.createElementNS(svg.namespaceURI, "use");
+  use.setAttribute("href", "#ph-icon-sidebar");
+  svg.append(use);
+  element.append(svg);
+  return element;
+}
+
 function mountInbox(props: InboxProps): WorkspaceInbox {
   const { root, reader } = props;
   const page = root.closest<HTMLElement>(".view")!;
@@ -46,20 +62,21 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   element.className = "workspace-inbox";
   const overview = document.createElement("section");
   overview.className = "workspace-overview";
+  overview.id = "workspaceSessions";
   overview.setAttribute("aria-label", "Workspace overview");
   const overviewContent = document.createElement("div");
   overviewContent.className = "workspace-overview-content";
   const navBar = document.createElement("div");
   navBar.className = "workspace-nav-bar";
   const libraryBack = page.querySelector<HTMLElement>("#back");
-  const fullOverview = button("← Workspace overview", "Open workspace overview");
-  const close = button("×", "Close workspace sessions");
+  const fullOverview = button("Workspace overview", "Open workspace overview");
+  const close = sidebarButton("Hide agent sessions");
   fullOverview.onclick = props.onOverview;
   navBar.append(fullOverview, close);
   if (libraryBack) overviewContent.append(libraryBack);
-  overviewContent.append(navBar, ...props.overview);
-  overview.append(overviewContent);
-  const divider = button("", "Resize workspace sessions sidebar");
+  overviewContent.append(...props.overview);
+  overview.append(navBar, overviewContent);
+  const divider = button("", "Resize agent sessions sidebar");
   divider.className = "workspace-divider";divider.dataset.viewField="sidebar_width";
   divider.setAttribute("role", "separator");
   divider.setAttribute("aria-orientation", "vertical");
@@ -67,22 +84,12 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   const viewer = document.createElement("section");
   viewer.className = "workspace-reader";
   viewer.setAttribute("aria-label", "Conversation viewer");
-  const bar = document.createElement("header");
-  bar.className = "workspace-reader-bar";
-  const breadcrumb = button("←", "Open workspace overview");
-  breadcrumb.className = "workspace-reader-workspace";
-  breadcrumb.title = `Workspace overview · ${props.title}`;
-  breadcrumb.onclick = props.onOverview;
-  const heading = document.createElement("div");
-  heading.className = "workspace-reader-heading";
-  const sessions = button("Workspace Sessions", "Show workspace sessions");
-  sessions.className = "workspace-sessions-button";
+  const sessions = sidebarButton("Show agent sessions");
   sessions.setAttribute("aria-expanded", "false");
-  const backdrop = button("", "Close workspace sessions");
+  const backdrop = button("", "Close agent sessions");
   backdrop.className = "workspace-nav-backdrop";
-  bar.append(breadcrumb, heading, sessions);
   reader.classList.add("workspace-reader-content");
-  viewer.append(bar, reader);
+  viewer.append(sessions, reader);
   element.append(overview, divider, viewer, backdrop);
   root.replaceChildren(element);
   page.classList.add("workspace-page");
@@ -110,6 +117,7 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
     element.classList.toggle("merged", api.merged);
     element.classList.toggle("navigator-hidden", split && !mobile.matches && hidden);
     element.classList.toggle("sessions-open", split && mobile.matches && sheet);
+    element.classList.toggle("sidebar-collapsed", split && !visible);
     element.style.setProperty("--workspace-nav-width", `${clamped(width)}px`);
     const compact = split && (mobile.matches || (!hidden && clamped(width) < 720));
     element.classList.toggle("compact", compact);
@@ -120,15 +128,15 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
     if (split && mobile.matches && sheet) {
       overview.setAttribute("role", "dialog");
       overview.setAttribute("aria-modal", "true");
-      overview.setAttribute("aria-label", "Workspace sessions");
+      overview.setAttribute("aria-label", "Agent sessions");
     } else {
       overview.removeAttribute("role");
       overview.removeAttribute("aria-modal");
       overview.setAttribute("aria-label", "Workspace overview");
     }
     sessions.setAttribute("aria-expanded", String(visible));
-    sessions.setAttribute("aria-label", visible ? "Hide workspace sessions" : "Show workspace sessions");
-    sessions.textContent = visible ? "Hide sessions" : "Workspace Sessions";
+    close.setAttribute("aria-expanded", String(visible));
+    sessions.hidden = !split || visible;
     divider.setAttribute("aria-valuemin", "300");
     divider.setAttribute("aria-valuemax", String(Math.round(clamped(element.clientWidth))));
     divider.setAttribute("aria-valuenow", String(Math.round(clamped(width))));
@@ -139,7 +147,7 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
     element.classList.toggle("reader-narrow", narrow);
     document.body.classList.toggle("workspace-reader-narrow", narrow);
     if (viewing) {
-      const top = api.merged ? viewer.getBoundingClientRect().top : bar.getBoundingClientRect().bottom;
+      const top = viewer.getBoundingClientRect().top;
       document.documentElement.style.setProperty("--conversation-rail-top", `${Math.ceil(top + 5)}px`);
       document.documentElement.style.setProperty("--workspace-reader-width", `${viewer.clientWidth}px`);
     }
@@ -162,7 +170,6 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
     element,
     overview,
     reader,
-    heading,
     lead: overviewContent,
     viewing: false,
     merged: false,
@@ -214,11 +221,7 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
       if (libraryBack) page.insertBefore(libraryBack, root);
     },
   };
-  sessions.dataset.viewField="sidebar_visible";
-  sessions.onclick = () => {
-    if (mobile.matches ? sheet : !hidden) closeSheet();
-    else api.showSessions();
-  };
+  sessions.onclick = api.showSessions;
   close.onclick = backdrop.onclick = closeSheet;
   divider.onpointerdown = event => {
     if (event.button !== 0) return;
@@ -265,7 +268,6 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   const observer = new ResizeObserver(update);
   observer.observe(element);
   observer.observe(viewer);
-  observer.observe(bar);
   mobile.addEventListener("change", update);
   window.addEventListener("resize", update);
   document.addEventListener("keydown", key);

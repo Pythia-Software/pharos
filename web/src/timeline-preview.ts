@@ -1,3 +1,6 @@
+/** Remove surrounding whitespace only from a displayed message excerpt. */
+export function trimTimelineSnippet(text:string):string{return text.trim();}
+
 /** Display known content envelopes without rewriting retained source text.
  * Unknown structured data stays visible, including fields beside a text field. */
 export function timelinePreviewText(text:string,{input=false,unwrap=true}:{input?:boolean;unwrap?:boolean}={}):string{

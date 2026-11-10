@@ -25,9 +25,12 @@ export const thinkingBreakdowns = [
   ["none", "None · all requests"],
   ["model", "Model"],
   ["model_effort", "Model + effort"],
-  ["provider", "Agent family"],
+  ["speed", "Speed"],
+  ["model_speed", "Model + speed"],
+  ["model_effort_speed", "Model + effort + speed"],
+  ["provider", "Provider"],
   ["effort", "Effort"],
-  ["harness", "Agent / harness"],
+  ["harness", "Agent app"],
   ["project", "Project"],
   ["machine", "Machine"],
   ["preceding_tool", "Preceding tool"],
@@ -250,7 +253,7 @@ export function thinkingRequest(
   }
   if (overview) {
     q.set("overview", "1");
-    q.set("groupBy", "model");
+    q.set("groupBy", state.groupBy === "none" ? "model" : state.groupBy);
     q.set("view", "histogram");
     q.set("minimum", "0");
   }

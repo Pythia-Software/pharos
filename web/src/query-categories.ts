@@ -16,13 +16,18 @@ export const queryCategories = {
   skills: { label: "Skills", tone: "var(--gold)" },
   tools: { label: "Tool Flow", tone: "color-mix(in srgb,var(--gold) 65%,var(--warn))" },
   delegation: { label: "Delegation", tone: "var(--heat-2)" },
-  views: { label: "Work Views", tone: "var(--muted)" },
+  views: { label: "Workspace Views", tone: "var(--muted)" },
   machines: { label: "Machine Time", tone: "var(--heat-1)" },
+  sessions: { label: "Session Shape", tone: "color-mix(in srgb,var(--sea) 55%,var(--muted))" },
   carbon: { label: "Carbon", tone: "var(--sea)" },
   safety: { label: "Risky actions", tone: "var(--gold)" },
   findings: { label: "Findings", tone: "var(--gold)" },
   library: { label: "Search", tone: "color-mix(in srgb,var(--muted) 70%,var(--sea))" },
   tl1: { label: "TL1", tone: "color-mix(in srgb,var(--heat-2) 70%,var(--warn))" },
+  agent_events: { label: "Agent Events", tone: "color-mix(in srgb,var(--sea) 55%,var(--warn))" },
+  // This week against the ones before: new and returning Fixes, safeguards
+  // got around, friction by week (digest-card-recipes.ts).
+  digest: { label: "Weekly digest", tone: "color-mix(in srgb,var(--sea) 45%,var(--gold))" },
 } as const;
 export type QueryCategory = keyof typeof queryCategories;
 
@@ -38,8 +43,11 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   const has = (...names: string[]) => names.some(name => fields.has(name));
   if (dataset === "findings") return "findings";
   if (dataset === "safety") return "safety";
+  if (dataset === "fixes") return "findings";
+  if (dataset === "agent_events" || dataset === "agent_event_messages" || dataset === "agent_event_rates") return "agent_events";
   if (dataset === "parallelism" || dataset === "rhythm") return "machines";
-  if (dataset === "model_requests") return "thinking";
+  if (dataset === "session_shape") return "sessions";
+  if ((dataset === "model_requests" || dataset === "compactions")) return "thinking";
   if (has("co2e_g", "co2e_kg", "energy_wh", "energy_kwh", "carbon_tier")) return "carbon";
   if (has("cost_usd", "cost_today_usd")) return "cost";
   if (has("error_count", "error_signature", "tool_error_count", "error_types", "test_failure") || predicates.some(term => term.field === "status" && term.op === "=" && term.value === "error")) return "errors";
@@ -55,5 +63,5 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   if (has("token_count", "total_tokens") || dataset === "usage") return "usage";
   if (dataset === "tool_calls" || dataset === "tools" || dataset === "mcp_calls") return "tools";
   if (dataset === "tl1_attempts") return "delegation";
-  return "views";
+  return dataset === "messages" ? "library" : "views";
 }

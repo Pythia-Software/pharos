@@ -54,7 +54,7 @@ export const agentEventsAnalysisCatalog: AnalysisCatalog = {
     message: { label: "Agent message", plural: "Agent messages", key: "message_id", where: present("message_id"), breakdowns: { source: ["source"], project_name: ["project_name"], provider: ["provider"] },
       note: "An agent message is one visible reply or one thinking block; its events of a kind form one observation." },
     conversation: { label: "Agent conversation", plural: "Agent conversations", key: "conversation_id", where: present("conversation_id"), breakdowns: { project_name: ["project_name"], provider: ["provider"] },
-      note: "An agent conversation is one recorded agent transcript; delegated subagents are conversations of their own." },
+      note: "An agent conversation is one recorded agent transcript; delegated sub-agents are conversations of their own." },
   },
   cycle: { hour: { kind: "timestamp", field: "occurred_at" }, weekday: { kind: "timestamp", field: "occurred_at" } },
   periods: { day: "day", week: "week", month: "month" }, timestamp: "occurred_at",

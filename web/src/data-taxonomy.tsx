@@ -1,15 +1,20 @@
+import { DataReadinessIndicator } from "./data-readiness";
 import { useViewEntry, useViewState } from "./view-state";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { QueryBuilder, QueryFilterRow, type QueryBuilderProps } from "@pythia-software/query-table-ui";
 import type { QueryFilterApi } from "@pythia-software/query-table-react";
 import { Icon } from "./icons";
-import { dataEntities, dataSources, describeDataSource, type DataEntity, type DataSource } from "./data-taxonomy-model";
+import { dataEntities, dataEntityGroups, dataGuideSelectionKeys, dataSources, describeDataSource, resolveGuideEntity, type DataEntity, type DataGuideSelection, type DataSource } from "./data-taxonomy-model";
+import { DataGuideExample, guideSceneForEntity } from "./data-guide-examples";
 import { readConcurrencySettings } from "./concurrency-settings";
+import { NavigationItems } from "./app-navigation";
+import { toggleNavigationSection, type NavigationExpansion } from "./app-navigation-model";
+import { DashboardSelect } from "./dashboard-select";
 import "./data-taxonomy.css";
 
 // Any page (including the classic shell) can open the single shared guide.
-export function openDataTaxonomy(dataset: DataSource = "library", invoker?: HTMLElement) {
-  window.dispatchEvent(new CustomEvent("pharos:open-data-guide", { detail: { dataset, invoker } }));
+export function openDataTaxonomy(dataset?: DataSource, invoker?: HTMLElement, entity?: DataGuideSelection) {
+  window.dispatchEvent(new CustomEvent("pharos:open-data-guide", { detail: { dataset, invoker, entity } }));
 }
 
 function useDataSource(dataset: DataSource) {
@@ -27,7 +32,7 @@ function SourceStatement({ dataset }: { dataset: DataSource }) {
   const source = useDataSource(dataset);
   return <div className="qt-qb-row data-source-statement">
     <span className="qt-qb-kw">FROM</span>
-    <a className="data-source-link" href={`#data-guide-${source.entity}`} aria-haspopup="dialog" onClick={event => { event.preventDefault(); openDataTaxonomy(dataset, event.currentTarget); }}>{source.label}<Icon name="info" /></a>
+    <a className="data-source-link" href={`#data-guide-${source.entity}`} title={source.grain} aria-description={source.grain} aria-haspopup="dialog" onClick={event => { event.preventDefault(); openDataTaxonomy(dataset, event.currentTarget); }}>{source.label}<Icon name="info" /></a>
   </div>;
 }
 
@@ -42,40 +47,92 @@ export function SourceQueryBuilder<Row>({ dataset, whereRow, ...props }: QueryBu
   const sourceFilters = useMemo(() => new Proxy({} as QueryFilterApi<Row>, {
     get: (_, property) => Reflect.get(currentApi.current.query.grouping ? currentApi.current.grouping!.source : currentApi.current, property),
   }), []);
-  return <div className="data-source-query" data-pharos-target={`control:q_${dataset}`}><QueryBuilder {...props} collapsed={props.collapsed??collapsed} onCollapsedChange={props.onCollapsedChange??setCollapsed} whereRow={<>
-    {dataset !== "findings" && dataset !== "safety" ? <SourceStatement dataset={dataset} /> : null}
+  return <div className="data-source-query" data-pharos-target={`control:q_${dataset}`}><QueryBuilder {...props} collapsed={props.collapsed??collapsed} onCollapsedChange={props.onCollapsedChange??setCollapsed} runActionsBeforeActivity={<DataReadinessIndicator id={`query:${dataset}`} title={dataSources[dataset].label} dataset={dataset} query={props.api.query} empty={props.api.execution?.rows==="succeeded"&&!props.api.loading&&!props.api.error&&props.api.rows.length===0} className="qt-btn query-table-readiness" />} whereRow={<>
+    {dataset !== "findings" && dataset !== "safety" && dataset !== "fixes" ? <SourceStatement dataset={dataset} /> : null}
     {whereRow ?? <QueryFilterRow api={sourceFilters} fields={props.api.query.grouping ? props.api.grouping!.source.schema.fields : props.fields} />}
   </>} /></div>;
 }
 
 export function DataTaxonomyModal() {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [sourceDataset,setSourceDataset]=useViewState<DataSource>("guide_dataset","library");
-  const source=useDataSource(sourceDataset);
-  const [entity, setEntity] = useViewState<DataEntity>("guide_entity", "workspaces");
+  const content = useRef<HTMLDivElement>(null);
+  const termNavigation = useRef<HTMLElement>(null);
+  const termPicker = useRef<HTMLLabelElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  const [,setSourceDataset]=useViewState<DataSource>("guide_dataset","library");
+  const [selection, setEntity] = useViewState<DataGuideSelection>("guide_entity", "conversations");
+  const entity = resolveGuideEntity(selection);
+  const scene = guideSceneForEntity(entity);
   const [conversation, setConversation] = useViewState("guide_example", "implementation");
+  const [expanded, setExpanded] = useViewState<NavigationExpansion>("nav_expanded", {});
+  const pages = dataEntityGroups.map(group => ({ id: group.id, label: group.label, children: group.entities.map(key => ({ id: key, label: dataEntities[key].label, href: `#data-guide-${key}` })) }));
   const [shown,setShown] = useViewState("guide_open",false);
+  const rememberFocus = () => {
+    const active = document.activeElement;
+    previousFocus.current = active instanceof HTMLElement && dialog.current?.contains(active) ? active : null;
+  };
+  const selectEntity = (next: DataEntity) => { if (next === entity) return; rememberFocus(); setEntity(next); };
+  const selectConversation = (next: "implementation" | "review") => { if (next === conversation && entity === "conversations") return; rememberFocus(); setConversation(next); setEntity("conversations"); };
+  useLayoutEffect(() => {
+    const previous = previousFocus.current;
+    previousFocus.current = null;
+    const element = dialog.current;
+    // An illustration can remove its own button when it changes scenes. Keep
+    // a deliberate selection inside the dialog, but leave surviving focus and
+    // URL restoration alone.
+    if (!previous || previous.isConnected || !element?.open || element.contains(document.activeElement)) return;
+    const selectedTerm = termNavigation.current?.querySelector<HTMLButtonElement>('button[aria-current="page"]');
+    // A collapsed menu branch hides the selected term. Keep that choice of
+    // expansion and return to its visible summary; phones use the term picker.
+    const groupSummary = selectedTerm?.closest("details")?.querySelector<HTMLElement>(":scope > summary");
+    for (const target of [selectedTerm, groupSummary, termPicker.current?.querySelector("select"), element.querySelector<HTMLElement>(".data-guide-close")]) {
+      if (!target?.getClientRects().length) continue;
+      target.focus();
+      // Closed details can retain layout rectangles even though their children
+      // refuse focus. Keep looking until a reachable control accepts it.
+      if (document.activeElement === target) break;
+    }
+  }, [entity, conversation]);
   useEffect(()=>{const element=dialog.current!;if(shown&&!element.open)element.showModal();else if(!shown&&element.open)element.close();},[shown]);
   useEffect(() => {
     const element = dialog.current!;
     let invoker: HTMLElement | null = null;
     const show = (event: Event) => {
-      const context = (event as CustomEvent<{ dataset?: string; invoker?: HTMLElement }>).detail;
+      const context = (event as CustomEvent<{ dataset?: string; entity?: DataGuideSelection; invoker?: HTMLElement }>).detail;
       const requested = context?.dataset;
-      const next = requested && Object.hasOwn(dataSources, requested) ? requested as DataSource : "library";
-      const openedSource = describeDataSource(next, readConcurrencySettings().counting);
-      setSourceDataset(next); setEntity(openedSource.entity); setConversation("implementation");
+      const next = requested && Object.hasOwn(dataSources, requested) ? requested as DataSource : undefined;
+      setSourceDataset(next ?? "library");
+      setEntity(context?.entity && dataGuideSelectionKeys.includes(context.entity) ? context.entity : next ? describeDataSource(next, readConcurrencySettings().counting).entity : "conversations");
+      setConversation("implementation");
       setShown(true);
       if (!element.open) { invoker = context?.invoker ?? document.activeElement as HTMLElement; element.showModal(); }
     };
-    const close = () => { setShown(false); if (invoker?.isConnected) invoker.focus(); };
+    const close = () => { previousFocus.current = null; setShown(false); if (invoker?.isConnected) invoker.focus(); };
     window.addEventListener("pharos:open-data-guide", show);
     element.addEventListener("close", close);
     return () => { window.removeEventListener("pharos:open-data-guide", show); element.removeEventListener("close", close); };
   }, []);
+  useEffect(() => { dialog.current!.dataset.ready = "true"; window.dispatchEvent(new Event("pharos:data-guide-ready")); }, []);
+  useEffect(() => { content.current?.scrollTo({ top: 0 }); }, [scene]);
+  useEffect(() => {
+    if (!shown) return;
+    const menuItem = termNavigation.current?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (menuItem?.getClientRects().length) menuItem.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const active = document.activeElement;
+    const invoked = active instanceof HTMLElement && content.current?.contains(active) ? active.closest<HTMLElement>(".pharos-guide-highlight") : null;
+    // Repeated messages and usage receipts can occur far apart. A link in the
+    // story keeps attention there; selecting a guide term starts at its first example.
+    if (entity === "agents" && !invoked) {
+      const history = content.current?.querySelector<HTMLElement>(".guide-chat-history");
+      const helper = history?.querySelector<HTMLElement>(".guide-helper-description");
+      if (history && helper) history.scrollTo({ top: history.scrollTop + helper.getBoundingClientRect().top - history.getBoundingClientRect().top - 16 });
+      content.current?.querySelector(".guide-main-thread")?.scrollIntoView({ block: "start", inline: "nearest" });
+      return;
+    }
+    const target = invoked ?? content.current?.querySelector<HTMLElement>(".pharos-guide-highlight");
+    target?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [entity, shown]);
   const selected = dataEntities[entity];
-  const mark = (target: DataEntity) => entity === target ? " is-selected" : "";
-  const review = conversation === "review";
   return <dialog data-view-field="guide_open" ref={dialog} className="data-guide" aria-labelledby="dataGuideTitle" onClick={event => {
     if (event.target !== event.currentTarget) return;
     const rect = event.currentTarget.getBoundingClientRect();
@@ -83,54 +140,21 @@ export function DataTaxonomyModal() {
   }}>
     <header className="data-guide-header">
       <h2 id="dataGuideTitle">Data Guide</h2>
-      <nav className="data-guide-layers" aria-label="Data layers">
-        {(Object.keys(dataEntities) as DataEntity[]).map((key, index) => <React.Fragment key={key}>
-          {index ? <Icon name="chevron-right" /> : null}<button data-view-field="guide_entity" type="button" aria-pressed={entity === key} onClick={() => setEntity(key)}>{dataEntities[key].label}</button>
-        </React.Fragment>)}
-      </nav>
       <button type="button" className="data-guide-close" aria-label="Close data guide" onClick={() => dialog.current?.close()}><Icon name="close" /></button>
     </header>
     <div className="data-guide-body">
-      <div className="data-guide-explainer">
-        <div className="data-guide-example">
-          <div className={`data-guide-workspace${mark("workspaces")}`}>
-            <button data-view-field="guide_entity" type="button" className="data-guide-workspace-title" aria-label="Explain workspaces" onClick={() => setEntity("workspaces")}><span className="data-guide-folder" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z" /></svg></span><span><small>WORKSPACE</small><strong>Add search to the app</strong></span></button>
-            <div className="data-guide-chat-tabs" role="group" aria-label="Example conversations">
-              <button type="button" aria-pressed={!review} onClick={() => { setConversation("implementation"); setEntity("conversations"); }}><span aria-hidden="true">▤</span> Implementation</button>
-              <button type="button" aria-pressed={review} onClick={() => { setConversation("review"); setEntity("conversations"); }}><span aria-hidden="true">▤</span> Review</button>
-              <span className="data-guide-tab-spacer" aria-hidden="true">···</span>
-            </div>
-            <div className={`data-guide-transcript${entity === "conversations" || entity === "agents" ? " is-selected" : ""}`}>
-              <div className="data-guide-chat-brand" aria-hidden="true"><strong>ChatGPT <Icon name="chevron-down" /></strong><Icon name="more" /></div>
-              <button data-view-field="guide_entity" type="button" className={`data-guide-message human${mark("messages")}`} onClick={() => setEntity("messages")}><span className="data-guide-avatar">Y</span><span><small>YOU <span>Human message</span></small><span>{review ? "Check the search change for edge cases." : "Add search to the library."}</span></span></button>
-              <button data-view-field="guide_entity" type="button" className={`data-guide-message${mark("messages")}`} onClick={() => setEntity("messages")}><span className="data-guide-avatar agent" aria-hidden="true">✳</span><span><small>ASSISTANT <span>Response</span></small><span>I’ll ask two helpers to check this.</span></span></button>
-              <div className={`data-guide-agent-branch${mark("agents")}`} role="group" aria-label="Test helper session">
-                <button data-view-field="guide_entity" type="button" className="data-guide-delegation" onClick={() => setEntity("agents")}><span aria-hidden="true">↳</span><span><strong>Test helper</strong><small>Sub-agent session</small></span><Icon name="arrow-right" /></button>
-                <button data-view-field="guide_entity" type="button" className={`data-guide-tool${mark("tool_calls")}`} onClick={() => setEntity("tool_calls")}>
-                  <span className="data-guide-tool-heading"><span><span aria-hidden="true">⌘</span> exec_command</span><span>Tool call</span></span>
-                  <span className="data-guide-tool-line"><small>INPUT</small><code>{review ? "npm test -- search" : "npm test"}</code></span>
-                  <span className="data-guide-tool-line"><small>RESULT</small><span><span className="data-guide-success">✓</span> 12 tests passed <span className="data-guide-duration">· 1.4s</span></span></span>
-                </button>
-              </div>
-              <div className={`data-guide-agent-branch${mark("agents")}`} role="group" aria-label="Review helper session">
-                <button data-view-field="guide_entity" type="button" className="data-guide-delegation" onClick={() => setEntity("agents")}><span aria-hidden="true">↳</span><span><strong>Review helper</strong><small>Sub-agent session</small></span><Icon name="arrow-right" /></button>
-                <button data-view-field="guide_entity" type="button" className={`data-guide-helper-message${mark("messages")}`} onClick={() => setEntity("messages")}>{review ? "No keyboard issues found." : "Empty queries look good."}</button>
-              </div>
-              <div className="data-guide-chat-composer" aria-hidden="true"><span>Message ChatGPT</span><span>↑</span></div>
-            </div>
-          </div>
-          <span className="data-guide-example-label">EXAMPLE</span>
-        </div>
-        <div className="data-guide-details">
-          <aside id={`data-guide-${entity}`} className="data-guide-inspector" aria-live="polite" aria-atomic="true">
-            <h3>{selected.singular}</h3>
-            <p>{selected.description}</p>
-          </aside>
-          {entity === source.entity ? <section className="data-guide-query" aria-label="Dataset row definitions">
-            <div className="data-guide-query-heading"><span>THIS QUERY READS</span><strong>{source.label}</strong></div>
-            <p className="data-guide-query-grain">{source.grain}.</p>
-          </section> : null}
-        </div>
+      <nav ref={termNavigation} className="data-guide-terms app-navigation-list" aria-label="Data Guide terms">
+        <NavigationItems pages={pages} current={entity} navigate={() => {}} expanded={expanded["data-guide"] ?? {}} toggle={(id, fallback) => setExpanded(state => toggleNavigationSection(state, "data-guide", id, fallback))} renderLeaf={(page, style) => <button data-view-field="guide_entity" type="button" className="app-navigation-page" style={style} aria-current={entity === page.id ? "page" : undefined} onClick={() => selectEntity(page.id as DataEntity)}><span className="app-navigation-label">{page.label}</span></button>} />
+      </nav>
+      <div ref={content} className="data-guide-content">
+        <label ref={termPicker} className="data-guide-picker">Guide term<DashboardSelect data-view-field="guide_entity" value={entity} onChange={event => selectEntity(event.target.value as DataEntity)}>{dataEntityGroups.map(group => <optgroup key={group.label} label={group.label}>{group.entities.map(key => <option key={key} value={key}>{dataEntities[key].label}</option>)}</optgroup>)}</DashboardSelect></label>
+        <aside id={`data-guide-${entity}`} className="data-guide-inspector" aria-live="polite" aria-atomic="true">
+          <h3>{selected.singular}</h3>
+          <p>{selected.description}</p>
+        </aside>
+        {scene === "machines" ? <p className="muted data-guide-detail">{selected.detail}</p> : null}
+        <DataGuideExample entity={entity} onSelect={selectEntity} conversation={conversation} onConversationChange={selectConversation} />
+        {scene !== "machines" ? <p className="muted data-guide-detail">{selected.detail}</p> : null}
       </div>
     </div>
   </dialog>;
