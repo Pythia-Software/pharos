@@ -48,6 +48,8 @@ const domainScopes: Record<string,string[]> = {
   tools:[...sources,'an.ledger','an.tools'],tool_calls:[...sources,'an.ledger'],skill_usages:[...sources,'an.ledger'],
   parallelism:sources,rhythm:[...sources,'an.authorship'],tl1_attempts:sources,
   session_shape:[...sources,'an.ledger','an.authorship'],
+  // Outcomes are derived in the tools stage, after the tool ledger.
+  outcomes:[...sources,'an.ledger','an.tools'],
   message_labels:[...sources,'an.authorship','@labels'],people_message_labels:[...sources,'an.authorship','@labels'],
   agent_events:[...sources,'@agent_events'],agent_event_messages:[...sources,'@agent_events'],agent_event_rates:[...sources,'@agent_events'],
   findings:[...sources,'findings'],safety:[...sources,'an.ledger','findings'],fixes:[...sources,'@agent_events','findings'],

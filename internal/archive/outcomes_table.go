@@ -68,7 +68,7 @@ type sessionUsage struct {
 // sessionModelUsage prices the usage ledger per session as workspaceUsage
 // does, and finds each session's main model and first usage hour.
 func (c *Catalog) sessionModelUsage(ctx context.Context) (map[string]*sessionUsage, error) {
-	ledger, err := c.usageLedger(nil)
+	ledger, err := c.usageLedger(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
