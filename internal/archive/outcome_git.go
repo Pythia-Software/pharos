@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -27,6 +28,7 @@ import (
 // timeout, runs at low priority and waits while pages read; requests read
 // the stored facts. A repository whose refs and sessions did not change since
 // its last scan is not asked again.
+
 //
 // Only facts are stored: hashes, times, counts, the files a link shares and
 // how a commit was reverted. No commit message, diff or file content.
@@ -192,6 +194,10 @@ func (c *Catalog) refreshSessionGit(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	identities, err := c.gitIdentities(ctx)
+	if err != nil {
+		return err
+	}
 	host := currentHost().ID
 	stored, err := queryMapsContext(ctx, c.DB, "SELECT repository_id,scan_key,status,reason FROM git_repository_scans WHERE host_id=?", host)
 	if err != nil {
@@ -214,18 +220,22 @@ func (c *Catalog) refreshSessionGit(ctx context.Context) error {
 		}
 		members := byRepository[repository]
 		scan := gitScan{Status: "not_checked"}
-		dir, reason := gitCheckout(locations[repository])
+		var clones []*gitClone
+		reason := ""
+		if gitErr == nil {
+			clones, reason = gitCheckouts(ctx, locations[repository], identities[repository])
+		}
 		// A scan that could not start is keyed by its reason; one that
 		// started and failed, by what it read and the day, so that a timeout
 		// is tried again when the repository changes or the next day.
-		key, failedKey, heads := "", "", []string(nil)
+		key, failedKey := "", ""
 		switch {
 		case gitErr != nil:
 			scan.Reason = "Git is not installed on this Mac."
-		case dir == "":
+		case len(clones) == 0:
 			scan.Reason = reason
 		default:
-			key, heads, err = gitScanKey(ctx, dir, sessions, members, repository)
+			key, err = gitScanKey(ctx, clones, sessions, members, repository)
 			if err != nil {
 				scan.Reason = gitFailure(err)
 			} else {
@@ -240,7 +250,7 @@ func (c *Catalog) refreshSessionGit(ctx context.Context) error {
 			continue
 		}
 		if scan.Reason == "" {
-			scan = scanRepository(ctx, dir, sessions, members, repository, heads)
+			scan = scanRepository(ctx, clones, sessions, members, repository)
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -352,18 +362,95 @@ func (c *Catalog) gitLocations(ctx context.Context) (map[string][]string, error)
 	return locations, nil
 }
 
-// gitCheckout is the first recorded checkout that still exists, or why none
-// can be used.
-func gitCheckout(locations []string) (string, string) {
-	if len(locations) == 0 {
-		return "", "No checkout of this repository was recorded on this Mac."
+// gitIdentity is what names a repository: its first root commit and its
+// normalized remotes.
+type gitIdentity struct {
+	Root    string
+	Remotes []string
+}
+
+// gitIdentities reads each repository's identity.
+func (c *Catalog) gitIdentities(ctx context.Context) (map[string]gitIdentity, error) {
+	rows, err := queryMapsContext(ctx, c.DB, "SELECT id,root_commit,normalized_remote,aliases_json FROM repositories")
+	if err != nil {
+		return nil, err
 	}
-	for _, location := range locations {
-		if _, err := integrationCommonDir(location); err == nil {
-			return location, ""
+	identities := map[string]gitIdentity{}
+	for _, row := range rows {
+		identity := gitIdentity{Root: strings.ToLower(firstString(row["root_commit"]))}
+		var aliases []string
+		_ = json.Unmarshal([]byte(firstString(row["aliases_json"])), &aliases)
+		for _, remote := range append([]string{firstString(row["normalized_remote"])}, aliases...) {
+			if remote = normalizeRepositoryRemote(remote); remote != "" && !slices.Contains(identity.Remotes, remote) {
+				identity.Remotes = append(identity.Remotes, remote)
+			}
+		}
+		identities[firstString(row["id"])] = identity
+	}
+	return identities, nil
+}
+
+// holds reports whether the checkout at location is of the repository: it
+// has the repository's root commit, or its origin is one of its remotes (a
+// shallow clone can lack the root). With neither known, the location must be
+// the checkout itself: finding .git in a folder above it, such as a home
+// folder kept in Git, finds some other repository.
+func (identity gitIdentity) holds(ctx context.Context, location string) bool {
+	if identity.Root != "" && gitCommitID.MatchString(identity.Root) {
+		if _, err := outcomeGitCommand(ctx, location, outcomeGitShortTimeout, nil, "cat-file", "-e", identity.Root+"^{commit}"); err == nil {
+			return true
 		}
 	}
-	return "", "The checkouts recorded on this Mac are gone."
+	if len(identity.Remotes) > 0 {
+		origin, err := outcomeGitCommand(ctx, location, outcomeGitShortTimeout, nil, "remote", "get-url", "origin")
+		return err == nil && slices.Contains(identity.Remotes, normalizeRepositoryRemote(strings.TrimSpace(string(origin))))
+	}
+	if identity.Root != "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(location, ".git"))
+	return err == nil
+}
+
+// gitClone is one clone of a repository a scan reads: a recorded checkout
+// of it, whether it is shallow, its worktrees' detached HEADs and the
+// commits read from it. Clones of one repository (a checkout in a home
+// folder and a Conductor clone) share its identity but not their branches.
+type gitClone struct {
+	Dir     string
+	Common  string
+	Shallow bool
+	Heads   []string
+	Has     map[string]bool
+}
+
+// gitCheckouts is one recorded checkout of the repository that still exists
+// for each of its clones on this Mac (each Git common directory), most
+// recently seen first, or why there is none.
+func gitCheckouts(ctx context.Context, locations []string, identity gitIdentity) ([]*gitClone, string) {
+	if len(locations) == 0 {
+		return nil, "No checkout of this repository was recorded on this Mac."
+	}
+	clones, seen, other := []*gitClone{}, map[string]bool{}, false
+	for _, location := range locations {
+		common, err := integrationCommonDir(location)
+		if err != nil || seen[common] {
+			continue
+		}
+		if !identity.holds(ctx, location) {
+			other = true
+			continue
+		}
+		seen[common] = true
+		clones = append(clones, &gitClone{Dir: location, Common: common, Shallow: integrationShallow(common)})
+	}
+	switch {
+	case len(clones) > 0:
+		return clones, ""
+	case other:
+		return nil, "The checkouts recorded on this Mac hold another repository."
+	}
+	return nil, "The checkouts recorded on this Mac are gone."
 }
 
 func gitFailure(err error) string {
@@ -373,27 +460,31 @@ func gitFailure(err error) string {
 	return "Git could not read this repository."
 }
 
-// gitScanKey identifies what a scan would read: the repository's refs, its
-// worktrees' detached HEADs and the sessions linked against it. An unchanged
-// key needs no scan. It also gives the detached HEADs, which no ref holds.
-func gitScanKey(ctx context.Context, dir string, sessions map[string]*gitSession, members []string, repository string) (string, []string, error) {
-	refs, err := outcomeGitCommand(ctx, dir, outcomeGitShortTimeout, nil, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/remotes", "refs/tags", "refs/notes/ai")
-	if err != nil {
-		return "", nil, err
-	}
-	worktrees, err := outcomeGitCommand(ctx, dir, outcomeGitShortTimeout, nil, "worktree", "list", "--porcelain")
-	if err != nil {
-		return "", nil, err
-	}
-	heads := detachedHeads(string(worktrees))
+// gitScanKey identifies what a scan would read: each clone's refs and its
+// worktrees' detached HEADs, and the sessions linked against it. An
+// unchanged key needs no scan. It also records each clone's detached HEADs,
+// which no ref holds.
+func gitScanKey(ctx context.Context, clones []*gitClone, sessions map[string]*gitSession, members []string, repository string) (string, error) {
 	hash := sha256.New()
-	fmt.Fprintf(hash, "%s\x00%s\x00%s\x00", outcomeGitVersion, outcomeGitGrace, repository)
-	hash.Write(refs)
-	fmt.Fprintf(hash, "\x00%s", strings.Join(heads, " "))
+	fmt.Fprintf(hash, "%s\x00%s\x00%s", outcomeGitVersion, outcomeGitGrace, repository)
+	for _, clone := range clones {
+		refs, err := outcomeGitCommand(ctx, clone.Dir, outcomeGitShortTimeout, nil, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/remotes", "refs/tags", "refs/notes/ai")
+		if err != nil {
+			return "", err
+		}
+		worktrees, err := outcomeGitCommand(ctx, clone.Dir, outcomeGitShortTimeout, nil, "worktree", "list", "--porcelain")
+		if err != nil {
+			return "", err
+		}
+		clone.Heads = detachedHeads(string(worktrees))
+		fmt.Fprintf(hash, "\x00%s\x00", clone.Common)
+		hash.Write(refs)
+		fmt.Fprintf(hash, "\x00%s", strings.Join(clone.Heads, " "))
+	}
 	for _, id := range members {
 		fmt.Fprintf(hash, "\x00%s\x00%s", id, strings.Join(sessions[id].key, "\x01"))
 	}
-	return hex.EncodeToString(hash.Sum(nil)), heads, nil
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // detachedHeads reads the commits worktrees have checked out without a
@@ -416,9 +507,10 @@ func detachedHeads(worktrees string) []string {
 	return heads
 }
 
-// scanRepository reads a repository's commits since its sessions began and
-// links them.
-func scanRepository(ctx context.Context, dir string, sessions map[string]*gitSession, members []string, repository string, heads []string) gitScan {
+// scanRepository reads a repository's commits since its sessions began, in
+// each of its clones, and links them. A commit is the same in every clone
+// that has it; each clone answers for the commits it has.
+func scanRepository(ctx context.Context, clones []*gitClone, sessions map[string]*gitSession, members []string, repository string) gitScan {
 	// From the first edit or printed commit of its sessions.
 	since := time.Time{}
 	earliest := func(at time.Time) {
@@ -442,12 +534,22 @@ func scanRepository(ctx context.Context, dir string, sessions map[string]*gitSes
 	}
 	// A day of slack for clocks and for commits printed before the first edit.
 	after := "--since=" + strconv.FormatInt(since.Add(-24*time.Hour).Unix(), 10)
-	commits, err := readGitCommits(ctx, dir, after, heads...)
-	if err != nil {
-		return gitScan{Status: "not_checked", Reason: gitFailure(err)}
+	commits := map[string]*gitCommit{}
+	for _, clone := range clones {
+		read, err := readGitCommits(ctx, clone.Dir, after, clone.Heads...)
+		if err != nil {
+			return gitScan{Status: "not_checked", Reason: gitFailure(err)}
+		}
+		clone.Has = map[string]bool{}
+		for hash, commit := range read {
+			clone.Has[hash] = true
+			if commits[hash] == nil {
+				commits[hash] = commit
+			}
+		}
 	}
 	scan := gitScan{Status: "checked", Commits: commits}
-	scan.Links, _ = inferLinks(ctx, dir, after, sessions, members, repository, commits)
+	scan.Links, _ = inferLinks(ctx, clones, sessions, members, repository, commits)
 	linked := map[string]*gitCommit{}
 	for _, link := range scan.Links {
 		linked[link.Hash] = commits[link.Hash]
@@ -455,27 +557,40 @@ func scanRepository(ctx context.Context, dir string, sessions map[string]*gitSes
 	if len(linked) == 0 {
 		return scan
 	}
-	common, _ := integrationCommonDir(dir)
-	shallow := integrationShallow(common)
-	if err := markMainline(ctx, dir, after, linked, shallow); err != nil {
-		return gitScan{Status: "not_checked", Reason: gitFailure(err)}
+	for _, clone := range clones {
+		if err := markMainline(ctx, clone.Dir, after, clone.holding(linked), clone.Shallow); err != nil {
+			return gitScan{Status: "not_checked", Reason: gitFailure(err)}
+		}
 	}
 	scan.Links = linkCopiesOnce(scan.Links, linked)
 	linked = map[string]*gitCommit{}
 	for _, link := range scan.Links {
 		linked[link.Hash] = commits[link.Hash]
 	}
-	if err := markReverts(ctx, dir, after, commits, linked); err != nil {
-		return gitScan{Status: "not_checked", Reason: gitFailure(err)}
-	}
-	if notes, err := outcomeGitCommand(ctx, dir, outcomeGitShortTimeout, nil, "notes", "--ref=ai", "list"); err == nil {
-		for _, line := range strings.Split(string(notes), "\n") {
-			if fields := strings.Fields(line); len(fields) == 2 && linked[fields[1]] != nil {
-				linked[fields[1]].AINote = true
+	for _, clone := range clones {
+		if err := markReverts(ctx, clone.Dir, after, clone.holding(commits), clone.holding(linked)); err != nil {
+			return gitScan{Status: "not_checked", Reason: gitFailure(err)}
+		}
+		if notes, err := outcomeGitCommand(ctx, clone.Dir, outcomeGitShortTimeout, nil, "notes", "--ref=ai", "list"); err == nil {
+			for _, line := range strings.Split(string(notes), "\n") {
+				if fields := strings.Fields(line); len(fields) == 2 && linked[fields[1]] != nil && clone.Has[fields[1]] {
+					linked[fields[1]].AINote = true
+				}
 			}
 		}
 	}
 	return scan
+}
+
+// holding is those of commits the clone has.
+func (clone *gitClone) holding(commits map[string]*gitCommit) map[string]*gitCommit {
+	held := map[string]*gitCommit{}
+	for hash, commit := range commits {
+		if clone.Has[hash] {
+			held[hash] = commit
+		}
+	}
+	return held
 }
 
 // linkCopiesOnce links each session once to a change it also linked as its
@@ -551,12 +666,12 @@ func readGitCommits(ctx context.Context, dir, after string, heads ...string) (ma
 
 // inferLinks links a repository's commits, reading signals for the
 // contested ones; it returns the links and the signals it read.
-func inferLinks(ctx context.Context, dir, after string, sessions map[string]*gitSession, members []string, repository string, commits map[string]*gitCommit) ([]gitLink, *gitSignals) {
+func inferLinks(ctx context.Context, clones []*gitClone, sessions map[string]*gitSession, members []string, repository string, commits map[string]*gitCommit) ([]gitLink, *gitSignals) {
 	links, contested := linkCommits(sessions, members, repository, commits, nil)
 	if len(contested) == 0 {
 		return links, nil
 	}
-	signals := readGitSignals(ctx, dir, sessions, contested)
+	signals := readGitSignals(ctx, clones, sessions, contested)
 	links, _ = linkCommits(sessions, members, repository, commits, signals)
 	return links, signals
 }
@@ -744,7 +859,8 @@ func mainlineTip(ctx context.Context, dir string) (tip, ref string, err error) {
 // cherry-pick, by patch-id). A squash of several commits is not recognized.
 // Without a mainline, in a shallow clone that lacks it, or when its change
 // cannot be read (an empty commit or a merge has no patch-id), it stays
-// unknown.
+// unknown. Each clone answers for the commits it has: one whose mainline has
+// a commit makes it landed, whichever clone said otherwise.
 func markMainline(ctx context.Context, dir, after string, linked map[string]*gitCommit, shallow bool) error {
 	tip, ref, err := mainlineTip(ctx, dir)
 	if err != nil || tip == "" {
@@ -761,8 +877,8 @@ func markMainline(ctx context.Context, dir, after string, linked map[string]*git
 	missing := []string{}
 	for hash, commit := range linked {
 		if on[hash] {
-			commit.OnMainline, commit.MainlineEvidence = new(true), "reachable from "+strings.TrimPrefix(ref, "refs/")
-		} else {
+			commit.OnMainline, commit.MainlineEvidence, commit.SameAs = new(true), "reachable from "+strings.TrimPrefix(ref, "refs/"), ""
+		} else if commit.OnMainline == nil || !*commit.OnMainline {
 			missing = append(missing, hash)
 		}
 	}
@@ -789,7 +905,7 @@ func markMainline(ctx context.Context, dir, after string, linked map[string]*git
 		switch match := byPatch[mine[hash]]; {
 		case mine[hash] != "" && match != "":
 			commit.OnMainline, commit.MainlineEvidence, commit.SameAs = new(true), "same change as "+match[:12]+" on "+strings.TrimPrefix(ref, "refs/"), match
-		case mine[hash] != "" && !shallow:
+		case mine[hash] != "" && !shallow && commit.OnMainline == nil:
 			commit.OnMainline = new(false)
 		}
 	}

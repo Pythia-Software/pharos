@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -149,7 +150,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	f := newGitFixture(t)
 	repo := f.repo
 	for _, id := range []string{"direct", "inferred", "stale", "wide", "narrow", "branch", "picked", "squashed", "reverted", "undone", "late",
-		"early", "printer", "printer-too", "detached", "editor", "publisher", "empty"} {
+		"early", "printer", "printer-too", "detached", "editor", "publisher", "empty", "cloned"} {
 		f.session(id, "")
 	}
 	// A session that only committed, before every other session's edits.
@@ -239,6 +240,14 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	pr := repo.commit(2.59, "Pull request", map[string]string{"pr.go": "package pr\n"})
 	f.printed("publisher", pr, 2.59)
 	repo.git(time.Now(), "update-ref", "refs/remotes/origin/main", "HEAD")
+	// Another clone of the repository, with a branch only it has.
+	clone := &gitRepository{t, filepath.Join(t.TempDir(), "clone")}
+	repo.git(time.Now(), "clone", "-q", repo.dir, clone.dir)
+	clone.git(time.Now(), "checkout", "-q", "-b", "unpushed")
+	clone.git(time.Now(), "config", "color.ui", "always")
+	execTx(t, f.catalog.DB, `UPDATE workspace_sightings SET location='`+clone.dir+`' WHERE workspace_id='cloned'`)
+	f.edit("cloned", "cloned.go", 2.5)
+	cloned := clone.commit(2.49, "Cloned", map[string]string{"cloned.go": "package cloned\n"})
 	// A commit in a worktree on a detached HEAD, which no ref holds.
 	tree := filepath.Join(t.TempDir(), "tree")
 	repo.git(time.Now(), "worktree", "add", "-q", "--detach", tree)
@@ -252,7 +261,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 		"direct": direct[:7] + " transcript 1", "inferred": inferred[:7] + " inferred 0.7", "narrow": narrow[:7] + " inferred 0.5",
 		"reverted": reverted[:7] + " inferred 0.7", "undone": undone[:7] + " inferred 0.7", "branch": branch[:7] + " inferred 0.7", "picked": copied[:7] + " inferred 0.7", "squashed": squashed[:7] + " inferred 0.7",
 		"early": early[:7] + " transcript 1", "printer": printedCopy[:7] + " transcript 1", "printer-too": printed[:7] + " transcript 1", "detached": detached[:7] + " transcript 1",
-		"editor": pr[:7] + " inferred 0.7", "publisher": pr[:7] + " transcript 1", "empty": empty[:7] + " transcript 1",
+		"editor": pr[:7] + " inferred 0.7", "publisher": pr[:7] + " transcript 1", "empty": empty[:7] + " transcript 1", "cloned": cloned[:7] + " inferred 0.7",
 	} {
 		if strings.Join(links[id], ", ") != want {
 			t.Errorf("%s links: %v, want %s", id, links[id], want)
@@ -277,7 +286,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	for id, want := range map[string]string{
 		"direct": "landed", "inferred": "landed", "narrow": "changed_kept", "picked": "landed", "squashed": "landed", "branch": "committed",
 		"reverted": "reworked", "undone": "reworked", "stale": "changed_kept", "wide": "changed_kept", "late": "changed_recent",
-		"editor": "landed", "publisher": "landed", "empty": "committed",
+		"editor": "landed", "publisher": "landed", "empty": "committed", "cloned": "committed",
 	} {
 		if labels[id][0] != want {
 			t.Errorf("%s: %s, want %s (%s)", id, labels[id][0], want, labels[id][1])
@@ -298,8 +307,9 @@ func TestSessionGitLinksCommits(t *testing.T) {
 		FROM (SELECT * FROM git_commits WHERE hash IN (?,?,?))`, squashed, reverted, undone).Scan(&evidence); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{squashed + " same change as " + squash[:12], reverted + " reachable from remotes/origin/main message", undone + " reachable from remotes/origin/main inverse_diff"} {
-		if !strings.Contains(evidence, want) {
+	// Either clone can say so: the other's origin is this checkout's main.
+	for _, want := range []string{squashed + " same change as " + squash[:12] + " ", reverted + " reachable from remotes/origin/(main|HEAD) message", undone + " reachable from remotes/origin/(main|HEAD) inverse_diff"} {
+		if !regexp.MustCompile(want).MatchString(evidence) {
 			t.Errorf("commit evidence %q lacks %q", evidence, want)
 		}
 	}
@@ -373,6 +383,39 @@ func TestSessionGitNotChecked(t *testing.T) {
 	execTx(t, f.catalog.DB, `UPDATE workspaces SET project_folder='~/notes' WHERE id='notes'`)
 	if got := state("notes"); got != "not_applicable|<nil>|<nil>" {
 		t.Fatalf("a folder: %s", got)
+	}
+	// A recorded folder inside some other repository (a home folder kept in
+	// Git, once the checkout in it is gone) is not a checkout of this one:
+	// it needs the repository's root commit or remote, or, with neither
+	// known, to be the checkout itself.
+	home := filepath.Join(t.TempDir(), "home")
+	gitInit(t, home)
+	folder := filepath.Join(home, "app")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := f.repo.git(time.Now(), "rev-list", "--max-parents=0", "HEAD")
+	f.repo.git(time.Now(), "remote", "add", "origin", "git@github.com:Owner/App.git")
+	ctx := context.Background()
+	for _, check := range []struct {
+		identity  gitIdentity
+		locations []string
+		want      string
+	}{
+		{gitIdentity{Root: root}, []string{folder}, "The checkouts recorded on this Mac hold another repository."},
+		{gitIdentity{Remotes: []string{"github.com/owner/app"}}, []string{folder}, "The checkouts recorded on this Mac hold another repository."},
+		{gitIdentity{}, []string{folder}, "The checkouts recorded on this Mac hold another repository."},
+		{gitIdentity{Root: root}, []string{folder, f.repo.dir}, f.repo.dir},
+		{gitIdentity{Root: strings.Repeat("0", 40), Remotes: []string{"github.com/owner/app"}}, []string{f.repo.dir}, f.repo.dir},
+		{gitIdentity{}, []string{folder, f.repo.dir}, f.repo.dir},
+	} {
+		clones, reason := gitCheckouts(ctx, check.locations, check.identity)
+		if len(clones) == 1 {
+			reason = clones[0].Dir
+		}
+		if reason != check.want || len(clones) > 1 {
+			t.Errorf("%+v in %v: %s, want %s", check.identity, check.locations, reason, check.want)
+		}
 	}
 }
 

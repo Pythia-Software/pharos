@@ -241,7 +241,13 @@ transcript it was read from already holds the text.
 
 `internal/archive/outcome_git.go` asks local git about the repositories in
 which sessions changed files or printed a commit, using only checkouts this
-Mac recorded that still exist.
+Mac recorded that still exist and hold the repository: one with its root
+commit, else with one of its remotes as `origin`, else (with neither known)
+a checkout at the recorded folder itself, not in a folder above it, such as
+a home folder kept in git. It reads one such checkout of each clone (each
+git common directory) and combines what they say: a repository's identity
+follows its remote, so `~/code/app` and a Conductor clone of it are one
+repository whose clones hold different branches.
 
 - **When.** In background stages only: after the tool summaries in
   incremental recovery, and as the "linking commits" phase of a library
@@ -249,9 +255,9 @@ Mac recorded that still exist.
   Before each repository it yields to interactive queries, and git runs
   under `nice -n 10` with a 60-second timeout for the log and 10 seconds for
   everything else.
-- **Cache.** A repository's scan key is its refs (heads, remotes, tags and
-  `refs/notes/ai`) and its worktrees' detached HEADs, plus its sessions'
-  edit windows, files (with each file's first and last edit and its kept
+- **Cache.** A repository's scan key is each clone's refs (heads, remotes,
+  tags and `refs/notes/ai`) and its worktrees' detached HEADs, plus its
+  sessions' edit windows, files (with each file's first and last edit and its kept
   line fingerprints) and printed commits. An unchanged key runs no `git log` and writes nothing, so the
   cached views stay valid. A scan that could not start is keyed by its
   reason; one that timed out is tried again when the repository changes or
@@ -298,7 +304,8 @@ Mac recorded that still exist.
   mainline does not reach is unknown, not "not landed", and so is a commit
   whose patch could not be read or is empty (an empty commit or a merge).
   Patches are read with `--no-color`, which a repository can force on, and
-  listed commits are passed on standard input.
+  listed commits are passed on standard input. Each clone answers for the
+  commits it has; one whose mainline has the commit makes it landed.
 - **Reverts.** A later commit reverts a linked one when its message says
   `This reverts commit <hash>`, or when it changes the same files with the
   added and removed counts swapped and its patch-id equals the linked
@@ -354,7 +361,7 @@ Each git-only fact has three distinct states, both in data and in the UI:
 | State | Meaning | Shown as |
 |---|---|---|
 | Not applicable | The project is a folder or none, or the session changed no file in its repository. | "Not a repository" / "No git data" / "Not applicable" |
-| Not checked | A repository, but Pharos could not inspect it. Reasons: no `git` binary, checkout deleted or recorded only on another Mac, a timeout, or git failing to read it. | "Not checked", with the reason |
+| Not checked | A repository, but Pharos could not inspect it. Reasons: no `git` binary, checkout deleted, holding another repository or recorded only on another Mac, a timeout, or git failing to read it. | "Not checked", with the reason |
 | None | Inspected, and nothing was found. | "Not on mainline", "No commits" |
 
 A "Not checked" state is never negative evidence.
@@ -532,7 +539,8 @@ first and rework judged once per marked session (`session_rework_dirty`).
   (`log.showSignature=false`).
 - It never runs git in a path another Mac recorded
   (`workspace_sightings.host_id`), because that path may be an unrelated
-  checkout here.
+  checkout here, nor in a recorded path whose checkout holds another
+  repository.
 - It never runs git on a request. Pages and MCP tools read stored facts.
   Git runs in background stages at low priority, with timeouts and
   cancellation, and caches by the repository's refs.

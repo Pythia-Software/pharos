@@ -269,8 +269,8 @@ sessions `session_outcome_dirty` marks, into `session_files` and
 `session_outcomes`; the Library reads the label from them
 (`outcome_label`, `outcome_why`, `web/src/outcomes.ts`).
 
-Tier 2 (`outcome_git.go`) links those sessions to commits in this Mac's
-checkouts, from a hash the session printed or inferred from its edit window
+Tier 2 (`outcome_git.go`) links those sessions to commits in each clone of
+their repository this Mac recorded, from a hash the session printed or inferred from its edit window
 and files (a commit several sessions could have made goes to the one whose
 checkout made it or whose kept lines it adds, `outcome_git_signals.go`),
 and marks which reached mainline or were reverted. It runs only
