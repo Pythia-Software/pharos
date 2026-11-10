@@ -30,8 +30,9 @@ Every workspace belongs to exactly one **project**, chosen in this order:
    the new checkout. It also covers a session recorded on another Mac in a
    checkout this library knows.
 3. **The working folder.** The location is normalized as a folder key:
-   - The home directory is shown as `~`. For `/Users/<name>/…` and
-     `/home/<name>/…` that applies on any Mac, not only the current one.
+   - A home directory, `/Users/<name>/…` or `/home/<name>/…`, is shown as
+     `~`. The rule reads nothing of the host, so every Mac sharing a
+     library derives the same key; a home elsewhere keeps its full path.
    - Temporary directories (`/tmp`, `/private/tmp`, `/var/folders`) form
      one project, `/tmp`. Otherwise each throwaway directory would be a
      project of its own.

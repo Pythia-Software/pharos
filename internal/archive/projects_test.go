@@ -1,21 +1,18 @@
 package archive
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 )
 
 func TestFolderKey(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A home elsewhere is this host's alone, so it is not ~: another Mac
+	// sharing the library would derive another key for the same folder.
+	t.Setenv("HOME", "/srv/me")
 	for location, want := range map[string]string{
 		"":                               "",
 		"relative/dir":                   "",
-		home:                             "~",
-		filepath.Join(home, "notes"):     "~/notes",
+		"/srv/me/notes":                  "/srv/me/notes",
 		"/Users/someone/Documents/notes": "~/Documents/notes",
 		"/Users/someone":                 "~",
 		"/home/someone/data/":            "~/data",

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,7 +15,9 @@ import (
 // none (a chat export). See docs/projects-and-outcomes.md.
 
 // folderKey is a working directory as a folder project names it: cleaned, with
-// a home directory (this Mac's, or any /Users/<name> or /home/<name>) as ~.
+// a home directory (any /Users/<name> or /home/<name>) as ~. It reads nothing
+// of this host, so every Mac sharing a library derives the same key and none
+// rewrites another's.
 func folderKey(location string) string {
 	location = strings.TrimSpace(location)
 	if location == "" {
@@ -29,14 +30,6 @@ func folderKey(location string) string {
 		return ""
 	}
 	location = filepath.Clean(location)
-	if home, err := os.UserHomeDir(); err == nil && home != "" && home != "/" {
-		if location == home {
-			return "~"
-		}
-		if rest, ok := strings.CutPrefix(location, home+"/"); ok {
-			return "~/" + rest
-		}
-	}
 	parts := strings.SplitN(strings.TrimPrefix(location, "/"), "/", 3)
 	if len(parts) >= 2 && (parts[0] == "Users" || parts[0] == "home") && parts[1] != "" && parts[1] != "Shared" {
 		if len(parts) == 2 {
