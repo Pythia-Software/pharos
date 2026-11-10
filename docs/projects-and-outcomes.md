@@ -958,10 +958,14 @@ call at the file's first edit.
   mainline.
 - `git_tree_files`: per repository, the paths at the tip the scan read
   (`tree_ref`, `tree_commit` on `git_repository_scans`), up to 100,000.
+  Git's listing is read only that far: a larger tree is not kept.
 
 The scan already ran `git log --numstat`; the tree is one `git ls-tree -r
 --name-only` per scan, which runs only when the repository's refs or
-sessions change. Requests read only these tables.
+sessions change, and only when the tip moved: a tree of the stored commit
+is neither read nor written again. A scan that fails, or cannot read the
+tree, keeps the stored tree and its `tree_commit`, since failing to look is
+not evidence the tree changed. Requests read only these tables.
 
 **Library file search** reads `session_files` as well as `change_files`, so
 Claude Code, Codex and Antigravity edits are found. Each hit opens the

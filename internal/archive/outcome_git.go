@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -215,9 +216,12 @@ type gitScan struct {
 	// stored, so file history says it covers only the time since.
 	Since time.Time
 	// Tree is the paths at TreeCommit, the mainline tip (TreeRef) or HEAD;
-	// empty when the tree was too large or could not be read.
+	// empty when the tree was too large. TreeKept says the stored tree
+	// stands: it is of TreeCommit already, or, with no TreeCommit, Git
+	// could not read the tree.
 	Tree                []string
 	TreeRef, TreeCommit string
+	TreeKept            bool
 }
 
 var errGitTimeout = errors.New("git timed out")
@@ -283,6 +287,19 @@ func (c *Catalog) refreshSessionGit(ctx context.Context) error {
 	for _, row := range stored {
 		previous[firstString(row["repository_id"])] = row
 	}
+	// The commit of each repository's stored tree, when every Mac's scan
+	// agrees on it: the tree is the repository's, whichever Mac wrote it.
+	treeRows, err := queryMapsContext(ctx, c.DB, `SELECT repository_id,MIN(COALESCE(tree_commit,'')) low,MAX(COALESCE(tree_commit,'')) high
+		FROM git_repository_scans GROUP BY repository_id`)
+	if err != nil {
+		return err
+	}
+	trees := map[string]string{}
+	for _, row := range treeRows {
+		if low := firstString(row["low"]); low == firstString(row["high"]) {
+			trees[firstString(row["repository_id"])] = low
+		}
+	}
 	repositories := make([]string, 0, len(byRepository))
 	for repository := range byRepository {
 		repositories = append(repositories, repository)
@@ -327,6 +344,9 @@ func (c *Catalog) refreshSessionGit(ctx context.Context) error {
 		}
 		if scan.Reason == "" {
 			scan = scanRepository(ctx, clones, sessions, members, repository, forges[repository])
+			if scan.Status == "checked" {
+				scan.readTree(ctx, clones, trees[repository])
+			}
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -644,7 +664,6 @@ func scanRepository(ctx context.Context, clones []*gitClone, sessions map[string
 		}
 	}
 	scan := gitScan{Status: "checked", Commits: commits, Since: since.Add(-24 * time.Hour)}
-	scan.Tree, scan.TreeRef, scan.TreeCommit = readGitTree(ctx, clones)
 	scan.Links, _ = inferLinks(ctx, clones, sessions, members, repository, commits)
 	linked := map[string]*gitCommit{}
 	for _, link := range scan.Links {
@@ -706,42 +725,102 @@ func (clone *gitClone) holding(commits map[string]*gitCommit) map[string]*gitCom
 	return held
 }
 
-// readGitTree reads the paths at the mainline tip, else HEAD, for the file
+// readTree reads the paths at the mainline tip, else HEAD, for the file
 // tree: from the first clone (most recently seen first) with a mainline,
-// else the first clone's HEAD. A tree it cannot read or larger than
-// outcomeGitTreeLimit is left out: the files page then lists what sessions
-// and commits touched.
-func readGitTree(ctx context.Context, clones []*gitClone) (paths []string, ref, commit string) {
+// else the first clone's HEAD; unless the stored tree is of that commit
+// already (stored). A tree larger than outcomeGitTreeLimit is left out: the
+// files page then lists what sessions and commits touched. A tree Git could
+// not read keeps the stored one, since failing to look is not evidence it
+// changed.
+func (scan *gitScan) readTree(ctx context.Context, clones []*gitClone, stored string) {
 	if len(clones) == 0 {
-		return nil, "", ""
+		scan.TreeKept = true
+		return
 	}
-	dir := clones[0].Dir
+	dir, commit, ref, read := clones[0].Dir, "", "", false
 	for _, clone := range clones {
 		tip, tipRef, err := mainlineTip(ctx, clone.Dir)
-		if err == nil && tip != "" {
+		if err != nil {
+			continue
+		}
+		read = true
+		if tip != "" {
 			dir, commit, ref = clone.Dir, tip, tipRef
 			break
 		}
 	}
+	if !read {
+		scan.TreeKept = true
+		return
+	}
 	if commit == "" {
 		head, err := outcomeGitCommand(ctx, dir, outcomeGitShortTimeout, nil, "rev-parse", "--verify", "-q", "HEAD^{commit}")
-		if commit, ref = strings.TrimSpace(string(head)), "HEAD"; err != nil || !gitCommitID.MatchString(commit) {
-			return nil, "", ""
+		commit, ref = strings.TrimSpace(string(head)), "HEAD"
+		if errors.Is(err, errGitTimeout) {
+			scan.TreeKept = true
+			return
+		}
+		if err != nil || !gitCommitID.MatchString(commit) {
+			return
 		}
 	}
-	output, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, "ls-tree", "-r", "-z", "--name-only", "--full-tree", commit)
-	if err != nil {
-		return nil, "", ""
+	scan.TreeRef, scan.TreeCommit = strings.TrimPrefix(strings.TrimPrefix(ref, "refs/remotes/"), "refs/heads/"), commit
+	if commit == stored {
+		scan.TreeKept = true
+		return
 	}
-	for _, path := range strings.Split(string(output), "\x00") {
-		if path != "" {
+	paths, complete, err := listGitTree(ctx, dir, commit, outcomeGitTreeLimit)
+	switch {
+	case err != nil:
+		scan.TreeKept, scan.TreeRef, scan.TreeCommit = true, "", ""
+	case !complete:
+		scan.TreeRef, scan.TreeCommit = "", ""
+	default:
+		scan.Tree = paths
+	}
+}
+
+// listGitTree reads the paths of a commit's tree as Git lists them, read-only
+// and at low priority as outcomeGitCommand runs it, and stops past limit
+// paths: complete is false for a larger tree, which is never held whole.
+var listGitTree = func(ctx context.Context, dir, commit string, limit int) (paths []string, complete bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, outcomeGitLogTimeout)
+	defer cancel()
+	name, full := "git", []string{"-C", dir, "-c", "log.showSignature=false", "ls-tree", "-r", "-z", "--name-only", "--full-tree", commit}
+	if nice, err := exec.LookPath("nice"); err == nil {
+		name, full = nice, append([]string{"-n", "10", "git"}, full...)
+	}
+	command := exec.CommandContext(ctx, name, full...)
+	command.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0")
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, false, err
+	}
+	if err := command.Start(); err != nil {
+		return nil, false, err
+	}
+	reader := bufio.NewReader(stdout)
+	for {
+		path, readErr := reader.ReadString(0)
+		if path = strings.TrimSuffix(path, "\x00"); path != "" {
+			if len(paths) == limit {
+				cancel()
+				_ = command.Wait()
+				return nil, false, nil
+			}
 			paths = append(paths, path)
 		}
+		if readErr != nil {
+			break
+		}
 	}
-	if len(paths) > outcomeGitTreeLimit {
-		return nil, "", ""
+	if err := command.Wait(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, false, errGitTimeout
+		}
+		return nil, false, err
 	}
-	return paths, strings.TrimPrefix(strings.TrimPrefix(ref, "refs/remotes/"), "refs/heads/"), commit
+	return paths, true, nil
 }
 
 // stashSubject is the subject git stash gives the commits it makes, which
@@ -1790,8 +1869,12 @@ func (c *Catalog) writeGitScan(ctx context.Context, repository, host, key string
 			if err := writeGitLinks(ctx, tx, repository, host, scan); err != nil {
 				return err
 			}
-			if err := writeGitTreeFiles(ctx, tx, repository, scan.Tree); err != nil {
-				return err
+			// The tree is written again only when it was read: a tree of the
+			// stored commit, or one Git could not read, stands.
+			if !scan.TreeKept {
+				if err := writeGitTreeFiles(ctx, tx, repository, scan.Tree); err != nil {
+					return err
+				}
 			}
 		}
 		var since any
@@ -1799,13 +1882,15 @@ func (c *Catalog) writeGitScan(ctx context.Context, repository, host, key string
 			since = scan.Since.UTC().Format(time.RFC3339)
 		}
 		// A failed scan keeps the commits and tree an earlier one stored, so
-		// it keeps how far back they were read and the tree's commit too.
+		// it keeps how far back they were read and the tree's commit too; so
+		// does a scan that could not read the tree.
+		keep := scan.Status != "checked" || scan.TreeKept && scan.TreeCommit == ""
 		_, err := tx.ExecContext(ctx, `INSERT INTO git_repository_scans(repository_id,host_id,scan_key,status,reason,scanned_at,history_since,tree_ref,tree_commit) VALUES(?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(repository_id,host_id) DO UPDATE SET scan_key=excluded.scan_key,status=excluded.status,reason=excluded.reason,scanned_at=excluded.scanned_at,
 			history_since=CASE WHEN excluded.status='checked' THEN excluded.history_since ELSE git_repository_scans.history_since END,
-			tree_ref=CASE WHEN excluded.status='checked' THEN excluded.tree_ref ELSE git_repository_scans.tree_ref END,
-			tree_commit=CASE WHEN excluded.status='checked' THEN excluded.tree_commit ELSE git_repository_scans.tree_commit END`,
-			repository, host, key, scan.Status, nilIfEmpty(scan.Reason), now(), since, nilIfEmpty(scan.TreeRef), nilIfEmpty(scan.TreeCommit))
+			tree_ref=CASE WHEN ? THEN git_repository_scans.tree_ref ELSE excluded.tree_ref END,
+			tree_commit=CASE WHEN ? THEN git_repository_scans.tree_commit ELSE excluded.tree_commit END`,
+			repository, host, key, scan.Status, nilIfEmpty(scan.Reason), now(), since, nilIfEmpty(scan.TreeRef), nilIfEmpty(scan.TreeCommit), keep, keep)
 		return err
 	})
 }
