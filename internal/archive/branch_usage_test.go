@@ -175,6 +175,12 @@ func TestBranchUsageRows(t *testing.T) {
 	if day := callProjectTool(t, library.catalog, "get_branch_spend", map[string]any{"project": "app", "to": "2026-09-02"}); integer(day["coverage"].(map[string]any)["on_branch"].(map[string]any)["tokens"]) != 6000 {
 		t.Fatalf("a date to includes its day: %#v", day)
 	}
+	// A date is a local day, as the page counts days: twelve hours behind
+	// UTC, 2 September starts at 12:00Z, after feature/b's 11:00Z hour.
+	override(t, &time.Local, time.FixedZone("UTC-12", -12*3600))
+	if day := callProjectTool(t, library.catalog, "get_branch_spend", map[string]any{"project": "app", "branch": "feature/b", "from": "2026-09-02"}); len(day["items"].([]any)) != 1 || integer(day["items"].([]any)[0].(map[string]any)["tokens"]) != 1000 {
+		t.Fatalf("a date from starts at local midnight: %#v", day)
+	}
 	if folder := callProjectTool(t, library.catalog, "get_branch_spend", map[string]any{"project": library.folders["notes"]}); integer(folder["total"]) != 0 || len(folder["coverage"].(map[string]any)) != 0 {
 		t.Fatalf("a folder has spend by branch: %#v", folder)
 	}

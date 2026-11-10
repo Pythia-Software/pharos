@@ -36,8 +36,8 @@ var outcomeMCPTools = []map[string]any{
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"project":           map[string]any{"type": "string", "description": "A repository from list_projects."},
 			"branch":            map[string]any{"type": "string", "description": "Only branches whose name contains this text."},
-			"from":              map[string]any{"type": "string", "description": "Usage in UTC hours starting at or after this time: an RFC 3339 timestamp or a UTC date. Spend is placed in the hour it was used."},
-			"to":                map[string]any{"type": "string", "description": "Usage in UTC hours starting before this time; a date includes its whole day."},
+			"from":              map[string]any{"type": "string", "description": "Usage in hours starting at or after this time: an RFC 3339 timestamp, or a date, which starts at midnight in this Mac's time zone as the Spend by Branch page counts days. Spend is placed in the hour it was used."},
+			"to":                map[string]any{"type": "string", "description": "Usage in hours starting before this time; a date includes its whole local day."},
 			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "description": "Branches listed; default 20."},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 }
@@ -51,16 +51,20 @@ func (c *Catalog) getBranchSpend(ctx context.Context, args map[string]any) (map[
 	budget := mcpBudget(args, 1500)
 	project, branchText := firstString(args["project"]), strings.ToLower(firstString(args["branch"]))
 	// Rows are hourly: the bounds select the hours starting in [from, to),
-	// compared as instants, so a bound's offset counts.
+	// compared as instants, so a bound's offset counts. A date is a day in
+	// this Mac's time zone, as Spend by Branch counts days (localMidnight).
 	var from, to time.Time
 	for key, bound := range map[string]*time.Time{"from": &from, "to": &to} {
 		if value := strings.TrimSpace(firstString(args[key])); value != "" {
 			parsed, ok := parseTime(value)
+			if day, err := time.ParseInLocation("2006-01-02", value, time.Local); err == nil {
+				parsed, ok = day, true
+				if key == "to" {
+					parsed = day.AddDate(0, 0, 1)
+				}
+			}
 			if !ok {
 				return nil, fmt.Errorf("%s must be a valid timestamp or date", key)
-			}
-			if key == "to" && len(value) == len("2006-01-02") {
-				parsed = parsed.Add(24 * time.Hour)
 			}
 			*bound = parsed
 		}

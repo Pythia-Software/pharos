@@ -774,9 +774,10 @@ commit, is an error naming `max_output_tokens`, never an empty page whose
   coverage split (on a branch per turn or per session, unknown, no branch
   data), from the same rows as Analyze → Spend by Branch. Where no repository
   session has spend, it says so and points to `query_statistics` per project.
-  Spend is placed in the UTC hour it was used: `from` and `to` select the
-  hours starting in [`from`, `to`), compared as instants, and a date `to`
-  includes its day.
+  Spend is placed in the hour it was used: `from` and `to` select the
+  hours starting in [`from`, `to`), compared as instants. A date is a day in
+  the Mac's time zone, as the page counts days, and a date `to` includes its
+  day.
 
 Every other tool takes the new facts too:
 
