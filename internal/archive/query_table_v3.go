@@ -166,6 +166,8 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	var required []string
 	var find *libraryFindSet
 	var err error
+	// unordered is the source before newestFirstScan ordered it, when it did.
+	unordered := ""
 	if sqlBacked {
 		if err = s.Catalog.prepareSQLDataset(ctx, dataset); err != nil {
 			return qt.QueryResultV3{}, nil, err
@@ -190,8 +192,12 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			var bounds map[string][2]string
 			bounds, err = queryBucketBounds(ctx, s.Catalog.reader(), where)
 			if err == nil {
-				projected, _ := table.project(required).preferCoveringScan(where)
+				projected, covering := table.project(required).preferCoveringScan(where)
 				d.SourceSQL, d.SourceArgs = projected.windowedQuerySource(schema, where, time.UnixMilli(q.Now), bounds)
+				if ordered, ok := projected.newestFirstScan(q, where); ok && !covering {
+					unordered = d.SourceSQL
+					d.SourceSQL, _ = ordered.windowedQuerySource(schema, where, time.UnixMilli(q.Now), bounds)
+				}
 			}
 		}
 	} else {
@@ -341,7 +347,11 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		// query generation (or stay in step with ones that do), so its
 		// counts are reusable within one. Staged rows are read outside the
 		// transaction, and record search gives each request its own plan.
-		d.PopulationCounter = s.Catalog.populationCounter(queryDatasetGeneration(dataset), queryPopulationFastCounts(dataset, schema, table)...)
+		fast := queryPopulationFastCounts(dataset, schema, table)
+		if unordered != "" {
+			fast = append(fast, unorderedCount(d.SourceSQL, unordered))
+		}
+		d.PopulationCounter = s.Catalog.populationCounter(queryDatasetGeneration(dataset), fast...)
 	}
 	var result qt.QueryResultV3
 	if dataset == "usage" && q.Grouping == nil && len(q.Metrics) > 0 {

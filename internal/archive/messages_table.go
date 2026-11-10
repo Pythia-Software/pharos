@@ -71,7 +71,8 @@ var messagesDataset = func() sqlDataset {
 			"ar": " LEFT JOIN repositories ar ON ar.id=aw.repository_id",
 			"o":  " LEFT JOIN conversation_origins o ON o.conversation_id=m.conversation_id",
 		},
-		pageFrom: "FROM messages m",
+		pageFrom:    "FROM messages m",
+		newestFirst: map[string]string{"sent_at": "messages_page_idx"},
 	}
 }()
 

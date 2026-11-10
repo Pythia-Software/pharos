@@ -899,6 +899,54 @@ func TestQueryV3ReusesPopulationCountsWithinAGeneration(t *testing.T) {
 	}
 }
 
+// A Tool calls page sorted newest first reads the time index and counts
+// over the unordered source (newestFirstScan): the same rows and total as
+// the page in any other order.
+func TestQueryV3NewestFirstToolCallsMatchOldestFirst(t *testing.T) {
+	c, config := testCatalog(t)
+	seedToolCalls(t, c, 40)
+	c.maintainQueryTextIndexes(t.Context())
+	if err := c.ensureToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, c)
+	noon := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	page := func(dir string, where ...qt.WhereTerm) ([]string, int64) {
+		t.Helper()
+		q := ungroupedRowsRequest(noon, where...)
+		q.Result.Select, q.Result.Limit = []string{"id", "started_at", "conversation_id"}, 100
+		q.Result.OrderBy = []qt.OrderBy{{Field: "started_at", Dir: dir}}
+		schema, _ := sqliteQuerySchema("tool_calls")
+		result, _, err := server.executeQueryV3(t.Context(), "tool_calls", nil, schema, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []string{}
+		for i, row := range result.Rows {
+			if i > 0 && firstString(row["started_at"]) != firstString(result.Rows[i-1]["started_at"]) &&
+				(firstString(row["started_at"]) > firstString(result.Rows[i-1]["started_at"])) == (dir == "desc") {
+				t.Fatalf("%s page out of order at row %d", dir, i)
+			}
+			ids = append(ids, firstString(row["id"]))
+		}
+		slices.Sort(ids)
+		return ids, result.Total
+	}
+	for _, where := range [][]qt.WhereTerm{nil, {{Field: "started_at", Op: ">=", Value: "-30d"}}} {
+		c.queryCounts = queryCountCache{}
+		newest, total := page("desc", where...)
+		// Unfiltered, the cube answers; bounded, the unordered source does.
+		if stats := c.queryCounts.snapshot(); stats.Fast != 1 || stats.Counted != 0 {
+			t.Fatalf("a newest-first page counted over its ordered source: %+v for %v", stats, where)
+		}
+		c.queryCounts = queryCountCache{}
+		oldest, plain := page("asc", where...)
+		if len(newest) == 0 || total != plain || !slices.Equal(newest, oldest) {
+			t.Fatalf("newest first %d rows of %d, oldest first %d of %d, for %v", len(newest), total, len(oldest), plain, where)
+		}
+	}
+}
+
 func TestQueryV3ToolCubeCountsMatchTheCalls(t *testing.T) {
 	slowTest(t)
 	c, config := testCatalog(t)

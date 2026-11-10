@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
 	"modernc.org/sqlite"
 )
@@ -53,9 +54,12 @@ type sqlDataset struct {
 	optionalJoins map[string]string
 	// Compound sources need to prune their inner projection too: SQLite may
 	// otherwise carry every UNION column through a coroutine for each row.
-	projectFrom        func([]string) string
-	pageFrom           string
-	pageIndexes        map[string]string
+	projectFrom func([]string) string
+	pageFrom    string
+	pageIndexes map[string]string
+	// newestFirst maps a timestamp field to an index on pageFrom's table
+	// that begins with its column, for pages sorted by it (see newestFirstScan).
+	newestFirst        map[string]string
 	coveringIndex      string
 	rangeCoveringIndex string
 	coveredFields      map[string]bool
@@ -101,6 +105,49 @@ func (d sqlDataset) preferCoveringScan(terms []querytable.WhereTerm) (sqlDataset
 	return d, true
 }
 
+var innerJoin = regexp.MustCompile(`(\s)(LEFT |CROSS )?JOIN `)
+
+// newestFirstScan is d reading its rows in a timestamp's order, for a page
+// of rows sorted newest first by that timestamp and filtered by nothing
+// else. SQLite otherwise tends to start from the smaller joined table and
+// sort every row to find the first fifty: all eight million messages, text
+// included. Reading the timestamp's index stops after a page. ok is false
+// when the request is anything else, where the planner's choice stands.
+//
+// A count over this source would visit every row in index order, so the
+// caller counts over the unordered source (unorderedCount).
+func (d sqlDataset) newestFirstScan(q qt.QueryRequestV3, where []qt.WhereTerm) (ordered sqlDataset, ok bool) {
+	if !q.Rows || q.Grouping != nil || q.Distinct != nil || len(q.Metrics) > 0 || len(q.Result.OrderBy) == 0 {
+		return d, false
+	}
+	// NULLs sort lowest in SQLite, so only descending with NULLs last is
+	// the index's own order read backwards.
+	order := q.Result.OrderBy[0]
+	index := d.newestFirst[order.Field]
+	if index == "" || order.Dir != "desc" || order.Nulls == "first" || order.Extract != nil {
+		return d, false
+	}
+	for _, term := range where {
+		if term.IsGroup() || term.Negated || term.Field != order.Field || !slices.Contains([]string{">", ">=", "<", "<="}, term.Op) {
+			return d, false
+		}
+	}
+	rest, found := strings.CutPrefix(d.from, d.pageFrom)
+	if d.pageFrom == "" || !found || rest != "" && !strings.ContainsAny(rest[:1], " \n\t") || strings.HasPrefix(strings.TrimSpace(rest), "INDEXED BY") {
+		return d, false // already indexed, or another table
+	}
+	from := d.pageFrom + " INDEXED BY " + sqlIdentifier(index) + rest
+	// Keep the indexed table outermost: an inner join is free to start from
+	// the other side.
+	d.from = innerJoin.ReplaceAllStringFunc(from, func(join string) string {
+		if strings.Contains(join, "LEFT ") || strings.Contains(join, "CROSS ") {
+			return join
+		}
+		return join[:1] + "CROSS JOIN "
+	})
+	return d, true
+}
+
 func (d sqlDataset) project(fields []string) sqlDataset {
 	columns := make(map[string]string, len(fields))
 	for _, field := range fields {
@@ -120,6 +167,7 @@ func (d sqlDataset) project(fields []string) sqlDataset {
 		if compact {
 			d.from = strings.Replace(d.from, "FROM tool_calls t", "FROM tool_query_facts t", 1)
 			d.pageFrom = "FROM tool_query_facts t"
+			d.newestFirst = nil // the index is on tool_calls
 			if _, ok := columns["activity"]; ok {
 				columns["activity"] = "t.activity"
 			}

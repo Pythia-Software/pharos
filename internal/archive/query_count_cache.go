@@ -255,6 +255,21 @@ func queryPopulationFastCounts(dataset string, schema qt.Schema, table sqlDatase
 	return nil
 }
 
+// unorderedCount runs the executor's count over the source as it was before
+// newestFirstScan fixed its read order: the same rows, with the planner free
+// to count them from whichever table is cheapest.
+func unorderedCount(ordered, unordered string) queryPopulationCount {
+	return func(ctx context.Context, tx *sql.Tx, p qt.PopulationCount) (int64, bool, error) {
+		statement := strings.Replace(p.SQL, ordered, unordered, 1)
+		if statement == p.SQL {
+			return 0, false, nil
+		}
+		var total int64
+		err := tx.QueryRowContext(ctx, statement, p.Args...).Scan(&total)
+		return total, err == nil, err
+	}
+}
+
 // agentEventRateCount answers an Agent event rates count filtered by kind
 // alone. Every message read has one row for every kind
 // (agentEventRateDataset), so the count is the messages the dataset serves

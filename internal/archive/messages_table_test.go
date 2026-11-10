@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -267,6 +268,41 @@ func TestMessagesQueryV3GroupsSearchesAndBoundsText(t *testing.T) {
 					t.Fatalf("message %s segments changed: got %q, want %q", id, joined.String(), body)
 				}
 			}
+		}
+	}
+
+	// A page sorted newest first reads the time index and counts over the
+	// unordered source (newestFirstScan). It has the rows and total of any
+	// other order, with or without a time bound.
+	page := func(dir string, where ...qt.WhereTerm) ([]string, int64) {
+		t.Helper()
+		q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true, Source: qt.WireQuery{Limit: 1},
+			Result: qt.WireQuery{Select: []string{"id", "sent_at", "title"}, Where: where, OrderBy: []qt.OrderBy{{Field: "sent_at", Dir: dir}}, Limit: 50}}
+		result, _, err := s.executeQueryV3(t.Context(), "messages", nil, PharosMessagesSchema(), q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids, last := []string{}, ""
+		for i, row := range result.Rows {
+			at := firstString(row["sent_at"])
+			if i > 0 && at != "" && last != "" && (at > last) == (dir == "desc") && at != last {
+				t.Fatalf("%s page out of order at %d: %s after %s", dir, i, at, last)
+			}
+			ids, last = append(ids, firstString(row["id"])), at
+		}
+		slices.Sort(ids)
+		return ids, result.Total
+	}
+	for _, where := range [][]qt.WhereTerm{nil, {{Field: "sent_at", Op: ">=", Value: "2026-10-01T09:02:00.000Z"}, {Field: "sent_at", Op: "<", Value: "2026-10-01T09:05:00.000Z"}}} {
+		counted := c.queryCounts.snapshot()
+		newest, total := page("desc", where...)
+		if after := c.queryCounts.snapshot(); after.Fast != counted.Fast+1 {
+			t.Fatalf("a newest-first page counted over its ordered source: %+v", after)
+		}
+		c.queryCounts = queryCountCache{}
+		oldest, plain := page("asc", where...)
+		if len(newest) == 0 || total != plain || !slices.Equal(newest, oldest) {
+			t.Fatalf("newest first %v (%d), oldest first %v (%d) for %v", newest, total, oldest, plain, where)
 		}
 	}
 }
