@@ -40,6 +40,23 @@ func checkExport(spec *providerSpec, path string) (int64, error) {
 	} else if err != nil {
 		return 0, probeRequestError{fmt.Errorf("Pharos cannot read %s: %w", path, err)}
 	}
+	if spec.Kind == "claude-ai" && info.IsDir() {
+		inputs, err := claudeExportInputs(sourceFiles{}, path)
+		if err != nil {
+			return 0, probeRequestError{err}
+		}
+		managed, conversations, size := false, false, int64(0)
+		for _, input := range inputs {
+			managed = managed || filepath.Base(input.path) == claudeInventoryName
+			conversations = conversations || input.conversations
+			if info, err := os.Stat(input.path); err == nil {
+				size += info.Size()
+			}
+		}
+		if managed && conversations {
+			return size, nil
+		}
+	}
 	conversations := func(names []string) bool {
 		if spec.Kind == "chatgpt" {
 			return len(chatGPTConversationFiles(names)) > 0

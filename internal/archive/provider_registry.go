@@ -477,7 +477,7 @@ func init() {
 			Plan: (*capturePlan).chatGPT, Preservation: retainedInputs,
 		},
 		{
-			Kind: "claude-ai", DisplayName: "Claude.ai", Export: "On claude.ai, open Settings → Privacy → Export data. The email it sends links to a ZIP.", Mutation: "retrieval-only", MirrorRank: 1,
+			Kind: "claude-ai", DisplayName: "Claude.ai", Export: "On claude.ai, open Settings → Privacy → Export data. Choose the manifest from the email or the folder holding its downloaded ZIPs. Pharos keeps missing parts available to resume.", Mutation: "retrieval-only", MirrorRank: 1,
 			Content: contentCapabilities{Supported: "timestamps", Varies: "tool_calls tool_results reasoning title", NotApplicable: "cwd git_branch subagents harness_version",
 				Notes: map[string]string{"tool_calls": "Not in older exports, which flatten each message to text.", "tool_results": "Not in older exports, which flatten each message to text.", "model": "The export names no model.", "message_tokens": "Exports have no token counts.", "reasoning": "A summary, when the export holds one."}, VariesNote: "When the export holds it."},
 			New:  func(base baseAdapter) Adapter { return &claudeAIAdapter{base} },

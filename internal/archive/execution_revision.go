@@ -33,16 +33,23 @@ type executionSourceTable struct {
 	presence []string
 }
 
+// nameScopeMoves is true of a root row (%[1]s) whose workspace has fewer than
+// two other roots that loadExecutionNames counts. It reads at most two of them.
+const nameScopeMoves = `CASE WHEN %[1]s.agent_depth=0 AND instr(%[1]s.native_id,':subagent:')=0 THEN (SELECT COUNT(*) FROM (
+ SELECT 1 FROM conversations r WHERE r.workspace_id=%[1]s.workspace_id AND r.id<>%[1]s.id AND r.agent_depth=0
+ AND instr(r.native_id,':subagent:')=0 AND (r.parent_id IS NULL OR r.provider='codex') LIMIT 2))<2 ELSE 0 END`
+
 var executionSourceTables = []executionSourceTable{
-	// Source titles have conversation scope only while there is one root.
-	// A second root, a move or a corrected depth invalidates the other roots'
-	// names too. Nickname/usage changes keep their existing narrower owner.
+	// Source titles have conversation scope only while there is one root
+	// (loadExecutionNames' root_count). A row can move that count to or from
+	// one only while the workspace has fewer than two other counted roots, so
+	// only then are the other roots' names invalidated; a workspace that already
+	// has several roots does not pay for each one on every insert.
+	// Nickname/usage changes keep their existing narrower owner.
 	{table: "conversations", tag: "name_scope", owners: []string{`SELECT id owner FROM conversations WHERE workspace_id=%[1]s.workspace_id
- AND agent_depth=0 AND instr(native_id,':subagent:')=0
- AND %[1]s.agent_depth=0 AND instr(%[1]s.native_id,':subagent:')=0`,
+ AND agent_depth=0 AND instr(native_id,':subagent:')=0 AND ` + nameScopeMoves,
 		`SELECT c.id owner FROM conversations c JOIN workspace_names n ON n.workspace_id=c.workspace_id
- WHERE n.display_workspace_id=%[1]s.workspace_id AND c.agent_depth=0 AND instr(c.native_id,':subagent:')=0
- AND %[1]s.agent_depth=0 AND instr(%[1]s.native_id,':subagent:')=0`},
+ WHERE n.display_workspace_id=%[1]s.workspace_id AND c.agent_depth=0 AND instr(c.native_id,':subagent:')=0 AND ` + nameScopeMoves},
 		columns: []string{"id", "workspace_id", "native_id", "agent_depth", "parent_id", "provider"}},
 	{table: "conversations", owners: []string{"%[1]s.id"},
 		columns: []string{"id", "workspace_id", "provider", "account", "native_id", "parent_id", "agent_depth", "agent_path", "agent_nickname", "started_at", "aliases_json"}},

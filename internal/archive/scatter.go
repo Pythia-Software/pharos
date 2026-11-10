@@ -139,7 +139,9 @@ func (s *Server) scatterRows(ctx context.Context, fields libraryFields, filters 
 			return nil, fmt.Errorf("scatter metric %s: %w", id, err)
 		}
 		if result.Total > int64(len(result.Rows)) {
-			return nil, fmt.Errorf("scatter metric %s exceeds %d points; choose a shorter range", id, scatterMaxEntities)
+			// A diagnostic reaches the page as its message; a plain error
+			// would read as the query failing.
+			return nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeResourceLimit, Message: fmt.Sprintf("This range has more than %d points to plot; choose a shorter range", scatterMaxEntities)}
 		}
 		for _, row := range result.Rows {
 			entity := firstString(row[key])
