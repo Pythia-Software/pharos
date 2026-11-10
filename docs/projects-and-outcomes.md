@@ -194,8 +194,9 @@ a Conductor workspace. Its delegated agents' calls are its own.
     workspace's edits and is never rework. When a workspace becomes or stops
     being a mirror, the sessions sharing its files are judged again.
   - A session whose edits cannot be read line by line (an input the
-    transcript did not keep, or only parts of lines) is not judged, and its
-    "why" says so.
+    transcript did not keep, only parts of lines, or a patch recorded as
+    its list of changed files) is not judged: once its window has passed
+    it is Unknown, not kept, and its "why" says so.
 
   Editing the same files again is not rework: continued work on a file
   usually adds to it. The calibration is under
@@ -269,7 +270,7 @@ decided it and its tier.
 | Changed, too recent | Edits less than N days ago, so rework cannot be judged yet. | Same. |
 | Reworked | Its changes were reverted, or later sessions removed at least half of the lines it added within N days. | Later sessions removed at least half of the lines it added within N days. |
 | No changes | The session changed no files. Research, review and questions are normal. | Same. |
-| Unknown | Not enough evidence, for example a harness that records no tool calls. | Same. |
+| Unknown | Not enough evidence, for example a harness that records no tool calls, or edits that could not be read line by line. | Same. |
 
 "Changed, too recent" is a revision of the brief's table. Without it, every
 session from the last two weeks would read as "kept" before rework could

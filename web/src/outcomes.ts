@@ -12,7 +12,7 @@ export const outcomeLabels: { id: OutcomeLabel; label: string; description: stri
   { id: "changed_recent", label: "Changed, too recent", description: "Edits younger than the rework window, so rework cannot be judged yet." },
   { id: "reworked", label: "Reworked", description: "Later sessions removed at least half of the lines it added, or its commits were reverted, within the rework window." },
   { id: "no_changes", label: "No changes", description: "The session changed no files: research, review and questions are normal." },
-  { id: "unknown", label: "Unknown", description: "Not enough evidence, such as a source that records no tool calls." },
+  { id: "unknown", label: "Unknown", description: "Not enough evidence, such as a source that records no tool calls, or edits that could not be read line by line, so rework was not judged." },
 ];
 
 const byId = new Map(outcomeLabels.map(label => [label.id, label]));

@@ -247,7 +247,7 @@ func TestSessionOutcomeLabels(t *testing.T) {
 	for id, want := range map[string]string{
 		"chat": "unknown", "web-chat": "unknown", "quiet": "no_changes", "research": "no_changes", "kept": "changed_kept", "recent": "changed_recent", "reworked": "reworked", "reworker": "changed_kept",
 		"light": "changed_kept", "continued": "changed_kept", "slow": "changed_kept", "mirrored": "changed_kept", "tree-a": "reworked", "rewritten": "reworked",
-		"opaque": "changed_kept", "patched": "changed_kept", "deleted": "reworked",
+		"opaque": "unknown", "inline": "unknown", "patched": "changed_kept", "deleted": "reworked",
 	} {
 		if labels[id][0] != want {
 			t.Errorf("%s: %s, want %s (%s)", id, labels[id][0], want, labels[id][1])

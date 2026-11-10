@@ -636,11 +636,13 @@ func bytesValue(value any) []byte {
 }
 
 // outcomeLabelSQL is the label of workspace w's session, from its stored
-// facts: a change younger than its rework window is too recent to judge.
+// facts: a change younger than its rework window is too recent to judge, and
+// one whose edits could not be read line by line (kept_lines NULL) is never
+// judged, so whether it was kept is unknown.
 func outcomeLabelSQL(w string) string {
 	return `COALESCE((SELECT CASE WHEN so.tool_calls_recorded=0 THEN 'unknown' WHEN so.files_changed=0 THEN 'no_changes'
 		WHEN so.heavily_reworked=1 THEN 'reworked' WHEN julianday(so.last_edit_at)>julianday('now')-so.rework_days THEN 'changed_recent'
-		ELSE 'changed_kept' END FROM session_outcomes so WHERE so.workspace_id=` + w + `.id),'unknown')`
+		WHEN so.kept_lines IS NULL THEN 'unknown' ELSE 'changed_kept' END FROM session_outcomes so WHERE so.workspace_id=` + w + `.id),'unknown')`
 }
 
 // outcomeWhySQL says what decided the label, and from which evidence tier.
