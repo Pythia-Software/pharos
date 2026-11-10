@@ -185,7 +185,7 @@ func (c *Catalog) ensureMessageLabelFacts(ctx context.Context) error {
 			var generation int
 			err = tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name='query_cache_generation'").Scan(&generation)
 			if err == nil && generation > 0 {
-				_, err = tx.ExecContext(ctx, "UPDATE query_cache_generation SET value=value+1 WHERE id=1")
+				err = advanceCacheGeneration(ctx, tx, "labels")
 			}
 		}
 		return err
@@ -383,7 +383,7 @@ func publishMessageLabelFacts(ctx context.Context, tx *sql.Tx, build messageLabe
 		}
 		n, err := result.RowsAffected()
 		if err == nil && n > 0 {
-			_, err = tx.ExecContext(ctx, "UPDATE query_cache_generation SET value=value+1 WHERE id=1")
+			err = advanceCacheGeneration(ctx, tx, "labels")
 		}
 		return err
 	}

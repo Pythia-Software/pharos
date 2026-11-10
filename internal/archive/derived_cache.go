@@ -307,6 +307,9 @@ func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, comput
 			return computeDerived(ctx, compute)
 		}
 		cache.version = version
+		// The value is current while nothing it reads has changed, which
+		// for most is less than every write (derivedKeyGeneration).
+		version = cache.versions.generations.of(derivedKeyGeneration(key))
 		if isWarmOnly(ctx) {
 			entry := cache.entries[key]
 			cache.mu.Unlock()
@@ -324,8 +327,8 @@ func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, comput
 				return nil, errDerivedCold
 			}
 		}
-		cache.pruneDelegationEntries(version, time.Now())
-		cache.pruneThinkingEntries(version, time.Now())
+		cache.pruneDelegationEntries(cache.versions.generations.of(derivedKeyGeneration("delegation:")), time.Now())
+		cache.pruneThinkingEntries(cache.versions.generations.of(derivedKeyGeneration("thinking:")), time.Now())
 		// A published tool cube changes independently of the input generation.
 		// Retain only its current completed Machine Time projection; in-flight
 		// readers continue to own their immutable snapshots after eviction.
@@ -440,8 +443,8 @@ func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, comput
 						delete(cache.entries, key)
 					}
 					close(entry.ready)
-					cache.pruneDelegationEntries(cache.version, time.Now())
-					cache.pruneThinkingEntries(cache.version, time.Now())
+					cache.pruneDelegationEntries(cache.versions.generations.of(derivedKeyGeneration("delegation:")), time.Now())
+					cache.pruneThinkingEntries(cache.versions.generations.of(derivedKeyGeneration("thinking:")), time.Now())
 				}()
 				value, err = computeDerived(work, compute)
 			}()
@@ -471,6 +474,30 @@ func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, comput
 		}
 		return entry.value, entry.err
 	}
+}
+
+// derivedCoreFamilies are the derived values (by derivedKeyFamily) computed
+// from sources, usage and tool evidence alone: no statement of theirs reads
+// a label or agent-event table (queryCacheDomains), so a write to one leaves
+// them current. A value that starts reading one must leave this list, or it
+// would keep showing what that table held when it was computed.
+var derivedCoreFamilies = map[string]bool{
+	"rhythm": true, "parallelism": true, "parallelism-threads": true, "session-shape": true,
+	"usage": true, "usage-hourly": true, "usage-base": true, "usage-ledger": true, "usage-roots": true, "workspace-usage": true,
+	"thinking": true, "writing": true, "writing-hourly": true, "conversation-activity": true,
+}
+
+// derivedKeyGeneration is the generation (cacheGenerations.of) whose advance
+// makes key's value stale.
+func derivedKeyGeneration(key string) string {
+	switch family := derivedKeyFamily(key); {
+	case derivedCoreFamilies[family]:
+		return generationCore
+	case family == "delegation":
+		// A workspace's snapshot counts its agent events and reads no label.
+		return generationEvents
+	}
+	return generationAll
 }
 
 // catalogVersion reads the catalog's data version on the cache's monitor.
@@ -505,8 +532,8 @@ func (c *Catalog) warmCaches(ctx context.Context) {
 	if err == nil {
 		cache := &c.derived
 		cache.mu.Lock()
-		cache.pruneDelegationEntries(cache.version, time.Now())
-		cache.pruneThinkingEntries(cache.version, time.Now())
+		cache.pruneDelegationEntries(cache.versions.generations.of(derivedKeyGeneration("delegation:")), time.Now())
+		cache.pruneThinkingEntries(cache.versions.generations.of(derivedKeyGeneration("thinking:")), time.Now())
 		cache.mu.Unlock()
 	}
 	if err != nil || version != c.quietVersion {
@@ -540,7 +567,7 @@ func (c *Catalog) warmCaches(ctx context.Context) {
 		if strings.HasPrefix(key, "delegation:") || strings.HasPrefix(key, "machine-time:") || isThinkingCohortKey(key) {
 			continue
 		}
-		if entry.version != version && time.Since(entry.usedAt) < recentUse {
+		if entry.version != cache.versions.generations.of(derivedKeyGeneration(key)) && time.Since(entry.usedAt) < recentUse {
 			stale[key] = entry.compute
 		}
 	}

@@ -11,8 +11,12 @@ import (
 
 func TestQueryCachesSurviveMaintenanceAndAuditCommits(t *testing.T) {
 	catalog, _ := libraryFixture(t)
-	other := otherProcess(t, catalog)
 	ctx := context.Background()
+	// The label ledger's setup installs the triggers for every table present.
+	if err := errors.Join(catalog.ensureAgentEventFactsSchema(), catalog.ensureLabelsSchema(ctx)); err != nil {
+		t.Fatal(err)
+	}
+	other := otherProcess(t, catalog)
 	before := libraryRowsByID(t, catalog)
 	var builds int
 	compute := func(context.Context) (int, error) { builds++; return 42, nil }
@@ -44,6 +48,41 @@ func TestQueryCachesSurviveMaintenanceAndAuditCommits(t *testing.T) {
 	}
 	if current, err := catalog.catalogVersion(ctx); err != nil || current != version {
 		t.Fatalf("maintenance changed input generation: %d -> %d, %v", version, current, err)
+	}
+	// The labeling and agent-event passes commit to their own tables for
+	// hours. A value that reads neither (derivedCoreFamilies) is kept; any
+	// other is recomputed, as it is by every tracked write.
+	start, err := readCacheGenerations(ctx, other.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wide int
+	everything := func(context.Context) (int, error) { wide++; return 42, nil }
+	var narrow int
+	events := func(context.Context) (*delegationSnapshot, error) { narrow++; return nil, nil }
+	for i, statement := range []string{
+		`SELECT 1`,
+		`INSERT INTO message_labels_dirty(conversation_id,token) VALUES('c','t')`,
+		`INSERT INTO agent_event_fact_conversations(conversation_id,stamp) VALUES('c','s')`,
+	} {
+		if _, err := other.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cachedValue(ctx, catalog, "probe", everything); err != nil || wide != i+1 {
+			t.Fatalf("after %q: %d builds of a value that may read it, %v", statement, wide, err)
+		}
+		if _, err := cachedValue(ctx, catalog, "usage:probe", compute); err != nil || builds != 1 {
+			t.Fatalf("after %q: %d builds of a value that reads neither, %v", statement, builds, err)
+		}
+		// A delegation snapshot reads agent events and no label.
+		if _, err := cachedValue(ctx, catalog, "delegation:probe", events); err != nil || narrow != 1+i/2 {
+			t.Fatalf("after %q: %d builds of a value that reads agent events, %v", statement, narrow, err)
+		}
+	}
+	generations, err := readCacheGenerations(ctx, other.DB)
+	if err != nil || generations.labels <= start.labels || generations.events <= start.events ||
+		generations.of(generationCore) != start.of(generationCore) || generations.of(generationEvents) == start.of(generationEvents) {
+		t.Fatalf("generations after a label and an event write: %+v (from %+v), %v", generations, start, err)
 	}
 	// A real source edit from another process still invalidates both caches.
 	if _, err := other.DB.Exec(`UPDATE workspaces SET title='Updated' WHERE id='c'`); err != nil {
