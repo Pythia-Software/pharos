@@ -260,14 +260,16 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 	if parent, _ := ctx.Value(derivedAdmissionKey{}).(*derivedAdmission); parent != nil {
 		// Do not hold a heavy slot while waiting for a shared dependency. A
 		// queue of parents waiting on queued children would otherwise deadlock.
-		parent.release()
+		ran := parent.lease.yield()
 		ctx = context.WithValue(ctx, derivedAdmissionKey{}, (*derivedAdmission)(nil))
 		value, err := c.derivedValueUnadmitted(ctx, key, compute, request)
-		release, admissionErr := parent.gate.acquireKind(ctx, parent.kind)
+		// The builder resumes as the work it has been: time it ran before
+		// yielding still counts towards how long its kind takes.
+		lease, admissionErr := parent.gate.lease(ctx, parent.kind, ran)
 		if admissionErr != nil {
 			return nil, admissionErr
 		}
-		parent.release = release
+		parent.lease = lease
 		return value, err
 	}
 	return c.derivedValueUnadmitted(ctx, key, compute, request)
