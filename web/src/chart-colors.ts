@@ -5,6 +5,7 @@ import { orderedValues } from "./session-shape-bands";
 import agentEventKinds from "./agent-event-kinds.json";
 import type { MetricValue } from "@pythia-software/query-table-core";
 import type { MetricTheme } from "@pythia-software/query-table-ui";
+import { fitProjectColor, projectColorFields, projectMetricTheme, projectSeriesColor } from "./project-colors";
 
 // Agent event groups take the reader's event hues (ui.py's --event-* tokens):
 // friction red, learning ochre, second look green, choices blue. A kind is a
@@ -66,7 +67,8 @@ function generatedColor(key: string, provider?: Provider): string {
   for (let attempt = 0; ; attempt++) {
     const hash = hashName(`${key}:${attempt}`);
     const hue = provider ? (catalog.providers[provider].hue + (hash % 17) - 8 + 360) % 360 : hash % 360;
-    const color = hexColor(hue, (55 + ((hash >>> 8) % 30)) / 100, (35 + ((hash >>> 16) % 31)) / 100);
+    const raw = hexColor(hue, (55 + ((hash >>> 8) % 30)) / 100, (35 + ((hash >>> 16) % 31)) / 100);
+    const color = key.startsWith("project:") ? fitProjectColor(raw) : raw;
     if (reserved.has(color)) continue;
     reserved.add(color);
     allocated.set(key, color);
@@ -102,6 +104,7 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
       groupPath:[group,...scope==='label'?parts.slice(1,-1).map((_,index)=>shortLabel(parts.slice(0,index+2).join('.'))):[]]};
   }
   if (scope.startsWith("root_")) scope = scope.slice(5);
+  if (projectColorFields.includes(scope)) return { color: projectSeriesColor(name, generatedColor(`project:${name}`)) };
   if (scope === "family_group" && Object.hasOwn(eventGroupHues, name)) return { color: eventGroupHues[name], order: String(agentEventKinds.groups.indexOf(name)) };
   if (scope === "family" && eventKindStyles.has(name)) return eventKindStyles.get(name)!;
   // Daily covers key series by their displayed label; Machine Time's palette applies to either.
@@ -161,7 +164,11 @@ export function colorFields(clause: { groupBy: string[]; dateGrouping?: { interv
 // The key whose palette colours a group of several keys, in priority order:
 // a kind of agent event keeps its colour on every repository's bar, and a
 // model its family's colour beside a provider, repository or effort.
-export const keyColorFields = ["family", "family_group", "root_model_family", "model_family", "root_effort", "effort", "root_provider", "provider", "project_name", "root_project_name", "repository_name"];
+export const keyColorFields = ["family", "family_group", "root_model_family", "model_family", "root_effort", "effort", "root_provider", "provider", "project_id", "root_project_id", "repository_id", "root_repository_id", "project_name", "root_project_name", "repository_name", "root_repository_name"];
+
+export function chartMetricTheme(): MetricTheme {
+  return { ...projectMetricTheme(), colorBy: keyColorFields };
+}
 
 // Compound metric groups retain their model palette even when their first key
 // is provider, repository, or a display label flattened for the native renderer.
@@ -174,7 +181,7 @@ export function metricSeriesColor(fields: string[], keys: unknown[]): string {
 // several keys by that palette key (Query Table's colorBy), so the chart
 // agrees with its legend and with the compact covers.
 export function keyColorTheme(fields: string[], buckets: ReadonlyArray<{ keys: ReadonlyArray<unknown> }>): MetricTheme | undefined {
-  const field = fields.length > 1 ? keyColorFields.find(field => fields.includes(field)) : undefined;
+  const field = fields.length > 1 ? keyColorFields.find(field => fields.includes(field)) ?? projectColorFields.find(field => fields.includes(field)) : fields.find(field => projectColorFields.includes(field));
   if (!field) return undefined;
   const index = fields.indexOf(field), values = [...new Set(buckets.map(bucket => bucket.keys[index]))];
   return { colorBy: field, dimensions: { [field]: { layer: field, overrides: values.map(value => ({ value: value as MetricValue, color: chartSeriesStyle(field, String(value ?? "Unspecified")).color })) } } };

@@ -1,5 +1,6 @@
 import type { ChartBucket, ChartSeries } from "./chart-series";
-import { clipIntervals, concurrencyPalette, concurrencySpans, concurrencyUnit, minute, type ConcurrencyData, type Interval } from "./concurrency-data";
+import { clipIntervals, concurrencySpans, concurrencyUnit, minute, type ConcurrencyData, type Interval } from "./concurrency-data";
+import { chartSeriesStyle } from "./chart-colors";
 import { concurrencyRangePresets, resolveConcurrencyRange, type ConcurrencySettings } from "./concurrency-settings";
 
 // The Parallelism ribbon as a Home card: the ribbon's range, zoom, counting,
@@ -52,7 +53,7 @@ export function ribbonCover(data: ConcurrencyData, settings: ConcurrencySettings
     buckets.push({ key: String(start), date: new Date(start), values });
   }
   const series: ChartSeries[] = repositories.filter(repository => buckets.some(bucket => bucket.values[repository])).map(repository => ({
-    key: repository, label: repository, value: repository, color: concurrencyPalette[repositories.indexOf(repository) % concurrencyPalette.length],
+    key: repository, label: repository || "No project", value: repository, color: chartSeriesStyle("project_name", repository).color,
   }));
   return { buckets, series, hourly: period < 24 * hour, label: `Average concurrent ${units(settings)}` };
 }
