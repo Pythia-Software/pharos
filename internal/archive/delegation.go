@@ -97,15 +97,16 @@ type delegationNode struct {
 	// Label is the execution's one name in every reader and projection
 	// (delegationProjection.label). Subtitle is local context, such as the
 	// workspace title, that never replaces it.
-	Label       string `json:"label"`
-	LabelSource string `json:"label_source"`
-	NativeID    string `json:"native_id,omitempty"`
-	Subtitle    string `json:"subtitle,omitempty"`
-	Provider    string `json:"provider"`
-	Model       string `json:"model"`
-	Effort      string `json:"effort"`
-	Coverage    string `json:"coverage"`
-	Usage       string `json:"usage_status"`
+	Label         string                `json:"label"`
+	LabelSource   string                `json:"label_source"`
+	NativeID      string                `json:"native_id,omitempty"`
+	Subtitle      string                `json:"subtitle,omitempty"`
+	Provider      string                `json:"provider"`
+	Model         string                `json:"model"`
+	Effort        string                `json:"effort"`
+	EffortSummary *sessionEffortSummary `json:"effort_summary"`
+	Coverage      string                `json:"coverage"`
+	Usage         string                `json:"usage_status"`
 	// Depth is layout indentation within this snapshot. Ancestry carries the
 	// semantic parent state; its depth is absent unless the chain reaches a
 	// known root. AncestorIDs are the resolved chain, nearest first.
@@ -258,6 +259,10 @@ func delegationUnion(spans []delegationSpan) float64 {
 // context never takes it past this (a package variable so tests can lower it).
 var delegationAnalysisLimit = 10000
 
+func errDelegationTooLarge() error {
+	return fmt.Errorf("workspace exceeds the %s-agent-session analysis limit", thousands(delegationAnalysisLimit))
+}
+
 var errDelegationSnapshotChanged = errors.New("execution evidence changed since the explorer snapshot")
 
 func (c *Catalog) delegationSnapshot(ctx context.Context, workspace string) (*delegationSnapshot, error) {
@@ -341,7 +346,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	}
 	conversations, err := queryMapsContext(ctx, tx, `SELECT id,provider,account,model,effort,native_id,parent_id,agent_path,agent_nickname,coverage,started_at,ended_at,
  (SELECT substr(d.initiation,1,180) FROM conversation_documents d WHERE d.conversation_id=c.id) prompt
- FROM conversations c WHERE workspace_id=? ORDER BY started_at,id LIMIT 10001`, workspace)
+ FROM conversations c WHERE workspace_id=? ORDER BY started_at,id LIMIT ?`, workspace, delegationAnalysisLimit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -349,17 +354,17 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	// fields. Codex can retain a readable task_name beside an encrypted message.
 	// Extract before clipping: the name may follow a very large message. Unknown
 	// structured payloads and opaque messages must not become display labels.
-	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,`+delegationAssignmentCandidatesSQL+` assignment_candidates
- FROM agent_sessions a LEFT JOIN messages m ON m.id=a.delegation_message_id
- WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT 10001`, workspace)
+	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,es.summary_json effort_summary,`+delegationAssignmentCandidatesSQL+` assignment_candidates
+ FROM agent_sessions a`+sessionEffortSummaryJoin+`LEFT JOIN messages m ON m.id=a.delegation_message_id
+ WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT ?`, workspace, delegationAnalysisLimit+1)
 	if err != nil {
 		return nil, err
 	}
 	for _, session := range sessions {
 		session["assignment"] = delegationAssignment(firstString(session["assignment_candidates"]))
 	}
-	if len(sessions) > 10000 || len(conversations) > 10000 {
-		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
+	if len(sessions) > delegationAnalysisLimit || len(conversations) > delegationAnalysisLimit {
+		return nil, errDelegationTooLarge()
 	}
 	s := &delegationSnapshot{ByID: map[string]*delegationNode{}, Aliases: map[string]string{}, Maxima: map[string]map[string]float64{"self": {}, "all": {}}, Density: make([]int, 120), Warnings: []string{}}
 	res, err := c.executionResolutionAt(ctx, tx)
@@ -387,8 +392,8 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			sessions = append(sessions, map[string]any{"id": id, "conversation_id": cid, "provider": cv["provider"], "model": cv["model"], "started_at": cv["started_at"], "ended_at": cv["ended_at"], "usage_status": "unavailable", "native_id": "main"})
 		}
 	}
-	if len(sessions) > 10000 {
-		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
+	if len(sessions) > delegationAnalysisLimit {
+		return nil, errDelegationTooLarge()
 	}
 	// One row per execution with a stream here. Attempts and copied launches are
 	// source evidence, not executions: their IDs remain aliases, and a row the
@@ -492,9 +497,14 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		if main {
 			label = firstString(cv["native_id"], label)
 		}
-		n := &delegationNode{ID: nid, WorkspaceID: workspace, ConversationID: cid, Provider: firstString(lead["provider"], cv["provider"]), Model: firstString(lead["model"], cv["model"]), Label: label, Coverage: firstString(cv["coverage"]), TimeBoundsSource: firstString(lead["time_bounds_source"]), Usage: "unavailable", envelopeStart: delegationTime(lead["started_at"]), envelopeEnd: delegationTime(lead["ended_at"]), MessageID: firstString(lead["delegation_message_id"]), Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
+		model := firstString(lead["model"])
+		if main && model == "" {
+			model = firstString(cv["model"])
+		}
+		n := &delegationNode{ID: nid, WorkspaceID: workspace, ConversationID: cid, Provider: firstString(lead["provider"], cv["provider"]), Model: model, Label: label, Coverage: firstString(cv["coverage"]), TimeBoundsSource: firstString(lead["time_bounds_source"]), Usage: "unavailable", envelopeStart: delegationTime(lead["started_at"]), envelopeEnd: delegationTime(lead["ended_at"]), MessageID: firstString(lead["delegation_message_id"]), Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
 		// Embedded executions must not inherit the parent agent's effort.
 		n.Effort = firstString(lead["effort"])
+		n.EffortSummary = readSessionEffortSummary(lead["effort_summary"])
 		if main && n.Effort == "" {
 			n.Effort = firstString(cv["effort"])
 		}
@@ -516,6 +526,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			if meta, ok := metas[x.Conversation]; ok && !p.hasTranscriptIn(x, workspace) {
 				n.ConversationID, n.WorkspaceID, n.Provider = meta.ID, meta.WorkspaceID, meta.Provider
 				n.Model, n.Effort, n.Coverage = meta.Model, meta.Effort, meta.Coverage
+				n.EffortSummary = nil
 				n.ExternalChild = &delegationReference{ConversationID: meta.ID, WorkspaceID: meta.WorkspaceID, Label: n.Label, Provider: meta.Provider}
 			}
 		}
@@ -597,7 +608,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		}
 	}
 	if len(s.Nodes) > delegationAnalysisLimit {
-		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
+		return nil, errDelegationTooLarge()
 	}
 	// Attempts stay visible on the execution that issued them.
 	unowned := 0

@@ -138,9 +138,7 @@ func TestLibraryCacheRepricesOnPriceBookAndDateChanges(t *testing.T) {
 	today := time.Date(2026, 9, 24, 12, 0, 0, 0, time.Local)
 	catalog.now = func() time.Time { return today }
 	ingestUsageFixture(t, catalog)
-	if _, err := catalog.DB.Exec(`UPDATE agent_sessions SET model='cache-probe-1'`); err != nil {
-		t.Fatal(err)
-	}
+	execTx(t, catalog.DB, `UPDATE agent_sessions SET model='cache-probe-1'`, `UPDATE agent_session_usage SET model='cache-probe-1'`)
 	cost := func() (any, any) {
 		t.Helper()
 		rows, err := catalog.searchRows(SearchOptions{}, nil)

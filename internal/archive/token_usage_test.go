@@ -22,6 +22,47 @@ func TestTokenMetricsHaveStableDigestOrder(t *testing.T) {
 	}
 }
 
+func TestObservedEffortDoesNotAllocateUnknownAggregate(t *testing.T) {
+	c, _ := testCatalog(t)
+	record := WorkspaceRecord{SourceID: "observed-effort", SourceKind: "codex", Account: "local", Conversations: []ConversationRecord{{
+		NativeID: "observed-effort", Provider: "codex", Model: "gpt-test", Account: "local",
+		Messages: []MessageRecord{
+			{NativeID: "startup", Role: "user", Kind: "message", Text: "before recorded configuration", Selected: true},
+			{NativeID: "request", Role: "system", Kind: "metadata", Effort: "high", Text: `{"type":"token_usage_record","response_id":"r1","usage":{"input_tokens":100,"output_tokens":20}}`, Selected: true},
+			{NativeID: "result", Role: "system", Kind: "metadata", Effort: "high", Text: `{"type":"result","usage":{"input_tokens":300,"output_tokens":60}}`, Selected: true},
+		},
+	}}}
+	tx, err := c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, _, err := ingestWorkspace(tx, record, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var summary string
+	if err := c.DB.QueryRow(`SELECT summary_json FROM agent_session_effort_summaries`).Scan(&summary); err != nil {
+		t.Fatal(err)
+	}
+	if got := readSessionEffortSummary(summary); got.KnownRequests != 1 || got.UnknownRequests != 0 || len(got.Levels) != 1 || got.Levels[0] != "high" {
+		t.Fatalf("observed effort: %s", summary)
+	}
+	rows, err := queryMaps(c.DB, `SELECT effort,SUM(total_tokens) tokens FROM agent_session_usage GROUP BY effort`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, row := range rows {
+		got[firstString(row["effort"])] = integer(row["tokens"])
+	}
+	if len(got) != 2 || got["high"] != 120 || got[""] != 240 {
+		t.Fatalf("observed summary relabeled uncertain aggregate: %v", got)
+	}
+}
+
 func TestAgentSessionTimeBounds(t *testing.T) {
 	if decodeSessionBounds(`{"source":"attempt-envelope","started_at":"2026-09-20T10:00:00Z","ended_at":123}`) != nil {
 		t.Fatal("malformed retained bounds must not supply partial proof")
@@ -148,6 +189,38 @@ func TestTokenUsageFixtures(t *testing.T) {
 }
 
 func TestNestedSubagentsArePersistedWithCostDimensions(t *testing.T) {
+	t.Run("execution model evidence", func(t *testing.T) {
+		launch := MessageRecord{NativeID: "launch", Kind: "delegation", CallID: "child", Model: "opus", Text: `{"input":{"model":"sonnet"}}`}
+		request := func(model string) MessageRecord {
+			return MessageRecord{NativeID: model, Kind: "metadata", ParentNativeID: "launch", Model: "opus", RawText: `{"type":"assistant","message":{"model":"` + model + `","usage":{"input_tokens":10}}}`}
+		}
+		for _, tc := range []struct {
+			name     string
+			messages []MessageRecord
+			want     string
+		}{
+			{"observed beats configured and inherited", []MessageRecord{launch, request("claude-haiku-4-5-20251001")}, "claude-haiku-4-5-20251001"},
+			{"two observed models", []MessageRecord{launch, request("haiku"), request("sonnet")}, multipleSessionModels},
+			{"aliases remain distinct", []MessageRecord{launch, request("haiku"), request("claude-haiku-4-5-20251001")}, multipleSessionModels},
+			{"context variants remain distinct", []MessageRecord{launch, request("opus"), request("opus[1m]")}, multipleSessionModels},
+			{"synthetic error preserves observed model", []MessageRecord{launch, request("haiku"), request("<synthetic>")}, "haiku"},
+			{"configured without usage", []MessageRecord{launch}, "sonnet"},
+			{"unknown never inherits", []MessageRecord{{NativeID: "launch", Kind: "delegation", CallID: "child", Model: "opus"}}, "Unknown model"},
+			{"tool output cannot claim model", []MessageRecord{{NativeID: "launch", Kind: "delegation", CallID: "child"}, {Kind: "tool_result", ParentNativeID: "child", Text: `{"type":"assistant","model":"haiku"}`}}, "Unknown model"},
+			{"assistant JSON response example", []MessageRecord{launch, request("haiku"), {Kind: "message", Role: "assistant", ParentNativeID: "child", Text: `{"object":"response","model":"gpt-4.1","output":[]}`}}, "haiku"},
+			{"assistant JSON without envelopes", []MessageRecord{launch, {Kind: "message", Role: "assistant", ParentNativeID: "child", Text: `{"type":"assistant","message":{"model":"gpt-4.1"}}`}}, "sonnet"},
+			{"metadata text retains protocol evidence", []MessageRecord{launch, {Kind: "metadata", Role: "system", ParentNativeID: "child", Text: `{"type":"assistant","message":{"model":"haiku"}}`}}, "haiku"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				conversation := ConversationRecord{Model: "opus", Messages: tc.messages}
+				for _, summary := range agentSessionSummaries(tc.messages) {
+					if summary.nativeID == "child" && summarySessionModel(summary, conversation) != tc.want {
+						t.Fatalf("model=%q want %q", summarySessionModel(summary, conversation), tc.want)
+					}
+				}
+			})
+		}
+	})
 	t.Run("structured Agent result fallback", func(t *testing.T) {
 		launch := MessageRecord{NativeID: "launch", Kind: "delegation", CallID: "child", Model: "claude-opus-5", Text: `{"tool":"Agent","input":{"model":"sonnet"}}`}
 		result := MessageRecord{NativeID: "handback", Kind: "delegation_result", CallID: "child", Model: "claude-opus-5", CreatedAt: "2026-08-05T13:17:21Z", Text: `{"details":{"status":"completed","totalToolUseCount":0,"totalTokens":110,"usage":{"input_tokens":5,"cache_read_input_tokens":90,"cache_creation_input_tokens":5,"output_tokens":10}},"content":"Finished"}`}
@@ -226,7 +299,7 @@ func TestNestedSubagentsArePersistedWithCostDimensions(t *testing.T) {
 	}
 	messages := []MessageRecord{
 		{NativeID: "delegate-outer", Role: "assistant", Kind: "delegation", CallID: "outer", Text: `{"tool":"spawn_agent"}`, Selected: true},
-		{NativeID: "outer-usage", Role: "assistant", Kind: "metadata", ParentNativeID: "outer", Text: `{"type":"assistant","parent_tool_use_id":"outer","message":{"id":"outer-request","usage":{"input_tokens":10,"cache_read_input_tokens":90,"output_tokens":10}}}`, Selected: true},
+		{NativeID: "outer-usage", Role: "assistant", Kind: "metadata", ParentNativeID: "outer", Model: "claude-haiku-4-5-20251001", Text: `{"type":"assistant","parent_tool_use_id":"outer","message":{"id":"outer-request","model":"claude-haiku-4-5-20251001","usage":{"input_tokens":10,"cache_read_input_tokens":90,"output_tokens":10}}}`, Selected: true},
 		{NativeID: "delegate-inner", Role: "assistant", Kind: "delegation", ParentNativeID: "outer", CallID: "inner", Text: `{"tool":"spawn_agent"}`, Selected: true},
 		{NativeID: "inner-usage", Role: "assistant", Kind: "metadata", ParentNativeID: "inner", Text: `{"type":"assistant","parent_tool_use_id":"inner","message":{"id":"inner-request","usage":{"input_tokens":20,"cache_creation_input_tokens":30,"output_tokens":5}}}`, Selected: true},
 		{NativeID: "result", Role: "system", Kind: "result", Text: `{"type":"result","usage":{"total_tokens":165}}`, Selected: true},
@@ -243,7 +316,7 @@ func TestNestedSubagentsArePersistedWithCostDimensions(t *testing.T) {
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := queryMaps(catalog.DB, `SELECT native_id,depth,uncached_input_tokens,cache_read_input_tokens,
+	rows, err := queryMaps(catalog.DB, `SELECT native_id,model,depth,uncached_input_tokens,cache_read_input_tokens,
 		cache_creation_input_tokens,output_tokens,total_tokens FROM agent_sessions ORDER BY depth,native_id`)
 	if err != nil {
 		t.Fatal(err)
@@ -254,6 +327,9 @@ func TestNestedSubagentsArePersistedWithCostDimensions(t *testing.T) {
 	byID := map[string]map[string]any{}
 	for _, row := range rows {
 		byID[firstString(row["native_id"])] = row
+	}
+	if byID["outer"]["model"] != "claude-haiku-4-5-20251001" || byID["inner"]["model"] != "Unknown model" {
+		t.Fatalf("embedded model metadata inherited the parent: %#v", byID)
 	}
 	if integer(byID["outer"]["depth"]) != 1 || integer(byID["outer"]["uncached_input_tokens"]) != 10 ||
 		integer(byID["outer"]["cache_read_input_tokens"]) != 90 || integer(byID["outer"]["total_tokens"]) != 110 {
@@ -308,6 +384,8 @@ func TestUsageBucketsWithMissingAndExplicitModelCoalesce(t *testing.T) {
 			{"unmatched request model stays unpriced", []MessageRecord{{Kind: "metadata", Text: request.Text}, claim}, map[string]float64{"": 65, "<synthetic>": 100}},
 			{"one model with cache TTL", []MessageRecord{{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":5,"output_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":20}},"modelUsage":{"claude-opus-5":{"inputTokens":5,"outputTokens":10,"cacheCreationInputTokens":20}}}`}}, map[string]float64{"claude-opus-5": 35}},
 			{"model identity without redundant counters", []MessageRecord{{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":5,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":200000}}}`}}, map[string]float64{"claude-opus-5": 15}},
+			{"context windows do not allocate aggregate", []MessageRecord{request, {Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":100,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":200000},"claude-haiku-5-5":{"contextWindow":200000}}}`}}, map[string]float64{"claude-opus-5": 65, "<synthetic>": 45}},
+			{"context windows do not inherit real model", []MessageRecord{request, {Kind: "result", Model: "claude-opus-5", Text: `{"type":"result","usage":{"input_tokens":100,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":200000},"claude-haiku-5-5":{"contextWindow":200000}}}`}}, map[string]float64{"claude-opus-5": 65, "Unknown model": 45}},
 			{"several context windows cannot allocate aggregate usage", []MessageRecord{{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":100,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":1000000},"claude-haiku-5-5":{"contextWindow":200000}}}`}}, map[string]float64{"<synthetic>": 110}},
 			{"known request leaves ambiguous multi-model remainder", []MessageRecord{request, {Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":100,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":1000000},"claude-haiku-5-5":{"contextWindow":200000}}}`}}, map[string]float64{"claude-opus-5": 65, "<synthetic>": 45}},
 		} {

@@ -5,6 +5,10 @@ export type SearchComposerState = { text: TextSearchDraft; kind: "text" | "file"
 export function freshSearch(schema: FieldSchema): SearchComposerState {
   return { text: newKeywordSearch(), kind: "text", file: "", fileCase: false, query: { ...EMPTY_QUERY, where: [], orderBy: schema.defaultSort ?? [], select: schema.defaultSelect ?? [], limit: schema.defaultLimit ?? 50 } };
 }
+export function sourceConversationsURL(schema: FieldSchema, source: string): string {
+  const query = freshSearch(schema).query;
+  return queryURL("library", { ...query, where: [{ field: "source_kind", op: "=", value: source }] });
+}
 export function restoreSearch(params: URLSearchParams, schema: FieldSchema): SearchComposerState {
   const state = freshSearch(schema), text = readTextSearch(params);
   const token = params.get("q_library");

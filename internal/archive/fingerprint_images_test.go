@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -781,12 +782,12 @@ func TestFingerprintCancellation(t *testing.T) {
 		return fingerprintRendered{}, ctx.Err()
 	})
 	execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=0;UPDATE fingerprint_entities SET dirty=1,next_attempt=0 WHERE entity='conversation' AND id='fp-a'`)
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	done := make(chan error, 1)
 	go func() { _, err := c.refreshFingerprintImages(ctx); done <- err }()
 	<-started
-	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
+	cancel(errAutomaticPreempted)
+	if err := <-done; !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "render images") || !strings.Contains(err.Error(), errAutomaticPreempted.Error()) {
 		t.Fatal(err)
 	}
 	var dirty, attempts int
@@ -798,6 +799,181 @@ func TestFingerprintCancellation(t *testing.T) {
 	// embedded renderer. It must also release promptly on shutdown.
 	if _, err := findAgentEventTargetsContext(ctx, []eventLinkMessage{{ID: "m", Text: "a retained prompt"}}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal("source target matching ignored cancellation", err)
+	}
+	t.Run("preempted passes resume", testFingerprintPreemptedPasses)
+	t.Run("preemption preserves other worker failures", func(t *testing.T) {
+		cancelled := fmt.Errorf("render images: %w", context.Canceled)
+		if !cancellationOnly(errors.Join(cancelled, context.Canceled)) || cancellationOnly(errors.Join(cancelled, errors.New("disk write failed"))) || cancellationOnly(context.DeadlineExceeded) {
+			t.Fatal("preemption hid a non-cancellation failure")
+		}
+	})
+	t.Run("preempted before rendering", func(t *testing.T) {
+		c, config := seedFingerprintLibrary(t)
+		s := testServer(t, config, c)
+		ctx, cancel := context.WithCancelCause(t.Context())
+		cancel(errAutomaticPreempted)
+		_, _ = s.runBackgroundItems(ctx, nil, "", "requested", []string{"fingerprints"}, nil)
+		if s.background.fingerprintRetry != "requested" {
+			t.Fatal("preemption before the fingerprint stage lost its request")
+		}
+	})
+	t.Run("timeouts remain retryable", func(t *testing.T) {
+		c, _ := seedFingerprintLibrary(t)
+		for _, phase := range []string{"load input", "render images"} {
+			t.Run(phase, func(t *testing.T) {
+				if phase == "load input" {
+					override(t, &fingerprintRenderTimeout, time.Duration(0))
+				} else {
+					c.fingerprints.renderer = fingerprintRenderFunc(func(context.Context, any, int) (fingerprintRendered, error) {
+						return fingerprintRendered{}, context.DeadlineExceeded
+					})
+				}
+				execTx(t, c.DB, `UPDATE fingerprint_entities SET attempts=0,last_error=''`)
+				renderFingerprintTestEntity(t, c, "conversation", "fp-a")
+				var dirty, attempts, next int
+				var problem string
+				if err := c.DB.QueryRow(`SELECT dirty,attempts,next_attempt,last_error FROM fingerprint_entities WHERE entity='conversation' AND id='fp-a'`).Scan(&dirty, &attempts, &next, &problem); err != nil {
+					t.Fatal(err)
+				}
+				if dirty != 1 || attempts != 1 || next <= int(time.Now().Unix()) || !strings.Contains(problem, phase) || !strings.Contains(problem, context.DeadlineExceeded.Error()) || !strings.Contains(problem, "fp-a") {
+					t.Fatalf("timeout lost diagnostics or retry: dirty=%d attempts=%d next=%d %s", dirty, attempts, next, problem)
+				}
+			})
+		}
+		c.fingerprints.renderer = nil
+		renderFingerprintTestEntity(t, c, "conversation", "fp-a")
+		if metadata, err := c.fingerprintMetadata(t.Context(), fingerprintRequest{"conversation", "fp-a", "wide"}, true); err != nil || metadata.State != "ready" {
+			t.Fatal("timed out fingerprint did not recover", metadata, err)
+		}
+	})
+}
+
+func testFingerprintPreemptedPasses(t *testing.T) {
+	for _, engine := range []string{"classic", "scheduled"} {
+		for _, mode := range []struct {
+			cadence    string
+			stop       bool
+			stopBefore bool
+		}{{"requested", false, false}, {"requested", true, false}, {cadenceHourly, false, false}, {cadenceHourly, true, false}, {"requested", true, true}} {
+			cadence, stop, stopBefore := mode.cadence, mode.stop, mode.stopBefore
+			t.Run(fmt.Sprintf("%s/%s/stop=%t/before=%t", engine, cadence, stop, stopBefore), func(t *testing.T) {
+				c, config := seedFingerprintLibrary(t)
+				config.WorkEngine, config.BackgroundCPUs = engine, 1
+				s := testServer(t, config, c)
+				if s.work != nil {
+					defs := []workDefinition{{Kind: kindFingerprints, Coarse: true, Task: s.fingerprintMaintenanceTask()}}
+					if stopBefore {
+						all, err := s.maintenanceWorkDefinitions(nil)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defs = all
+					}
+					useWorkDefinitions(t, s, defs...)
+				}
+				placement := cadence
+				if cadence == "requested" {
+					placement = cadenceManual
+				}
+				temporary := map[string]any{}
+				for _, item := range backgroundItems {
+					temporary[item.ID] = cadenceManual
+				}
+				temporary["fingerprints"] = placement
+				set := apiCall(t, s, config.APIToken, http.MethodPost, "/api/background/settings", map[string]any{
+					"mode": "on", "hold_when_busy": false, "temporary_cadences": temporary})
+				if set.Code != http.StatusOK {
+					t.Fatal(set.Body.String())
+				}
+				// A retained scheduled pass must resume even when its next
+				// ordinary cadence is not due. Keep its last success intact.
+				c.recordBackgroundRun(t.Context(), "fingerprints", time.Now(), true, nil)
+				lastRun := c.backgroundRuns(t.Context())["fingerprints"]
+				lastSuccess := lastRun.succeeded
+				started := make(chan struct{})
+				native, err := newFingerprintRenderer()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var first atomic.Bool
+				c.fingerprints.renderer = fingerprintRenderFunc(func(ctx context.Context, input any, mask int) (fingerprintRendered, error) {
+					if first.CompareAndSwap(false, true) {
+						close(started)
+						<-ctx.Done()
+						return fingerprintRendered{}, ctx.Err()
+					}
+					return native.Render(ctx, input, mask)
+				})
+				execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=1,next_attempt=0 WHERE entity='conversation' AND id='fp-a'`)
+				if stop {
+					// This is the accepted demand retained by a previous
+					// preemption, still set while its resumed pass runs.
+					s.retainFingerprintPass(cadence)
+				}
+				ids := []string{"fingerprints"}
+				releaseQuery := func() {}
+				if stopBefore {
+					ids = []string{"search", "fingerprints"}
+					c.queries.setEnabled(true)
+					releaseQuery = sync.OnceFunc(c.queries.begin())
+					t.Cleanup(releaseQuery)
+				}
+				done := make(chan bool, 1)
+				go func() { done <- s.runBackgroundPass(t.Context(), cadence, ids, nil) }()
+				if stopBefore {
+					waitUntil(t, 5*time.Second, "search before the fingerprint stage", func() bool {
+						c.queries.mu.Lock()
+						defer c.queries.mu.Unlock()
+						return c.queries.waiting > 0
+					})
+					if first.Load() {
+						t.Fatal("fingerprint stage ran before Stop")
+					}
+					if c.backgroundRuns(t.Context())["fingerprints"].started != lastRun.started {
+						t.Fatal("Stop did not precede the fingerprint stage")
+					}
+				} else {
+					<-started
+				}
+				if stop {
+					if !s.stopIngest() {
+						t.Fatal("could not stop pass")
+					}
+				} else {
+					if !s.acquireManualIngest() {
+						t.Fatal("manual verification could not preempt pass")
+					}
+					s.ingestMu.Unlock()
+				}
+				if !<-done {
+					t.Fatal("pass was not admitted")
+				}
+				if countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE id='fp-a' AND dirty=1 AND attempts=0`) != 1 {
+					t.Fatal("interruption lost pending work or charged a render failure")
+				}
+				if stop {
+					if s.background.fingerprintRetry != "" {
+						t.Fatal("deliberate Stop retained the resumed request")
+					}
+					releaseQuery()
+					if s.backgroundPass(t.Context(), time.Now()) || countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE id='fp-a' AND dirty=1 AND attempts=0`) != 1 {
+						t.Fatal("background tick restarted the stopped pass")
+					}
+					return
+				}
+				if row := c.backgroundRuns(t.Context())["fingerprints"]; row.err != "" || row.succeeded != lastSuccess || s.background.fingerprintRetry != cadence {
+					t.Fatalf("preemption became a failure or consumed request: %+v retry=%q", row, s.background.fingerprintRetry)
+				}
+				for _, view := range s.ops.views() {
+					if view.Spec.Kind == "background.update" && view.State != opInterrupted {
+						t.Fatalf("preemption misclassified parent operation: %+v", view)
+					}
+				}
+				if !s.backgroundPass(t.Context(), time.Now()) || s.background.fingerprintRetry != "" || countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`) != 0 {
+					t.Fatalf("preempted %s request did not resume: retry=%q pending=%d", cadence, s.background.fingerprintRetry, countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`))
+				}
+			})
+		}
 	}
 }
 

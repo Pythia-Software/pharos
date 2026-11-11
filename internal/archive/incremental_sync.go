@@ -18,6 +18,9 @@ import (
 const automaticRunKind = "automatic-sync"
 const manualSyncRunKind = "manual-sync"
 
+var errAutomaticPreempted = errors.New("background work yielded to manual indexing or verification")
+var errAutomaticPaused = errors.New("background work paused by settings")
+
 type syncSettings struct {
 	Enabled  bool     `json:"enabled"`
 	Interval int      `json:"interval_seconds"`
@@ -27,7 +30,7 @@ type syncSettings struct {
 
 type automaticSync struct {
 	mu            sync.Mutex
-	cancel        context.CancelFunc
+	cancel        context.CancelCauseFunc
 	done          chan struct{}
 	cold          bool
 	manualWaiters int
@@ -183,7 +186,7 @@ func (s *Server) acquireManualIngest() bool {
 	s.auto.manualWaiters++
 	defer func() { s.auto.manualWaiters--; s.auto.mu.Unlock() }()
 	if s.auto.cancel != nil {
-		s.auto.cancel()
+		s.auto.cancel(errAutomaticPreempted)
 		done := s.auto.done
 		s.auto.mu.Unlock()
 		select {
@@ -286,13 +289,14 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		// Deferred first, so it runs last, after the run's final state.
 		defer handle.Finish(nil)
 	}
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancelCause := context.WithCancelCause(parent)
+	cancel := func() { cancelCause(nil) }
 	mode := modeOf(ctx)
 	mode.automatic = !manual
 	ctx = withIngestMode(ctx, mode)
 	done := make(chan struct{})
 	if !manual {
-		s.auto.cancel, s.auto.done = cancel, done
+		s.auto.cancel, s.auto.done = cancelCause, done
 	}
 	cold := !s.auto.cold
 	s.auto.cold = true
@@ -859,7 +863,7 @@ func (s *Server) postIncrementalSync(w http.ResponseWriter, r *http.Request, bod
 		settings.NextAt = time.Now().Add(time.Duration(settings.Interval) * time.Second).UTC().Format(time.RFC3339Nano)
 		s.auto.mu.Lock()
 		if !settings.Enabled && s.auto.cancel != nil {
-			s.auto.cancel()
+			s.auto.cancel(errAutomaticPaused)
 		}
 		s.Catalog.projectionBatches.Add(1)
 		err = s.Catalog.writeTransaction(r.Context(), "sync settings", func(tx *sql.Tx) error {

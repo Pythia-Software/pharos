@@ -385,5 +385,8 @@ func linkClaudeGroupDelegations(tx *sql.Tx, conversations []ConversationRecord, 
 			return err
 		}
 	}
+	if len(accepted) > 0 || len(linked) > 0 {
+		return refreshLinkedSessionModels(tx, groupIDs)
+	}
 	return nil
 }

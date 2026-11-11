@@ -309,7 +309,25 @@ func Run(arguments []string) error {
 				return fmt.Errorf("refine usage after %d conversations: %w", refined, err)
 			}
 			return printJSON(map[string]any{"conversations_refined": refined})
+		case "repair-session-models":
+			report, err := catalog.RepairAgentSessionModels(ctx, func(done, total int) {
+				op.progress("Correct agent session models", "", "workspace", float64(done), float64(total), total > 0)
+			})
+			if err != nil {
+				return fmt.Errorf("repair session models: %w", err)
+			}
+			return printJSON(report)
 		case "repair-usage-attribution":
+			if slices.Contains(args, "--session-effort-only") {
+				repaired, err := catalog.RepairSessionEffortSummaries(ctx, func(done, total int) {
+					op.progress("Summarize recorded request effort", "", "agent session", float64(done), float64(total), total > 0)
+					fmt.Fprintf(os.Stderr, "summarized effort for %d/%d agent sessions\n", done, total)
+				})
+				if err != nil {
+					return fmt.Errorf("summarize request effort after %d agent sessions: %w", repaired, err)
+				}
+				return printJSON(map[string]any{"agent_sessions_summarized": repaired})
+			}
 			repaired, err := catalog.RepairUsageAttribution(ctx, func(done, total int) {
 				op.progress("Repair usage attribution", "", "workspace", float64(done), float64(total), total > 0)
 				if done%100 == 0 || done == total {
@@ -319,7 +337,11 @@ func Run(arguments []string) error {
 			if err != nil {
 				return fmt.Errorf("repair usage attribution after %d workspaces: %w", repaired, err)
 			}
-			return printJSON(map[string]any{"workspaces_repaired": repaired})
+			summarized, err := catalog.RepairSessionEffortSummaries(ctx, nil)
+			if err != nil {
+				return fmt.Errorf("summarize request effort after %d agent sessions: %w", summarized, err)
+			}
+			return printJSON(map[string]any{"workspaces_repaired": repaired, "agent_sessions_summarized": summarized})
 		case "repair-session-bounds":
 			if len(args) > 1 || len(args) == 1 && args[0] != "--apply" {
 				return fmt.Errorf("usage: pharos repair-session-bounds [--apply]")
@@ -383,7 +405,7 @@ func cliCatalogOperation(command string, args []string) OperationSpec {
 		default:
 			return OperationSpec{Kind: "analysis.agent_events.import"}
 		}
-	case "refine-usage", "repair-usage-attribution", "repair-session-bounds":
+	case "refine-usage", "repair-usage-attribution", "repair-session-models", "repair-session-bounds":
 		return OperationSpec{Kind: "catalog.repair", Variant: command}
 	case "upgrade":
 		if !slices.Contains(args, "--status") && !slices.Contains(args, "--preview") {
@@ -585,7 +607,7 @@ func firstOf(args []string) string {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,claude-import,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,repair-session-bounds,upgrade,build-tools,agent-events,execution-evidence,conversation-names,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,claude-import,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,repair-session-models,repair-session-bounds,upgrade,build-tools,agent-events,execution-evidence,conversation-names,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
 
 }
 func urlQueryEscape(value string) string {

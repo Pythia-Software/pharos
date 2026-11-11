@@ -563,8 +563,9 @@ func (a *jsonlAdapter) partExtractor() string { return a.provider + ":" + a.extr
 // claudeExtractor versions what changed in the Claude parser alone since
 // jsonlExtractor, so a change to it reads Claude Code's transcripts again and
 // not Codex's: v2 selects the active branch, counts once a reply several of a
-// session's transcripts hold, and counts advisor iterations.
-const claudeExtractor = "claude-v2-active-branch"
+// session's transcripts hold, and counts advisor iterations. v3 keeps synthetic
+// errors out of the inherited execution model while retaining their evidence.
+const claudeExtractor = "claude-v3-execution-model"
 
 func (a *jsonlAdapter) extractorVersion() string {
 	if a.provider == "claude" {
@@ -1151,7 +1152,8 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 			}
 			continue
 		}
-		model = defaultString(message["model"], model)
+		messageModel := firstString(message["model"], model)
+		model = advanceExecutionModel(model, firstString(message["model"]))
 		parent := firstString(event["parentUuid"])
 		content := firstNonNil(message["content"], event["content"])
 		text := messageText(content)
@@ -1159,7 +1161,10 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 		if baseID == "" {
 			baseID = fmt.Sprintf("line-%d", integer(event["_line"]))
 		}
-		item := MessageRecord{NativeID: baseID, Role: role, Kind: "message", Text: text, Model: model, Effort: effort, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
+		item := MessageRecord{NativeID: baseID, Role: role, Kind: "message", Text: text, Model: messageModel, Effort: effort, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
+		if placeholderModel(messageModel) {
+			item.RawText = jsonText(event)
+		}
 		splitAssistant := false
 		if role == "assistant" {
 			for _, raw := range reasoningList(content) {
@@ -1251,11 +1256,11 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 				} else {
 					continue
 				}
-				messages = append(messages, MessageRecord{NativeID: fmt.Sprintf("%s:block:%d", baseID, index), Role: blockRole, Kind: kind, Text: blockText, Model: model, Effort: effort, PreviousNativeID: parent, CallID: callID, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d:block:%d", origin, integer(event["_line"]), index), Selected: true})
+				messages = append(messages, MessageRecord{NativeID: fmt.Sprintf("%s:block:%d", baseID, index), Role: blockRole, Kind: kind, Text: blockText, Model: messageModel, Effort: effort, PreviousNativeID: parent, CallID: callID, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d:block:%d", origin, integer(event["_line"]), index), Selected: true})
 			}
 		}
 		if usage := mapValue(message["usage"]); usage != nil {
-			usageRecord := MessageRecord{RawText: jsonText(event), NativeID: baseID + ":usage", Role: "system", Kind: "metadata", Text: jsonText(map[string]any{"type": "token_usage", "usage": usage, "usage_message_id": firstString(message["id"])}), Model: model, Effort: effort, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
+			usageRecord := MessageRecord{RawText: jsonText(event), NativeID: baseID + ":usage", Role: "system", Kind: "metadata", Text: jsonText(map[string]any{"type": "token_usage", "usage": usage, "usage_message_id": firstString(message["id"])}), Model: messageModel, Effort: effort, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
 			messages = append(messages, usageRecord)
 			messages = append(messages, claudeAdvisorUsage(usageRecord, event, usage)...)
 			for _, key := range []string{"input_tokens", "output_tokens"} {

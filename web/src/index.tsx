@@ -45,6 +45,7 @@ import { fittedDefaultQuery, usageActionQuery, usageQuerySchema, withGroupDetail
 import { orderedUsageQuery } from "./usage-query-order";
 import { usageRowRenderers } from "./usage-row-renderers";
 import { SearchDialog } from "./search-dialog";
+import { sourceConversationsURL } from "./search-composer-state";
 import { ExploreSearch } from "./explore-search";
 import { recordKeywordSummary, RecordKeywordClause } from "./record-keyword-clause";
 import { refreshTodayHost, changeLibrarySearch, libraryFind, libraryHostQuery, libraryHostState, readLibraryHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withoutLibrarySearch, withRecordKeyword, type LibraryHost } from "./host-query-state";
@@ -223,6 +224,7 @@ declare global {
       filterModel: (model: string) => void;
       summaryURL: typeof usageSummaryURL;
       sourceWorkspacesURL: (kind: string) => string;
+      sourceConversationsURL: (source: string) => string;
       writingTotals: (publish: (totals: WritingTotals) => void, signal: AbortSignal) => Promise<void>;
     };
   }
@@ -1834,6 +1836,7 @@ window.addEventListener("pharos:preferences-saved", event => {
 window.pharosQueryTables = {
   sourceWorkspacesURL: kind => sourceWorkspacesURL(kind, schemas.library),
   summaryURL: (metric, window, generatedAt, _concurrency, from) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings(), from),
+  sourceConversationsURL: source => sourceConversationsURL(schemas.library, source),
   async createLink() {
     const entry = [...tableApis.entries()].find(([dataset]) => datasetIsVisible(dataset));
     if (!entry) return { url: location.href };

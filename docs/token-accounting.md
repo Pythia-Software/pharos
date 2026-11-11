@@ -51,6 +51,89 @@ When a catalog opens, sessions stored before the ledger existed (or written by t
 
 Run `pharos repair-usage-attribution` after upgrading an existing catalog. It adds the advisor usage records a stored reply's usage holds (TL1's runs too), settles copied Claude Code replies (above), then recomputes sessions, hourly usage, model requests, and workspace token metrics from stored messages, one workspace per transaction. A workspace whose copies change rebuilds every workspace that holds the same replies. `usage_attribution_state` records the attribution version with each commit, so an interrupted run resumes at the next workspace. An unchanged source is replayed when its attribution version is old; ingest leaves the workspace pending if any stored conversation was omitted or could not be replayed. Runtime scales with the retained Claude messages and can take tens of minutes on a large library; the command reports progress every 100 workspaces. The Library's dirty-row triggers refresh its cached rows; Usage and cost queries read the corrected ledger. Rebuilding does not need source transcripts. Positive legacy session totals and ledger rows are preserved when their accounting envelopes were not retained. Process claims subtract those preserved child facts before computing their remainder, so retaining them does not charge them twice. Mixed-workspace metrics include those saved facts; explicit zero reports and settled usage copies can still clear old derived counts. A Claude Code workspace recovered from a saved catalog keeps the usage it was saved with, unless its replies settle differently beside this catalog's conversations or it was saved without advisor records; then its usage is derived again from what is stored. The `/api/health` response and `pharos health` group roots from the last 30 days by source and provider, count sessions whose totals exceed their request sums by more than 5% plus 100,000 tokens, and label sources with aggregate-only counters as `session totals only`.
 
+### Agent session model labels
+
+An embedded agent session uses evidence owned by that execution. Its own
+request envelopes take precedence over a single conflicting usage model;
+several real request or usage model strings produce `Multiple models`.
+Aliases and context variants remain distinct recorded identities. Placeholder
+models, copied accounting envelopes, parent configuration, assistant answers and
+tool-output prose do not establish a child's executing model. An explicit Agent result model is
+observed child evidence; an explicit launch `input.model` is only a configured
+fallback. The retained launch and raw request strings remain available when
+configured and observed models disagree. With neither, the label is
+`Unknown model`. A separate child transcript can supply its own evidence before
+falling back to launch configuration. A transcript's main session may use that
+transcript's own conversation configuration.
+Conversation summaries keep their latest real request model; an embedded session
+summarizes the child's whole execution, including when it has a separate transcript.
+
+The next Library upgrade automatically runs **Correct agent session models**
+once to correct existing **subagent session rows**, including those whose native
+source has disappeared. No manual command is needed. This pass updates only
+`agent_sessions.model` and its independent completion marker
+`agent_session_model_version=2`; it does not advance `usageAttributionVersion`
+or replay token accounting. Catalogs completed by version 1 are pending again.
+The step runs after retained child-link restoration and the tool index, so its
+completion marker covers the evidence those steps restore. Normal ingestion and
+lineage-only restoration refresh linked launch labels in their existing
+transaction without scheduling the one-time repair again. It reads retained
+stream membership, request envelopes, positive usage models and linked child
+transcripts. A usage model
+that merely echoes the parent configuration is not used as proof for an embedded
+child. Each workspace commits through the normal writer, which invalidates cached
+views. An interrupted pass can be restarted; completed labels are skipped on
+repeat scans. The optional maintenance command
+`pharos --config PATH repair-session-models` always rescans, so it also handles old
+rows imported after the upgrade.
+
+The command reports `sessions`, `updated`, `multiple`, `unknown`, and
+`pricing_fallback`. These are stored session rows, including mirrors, rather
+than deduplicated executions. `multiple` and `unknown` describe the resulting
+summary; `pricing_fallback` counts rows left untouched because a positive legacy
+usage bucket has an empty model and still depends on the session label for
+pricing. Those rows require a separately reviewed accounting migration.
+Per-model tokens, categories, hourly usage, IDs, hierarchy and linked-child
+ownership are preserved. Costs continue to use `agent_session_usage.model`.
+Delegation search and JSON responses read the corrected session label; external
+child metadata prefers its own main-session summary. Ledger filters and exports
+retain the original per-model identities.
+
+The opt-in `TestSessionModelCohortReplay` probe copies the narrow single-Haiku
+mismatch cohort from a catalog attached with SQLite `mode=ro` into a disposable
+catalog, applies the actual repair twice, and compares every usage row and its
+historical price. It does not initialize or modify the source catalog:
+
+```sh
+PHAROS_SESSION_MODEL_CATALOG=/path/catalog.sqlite3 \
+  go test -tags probe -run '^TestSessionModelCohortReplay$' -v -timeout 20m ./internal/archive
+```
+
+Validation on November 10, 2026 copied 2,412 mismatched subagent-session rows
+from Pharos On Euclid. All 2,412 became Haiku labels; the second repair updated
+zero rows. Every hourly usage row, token category and historical price compared
+identically before and after. The source catalog remained read-only.
+
+| Source | Mismatched rows before | Mismatched rows after |
+| --- | ---: | ---: |
+| Conductor | 2,271 | 0 |
+| TL1 | 127 | 0 |
+| Claude | 14 | 0 |
+
+This validates the narrow demonstrated cohort, not every session's model.
+The broader read-only inventory found 14,532 subagent-session rows: 10,737 with
+one real positive-usage model, 48 with multiple, and 3,747 without a real
+positive-usage model. The latter groups require their own retained evidence and
+are reported as multiple/unknown where appropriate; they are not assigned to
+Haiku by this repair. No positive blank-model pricing fallbacks were found in
+that inventory.
+
+At this revision the general `probe` build is blocked by unrelated stale Git
+API calls in `outcome_stages_probe_test.go` (`gitCheckout` and `inferLinks`).
+The cohort validation used a temporary Go compiler overlay replacing only that
+probe with an empty `package archive` file. Production code and the cohort
+probe ran unchanged; ordinary Go checks do not use that overlay.
+
 ## Cost
 
 Usage and Library rows have a **Cost (API $)** column: the API list-price equivalent of the tokens on the day they were used. Each ledger entry's model is resolved through `model_alias_on_date` (for example, bare `opus` resolves to the model it meant that day) and priced from `cost_on_date` by category. Uncached input, cache reads, 5-minute and 1-hour cache writes, and output each use their own rate. Reasoning is already included in output. A cache write with no TTL split is charged at the 5-minute rate. **Cost at today's prices** prices the same model at its current rate, so trends aren't skewed by price changes. Long-context premiums, batch/priority tiers, and subscriptions are not modeled, so cost is a lower bound.
@@ -74,6 +157,42 @@ Evidence already discarded by an earlier importer requires re-reading its origin
 ## Agent effort levels
 
 `effort` is recorded with conversations, messages, agent sessions, model requests, tool calls, and hourly usage. Codex turn contexts, explicit Claude/Conductor settings, TL1 attempts, Antigravity selector suffixes, and canonical/ChatGPT metadata supply the level when present. Missing or explicitly reset levels stay unknown. Multi-effort sessions have no single session effort; request usage retains each level. Aggregate usage that cannot be assigned across effort changes stays unknown, including Claude process remainders.
+
+The existing `agent_sessions.effort` keeps its strict meaning: every retained
+message in that session must carry the same effort. It may be blank because an
+early user, context or metadata message predates recorded configuration, even
+when all retained requests agree. It is not the observed-request summary.
+
+Work detail's agent sessions, MCP `get_work_detail`'s `agent_sessions` section,
+and the delegation API expose a separate `effort_summary` object:
+
+```json
+{"levels":["high"],"known_requests":12,"unknown_requests":1,"state":"single","coverage":"recorded-requests"}
+```
+
+`levels` is a sorted distinct set of normalized effort from that session's `model_requests` rows.
+`state` is `no-requests`, `unknown` (requests exist but all have unknown effort),
+`single`, or `multiple`. A `single` or `multiple` state can include unknown
+requests: always check `unknown_requests`. Missing/null/empty effort, including
+requests after an explicit reset, contributes to the unknown count; the literal
+effort `none` is a known level. A reset without a subsequent recorded request
+does not change this request-only summary. Stored request effort cannot tell
+whether an unknown originated in a missing setting or an explicit reset.
+
+`coverage: "recorded-requests"` never asserts complete historical coverage,
+even when `unknown_requests` is zero. Startup messages, aggregate usage claims,
+and settings without requests do not contribute. A null `effort_summary` means
+the projection is pending or the represented session is not locally available;
+it does not mean no requests. Delegation uses the represented session's summary
+and never substitutes a parent or conversation setting. Cross-workspace context
+nodes have no local request summary. Summaries count stored source/mirror
+records, not deduplicated executions.
+
+The projection lives in `agent_session_effort_summaries`, versioned separately
+from usage attribution. Ingest refreshes it after writing request rows. Request
+inserts, deletes, effort changes and session moves invalidate affected summaries;
+reads expose null until ingest or repair refreshes them. See the
+[summary backfill instructions and census](session-effort-summary.md).
 
 Library exposes all observed `efforts`; Usage, Tools, Tool calls, and Skills expose `effort` for selection, filters, grouping, and metrics. Usage offers an Effort chart split and a model-and-effort preset. The reader shows conversation and turn effort. CLI and HTTP work search accept `effort` (`pharos search --effort high`); MCP work and conversation search accept the same filter.
 

@@ -346,6 +346,21 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		conversationID, toolLedgerVersion, len(calls), now()); err != nil {
 		return err
 	}
+	// Request writes invalidate the projection; fill pending summaries even
+	// when this ledger's fingerprints were already current.
+	pending, err := queryMaps(tx, `SELECT a.id FROM agent_sessions a`+sessionEffortSummaryJoin+`WHERE a.conversation_id=? AND es.agent_session_id IS NULL`, conversationID)
+	if err != nil {
+		return err
+	}
+	if len(pending) > 0 {
+		ids := make([]string, 0, len(pending))
+		for _, row := range pending {
+			ids = append(ids, firstString(row["id"]))
+		}
+		if err := refreshSessionEffortSummaries(context.Background(), tx, ids); err != nil {
+			return err
+		}
+	}
 	if changed {
 		return bumpToolLedgerPartitionGeneration(tx)
 	}

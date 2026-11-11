@@ -88,10 +88,11 @@ func (c *Catalog) backgroundSearchView(ctx context.Context) error {
 		{kindNames, countBatch(func(ctx context.Context) (int, error) { return c.refreshConversationNames(ctx, 25) })},
 		{"maintenance.origins", func(ctx context.Context) (bool, error) { return c.publishOrigins(ctx) }},
 		{"maintenance.library-view", countBatch(func(ctx context.Context) (int, error) {
-			count, err := c.RefreshLibrary(ctx, 10)
+			count, err := c.refreshLibrary(ctx, 10, nil)
 			c.noteLibraryRefresh(count, err)
 			return count, err
 		})},
+		{kindMetrics, countBatch(func(ctx context.Context) (int, error) { return c.refreshMetricProjections(ctx, metricProjectionBatch) })},
 		{"maintenance.previews", countBatch(func(ctx context.Context) (int, error) { return c.refreshPreviews(ctx, 25) })},
 		{"maintenance.parallelism", countBatch(func(ctx context.Context) (int, error) { return c.refreshParallelism(ctx, parallelismBatch, false) })},
 		{"maintenance.session-shape", countBatch(func(ctx context.Context) (int, error) { return c.refreshSessionShape(ctx, sessionShapeBatch, false) })},

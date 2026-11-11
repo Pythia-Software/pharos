@@ -315,9 +315,10 @@ func loadDelegationConversationMeta(ctx context.Context, tx *sql.Tx, ids []strin
 		return out, nil
 	}
 	encoded, _ := json.Marshal(ids)
-	rows, err := queryMapsContext(ctx, tx, `SELECT c.id,c.workspace_id,c.provider,c.model,c.effort,c.coverage,
+	rows, err := queryMapsContext(ctx, tx, `SELECT c.id,c.workspace_id,c.provider,COALESCE(NULLIF(s.model,''),c.model) model,c.effort,c.coverage,
  COALESCE(w.title,'') title,substr(COALESCE(d.initiation,''),1,180) initiation
  FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
+ LEFT JOIN agent_sessions s ON s.conversation_id=c.id AND s.native_id='main'
  LEFT JOIN conversation_documents d ON d.conversation_id=c.id
  WHERE c.id IN (SELECT value FROM json_each(?))`, string(encoded))
 	if err != nil {

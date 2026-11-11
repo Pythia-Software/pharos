@@ -154,6 +154,26 @@ func TestUsageCostAuditReplay(t *testing.T) {
 			}
 		}
 		summary := summaries[firstString(row["native_id"])]
+		// Keep label-only changes separate from actual repricing. The input
+		// inventory may select only one placeholder bucket of a mixed session.
+		stored, err := queryMaps(tx, `SELECT * FROM agent_session_usage WHERE agent_session_id=?`, row["id"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeCost, afterCost := 0.0, 0.0
+		var allUnpricedBefore int64
+		for _, bucket := range stored {
+			day := ""
+			if at, ok := parseTime(firstString(bucket["usage_hour"])); ok {
+				day = at.In(time.Local).Format("2006-01-02")
+			}
+			price := book.cost(defaultString(firstString(bucket["model"]), firstString(row["model"], conversationModel)), day, ledgerTokens(bucket))
+			if price.cost == nil {
+				allUnpricedBefore += integer(bucket["total_tokens"])
+			} else {
+				beforeCost += *price.cost
+			}
+		}
 		var unpricedAfter, unclassifiedAfter int64
 		buckets := []map[string]any{}
 		for bucket, values := range summary.usage {
@@ -178,6 +198,8 @@ func TestUsageCostAuditReplay(t *testing.T) {
 			price := book.cost(model, day, tokens)
 			if price.cost == nil {
 				unpricedAfter += tokens["total_tokens"]
+			} else {
+				afterCost += *price.cost
 			}
 			buckets = append(buckets, map[string]any{"hour": hour, "model": model, "tokens": tokens, "cost_usd": price.cost, "price_status": price.status})
 		}
@@ -192,7 +214,9 @@ func TestUsageCostAuditReplay(t *testing.T) {
 		counts[classification]++
 		if err := encoder.Encode(map[string]any{"id": row["id"], "conversation_id": current, "source_kind": row["source_kind"],
 			"classification": classification, "before_tokens": row["total_tokens"], "after_tokens": summary.counts["total_tokens"],
-			"before_unpriced_tokens": unpricedBefore, "after_unpriced_tokens": unpricedAfter,
+			"before_cost_usd": beforeCost, "after_cost_usd": afterCost, "cost_delta_usd": afterCost - beforeCost,
+			"before_all_unpriced_tokens": allUnpricedBefore,
+			"before_unpriced_tokens":     unpricedBefore, "after_unpriced_tokens": unpricedAfter,
 			"before_unclassified_tokens": row["unclassified_tokens"], "after_unclassified_tokens": unclassifiedAfter, "buckets": buckets}); err != nil {
 			t.Fatal(err)
 		}

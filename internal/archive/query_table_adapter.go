@@ -552,18 +552,29 @@ func (s *Server) queryComputedColumns(w http.ResponseWriter, r *http.Request) {
 	}).ServeHTTP(w, r)
 }
 
+// beginQueryWithTempStore leases a connection whose scratch storage is mode
+// (1 file, 2 memory) with a 64 MiB scratch cache, and begins a transaction on
+// it. release rolls the transaction back and restores the connection's own
+// settings.
+//
+// Changing temp_store while the connection's temp database is open closes it
+// and discards every schema the connection has parsed, which the next
+// statement pays for by reading and parsing the whole catalog schema again.
+// So the order matters: the mode is set before anything opens the temp
+// database, and restored last, which leaves it closed for the next lease. A
+// lease whose mode the connection already has (the read pool's file store)
+// changes nothing and costs no schema load; one that differs costs one.
 func beginQueryWithTempStore(ctx context.Context, db *sql.DB, mode int) (*sql.Tx, func() error, error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
+	discard := func() {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		conn.Close()
+	}
 	var original int
 	if err = conn.QueryRowContext(ctx, "PRAGMA temp_store").Scan(&original); err != nil {
-		conn.Close()
-		return nil, nil, err
-	}
-	var originalCache int
-	if err = conn.QueryRowContext(ctx, "PRAGMA temp.cache_size").Scan(&originalCache); err != nil {
 		conn.Close()
 		return nil, nil, err
 	}
@@ -573,12 +584,17 @@ func beginQueryWithTempStore(ctx context.Context, db *sql.DB, mode int) (*sql.Tx
 			return nil, nil, err
 		}
 	}
+	// Reading the temp cache size opens the temp database, under mode.
+	var originalCache int
+	if err = conn.QueryRowContext(ctx, "PRAGMA temp.cache_size").Scan(&originalCache); err != nil {
+		discard()
+		return nil, nil, err
+	}
 	// FILE temp storage defaults to a zero-page cache. Grouping then writes
 	// scratch pages to the SSD repeatedly even for small, bounded populations.
 	// Give this leased connection 64 MiB of scratch cache while retaining spill.
 	if _, err = conn.ExecContext(ctx, "PRAGMA temp.cache_size=-65536"); err != nil {
-		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-		conn.Close()
+		discard()
 		return nil, nil, err
 	}
 	tx, err := conn.BeginTx(ctx, nil)
@@ -597,17 +613,16 @@ func beginQueryWithTempStore(ctx context.Context, db *sql.DB, mode int) (*sql.Tx
 		}
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
+		// A cancelled transaction may have closed its physical connection already.
+		// Otherwise discard a connection whose original settings cannot be restored.
+		if _, err := conn.ExecContext(cleanup, fmt.Sprintf("PRAGMA temp.cache_size=%d", originalCache)); err != nil {
+			discard()
+			return errors.Join(rollbackError, err)
+		}
 		if original != mode {
 			if _, resetError := conn.ExecContext(cleanup, fmt.Sprintf("PRAGMA temp_store=%d", original)); resetError != nil {
-				// A cancelled transaction may have closed its physical connection already.
-				// Otherwise discard a connection whose original settings cannot be restored.
 				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 			}
-		}
-		if _, err := conn.ExecContext(cleanup, fmt.Sprintf("PRAGMA temp.cache_size=%d", originalCache)); err != nil {
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-			conn.Close()
-			return errors.Join(rollbackError, err)
 		}
 		closeError := conn.Close()
 		if rollbackError != nil {

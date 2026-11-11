@@ -15,6 +15,14 @@ test("imported source workspace links retain their source and include older conv
  assert.deepEqual(restored.query.orderBy, schema.defaultSort);
  assert.ok(!restored.error);
 });
+test("source conversation links open all workspaces from that source", () => {
+ const url = new URL(m.sourceConversationsURL(schema, "claude-ai"), "http://localhost");
+ const restored = m.restoreSearch(url.searchParams, schema);
+ assert.equal(url.pathname, "/library");
+ assert.deepEqual(restored.query.where, [{ field: "source_kind", op: "=", value: "claude-ai" }]);
+ assert.equal(url.searchParams.has("text_builder"), false);
+ assert.equal(searchResultsView(restored.query, "conversation"), "conversation");
+});
 test("fresh and restored unused composers start with a removable 30-day message restriction", () => {
  const earliest = Date.now() - 30 * 86400000;
  for (const state of [m.freshSearch(schema), m.restoreSearch(new URLSearchParams(), schema)]) {

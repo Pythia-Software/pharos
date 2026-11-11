@@ -245,8 +245,10 @@ func (c *Catalog) ensureLibrary() error {
 	return tx.Commit()
 }
 
-// RefreshLibrary recomputes up to batch dirty workspaces in one short write
-// transaction and reports how many it cleared.
+// RefreshLibrary recomputes up to batch dirty workspaces' Search view rows and
+// then up to batch dirty workspaces' metrics, and reports the larger count.
+// The service maintains the two separately (maintainLibrary,
+// maintainWorkspaceMetrics); this is for commands and tests without one.
 func (c *Catalog) RefreshLibrary(ctx context.Context, batch int) (int, error) {
 	count, err := c.refreshLibrary(ctx, batch, nil)
 	if err != nil {
@@ -580,7 +582,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 		begin(&view, "maintenance.library-view")
 		var count int
 		var err error
-		view.runIO(pass, func(ctx context.Context) { count, err = c.RefreshLibrary(ctx, 10) })
+		view.runIO(pass, func(ctx context.Context) { count, err = c.refreshLibrary(ctx, 10, nil) })
 		c.noteLibraryRefresh(count, err)
 		view.worked(count)
 		settle(&view, count > 0, err)

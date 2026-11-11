@@ -69,6 +69,9 @@ func TestMain(m *testing.M) {
 		return nil, fmt.Errorf("%s does not run in tests", name)
 	}
 	catalogDurability = testDurability
+	if err := keepStatementJournalsInMemory(); err != nil {
+		panic(err)
+	}
 	labelingLedgerSynchronous = "OFF"
 	resultCacheSynchronous = "OFF"
 	syncToDrive = func(file *os.File) error {

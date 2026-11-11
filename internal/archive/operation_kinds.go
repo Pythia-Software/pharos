@@ -157,6 +157,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops during rendering; unfinished images stay queued and resume next time.", Latency: "record", Journal: journalLonger(10 * time.Second), Priority: priorityBackground},
 	{Kind: "maintenance.library-view", Class: workClassPartition, Label: "Index the Search view", Verb: "Indexing the Search view", Holds: "D:w W:w", Affects: "view", Stop: "view",
 		OnEject: "Stops; the batch in progress is abandoned, and it carries on when Pharos next opens the library or on Resume.", Latency: "record", Journal: journalLonger(15 * time.Second), Priority: priorityBackground},
+	{Kind: kindMetrics, Class: workClassPartition, Label: "Update workspace metrics", Verb: "Updating workspace metrics", Holds: "D:w W:w", Affects: "—",
+		OnEject: "Stops; the batch in progress is abandoned, and it carries on later.", Latency: "record", Journal: journalLonger(15 * time.Second), Priority: priorityBackground},
 	{Kind: "maintenance.previews", Class: workClassPartition, Label: "Fill in previews", Verb: "Filling in previews", Holds: "D:w W:w", Affects: "view",
 		OnEject: "Stops; it carries on later.", Latency: "record", Journal: journalNever, Priority: priorityBackground},
 	{Kind: "maintenance.conversation-names", Class: workClassPartition, Label: "Name conversations", Verb: "Naming conversations", Holds: "D:w W:w", Affects: "view",

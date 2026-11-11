@@ -20,7 +20,7 @@ import (
 // work it is.
 var runningItem = map[string]string{
 	"index.changes.automatic": "conversations", "index.changes.manual": "conversations", "index.sources.legacy": "conversations",
-	"maintenance.library-view": "search", "analysis.github": "repositories", "analysis.identities": "repositories", "analysis.git": "repositories",
+	"maintenance.library-view": "search", kindMetrics: "search", "analysis.github": "repositories", "analysis.identities": "repositories", "analysis.git": "repositories",
 	"analysis.authorship.refine": "writing-refine", "analysis.tools": "tools", "analysis.authorship": "writing", "analysis.peers": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events",
 	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
 	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup",
@@ -816,7 +816,7 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 	indexing.NextAt = at.Add(time.Duration(indexing.Interval) * time.Second).UTC().Format(time.RFC3339Nano)
 	s.auto.mu.Lock()
 	if (!indexing.Enabled || paused != "") && s.auto.cancel != nil {
-		s.auto.cancel()
+		s.auto.cancel(errAutomaticPaused)
 	}
 	err = s.Catalog.writeTransaction(ctx, "background settings", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO sync_settings(host_id,enabled,interval_seconds,sources_json,next_at) VALUES(?,?,?,?,?)

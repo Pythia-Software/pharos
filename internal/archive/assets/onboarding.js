@@ -1060,6 +1060,10 @@ function pharosClaudeWatchLine(item) {
       row.append(node('p','muted',line.files));
       if(line.progress)row.append(node('p','',line.progress),node('p','muted','This update includes earlier exports in the source. Existing conversations are updated in place.'));
       if(line.detail)row.append(node('p',line.attention?'sync-note badtext':'muted',line.detail));
+      if(item.state==='imported'&&window.pharosQueryTables?.sourceConversationsURL){
+        const link=node('a','','View Claude.ai conversations →');link.href=window.pharosQueryTables.sourceConversationsURL('claude-ai');
+        const destination=node('p');destination.append(link);row.append(destination);
+      }
       if(line.actions.length){
         const actions=node('div','claude-watch-actions');
         let profile=null;

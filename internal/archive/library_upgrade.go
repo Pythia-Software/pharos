@@ -103,6 +103,14 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 		return nil, err
 	}
 	checked(2)
+	var sessionModels int64
+	if version, err := c.metaValue(ctx, "agent_session_model_version"); err != nil {
+		return nil, err
+	} else if version != agentSessionModelVersion {
+		if sessionModels, err = count(`SELECT COUNT(DISTINCT workspace_id) FROM agent_sessions WHERE kind='subagent'`); err != nil {
+			return nil, err
+		}
+	}
 	// Some conversations have no version to find (a Codex session whose file
 	// is gone), so the step is done once one full backfill pass completes.
 	var harness int64
@@ -154,6 +162,8 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 			Detail: "Restores proven Claude parent/child links, makes delivered sub-agent reports readable, and repairs phrase matching in retained tool and context text. Keeps original evidence and resumes after interruption.", Pending: messageSearch},
 		{ID: "tools", Label: "Rebuild the tool index", Unit: "conversation",
 			Detail: "Re-reads retained messages to store error signatures, test failures, and repository-relative paths. The longest step.", Pending: tools},
+		{ID: "session-models", Label: "Correct agent session models", Unit: "workspace",
+			Detail: "Uses each agent session's own retained model evidence to correct its summary label. Preserves usage and pricing.", Pending: sessionModels},
 	}
 	for index := range steps {
 		steps[index].Seconds = state.seconds[steps[index].ID]
@@ -415,6 +425,15 @@ func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, don
 	if pending["tools"] > 0 {
 		if err := timed("tools", func() error {
 			_, err := c.BackfillToolLedger(ctx, func(done, total int) { report("tools", done, total) })
+			return err
+		}); err != nil {
+			return finish(err)
+		}
+	}
+	// Model evidence depends on restored child links and request ownership.
+	if pending["session-models"] > 0 {
+		if err := timed("session-models", func() error {
+			_, err := c.RepairAgentSessionModels(ctx, func(done, total int) { report("session-models", done, total) })
 			return err
 		}); err != nil {
 			return finish(err)

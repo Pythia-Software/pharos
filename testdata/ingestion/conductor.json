@@ -1,5 +1,5 @@
 {
-  "index_version": "conductor-v14-inference-speed+sender+reasoning-v1",
+  "index_version": "conductor-v15-execution-model+sender+reasoning-v1",
   "records": [
     {
       "SourceID": "session-1",
@@ -195,7 +195,7 @@
               "Selected": true
             }
           ],
-          "Extractor": "conductor-v14-inference-speed"
+          "Extractor": "conductor-v15-execution-model"
         }
       ],
       "WorkItems": null,
