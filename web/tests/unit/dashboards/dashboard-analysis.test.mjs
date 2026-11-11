@@ -246,7 +246,7 @@ test("Over time draws every measure and population; only unit reductions stay un
   for (const metric of Object.keys(catalog.measures)) for (const split of ["provider", "provider_model", "none"]) {
     const state = { ...trend, view: "compare", metric, split, compareAs: "bars" };
     assert.equal(trendUnavailable(catalog, state), undefined, metric);
-    assert.equal(viewOptions(catalog, state).find(([view]) => view === "trend")[2], undefined, `${metric}: the option is enabled`);
+    for (const drawing of ["trend_line", "trend_bar"]) assert.equal(viewOptions(catalog, state).find(([view]) => view === drawing)[2], undefined, `${metric}: ${drawing} is enabled`);
     const there = switchView(catalog, state, "trend");
     assert.deepEqual([there.view, there.metric, there.split, normalizeAnalysis(catalog, there).share], ["trend", metric, split, false], `${metric} by ${split}: nothing is substituted`);
     assert.deepEqual(["metric", "split", "compareAs"].map(key => normalizeAnalysis(catalog, switchView(catalog, there, "compare"))[key]), [metric, split, "bars"], `${metric} by ${split}: and back`);

@@ -665,7 +665,8 @@ no sum, cumulative or share.
   and let it transform them.
 - **Controls.** `AnalysisControls` is the one control bar for every view,
   in two groups (`ControlSections`). **Data** chooses what the chart
-  holds: Analysis (Over time, Compare groups, Distribution, Scatter plot,
+  holds: Analysis (Over time - line, Over time - bar, Over time - heatmap
+  where the selected measure and breakdown support it, Compare groups, Distribution, Scatter plot,
   cycle; the state's `view` key), Count each, Metric, Breakdown, Combine
   or Summarize, Minimum, Cycle, Population, Range, and for the trend Time
   bucket and Periods (whole periods only). **View** chooses how those same
@@ -747,6 +748,14 @@ no sum, cumulative or share.
     computed expression.
 
 ### Default views
+
+Every catalog with a time series offers explicit line and bar choices in
+the Analysis picker. The automatic `trend` identity remains readable in saved
+URLs and cards, preserving their data-dependent defaults; the picker names
+the drawing it resolves to instead of offering a duplicate “Over time”.
+Heatmaps remain available through Display and an explicitly named Analysis
+option where supported. Choosing line or bar exits a heatmap; switching
+between line and bar preserves filters, buckets, smoothing and legend choices.
 
 Every dashboard chooses its view the same way (`suggestedView`), from the
 analysis, measure, breakdown, counting unit, reduction and time bucket and

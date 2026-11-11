@@ -295,7 +295,11 @@ export const records = "records", noSplit = "none";
 export const analysisViews: Array<[AnalysisView, string]> = [["trend", "Over time"], ["compare", "Compare groups"], ["distribution", "Distribution"], ["scatter", "Scatter plot"], ["cycle", "Hour / weekday cycle"]];
 const explicitTrendViews: Array<[AnalysisView, string]> = [["trend_line", "Over time - line"], ["trend_bar", "Over time - bar"]];
 export const allAnalysisViews = [...analysisViews, ...explicitTrendViews];
-export const catalogViews = (catalog: AnalysisCatalog) => catalog.views ? catalog.views.map(view => allAnalysisViews.find(([id]) => id === view)!) : analysisViews;
+// Keep the automatic trend identity for saved links and cards. Every catalog
+// with that identity also supports deliberate line and bar choices.
+export const catalogViews = (catalog: AnalysisCatalog): Array<[AnalysisView, string]> =>
+  [...new Set((catalog.views ?? analysisViews.map(([view]) => view)).flatMap(view => view === "trend" ? [view, ...explicitTrendViews.map(([id]) => id)] : [view]))]
+    .map(view => allAnalysisViews.find(([id]) => id === view)!);
 export const analysisReductions: Array<[AnalysisReduce, string]> = [["total", "Total"], ["mean", "Mean per unit"], ["median", "Median per unit"], ["max", "Largest unit"], ["count", "Number of units"]];
 export const sampleThresholds = [0, 2, 3, 5, 10, 20, 50, 100];
 export const analysisDefaults = { unit: records, reduce: "total", compareAs: "bars", minSamples: 0, scaleY: "linear", cycle: "weekday",
@@ -342,8 +346,17 @@ export function trendUnavailable(catalog: AnalysisCatalog, state: AnalysisState)
   }
 }
 // Each view's option, disabled with its reason where this state cannot move.
-export const viewOptions = (catalog: AnalysisCatalog, state: AnalysisState): Array<[AnalysisView, string, string?]> =>
-  catalogViews(catalog).filter(([view]) => view !== "scatter" || catalog.dataset === "scatter").map(([view, label]) => [view, label, isTrendView(view) ? trendUnavailable(catalog, state) : viewUnavailable(catalog, view)]);
+export function viewOptions(catalog: AnalysisCatalog, state: AnalysisState): Array<[AnalysisView, string, string?]> {
+  const resolved = normalizeAnalysis(catalog, state), heatmap = heatmapAxis(catalog, resolved);
+  return catalogViews(catalog).filter(([view]) => (view !== "scatter" || catalog.dataset === "scatter") && (view !== "trend" || heatmap))
+    .map(([view, label]) => [view, view === "trend" ? "Over time - heatmap" : label, isTrendView(view) ? trendUnavailable(catalog, state) : viewUnavailable(catalog, view)]);
+}
+// The picker names the drawing a legacy automatic link actually produces.
+export function analysisViewValue(catalog: AnalysisCatalog, state: AnalysisState): AnalysisView {
+  const resolved = normalizeAnalysis(catalog, state);
+  if (!isTrendView(resolved.view)) return resolved.view;
+  return resolved.display === "heatmap" ? "trend" : trendDrawing(catalog, resolved) === "trend_line" ? "trend_line" : "trend_bar";
+}
 export function catalogProblems(catalog: AnalysisCatalog): string[] {
   const problems: string[] = [];
   if (has(catalog.units, records)) problems.push(`A unit may not be named ${records}.`);
@@ -514,7 +527,7 @@ export function normalizeAnalysis<T extends AnalysisState>(catalog: AnalysisCata
   if(catalog.breakdowns[next.split]?.measures && !catalog.breakdowns[next.split].measures!.includes(next.metric)) next.split=noSplit;
   next.view ??= "trend";
   if(catalog.breakdowns[next.split]?.views && !catalog.breakdowns[next.split].views!.includes(next.view)) next.split=noSplit;
-  if (catalog.views && !catalog.views.includes(next.view)) next.view = catalog.views[0] ?? "trend";
+  if (catalog.views && !catalogViews(catalog).some(([view]) => view === next.view)) next.view = catalog.views[0] ?? "trend";
   if (isTrendView(next.view)) return normalizeTrend(catalog, next, asked);
   const firstUnit = Object.keys(catalog.units)[0];
   // A view this catalog cannot show at all becomes Compare; viewOptions
@@ -587,7 +600,7 @@ export function suggestedView(catalog: AnalysisCatalog, state: ViewInputs): View
   if (!measure) return {};
   if (isTrendView(state.view)) {
     const daily = state.period === "day", axis = heatmapAxis(catalog, state);
-    if (axis && !axis.unit) return { view: "trend", display: "heatmap", share: false, nonzero: false, rollingPeriods: daily ? 7 : 0 };
+    if (axis && !axis.unit && (state.view === undefined || state.view === "trend")) return { view: "trend", display: "heatmap", share: false, nonzero: false, rollingPeriods: daily ? 7 : 0 };
     const lines = trendKind(measure) !== "additive", share = Boolean(measure.populationShare) && state.split !== noSplit;
     return { view: lines ? "trend_line" : "trend", display: "interval", share, nonzero: true, scale: share || measure.format.kind === "percent" ? "linear" : "half",
       rollingPeriods: lines && daily ? 7 : 0, percentiles: lines && daily && state.split === noSplit && !share ? ["mean"] : [] };
@@ -808,6 +821,16 @@ export function switchView<T extends AnalysisState>(catalog: AnalysisCatalog, in
       split: has(catalog.breakdowns, trend.split) || view === "compare" && !comparisonComponentUnavailable(catalog, trend, trend.split) ? trend.split : noSplit })));
   }
   return data(normalizeAnalysis(catalog, withoutView({ ...state, view, ...view === "cycle" ? { reduce: "median" as const } : {} })));
+}
+
+// User choices name a drawing explicitly. The automatic identity remains
+// readable, but its picker option specifically requests the heatmap.
+export function chooseAnalysisView<T extends AnalysisState>(catalog: AnalysisCatalog, input: T, view: AnalysisView): T {
+  if (isTrendView(view) && trendUnavailable(catalog, input)) return input;
+  const next = switchView(catalog, input, view);
+  if (view === "trend" && heatmapAxis(catalog, normalizeAnalysis(catalog, next))) return { ...next, display: "heatmap" };
+  if (isTrendView(view) && next.display === "heatmap") return { ...next, display: "interval" };
+  return next;
 }
 
 export const unique = (terms: WhereTerm[]) => terms.filter((term, index) => terms.findIndex(other => JSON.stringify(other) === JSON.stringify(term)) === index);
