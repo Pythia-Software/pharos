@@ -1,5 +1,7 @@
 # Query Table handoff: use the arrow for disabled picker items
 
+**Resolved in Query Table 1.0.5**: unavailable picker items use the default arrow cursor and no longer highlight on hover.
+
 Status: upstream change requested; no local Query Table patch.
 Baseline: published Query Table 1.0.3 / Go v1.0.3.
 Consumer: Pharos. Prepared 2026-11-08.

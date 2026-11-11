@@ -121,15 +121,6 @@ func (s *Server) queryV3SourceFields(ctx context.Context, schema qt.Schema, q qt
 	if err = authorizeQueryV3Computed(ctx, tx, &d); err != nil {
 		return nil, err
 	}
-	// Distinct values read source.where and a field outside the result SELECT.
-	// Plan that authorized field as a row projection to discover its complete
-	// base/computed inputs; execute the original distinct request unchanged.
-	if q.Distinct != nil {
-		field := q.Distinct.Field
-		q.Distinct = nil
-		q.Rows = true
-		q.Result = qt.WireQuery{Select: []string{field}, Where: q.Source.Where, Limit: 1}
-	}
 	plan, err := d.SourcePlan(ctx, q, qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name,
 		Resolver: qt.SQLiteComputedDefinitionResolver{Tx: tx, Scope: d.Scope, Dataset: d.Dataset}})
 	return plan.BaseFields, err

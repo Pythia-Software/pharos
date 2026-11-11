@@ -1,5 +1,7 @@
 # Query Table 1.0.0 follow-up from Pharos
 
+**Status after Query Table 1.0.5**: §3 (distinct targets in `SourcePlan`) and §4 (wrapping links in screen fitting) are resolved. §1 is partly met: a field's `currency` or compact `number` display becomes the default format of metrics over it, but numeric metrics still take no host renderer. §2 (an unpaged identity plan) remains open.
+
 Pharos consumes unmodified core/react/ui/codegen 1.0.0 and Go v1.0.0. Current
 remote consumers use V3 throughout. No local dependency patches are permitted.
 

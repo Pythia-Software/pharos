@@ -17,7 +17,6 @@ tests.
 | [machine-time-all-time-cpu.md](machine-time-all-time-cpu.md) | Machine Time's all-time view may take twice the CPU the legacy route did; confirm or fix |
 | [usage-v3-hour-grouping.md](usage-v3-hour-grouping.md) | `/query-v3` groups usage by `hour` over daily records, where it is null; only `/metrics` reads the hourly ledger |
 | [query-table-schema-reload.md](query-table-schema-reload.md) | Every staged Query Table request makes its connection re-parse the whole catalog schema twice, adding about 6 ms of CPU |
-| [query-table-redundant-tooltips.md](query-table-redundant-tooltips.md) | Native table cells, JSON previews and grouped-column labels repeat visible content on hover; requires an upstream release |
 | [query-table-log-axes.md](query-table-log-axes.md) | Native log axes give the smallest bar zero length and unround ticks, and histograms bin evenly, so long-tailed histograms cannot take a log axis; requires an upstream release |
 
 ## Analysis chain cost
@@ -52,14 +51,20 @@ shipped as #271–#273.
 
 ## Upstream Query Table
 
-[`query-table-rate-intervals.md`](query-table-rate-intervals.md) (open, against
-1.0.0): intervals for ratio metrics (Wilson for shares, Poisson for rates) in
-the result and the charts, so the Agent Events dashboard can show how far a
-small group's value could move.
-
-[`query-table-tuple-colors.md`](query-table-tuple-colors.md) (open, against
-1.0.0): colour a grouped bar by one of its keys, so a kind of agent event keeps
-its palette colour on every repository's bar.
+Query Table 1.0.5 delivered
+[`query-table-rate-intervals.md`](query-table-rate-intervals.md) (intervals
+for ratio metrics),
+[`query-table-tuple-colors.md`](query-table-tuple-colors.md) (colour a grouped
+bar by one key),
+[`query-table-fit-wrapping-links.md`](query-table-fit-wrapping-links.md),
+[`query-table-redundant-tooltips.md`](query-table-redundant-tooltips.md),
+[`query-table-icon-tooltips.md`](query-table-icon-tooltips.md),
+[`query-table-disabled-picker-cursor.md`](query-table-disabled-picker-cursor.md),
+[`query-table-scatter-text-metrics.md`](query-table-scatter-text-metrics.md)
+and §3–§4 of [`query-table-after-1.0.0.md`](query-table-after-1.0.0.md), along
+with the percentiles, quantile curves and calendar buckets of several intervals
+that the dashboards' move onto query-v3 needed. Each handoff is marked with
+what the release resolved.
 
 Pharos uses the published Query Table module and packages without patches.
 Query Table 0.9.7 delivered every request in
@@ -70,12 +75,8 @@ counts, calendar grouping keys and OR-of-AND filters; and the V2, text-index
 and metadata performance asks. Pharos took the chart, fitting and metadata
 fixes on upgrading; it adopts the new capabilities in later changes.
 
-[`query-table-fit-wrapping-links.md`](query-table-fit-wrapping-links.md) is
-open: 0.9.7's fit-to-screen minimums measure a wrapping host link as one
-unshrinkable line, so Analyze's fitted tables scroll at desktop widths. It can
-be sent directly to the Query Table team.
-
-That handoff superseded the requests in
+[`query-table-fit-wrapping-links.md`](query-table-fit-wrapping-links.md)
+(resolved in 1.0.5) superseded the requests in
 [`query-table-dashboard-views.md`](query-table-dashboard-views.md),
 [`query-table-fit-link-clipping.md`](query-table-fit-link-clipping.md),
 [`query-table-fit-screen-controls.md`](query-table-fit-screen-controls.md),

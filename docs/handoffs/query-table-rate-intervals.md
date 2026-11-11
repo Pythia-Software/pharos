@@ -1,5 +1,7 @@
 # Query Table: intervals for rates and shares
 
+**Resolved in Query Table 1.0.5**: `interval: { kind: "proportion" | "rate", level? }` on a metric whose formula is a ratio of SUM, COUNT or COUNT_DISTINCT parts (the parts come from the `A/B` formula; there is no explicit numerator/denominator form), `lower`/`upper` on buckets and Other, and whiskers and bands in the charts.
+
 For the Query Table team. This is a self-contained request against the
 published **1.0.0** release (Go module `backends/go` v1.0.0 and the npm core,
 react, ui and codegen packages at 1.0.0), dated **2026-11-06**. Pharos will

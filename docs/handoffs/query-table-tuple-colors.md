@@ -1,5 +1,7 @@
 # Query Table: colour a grouped bar by one of its keys
 
+**Resolved in Query Table 1.0.5**: `MetricTheme.colorBy` and a chart's saved `display.colorBy` colour bars, boxes and list rows grouped by several keys by one named key.
+
 For the Query Table team. This is a self-contained request against the published **1.0.0** release (Go module
 `backends/go` v1.0.0 and the npm core, react, ui and codegen packages at 1.0.0), dated **2026-11-07**. Pharos will
 consume it through a published release; it does not patch Query Table locally.
