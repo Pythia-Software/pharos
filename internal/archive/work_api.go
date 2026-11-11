@@ -157,7 +157,7 @@ func (s *Server) postWork(w http.ResponseWriter, r *http.Request, body map[strin
 		case "resume":
 			changed = s.work.runner.Resume(kind)
 			switch kind {
-			case "maintenance.origins", "maintenance.library-view", "maintenance.previews", "maintenance.parallelism", "maintenance.session-shape", kindNames:
+			case "maintenance.origins", "maintenance.library-view", kindMetrics, "maintenance.previews", "maintenance.parallelism", "maintenance.session-shape", kindNames:
 				// These tasks also honor the existing Search-view Stop.
 				changed = s.Catalog.resumeLibraryRefresh() || changed
 			}

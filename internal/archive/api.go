@@ -198,6 +198,7 @@ func (s *Server) Serve() error {
 		s.daemon("maintainLibrary", s.maintainWork)
 	} else {
 		s.daemon("maintainLibrary", s.Catalog.maintainLibrary)
+		s.daemon("maintainWorkspaceMetrics", s.Catalog.maintainWorkspaceMetrics)
 		s.daemon("maintainSubstringIndex", s.Catalog.maintainSubstringIndex)
 		s.daemon("maintainToolOutputIndex", s.Catalog.maintainToolOutputIndex)
 		s.daemon("maintainTextSearch", s.Catalog.maintainTextSearch)
@@ -981,6 +982,7 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/library/refresh/stop":
 		stopped := s.Catalog.stopLibraryRefresh()
 		s.ops.markKindStopping("maintenance.library-view")
+		s.ops.markKindStopping(kindMetrics)
 		writeJSON(w, map[string]any{"stopped": stopped}, http.StatusOK)
 	case path == "/api/library/refresh/resume":
 		writeJSON(w, map[string]any{"resumed": s.Catalog.resumeLibraryRefresh()}, http.StatusOK)

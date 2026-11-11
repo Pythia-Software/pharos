@@ -340,7 +340,30 @@ func TestStatisticsIncrementalProjectionAndPriceInvalidation(t *testing.T) {
 	args := map[string]any{"select": []string{"cost_usd"}, "retain_snapshot": true}
 	first := statisticsCall(t, c, "query_statistics", args)
 	before := statisticsItems(first)[0]["cost_usd"]
-	if _, err := c.DB.Exec("UPDATE cost_changes SET input_per_mtok=4 WHERE model_key='gpt-5.5'"); err != nil {
+	// A pricing file that changes a price the workspace's usage is charged
+	// at leaves its metrics to be computed again; one that adds a model it
+	// never used leaves them alone.
+	reprice := func(model string, input float64) error {
+		doc := testPricing()
+		for index := range doc.Changes {
+			if doc.Changes[index].Model == model {
+				doc.Changes[index].Input = rate(input)
+			}
+		}
+		return c.replacePricing(doc, "test")
+	}
+	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	unused := testPricing()
+	unused.Changes = append(unused.Changes, priceChange{Provider: "openai", Model: "gpt-9", EffectiveFrom: "2026-05-01", Input: rate(1), Output: rate(1), Status: "confirmed", SourceURL: "https://example.com/g"})
+	var pendingMetrics int
+	if err := c.replacePricing(unused, "test"); err != nil {
+		t.Fatal(err)
+	} else if err := c.DB.QueryRow("SELECT COUNT(*) FROM mcp_metric_dirty").Scan(&pendingMetrics); err != nil || pendingMetrics != 0 {
+		t.Fatalf("a price for a model no workspace used left %d workspaces to recompute (%v)", pendingMetrics, err)
+	}
+	if err := reprice("gpt-5.5", 4); err != nil {
 		t.Fatal(err)
 	}
 	after := statisticsCall(t, c, "query_statistics", args)
@@ -359,7 +382,7 @@ func TestStatisticsIncrementalProjectionAndPriceInvalidation(t *testing.T) {
 	}
 	pending, obsolete := stored()
 	override(t, &metricProjectionComputedHook, func() {
-		if _, err := c.DB.Exec("UPDATE cost_changes SET input_per_mtok=5 WHERE model_key='gpt-5.5'"); err != nil {
+		if err := reprice("gpt-5.5", 5); err != nil {
 			t.Error(err)
 		}
 	})
@@ -405,6 +428,35 @@ func TestStatisticsIncrementalProjectionAndPriceInvalidation(t *testing.T) {
 	}
 	if repriced := statisticsItems(statisticsCall(t, c, "query_statistics", args))[0]["cost_usd"]; repriced == statisticsItems(after)[0]["cost_usd"] {
 		t.Fatal("the stored projection kept the price it was overtaken at")
+	}
+	// A recomputation that changes nothing leaves the stored rows as they
+	// are, and one that finds a conversation gone drops its row.
+	rows := func() string {
+		t.Helper()
+		var text string
+		if err := c.DB.QueryRow("SELECT COALESCE(group_concat(rowid||':'||entity_id,' '),'') FROM (SELECT rowid,entity_id FROM mcp_metric_projection ORDER BY entity,entity_id)").Scan(&text); err != nil {
+			t.Fatal(err)
+		}
+		return text
+	}
+	kept := rows()
+	if _, err := c.DB.Exec("INSERT OR IGNORE INTO mcp_metric_dirty SELECT id FROM workspaces"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := rows(); got != kept || !strings.Contains(kept, ":c2") {
+		t.Fatalf("an unchanged recomputation rewrote the projection: %q → %q", kept, got)
+	}
+	if _, err := c.DB.Exec("DELETE FROM conversations WHERE id='c2'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.refreshMetricProjections(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := rows(); strings.Contains(got, ":c2") || !strings.Contains(got, ":c1") {
+		t.Fatalf("a deleted conversation's metrics: %q", got)
 	}
 	if _, err := c.DB.Exec("INSERT INTO mcp_calls(called_at,tool_name,status,duration_ms,response_bytes,estimated_output_tokens) VALUES('x','query_statistics','ok',0,0,0)"); err != nil {
 		t.Fatal(err)
@@ -852,4 +904,29 @@ func TestStatisticsAggregateUsageKeepsConsumingLayerUnknown(t *testing.T) {
 		t.Fatalf("leaf aggregate lost its own cost: %+v", got)
 	}
 
+}
+
+// An index and its analysis chain pause the Search view's maintenance loop,
+// not workspace metrics: they are computed from a snapshot and published only
+// for workspaces nothing wrote meanwhile.
+func TestWorkspaceMetricsStoreDuringAnIngest(t *testing.T) {
+	c := statisticsFixture(t)
+	pending := func() int { return countRows(t, c, "SELECT COUNT(*) FROM mcp_metric_dirty") }
+	if pending() == 0 {
+		t.Fatal("the fixture left nothing to compute")
+	}
+	// What beginIngest does for a sync or a capture index run.
+	c.projectionBatches.Add(1)
+	defer c.projectionBatches.Add(-1)
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan struct{})
+	go func() { c.maintainWorkspaceMetrics(ctx); close(stopped) }()
+	defer func() { cancel(); <-stopped }()
+	if !waitFor(10*time.Second, func() {
+		for pending() != 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}) {
+		t.Fatalf("%d workspaces' metrics still waited for the ingest", pending())
+	}
 }
