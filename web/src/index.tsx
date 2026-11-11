@@ -100,6 +100,7 @@ import { AskPharosSearch, AskPharosSettings } from "./ask-pharos";
 import { CardLibraryPage } from "./card-library";
 import { linkTargets, navigateLink } from "./query-link-targets";
 import { queryFromURL, readRollingWindow, resolveRollingQuery, rollingQueryMatches, restoreRollingDefinition } from "./query-links";
+import { sourceWorkspacesURL } from "./search-composer-state";
 import { mainIntegration, pullRequestLabel, pullRequestURL, pullRequests } from "./pull-requests";
 import { optionLabels } from "./option-labels";
 import { preferences } from "./preferences";
@@ -224,6 +225,7 @@ declare global {
       filterRepository: (repository: string) => void;
       filterModel: (model: string) => void;
       summaryURL: typeof usageSummaryURL;
+      sourceWorkspacesURL: (kind: string) => string;
       sourceConversationsURL: (source: string) => string;
       writingTotals: (publish: (totals: WritingTotals) => void, signal: AbortSignal) => Promise<void>;
     };
@@ -1836,6 +1838,7 @@ window.addEventListener("pharos:preferences-saved", event => {
   for (const dataset of datasetsForSavedPreferences((event as CustomEvent<{ set?: Record<string, unknown>; delete?: string[] }>).detail)) window.pharosQueryTables?.refreshDashboards(dataset as Dataset);
 });
 window.pharosQueryTables = {
+  sourceWorkspacesURL: kind => sourceWorkspacesURL(kind, schemas.library),
   summaryURL: (metric, window, generatedAt, _concurrency, from) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings(), from),
   sourceConversationsURL: source => sourceConversationsURL(schemas.library, source),
   async createLink() {

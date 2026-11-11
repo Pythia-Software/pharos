@@ -263,13 +263,13 @@ func (s *Server) newClaudeDownloads() *claudeDownloads {
 			op.Finish(err)
 			return job, err
 		},
-		index: func(ctx context.Context, name string) error {
+		index: func(ctx context.Context, name string, progress ProgressFunc) error {
 			if !s.ingestMu.TryLock() {
 				return errClaudeImportBusy
 			}
 			defer s.ingestMu.Unlock()
 			ctx, op := s.begin(ctx, OperationSpec{Kind: "capture.import", Variant: "claude-ai", Trigger: triggerSchedule})
-			err := s.backgroundCapture(ctx, op, "claude-ai", []string{name})
+			err := s.backgroundCaptureProgress(ctx, op, "claude-ai", []string{name}, progress)
 			op.Finish(err)
 			return err
 		},
@@ -327,7 +327,46 @@ func (s *Server) claudeWatchDocument() map[string]any {
 		exports[i].BrowserLabel = browserProfileLabel(exports[i].Browser, browsers)
 	}
 	return map[string]any{"enabled": setting.Enabled, "available": browserOpenAvailable(), "folder": s.claudeWatch.dir, "problem": problem,
-		"browser": setting.Browser, "browsers": browsers, "exports": exports}
+		"browser": setting.Browser, "browsers": browsers, "exports": exports, "library": s.claudeImportLibrary()}
+}
+
+type claudeImportWorkspace struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+type claudeImportLibrary struct {
+	Workspaces    int                     `json:"workspaces"`
+	Conversations int                     `json:"conversations"`
+	Recent        []claudeImportWorkspace `json:"recent"`
+	Error         string                  `json:"error,omitempty"`
+}
+
+// This source-wide view also works for exports collected before ingestion
+// progress was recorded, and while a source is only partly indexed.
+func (s *Server) claudeImportLibrary() claudeImportLibrary {
+	result := claudeImportLibrary{Recent: []claudeImportWorkspace{}}
+	ctx, cancel := context.WithTimeout(s.life.ctx, 2*time.Second)
+	defer cancel()
+	err := s.Catalog.reader().QueryRowContext(ctx, `SELECT COUNT(DISTINCT w.id),COUNT(DISTINCT c.id)
+		FROM workspace_sightings s JOIN workspaces w ON w.id=s.workspace_id
+		LEFT JOIN conversations c ON c.workspace_id=w.id
+		WHERE s.host_id=? AND s.source_name=?`, currentHost().ID, s.claudeWatch.name).Scan(&result.Workspaces, &result.Conversations)
+	if err == nil {
+		var rows []map[string]any
+		rows, err = queryMapsContext(ctx, s.Catalog.reader(), `SELECT w.id,w.title FROM workspace_sightings s
+			JOIN workspaces w ON w.id=s.workspace_id WHERE s.host_id=? AND s.source_name=?
+			ORDER BY w.activity_at DESC,w.id LIMIT 5`, currentHost().ID, s.claudeWatch.name)
+		for _, row := range rows {
+			id := asString(row["id"])
+			result.Recent = append(result.Recent, claudeImportWorkspace{ID: id, Title: defaultString(asString(row["title"]), "Claude.ai conversation"), URL: "/work/" + url.PathEscape(id)})
+		}
+	}
+	if err != nil {
+		result.Error = "Workspace status is temporarily unavailable."
+	}
+	return result
 }
 
 func claudeBrowserKnown(key string) bool {

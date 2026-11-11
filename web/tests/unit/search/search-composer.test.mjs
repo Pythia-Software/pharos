@@ -4,6 +4,17 @@ import * as m from "../../../src/search-composer-state";
 import { withGroupingKeys } from "@pythia-software/query-table-core";
 import { queryForSearchResultsView, searchResultsView } from "../../../src/search-results-view-model";
 const schema = { name: "test", idField: "id", fields: [], defaultSort: [{ field: "activity_at", dir: "desc" }], defaultLimit: 50 };
+test("imported source workspace links retain their source and include older conversations", () => {
+ const url = new URL(m.sourceWorkspacesURL("claude-ai", schema), "http://localhost");
+ assert.equal(url.pathname, "/library");
+ const restored = m.restoreSearch(url.searchParams, schema);
+ assert.deepEqual(restored.query.where, [{ field: "source_kind", op: "=", value: "claude-ai" }]);
+ assert.equal(url.searchParams.has("text_builder"), false, "no applied message search or date restriction");
+ assert.equal(url.searchParams.has("window_days"), false);
+ assert.equal(restored.query.offset, 0);
+ assert.deepEqual(restored.query.orderBy, schema.defaultSort);
+ assert.ok(!restored.error);
+});
 test("source conversation links open all workspaces from that source", () => {
  const url = new URL(m.sourceConversationsURL(schema, "claude-ai"), "http://localhost");
  const restored = m.restoreSearch(url.searchParams, schema);
