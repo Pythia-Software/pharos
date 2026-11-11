@@ -672,7 +672,7 @@ func rebuildWorkspaceUsage(tx *sql.Tx, workspaceID string, conversations []Conve
 var storedWorkspaceConversations = loadStoredWorkspaceConversations
 
 func loadStoredWorkspaceConversations(ctx context.Context, q queryer, workspaceID string) ([]ConversationRecord, []string, error) {
-	items, err := queryMapsContext(ctx, q, `SELECT id,native_id,parent_id,provider,account,model,effort,agent_depth,started_at FROM conversations
+	items, err := queryMapsContext(ctx, q, `SELECT id,native_id,parent_id,provider,account,model,effort,agent_depth,started_at,ended_at,coverage,session_bounds_json FROM conversations
 		WHERE workspace_id=? ORDER BY agent_depth,native_id`, workspaceID)
 	if err != nil {
 		return nil, nil, err
@@ -694,7 +694,7 @@ func loadStoredWorkspaceConversations(ctx context.Context, q queryer, workspaceI
 			parentNativeID = before
 		}
 		conversations = append(conversations, ConversationRecord{NativeID: nativeID, ParentNativeID: parentNativeID, Provider: firstString(item["provider"]), Account: firstString(item["account"]),
-			Model: firstString(item["model"]), Effort: firstString(item["effort"]), AgentDepth: int(integer(item["agent_depth"])), StartedAt: firstString(item["started_at"]), Messages: messages})
+			Model: firstString(item["model"]), Effort: firstString(item["effort"]), AgentDepth: int(integer(item["agent_depth"])), StartedAt: firstString(item["started_at"]), EndedAt: firstString(item["ended_at"]), Coverage: firstString(item["coverage"]), SessionBounds: decodeSessionBounds(item["session_bounds_json"]), Messages: messages})
 	}
 	return conversations, ids, nil
 }

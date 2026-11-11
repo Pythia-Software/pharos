@@ -473,11 +473,18 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 	if err := catalog.ensureToolRollup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// Even a backlog larger than the inline budget serves stored Session
+	// Shape statistics while the writer is held.
+	override(t, &sessionShapeInlineLimit, 0)
+	if _, err := catalog.refreshSessionShape(t.Context(), 100, true); err != nil {
+		t.Fatal(err)
+	}
 	// A sync's commits leave every projection stale, and a cloud backup this
 	// Mac was running has lost its process.
 	interrupted := jsonText(cloudRun{ID: "lost-run", DestinationID: "cloud", State: "running", OwnerPID: 999999999, OwnerHost: currentHost().ID, UpdatedAt: "earlier"})
 	execTx(t, catalog.DB, "UPDATE origin_state SET revision=revision+1",
 		"INSERT OR IGNORE INTO parallelism_dirty SELECT id,'' FROM conversations",
+		"INSERT OR IGNORE INTO session_shape_dirty SELECT id,'' FROM conversations",
 		"INSERT OR IGNORE INTO mcp_metric_dirty SELECT id FROM workspaces",
 		"INSERT OR IGNORE INTO tool_rollup_dirty SELECT id,'stale' FROM workspaces",
 		`INSERT INTO cloud_destinations(id,config_json,credential_json,imported_at) VALUES('cloud','{"name":"Backup"}','{}','2026-10-27')`,
@@ -537,10 +544,12 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 		{"GET", "/api/status", ""}, {"GET", "/api/status?fresh=1", ""},
 	}
 	for _, dataset := range []string{"library", "usage", "tools", "tool_calls", "writing", "writing_messages", "parallelism",
-		"conversation_activity", "activity", "mcp_calls", "skill_usages", "tl1_attempts", "findings"} {
+		"conversation_activity", "activity", "mcp_calls", "skill_usages", "tl1_attempts", "findings", "session_shape"} {
 		requests = append(requests, struct{ method, path, body string }{"POST", "/api/query/" + dataset + "/rows-v2", rows},
 			struct{ method, path, body string }{"POST", "/api/query/" + dataset + "/metrics", count})
 	}
+	requests = append(requests, struct{ method, path, body string }{"POST", "/api/query/session_shape/query-v3",
+		fmt.Sprintf(`{"version":3,"profile":"qt-sqlite-v1","now":%d,"rows":true,"source":{},"result":{"select":["id","messages"],"limit":5}}`, time.Now().UnixMilli())})
 	tools := []struct {
 		name string
 		args map[string]any

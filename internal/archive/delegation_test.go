@@ -846,6 +846,56 @@ func TestDelegationActivitySpanFollowsOwnActivity(t *testing.T) {
 	})
 }
 
+func TestDelegationAttemptEnvelopeWithoutTimedMessages(t *testing.T) {
+	for _, ongoing := range []bool{false, true} {
+		t.Run(fmt.Sprint("ongoing=", ongoing), func(t *testing.T) {
+			c, _ := testCatalog(t)
+			start, end := "2026-01-01T10:00:00.000Z", "2026-01-01T10:20:00.000Z"
+			if ongoing {
+				end = ""
+			}
+			ingestRecordTx(t, c, WorkspaceRecord{SourceID: "attempt-envelope", SourceKind: "tl1", Account: "local", Conversations: []ConversationRecord{{
+				NativeID: "root", Provider: "codex", Account: "local", SessionBounds: attemptSessionBounds(start, end),
+				Messages: []MessageRecord{{NativeID: "request", Kind: "metadata", RawText: `{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}`}, {NativeID: "launch", CallID: "child", Kind: "delegation"}},
+			}}})
+			var workspace, conversation string
+			if err := c.DB.QueryRow(`SELECT workspace_id,id FROM conversations WHERE native_id='root'`).Scan(&workspace, &conversation); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := c.readDelegationSnapshot(t.Context(), workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, node := range snapshot.Nodes {
+				if node.NativeID != "root" {
+					if node.Self["clock"].Value != nil {
+						t.Fatalf("child inherited timing: %+v", node.Self["clock"])
+					}
+					continue
+				}
+				if node.TimeBoundsSource != "attempt-envelope" || node.Self["start"].Value == nil || node.Self["start"].Quality != "reported" {
+					t.Fatalf("root timing: %+v", node)
+				}
+				clock := node.Self["clock"]
+				if ongoing {
+					if clock.Value != nil || node.End != nil {
+						t.Fatalf("ongoing duration: %+v", clock)
+					}
+				} else if clock.Value == nil || *clock.Value != 20*60*1000 || clock.Quality != "reported" {
+					t.Fatalf("attempt envelope: %+v", clock)
+				}
+				if node.Self["modelTime"].Value != nil {
+					t.Fatal("attempt envelope manufactured processing time")
+				}
+			}
+			shape, _, err := deriveSessionShapeOf(t.Context(), c.DB, conversation)
+			if err != nil || shape == nil || shape.HasTimestamps || shape.WallSeconds != nil || shape.ActiveSeconds != nil {
+				t.Fatalf("message-derived shape acquired timing: %+v, %v", shape, err)
+			}
+		})
+	}
+}
+
 func TestDelegationCostFollowsUsageModelAndHistoricalDate(t *testing.T) {
 	c, _ := testCatalog(t)
 	seedDelegation(t, c)

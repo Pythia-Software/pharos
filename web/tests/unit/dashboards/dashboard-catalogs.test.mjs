@@ -18,7 +18,7 @@ import { groupedDashboardQuery } from "../../../src/usage-dashboard-model";
 import { analysisCatalogs, normalizedDashboardChart } from "../../../src/analysis-catalogs";
 import { trendHeatmap } from "../../../src/dashboard-heatmap-model";
 import { now, toolCalls, toolsRollup, mcpCalls, skillUsages } from "../helpers/record-ledgers.mjs";
-import { viewKeys, viewDefaults, suggestedView, longTailed, trendKind, distributionBins, clearView, changeState, canonicalState, heatmapAxis, heatmapSource, percentileLimit, isTrendView, analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, nativeCycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
+import { viewKeys, viewDefaults, suggestedView, longTailed, trendKind, distributionBins, clearView, changeState, canonicalState, heatmapAxis, heatmapSource, percentileLimit, isTrendView, analysisInspectQuery, analysisNote, analysisQuery, analysisViewValue, chooseAnalysisView, catalogProblems, nativeCycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catalog";
@@ -67,6 +67,57 @@ test("every view of every measure and breakdown executes over its own dataset", 
   }
 });
 
+test("every time-series catalog offers line and bar without duplicating the automatic drawing", () => {
+  for (const [topic, catalog] of Object.entries(analysisCatalogs)) {
+    if (topic === "scatter") continue;
+    const asked = { ...dashboardDefaults[topic], view: "trend", v: analysisVersion };
+    const options = viewOptions(catalog, asked);
+    assert.ok(options.some(([id]) => id === "trend_line"), topic);
+    assert.ok(options.some(([id]) => id === "trend_bar"), topic);
+    assert.ok(options.every(([, label]) => label !== "Over time"), topic);
+    const before = normalizeAnalysis(catalog, asked);
+    assert.equal(analysisViewValue(catalog, asked), before.display === "heatmap" ? "trend" : trendSeries(catalog, asked, trendQuery(catalog, asked, [], { now }), [], { now }).lines ? "trend_line" : "trend_bar", topic);
+    const fields = catalog.breakdowns[asked.split]?.fields ?? [];
+    const selected = fields.length > 1 ? JSON.stringify(fields.map(() => "one")) : "one";
+    const input = { ...asked, display: "interval", rollingPeriods: 3, scale: "linear", selection: { values: [selected], excluded: false } };
+    const line = chooseAnalysisView(catalog, input, "trend_line"), bar = chooseAnalysisView(catalog, line, "trend_bar");
+    assert.equal(normalizeAnalysis(catalog, line).view, "trend_line", topic);
+    assert.equal(normalizeAnalysis(catalog, bar).view, "trend_bar", topic);
+    assert.deepEqual({ ...bar, view: "trend_line" }, line, topic);
+    assert.deepEqual(trendQuery(catalog, line, month(catalog), { now }), trendQuery(catalog, bar, month(catalog), { now }), topic);
+    assert.deepEqual(chooseAnalysisView(catalog, bar, "trend_line"), line, topic);
+    assert.ok(validAnalysisState(catalog, bar), topic);
+  }
+  assert.deepEqual(viewOptions(compaction, dashboardDefaults.compaction).map(([id]) => id), ["trend_line", "trend_bar", "compare", "cycle"]);
+  for (const metric of ["compactions", "conversations"]) {
+    const old = { view: "trend", metric, split: "trigger" };
+    assert.ok(validAnalysisState(compaction, old));
+    assert.equal(analysisViewValue(compaction, old), metric === "compactions" ? "trend_bar" : "trend_line");
+    assert.equal(normalizeAnalysis(compaction, old).view, "trend", "legacy links retain their automatic defaults");
+  }
+});
+
+test("explicit line and bar choices leave automatic heatmaps and preserve the selected population", () => {
+  const original = { ...dashboardDefaults.session_shape, view: "trend", selection: { values: ["short"], excluded: false }, rollingPeriods: 3 };
+  assert.equal(normalizeAnalysis(sessionShape, original).display, "heatmap");
+  assert.equal(viewOptions(sessionShape, original).find(([id]) => id === "trend")[1], "Over time - heatmap");
+  for (const view of ["trend_line", "trend_bar"]) {
+    const chosen = chooseAnalysisView(sessionShape, { ...original, display: "heatmap" }, view);
+    assert.equal(normalizeAnalysis(sessionShape, chosen).display, "interval");
+    assert.deepEqual(chosen.selection, original.selection);
+    assert.equal(chosen.rollingPeriods, 3);
+    const heatmap = chooseAnalysisView(sessionShape, chosen, "trend");
+    assert.equal(normalizeAnalysis(sessionShape, heatmap).display, "heatmap");
+    assert.deepEqual(heatmap.selection, original.selection);
+  }
+  const maximum = { view: "compare", metric: "largest_output", split: "tool_name" };
+  for (const view of ["trend_line", "trend_bar"]) {
+    const blocked = viewOptions(mcp, maximum).find(([id]) => id === view)[2];
+    assert.ok(blocked, view);
+    assert.deepEqual(chooseAnalysisView(mcp, maximum, view), maximum);
+  }
+});
+
 // Every dashboard derives its view from the data asked for (suggestedView),
 // and every default is one the chart can draw: normalizing a state without
 // view settings leaves each suggested setting as suggested. The rules
@@ -108,7 +159,7 @@ test("every combination of every dashboard opens with a view its chart can draw,
 
 test("the Tools rollup has no observations to distribute or pair, and says so", () => {
   const options = Object.fromEntries(viewOptions(tools, { metric: "calls", split: "tool_name" }).map(([view, , reason]) => [view, reason]));
-  assert.deepEqual(Object.keys(options), analysisViews.filter(([view]) => view !== "scatter").map(([view]) => view));
+  assert.deepEqual(Object.keys(options), ["trend_line", "trend_bar", "compare", "distribution", "cycle"]);
   assert.match(options.distribution, /summaries, with no value per observation/);
   assert.match(options.cycle, /no hours or dates/);
   assert.equal(options.compare, undefined);

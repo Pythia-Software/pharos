@@ -63,6 +63,51 @@ func TestObservedEffortDoesNotAllocateUnknownAggregate(t *testing.T) {
 	}
 }
 
+func TestAgentSessionTimeBounds(t *testing.T) {
+	if decodeSessionBounds(`{"source":"attempt-envelope","started_at":"2026-09-20T10:00:00Z","ended_at":123}`) != nil {
+		t.Fatal("malformed retained bounds must not supply partial proof")
+	}
+	start, end := "2026-09-20T10:00:00.000Z", "2026-09-20T10:20:00.000Z"
+	request := MessageRecord{NativeID: "request", Kind: "metadata", RawText: `{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}`}
+	for _, tc := range []struct {
+		name, start, end, timestamp, wantStart, wantEnd, source string
+		depth                                                   int
+		coverage                                                string
+	}{
+		{name: "completed", start: start, end: end, wantStart: start, wantEnd: end, source: "attempt-envelope"},
+		{name: "ongoing", start: start, wantStart: start, source: "attempt-envelope"},
+		{name: "invalid end", start: start, end: "unknown", wantStart: start, source: "attempt-envelope"},
+		{name: "reversed end", start: start, end: "2026-09-19T10:00:00Z", wantStart: start, source: "attempt-envelope"},
+		{name: "invalid start", start: "unknown", end: end, source: "unavailable"},
+		{name: "explicit message", start: start, end: end, timestamp: "2026-09-20T10:05:00.000Z", wantStart: "2026-09-20T10:05:00.000Z", wantEnd: "2026-09-20T10:05:00.000Z", source: "message-span"},
+		{name: "invalid message", start: start, end: end, timestamp: "unknown", wantStart: start, wantEnd: end, source: "attempt-envelope"},
+		{name: "child conversation", start: start, end: end, depth: 1, source: "unavailable"},
+		{name: "partial transcript", start: start, end: end, coverage: "partial", source: "unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := request
+			m.CreatedAt = tc.timestamp
+			messages := []MessageRecord{m, {NativeID: "launch", CallID: "child", Kind: "delegation"}, {NativeID: "child-message", ParentNativeID: "child", Kind: "message"}}
+			c := ConversationRecord{AgentDepth: tc.depth, Coverage: tc.coverage, SessionBounds: attemptSessionBounds(tc.start, tc.end), Messages: messages}
+			before := jsonText(messages)
+			summaries := agentSessionSummaries(messages)
+			for i := range summaries {
+				applySessionEnvelope(&summaries[i], c)
+			}
+			root := summaries[0]
+			if root.startedAt != tc.wantStart || root.endedAt != tc.wantEnd || root.timeBoundsSource != tc.source {
+				t.Fatalf("bounds = %q / %q (%s)", root.startedAt, root.endedAt, root.timeBoundsSource)
+			}
+			if child := summaries[1]; child.startedAt != "" || child.endedAt != "" || child.timeBoundsSource != "unavailable" {
+				t.Fatalf("child inherited root timing: %+v", child)
+			}
+			if root.counts["total_tokens"] != 12 || jsonText(messages) != before {
+				t.Fatal("timing policy changed requests or token facts")
+			}
+		})
+	}
+}
+
 func TestAccountingEvidenceSurvivesParsingStorageAndAPI(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	root := t.TempDir()
@@ -304,6 +349,8 @@ func TestUsageBucketsWithMissingAndExplicitModelCoalesce(t *testing.T) {
 			{"unmatched request model stays unpriced", []MessageRecord{{Kind: "metadata", Text: request.Text}, claim}, map[string]float64{"": 65, "<synthetic>": 100}},
 			{"one model with cache TTL", []MessageRecord{{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":5,"output_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":20}},"modelUsage":{"claude-opus-5":{"inputTokens":5,"outputTokens":10,"cacheCreationInputTokens":20}}}`}}, map[string]float64{"claude-opus-5": 35}},
 			{"model identity without redundant counters", []MessageRecord{{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":5,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":200000}}}`}}, map[string]float64{"claude-opus-5": 15}},
+			{"several context windows cannot allocate aggregate usage", []MessageRecord{{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":100,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":1000000},"claude-haiku-5-5":{"contextWindow":200000}}}`}}, map[string]float64{"<synthetic>": 110}},
+			{"known request leaves ambiguous multi-model remainder", []MessageRecord{request, {Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":100,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":1000000},"claude-haiku-5-5":{"contextWindow":200000}}}`}}, map[string]float64{"claude-opus-5": 65, "<synthetic>": 45}},
 		} {
 			t.Run(check.name, func(t *testing.T) {
 				got := map[string]float64{}

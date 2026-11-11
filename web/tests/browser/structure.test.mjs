@@ -546,6 +546,21 @@ const ROUTES = [
     analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "started_at", op: ">=", value: "-30d" }, { field: "started_at", op: "<", value: "+0s" }, { any: [{ field: "harness", op: "!=", value: "antigravity-cli" }, { field: "harness", op: "is_null", value: "" }] }] }) })}`,
     ready: `.usage-session-shape-dashboard ${overTimeReady}`,
     check: async page => assert.equal(await page.locator(".usage-session-shape-dashboard .dashboard-population-chip").count(), 1, "the population is not shown beside the controls") },
+  { name: "Session shape dashboard with statistics pending", url: "/analyze?analyze_topic=session_shape", api: {
+    "* /api/query/:dataset/:operation": async call => {
+      const answer = await defaultApi["* /api/query/:dataset/:operation"](call);
+      return call.params.dataset === "session_shape" && call.params.operation === "query-v3"
+        ? { ...answer, coverage: { state: "pending", pending_sessions: 5, stale_sessions: 2, missing_sessions: 3 } } : answer;
+    },
+  }, ready: `.usage-session-shape-dashboard ${overTimeReady}`,
+    check: page => page.locator(".usage-session-shape-dashboard .usage-dashboard-note[role=status]").waitFor() },
+  { name: "Session shape query with statistics pending", url: "/analyze?analyze_mode=query&analyze_data=session_shape", api: {
+    "* /api/query/:dataset/:operation": async call => {
+      const answer = await defaultApi["* /api/query/:dataset/:operation"](call);
+      return call.params.dataset === "session_shape" && call.params.operation === "query-v3"
+        ? { ...answer, coverage: { state: "pending", pending_sessions: 5, stale_sessions: 2, missing_sessions: 3 } } : answer;
+    },
+  }, ready: ".usage-workspace-table .usage-dashboard-note[role=status]" },
   { name: "Analyze binned distribution", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "distribution", metric: "active_time", split: "none" }))}`, ready: '.usage-analysis-dashboard[aria-busy="false"]' },
   { name: "Analyze trend heatmap", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "sessions", split: "autonomy_band", display: "heatmap", period: "day" }))}`, ready: '.usage-session-shape-dashboard section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
   { name: "Human Words conversation heatmap", url: `/analyze?analyze_topic=human&analyze_days=30&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "typed", split: "none", display: "heatmap", period: "day" }))}`, ready: 'section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },

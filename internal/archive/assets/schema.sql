@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS workspace_names (
 
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
+  session_bounds_json TEXT,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
   provider TEXT NOT NULL,
@@ -440,6 +441,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   depth INTEGER NOT NULL DEFAULT 0,
   started_at TEXT,
   ended_at TEXT,
+  time_bounds_source TEXT NOT NULL DEFAULT 'unavailable',
   input_tokens INTEGER NOT NULL DEFAULT 0,
   uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
   cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
