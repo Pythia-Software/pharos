@@ -486,6 +486,11 @@ const ROUTES = [
     check: async page => {
       const painted = await page.locator(".result-turn-content .human-written").first().evaluate(element => getComputedStyle(element).backgroundColor);
       assert.notEqual(painted, "rgba(0, 0, 0, 0)", "human writing remains highlighted when the reader preference is off");
+      const mark = page.locator(".result-turn-content .human-written").first();
+      await mark.hover();const tip=page.getByRole("tooltip");await tip.waitFor();
+      assert.match(await tip.textContent(), /Human writing.*typed or dictated/s);
+      await page.locator(".result-turn-content .result-message-label").first().hover();
+      assert.equal(await tip.isVisible(),false);
     } },
   { name: "Transcript human writing", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".conversation-panel .human-written" },
   { name: "Transcript expanded sub-agent", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".subagent-run", open: async page => { await page.locator(".subagent-run > summary").first().click(); }, shown: ".subagent-body" },

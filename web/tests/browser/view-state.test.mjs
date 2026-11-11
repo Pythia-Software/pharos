@@ -1961,6 +1961,35 @@ test('Data Guide terms and example restore and return focus',{skip},async t=>{
  assert.equal(await trigger.evaluate(el=>document.activeElement===el),true);
 });
 
+test('message expansion follows rendered overflow and resizes',{skip},async t=>{
+ const brief='A short message with no hidden content.';
+ const chip='<system_instruction>'+('Generated setup '.repeat(80))+'</system_instruction>';
+ const wrapping='A short sentence that wraps as the reader gets narrower. '.repeat(8);
+ const long='This message has enough content to require expansion. '.repeat(40);
+ const messages=[['brief',brief],['chip',chip],['wrapping',wrapping],['long',long]].map(([id,text],index)=>({id,native_id:id,role:index?'assistant':'user',kind:'message',text}));
+ const api={'GET /api/work/:id/conversations/:conversation':()=>({id:rootConversation,workspace_id:workID,provider:'codex',messages})};
+ const {page}=await open(t,{api,url:`/work/${workID}/conversation/${rootConversation}`,ready:'.conversation-panel .message-card'});
+ const card=id=>page.locator(`[data-message-id="${id}"] .message-card`).first();
+ const button=id=>card(id).locator('.message-toggle');
+ await button('long').waitFor();
+ assert.equal(await button('brief').isVisible(),false);
+ assert.equal(await card('brief').locator('.message-prose').evaluate(el=>el.classList.contains('prose-truncated')),false,'fitting content is not treated as collapsed');
+ assert.equal(await button('chip').isVisible(),false,'a large collapsed XML block fits as a chip');
+ assert.equal(await button('wrapping').isVisible(),false,'short rendered text fits at desktop width');
+ await button('long').waitFor();await button('long').click();
+ assert.equal(await button('long').getAttribute('aria-expanded'),'true');
+ assert.ok(await card('long').locator('.message-prose').evaluate(el=>el.scrollHeight<=el.clientHeight));
+ const copied=await open(t,{api,url:path(page),ready:'[data-message-id="long"] .message-card'});
+ const restored=copied.page.locator('[data-message-id="long"] .message-toggle');await restored.waitFor();
+ assert.equal(await restored.getAttribute('aria-expanded'),'true','a copied URL restores expanded content');
+ await button('long').click();
+ await page.setViewportSize({width:320,height:900});
+ await button('wrapping').waitFor();
+ await page.setViewportSize({width:1440,height:900});
+ await page.waitForFunction(()=>{const el=document.querySelector('[data-message-id="wrapping"] .message-toggle');return el?.hidden});
+ assert.equal(await button('long').isVisible(),true);
+});
+
 test('message card labels and sentence events restore independently in the reader',{skip},async t=>{
  const at='2026-11-05T14:00:00Z',prompt='Please review the importer and keep the existing CSV format. Show the evidence before changing the parser.',thought='I should compare the parser with the saved fixtures first. The import fails when a quoted cell contains a newline. I will preserve that cell and add a focused check.'+' Additional context.'.repeat(30),reply='The parser now keeps quoted newlines inside their cells. The existing fixtures pass, and the added check covers the failing import.';
  const labeled=(id,role,kind,text,label,segment,seconds)=>({id,native_id:id,role,kind,text,created_at:new Date(Date.parse(at)+seconds*1000).toISOString(),labels:{ids:[label],probs:{[label]:.94},segment}});
@@ -2007,7 +2036,11 @@ test('message card labels and sentence events restore independently in the reade
  assert.equal(await page.locator('.conversation-panel').evaluate(panel=>panel.classList.contains('show-events')&&panel.classList.contains('show-labels')),true);
  const writingOnlyApi={...api,'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),labels:null,agent_events:null,messages:[{id:'typed-only',native_id:'typed-only',kind:'message',role:'user',text:'Summarize the outlook',created_at:at,authorship:{spans:[{category:'typed',start:0,end:21}]}}]})};
  const writingOnly=await open(t,{api:writingOnlyApi,url:`/work/${workID}/conversation/${rootConversation}?reader_writing=1&reader_events=1&reader_labels=1`,ready:'.transcript-highlights'});
+ const writingMark=writingOnly.page.locator('mark.human-written');
+ await writingMark.hover();const writingTip=writingOnly.page.getByRole('tooltip');await writingTip.waitFor();
+ assert.match(await writingTip.textContent(),/Human writing.*typed or dictated.*Summarize the outlook/s);
  const writingToggle=writingOnly.page.getByRole('button',{name:'Text highlighting',exact:true});await writingToggle.click();
+ await writingMark.hover();assert.equal(await writingTip.isVisible(),false,'hidden writing does not show a tooltip');
  for(const field of ['reader_writing','reader_events','reader_labels'])assert.equal(new URL(writingOnly.page.url()).searchParams.get(field),'0',`${field} turns off even when this conversation lacks that highlight`);
  await writingToggle.click();
  for(const field of ['reader_writing','reader_events','reader_labels'])assert.equal(new URL(writingOnly.page.url()).searchParams.get(field),'1',`${field} turns back on`);
@@ -2047,8 +2080,6 @@ test('message card labels and sentence events restore independently in the reade
  await page.mouse.down();assert.equal(await tip.isVisible(),false,'pressing to select hides the tooltip');
  await card.locator('.message-prose').hover();await card.hover({position:{x:3,y:3}});
  assert.equal(await tip.isVisible(),false,'dragging does not reopen the tooltip');await page.mouse.up();
- await card.locator('.message-toggle').hover();assert.equal(await tip.isVisible(),false,'card controls do not show the label');
- await card.locator('.message-toggle').click();assert.equal(await card.locator('.message-toggle').getAttribute('aria-expanded'),'true');
  const human=page.locator('.speaker-row.human[data-label-family]').first();
  await human.hover({position:{x:3,y:3}});await tip.waitFor();assert.match(await tip.textContent(),/Implement/);
  await human.locator('.message-prose').hover();assert.equal(await tip.isVisible(),false);

@@ -86,7 +86,7 @@ APP_HTML = r'''<!doctype html>
     .speaker-row::before,.speaker-row::after,.avatar{display:none}
     .message-prose{white-space:pre-wrap;overflow-wrap:anywhere;font:var(--fs-base)/1.65 var(--sans)}
     .prose-truncated{display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden}
-    .message-toggle{display:block;padding:3px 0;color:var(--accent);font-size:var(--fs-xs)}
+    .message-toggle{display:block;padding:3px 0;color:var(--accent);font-size:var(--fs-xs)}.message-toggle[hidden]{display:none}
     .sequence-more{display:block;margin:4px 0 6px 58px;padding:3px 0;color:var(--accent);font-size:var(--fs-xs)}.clipped-note{display:flex;gap:8px;align-items:baseline;margin:2px 0 4px;color:var(--muted);font-size:var(--fs-xs)}.clipped-note button{color:var(--accent);font-size:var(--fs-xs);padding:0}.conversation-loading{color:var(--muted)}
     .tool-event,.tool-event.error,.subagent-run{margin:0;border:0;border-radius:0;background:none}
     .tool-event>summary,.subagent-run>summary{display:flex;align-items:center;gap:10px;min-height:30px;padding:5px 0;list-style:none;font-size:var(--fs-sm);color:var(--ink)}
@@ -225,7 +225,7 @@ APP_HTML = r'''<!doctype html>
     .thinking-card{position:relative;padding:8px 12px;margin:4px 0 8px;border-left:2px solid var(--line);background:color-mix(in srgb,var(--bg) 30%,var(--panel))}
     .label-legend-group{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:5px 7px;border:1px solid color-mix(in srgb,var(--ink) 14%,transparent);border-radius:5px;max-width:100%}.label-legend-group>strong{font-size:inherit;font-weight:600;color:var(--ink)}
     .label-legend{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;max-width:100%}.label-legend[hidden]{display:none}.label-legend-item{display:inline-flex;align-items:center;gap:5px;white-space:normal;min-width:0}.label-legend-item i,.label-tip-row i{display:inline-block;flex:none;width:11px;height:11px;border-radius:2px;background:color-mix(in srgb,var(--label-hue) 24%,transparent);border:1px solid color-mix(in srgb,var(--label-hue) 60%,transparent)}.label-legend-note{color:var(--muted)}
-    .label-tip{position:fixed;z-index:60;max-width:340px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);box-shadow:0 8px 24px #0003;font-size:var(--fs-sm);line-height:1.35;pointer-events:none}.label-tip[hidden]{display:none}.label-tip-segment{margin-bottom:6px;color:var(--muted);font-size:var(--fs-xs)}.label-tip-row{display:grid;grid-template-columns:11px 1fr auto;column-gap:7px;align-items:center;margin-top:4px}.label-tip-row strong{font-weight:600}.label-tip-row span{color:var(--muted);font-variant-numeric:tabular-nums}.label-tip-row p{grid-column:2/4;margin:1px 0 0;color:var(--muted);font-size:var(--fs-xs)}
+    .label-tip{position:fixed;z-index:60;max-width:340px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);box-shadow:0 8px 24px #0003;font-size:var(--fs-sm);line-height:1.35;overflow-wrap:anywhere;pointer-events:none}.label-tip[hidden]{display:none}.label-tip-segment{margin-bottom:6px;color:var(--muted);font-size:var(--fs-xs)}.label-tip-row{display:grid;grid-template-columns:11px 1fr auto;column-gap:7px;align-items:center;margin-top:4px}.label-tip-row strong{font-weight:600}.label-tip-row span{color:var(--muted);font-variant-numeric:tabular-nums}.label-tip-row p{grid-column:2/4;margin:1px 0 0;color:var(--muted);font-size:var(--fs-xs)}
     /* Agent events (agentEventsAttacher): an event's sentence in its kind group's hue, what it was about and what the agent did underlined, shown with the Agent events highlight. */
     /* Agent events take the primaries, so they read apart from the secondary and tertiary tool-action hues (web/src/delegation.css) and the message modes: friction red, learning gold (a deep ochre, kept apart from the attention and Find yellows --attention-*), second look green, choices blue. Deep in light mode, pale in dark; each group also has its own shape (web/src/event-link-layout.ts). web/tests/unit/delegation/timeline-palette.test.mjs checks the separations. Links between an event and its target are ink (--event-link); --event-on is text on an event colour. */
     :root{--event-friction:#b0102c;--event-learning:#806400;--event-second-look:#2fa24f;--event-choices:#1849b8;--event-link:#2c2821;--event-on:#fffaf0}
@@ -954,7 +954,38 @@ function restoreViewContent(root=document){for(const toggle of root.querySelecto
 window.addEventListener('popstate',()=>restoreViewContent());window.addEventListener('pharos:view',()=>restoreViewContent());window.addEventListener('pharos:view-ready',()=>restoreViewContent());
 
 function citationView(message){const citations=messageCitations(message);if(!citations.length)return null;const sources=node('aside','message-citations');sources.setAttribute('aria-label','Citations');sources.append(node('strong','tool-detail-label','Sources'));const list=node('ol','');for(const citation of citations){const item=node('li','');if(citation.url){const link=node('a','',citation.title);link.href=citation.url;link.target='_blank';link.rel='noopener noreferrer';item.append(link)}else item.append(document.createTextNode(citation.title));if(citation.quote)item.append(node('blockquote','',citation.quote));list.append(item)}sources.append(list);return sources}
-function messageCard(message,workspace='',text=displayText(message)){const labels=messageLabelView(message,labelTaxonomy),events=messageEventView(message,text),targets=eventTargetSpans(text,messageEventTargets(message)),mask=eventTargetMask(text,targets,eventMask(text,events,humanWritingMask(message,text))),card=node('div','message-card'),prose=node('div','message-prose'),visible=xmlSegments(text).map(segment=>segment.tag?segment.tag:segment.text).join('\n');prose.classList.add('rendered-markdown');prose.append(messageBody(text,true,workspace,mask));if(message.authorship?.provisional)card.append(node('p','usage-dashboard-note','Provisional writing estimate · refined overnight'));card.append(prose);const sources=citationView(message);if(sources)card.append(sources);decorateEventLinks(card,message,events,targets);if(mask.includes('1'))card.classList.add('writing');if(labels){card.dataset.labelFamily=labels.family;card.labelMessage=message}if(events){card.dataset.agentEvents=String(events.length);card.eventView=events}if(visible.length>600||visible.split('\n').length>8){prose.classList.add('prose-truncated');const toggle=node('button','message-toggle','Show more');toggle.type='button';const apply=expanded=>{toggle.setAttribute('aria-expanded',String(expanded));toggle.textContent=expanded?'Show less':'Show more';prose.classList.toggle('prose-truncated',!expanded)};bindViewContent(toggle,viewContentKey(message),false,apply);toggle.onclick=()=>{const expanded=toggle.getAttribute('aria-expanded')!=='true';apply(expanded);saveViewContent(toggle.dataset.viewContent,expanded)};prose.pharosFindExpand=()=>{if(prose.classList.contains('prose-truncated'))toggle.click()};prose.addEventListener('toggle',event=>{if(event.target.open&&prose.classList.contains('prose-truncated'))toggle.click()},true);card.append(toggle)}const handoffs=handoffStrip(message);if(handoffs)card.append(handoffs);for(const detail of card.querySelectorAll('details'))detail.dataset.viewKey='content:'+viewContentKey(message)+':'+detail.className+(detail.dataset.jsonPath?':'+detail.dataset.jsonPath:'');return card}
+// Measure the collapsed rendering, not source length: Markdown and XML chips can
+// make a long source short, while narrow windows can clip a short message.
+const messageSizeObserver=new ResizeObserver(entries=>{for(const {target} of entries)target.measureMessageOverflow?.()});
+const messageRemovalObserver=new MutationObserver(records=>{for(const record of records)for(const removed of record.removedNodes){if(removed.nodeType!==1)continue;for(const prose of [removed,...removed.querySelectorAll('.message-prose')])if(prose.measureMessageOverflow&&!prose.isConnected)messageSizeObserver.unobserve(prose)}});
+messageRemovalObserver.observe(document.body,{childList:true,subtree:true});
+function messageCard(message,workspace='',text=displayText(message)){
+  const labels=messageLabelView(message,labelTaxonomy),events=messageEventView(message,text),targets=eventTargetSpans(text,messageEventTargets(message)),mask=eventTargetMask(text,targets,eventMask(text,events,humanWritingMask(message,text))),card=node('div','message-card'),prose=node('div','message-prose');
+  prose.classList.add('rendered-markdown');prose.append(messageBody(text,true,workspace,mask));
+  if(message.authorship?.provisional)card.append(node('p','usage-dashboard-note','Provisional writing estimate · refined overnight'));
+  card.append(prose);const sources=citationView(message);if(sources)card.append(sources);decorateEventLinks(card,message,events,targets);
+  if(mask.includes('1'))card.classList.add('writing');if(labels){card.dataset.labelFamily=labels.family;card.labelMessage=message}if(events){card.dataset.agentEvents=String(events.length);card.eventView=events}
+  const toggle=node('button','message-toggle','Show more');toggle.type='button';toggle.hidden=true;let measured=false;
+  const apply=expanded=>{const state=String(expanded),label=expanded?'Show less':'Show more';if(toggle.getAttribute('aria-expanded')!==state)toggle.setAttribute('aria-expanded',state);if(toggle.textContent!==label)toggle.textContent=label;prose.classList.toggle('prose-truncated',!expanded&&(!measured||!toggle.hidden))};
+  bindViewContent(toggle,viewContentKey(message),false,apply);
+  toggle.onclick=()=>{const expanded=toggle.getAttribute('aria-expanded')!=='true';apply(expanded);saveViewContent(toggle.dataset.viewContent,expanded)};
+  prose.measureMessageOverflow=()=>{
+    if(!prose.isConnected){messageSizeObserver.unobserve(prose);return}
+    if(!prose.getClientRects().length)return;
+    const expanded=toggle.getAttribute('aria-expanded')==='true';prose.classList.add('prose-truncated');
+    const hidden=prose.scrollHeight<=prose.clientHeight;measured=true;if(toggle.hidden!==hidden)toggle.hidden=hidden;
+    prose.classList.toggle('prose-truncated',!expanded&&!hidden);
+  };
+  messageSizeObserver.observe(prose);
+  prose.pharosFindExpand=()=>{prose.measureMessageOverflow();if(prose.classList.contains('prose-truncated')&&(!measured||!toggle.hidden))toggle.click()};
+  prose.addEventListener('toggle',event=>{prose.measureMessageOverflow();if(event.target.open&&prose.classList.contains('prose-truncated')&&!toggle.hidden)toggle.click()},true);
+  card.append(toggle);
+  // Search's Browse preview shares message cards but has no transcript key.
+  card.addEventListener('pointerover',event=>{if(card.closest('.conversation-panel'))return;const mark=event.target.closest?.('mark.human-written');if(!event.buttons&&mark&&card.closest('.show-writing'))showWritingTip(mark,event);else hideLabelTip()});
+  card.addEventListener('pointermove',event=>{if(!card.closest('.conversation-panel')&&labelTip&&!labelTip.hidden){if(event.buttons)hideLabelTip();else placeLabelTip(event)}});
+  card.addEventListener('pointerleave',hideLabelTip);card.addEventListener('pointerdown',hideLabelTip);
+  const handoffs=handoffStrip(message);if(handoffs)card.append(handoffs);for(const detail of card.querySelectorAll('details'))detail.dataset.viewKey='content:'+viewContentKey(message)+':'+detail.className+(detail.dataset.jsonPath?':'+detail.dataset.jsonPath:'');return card;
+}
 function attachMessageRaw(card,message){if(messageJSON(message,true)){const raw=rawDisclosure(message),button=node('button','message-raw-button',icon('code'));raw.hidden=true;button.type='button';button.setAttribute('aria-label','Raw event');button.setAttribute('aria-expanded','false');const key='raw:'+viewContentKey(message),apply=open=>{raw.hidden=!open;if(open)raw.show();raw.open=open;button.setAttribute('aria-expanded',String(open))};bindViewContent(button,key,false,apply);button.onclick=()=>{const open=raw.hidden;apply(open);saveViewContent(key,open)};card.append(button,raw)}}
 function narrativeEvent(message,turnStart,workspace=''){const row=node('article',`speaker-row ${message.role==='user'?'human':'agent'} conversation-event`),card=messageCard(message,workspace);row.setAttribute('aria-label',message.role==='user'?'User message':message.role==='agent'?'Parent agent message':'Assistant message');const mark=kindIcon(message.role==='user'?'human':'agent');mark.classList.add('message-kind');card.prepend(mark);if(message.id){const name=shortText(messageSummary(message),120);card.append(copyValues(name?copyValueButton('Name',name,'message name'):null,copyValueButton('ID',message.id,'message ID')))}attachMessageRaw(card,message);row.dataset.searchEntry=messageSearch(message);if(card.labelMessage){row.dataset.labelFamily=card.dataset.labelFamily;row.labelMessage=message}row.append(card);return timelineEntry(row,message,turnStart,message.role==='user'?'human-entry':'agent-entry')}
 function changeChips(files){const group=node('span','change-chips');files.forEach(file=>{const chip=node('span','change-chip');chip.title=file.path;chip.append(node('span','change-path',file.path.split('/').pop()||file.path),node('span','change-directory',file.path.includes('/')?file.path.split('/').slice(0,-1).slice(-2).join('/')+'/':''));if(file.unknown)chip.append(node('span','delta-unknown','Δ unknown'));else chip.append(node('span','delta-add',`+${file.added}`),node('span','delta-remove',`−${file.removed}`));group.append(chip)});return group}
@@ -1292,6 +1323,8 @@ function transcriptHighlightControl(panel,conversation,messages){
     const events=panel.classList.contains('show-events'),labels=panel.classList.contains('show-labels');
     const eventMark=events&&event.target.closest?.('mark.agent-event:not(.reader-event-hidden),mark.event-context:not(.reader-event-hidden)'),eventCard=eventMark&&eventMark.closest('[data-agent-events]');
     if(eventCard?.eventView){showEventTip(readerEventHighlights(eventsAtMark(eventCard.eventView,eventMark),visible),event);return}
+    const writingMark=visible.has('writing')&&event.target.closest?.('mark.human-written');
+    if(writingMark){showWritingTip(writingMark,event);return}
     // Only the tinted background shows message labels, leaving text and controls unobscured.
     const card=labels&&event.target;
     if(card?.classList?.contains('reader-label-hidden')){hideLabelTip();return}
@@ -1313,6 +1346,11 @@ function showEventTip(events,event){if(!events.length){hideLabelTip();return}
   labelTip.hidden=false;placeLabelTip(event);
 }
 let labelTip=null;
+function showWritingTip(mark,event){
+  if(!labelTip){labelTip=node('div','label-tip');labelTip.setAttribute('role','tooltip');document.body.append(labelTip)}
+  labelTip.replaceChildren(node('strong','','Human writing'),node('p','label-tip-segment','Estimated as text typed or dictated by a person, after checking for generated, pasted, quoted and re-sent text.'),node('div','',shortText(mark.textContent,180)));
+  labelTip.hidden=false;placeLabelTip(event);
+}
 function showLabelTip(view,event){
   if(!labelTip){labelTip=node('div','label-tip');labelTip.setAttribute('role','tooltip');document.body.append(labelTip)}
   labelTip.replaceChildren();if(view.segmentName)labelTip.append(node('div','label-tip-segment',view.segmentName));
