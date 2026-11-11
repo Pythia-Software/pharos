@@ -85,8 +85,10 @@ func catalogDSNWithPragmas(path string, pragmas catalogPragmas) string {
 const readerConns = 8
 
 func readerDSN(path string) string {
+	// temp_store names the file store that is this build's default, so that a
+	// query leasing file scratch finds it set (see beginQueryWithTempStore).
 	return (&url.URL{Scheme: "file", Path: path}).String() + fmt.Sprintf("?mode=ro&_pragma=busy_timeout(%d)"+
-		"&_pragma=cache_size(-16384)&_pragma=mmap_size(268435456)", busyTimeoutMS)
+		"&_pragma=temp_store(1)&_pragma=cache_size(-16384)&_pragma=mmap_size(268435456)", busyTimeoutMS)
 }
 
 // openReader opens c's read pool. It is lazy: no connection opens until a

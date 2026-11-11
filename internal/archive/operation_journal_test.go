@@ -560,7 +560,7 @@ func TestJournalRoundInterruptedMidTransactionReleasesTheLock(t *testing.T) {
 	override(t, &journalRoundDeadline, 30*time.Millisecond)
 	// Each journal row now takes far longer than the round's deadline.
 	execTx(t, catalog.DB, `CREATE TRIGGER slow_journal AFTER INSERT ON operation_journal BEGIN
-		INSERT INTO meta(key,value) SELECT 'slow-journal', (WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<30000000) SELECT SUM(i) FROM n)
+		INSERT INTO meta(key,value) SELECT 'slow-journal', (WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<3000000) SELECT SUM(i) FROM n)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value; END`)
 	if err := journal.round(context.Background(), 0); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a round slower than its deadline: %v", err)

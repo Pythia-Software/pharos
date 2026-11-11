@@ -257,6 +257,18 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   `PHAROS_TEST_PROCESSES=1` runs everything in one process, for example
   under a debugger. Profiles, coverage, benchmarks, fewer than 16 tests and
   `-run` patterns with a `/` already run in one process.
+
+  Those processes take turns across every checkout on the machine: each
+  holds one of a shared pool of slots (a quarter of the CPUs, at least
+  four) while it runs. A run that seems to wait is queued behind other
+  agents' runs, and finishes sooner than it would by competing with them;
+  do not start a second copy. Halfway to `-timeout` a run stops queueing
+  and finishes without slots. `PHAROS_TEST_SLOTS` sets the pool's size
+  for one run; `0` removes the bound.
+- **Keep the fast tier cheap.** Many agents run it at once, and a handful
+  of tests can be a third of its CPU. When a test takes seconds, lower a
+  limit with `override`, shrink its fixture, or mark it `slowTest(t)`.
+  `go test -short -v ./internal/archive` prints each test's time.
 - **Keep data-safety tests**, even when slow. These include adopt, backup,
   capture, durability, and cross-host merges. Make their fixtures cheaper
   instead.

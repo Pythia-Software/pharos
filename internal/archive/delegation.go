@@ -258,6 +258,10 @@ func delegationUnion(spans []delegationSpan) float64 {
 // context never takes it past this (a package variable so tests can lower it).
 var delegationAnalysisLimit = 10000
 
+func errDelegationTooLarge() error {
+	return fmt.Errorf("workspace exceeds the %s-agent-session analysis limit", thousands(delegationAnalysisLimit))
+}
+
 var errDelegationSnapshotChanged = errors.New("execution evidence changed since the explorer snapshot")
 
 func (c *Catalog) delegationSnapshot(ctx context.Context, workspace string) (*delegationSnapshot, error) {
@@ -341,7 +345,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	}
 	conversations, err := queryMapsContext(ctx, tx, `SELECT id,provider,account,model,effort,native_id,parent_id,agent_path,agent_nickname,coverage,started_at,ended_at,
  (SELECT substr(d.initiation,1,180) FROM conversation_documents d WHERE d.conversation_id=c.id) prompt
- FROM conversations c WHERE workspace_id=? ORDER BY started_at,id LIMIT 10001`, workspace)
+ FROM conversations c WHERE workspace_id=? ORDER BY started_at,id LIMIT ?`, workspace, delegationAnalysisLimit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -351,15 +355,15 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	// structured payloads and opaque messages must not become display labels.
 	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,`+delegationAssignmentCandidatesSQL+` assignment_candidates
  FROM agent_sessions a LEFT JOIN messages m ON m.id=a.delegation_message_id
- WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT 10001`, workspace)
+ WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT ?`, workspace, delegationAnalysisLimit+1)
 	if err != nil {
 		return nil, err
 	}
 	for _, session := range sessions {
 		session["assignment"] = delegationAssignment(firstString(session["assignment_candidates"]))
 	}
-	if len(sessions) > 10000 || len(conversations) > 10000 {
-		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
+	if len(sessions) > delegationAnalysisLimit || len(conversations) > delegationAnalysisLimit {
+		return nil, errDelegationTooLarge()
 	}
 	s := &delegationSnapshot{ByID: map[string]*delegationNode{}, Aliases: map[string]string{}, Maxima: map[string]map[string]float64{"self": {}, "all": {}}, Density: make([]int, 120), Warnings: []string{}}
 	res, err := c.executionResolutionAt(ctx, tx)
@@ -387,8 +391,8 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			sessions = append(sessions, map[string]any{"id": id, "conversation_id": cid, "provider": cv["provider"], "model": cv["model"], "started_at": cv["started_at"], "ended_at": cv["ended_at"], "usage_status": "unavailable", "native_id": "main"})
 		}
 	}
-	if len(sessions) > 10000 {
-		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
+	if len(sessions) > delegationAnalysisLimit {
+		return nil, errDelegationTooLarge()
 	}
 	// One row per execution with a stream here. Attempts and copied launches are
 	// source evidence, not executions: their IDs remain aliases, and a row the
@@ -597,7 +601,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		}
 	}
 	if len(s.Nodes) > delegationAnalysisLimit {
-		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
+		return nil, errDelegationTooLarge()
 	}
 	// Attempts stay visible on the execution that issued them.
 	unowned := 0
