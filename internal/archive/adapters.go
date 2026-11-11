@@ -34,10 +34,13 @@ type MessageRecord struct {
 }
 
 type ConversationRecord struct {
-	ParentProvider                                                                                   string            `json:"ParentProvider,omitempty"`
-	ParentAccount                                                                                    string            `json:"ParentAccount,omitempty"`
-	NativeContext                                                                                    map[string]any    `json:"NativeContext,omitempty"`
-	Initiation                                                                                       *InitiationRecord `json:"Initiation,omitempty"`
+	// SessionBounds is an explicitly scoped root envelope, independent of
+	// message timestamps and the conversation's display/usage dates.
+	SessionBounds                                                                                    *SessionTimeBounds `json:"SessionBounds,omitempty"`
+	ParentProvider                                                                                   string             `json:"ParentProvider,omitempty"`
+	ParentAccount                                                                                    string             `json:"ParentAccount,omitempty"`
+	NativeContext                                                                                    map[string]any     `json:"NativeContext,omitempty"`
+	Initiation                                                                                       *InitiationRecord  `json:"Initiation,omitempty"`
 	NativeID, Provider, Model, Effort, Account, ParentNativeID, Origin, Coverage, StartedAt, EndedAt string
 	AgentDepth                                                                                       int    `json:"AgentDepth,omitempty"`
 	AgentPath                                                                                        string `json:"AgentPath,omitempty"`
