@@ -3,25 +3,37 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
+
+	"modernc.org/sqlite"
 )
 
 // requestTimingVersion names the derivation stored in model_request_timings.
 // Changing it marks every conversation for recomputation.
-const requestTimingVersion = "timings-v4-projects"
+const requestTimingVersion = "timings-v5-labels-bands"
 
 // requestTimingColumns are model_request_timings' columns, in the order
 // thinkingSource returns them.
 const requestTimingColumns = `id,conversation_id,agent_session_id,workspace_id,native_id,previous_request_id,sequence,requested_at,observed_millis,
  model,effort,speed,service_tier,speed_source,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,provider,harness,agent_depth,
- source_kind,repository_name,machine,preceding_tool,timing_quality,gap_seconds,tool_result_at,project_name`
+ source_kind,repository_name,machine,preceding_tool,timing_quality,gap_seconds,tool_result_at,project_name,gap_bin`
 
 // requestTimingSQL derives each request's timing evidence within the
 // conversations {conversations} selects: the previous request in its stream
 // and the tool results it followed. Tool calls never link a request in another
 // conversation, so a conversation's evidence depends only on its own rows and
-// attributes.
+// attributes. A blank label is stored as a missing one, as /api/thinking reads
+// it, so a grouping has one missing bucket rather than an empty and a NULL one;
+// the wait band is stored too. Both are plain columns, so Query Table can
+// prove the stored source reads only stored values (thinkingStoredDataset).
 // The timing deliberately uses the first retained usage-bearing response
 // event, not an unverified request-send clock. Previous response and
 // incoming-tool evidence are computed before any dashboard filter.
@@ -54,10 +66,11 @@ var requestTimingSQL = `WITH incoming AS (SELECT next_request_id,MAX(unixepoch(e
  ELSE 'Usable timing' END timing_quality FROM durations)
  SELECT id,conversation_id,agent_session_id,workspace_id,native_id,previous_request_id,sequence,requested_at,CAST(ROUND(observed_at*1000) AS INTEGER) observed_millis,
  COALESCE(NULLIF(model,''),'Unreported') model,COALESCE(NULLIF(effort,''),'Unreported') effort,CASE WHEN LOWER(speed)='fast' THEN 'fast' ELSE 'standard' END speed,service_tier,COALESCE(NULLIF(speed_source,''),'assumed_standard') speed_source,
- input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,provider,harness,agent_depth,
- source_kind,repository_name,machine,preceding_tool,timing_quality,
+ input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,CASE WHEN TRIM(provider)='' THEN NULL ELSE provider END provider,CASE WHEN TRIM(harness)='' THEN NULL ELSE harness END harness,agent_depth,
+ source_kind,CASE WHEN TRIM(repository_name)='' THEN NULL ELSE repository_name END repository_name,CASE WHEN TRIM(machine)='' THEN NULL ELSE machine END machine,preceding_tool,timing_quality,
  CASE WHEN timing_quality='Usable timing' THEN observed_gap END gap_seconds,
- strftime('%Y-%m-%dT%H:%M:%fZ',anchor,'unixepoch') tool_result_at,project_name FROM qualified`
+ strftime('%Y-%m-%dT%H:%M:%fZ',anchor,'unixepoch') tool_result_at,CASE WHEN TRIM(project_name)='' THEN NULL ELSE project_name END project_name,
+ ` + thinkingBandSQL("(CASE WHEN timing_quality='Usable timing' THEN observed_gap END)") + ` gap_bin FROM qualified`
 
 func requestTimings(conversations string) string {
 	return strings.ReplaceAll(requestTimingSQL, "{conversations}", conversations)
@@ -92,22 +105,31 @@ var thinkingSource = `SELECT * FROM (SELECT ` + requestTimingColumns + ` FROM mo
  THEN t.conversation_id NOT IN (` + requestExclusionSQL + `)
  ELSE t.conversation_id NOT IN (SELECT conversation_id FROM model_request_exclusions) END`
 
-var thinkingRequestDataset = func() sqlDataset {
+// thinkingRequestDataset is model_requests: the stored timings, with those
+// of conversations awaiting refresh derived again (thinkingSource).
+// thinkingStoredDataset reads the stored rows alone; it is the same
+// population while no refresh is pending (requestTimingsPending), and Query
+// Table can read it once for a whole metric request, since it reads only
+// stored values.
+var thinkingRequestDataset, thinkingStoredDataset = func() (sqlDataset, sqlDataset) {
 	columns := map[string]string{}
-	for _, name := range []string{"id", "conversation_id", "agent_session_id", "workspace_id", "native_id", "sequence", "requested_at", "model", "effort", "speed", "service_tier", "speed_source", "input_tokens", "cache_read_input_tokens", "output_tokens", "reasoning_output_tokens", "compacted_before", "provider", "harness", "agent_depth", "source_kind", "repository_name", "project_name", "machine", "preceding_tool", "timing_quality", "gap_seconds", "tool_result_at"} {
+	for _, name := range []string{"id", "conversation_id", "agent_session_id", "workspace_id", "native_id", "sequence", "requested_at", "model", "effort", "speed", "service_tier", "speed_source", "input_tokens", "cache_read_input_tokens", "output_tokens", "reasoning_output_tokens", "compacted_before", "provider", "harness", "agent_depth", "source_kind", "repository_name", "project_name", "machine", "preceding_tool", "timing_quality", "gap_seconds", "tool_result_at", "gap_bin"} {
 		columns[name] = "d." + name
 	}
 	columns["model_effort"] = "model_effort(d.model,d.effort)"
 	columns["model_speed"] = "d.model || ' · ' || CASE WHEN d.speed='fast' THEN 'Fast' ELSE 'Standard' END"
 	columns["model_effort_speed"] = "d.model || ' · ' || d.effort || ' · ' || CASE WHEN d.speed='fast' THEN 'Fast' ELSE 'Standard' END"
-	columns["day"] = "date(d.requested_at,'localtime')"
-	columns["week"] = "date(d.requested_at,'localtime','-6 days','weekday 1')"
-	columns["month"] = "strftime('%Y-%m',d.requested_at,'localtime')"
-	return sqlDataset{from: "FROM (" + thinkingSource + ") d", columns: columns, timestamps: map[string]string{"requested_at": "d.requested_at"},
+	for field, sql := range thinkingCalendarColumns("") {
+		columns[field] = sql
+	}
+	derived := sqlDataset{from: "FROM (" + thinkingSource + ") d", columns: columns, timestamps: map[string]string{"requested_at": "d.requested_at"},
 		newestBounds: map[string]newestBound{"requested_at": {
 			nth:    "SELECT requested_at FROM model_request_timings ORDER BY requested_at DESC LIMIT 1 OFFSET ?",
 			column: "d.requested_at",
 		}}}
+	stored := derived
+	stored.from, stored.base = "FROM model_request_timings d", "d.conversation_id NOT IN (SELECT conversation_id FROM model_request_exclusions)"
+	return derived, stored
 }()
 
 // ensureRequestTimings installs the stored timing projection. Triggers mark a
@@ -122,13 +144,13 @@ func (c *Catalog) ensureRequestTimings() error {
  agent_session_id TEXT, workspace_id TEXT, native_id TEXT, previous_request_id TEXT, sequence INTEGER, requested_at TEXT, observed_millis INTEGER,
  model TEXT NOT NULL, effort TEXT NOT NULL, speed TEXT, service_tier TEXT, speed_source TEXT, input_tokens INTEGER, cache_read_input_tokens INTEGER, output_tokens INTEGER, reasoning_output_tokens INTEGER,
  compacted_before INTEGER, provider TEXT, harness TEXT, agent_depth INTEGER, source_kind TEXT, repository_name TEXT, machine TEXT,
- preceding_tool TEXT NOT NULL, timing_quality TEXT NOT NULL, gap_seconds REAL, tool_result_at TEXT, project_name TEXT,
+ preceding_tool TEXT NOT NULL, timing_quality TEXT NOT NULL, gap_seconds REAL, tool_result_at TEXT, project_name TEXT, gap_bin TEXT,
  PRIMARY KEY(conversation_id,id)) WITHOUT ROWID;`); err != nil {
 		return err
 	}
 	// The covering index lists every column, so one from before a column
 	// was added is rebuilt with it.
-	for _, column := range []string{"speed", "service_tier", "speed_source", "project_name"} {
+	for _, column := range []string{"speed", "service_tier", "speed_source", "project_name", "gap_bin"} {
 		if has, err := c.hasColumn("model_request_timings", column); err != nil {
 			return err
 		} else if !has {
@@ -311,4 +333,153 @@ func (c *Catalog) currentRequestTimings(ctx context.Context) error {
 		c.refreshToolRollup()
 	}
 	return nil
+}
+
+// thinkingCalendarColumns are model_requests' local calendar fields: in the
+// service's time zone (SQLite's localtime) when zone is empty, else in zone,
+// which must be a valid IANA name.
+func thinkingCalendarColumns(zone string) map[string]string {
+	if zone == "" {
+		return map[string]string{
+			"day":         "date(d.requested_at,'localtime')",
+			"week":        "date(d.requested_at,'localtime','-6 days','weekday 1')",
+			"month":       "strftime('%Y-%m',d.requested_at,'localtime')",
+			"hour_of_day": "CAST(strftime('%H',d.requested_at,'localtime') AS INTEGER)",
+		}
+	}
+	quoted := "'" + strings.ReplaceAll(zone, "'", "''") + "'"
+	columns := map[string]string{}
+	for _, field := range []string{"day", "week", "month", "hour_of_day"} {
+		columns[field] = "pharos_zoned_time(d.requested_at," + quoted + ",'" + field + "')"
+	}
+	return columns
+}
+
+// thinkingZonedDataset reads model_requests' calendar fields in a request's
+// time zone, as the Thinking dashboards ask (their Range, buckets and time of
+// day follow the viewer's zone). No zone keeps the service's own.
+// thinkingQueryDataset is model_requests for one query: read from the stored
+// timings alone while none await refresh (stored), and with its calendar
+// fields in zone. The choice is made before the query's transaction, so a
+// query that reads the stored timings checks them again inside it
+// (thinkingTimingsCurrent).
+func (c *Catalog) thinkingQueryDataset(ctx context.Context, table sqlDataset, zone string) (sqlDataset, bool, error) {
+	stored := false
+	if derived, _ := ctx.Value(thinkingDerivedOnly{}).(bool); !derived {
+		if err := thinkingTimingsCurrent(ctx, c.reader()); err == nil {
+			table.from, table.base, stored = thinkingStoredDataset.from, thinkingStoredDataset.base, true
+		} else if !errors.Is(err, errThinkingSourceMoved) {
+			return table, false, err
+		}
+	}
+	table, err := thinkingZonedDataset(table, zone)
+	return table, stored, err
+}
+
+// thinkingDerivedOnly, as a context value, makes model_requests read the
+// derived source whatever the timings' state.
+type thinkingDerivedOnly struct{}
+
+// errThinkingSourceMoved says some timings await refresh, so the stored
+// timings alone are not model_requests.
+var errThinkingSourceMoved = errors.New("request timings await refresh")
+
+// thinkingTimingsCurrent says whether the stored timings are all of
+// model_requests as q sees the catalog: nil if so, errThinkingSourceMoved if
+// a conversation awaits refresh or the exclusions are stale.
+func thinkingTimingsCurrent(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) error {
+	var pending bool
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_request_timing_dirty)
+ OR EXISTS(SELECT 1 FROM meta WHERE key='model_request_exclusions_stale')`).Scan(&pending); err != nil {
+		return err
+	}
+	if pending {
+		return errThinkingSourceMoved
+	}
+	return nil
+}
+
+func thinkingZonedDataset(table sqlDataset, zone string) (sqlDataset, error) {
+	if zone == "" {
+		return table, nil
+	}
+	if _, err := thinkingLocation(zone); err != nil {
+		return table, fmt.Errorf("invalid timezone")
+	}
+	columns := maps.Clone(table.columns)
+	maps.Copy(columns, thinkingCalendarColumns(zone))
+	table.columns = columns
+	return table, nil
+}
+
+var thinkingLocations sync.Map
+
+func thinkingLocation(zone string) (*time.Location, error) {
+	if loc, ok := thinkingLocations.Load(zone); ok {
+		return loc.(*time.Location), nil
+	}
+	loc, err := time.LoadLocation(zone)
+	if err != nil || zone == "" || zone == "Local" {
+		return nil, fmt.Errorf("invalid timezone %q", zone)
+	}
+	thinkingLocations.Store(zone, loc)
+	return loc, nil
+}
+
+// pharos_zoned_time(timestamp, zone, field) is a stored timestamp's local
+// day, Monday week, month or hour (0–23) in zone; NULL for a missing or
+// unreadable timestamp.
+func zonedTimeField(args []driver.Value) (driver.Value, error) {
+	text, _ := args[0].(string)
+	zone, _ := args[1].(string)
+	field, _ := args[2].(string)
+	at, err := time.Parse(time.RFC3339Nano, text)
+	if err != nil {
+		return nil, nil
+	}
+	loc, err := thinkingLocation(zone)
+	if err != nil {
+		return nil, err
+	}
+	at = at.In(loc)
+	switch field {
+	case "day":
+		return at.Format("2006-01-02"), nil
+	case "week":
+		return at.AddDate(0, 0, -((int(at.Weekday()) + 6) % 7)).Format("2006-01-02"), nil
+	case "month":
+		return at.Format("2006-01"), nil
+	case "hour_of_day":
+		return int64(at.Hour()), nil
+	}
+	return nil, fmt.Errorf("unknown zoned time field %q", field)
+}
+
+func init() {
+	_ = sqlite.RegisterDeterministicScalarFunction("pharos_zoned_time", 3, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		return zonedTimeField(args)
+	})
+}
+
+// thinkingBandSQL is thinkingBin in SQL, as the band's label (an enum, which
+// Query Table can group in one shared read): the band of thinkingEdges
+// holding a wait, each including its lower edge, the last its upper one too;
+// NULL outside the edges or without a wait.
+func thinkingBandSQL(value string) string {
+	var b strings.Builder
+	last := len(thinkingEdges) - 1
+	fmt.Fprintf(&b, "CASE WHEN %s IS NULL OR %s<%s OR %s>%s THEN NULL", value, value, strconv.FormatFloat(thinkingEdges[0], 'g', -1, 64), value, strconv.FormatFloat(thinkingEdges[last], 'g', -1, 64))
+	for i := 1; i < last; i++ {
+		fmt.Fprintf(&b, " WHEN %s<%s THEN '%s'", value, strconv.FormatFloat(thinkingEdges[i], 'g', -1, 64), thinkingBandLabel(i-1))
+	}
+	fmt.Fprintf(&b, " ELSE '%s' END", thinkingBandLabel(last-1))
+	return b.String()
+}
+
+// thinkingBandLabel names wait band i, the waits from thinkingEdges[i] up to
+// thinkingEdges[i+1] seconds (the last band includes its upper edge).
+func thinkingBandLabel(i int) string {
+	return strconv.FormatFloat(thinkingEdges[i], 'g', -1, 64) + "–" + strconv.FormatFloat(thinkingEdges[i+1], 'g', -1, 64) + " s"
 }

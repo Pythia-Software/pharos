@@ -479,6 +479,11 @@ test("all-time writing hours combine older dates and repeated DST hours into the
   assert.match(preview.study.sampleLabel, /^3 written messages/);
   partial = true; clearPreviewCache();
   await assert.rejects(loadQueryPreview(item.dataset, item.query, schema, { recipe }), /Complete hourly totals/);
+  // A bucket of several hours starts at one hour but holds the next ones' words.
+  partial = false; clearPreviewCache();
+  item.query.aggregations[0].dateGrouping.every = 2;
+  const multiHour = await loadQueryPreview(item.dataset, item.query, schema, { recipe, cover: item.cover, url: item.url });
+  assert.equal(multiHour.study, undefined, "two-hour buckets keep the native chart rather than the clock-hour cover");
 });
 
 test("daily repository words average seven calendar days with history before the 30-day window", async t => {

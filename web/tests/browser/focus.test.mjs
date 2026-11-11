@@ -1095,8 +1095,14 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
     await page.keyboard.press('Escape');
     await page.locator('#usageSummary').waitFor({ state: 'hidden' });
     await page.waitForFunction(element => document.activeElement === element, await more.elementHandle());
+    const guideButton = page.locator('#dataGuideToggle');
+    assert.equal(await guideButton.getAttribute('aria-expanded'), 'false');
     await activateHeaderTool(page, 'dataGuideToggle');
-    await holdsFocus(page, page.getByRole('dialog', {name:'Data Guide',exact:true}), more);
+    const guide = page.getByRole('dialog', {name:'Data Guide',exact:true});
+    await guide.waitFor();
+    await page.waitForFunction(() => document.getElementById('dataGuideToggle').getAttribute('aria-expanded') === 'true');
+    await holdsFocus(page, guide, more);
+    await page.waitForFunction(() => document.getElementById('dataGuideToggle').getAttribute('aria-expanded') === 'false');
   });
 }
 
@@ -1803,9 +1809,12 @@ test("Ask Pharos feedback requires explicit approval of the reviewed draft", { s
 
 test("feedback review keeps focus, fits a phone, and returns focus to its opener", { skip }, async t => {
   const { page, shot } = await open(t, { url: "/settings", ready: "#healthCards .panel" });
+  const feedbackHeader = page.locator("#feedbackSubmitToggle");
+  assert.equal(await feedbackHeader.getAttribute("aria-expanded"), "false");
   await activateHeaderTool(page, "feedbackSubmitToggle");
   const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
   await dialog.waitFor();
+  assert.equal(await feedbackHeader.getAttribute("aria-expanded"), "true");
   await page.waitForFunction(() => document.querySelector(".uifeedback-dialog")?.contains(document.activeElement));
   // A bug report is the default and includes recent logs; the contact email is an app preference.
   assert.equal(await dialog.getByRole("combobox", { name: "Type" }).inputValue(), "bug");
@@ -1818,6 +1827,7 @@ test("feedback review keeps focus, fits a phone, and returns focus to its opener
   await shot("feedback-review");
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "hidden" });
+  assert.equal(await feedbackHeader.getAttribute("aria-expanded"), "false");
   assert.equal(await page.evaluate(() => headerToolAnchor(document.getElementById("feedbackSubmitToggle")) === document.activeElement), true);
 });
 
@@ -1851,9 +1861,13 @@ test("annotated element screenshots render, the annotation surfaces stay on scre
   await page.locator("#feedbackSend").click();
   const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
   await dialog.waitFor();
+  assert.equal(await page.locator("#feedbackSubmitToggle").getAttribute("aria-expanded"), "true");
   await page.waitForFunction(() => document.querySelector(".uifeedback-dialog img")?.naturalWidth > 0);
   await dialog.getByRole("button", { name: "Send feedback", exact: true }).click();
   await page.getByRole("dialog", { name: "Feedback sent", exact: true }).waitFor();
+  assert.equal(await page.locator("#feedbackSubmitToggle").getAttribute("aria-expanded"), "true");
+  await page.getByRole("button", { name: "Close feedback", exact: true }).click();
+  assert.equal(await page.locator("#feedbackSubmitToggle").getAttribute("aria-expanded"), "false");
   assert.equal(new URL(page.url()).pathname, "/settings");
 });
 
@@ -2581,6 +2595,9 @@ async function openAskOverlay(t, width) {
 
 test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip}, async t => {
   const {page,shot,modal,editor}=await openAskOverlay(t,1440);
+  const askHeader=page.locator('#askPharosToggle');
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'true');
+  assert.equal(await askHeader.getAttribute('aria-current'),null);
   await page.evaluate(()=>{
     const original=window.fetch;window.askDraftAttempts=0;
     window.fetch=(input,options)=>{
@@ -2622,6 +2639,8 @@ test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip},
   assert.equal(await editor.evaluate(element=>element.value),'What if we broke it down by model?','removing context preserves the draft');
   await modal.getByRole('button',{name:'Close Ask Pharos',exact:true}).click();
   await modal.waitFor({state:'hidden'});
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'false');
+  assert.equal(await askHeader.getAttribute('aria-current'),null);
   assert.ok(await page.locator('#askPharosToggle').evaluate(element=>element===document.activeElement)||await page.locator('#headerMore').evaluate(element=>element===document.activeElement),'Close returns focus to the header');
   await activateHeaderTool(page,'askPharosToggle');
   await removeContext.waitFor();
@@ -2641,6 +2660,8 @@ test('Ask Pharos errors float over full screen and dismiss without moving it @ 3
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection:{provider:'Removed',model:'',effort:'Default'}},providers:[{id:'Codex'}]},
   }});
   const notice=page.locator('#askPage .pharos-notice');
+  assert.equal(await page.locator('#askPharosToggle').getAttribute('aria-current'),'page');
+  assert.equal(await page.locator('#askPharosToggle').getAttribute('aria-expanded'),'false');
   assert.match(await notice.getByRole('alert').textContent(),/Removed is unavailable/);
   const surface=page.locator('#askPage .pharos-product > :not(.pharos-notice-anchor):not([hidden])').first();
   const shown=await surface.boundingBox(),box=await notice.boundingBox(),ask=await page.locator('#askPage .pharos-product').boundingBox();
@@ -2655,9 +2676,13 @@ test('Ask Pharos errors float over full screen and dismiss without moving it @ 3
 
 test('Ask Pharos full screen moves the chat to its own page and back @ 390', {skip}, async t => {
   const {page,shot,modal,editor,state}=await openAskOverlay(t,390);
+  const askHeader=page.locator('#askPharosToggle');
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'true');
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/ask');
   await modal.waitFor({state:'hidden'});
+  assert.equal(await askHeader.getAttribute('aria-current'),'page');
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'false');
   assert.ok(await editor.evaluate(element=>!!element.closest('#askPage')&&element===document.activeElement),'full screen keeps the composer focused on its page');
   // Suggestions sit inside the composer until the user types.
   const suggestions=page.getByRole('region',{name:'Prompt suggestions',exact:true});
@@ -2677,6 +2702,8 @@ test('Ask Pharos full screen moves the chat to its own page and back @ 390', {sk
   await page.getByRole('button',{name:'Exit full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/analyze');
   await modal.waitFor();
+  assert.equal(await askHeader.getAttribute('aria-current'),null);
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'true');
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'leaving full screen reopens the dialog it came from');
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/ask');
@@ -2685,6 +2712,8 @@ test('Ask Pharos full screen moves the chat to its own page and back @ 390', {sk
   const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});
   await panel.waitFor();
   assert.ok(await modal.isHidden(),'Back leaves full screen, floating a pending question');
+  assert.equal(await askHeader.getAttribute('aria-current'),null);
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'false');
   // Header tabs switch views without a route event; they still leave full screen.
   await panel.locator('.pharos-floating-open').click();await modal.waitFor();
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
@@ -2716,7 +2745,7 @@ test('Ask Pharos full screen keeps a chat that is still loading', {skip}, async 
   const held=id=>new Promise(resolve=>{gates[id]=resolve;});
   let waiting={};
   t.after(()=>Object.values(gates).forEach(open=>open()));
-  const {page,settled}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+  const {page,settled,shot}=await open(t,{url:'/',viewport:{width:1920,height:1050},ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:Object.values(chats)}),
@@ -2732,13 +2761,14 @@ test('Ask Pharos full screen keeps a chat that is still loading', {skip}, async 
   await page.waitForURL(url=>url.pathname==='/ask'&&url.searchParams.get('ask_chat')==='slow');
   release('slow');waiting={};
   await page.locator('#askPage .pharos-user-question').filter({hasText:'Slow question'}).waitFor();
+  await shot('fullscreen-conversation');
   // Leaving full screen for the dialog while another chat loads keeps that chat.
   await activateHeaderTool(page,'settingsToggle');await page.waitForURL(url=>url.pathname==='/settings');
   await activateHeaderTool(page,'askPharosToggle');
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/ask');
-  await page.locator('.pharos-ai').getByRole('button',{name:'New Chat',exact:true}).click();
   if(!await page.getByRole('dialog',{name:'Chat history',exact:true}).isVisible())await page.getByRole('button',{name:'History',exact:true}).click();
+  await page.getByRole('dialog',{name:'Chat history',exact:true}).getByRole('button',{name:'New chat',exact:true}).click();
   waiting={other:held('other')};
   await page.getByRole('link',{name:'Open chat: Other question',exact:true}).click();
   await page.getByRole('button',{name:'Exit full screen',exact:true}).click();
@@ -2798,7 +2828,7 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   let finish;
   const response=new Promise(resolve=>{finish=resolve;});t.after(()=>finish());
-  const {page}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+  const {page,shot}=await open(t,{url:'/',viewport:{width:1920,height:1050},ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':{sessions:[]},
@@ -2861,6 +2891,7 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   await page.keyboard.press('Escape');
   await page.locator('body>header .brand').click();
   await page.locator('#homeAskSearch').getByRole('button',{name:'A. Tokens',exact:true}).waitFor();
+  await shot('home-answer');
   assert.ok((await homeFrame.boundingBox()).width>emptyHomeWidth,'a restored conversation uses more of the available Home width');
   await page.locator('#homeAskSearch').getByRole('button',{name:'New Chat',exact:true}).click();
   assert.ok(Math.abs((await homeFrame.boundingBox()).width-emptyHomeWidth)<1,'clearing the conversation restores the Home composer width');
@@ -3024,21 +3055,26 @@ test('Ask Pharos loads chart previews behind the floating panel so a ready answe
   assert.equal(queries(),loaded,'opening a just-loaded answer reuses its charts');
 });
 
-for (const width of [1440,320]) test(`Ask Pharos work previews fit beside their links @ ${width}`, {skip}, async t => {
+for (const width of [1920,320]) test(`Ask Pharos work previews fit beside their links @ ${width}`, {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
-  const cards=[{id:'work',title:'Long work',description:'The whole workspace.',href:'/work/'+workID},{id:'conversation',title:'Root conversation',description:'One conversation in it.',href:'/work/'+workID+'?conversation=conv-root'}];
+  const cards=[{id:'work',title:'Long work',description:'The whole workspace.',href:'/work/'+workID},{id:'conversation',title:'Root conversation',description:'One conversation in it.',href:'/work/'+workID+'?conversation=conv-root'},{id:'child',title:'Child conversation',description:'A second conversation.',href:'/work/'+workID+'/conversation/conv-child'}];
+  // Synthetic ribbon used only to exercise image loading and preview layout.
+  const colors=['#399bed','#20bfae','#b36df1','#f4b632','#ef9535','#2bc48e','#f16b52','#eace32'];
+  const ribbon='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 40">'+colors.map((color,index)=>`<rect x="${index*40}" y="${8+index%3*4}" width="38" height="${24-index%3*8}" fill="${color}"/>`).join('')+'</svg>');
   let session;
-  const {page,shot}=await open(t,{url:'/library',ready:'.conversation-result-card',viewport:{width,height:900},api:{
+  const home=width===1920;
+  const {page,shot,calls}=await open(t,{url:home?'/':'/library',ready:home?'#pharos-ask .pharos-ai:not([hidden])':'.conversation-result-card',viewport:{width,height:home?1050:900},api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:session?[session]:[]}),
     'GET /api/ask/session':()=>session,
     'POST /api/ask/session':({body})=>(session={...session,...body}),
     'POST /api/ask/send':({body})=>(session={id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'Your work.',cards}]}),
+    'POST /api/fingerprints':({body})=>({items:body.items.map(item=>({...item,state:'ready',href:'/work/'+workID+'/conversation/'+item.id,images:{light:ribbon,dark:ribbon}}))}),
   }});
   await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
-  await activateHeaderTool(page,'askPharosToggle');
-  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
+  if(!home)await activateHeaderTool(page,'askPharosToggle');
+  const surface=home?page.locator('#homeAskSearch'):page.getByRole('dialog',{name:'Ask Pharos',exact:true});
   const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
   await question.fill('What did I do in the long work?');
   const before=page.url();
@@ -3048,10 +3084,14 @@ for (const width of [1440,320]) test(`Ask Pharos work previews fit beside their 
     await figure.waitFor();await figure.scrollIntoViewIfNeeded();
     await page.waitForFunction(title=>document.querySelector(`figure[aria-label="Work preview: ${title}"]`)?.getAttribute('aria-busy')==='false',card.title);
     assert.equal(await page.getByRole('link',{name:new RegExp(card.title)}).getAttribute('href'),card.href);
+    if(card.id!=='work')await figure.getByRole('img',{name:'Conversation fingerprint',exact:true}).waitFor();
   }
+  const requested=calls.filter(call=>call.path==='/api/fingerprints').flatMap(call=>call.body.items);
+  for(const id of ['conv-root','conv-child'])assert.ok(requested.some(item=>item.entity==='conversation'&&item.id===id),'the conversation ID selects its fingerprint');
   for (const card of cards) assert.equal(await page.getByRole('figure',{name:'Work preview: '+card.title,exact:true}).locator('p').count(),2,'where/when and who/how much render');
-  assert.equal(page.url(),before,'previews leave the underlying page URL alone');
-  assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'loading previews must not move focus out of Ask');
+  const after=new URL(page.url());if(home)after.searchParams.delete('ask_chat');
+  assert.equal(after.href,before,'previews leave the underlying page URL alone');
+  assert.ok(await surface.evaluate(element=>element.contains(document.activeElement)),'loading previews must not move focus out of Ask');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'work preview overflowed the viewport');
   assert.ok(await page.evaluate(()=>[...document.querySelectorAll('.pharos-work-preview')].every(el=>el.scrollWidth<=el.clientWidth)),'work preview content overflowed its card');
   await shot('ask-work-previews');
@@ -3385,12 +3425,17 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   let recordFirst,releaseReceipt,receiptStarted,secondAttempt;
   const firstRecording=new Promise(resolve=>{recordFirst=resolve;}),oldReceipt=new Promise(resolve=>{releaseReceipt=resolve;});
   const readingError=new Promise(resolve=>{receiptStarted=resolve;});
-  t.after(()=>{recordFirst();releaseReceipt();});
+  const heldSearch=Promise.withResolvers(),searchStarted=Promise.withResolvers();
+  t.after(()=>{recordFirst();releaseReceipt();heldSearch.resolve();});
   t.after(()=>{for(const resolve of finish.values())resolve();});
-  const {page,settled,shot,calls}=await open(t,{url:'/ask',ready:'.pharos-new-chat',api:{
+  const {page,settled,shot,calls}=await open(t,{url:'/ask',viewport:{width:1920,height:1050},ready:'.pharos-new-chat',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
-    'GET /api/ask/sessions':()=>({sessions:[...sessions.values()]}),
+    'GET /api/ask/sessions':async({query})=>{
+      const term=query.get('q')||'';
+      if(term==='First'){searchStarted.resolve();await heldSearch.promise;}
+      return {sessions:[...sessions.values()].filter(session=>!term||session.conversation.some(turn=>turn.prompt.includes(term)))};
+    },
     'GET /api/ask/session':({query})=>sessions.get(query.get('id')),
     'POST /api/ask/session':({body})=>{const saved={createdAt:Date.now(),updatedAt:Date.now(),conversation:[],...sessions.get(body.id),...body};sessions.set(body.id,saved);return saved;},
     'POST /api/ask/read':async({body})=>{
@@ -3435,7 +3480,7 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   assert.ok(await question.evaluate(element=>element===document.activeElement),'background completion preserves focus');
   await shot('ask-inbox-background-answer');
   await first.click();await page.getByRole('status').filter({hasText:'The answer to First question'}).waitFor();
-  await page.locator('.pharos-receipt').filter({hasText:'Seen'}).waitFor();
+  await first.locator('.pharos-history-state').filter({hasText:'Seen'}).waitFor();
   finish.get('Second question')();await settled();
   assert.ok(calls.some(call=>call.path==='/api/ask/read'),'viewing an answer saves a receipt');
   const transcript=page.getByRole('region',{name:'Chat messages, scroll for earlier replies'});
@@ -3449,7 +3494,7 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   await first.click();await page.getByRole('status').filter({hasText:'The answer to First question'}).waitFor();
   await second.click();await page.getByRole('button',{name:'Try again',exact:true}).click();
   await page.getByRole('status').filter({hasText:'Recovered answer'}).waitFor();
-  await page.locator('.pharos-receipt').filter({hasText:'Seen'}).waitFor();
+  await second.locator('.pharos-history-state').filter({hasText:'Seen'}).waitFor();
   const acknowledged=page.waitForResponse(response=>response.url().endsWith('/api/ask/read')&&response.request().postDataJSON()?.startedAt===secondAttempt);
   releaseReceipt();const response=await acknowledged;await response.finished();await settled();
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
@@ -3462,6 +3507,20 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   assert.match(await first.getAttribute('aria-describedby').then(id=>page.locator('#'+id).textContent()),/Current chat/);
   await second.click();await page.getByRole('status').filter({hasText:'Recovered answer'}).waitFor();
   assert.equal(await second.getAttribute('aria-current'),'true');assert.equal(await first.getAttribute('aria-current'),'false');
+  await shot('ask-inbox-selected');
+  const sendsBeforeSearch=calls.filter(call=>call.path==='/api/ask/send').length;
+  const filter=drawer.getByRole('searchbox',{name:'Find a prior chat',exact:true}),search=drawer.getByRole('button',{name:'Search',exact:true});
+  await filter.fill('First');await search.click();await searchStarted.promise;
+  await drawer.getByRole('status').filter({hasText:'Searching…'}).waitFor();
+  await shot('ask-inbox-searching');
+  await filter.fill('Second');await filter.press('Enter');
+  await second.waitFor();await drawer.getByRole('status').filter({hasText:'Searching…'}).waitFor({state:'hidden'});
+  const stale=page.waitForResponse(response=>response.url().includes('/api/ask/sessions?')&&new URL(response.url()).searchParams.get('q')==='First');
+  heldSearch.resolve();await stale;await settled();
+  assert.equal(await first.count(),0,'an older search must not replace the latest results');
+  assert.ok(await filter.evaluate(element=>element===document.activeElement),'search keeps keyboard focus');
+  await filter.fill('');await search.click();await first.waitFor();await second.waitFor();
+  assert.equal(calls.filter(call=>call.path==='/api/ask/send').length,sendsBeforeSearch,'searching does not send a question');
   await newChat.click();
   assert.equal(await first.getAttribute('aria-current'),'false');assert.equal(await second.getAttribute('aria-current'),'false');
   await page.setViewportSize({width:390,height:844});

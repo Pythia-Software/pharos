@@ -96,33 +96,6 @@ func selectThinkingRecords(ctx context.Context, all []thinkingRecord, o thinking
 	return out, nil
 }
 
-type thinkingOptionsList struct{ Models, Efforts []string }
-
-func (c *Catalog) thinkingOptionsList(ctx context.Context) (thinkingOptionsList, error) {
-	// The choices come from the shared population, which every view loads
-	// first, rather than from another scan of the ledger.
-	return cachedValue(ctx, c, "thinking:options", func(ctx context.Context) (thinkingOptionsList, error) {
-		all, err := c.thinkingSnapshot(ctx)
-		if err != nil {
-			return thinkingOptionsList{}, err
-		}
-		models, efforts := map[string]bool{}, map[string]bool{}
-		for _, r := range all {
-			models[r.Model] = true
-			efforts[r.Effort] = true
-		}
-		out := thinkingOptionsList{}
-		for m := range models {
-			out.Models = append(out.Models, m)
-		}
-		for e := range efforts {
-			out.Efforts = append(out.Efforts, e)
-		}
-		sortThinkingOptions(&out)
-		return out, nil
-	})
-}
-
 type thinkingFit struct {
 	Factors []thinkingFactor
 	Ratios  []float64

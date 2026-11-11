@@ -3,17 +3,20 @@
 .data-source-link:hover { color: var(--gold); text-decoration-style: solid; }
 .data-source-link:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 3px; border-radius: 2px; }
 .data-source-link .app-icon { width: 12px; height: 12px; color: var(--qt-muted); }
-.data-guide { box-sizing: border-box; width: min(1080px, calc(100vw - 40px)); max-width: none; height: min(940px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); padding: 0; margin: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink); box-shadow: 0 32px 120px #0007; overflow: auto; overscroll-behavior: contain; font-family: var(--sans); }
+.data-guide { --guide-radius: 12px; box-sizing: border-box; width: min(1080px, calc(100vw - 40px)); max-width: none; height: min(940px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); padding: 0; margin: auto; border: 1px solid var(--line); border-radius: var(--guide-radius); background: var(--panel); color: var(--ink); box-shadow: 0 32px 120px #0007; overflow: auto; overscroll-behavior: contain; font-family: var(--sans); }
 .data-guide[open] { display: flex; flex-direction: column; }
 .data-guide::backdrop { background: #071713a8; backdrop-filter: blur(4px); }
 .data-guide * { box-sizing: border-box; }
 .data-guide button { cursor: pointer; }
 .data-guide button:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
 .data-guide-header { position: sticky; top: 0; z-index: 2; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 24px; background: var(--panel); border-bottom: 1px solid var(--line); }
+/* Round the outer surfaces without clipping highlights in the illustrations. */
+#dataGuideDialog > .data-guide-header { border-radius: calc(var(--guide-radius) - 1px) calc(var(--guide-radius) - 1px) 0 0; }
 .data-guide-header h2 { margin: 0; font: 500 24px/1.2 var(--serif); }
 .data-guide .data-guide-close { display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); }
 .data-guide-close .app-icon { width: 16px; height: 16px; }
 .data-guide-body { flex: 1; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 200px minmax(0, 1fr); }
+#dataGuideDialog > .data-guide-body { border-radius: 0 0 calc(var(--guide-radius) - 1px) calc(var(--guide-radius) - 1px); }
 .data-guide-terms { overflow: auto; padding: 20px 12px; border-right: 1px solid var(--line); background: var(--bg); }
 .data-guide-content { min-width: 0; overflow: auto; padding: 24px; }
 .data-guide-content .pharos-guide-highlight { scroll-margin-block: 80px; }

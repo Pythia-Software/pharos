@@ -8,6 +8,7 @@ import (
 	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
 	"hash/fnv"
+	"maps"
 	"math"
 	"net/http"
 	"net/url"
@@ -64,6 +65,13 @@ func readThinkingOptions(q url.Values, now time.Time) (thinkingOptions, error) {
 			return o, err
 		}
 	}
+	o.Zone = time.Local
+	if zone := q.Get("timezone"); zone != "" {
+		o.Zone, err = time.LoadLocation(zone)
+		if err != nil {
+			return o, fmt.Errorf("invalid timezone")
+		}
+	}
 	if token := q.Get("filters"); token != "" {
 		query, e := qt.DecodeQueryLink(token)
 		if e != nil || query.Grouping != nil {
@@ -82,16 +90,18 @@ func readThinkingOptions(q url.Values, now time.Time) (thinkingOptions, error) {
 		if e = wire.Validate(); e != nil {
 			return o, e
 		}
-		o.FilterSQL, o.FilterArgs, e = thinkingRequestDataset.where(query.Where, schema)
+		// Filters on the calendar fields read them in the viewer's zone, as
+		// query-v3 does for the same request, so the fit and the page's
+		// metrics count the same requests.
+		table := thinkingRequestDataset
+		if zone := q.Get("timezone"); zone != "" && zone != "Local" {
+			if table, e = thinkingZonedDataset(table, zone); e != nil {
+				return o, e
+			}
+		}
+		o.FilterSQL, o.FilterArgs, e = table.where(query.Where, schema)
 		if e != nil {
 			return o, e
-		}
-	}
-	o.Zone = time.Local
-	if zone := q.Get("timezone"); zone != "" {
-		o.Zone, err = time.LoadLocation(zone)
-		if err != nil {
-			return o, fmt.Errorf("invalid timezone")
 		}
 	}
 	for _, v := range []struct {
@@ -250,12 +260,12 @@ func thinkingMedian(a []float64) float64 {
 	return 0
 }
 
-type thinkingCell struct {
-	Stats         thinkingStats `json:"stats"`
-	Retained      int           `json:"retained"`
-	Conversations int           `json:"conversations"`
-	Counts        []int         `json:"counts"`
-}
+// thinkingCalendarCell is one row period and local hour of a group's time of
+// day: the median wait of its timed requests and the median workload-adjusted
+// ratio of its estimates, each only when supported (20 values from 3
+// conversations). It is read here rather than through query-v3 because a
+// metric takes one calendar key and the zoned day and hour are computed,
+// so Query Table reads them once per clause rather than in its shared scan.
 type thinkingCalendarCell struct {
 	Day                                               string `json:"day"`
 	Hour                                              int    `json:"hour"`
@@ -273,39 +283,32 @@ type thinkingComparison struct {
 	Days             int `json:"days"`
 	Ratio, Low, High *float64
 }
+
+// thinkingGroup holds what only the workload fit gives one group: its
+// supported estimates by time of day, their three-hour bands and the paired
+// comparison. With the ratio metric, stats and Conversations describe the
+// estimates; otherwise model_requests describes the group.
 type thinkingGroup struct {
-	Key                                                             string `json:"key"`
-	Label                                                           string `json:"label"`
-	Model                                                           string `json:"model"`
-	Effort                                                          string `json:"effort"`
-	Retained, Timed, Adjusted, Conversations, RetainedConversations int
-	Stats                                                           thinkingStats           `json:"stats"`
-	Counts                                                          []int                   `json:"counts"`
-	Periods                                                         map[string]thinkingCell `json:"periods"`
-	Calendar                                                        []thinkingCalendarCell  `json:"calendar"`
-	Bands                                                           []thinkingBand          `json:"bands"`
-	Comparison                                                      thinkingComparison      `json:"comparison"`
-	CDF                                                             [][2]float64            `json:"cdf,omitempty"`
+	Key           string                 `json:"key"`
+	Adjusted      int                    `json:"Adjusted"`
+	Stats         *thinkingStats         `json:"stats,omitempty"`
+	Conversations *int                   `json:"Conversations,omitempty"`
+	Calendar      []thinkingCalendarCell `json:"calendar"`
+	Bands         []thinkingBand         `json:"bands"`
+	Comparison    thinkingComparison     `json:"comparison"`
 }
-type thinkingBounds struct{ From, To string }
+
+// thinkingResponse is what the Thinking dashboards read beside query-v3:
+// the fitted estimates, factors, compaction pairs, traces and validation,
+// which need whole conversations in order rather than grouped rows.
 type thinkingResponse struct {
-	PeriodBounds                                     map[string]thinkingBounds `json:"periodBounds"`
-	CalendarBounds                                   map[string]thinkingBounds `json:"calendarBounds"`
-	Retained, Timed, Adjusted, Conversations, Hidden int
-	Edges                                            []float64       `json:"edges"`
-	Groups                                           []thinkingGroup `json:"groups"`
-	Models, Efforts                                  []string
-	Summary                                          thinkingStats `json:"summary"`
-	Periods                                          []string      `json:"periods"`
-	CalendarPeriods                                  []string      `json:"calendarPeriods"`
-	From, To                                         string
-	Timezone                                         string               `json:"timezone"`
-	AgentCoverage                                    []thinkingGroup      `json:"agentCoverage,omitempty"`
-	Coverage                                         []thinkingGroup      `json:"coverage,omitempty"`
-	Factors                                          []thinkingFactor     `json:"factors,omitempty"`
-	Compactions                                      []thinkingCompaction `json:"compactions,omitempty"`
-	Traces                                           []thinkingTrace      `json:"traces,omitempty"`
-	Validation                                       *thinkingValidation  `json:"validation,omitempty"`
+	Adjusted    int                  `json:"Adjusted"`
+	Groups      []thinkingGroup      `json:"groups"`
+	Timezone    string               `json:"timezone"`
+	Factors     []thinkingFactor     `json:"factors,omitempty"`
+	Compactions []thinkingCompaction `json:"compactions,omitempty"`
+	Traces      []thinkingTrace      `json:"traces,omitempty"`
+	Validation  *thinkingValidation  `json:"validation,omitempty"`
 }
 
 func thinkingStamp(t time.Time) string {
@@ -373,13 +376,7 @@ func (c *Catalog) thinkingRecords(ctx context.Context, o thinkingOptions) ([]thi
 		}
 		r.At, _ = time.Parse(time.RFC3339Nano, at)
 		r.Compaction = compacted != 0
-		r.Model = thinkingLabel(r.Model)
-		r.Effort = thinkingLabel(r.Effort)
-		r.Provider = thinkingLabel(r.Provider)
-		r.Harness = thinkingLabel(r.Harness)
-		r.Repository = thinkingLabel(r.Repository)
-		r.Project = defaultString(nilIfEmpty(r.Project), "No project")
-		r.Machine = thinkingLabel(r.Machine)
+		thinkingRelabel(&r)
 		if gap.Valid {
 			r.Gap = &gap.Float64
 		}
@@ -393,6 +390,43 @@ func (c *Catalog) thinkingRecords(ctx context.Context, o thinkingOptions) ([]thi
 		return nil, err
 	}
 	return slices.Concat(append(chunks, out)...), nil
+}
+
+// thinkingRelabel names a record's missing labels as the dashboards show them.
+// Model and effort are stored with missing ones already named; the other
+// breakdowns keep missing apart from a value that reads as its name
+// (thinkingNamed).
+func thinkingRelabel(r *thinkingRecord) {
+	r.Model = thinkingLabel(r.Model)
+	r.Effort = thinkingLabel(r.Effort)
+	r.Provider = thinkingNamed(r.Provider, "Unreported")
+	r.Harness = thinkingNamed(r.Harness, "Unreported")
+	r.Repository = thinkingLabel(r.Repository)
+	r.Project = thinkingNamed(r.Project, "No project")
+	r.Machine = thinkingNamed(r.Machine, "Unreported")
+}
+
+// thinkingNamed is a breakdown value as a group key: missing is the missing
+// label, and a value spelled like that label (or like an escaped one) is
+// escaped with a leading NUL, so query-v3's separate buckets stay separate
+// groups (thinkingGroupIdentity in thinking-query.ts).
+func thinkingNamed(s, missing string) string {
+	if strings.TrimSpace(s) == "" {
+		return missing
+	}
+	if s == missing || strings.HasPrefix(s, "\x00") {
+		return "\x00" + s
+	}
+	return s
+}
+
+// thinkingNamedLabel shows an escaped value in quotes, apart from the
+// missing group it is spelled like.
+func thinkingNamedLabel(key string) string {
+	if value, escaped := strings.CutPrefix(key, "\x00"); escaped {
+		return "“" + value + "”"
+	}
+	return key
 }
 
 func thinkingLabel(s string) string {
@@ -412,105 +446,31 @@ func thinkingBin(v float64) int {
 	return i - 1
 }
 
-// Resolve a civil grid boundary to a real instant. A skipped boundary starts
-// at the clock transition; a repeated boundary starts at its first occurrence.
-func thinkingCivilHour(y int, m time.Month, d, hour int, zone *time.Location) time.Time {
-	wall := time.Date(y, m, d, hour, 0, 0, 0, time.UTC)
-	at := time.Date(y, m, d, hour, 0, 0, 0, zone)
-	civil := func(t time.Time) time.Time {
-		t = t.In(zone)
-		y, m, d := t.Date()
-		return time.Date(y, m, d, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC)
-	}
-	start, end := at.ZoneBounds()
-	if !civil(at).Equal(wall) {
-		for _, transition := range []time.Time{start, end} {
-			if !transition.IsZero() && civil(transition.Add(-time.Nanosecond)).Before(wall) && !civil(transition).Before(wall) {
-				return transition.In(zone)
-			}
-		}
-	}
-	if !start.IsZero() {
-		_, previous := start.Add(-time.Nanosecond).Zone()
-		_, current := at.Zone()
-		if previous > current {
-			earlier := at.Add(-time.Duration(previous-current) * time.Second)
-			if civil(earlier).Equal(wall) {
-				return earlier
-			}
-		}
-	}
-	return at
-}
-
-func thinkingPeriod(t time.Time, period string, hours, days int, zone *time.Location) time.Time {
+// thinkingCalendarRow is the local day, Monday week or month holding t, as
+// model_requests' day, week and month fields name it in the same zone.
+func thinkingCalendarRow(t time.Time, rows string, zone *time.Location) string {
 	t = t.In(zone)
-	y, m, d := t.Date()
-	switch period {
-	case "hour":
-		// Subtract within the instant to preserve both occurrences of a DST hour.
-		start := t.Add(-time.Duration(t.Minute())*time.Minute - time.Duration(t.Second())*time.Second - time.Duration(t.Nanosecond()))
-		if transition, _ := t.ZoneBounds(); transition.After(start) {
-			return transition
-		}
-		return start
-	case "hours":
-		if hours == 1 {
-			return thinkingPeriod(t, "hour", hours, days, zone)
-		}
-		if 24%hours == 0 {
-			return thinkingCivilHour(y, m, d, t.Hour()/hours*hours, zone)
-		}
-		sec := int64(hours) * 3600
-		return time.Unix(t.Unix()/sec*sec, 0).In(zone)
-	case "days":
-		date := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
-		base := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
-		count := int(date.Sub(base).Hours() / 24)
-		v := base.AddDate(0, 0, int(math.Floor(float64(count)/float64(days)))*days)
-		return time.Date(v.Year(), v.Month(), v.Day(), 0, 0, 0, 0, zone)
+	switch rows {
 	case "week":
-		return time.Date(y, m, d-(int(t.Weekday())+6)%7, 0, 0, 0, 0, zone)
+		return t.AddDate(0, 0, -((int(t.Weekday()) + 6) % 7)).Format("2006-01-02")
 	case "month":
-		return time.Date(y, m, 1, 0, 0, 0, 0, zone)
-	}
-	return time.Date(y, m, d, 0, 0, 0, 0, zone)
-}
-func thinkingNext(t time.Time, period string, hours, days int) time.Time {
-	switch period {
-	case "hour":
-		next := t.Add(time.Hour - time.Duration(t.Minute())*time.Minute - time.Duration(t.Second())*time.Second - time.Duration(t.Nanosecond()))
-		if _, transition := t.ZoneBounds(); transition.After(t) && transition.Before(next) {
-			return transition
-		}
-		return next
-	case "hours":
-		if hours > 1 && 24%hours == 0 {
-			y, m, d := t.Date()
-			return thinkingCivilHour(y, m, d, (t.Hour()/hours+1)*hours, t.Location())
-		}
-		if hours == 1 {
-			return thinkingNext(t, "hour", hours, days)
-		}
-		return t.Add(time.Duration(hours) * time.Hour)
-	case "days":
-		return t.AddDate(0, 0, days)
-	case "week":
-		return t.AddDate(0, 0, 7)
-	case "month":
-		return t.AddDate(0, 1, 0)
-	}
-	return t.AddDate(0, 0, 1)
-}
-func thinkingPeriodKey(t time.Time, period string) string {
-	if period == "hour" || period == "hours" {
-		return t.Format(time.RFC3339)
-	}
-	if period == "month" {
 		return t.Format("2006-01")
 	}
 	return t.Format("2006-01-02")
 }
+
+// thinkingGroupKey is a record's group under a breakdown, keyed and labelled
+// as thinking-query.ts keys model_requests' groups, which the page merges.
+// thinkingTupleKey is a JSON array of a group's labels, as JSON.stringify
+// writes it: no HTML escaping.
+func thinkingTupleKey(parts ...string) string {
+	var b strings.Builder
+	encoder := json.NewEncoder(&b)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(parts)
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
 func thinkingGroupKey(r thinkingRecord, by string) (string, string) {
 	s := "All requests"
 	switch by {
@@ -526,20 +486,18 @@ func thinkingGroupKey(r thinkingRecord, by string) (string, string) {
 			parts = append(parts, r.Effort)
 		}
 		parts = append(parts, speedLabel(r.Speed))
-		b, _ := json.Marshal(parts)
-		return string(b), strings.Join(parts, " · ")
+		return thinkingTupleKey(parts...), strings.Join(parts, " · ")
 	case "model_effort":
-		b, _ := json.Marshal([]string{r.Model, r.Effort})
-		return string(b), r.Model + " · " + r.Effort
+		return thinkingTupleKey(r.Model, r.Effort), r.Model + " · " + r.Effort
 	case "provider":
-		s = r.Provider
+		return r.Provider, thinkingNamedLabel(r.Provider)
 	case "harness":
-		s = r.Harness
+		return r.Harness, thinkingNamedLabel(r.Harness)
 	// A link from before projects grouped by repository; it reads as project.
 	case "project", "repository":
-		s = r.Project
+		return r.Project, thinkingNamedLabel(r.Project)
 	case "machine":
-		s = r.Machine
+		return r.Machine, thinkingNamedLabel(r.Machine)
 	case "preceding_tool":
 		s = r.Preceding
 	case "agent_depth":
@@ -548,49 +506,6 @@ func thinkingGroupKey(r thinkingRecord, by string) (string, string) {
 	return s, s
 }
 
-type thinkingAccumulator struct {
-	values, raw, ratios                                         []float64
-	conversations, retainedConversations, adjustedConversations map[string]bool
-	counts                                                      []int
-	retained, timed, adjusted                                   int
-}
-
-func newThinkingAccumulator() *thinkingAccumulator {
-	return &thinkingAccumulator{conversations: map[string]bool{}, retainedConversations: map[string]bool{}, adjustedConversations: map[string]bool{}, counts: make([]int, len(thinkingEdges)-1)}
-}
-func (a *thinkingAccumulator) add(r thinkingRecord, reasoning, ratio bool) {
-	a.retained++
-	a.retainedConversations[r.Conversation] = true
-	if r.Gap != nil {
-		a.timed++
-		a.raw = append(a.raw, *r.Gap)
-	}
-	if r.Ratio != nil {
-		a.adjusted++
-		a.ratios = append(a.ratios, *r.Ratio)
-		a.adjustedConversations[r.Conversation] = true
-	}
-	var v *float64
-	if reasoning {
-		if r.Reasoning > 0 {
-			v = &r.Reasoning
-		}
-	} else if ratio {
-		v = r.Ratio
-	} else {
-		v = r.Gap
-	}
-	if v != nil {
-		a.values = append(a.values, *v)
-		a.conversations[r.Conversation] = true
-		if r.Gap != nil {
-			a.counts[thinkingBin(*r.Gap)]++
-		}
-	}
-}
-func (a *thinkingAccumulator) cell() thinkingCell {
-	return thinkingCell{thinkingSummarize(a.values), a.retained, len(a.conversations), a.counts}
-}
 func thinkingBootstrap(values []float64, seed uint32) (ratio, low, high *float64) {
 	if len(values) < 4 {
 		return nil, nil, nil
@@ -619,179 +534,89 @@ func thinkingFold(s string) int {
 	_, _ = h.Write([]byte(s))
 	return int(h.Sum32() % 5)
 }
-func thinkingEffortOrder(s string) int {
-	if s == "Unreported" {
-		return 100
-	}
-	for i, v := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max"} {
-		if strings.EqualFold(s, v) {
-			return i
-		}
-	}
-	return 99
-}
+
+// aggregateThinking gives each group its calendar estimates, bands and
+// comparison, for the time-of-day view; other views need none. Records carry
+// their fitted Ratio.
 func aggregateThinking(ctx context.Context, records []thinkingRecord, o thinkingOptions) (thinkingResponse, error) {
-	if err := ctx.Err(); err != nil {
-		return thinkingResponse{}, err
+	out := thinkingResponse{Groups: []thinkingGroup{}, Timezone: o.Zone.String()}
+	if err := ctx.Err(); err != nil || o.View != "calendar" {
+		return out, err
 	}
-	out := thinkingResponse{PeriodBounds: map[string]thinkingBounds{}, CalendarBounds: map[string]thinkingBounds{}, Edges: thinkingEdges, Groups: []thinkingGroup{}, Models: []string{}, Efforts: []string{}, From: thinkingStamp(o.From), To: thinkingStamp(o.To), Timezone: o.Zone.String(), Periods: []string{}, CalendarPeriods: []string{}}
-	models, efforts, conversations := map[string]bool{}, map[string]bool{}, map[string]bool{}
-	all := newThinkingAccumulator()
 	groups := map[string][]int{}
-	labels := map[string]string{}
-	var first, last time.Time
 	for i, r := range records {
 		if i%4096 == 0 {
 			if err := ctx.Err(); err != nil {
 				return out, err
 			}
 		}
-		all.add(r, false, false)
-		models[r.Model] = true
-		efforts[r.Effort] = true
-		conversations[r.Conversation] = true
-		key, label := thinkingGroupKey(r, o.GroupBy)
+		key, _ := thinkingGroupKey(r, o.GroupBy)
 		groups[key] = append(groups[key], i)
-		labels[key] = label
-		if !r.At.IsZero() {
-			if first.IsZero() || r.At.Before(first) {
-				first = r.At
-			}
-			if last.IsZero() || r.At.After(last) {
-				last = r.At
-			}
+		if r.Ratio != nil {
+			out.Adjusted++
 		}
 	}
-	out.Retained = all.retained
-	out.Timed = all.timed
-	out.Adjusted = all.adjusted
-	out.Conversations = len(conversations)
-	out.Summary = thinkingSummarize(all.raw)
-	for k := range models {
-		out.Models = append(out.Models, k)
+	type sample struct {
+		ratios        []float64
+		conversations map[string]bool
 	}
-	sort.Strings(out.Models)
-	for k := range efforts {
-		out.Efforts = append(out.Efforts, k)
+	newSample := func() *sample { return &sample{conversations: map[string]bool{}} }
+	add := func(m map[string]*sample, key string, r thinkingRecord) *sample {
+		if m[key] == nil {
+			m[key] = newSample()
+		}
+		m[key].ratios = append(m[key].ratios, *r.Ratio)
+		m[key].conversations[r.Conversation] = true
+		return m[key]
 	}
-	sort.Slice(out.Efforts, func(i, j int) bool { return thinkingEffortOrder(out.Efforts[i]) < thinkingEffortOrder(out.Efforts[j]) })
-	if !first.IsZero() {
-		from, to := first, last
-		if !o.From.IsZero() {
-			from = o.From
-		}
-		if !o.To.IsZero() {
-			to = o.To.Add(-time.Nanosecond)
-		}
-		for _, v := range []struct {
-			period string
-			target *[]string
-		}{{o.Period, &out.Periods}, {o.Rows, &out.CalendarPeriods}} {
-			if v.target == &out.Periods && o.View != "time" || v.target == &out.CalendarPeriods && o.View != "calendar" {
-				continue
-			}
-			t := thinkingPeriod(from, v.period, o.Hours, o.Days, o.Zone)
-			for !t.After(to) {
-				if len(*v.target) >= 5000 {
-					return out, fmt.Errorf("more than 5,000 time buckets; choose a coarser Time Bucket or shorter Range")
-				}
-				key := thinkingPeriodKey(t, v.period)
-				*v.target = append(*v.target, key)
-				lo, hi := t, thinkingNext(t, v.period, o.Hours, o.Days)
-				if !o.From.IsZero() && lo.Before(o.From) {
-					lo = o.From
-				}
-				if !o.To.IsZero() && hi.After(o.To) {
-					hi = o.To
-				}
-				bounds := thinkingBounds{thinkingStamp(lo), thinkingStamp(hi)}
-				if v.target == &out.Periods {
-					out.PeriodBounds[key] = bounds
-				} else {
-					out.CalendarBounds[key] = bounds
-				}
-				t = thinkingNext(t, v.period, o.Hours, o.Days)
-			}
-		}
-	}
+	supported := func(s *sample) bool { return len(s.ratios) >= 20 && len(s.conversations) >= 3 }
+	type cellSample struct{ raw, adjusted *sample }
 	for key, rs := range groups {
-		g := thinkingGroup{Key: key, Label: labels[key], Counts: make([]int, len(thinkingEdges)-1), Periods: map[string]thinkingCell{}, Calendar: []thinkingCalendarCell{}, Bands: []thinkingBand{}}
-		if o.GroupBy == "model_effort" || o.GroupBy == "model_effort_speed" || o.GroupBy == "model_speed" {
-			g.Model = records[rs[0]].Model
-			g.Effort = records[rs[0]].Effort
-		}
-		if o.GroupBy == "effort" {
-			g.Effort = records[rs[0]].Effort
-		}
-		if o.GroupBy == "model" {
-			g.Model = records[rs[0]].Model
-		}
-		a := newThinkingAccumulator()
-		periods := map[string]*thinkingAccumulator{}
-		cells := map[string]*thinkingAccumulator{}
-		daily := map[string]*thinkingAccumulator{}
-		cellDays := map[string]string{}
-		cellHours := map[string]int{}
+		g := thinkingGroup{Key: key, Calendar: []thinkingCalendarCell{}, Bands: []thinkingBand{}}
+		all := newSample()
+		cells, daily := map[string]*cellSample{}, map[string]*sample{}
 		for _, index := range rs {
 			r := records[index]
-			reasoning := o.View == "reasoning"
-			relative := o.View == "calendar" && o.Metric == "ratio"
-			a.add(r, reasoning, relative)
+			if r.Ratio != nil {
+				all.ratios = append(all.ratios, *r.Ratio)
+				all.conversations[r.Conversation] = true
+			}
 			if r.At.IsZero() {
 				continue
 			}
-			if o.View == "time" {
-				p := thinkingPeriodKey(thinkingPeriod(r.At, o.Period, o.Hours, o.Days, o.Zone), o.Period)
-				if periods[p] == nil {
-					periods[p] = newThinkingAccumulator()
-				}
-				periods[p].add(r, false, false)
+			hour := r.At.In(o.Zone).Hour()
+			k := thinkingCalendarRow(r.At, o.Rows, o.Zone) + "|" + strconv.Itoa(hour)
+			c := cells[k]
+			if c == nil {
+				c = &cellSample{raw: newSample(), adjusted: newSample()}
+				cells[k] = c
 			}
-			if o.View == "calendar" {
-				day := thinkingPeriodKey(thinkingPeriod(r.At, o.Rows, 1, 1, o.Zone), o.Rows)
-				hour := r.At.In(o.Zone).Hour()
-				cellKey := day + "|" + strconv.Itoa(hour)
-				if cells[cellKey] == nil {
-					cells[cellKey] = newThinkingAccumulator()
-					cellDays[cellKey] = day
-					cellHours[cellKey] = hour
-				}
-				cells[cellKey].add(r, false, false)
-				dk := r.At.In(o.Zone).Format("2006-01-02") + "|" + strconv.Itoa(hour/3*3)
-				if daily[dk] == nil {
-					daily[dk] = newThinkingAccumulator()
-				}
-				daily[dk].add(r, false, true)
+			if r.Gap != nil {
+				c.raw.ratios = append(c.raw.ratios, *r.Gap)
+				c.raw.conversations[r.Conversation] = true
+			}
+			if r.Ratio != nil {
+				c.adjusted.ratios = append(c.adjusted.ratios, *r.Ratio)
+				c.adjusted.conversations[r.Conversation] = true
+				add(daily, thinkingCalendarRow(r.At, "day", o.Zone)+"|"+strconv.Itoa(hour/3*3), r)
 			}
 		}
-		g.Retained = a.retained
-		g.Timed = a.timed
-		g.Adjusted = a.adjusted
-		g.Conversations = len(a.conversations)
-		g.RetainedConversations = len(a.retainedConversations)
-		g.Counts = a.counts
-		g.Stats = thinkingSummarize(a.values)
-		if g.Stats.N < o.Minimum {
-			out.Hidden++
-			continue
-		}
-		for p, c := range periods {
-			g.Periods[p] = c.cell()
-		}
-		if o.Overview && len(a.raw) > 0 {
-			sort.Float64s(a.raw)
-			for i := 0; i <= 100; i++ {
-				g.CDF = append(g.CDF, [2]float64{*thinkingQuantile(a.raw, float64(i)/100), float64(i) / 100})
-			}
+		g.Adjusted = len(all.ratios)
+		if o.Metric == "ratio" {
+			stats, n := thinkingSummarize(all.ratios), len(all.conversations)
+			g.Stats, g.Conversations = &stats, &n
 		}
 		for k, c := range cells {
-			cell := thinkingCalendarCell{Day: cellDays[k], Hour: cellHours[k], N: len(c.raw), Adjusted: len(c.ratios), Conversations: len(c.conversations), AdjustedConversations: len(c.adjustedConversations)}
-			if cell.N >= 20 && cell.Conversations >= 3 {
-				v := thinkingMedian(c.raw)
+			day, hour, _ := strings.Cut(k, "|")
+			cell := thinkingCalendarCell{Day: day, N: len(c.raw.ratios), Conversations: len(c.raw.conversations),
+				Adjusted: len(c.adjusted.ratios), AdjustedConversations: len(c.adjusted.conversations)}
+			cell.Hour, _ = strconv.Atoi(hour)
+			if supported(c.raw) {
+				v := thinkingMedian(c.raw.ratios)
 				cell.Raw = &v
 			}
-			if cell.Adjusted >= 20 && cell.AdjustedConversations >= 3 {
-				v := thinkingMedian(c.ratios)
+			if supported(c.adjusted) {
+				v := thinkingMedian(c.adjusted.ratios)
 				cell.Ratio = &v
 			}
 			g.Calendar = append(g.Calendar, cell)
@@ -802,80 +627,35 @@ func aggregateThinking(ctx context.Context, records []thinkingRecord, o thinking
 			}
 			return g.Calendar[i].Hour < g.Calendar[j].Hour
 		})
-		if o.View == "calendar" {
-			for hour := 0; hour < 24; hour += 3 {
-				band := thinkingBand{Hour: hour, Daily: map[string]float64{}}
-				values := []float64{}
-				keys := []string{}
-				for k := range daily {
-					keys = append(keys, k)
-				}
-				sort.Strings(keys)
-				for _, k := range keys {
-					c := daily[k]
-					if strings.HasSuffix(k, "|"+strconv.Itoa(hour)) && len(c.ratios) >= 20 && len(c.adjustedConversations) >= 3 {
-						v := thinkingMedian(c.ratios)
-						band.Daily[strings.Split(k, "|")[0]] = v
-						band.N += len(c.ratios)
-						values = append(values, v)
-					}
-				}
-				band.Days = len(values)
-				band.Ratio, band.Low, band.High = thinkingBootstrap(values, uint32(800+hour))
-				g.Bands = append(g.Bands, band)
-			}
-			a, b := g.Bands[o.HourA/3], g.Bands[o.HourB/3]
-			paired := []float64{}
-			keys := []string{}
-			for k := range a.Daily {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
+		keys := slices.Sorted(maps.Keys(daily))
+		for hour := 0; hour < 24; hour += 3 {
+			band := thinkingBand{Hour: hour, Daily: map[string]float64{}}
+			values := []float64{}
 			for _, k := range keys {
-				if v, ok := b.Daily[k]; ok {
-					paired = append(paired, a.Daily[k]/v)
+				c := daily[k]
+				if strings.HasSuffix(k, "|"+strconv.Itoa(hour)) && supported(c) {
+					v := thinkingMedian(c.ratios)
+					band.Daily[strings.Split(k, "|")[0]] = v
+					band.N += len(c.ratios)
+					values = append(values, v)
 				}
 			}
-			g.Comparison.Days = len(paired)
-			g.Comparison.Ratio, g.Comparison.Low, g.Comparison.High = thinkingBootstrap(paired, 5123)
+			band.Days = len(values)
+			band.Ratio, band.Low, band.High = thinkingBootstrap(values, uint32(800+hour))
+			g.Bands = append(g.Bands, band)
 		}
+		a, b := g.Bands[o.HourA/3], g.Bands[o.HourB/3]
+		paired := []float64{}
+		for _, k := range slices.Sorted(maps.Keys(a.Daily)) {
+			if v, ok := b.Daily[k]; ok {
+				paired = append(paired, a.Daily[k]/v)
+			}
+		}
+		g.Comparison.Days = len(paired)
+		g.Comparison.Ratio, g.Comparison.Low, g.Comparison.High = thinkingBootstrap(paired, 5123)
 		out.Groups = append(out.Groups, g)
 	}
-	sort.Slice(out.Groups, func(i, j int) bool {
-		a, b := out.Groups[i], out.Groups[j]
-		if o.GroupBy == "effort" || o.GroupBy == "model_effort" {
-			if a.Model != b.Model {
-				return a.Model < b.Model
-			}
-			if thinkingEffortOrder(a.Effort) != thinkingEffortOrder(b.Effort) {
-				return thinkingEffortOrder(a.Effort) < thinkingEffortOrder(b.Effort)
-			}
-			return a.Label < b.Label
-		}
-		var av, bv *float64
-		switch o.Sort {
-		case "volume":
-			x, y := float64(a.Stats.N), float64(b.Stats.N)
-			av, bv = &x, &y
-		case "p95":
-			av, bv = a.Stats.P95, b.Stats.P95
-		default:
-			av, bv = a.Stats.Median, b.Stats.Median
-		}
-		if av == nil {
-			return bv == nil && a.Label < b.Label
-		}
-		if bv == nil {
-			return true
-		}
-		if *av == *bv {
-			return a.Label < b.Label
-		}
-		if o.Direction == "asc" {
-			return *av < *bv
-		}
-		return *av > *bv
-	})
+	sort.Slice(out.Groups, func(i, j int) bool { return out.Groups[i].Key < out.Groups[j].Key })
 	return out, nil
 }
 func (s *Server) handleThinking(w http.ResponseWriter, r *http.Request) {
@@ -886,7 +666,18 @@ func (s *Server) handleThinking(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	r = r.WithContext(ctx)
-	o, err := readThinkingOptions(r.URL.Query(), time.Now())
+	// now (milliseconds) is the clock a rolling or Today Range ends at, so
+	// the page can end it where its query-v3 read ends (loadThinkingData).
+	now := time.Now()
+	if value := r.URL.Query().Get("now"); value != "" {
+		ms, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || ms <= 0 {
+			writeError(w, fmt.Errorf("invalid now"), 400)
+			return
+		}
+		now = time.UnixMilli(ms)
+	}
+	o, err := readThinkingOptions(r.URL.Query(), now)
 	if err != nil {
 		writeError(w, err, 400)
 		return
@@ -950,18 +741,9 @@ func (s *Server) handleThinking(w http.ResponseWriter, r *http.Request) {
 	var sections sync.WaitGroup
 	var compactions []thinkingCompaction
 	var traces []thinkingTrace
-	var coverage, agents thinkingResponse
 	if o.Overview {
-		cover := o
-		cover.GroupBy = "model"
-		cover.Minimum = 0
-		cover.View = "histogram"
-		agent := cover
-		agent.GroupBy = "harness"
 		sections.Go(func() { compactions = thinkingCompactions(pairRecords) })
 		sections.Go(func() { traces = thinkingTraces(records) })
-		sections.Go(func() { coverage, _ = aggregateThinking(r.Context(), records, cover) })
-		sections.Go(func() { agents, _ = aggregateThinking(r.Context(), records, agent) })
 	}
 	value, err := aggregateThinking(r.Context(), records, o)
 	sections.Wait()
@@ -982,8 +764,6 @@ func (s *Server) handleThinking(w http.ResponseWriter, r *http.Request) {
 			value.Compactions = append(value.Compactions, event)
 		}
 		value.Traces = traces
-		value.Coverage = coverage.Groups
-		value.AgentCoverage = agents.Groups
 	}
 	mark("aggregate")
 	if o.Evidence {
@@ -996,25 +776,6 @@ func (s *Server) handleThinking(w http.ResponseWriter, r *http.Request) {
 	if o.Evidence {
 		mark("validation")
 	}
-	metadata, err := s.Catalog.thinkingOptionsList(r.Context())
-	if err != nil {
-		writeError(w, err, 500)
-		return
-	}
-	value.Models = metadata.Models
-	value.Efforts = metadata.Efforts
-	mark("options")
 	w.Header().Set("Server-Timing", strings.Join(timings, ", "))
 	writeJSON(w, value, 200)
-}
-
-func sortThinkingOptions(v *thinkingOptionsList) {
-	sort.Strings(v.Models)
-	sort.Slice(v.Efforts, func(i, j int) bool {
-		a, b := thinkingEffortOrder(v.Efforts[i]), thinkingEffortOrder(v.Efforts[j])
-		if a != b {
-			return a < b
-		}
-		return v.Efforts[i] < v.Efforts[j]
-	})
 }

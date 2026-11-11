@@ -44,17 +44,18 @@ export type RequestParams = Record<string, string>;
 const withParams = (path: string, params?: RequestParams) => params && Object.keys(params).length ? `${path}?${new URLSearchParams(params)}` : path;
 
 // postMetrics runs clauses over dataset's rows matching where.
-export async function postMetrics(dataset: string, schema: FieldSchema<any>, where: WhereTerm[], clauses: AggregationClause[], signal?: AbortSignal, params?: RequestParams): Promise<MetricResult[]> {
-  return postQueryStateMetrics(dataset, schema, { ...EMPTY_QUERY, where, aggregations: clauses }, signal, params);
+export async function postMetrics(dataset: string, schema: FieldSchema<any>, where: WhereTerm[], clauses: AggregationClause[], signal?: AbortSignal, params?: RequestParams, now?: number): Promise<MetricResult[]> {
+  return postQueryStateMetrics(dataset, schema, { ...EMPTY_QUERY, where, aggregations: clauses }, signal, params, now);
 }
 
-// Metrics can reduce source rows or the result of a grouping stage.
-export async function postQueryStateMetrics(dataset: string, schema: FieldSchema<any>, query: QueryState, signal?: AbortSignal, params?: RequestParams): Promise<MetricResult[]> {
+// Metrics can reduce source rows or the result of a grouping stage. now, when
+// given, is the request's clock (relative bounds such as "-7d" end there).
+export async function postQueryStateMetrics(dataset: string, schema: FieldSchema<any>, query: QueryState, signal?: AbortSignal, params?: RequestParams, now?: number): Promise<MetricResult[]> {
   let handshake: { queryCapabilities?: QueryCapabilitiesV3; computedExecution?: ComputedExecution };
   try { handshake = await queryRequest<{ queryCapabilities?: QueryCapabilitiesV3; computedExecution?: ComputedExecution }>(`/api/query/${dataset}/capabilities`, { signal });
   } catch (error) { if (error instanceof QueryRequestError) throw new MetricRequestError(error.message, error.code === "resource_limit"); throw error; }
   if (handshake.queryCapabilities?.version !== 3) throw new MetricRequestError("This server does not support Query Table V3. Reload after updating the service.");
-  const request = toQueryRequestV3(query, sourceExecutionSchema(schema, handshake.computedExecution), handshake.queryCapabilities, handshake.computedExecution, { rows: false });
+  const request = toQueryRequestV3(query, sourceExecutionSchema(schema, handshake.computedExecution), handshake.queryCapabilities, handshake.computedExecution, { rows: false, ...now === undefined ? {} : { now } });
   request.hostState = query.hostState;
   return metricResults(await post<MetricResponse>(withParams(`/api/query/${dataset}/query-v3`, params), request, signal), query.aggregations ?? []);
 }

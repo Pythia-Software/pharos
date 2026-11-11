@@ -22,6 +22,41 @@ let frame = 0, navigation = "", landed = false, stayPut = false;
 const opened = new Set<string>();
 let marked = new Set<HTMLElement>();
 let status:HTMLElement|undefined,statusText:HTMLElement|undefined;
+// Keep the dismiss buttons outside target elements: targets can be buttons,
+// table rows or clipped containers, and must retain their original behavior.
+const dismissButtons = new Map<HTMLElement, HTMLButtonElement>();
+let dismissFrame = 0;
+function positionDismissButtons() {
+  dismissFrame = 0;
+  for (const [target, button] of dismissButtons) {
+    const rect = target.getBoundingClientRect();
+    let top = rect.top, right = rect.right, left = rect.left, bottom = rect.bottom;
+    for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent), clip = parent.getBoundingClientRect();
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, clip.left); right = Math.min(right, clip.right); }
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, clip.top); bottom = Math.min(bottom, clip.bottom); }
+    }
+    left = Math.max(left, 0); right = Math.min(right, innerWidth);
+    top = Math.max(top, 0); bottom = Math.min(bottom, innerHeight);
+    button.hidden = !visible(target) || right <= left || bottom <= top;
+    if (!button.hidden) { button.style.left = `${Math.max(left, right - button.offsetWidth)}px`; button.style.top = `${top}px`; }
+  }
+}
+function scheduleDismissPositions() { if (!dismissFrame) dismissFrame = requestAnimationFrame(positionDismissButtons); }
+function syncDismissButtons(targets: Set<HTMLElement>) {
+  for (const [target, button] of dismissButtons) if (!targets.has(target)) { button.remove(); dismissButtons.delete(target); }
+  for (const target of targets) if (!dismissButtons.has(target)) {
+    const button = document.createElement("button"); button.type = "button"; button.className = "pharos-attention-dismiss";
+    button.setAttribute("aria-label", "Clear highlights"); button.title = "Clear highlights"; button.textContent = "×";
+    button.onclick = clearAttention; dismissButtons.set(target, button);
+  }
+  // Native dialogs and popovers live above the page in the browser top layer.
+  for (const [target, button] of dismissButtons) {
+    const container = target.closest(":popover-open, dialog:modal") ?? document.body;
+    if (button.parentElement !== container) container.append(button);
+  }
+  scheduleDismissPositions();
+}
 const available = (element: HTMLElement) => element.isConnected && !element.closest("[hidden], [inert]") && (!element.closest(".view") || element.closest(".view")!.classList.contains("active"));
 const visible = (element: HTMLElement) => available(element) && element.getClientRects().length > 0;
 function currentAttention() {
@@ -94,6 +129,11 @@ function update() {
   }
   for(const element of marked) {if(!next.has(element))element.classList.remove("pharos-highlight","pharos-reveal");else {if(resolve(reveal)!==element)element.classList.remove("pharos-reveal");}}
   marked=next;
+  // Query Table owns native detail marks; the shared clear action hides those too.
+  const dismissTargets = new Set(next);
+  if (reveal.startsWith("detail:") && detailLanding.resolve(reveal))
+    for (const element of document.querySelectorAll<HTMLElement>(".qt-attention-target")) if (available(element)) dismissTargets.add(element);
+  syncDismissButtons(dismissTargets);
   if(highlights.length || reveal) {
     if(!status){status=document.createElement("aside");status.className="pharos-attention-status";status.setAttribute("aria-label","Linked highlights");statusText=document.createElement("span");statusText.setAttribute("role","status");const clear=document.createElement("button");clear.type="button";clear.textContent="Clear highlights";clear.onclick=clearAttention;status.append(statusText,clear);document.body.append(status);}
     const message=missing.length ? `Targets not available in this view yet: ${missing.join(", ")}` : "Linked highlights";
@@ -149,6 +189,8 @@ export function installViewAttention() {
   for (const event of ["pharos:uri-changed", "pharos:route", "popstate"]) window.addEventListener(event, closeMenu);
   for(const event of ["popstate","pharos:route","pharos:view"])window.addEventListener(event,()=>{navigation="";cancelDetailLanding();schedule();});
   window.addEventListener("pharos:uri-changed",schedule);
+  window.addEventListener("scroll", scheduleDismissPositions, true);
+  window.addEventListener("resize", scheduleDismissPositions);
   const observer=new MutationObserver(records=>{
     const attention=currentAttention();if(!attention.reveal&&!attention.highlights.length)return;
     if(records.some(record => attentionMutationMatters(record, marked))) schedule();

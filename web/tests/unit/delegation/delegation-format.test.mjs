@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 // delegation.tsx builds its date formatters when it loads, so the zone is set
 // first. Each test file runs in its own process.
 process.env.TZ = "America/Denver";
-const { addSessionColumns, sessionTimelineState, cellTitle, metricText, tableMetricText, tokenAttributionText, clampRange, formatted, localTime, timelineTickLabels, timelinePointerTime, timelineDragRange } = await import("../../../src/delegation");
+const { addSessionColumns, sessionTimelineState, cellTitle, metricText, tableMetricText, tokenAttributionText, clampRange, refreshedTimelineRange, formatted, localTime, timelineTickLabels, timelinePointerTime, timelineDragRange } = await import("../../../src/delegation");
+const { DelegationRequestError, DelegationSnapshotRecovery, snapshotChanged } = await import("../../../src/delegation-loading");
 const { readDelegationRoute, delegationRouteValues } = await import("../../../src/delegation-route");
 const { timelineSessionBranches } = await import("../../../src/timeline-label-model");
 
@@ -12,6 +13,39 @@ const start = Date.parse("2026-09-24T12:00:00Z"), winter = Date.parse("2026-01-2
 const metric = (value, quality = "observed") => ({ value, quality, known: value === null ? 0 : 1, total: 1 });
 const spec = (id, unit) => ({ id, label: id, unit, definition: `Definition for ${id}` });
 const session = (id, depth, child_count = 0) => ({ id, depth, child_count });
+
+test('snapshot recovery coalesces lane conflicts, stops repeated races and rearms after success', () => {
+  assert.equal(snapshotChanged(new DelegationRequestError('changed', 409, 'snapshot_changed')), true);
+  for (const error of [new Error('Archive changed; refresh the explorer.'), new DelegationRequestError('changed', 500, 'snapshot_changed'), new DelegationRequestError('changed', 409, 'other')]) {
+    assert.equal(snapshotChanged(error), false);
+  }
+  const recovery = new DelegationSnapshotRecovery();
+  recovery.loaded('a');
+  assert.equal(recovery.changed('a'), 'refresh');
+  assert.equal(recovery.changed('a'), 'ignore', 'the whole-window request shares the pending refresh');
+  recovery.succeeded('a'); // A late success cannot reset an in-flight recovery.
+  recovery.loaded('b');
+  assert.equal(recovery.changed('a'), 'ignore', 'an older lane cannot restart recovery');
+  assert.equal(recovery.changed('b'), 'refresh');
+  recovery.loaded('b');
+  assert.equal(recovery.changed('b'), 'exhausted', 'even an unchanged token has a bounded retry budget');
+  recovery.succeeded('a');
+  assert.equal(recovery.changed('b'), 'exhausted');
+  recovery.reset();
+  assert.equal(recovery.changed('b'), 'refresh', 'manual refresh rearms recovery');
+  recovery.loaded('c');
+  recovery.succeeded('c');
+  assert.equal(recovery.changed('c'), 'refresh');
+  recovery.loaded('d');
+  assert.equal(recovery.changed('d'), 'refresh', 'successful lanes replenish both retries');
+});
+
+test('an archive refresh preserves a zoom while a full timeline follows its updated bounds', () => {
+  assert.deepEqual(refreshedTimelineRange([20, 40], [0, 100], [0, 120]), [20, 40]);
+  assert.deepEqual(refreshedTimelineRange([0, 100], [0, 100], [0, 120]), [0, 120]);
+  assert.deepEqual(refreshedTimelineRange([20, 40], [0, 100], [30, 120]), [30, 50]);
+  assert.deepEqual(refreshedTimelineRange([20, 40], [0, 100], [25, 35]), [25, 35]);
+});
 
 
 test("new session columns join related metrics while preserving custom choices", () => {

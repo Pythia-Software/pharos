@@ -143,6 +143,61 @@ test('saved Parallel activity links open the native Timeline and retain the sele
  assert.equal(await copy.page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
 });
 
+test('Timeline recovers an archive change without losing its zoom, selection, disclosures or focus',{skip},async t=>{
+ const analysis=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const range=[analysis.start+10000,analysis.end-10000];
+ const disclosures={'timeline-key':true,'delegation-labels:s-root:session':true};
+ const params=new URLSearchParams({explorer:'timeline',delegation_start:String(range[0]),delegation_end:String(range[1]),delegation_session:'s-root',disclosures:JSON.stringify(disclosures)});
+ let revision=0,stableSnapshot=false;
+ const api={
+  'GET /api/work/:id/delegation':request=>{revision++;return {...defaultApi['GET /api/work/:id/delegation'](request),snapshot:stableSnapshot?'stable':`revision-${revision}`};},
+  'GET /api/work/:id/parallel':request=>({...defaultApi['GET /api/work/:id/parallel'](request),snapshot:request.query.get('snapshot')}),
+ };
+ const app=await open(t,{url:`/work/${workID}?${params}`,api,ready:'.lt-session-root'}),{page}=app;
+ await app.settled();
+ // Return real error responses without the browser's resource-error console
+ // noise, which the harness correctly rejects for ordinary requests.
+ await page.evaluate(full=>{
+  const original=window.fetch;
+  window.timelineConflicts=0;
+  window.timelineConflictWindow='all';
+  window.fetch=(input,options)=>{
+   const query=new URL(String(input),location.href).searchParams;
+   if(String(input).includes('/parallel?')&&window.timelineConflicts>0&&(window.timelineConflictWindow!=='whole'||query.get('start')===String(full[0])&&query.get('end')===String(full[1]))){
+    window.timelineConflicts--;
+    return Promise.resolve(new Response(JSON.stringify({code:'snapshot_changed',error:'Archive changed; refresh the explorer.'}),{status:409,headers:{'Content-Type':'application/json'}}));
+   }
+   return original(input,options);
+  };
+ },[analysis.start,analysis.end]);
+ const settings=()=>page.evaluate(()=>{const query=new URLSearchParams(location.search);return Object.fromEntries(['delegation_start','delegation_end','delegation_session','disclosures'].map(key=>[key,query.get(key)]));});
+ const end=page.getByRole('slider',{name:'Timeline window end',exact:true});
+ await end.focus();
+ const before=await settings(),loads=revision;
+ await page.evaluate(()=>{window.timelineConflicts=2;window.dispatchEvent(new Event('pharos:data-refresh'));});
+ await page.waitForFunction(()=>window.timelineConflicts===0);
+ await app.settled();
+ assert.equal(revision,loads+2,'one requested refresh and one recovery for both lane requests');
+ assert.deepEqual(await settings(),before);
+ assert.equal(await end.evaluate(element=>document.activeElement===element),true);
+ assert.equal(await page.getByRole('alert').count(),0);
+ await page.locator('.lt-session-root').first().waitFor();
+ // A race after the list was read can keep its token unchanged. A healthy
+ // visible window must not rearm retries of a failing whole-window read.
+ revision=0;stableSnapshot=true;
+ const stable=await settings();
+ await page.evaluate(()=>{window.timelineConflicts=100;window.timelineConflictWindow='whole';window.dispatchEvent(new Event('pharos:data-refresh'));});
+ await page.getByRole('button',{name:'Refresh analysis',exact:true}).waitFor();
+ await app.settled();
+ assert.ok(revision<=3,'continuous changes stop after the two recovery attempts');
+ assert.deepEqual(await settings(),stable);
+ await page.evaluate(()=>{window.timelineConflicts=0;});
+ await page.getByRole('button',{name:'Refresh analysis',exact:true}).click();
+ await app.settled();
+ assert.equal(await page.getByRole('alert').count(),0);
+ await page.locator('.lt-session-root').first().waitFor();
+});
+
 test('legacy delegation session IDs restore to canonical sessions once and keep unrelated state',{skip},async t=>{
  // s-legacy is an old row ID of s-child; s-split no longer names one session.
  const aliases={'s-legacy':'s-child','s-split':null};
@@ -931,6 +986,7 @@ test('semantic JSON-path reveal materializes exact details, reports missing path
  const app=await open(t,{url:fixture.route({...fixture.query,itemDetails:{modes:['expand']}},target),api:fixture.api,ready:'.qt-attention-target'}),{page}=app;
  await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
  const marker=page.locator('.qt-attention-target').filter({hasText:'needle 41'});await marker.first().waitFor();
+ await page.locator('.pharos-attention-dismiss:visible').first().waitFor();
  assert.equal(await page.evaluate(()=>document.activeElement===document.body),true);
  let scrolls=await page.evaluate(()=>{window.__attentionScrolls=0;const original=Element.prototype.scrollIntoView;Element.prototype.scrollIntoView=function(...args){window.__attentionScrolls++;return original.apply(this,args)};return window.__attentionScrolls});
  const refreshed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/query/mcp_calls/query-v3'&&response.request().postDataJSON()?.rows);
@@ -1106,13 +1162,28 @@ test('right-click and Escape clear linked highlights, with a saved shortcut pref
  const toggle=page.getByRole('switch',{name:'Escape clears highlights'});
  assert.equal(await toggle.getAttribute('aria-checked'),'true');
  await page.evaluate(()=>{
-  const target=document.createElement('p');target.id='attention-fixture';target.textContent='Attention fixture';document.querySelector('#optionalBehaviors').append(target);
+  const target=document.createElement('p');target.id='attention-fixture';target.textContent='Attention fixture';target.onclick=()=>{window.attentionFixtureClicked=true};document.querySelector('#optionalBehaviors').append(target);
  });
  const mark=async()=>{
   await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('reveal','section:attention-fixture');url.searchParams.append('highlight','page');history.replaceState(history.state,'',url);window.dispatchEvent(new Event('pharos:uri-changed'));});
   await page.waitForFunction(()=>document.querySelector('#attention-fixture')?.classList.contains('pharos-reveal'));
  };
  const cleared=async()=>page.waitForFunction(()=>!new URLSearchParams(location.search).has('highlight')&&!new URLSearchParams(location.search).has('reveal')&&!document.querySelector('.pharos-reveal,.pharos-highlight'));
+ await mark();
+ const dismiss=page.locator('.pharos-attention-dismiss').last();
+ await dismiss.waitFor({state:'visible'});
+ await page.waitForFunction(()=>{const target=document.querySelector('#attention-fixture').getBoundingClientRect(),button=[...document.querySelectorAll('.pharos-attention-dismiss')].at(-1).getBoundingClientRect();return Math.abs(button.top-target.top)<2&&Math.abs(button.right-target.right)<2});
+ await dismiss.click();await cleared();
+ assert.equal(await page.evaluate(()=>!!window.attentionFixtureClicked),false,'dismissing does not activate the highlighted content');
+ assert.equal(await page.locator('.pharos-attention-dismiss').count(),0);
+ await page.evaluate(()=>{
+  const dialog=document.createElement('dialog');dialog.id='attention-dismiss-dialog';dialog.innerHTML='<p id="attention-dialog-target">Dialog target</p>';document.body.append(dialog);dialog.showModal();
+  const url=new URL(location.href);url.searchParams.set('reveal','section:attention-dialog-target');history.replaceState(history.state,'',url);window.dispatchEvent(new Event('pharos:uri-changed'));
+ });
+ const dialogDismiss=page.locator('#attention-dismiss-dialog .pharos-attention-dismiss');
+ await dialogDismiss.waitFor({state:'visible'});await dialogDismiss.click();await cleared();
+ assert.equal(await page.locator('#attention-dismiss-dialog').evaluate(dialog=>dialog.open),true,'clearing a highlight leaves the dialog open');
+ await page.evaluate(()=>{document.querySelector('#attention-dismiss-dialog').close();document.querySelector('#attention-dismiss-dialog').remove()});
  await mark();
  await page.locator('#attention-fixture').click({button:'right'});
  await page.getByRole('button',{name:'Clear highlights',exact:true}).last().click();await cleared();
@@ -1566,9 +1637,10 @@ test('Thinking custom date editor follows the viewer zone and writes absolute da
  const state=JSON.parse(new URL(page.url()).searchParams.get('thinking'));
  assert.equal(state.from,'2026-10-20T06:00:00.000Z');assert.equal(state.to,'2026-10-22T06:00:00.000Z');
  assert.equal(state.timezone,'America/Denver');assert.equal(state.minimum,0);
- const calls=app.calls.filter(c=>c.path==='/api/thinking');
- assert.equal(calls.at(-1).query.get('from'),state.from);assert.equal(calls.at(-1).query.get('to'),state.to);
- assert.equal(calls.at(-1).query.get('timezone'),'America/Denver');assert.equal(calls.at(-1).query.get('minimum'),'0');
+ // The page reads model_requests through query-v3 with the Range and the viewer's zone.
+ const read=app.calls.filter(c=>c.path==='/api/query/model_requests/query-v3'&&c.body?.metrics?.some(m=>m.id==='retained')).at(-1);
+ assert.ok(JSON.stringify(read.body).includes(state.from)&&JSON.stringify(read.body).includes(state.to));
+ assert.equal(read.query.get('timezone'),'America/Denver');
  await range.selectOption('custom-times');await app.settled();
  assert.equal(await page.getByLabel('From date and time',{exact:true}).inputValue(),'2026-10-20T00:00');
  await page.getByLabel('From date and time',{exact:true}).fill('2026-10-21T12:30');await app.settled();
@@ -1831,6 +1903,7 @@ test('Data Guide terms and example restore and return focus',{skip},async t=>{
  await trigger.click();
  const guide=page.getByRole('dialog',{name:'Data Guide',exact:true});
  await guide.waitFor();
+ await page.waitForFunction(()=>document.getElementById('dataGuideToggle').getAttribute('aria-expanded')==='true');
  const appsBranch=guide.getByText('Apps & machines',{exact:true});
  await appsBranch.click();
  await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('nav_expanded'))?.['data-guide']?.apps===false);
@@ -1838,6 +1911,7 @@ test('Data Guide terms and example restore and return focus',{skip},async t=>{
  await page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='work_items');
  await page.reload();
  await guide.waitFor();
+ await page.waitForFunction(()=>document.getElementById('dataGuideToggle').getAttribute('aria-expanded')==='true');
  assert.equal(await appsBranch.evaluate(element=>element.closest('details').open),false,'shared guide menu expansion did not restore');
  assert.equal(await guide.getByRole('button',{name:'Work items',exact:true}).getAttribute('aria-current'),'page');
  await guide.getByRole('button',{name:'Conversations',exact:true}).click();
@@ -1883,6 +1957,7 @@ test('Data Guide terms and example restore and return focus',{skip},async t=>{
  await trigger.click();
  await page.keyboard.press('Escape');
  await page.waitForFunction(()=>!document.querySelector('.data-guide').open);
+ await page.waitForFunction(()=>document.getElementById('dataGuideToggle').getAttribute('aria-expanded')==='false');
  assert.equal(await trigger.evaluate(el=>document.activeElement===el),true);
 });
 

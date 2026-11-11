@@ -158,6 +158,17 @@ export function validateThinking(
     }
   return true;
 }
+// Hour buckets divide a day and day buckets count at most 1,000 days, as
+// Query Table's every does. Older links name others; read them as the
+// nearest supported one.
+export const thinkingHourChoices = [1, 2, 3, 4, 6, 8, 12, 24] as const;
+export const maxThinkingDays = 1000;
+export function supportedThinkingPeriod<T extends Pick<ThinkingState, "hours" | "days">>(state: T): T {
+  const hours = thinkingHourChoices.reduce((best, n) => Math.abs(n - state.hours) < Math.abs(best - state.hours) ? n : best, thinkingHourChoices[0]);
+  const days = Math.max(1, Math.min(maxThinkingDays, Math.round(state.days)));
+  return hours === state.hours && days === state.days ? state : { ...state, hours, days };
+}
+
 export function initialThinking(params: URLSearchParams): ThinkingState {
   let state = {
     ...defaultThinking,
@@ -214,11 +225,11 @@ export function initialThinking(params: URLSearchParams): ThinkingState {
   }
   // Keep old links readable, but these retired controls must not leave hidden
   // sample filters or a pinned zone behind. Absolute date bounds stay intact.
-  return {
+  return supportedThinkingPeriod({
     ...state,
     minimum: 0,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-  };
+  });
 }
 export function thinkingRequest(
   state: ThinkingState,
