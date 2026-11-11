@@ -47,6 +47,15 @@ Pharos answers the time-of-day cells from its own endpoint for now, from the
 same rows it already loads to fit workload estimates for those cells, and
 leaves the agent depth breakdown on query-v3 at 17 s.
 
+What is measured and what is inferred: the times above are measured. That
+the number key is what keeps the agent depth request off the shared read is
+read from `rows_metrics.go` (`grouping %s`), not confirmed by a run; the
+field's binding is `r."agent_depth"` with `expressionNumeric`, which may meet
+another check. The derived-rows request has not been timed as a single read,
+so how much (3) saves is unknown; its population is the stored rows of
+conversations not awaiting refresh, `UNION ALL` the awaiting ones derived
+again.
+
 ## Request
 
 Any subset helps; each is independent.
