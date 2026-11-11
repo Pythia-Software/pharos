@@ -16,8 +16,11 @@ import (
 
 // sourcePart is one part of a source in the version an adapter read.
 type sourcePart struct {
-	item string // original path, or sqlite:<original path>:sessions:<id>
-	size int64  // bytes, or a session's message count
+	// evidenceObservation accepts only a source-time watermark for an already
+	// parsed immutable payload; it never promotes a different payload identity.
+	evidenceObservation bool
+	item                string // original path, or sqlite:<original path>:sessions:<id>
+	size                int64  // bytes, or a session's message count
 	// Measurement metadata only; empty means bytes. SQLite dependencies can
 	// be files or session aggregates, so their paths cannot identify the unit.
 	sizeUnit string

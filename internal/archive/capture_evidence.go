@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 )
 
@@ -70,4 +71,45 @@ func (c *Catalog) acceptUnchangedEvidence(ctx context.Context, adapter Adapter, 
 		return false, err
 	}
 	return true, nil
+}
+
+// A repeated immutable payload can advance source ordering without reparsing
+// it. Match the currently associated identity and version in the transaction;
+// another payload/writer's authority must never be advanced by this receipt.
+func (c *Catalog) acceptRepeatedObservation(ctx context.Context, adapter Adapter, parts []sourcePart, tracker *partTracker) error {
+	host := sourceHost(adapter).ID
+	revision := ""
+	if view := captureViewOf(adapter); view != nil {
+		revision = view.evidenceRevision
+	}
+	pending := append([]sourcePart{}, tracker.pending...)
+	return c.writeTransaction(ctx, "accept repeated source observation", func(tx *sql.Tx) error {
+		tracker.pending = append(tracker.pending[:0], pending...)
+		for _, part := range parts {
+			if !part.evidenceObservation || part.version <= 0 {
+				continue
+			}
+			rows, err := queryMaps(tx, `SELECT workspace_id,conversation_id,origin,version FROM copy_evidence WHERE host_id=? AND identity=? AND version<?`, host, part.signal, part.version)
+			if err != nil {
+				return err
+			}
+			for _, row := range rows {
+				result, err := tx.Exec(`UPDATE copy_versions SET version=?,written_at=? WHERE host_id=? AND workspace_id=? AND conversation_id=? AND origin=? AND version=?`, part.version, now(), host, row["workspace_id"], row["conversation_id"], row["origin"], row["version"])
+				if err != nil {
+					return err
+				}
+				changed, err := result.RowsAffected()
+				if err != nil {
+					return err
+				}
+				if changed == 0 {
+					continue
+				}
+				if _, err := tx.Exec(`UPDATE copy_evidence SET version=?,revision=CASE WHEN ?='' THEN revision ELSE ? END WHERE host_id=? AND workspace_id=? AND conversation_id=? AND origin=? AND identity=? AND version=?`, part.version, revision, revision, host, row["workspace_id"], row["conversation_id"], row["origin"], part.signal, row["version"]); err != nil {
+					return err
+				}
+			}
+		}
+		return tracker.record(tx, parts)
+	})
 }

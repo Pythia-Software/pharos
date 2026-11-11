@@ -24,8 +24,9 @@ func (units *claudeSourceUnits) groupContent(group claudeSupplementUnit) string 
 	return hashBytes([]byte(jsonText(members)))
 }
 
-func (units *claudeSourceUnits) observeGroups(root string, observed int64) (map[string]claudeUnitHead, error) {
-	headWrites := map[string]claudeUnitHead{}
+// Part receipts describe membership only. Continuity is assigned to the
+// complete snapshot group after every transport part has been collected.
+func (units *claudeSourceUnits) describeGroups(observed int64) {
 	membership := map[string][]int{}
 	for index, member := range units.Members {
 		if key := claudeSupplementGroup(member.Name); key != "" {
@@ -39,50 +40,148 @@ func (units *claudeSourceUnits) observeGroups(root string, observed int64) (map[
 	sort.Strings(keys)
 	for _, key := range keys {
 		group := claudeSupplementUnit{Key: key, Members: membership[key], Observed: observed}
-		content := units.groupContent(group)
-		name, err := claudeOwnedPath(root, ".unit-heads/"+hashBytes([]byte("supplement:"+key))+".json")
-		if err != nil {
-			return nil, err
-		}
-		var previous claudeUnitHead
-		if data, err := os.ReadFile(name); err == nil {
-			if json.Unmarshal(data, &previous) != nil {
-				return nil, errors.New("invalid Claude supplementary observation lookup")
-			}
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
-		group.Occurrence = hashBytes([]byte(jsonText([]any{"supplement", key, content, observed})))
-		if previous.Content == content {
-			group.Occurrence, group.Observed = previous.Occurrence, previous.FirstObserved
-		}
+		group.Occurrence = hashBytes([]byte(jsonText([]any{"supplement-part", key, units.groupContent(group), observed})))
 		units.Groups = append(units.Groups, group)
-		if observed >= previous.Observed {
-			headWrites[name] = claudeUnitHead{Content: content, Occurrence: group.Occurrence, Observed: observed, FirstObserved: group.Observed}
-		}
 	}
-	return headWrites, nil
 }
 
-func (units *claudeSourceUnits) publishGroupHeads(root string, observed int64) error {
-	for _, group := range units.Groups {
-		name, err := claudeOwnedPath(root, ".unit-heads/"+hashBytes([]byte("supplement:"+group.Key))+".json")
+type claudeSupplementObservation struct {
+	Key        string `json:"key"`
+	Content    string `json:"content"`
+	Occurrence string `json:"observation"`
+	Observed   int64  `json:"observed_ns,string"`
+}
+
+func claudeSupplementContent(reads []claudeSupplementRead) (string, error) {
+	members := map[string]claudeSourceMember{}
+	for _, read := range reads {
+		for _, index := range read.group.Members {
+			member := read.input.units.Members[index]
+			if previous, ok := members[member.Name]; ok && (previous.SHA256 != member.SHA256 || previous.Size != member.Size) {
+				return "", errors.New("Claude export has conflicting supplementary copies")
+			}
+			members[member.Name] = member
+		}
+	}
+	names := []string{}
+	for name := range members {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	values := []any{}
+	for _, name := range names {
+		member := members[name]
+		values = append(values, []any{name, member.SHA256, member.Size})
+	}
+	return hashBytes([]byte(jsonText(values))), nil
+}
+
+func claudeSupplementHeadPath(root, key string) (string, error) {
+	return claudeOwnedPath(root, ".unit-heads/"+hashBytes([]byte("supplement-group:"+key))+".json")
+}
+
+func prepareClaudeSupplementObservations(config Config, job *claudeImportJob) error {
+	root := claudeImportRoot(config, job.Name)
+	groups := map[string][]claudeSupplementRead{}
+	complete := job.State == "collected"
+	for _, part := range job.Parts {
+		if part.State == claudePartExcluded || part.Manifest {
+			continue
+		}
+		if part.State != "collected" || part.Units == "" || part.UnitsError != "" {
+			complete = false
+			continue
+		}
+		units, err := readClaudeSourceUnits(sourceFiles{}, filepath.Join(claudeImportJobDir(config, job.Name, job.ID), part.Units), part.SHA256, part.UnitsSHA256)
 		if err != nil {
 			return err
 		}
-		var previous claudeUnitHead
+		observed := int64(0)
+		if at, ok := parseTime(job.ExportedAt); ok {
+			observed = at.UnixNano()
+		} else if at, ok := parseTime(part.SourceModified); ok {
+			observed = at.UnixNano()
+		}
+		for _, group := range units.Groups {
+			groups[group.Key] = append(groups[group.Key], claudeSupplementRead{input: claudeExportInput{units: units, version: observed}, group: group})
+		}
+	}
+	previous := map[string]claudeSupplementObservation{}
+	for _, group := range job.Groups {
+		previous[group.Key] = group
+	}
+	job.Groups = nil
+	keys := []string{}
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		reads := groups[key]
+		content, err := claudeSupplementContent(reads)
+		if err != nil {
+			return err
+		}
+		observed := int64(0)
+		for _, read := range reads {
+			observed = max(observed, read.input.version, read.group.Observed)
+		}
+		group := claudeSupplementObservation{Key: key, Content: content, Observed: observed, Occurrence: hashBytes([]byte(jsonText([]any{"supplement-group", key, content, observed, job.ID})))}
+		if prior, ok := previous[key]; ok && prior.Content == content {
+			group.Occurrence = prior.Occurrence
+		} else if complete {
+			name, err := claudeSupplementHeadPath(root, key)
+			if err != nil {
+				return err
+			}
+			var head claudeUnitHead
+			if data, err := os.ReadFile(name); err == nil {
+				if json.Unmarshal(data, &head) != nil || !validRecordHash(head.Content) || !validRecordHash(head.Occurrence) {
+					return errors.New("invalid Claude supplementary observation lookup")
+				}
+				if head.Content == content {
+					group.Occurrence = head.Occurrence
+				}
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+		}
+		job.Groups = append(job.Groups, group)
+	}
+	return nil
+}
+
+func publishClaudeSupplementHeads(config Config, job *claudeImportJob) error {
+	if job.State != "collected" {
+		return nil
+	}
+	for _, part := range job.Parts {
+		if part.State != claudePartExcluded && !part.Manifest && (part.State != "collected" || part.Units == "" || part.UnitsError != "") {
+			return nil
+		}
+	}
+	root := claudeImportRoot(config, job.Name)
+	for _, group := range job.Groups {
+		name, err := claudeSupplementHeadPath(root, group.Key)
+		if err != nil {
+			return err
+		}
+		var prior claudeUnitHead
 		if data, err := os.ReadFile(name); err == nil {
-			if json.Unmarshal(data, &previous) != nil {
+			if json.Unmarshal(data, &prior) != nil {
 				return errors.New("invalid Claude supplementary observation lookup")
 			}
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		if previous.Observed > observed {
+		if prior.Observed > group.Observed {
 			continue
 		}
-		head := claudeUnitHead{Content: units.groupContent(group), Occurrence: group.Occurrence, Observed: observed, FirstObserved: group.Observed}
-		if jsonText(head) == jsonText(previous) {
+		head := claudeUnitHead{Content: group.Content, Occurrence: group.Occurrence, Observed: group.Observed, FirstObserved: group.Observed}
+		if prior.Occurrence == group.Occurrence {
+			head.FirstObserved = prior.FirstObserved
+		}
+		if jsonText(head) == jsonText(prior) {
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(name), 0700); err != nil {

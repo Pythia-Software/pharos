@@ -552,10 +552,14 @@ func retainClaudeSourceUnits(ctx context.Context, config Config, job *claudeImpo
 			unit.Observed = observed
 			unit.Occurrence = hashBytes([]byte(jsonText([]any{unit.ID, content, observed})))
 			if head.Content == content {
-				unit.Occurrence, unit.Observed = head.Occurrence, head.FirstObserved
+				unit.Occurrence = head.Occurrence
 			}
 			if observed >= head.Observed {
-				heads[headPath] = claudeUnitHead{Content: content, Occurrence: unit.Occurrence, Observed: observed, FirstObserved: unit.Observed}
+				first := observed
+				if unit.Occurrence == head.Occurrence {
+					first = head.FirstObserved
+				}
+				heads[headPath] = claudeUnitHead{Content: content, Occurrence: unit.Occurrence, Observed: observed, FirstObserved: first}
 			}
 			units.Conversations = append(units.Conversations, unit)
 		}
@@ -630,13 +634,7 @@ func retainClaudeSourceUnits(ctx context.Context, config Config, job *claudeImpo
 		return err
 	}
 	units.Objects = w.refs
-	groupHeads, err := units.observeGroups(root, observed)
-	if err != nil {
-		return err
-	}
-	for name, head := range groupHeads {
-		heads[name] = head
-	}
+	units.describeGroups(observed)
 	content := []byte(jsonText(units))
 	if int64(len(content)) > claudeExportLimits.Manifest {
 		return errors.New("Claude source-unit receipt exceeds metadata limit")
@@ -698,6 +696,9 @@ func publishClaudeUnitHeads(root string, units *claudeSourceUnits, observed int6
 			continue
 		}
 		head := claudeUnitHead{Content: hashBytes([]byte(jsonText([]any{unit.Envelope, unit.Messages}))), Occurrence: unit.Occurrence, Observed: observed, FirstObserved: unit.Observed}
+		if previous.Occurrence == unit.Occurrence {
+			head.FirstObserved = previous.FirstObserved
+		}
 		if jsonText(head) == jsonText(previous) {
 			continue
 		}
@@ -708,7 +709,7 @@ func publishClaudeUnitHeads(root string, units *claudeSourceUnits, observed int6
 			return err
 		}
 	}
-	return units.publishGroupHeads(root, observed)
+	return nil
 }
 
 func readClaudeSourceUnits(files sourceFiles, name, sourceHash, receiptHash string) (*claudeSourceUnits, error) {

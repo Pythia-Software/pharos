@@ -63,13 +63,32 @@ branch selection produce new source observations.
 
 ## Incremental parsing
 
-Claude extractor `claude-ai-v5` implements the existing partial planner and durable
+Claude extractor `claude-ai-v6` implements the existing partial planner and durable
 `source_item_states` protocol. Only unseen conversation observations and changed
 supplementary groups are read and parsed. Unchanged imports after reopening the
 catalog perform zero source-object reads. A message extension stores new message
 objects and an updated envelope; parsing still assembles the complete changed
 conversation. Supplementary groups can span transport parts and are checkpointed
-only after their full publication succeeds.
+only after their full publication succeeds. Group continuity belongs to the
+complete snapshot membership (member names, sizes and content digests), rather
+than any individual ZIP part; rearranging identical members across parts reuses
+the same checkpoint. Complete group observations are published in the sanitized
+inventory/job before their continuity heads are updated.
+
+Payload checkpoints and source-time watermarks are separate. An unchanged repeat
+advances the currently associated evidence's source time transactionally with its
+metadata checkpoint, without parsing messages or replacing a different payload's
+identity. The planner retains the latest time across repeated receipts, so a
+delayed conflicting export cannot roll it back. This also works after restart
+and replay from captures. Older receipts produced before this distinction use
+their inventory's source time; the extractor upgrade rebuilds their checkpoints.
+
+Native fallback snapshots lack those per-record source proofs. When any native
+input changes, all its snapshot's native conversation shards are validated,
+including unchanged siblings; supplementary members are merged with any retained
+members into complete records before publication. That conservative fallback can
+reread unchanged native payloads on a change, while transformed inputs retain
+per-conversation/group payload skipping.
 
 Changed inputs are validated before any of that pass's catalog records are
 published. A cancellation midway through a native multi-record input never marks
@@ -187,7 +206,7 @@ Those reads count object/chunk accesses, including preflight; they are not
 physical disk-read counts or bytes. The catalog had 4,018 indexed messages
 (including block/metadata records). Final unique pack bytes were **4,581,969**;
 metadata including acquisition lookups, receipts, plans/proofs and run progress
-was **595,932 bytes**. These are file lengths, not filesystem allocation: small
+was **595,921 bytes**. These are file lengths, not filesystem allocation: small
 lookup files, directory blocks and temporary files can occupy additional space;
 peak allocation was not measured. Three managed native inputs totaled **5,657,798 logical
 bytes** (all-time 4,091,378; each window 783,210). Applying the plan removed those
@@ -205,4 +224,6 @@ but retain provenance metadata and native inputs until another explicit apply.
 Tests cover synthetic overlap, partial-only behavior through native merge tests,
 repackaging, A → B → A, chunk reuse, cancellation, corrupt dependencies,
 incomplete acquisitions, active library readers, link fallback, interruption,
-legacy preparation, compatibility refusal and offline replay.
+legacy preparation, compatibility refusal, latest-time repeats followed by delayed
+conflicts, validation against unchanged shards, multipart repackaging, mixed
+native/retired groups and offline replay.

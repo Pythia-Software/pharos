@@ -66,20 +66,21 @@ type claudeImportPart struct {
 }
 
 type claudeImportJob struct {
-	Error        string             `json:"error,omitempty"`
-	Version      int                `json:"version"`
-	ID           string             `json:"id"`
-	Name         string             `json:"name"`
-	State        string             `json:"state"`
-	CreatedAt    string             `json:"created_at"`
-	ExportedAt   string             `json:"exported_at,omitempty"`
-	UpdatedAt    string             `json:"updated_at"`
-	ManifestHash string             `json:"manifest_sha256,omitempty"`
-	Completeness string             `json:"completeness"`
-	Directories  []string           `json:"directories"`
-	Parts        []claudeImportPart `json:"parts"`
-	Warnings     []string           `json:"warnings"`
-	Source       *ProbeAcceptResult `json:"source,omitempty"`
+	Groups       []claudeSupplementObservation `json:"supplement_groups,omitempty"`
+	Error        string                        `json:"error,omitempty"`
+	Version      int                           `json:"version"`
+	ID           string                        `json:"id"`
+	Name         string                        `json:"name"`
+	State        string                        `json:"state"`
+	CreatedAt    string                        `json:"created_at"`
+	ExportedAt   string                        `json:"exported_at,omitempty"`
+	UpdatedAt    string                        `json:"updated_at"`
+	ManifestHash string                        `json:"manifest_sha256,omitempty"`
+	Completeness string                        `json:"completeness"`
+	Directories  []string                      `json:"directories"`
+	Parts        []claudeImportPart            `json:"parts"`
+	Warnings     []string                      `json:"warnings"`
+	Source       *ProbeAcceptResult            `json:"source,omitempty"`
 }
 
 type claudeImportRequest struct {
@@ -584,12 +585,17 @@ func collectClaudeExport(ctx context.Context, config Config, request claudeImpor
 		}
 		if part.State == "collected" {
 			if err := verifyClaudeStoredPart(ctx, dir, *part); err == nil {
+				priorUnits, priorHash := part.Units, part.UnitsSHA256
 				part.UnitsError = ""
 				if err := retainClaudeSourceUnits(ctx, config, job, part); err != nil {
 					part.UnitsError = err.Error()
 				}
-				if err := publishClaudeInventory(config, job); err != nil {
-					return job, err
+				// A verified retry must not temporarily erase/rewrite completed group
+				// metadata, changing the source fingerprint despite identical evidence.
+				if priorUnits != part.Units || priorHash != part.UnitsSHA256 {
+					if err := publishClaudeInventory(config, job); err != nil {
+						return job, err
+					}
 				}
 				if err := saveClaudeJob(config, job); err != nil {
 					return job, err
@@ -634,6 +640,9 @@ func collectClaudeExport(ctx context.Context, config Config, request claudeImpor
 			job.State = "incomplete"
 		}
 	}
+	if err := prepareClaudeSupplementObservations(config, job); err != nil {
+		return job, err
+	}
 	if err := publishClaudeInventory(config, job); err != nil {
 		return job, err
 	}
@@ -649,6 +658,9 @@ func collectClaudeExport(ctx context.Context, config Config, request claudeImpor
 		job.Source = &result
 	}
 	if err := saveClaudeJob(config, job); err != nil {
+		return job, err
+	}
+	if err := publishClaudeSupplementHeads(config, job); err != nil {
 		return job, err
 	}
 	return job, nil
@@ -1040,7 +1052,14 @@ func withoutClaudeAccountRecords(ctx context.Context, source *os.File, size int6
 }
 
 func publishClaudeInventory(config Config, job *claudeImportJob) error {
-	inventory := claudeExportInventory{Format: claudeInventoryFormat, CreatedAt: job.ExportedAt, Files: []claudeExportAsset{}, Missing: []string{}}
+	groups := job.Groups
+	// Intermediate collection receipts can have a different available closure
+	// than the last completed observation. Publish complete metadata only once
+	// its membership has been recomputed at collection completion.
+	if job.State != "collected" {
+		groups = nil
+	}
+	inventory := claudeExportInventory{Groups: groups, Format: claudeInventoryFormat, CreatedAt: job.ExportedAt, Files: []claudeExportAsset{}, Missing: []string{}}
 	if job.Version == 2 {
 		inventory.Format = claudeObjectInventoryFormat
 	}

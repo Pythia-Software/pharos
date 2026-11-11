@@ -46,24 +46,26 @@ type claudeExportAsset struct {
 }
 
 type claudeExportInventory struct {
-	Format    string              `json:"format"`
-	CreatedAt string              `json:"created_at,omitempty"`
-	Account   string              `json:"account_uuid,omitempty"`
-	Files     []claudeExportAsset `json:"files"`
-	Missing   []string            `json:"missing"`
+	Groups    []claudeSupplementObservation `json:"supplement_groups,omitempty"`
+	Format    string                        `json:"format"`
+	CreatedAt string                        `json:"created_at,omitempty"`
+	Account   string                        `json:"account_uuid,omitempty"`
+	Files     []claudeExportAsset           `json:"files"`
+	Missing   []string                      `json:"missing"`
 }
 
 type claudeExportInput struct {
-	path            string
-	member          string // Known supplementary member, for an unzipped export.
-	conversations   bool
-	version         int64
-	snapshot        string
-	sha256          string
-	units           *claudeSourceUnits
-	objectRoot      string
-	retired         bool
-	objectInventory bool
+	groupObservations []claudeSupplementObservation
+	path              string
+	member            string // Known supplementary member, for an unzipped export.
+	conversations     bool
+	version           int64
+	snapshot          string
+	sha256            string
+	units             *claudeSourceUnits
+	objectRoot        string
+	retired           bool
+	objectInventory   bool
 }
 
 // Export paths use slash semantics, independently of the indexing host. This
@@ -235,7 +237,7 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 					partVersion = at.UnixNano()
 				}
 			}
-			input := claudeExportInput{path: local, conversations: asset.Conversations, version: partVersion, snapshot: name, sha256: asset.SHA256, retired: asset.Retired}
+			input := claudeExportInput{groupObservations: inventory.Groups, path: local, conversations: asset.Conversations, version: partVersion, snapshot: name, sha256: asset.SHA256, retired: asset.Retired}
 			// A standalone copied snapshot still replays its authoritative native
 			// part without requiring the parent collection's optional object pool.
 			useUnits := asset.Units != ""
