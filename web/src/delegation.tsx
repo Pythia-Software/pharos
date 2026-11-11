@@ -24,7 +24,7 @@ import {timelineSessionBranches} from "./timeline-label-model";
 import {sessionOutsideWindow,launchAttemptNote,laneCoverage,segmentPosition,type ExecutionSegment,type LaunchAttempt,type SessionAncestry} from "./delegation-ancestry";
 import {delegationAliasRequests,normalizeDelegationView,readerSelection,unresolvedAliases,type DelegationAliases} from "./delegation-aliases";
 import {coverageSummary,eventsPendingNote,occurrenceNote,omittedSegmentsNote,parentNote,qualityMark,sessionCountText,timelineEventsPending,timelineEventsPendingNote,type ExecutionCoverage,type ParentCertainty} from "./delegation-coverage";
-import {TimelineLegend,timelineLegendWindow} from "./timeline-legend";
+import {TimelineLegend,timelineLegendWindow,timelineToolCategories} from "./timeline-legend";
 import {updateTimelineVisibility,type TimelineVisibility} from "./timeline-visibility";
 import {ribbonSourceURL,type RibbonObservation} from "./label-session-ribbon-model";
 
@@ -188,17 +188,7 @@ type Props = {
 };
 type Tint = "all" | "off" | "sort";
 type Range = [number, number];
-const categories: Record<string, string> = {
-  read: "Read / search",
-  write: "Edit / write",
-  run: "Run / build / test",
-  git: "Git",
-  network: "Network",
-  delegate: "Delegate / message",
-  wait: "Wait call",
-  poll: "Poll / delay",
-  other: "Other tool",
-};
+const categories = timelineToolCategories;
 const defaultColumns = [
   "tokens",
   "cost",

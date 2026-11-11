@@ -1372,10 +1372,23 @@ test("conversation navigation focuses the requested reader unless focus moved wh
 });
 
 for (const merged of [false, true]) test(`transcript navigators follow layout changes in ${merged ? "merged" : "split"} workspaces`, { skip }, async t => {
+  let sourceOnly = false;
   const api = merged ? {
     "GET /api/work/:id": call => {
       const work = defaultApi["GET /api/work/:id"](call);
-      return { ...work, conversations: work.conversations.slice(0, 1), attempts: [{ attempt_no: 1, result: "Retained archive evidence\n".repeat(40) }] };
+      return { ...work, title:sourceOnly ? 'Financial outlook' : work.title, source_kind: sourceOnly ? 'chatgpt' : 'claude', repository_name: sourceOnly ? null : work.repository_name, location: sourceOnly ? null : work.location, branch: sourceOnly ? null : work.branch,
+        conversations: sourceOnly ? [{...work.conversations[0],provider:'chatgpt',model:null,first_prompt:'Summarize the outlook'}] : work.conversations.slice(0, 1), attempts: sourceOnly ? [] : [{ attempt_no: 1, result: "Retained archive evidence\n".repeat(40) }],
+        handoffs: sourceOnly ? [] : [{ candidate_id:'candidate-1', custody_holder:'agent', custody_version:'1' }],
+        identity_links: sourceOnly ? [] : [{ related_provider:'codex', relationship:'related', confidence:'high' }],
+        receipt: sourceOnly ? null : {outcome:'complete',package_bytes:1024,package_hash:'test-hash'}, preservation_completeness: sourceOnly ? 'partial' : 'complete' };
+    },
+    "GET /api/work/:id/conversations/:conversation": call => {
+      const conversation=defaultApi["GET /api/work/:id/conversations/:conversation"](call);
+      if(!sourceOnly)return conversation;
+      return {...conversation,provider:'chatgpt',model:null,title:'Financial outlook',messages:[
+        {id:'chat-prompt',native_id:'chat-prompt',kind:'message',role:'user',text:'Summarize the outlook',created_at:'2026-11-10T18:00:00Z'},
+        {id:'chat-reply',native_id:'chat-reply',kind:'message',role:'assistant',text:'Here is a summary of the outlook.',created_at:'2026-11-10T18:00:10Z'},
+      ]};
     },
     "GET /api/work/:id/delegation": call => {
       const data = defaultApi["GET /api/work/:id/delegation"](call);
@@ -1421,11 +1434,17 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
   assert.equal(new URL(page.url()).searchParams.get('reader_navigator'),new URL(saved).searchParams.get('reader_navigator'));
 
   if (merged) {
+    assert.match(await page.locator('.work-heading > .meta').innerText(), /Source: claude/);
     // The overview grows without resizing the transcript or its scrollport.
     // The selected turn and the progress band must still describe the viewport.
     for (const expanded of [true, false]) {
       await page.getByText("Archive details", { exact: true }).click();
       assert.equal(await page.locator(".archive-details").evaluate(details => details.open), expanded);
+      if(expanded){
+        const details=page.locator('.archive-body');
+        for(const text of ['Retained archive evidence','candidate-1','Related source identities','Preservation receipt','test-hash'])assert.ok(await details.getByText(text,{exact:false}).count(),`${text} remains in Archive details`);
+        assert.doesNotMatch(await details.innerText(),/Source · claude/);
+      }
       await settled();
       await page.locator(".turn").nth(6).evaluate(turn => turn.scrollIntoView({ block: "center", behavior: "instant" }));
       await page.waitForFunction(() => {
@@ -1435,6 +1454,31 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
         return middle >= viewport.left && middle <= viewport.right;
       });
     }
+    sourceOnly=true;
+    await page.reload();
+    await page.locator('.reader-navigator').waitFor();
+    const context=await page.locator('.work-heading > .meta').innerText();
+    assert.match(context,/Repository not identified/);
+    assert.match(context,/Source: chatgpt/);
+    assert.equal(await page.locator('.archive-details').isVisible(),false,'source alone does not need Archive details');
+    assert.doesNotMatch(await page.locator('.coverage-warning').innerText(),/See Archive details/);
+    await shot('source-only-heading');
+  } else {
+    // The child fixture is a single exchange without context measurements.
+    // Keep unavailable choices in the URL so they return on another session.
+    const all = encodeURIComponent(JSON.stringify(['timeline','context','turns']));
+    await page.evaluate(url=>window.pharosNavigate(url), `/work/${workID}/conversation/conv-child?reader_navigator=${all}`);
+    await page.getByRole('article',{name:'User message',exact:true}).getByText('Review the change (conv-child)',{exact:true}).waitFor();
+    await page.locator('.reader-navigator-timeline').waitFor();
+    for(const name of ['Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).count(),0,`${name} is unavailable`);
+    await shot('session-navigator-unmeasured');
+    await page.getByRole('checkbox',{name:'Timeline',exact:true}).uncheck();
+    const state=new URL(page.url()).searchParams.get('reader_navigator');
+    assert.deepEqual(JSON.parse(state),['context','turns']);
+    await page.evaluate(url=>window.pharosNavigate(url), `/work/${workID}/conversation/conv-root?reader_navigator=${encodeURIComponent(state)}`);
+    await page.locator('.reader-navigator-context .token-marker').first().waitFor();
+    for(const name of ['Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).isChecked(),true,`${name} returns when available`);
+    await shot('session-navigator-measured');
   }
 });
 

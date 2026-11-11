@@ -163,7 +163,7 @@ APP_HTML = r'''<!doctype html>
     .work-heading{position:static;z-index:auto;background:none;backdrop-filter:none;border:0;box-shadow:none;margin-bottom:10px}.work-heading h1{margin:0 0 3px;font-size:var(--fs-2xl)}.work-activity{margin-top:7px}.work-controls{display:flex;align-items:start;flex-wrap:wrap;gap:8px;margin-top:6px;font-size:var(--fs-sm)}.work-repository-link{padding:0;color:var(--accent);font-size:inherit;text-decoration:underline;text-underline-offset:2px}
 .work-disclosure{position:relative}.work-disclosure>summary{cursor:pointer;color:var(--muted);padding:2px 5px}.work-disclosure[open]{flex-basis:100%;padding:6px 9px;border:1px solid var(--line);border-radius:4px}.work-disclosure .metric{padding:4px;font-size:var(--fs-sm)}
 .conversation-choice{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 14px;margin:-10px -14px 10px;background:color-mix(in srgb,var(--accent) 9%,var(--panel));border-bottom:1px solid var(--line)}.conversation-choice label{font-weight:700;color:var(--ink);white-space:nowrap}.conversation-selector{flex:1;min-width:min(320px,100%);max-width:100%;font:inherit;padding:7px 30px 7px 10px;border:1px solid var(--accent);border-radius:5px;background:var(--bg);color:var(--ink)}.file-index-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;padding:2px 0}.file-index-link{font:var(--fs-xs) ui-monospace,monospace;text-align:left;overflow-wrap:anywhere;min-width:0}.file-index-link:disabled{opacity:.65;cursor:default}
-.archive-details{margin-top:12px;font-size:var(--fs-sm);color:var(--muted)}.archive-details>summary{cursor:pointer}.archive-body{padding-top:8px}.archive-body .panel{padding:10px}.archive-body h2{font-size:var(--fs-base)}.coverage-warning{font-size:var(--fs-sm);padding:5px 9px;margin:5px 0;border-left:2px solid #bd8627}.conversation-host:empty{display:none}
+.archive-details{margin-top:12px;font-size:var(--fs-sm);color:var(--muted)}.archive-details[hidden],.workspace-inbox.merged .archive-details[hidden]{display:none}.archive-details>summary{cursor:pointer}.archive-body{padding-top:8px}.archive-body .panel{padding:10px}.archive-body h2{font-size:var(--fs-base)}.coverage-warning{font-size:var(--fs-sm);padding:5px 9px;margin:5px 0;border-left:2px solid #bd8627}.conversation-host:empty{display:none}
 /* Dense reading layout: structure is carried by alignment, not empty space. */
     .conversation-head{padding:10px 14px}.conversation-title-row h2{font-size:var(--fs-xl)}
     .conversation-toolbar{margin-top:7px;gap:6px}.conversation-toolbar input{padding:3px 8px;font-size:var(--fs-sm)}.conversation-toolbar button{padding:3px 7px;font-size:var(--fs-xs)}
@@ -1194,9 +1194,9 @@ function readerHighlightLinks(){return window.pharosView?{reader_writing:window.
 function transcriptHighlightControl(panel,conversation,messages){
   rememberLabelTaxonomy(conversation);
   const options=readerHighlightOptions(conversation,messages,labelTaxonomy);if(!options.length)return null;
-  const box=node('div','transcript-highlights'),row=node('div','transcript-highlight-options transcript-key-line'),host=node('div','reader-highlight-keys'),notes=node('div','transcript-key-notes');
+  const box=node('div','transcript-highlights'),row=node('div','transcript-highlight-options'),host=node('div','reader-highlight-keys'),notes=node('div','transcript-key-notes');
   if(!panel.classList.contains('conversation-panel')){box.classList.add('transcript-key','transcript-key-preview');const heading=node('div','transcript-key-heading');heading.append(node('h3','','Key'));box.append(heading)}
-  row.setAttribute('role','group');row.setAttribute('aria-label','Highlight in transcript');row.append(node('strong','transcript-filter-label','Highlight'),host);box.append(row);
+  row.setAttribute('role','group');row.setAttribute('aria-label','Highlight in transcript');row.append(host);box.append(row);
   const keyOf=(option,item)=>option.id+':'+(item.family??item.className),values=option=>option.legend.length?option.legend.map(item=>keyOf(option,item)):[option.id];
   const items=options.map(option=>{
     const children=option.legend.map(item=>({id:keyOf(option,item),label:item.name,values:[keyOf(option,item)],className:item.className,family:item.family}));
@@ -1239,9 +1239,9 @@ function transcriptHighlightControl(panel,conversation,messages){
     const hidden=window.pharosView?.read('reader_highlight_hidden',pharosPrefs.get('pharos-reader-highlight-hidden',[]))||[];
     visible=new Set(options.filter(option=>shown.has(option.id)).flatMap(values).filter(key=>!hidden.includes(key)));
     for(const option of READER_HIGHLIGHTS)panel.classList.toggle('show-'+option.id,shown.has(option.id));
-    keys.render({items,all,shown:[...visible],onChange:next=>{
+    keys.render({items,all,shown:[...visible],groupToggle:panel.classList.contains('conversation-panel'),onChange:(next,allKinds=false)=>{
       const selected=new Set(next),updates={reader_highlight_hidden:readerHighlightExclusions(hidden,all,next)};
-      for(const option of options)if(option.available){const on=values(option).some(key=>selected.has(key));updates[option.field]=on;pharosPrefs.set(option.pref,on)}
+      for(const option of allKinds?READER_HIGHLIGHTS:options.filter(option=>option.available)){const on=allKinds?next.length>0:values(option).some(key=>selected.has(key));updates[option.field]=on;pharosPrefs.set(option.pref,on)}
       pharosPrefs.set('pharos-reader-highlight-hidden',updates.reader_highlight_hidden);window.pharosView?.writeAll(updates);apply();
     }});
     hideLabelTip();const signature=JSON.stringify([...visible]);if(signature!==lastVisibility){lastVisibility=signature;applyMarks(panel)}
@@ -1496,7 +1496,7 @@ const root=$('#detailBody');root.replaceChildren();
 for(const key of ['prs','attempts','handoffs','changes','metrics','conversations','identity_links'])w[key] ||= [];
 const disclosure=(label,className)=>{const d=node('details',className);d.append(node('summary','',label));return d};
 const header=node('header','work-heading'),context=node('div','meta'),appendContext=value=>{if(!value)return;if(context.childNodes.length)context.append(document.createTextNode(' · '));context.append(value instanceof Node?value:document.createTextNode(value))};
-if(w.repository_name){const repository=node('button','work-repository-link',w.repository_name);repository.type='button';repository.title=`Search work for ${w.repository_name}`;repository.onclick=()=>{window.pharosQueryTables?.filterRepository?.(w.repository_name);show('library')};appendContext(repository)}else appendContext('Repository not identified');appendContext(w.branch);appendContext(w.activity_at?timeLabel(w.activity_at):null);
+if(w.repository_name){const repository=node('button','work-repository-link',w.repository_name);repository.type='button';repository.title=`Search work for ${w.repository_name}`;repository.onclick=()=>{window.pharosQueryTables?.filterRepository?.(w.repository_name);show('library')};appendContext(repository)}else appendContext('Repository not identified');if(w.source_kind)appendContext(`Source: ${w.source_kind}`);appendContext(w.branch);appendContext(w.activity_at?timeLabel(w.activity_at):null);
 const workspaceStats=node('div','delegation-workspace-stats');header.append(node('h1','',w.title),context);
 w.peers ||= [];w.peer_conversations ||= [];
 // A heading section remembers, across work pages, whether it was last open;
@@ -1512,7 +1512,6 @@ for(const pr of workPullRequests(w)){const link=node(pr.url?'a':'span','chip',pr
 if(w.main_merge_commit)controls.append(mainIntegrationLink(w));
 const archive=disclosure('Archive details','archive-details'),archiveBody=node('div','archive-body');archive.dataset.viewKey='work:'+id+':archive';archive.dataset.pharosTarget='section:archive';archive.append(archiveBody);
 if(w.location)archiveBody.append(node('div','file',w.location));
-if(w.source_kind)archiveBody.append(node('div','meta',`Source · ${w.source_kind}`));
 if(w.attempts.length||w.handoffs.length){const p=node('section','panel');p.append(node('h2','','Attempts, checkpoints, and handoffs'));w.attempts.forEach(a=>{const item=node('div','message');item.append(node('div','role',`Attempt ${a.attempt_no||'?'}${a.validation?' · '+a.validation:''}`),contentView(a.result||a.failure||'Outcome unavailable'));p.append(item)});w.handoffs.forEach(h=>p.append(node('div','message',`Candidate ${h.candidate_id||'unknown'} · custody ${h.custody_holder||'released'} · version ${h.custody_version||'unknown'}`)));archiveBody.append(p)}
 
 if(w.identity_links.length){const p=node('section','panel');p.append(node('h2','','Related source identities'));w.identity_links.forEach(x=>p.append(node('div','meta',`${x.related_provider} · ${x.relationship} · confidence ${x.confidence}`)));archiveBody.append(p)}
@@ -1520,6 +1519,7 @@ if(w.receipt){const p=node('section','panel');p.append(node('h2','','Preservatio
 
 // Selected related work’s conversations read in place beside this workspace’s own.
 const conversations=[...w.conversations,...w.peer_conversations],roots=[w.location,...(parsedJSON(w.repository_locations_json)||[])],host=node('div','conversation-host');
+archive.hidden=!archiveBody.childNodes.length&&!(!conversations.length&&w.summary);
 let activeIndex=-1,mounting=0;
 const readerStates=new Map();
 const rememberReader=()=>{const panel=host.querySelector('.conversation-panel:not(.conversation-loading)');if(activeIndex<0||!panel)return;readerStates.set(conversations[activeIndex].id,{scroll:host.scrollTop,turns:[...panel.querySelectorAll('.turn-list > .turn')].map(turn=>turn.open)})};
@@ -1593,7 +1593,7 @@ if(controls.childNodes.length)header.append(activity);if(strip)header.append(str
 if(missingConversation){const notice=node('p','coverage-warning','The linked conversation is no longer available in this workspace.'+(conversations.length===1&&!conversations[0].parent_id?' Showing the retained conversation.':conversations.length?' Choose a retained agent session below.':''));notice.setAttribute('role','status');root.append(notice)}
 const warnings=conversations.filter(c=>/partial|incomplete|missing|truncat|failed/i.test(c.coverage||''));
 if(warnings.length)root.append(node('div','coverage-warning',`Transcript coverage: ${warnings.map(c=>`${c.provider||'Agent'} · ${c.coverage}`).join('; ')}. Some activity may be unavailable.`));
-if(/partial|incomplete|failed/i.test(w.preservation_completeness||''))root.append(node('div','coverage-warning',`Preservation · ${w.preservation_completeness}. See Archive details.`));
+if(/partial|incomplete|failed/i.test(w.preservation_completeness||''))root.append(node('div','coverage-warning',`Preservation · ${w.preservation_completeness}.${archive.hidden?'':' See Archive details.'}`));
 const focus=new URLSearchParams(location.search),focusIndex=conversations.findIndex(c=>c.id===routeConversation()),matchedIndex=focusIndex<0?await matchingLibraryConversation(focus.get('search')||''):-1,initialIndex=Math.max(0,focusIndex,matchedIndex);
 if(signal.aborted)return;const explorer=node('div','delegation-host');
 root.append(explorer,host,archive);

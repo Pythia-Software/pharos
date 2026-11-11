@@ -1,9 +1,23 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readerGeometry,readerVisibleWindow,readerNavigatorClock,nearestReaderMessage} from '../../../src/reader-navigator-model';
+import {availableReaderNavigators,readerGeometry,readerVisibleWindow,readerNavigatorClock,nearestReaderMessage} from '../../../src/reader-navigator-model';
 import {reader,event,human,render} from '../helpers/transcript.mjs';
 import {plain} from '../helpers/classic-script.mjs';
 import {sessionRibbonTree} from '../../../src/label-session-ribbon-model';
+
+test('navigator choices reflect drawable measurements and meaningful turn boundaries',()=>{
+  const byID=new Map([['a',[0,1]],['b',[1,2]]]);
+  const data={contexts:[],turns:[{messages:['a']}]};
+  assert.deepEqual(availableReaderNavigators(data,byID),['timeline']);
+  data.contexts.push({message:{id:'a'},sample:{size:null,compact:true}});
+  assert.deepEqual(availableReaderNavigators(data,byID),['timeline'],'compaction alone is not a context measurement');
+  data.contexts.push({message:{id:'missing'},sample:{size:100}});
+  data.turns.push({messages:['missing']});
+  assert.deepEqual(availableReaderNavigators(data,byID),['timeline'],'undrawable data does not offer a bar');
+  data.contexts.push({message:{id:'b'},sample:{size:0}});
+  data.turns.push({messages:['b']});
+  assert.deepEqual(availableReaderNavigators(data,byID),['timeline','context','turns'],'zero is a known context measurement');
+});
 
 test('viewport bounds interpolate expanded rows and include collapsed groups',()=>{
   const geometry=readerGeometry([{top:100,bottom:200,start:0,end:10},{top:220,bottom:240,start:10,end:100},{top:260,bottom:360,start:100,end:120}]);
