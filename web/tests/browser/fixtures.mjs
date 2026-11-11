@@ -806,6 +806,11 @@ const filesLog = [
 const filesDiff = ["diff --git a/internal/archive/api.go b/internal/archive/api.go", "index 1111111..2222222 100644", "--- a/internal/archive/api.go", "+++ b/internal/archive/api.go",
   "@@ -1,4 +1,5 @@ package archive", " package archive", " ", "-// ServeHTTP answers.", "+" + filesCode[2], "+func (s *Server) ServeHTTP() {", " \treturn", ""].join("\n");
 
+export const projectColorFixture = [
+  { id: "repository:pharos", key: "a".repeat(64), name: "pharos", kind: "repository", default_color: "#2a83a4", source: "public/favicon.svg" },
+  { id: "folder:~/notes", key: "b".repeat(64), name: "~/notes", kind: "folder", default_color: "#b27430", source: "Automatic palette" },
+];
+
 export const defaultApi = {
   "GET /api/claude-imports":{jobs:[],run:{running:false},watch:claudeWatchFixture},
   "POST /api/claude-imports/watch":{...claudeWatchFixture,enabled:false},
@@ -826,6 +831,11 @@ export const defaultApi = {
   "POST /api/ask/remove-visit": {ok:true},
 
   // Library preferences, saved views and snapshots.
+  "GET /api/project-colors": ({ state }) => state.projectColors ??= structuredClone(projectColorFixture),
+  "POST /api/project-colors": ({ body, state }) => {
+    state.projectColors = state.projectColors.map(project => project.id === body.id ? { ...project, custom_color: body.color || undefined } : project);
+    return state.projectColors;
+  },
   "GET /api/preferences": ({ state }) => ({ values: state.preferences }),
   "POST /api/preferences": ({ body, state }) => {
     Object.assign(state.preferences, body?.set);

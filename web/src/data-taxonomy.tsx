@@ -1,4 +1,6 @@
 import { DataReadinessIndicator } from "./data-readiness";
+import { chartMetricTheme } from "./chart-colors";
+import { useProjectColorRevision } from "./project-colors";
 import { useViewEntry, useViewState } from "./view-state";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { QueryBuilder, QueryFilterRow, type QueryBuilderProps } from "@pythia-software/query-table-ui";
@@ -39,6 +41,7 @@ function SourceStatement({ dataset }: { dataset: DataSource }) {
 // Compose source information with WHERE, leaving the builder's native grouping
 // clauses and collapsed summary intact. Grouped WHERE edits the source rows.
 export function SourceQueryBuilder<Row>({ dataset, whereRow, ...props }: QueryBuilderProps<Row> & { dataset: DataSource }) {
+  useProjectColorRevision();
   const [collapsed,setCollapsed]=useViewEntry("query_layout",dataset,Boolean(props.defaultCollapsed));
   const currentApi = useRef(props.api);
   currentApi.current = props.api;
@@ -47,7 +50,7 @@ export function SourceQueryBuilder<Row>({ dataset, whereRow, ...props }: QueryBu
   const sourceFilters = useMemo(() => new Proxy({} as QueryFilterApi<Row>, {
     get: (_, property) => Reflect.get(currentApi.current.query.grouping ? currentApi.current.grouping!.source : currentApi.current, property),
   }), []);
-  return <div className="data-source-query" data-pharos-target={`control:q_${dataset}`}><QueryBuilder {...props} collapsed={props.collapsed??collapsed} onCollapsedChange={props.onCollapsedChange??setCollapsed} runActionsBeforeActivity={<DataReadinessIndicator id={`query:${dataset}`} title={dataSources[dataset].label} dataset={dataset} query={props.api.query} empty={props.api.execution?.rows==="succeeded"&&!props.api.loading&&!props.api.error&&props.api.rows.length===0} className="qt-btn query-table-readiness" />} whereRow={<>
+  return <div className="data-source-query" data-pharos-target={`control:q_${dataset}`}><QueryBuilder metricTheme={chartMetricTheme()} {...props} collapsed={props.collapsed??collapsed} onCollapsedChange={props.onCollapsedChange??setCollapsed} runActionsBeforeActivity={<DataReadinessIndicator id={`query:${dataset}`} title={dataSources[dataset].label} dataset={dataset} query={props.api.query} empty={props.api.execution?.rows==="succeeded"&&!props.api.loading&&!props.api.error&&props.api.rows.length===0} className="qt-btn query-table-readiness" />} whereRow={<>
     {dataset !== "findings" && dataset !== "safety" && dataset !== "fixes" ? <SourceStatement dataset={dataset} /> : null}
     {whereRow ?? <QueryFilterRow api={sourceFilters} fields={props.api.query.grouping ? props.api.grouping!.source.schema.fields : props.fields} />}
   </>} /></div>;

@@ -705,6 +705,7 @@ const ROUTES = [
   { name: "Quick Stats settings", url: "/settings/layout", ready: "#quickStatsExpand", open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsEditor button' },
   { name: "Quick Stats toolbox", url: "/settings/layout", ready: "#quickStatsExpand", preferences: { "pharos-quick-stats-v1": { metrics: ['human_words', 'tokens'], windows: ['today', '24h'] } }, open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsPreview td' },
   { name: "App preferences", url: "/settings/preferences", ready: "#lighthouseSpinOnClick" },
+  { name: "Project colors", url: "/settings/projects", ready: ".project-color-row" },
   { name: "Mac menu disabled", url: "/settings/layout", ready: "#showMacMenuBar", preferences: { 'pharos-menu-bar': { enabled: false } } },
   { name: "Mac menu expanded", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button' },
   { name: "Mac menu syncing", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive .menu-bar-detail', api: {

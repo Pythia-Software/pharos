@@ -75,7 +75,7 @@ main > #home { padding-bottom:28px; }
 .home-belt-row:not(.sliding) .query-card { --belt-focus:1; }
 .home-belt-row:not(.sliding) .query-card[data-xray] { --belt-focus:0; }
 .home-belt-row .query-cover { isolation:isolate; background:transparent; }
-.home-belt-row .query-cover::before { content:""; position:absolute; z-index:-1; inset:0; opacity:var(--belt-focus); background:var(--query-cover-bg); pointer-events:none; }
+.home-belt-row .query-cover::before { content:""; position:absolute; z-index:-1; inset:0; border-radius:inherit; opacity:var(--belt-focus); background:var(--query-cover-bg); pointer-events:none; }
 .home-belt-row .query-caption { border-top:1px solid var(--query-border); background:color-mix(in srgb,var(--query-caption-bg) calc(var(--belt-focus)*100%),transparent); }
 .home-belt-row :is(.query-cover-head,.query-rank-label,.query-excerpt,.query-result-summary:not(.is-headline),.query-result-evidence,.query-preview-status,.query-caption>span,.query-keep) { opacity:var(--belt-focus); }
 .home-belt-row :is(.query-cover-columns,.query-rank-track) { opacity:calc(.45 + var(--belt-focus)*.55); }

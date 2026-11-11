@@ -171,6 +171,16 @@ func (s *Server) getPreferences(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
+	colors, err := s.Catalog.projectColors(r.Context())
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	colorPayload, err := json.Marshal(colors)
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -180,6 +190,7 @@ func (s *Server) getPreferences(w http.ResponseWriter, r *http.Request) {
 	// catalog path or API token to the page.
 	scope := sha256.Sum256([]byte(s.Catalog.Path + "\x00" + s.config.APIToken))
 	_, _ = fmt.Fprintf(w, "window.pharosPreviewScope=%q;", fmt.Sprintf("%x", scope))
+	_, _ = w.Write(append(append([]byte("window.pharosProjectColors="), colorPayload...), ';'))
 	// Feature flags the library's configuration turns on, which no
 	// preference records: agent_events_enabled lists Agent Experience as
 	// its Settings switch does.
