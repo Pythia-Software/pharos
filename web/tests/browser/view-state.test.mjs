@@ -931,6 +931,7 @@ test('semantic JSON-path reveal materializes exact details, reports missing path
  const app=await open(t,{url:fixture.route({...fixture.query,itemDetails:{modes:['expand']}},target),api:fixture.api,ready:'.qt-attention-target'}),{page}=app;
  await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
  const marker=page.locator('.qt-attention-target').filter({hasText:'needle 41'});await marker.first().waitFor();
+ await page.locator('.pharos-attention-dismiss:visible').first().waitFor();
  assert.equal(await page.evaluate(()=>document.activeElement===document.body),true);
  let scrolls=await page.evaluate(()=>{window.__attentionScrolls=0;const original=Element.prototype.scrollIntoView;Element.prototype.scrollIntoView=function(...args){window.__attentionScrolls++;return original.apply(this,args)};return window.__attentionScrolls});
  const refreshed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/query/mcp_calls/query-v3'&&response.request().postDataJSON()?.rows);
@@ -1106,13 +1107,28 @@ test('right-click and Escape clear linked highlights, with a saved shortcut pref
  const toggle=page.getByRole('switch',{name:'Escape clears highlights'});
  assert.equal(await toggle.getAttribute('aria-checked'),'true');
  await page.evaluate(()=>{
-  const target=document.createElement('p');target.id='attention-fixture';target.textContent='Attention fixture';document.querySelector('#optionalBehaviors').append(target);
+  const target=document.createElement('p');target.id='attention-fixture';target.textContent='Attention fixture';target.onclick=()=>{window.attentionFixtureClicked=true};document.querySelector('#optionalBehaviors').append(target);
  });
  const mark=async()=>{
   await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('reveal','section:attention-fixture');url.searchParams.append('highlight','page');history.replaceState(history.state,'',url);window.dispatchEvent(new Event('pharos:uri-changed'));});
   await page.waitForFunction(()=>document.querySelector('#attention-fixture')?.classList.contains('pharos-reveal'));
  };
  const cleared=async()=>page.waitForFunction(()=>!new URLSearchParams(location.search).has('highlight')&&!new URLSearchParams(location.search).has('reveal')&&!document.querySelector('.pharos-reveal,.pharos-highlight'));
+ await mark();
+ const dismiss=page.locator('.pharos-attention-dismiss').last();
+ await dismiss.waitFor({state:'visible'});
+ await page.waitForFunction(()=>{const target=document.querySelector('#attention-fixture').getBoundingClientRect(),button=[...document.querySelectorAll('.pharos-attention-dismiss')].at(-1).getBoundingClientRect();return Math.abs(button.top-target.top)<2&&Math.abs(button.right-target.right)<2});
+ await dismiss.click();await cleared();
+ assert.equal(await page.evaluate(()=>!!window.attentionFixtureClicked),false,'dismissing does not activate the highlighted content');
+ assert.equal(await page.locator('.pharos-attention-dismiss').count(),0);
+ await page.evaluate(()=>{
+  const dialog=document.createElement('dialog');dialog.id='attention-dismiss-dialog';dialog.innerHTML='<p id="attention-dialog-target">Dialog target</p>';document.body.append(dialog);dialog.showModal();
+  const url=new URL(location.href);url.searchParams.set('reveal','section:attention-dialog-target');history.replaceState(history.state,'',url);window.dispatchEvent(new Event('pharos:uri-changed'));
+ });
+ const dialogDismiss=page.locator('#attention-dismiss-dialog .pharos-attention-dismiss');
+ await dialogDismiss.waitFor({state:'visible'});await dialogDismiss.click();await cleared();
+ assert.equal(await page.locator('#attention-dismiss-dialog').evaluate(dialog=>dialog.open),true,'clearing a highlight leaves the dialog open');
+ await page.evaluate(()=>{document.querySelector('#attention-dismiss-dialog').close();document.querySelector('#attention-dismiss-dialog').remove()});
  await mark();
  await page.locator('#attention-fixture').click({button:'right'});
  await page.getByRole('button',{name:'Clear highlights',exact:true}).last().click();await cleared();
