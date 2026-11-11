@@ -5,9 +5,18 @@ import type {TimeRange} from './timeline-label-model';
 
 export type ReaderContext={title:string;color:string;message:{id:string};sample:{stream:string;compact?:boolean;trigger?:string;size:number|null;window?:number|null};from:number;width:number;label:string};
 export type ReaderNavigatorMark=Omit<ActivityMark,'start'|'end'>&{start:number|null;end:number|null};
-export type ReaderNavigatorData={messages:LabelMessage[];marks:ReaderNavigatorMark[];events:AgentEventLink[];taxonomy:Taxonomy;turns:{target:HTMLDetailsElement;messages:string[];label:string}[];contexts:ReaderContext[];jumpContext:(entry:ReaderContext)=>void;jumpMessage:(id:string)=>void};
+export type ReaderNavigatorData={sessionID:string;messages:LabelMessage[];marks:ReaderNavigatorMark[];events:AgentEventLink[];taxonomy:Taxonomy;turns:{target:HTMLDetailsElement;messages:string[];label:string}[];contexts:ReaderContext[];jumpContext:(entry:ReaderContext)=>void;jumpMessage:(id:string)=>void};
 export type ReaderSpan={top:number;bottom:number;start:number;end:number};
 export type ReaderGeometry={spans:ReaderSpan[];ends:number[]};
+export type ReaderNavigatorChoice='timeline'|'context'|'turns';
+
+/** Offer bars only when they can show measured context or distinguish turns. */
+export function availableReaderNavigators(data:Pick<ReaderNavigatorData,'contexts'|'turns'>,byID:Map<string,TimeRange>):ReaderNavigatorChoice[]{
+  const available:ReaderNavigatorChoice[]=['timeline'];
+  if(data.contexts.some(entry=>entry.sample.size!==null&&Number.isFinite(entry.sample.size)&&byID.has(entry.message.id)))available.push('context');
+  if(data.turns.filter(turn=>turn.messages.some(id=>byID.has(id))).length>1)available.push('turns');
+  return available;
+}
 
 /** Build once per session. Missing timestamps stay missing; an entirely
  * untimed transcript explicitly uses message order instead of a fake clock. */

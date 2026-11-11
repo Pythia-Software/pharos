@@ -50,6 +50,7 @@ type claudeExportInventory struct {
 
 type claudeExportInput struct {
 	path          string
+	member        string // Known supplementary member, for an unzipped export.
 	conversations bool
 	version       int64
 	snapshot      string
@@ -116,7 +117,7 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 	}
 	// A managed collection keeps its inventories in known places. Anything
 	// else is a person's folder, which may hold unrelated files: only its own
-	// top-level conversation files are read, as an unzipped export has them.
+	// conversation files and known supplementary directories are read.
 	// ZIPs there are not read, since they can carry account records that
 	// collection would strip.
 	inventories, err := claudeInventories(files, root)
@@ -124,6 +125,7 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 		return nil, err
 	}
 	var candidates []string
+	var inputs []claudeExportInput
 	if len(inventories) == 0 {
 		entries, err := files.ReadDir(root)
 		if err != nil {
@@ -133,12 +135,42 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 			if entry.Type().IsRegular() && claudeConversationName(entry.Name()) {
 				candidates = append(candidates, filepath.Join(root, entry.Name()))
 			}
+			if entry.IsDir() && claudeSupplementDirectory(entry.Name()) {
+				err := files.WalkDir(filepath.Join(root, entry.Name()), func(name string, item fs.DirEntry, walkErr error) error {
+					if walkErr != nil {
+						return walkErr
+					}
+					if err := files.context().Err(); err != nil {
+						return err
+					}
+					if item.Type()&os.ModeSymlink != 0 {
+						return fmt.Errorf("Claude export contains a symbolic link: %s", name)
+					}
+					if item.IsDir() {
+						return nil
+					}
+					if !item.Type().IsRegular() {
+						return fmt.Errorf("Claude export contains a non-regular file: %s", name)
+					}
+					rel, err := filepath.Rel(root, name)
+					if err != nil {
+						return err
+					}
+					inputs = append(inputs, claudeExportInput{path: name, member: filepath.ToSlash(rel), snapshot: root})
+					if len(inputs) > claudeExportLimits.Entries {
+						return errors.New("Claude export exceeds the entry limit")
+					}
+					return nil
+				})
+				if err != nil {
+					return nil, err
+				}
+			}
 		}
 		if len(candidates) > claudeExportLimits.Parts {
 			return nil, fmt.Errorf("Claude export exceeds the file limit")
 		}
 	}
-	var inputs []claudeExportInput
 	for _, name := range inventories {
 		var inventory claudeExportInventory
 		if err := claudeReadJSON(files, name, &inventory); err != nil {

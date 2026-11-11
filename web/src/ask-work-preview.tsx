@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { askWorkPreviewAddress, workPreviewEndpoint, workPreviewView, type WorkPreview, type WorkPreviewAddress } from "./ask-work-model";
 import { PreviewBoundary, type AskLinkPreviews } from "./ask-link-previews";
+import { FingerprintImage } from "./fingerprint-image";
 
 const unavailable = "Workspace preview unavailable. Open the linked workspace to explore it.";
 
@@ -53,9 +54,11 @@ function AskWorkPreview({ address, title, openings }: { address: WorkPreviewAddr
   }, [address, visible, revision]);
   const { preview, error } = result;
   const view = preview && workPreviewView(preview);
-  return <figure ref={host} className="pharos-work-preview" aria-label={`Work preview: ${title}`} aria-busy={!preview && !error}>
+  const fingerprint = visible ? address.conversation : undefined;
+  return <figure ref={host} className={`pharos-work-preview${fingerprint ? " has-fingerprint" : ""}`} aria-label={`Work preview: ${title}`} aria-busy={!preview && !error}>
     {error ? <p className="pharos-work-preview-status" role="status">{unavailable}</p>
       : !view ? <p className="pharos-work-preview-status" role="status">Loading workspace summary…</p>
-      : [view.where, view.what].map((parts, line) => parts.length ? <p key={line} className="pharos-work-preview-line">{parts.map((part, index) => <span key={index} title={part.title} data-overflow-title={part.title ? undefined : ""}>{part.text}</span>)}</p> : null)}
+      : <div className="pharos-work-preview-details">{[view.where, view.what].map((parts, line) => parts.length ? <p key={line} className="pharos-work-preview-line">{parts.map((part, index) => <span key={index} title={part.title} data-overflow-title={part.title ? undefined : ""}>{part.text}</span>)}</p> : null)}</div>}
+    {fingerprint ? <div className="pharos-work-preview-fingerprint"><FingerprintImage id={fingerprint} linkToSource={false} /></div> : null}
   </figure>;
 }

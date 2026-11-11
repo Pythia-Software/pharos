@@ -135,7 +135,7 @@ func TestClaudeImportCollectsMultipartAndIndexesCapturedFiles(t *testing.T) {
 	}
 	ingestSource(t, c, config.Sources[0])
 	var count int
-	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM conversations WHERE provider='claude'`).Scan(&count); err != nil || count != 2 {
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM conversations WHERE provider='claude'`).Scan(&count); err != nil || count != 3 {
 		t.Fatal(count, err)
 	}
 	if result := runCapture(t, config); !result.OK {
@@ -150,10 +150,10 @@ func TestClaudeImportCollectsMultipartAndIndexesCapturedFiles(t *testing.T) {
 	useHost(t, "host-b")
 	other, _ := testCatalog(t)
 	indexCaptures(t, other, config.CaptureRoot, "host-a")
-	if err := other.DB.QueryRow(`SELECT COUNT(*) FROM conversations WHERE provider='claude'`).Scan(&count); err != nil || count != 2 {
+	if err := other.DB.QueryRow(`SELECT COUNT(*) FROM conversations WHERE provider='claude'`).Scan(&count); err != nil || count != 3 {
 		t.Fatal("offline conversations", count, err)
 	}
-	if err := other.DB.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&count); err != nil || count != 15 {
+	if err := other.DB.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&count); err != nil || count != 18 {
 		t.Fatal("offline messages", count, err)
 	}
 }
@@ -731,15 +731,16 @@ func TestClaudeImportFullThenOverlappingPartialExports(t *testing.T) {
 		}
 	}
 	collect("2026-10-03T00:00:00Z", full)
-	check(c, 2, 15)
+	// Totals include one retained export-metadata message per conversation.
+	check(c, 2, 17)
 	// This export omits conv-2 completely, updates conv-1, and adds one chat.
 	delta := []map[string]any{changed[0], newConversation}
 	first := collect("2026-10-06T00:00:00Z", delta)
-	check(c, 3, 19)
+	check(c, 3, 22)
 	// Overlap is deduplicated in the catalog; raw snapshots currently retain
 	// even byte-identical exports under their separate manifest identities.
 	repeated := collect("2026-10-08T00:00:00Z", delta)
-	check(c, 3, 19)
+	check(c, 3, 22)
 	if first.ID == repeated.ID || first.Parts[0].SHA256 != repeated.Parts[0].SHA256 {
 		t.Fatal("fixture should contain distinct snapshots of identical conversation bytes")
 	}
@@ -750,7 +751,7 @@ func TestClaudeImportFullThenOverlappingPartialExports(t *testing.T) {
 	}
 	// A delayed older partial snapshot cannot roll the latest reply back.
 	collect("2026-10-04T00:00:00Z", full[:1])
-	check(c, 3, 19)
+	check(c, 3, 22)
 	if countRows(t, c, "SELECT COUNT(*) FROM messages WHERE text='Latest periodic reply' AND selected=1") != 1 {
 		t.Fatal("late export lost or duplicated the latest reply")
 	}
@@ -760,5 +761,5 @@ func TestClaudeImportFullThenOverlappingPartialExports(t *testing.T) {
 	useHost(t, "host-b")
 	rebuilt, _ := testCatalog(t)
 	indexCaptures(t, rebuilt, config.CaptureRoot, "host-a")
-	check(rebuilt, 3, 19)
+	check(rebuilt, 3, 22)
 }

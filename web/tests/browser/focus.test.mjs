@@ -1372,10 +1372,23 @@ test("conversation navigation focuses the requested reader unless focus moved wh
 });
 
 for (const merged of [false, true]) test(`transcript navigators follow layout changes in ${merged ? "merged" : "split"} workspaces`, { skip }, async t => {
+  let sourceOnly = false;
   const api = merged ? {
     "GET /api/work/:id": call => {
       const work = defaultApi["GET /api/work/:id"](call);
-      return { ...work, conversations: work.conversations.slice(0, 1), attempts: [{ attempt_no: 1, result: "Retained archive evidence\n".repeat(40) }] };
+      return { ...work, title:sourceOnly ? 'Financial outlook' : work.title, source_kind: sourceOnly ? 'chatgpt' : 'claude', repository_name: sourceOnly ? null : work.repository_name, location: sourceOnly ? null : work.location, branch: sourceOnly ? null : work.branch,
+        conversations: sourceOnly ? [{...work.conversations[0],provider:'chatgpt',model:null,first_prompt:'Summarize the outlook'}] : work.conversations.slice(0, 1), attempts: sourceOnly ? [] : [{ attempt_no: 1, result: "Retained archive evidence\n".repeat(40) }],
+        handoffs: sourceOnly ? [] : [{ candidate_id:'candidate-1', custody_holder:'agent', custody_version:'1' }],
+        identity_links: sourceOnly ? [] : [{ related_provider:'codex', relationship:'related', confidence:'high' }],
+        receipt: sourceOnly ? null : {outcome:'complete',package_bytes:1024,package_hash:'test-hash'}, preservation_completeness: sourceOnly ? 'partial' : 'complete' };
+    },
+    "GET /api/work/:id/conversations/:conversation": call => {
+      const conversation=defaultApi["GET /api/work/:id/conversations/:conversation"](call);
+      if(!sourceOnly)return conversation;
+      return {...conversation,provider:'chatgpt',model:null,title:'Financial outlook',messages:[
+        {id:'chat-prompt',native_id:'chat-prompt',kind:'message',role:'user',text:'Summarize the outlook',created_at:'2026-11-10T18:00:00Z'},
+        {id:'chat-reply',native_id:'chat-reply',kind:'message',role:'assistant',text:'Here is a summary of the outlook.',created_at:'2026-11-10T18:00:10Z'},
+      ]};
     },
     "GET /api/work/:id/delegation": call => {
       const data = defaultApi["GET /api/work/:id/delegation"](call);
@@ -1421,11 +1434,17 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
   assert.equal(new URL(page.url()).searchParams.get('reader_navigator'),new URL(saved).searchParams.get('reader_navigator'));
 
   if (merged) {
+    assert.match(await page.locator('.work-heading > .meta').innerText(), /Source: claude/);
     // The overview grows without resizing the transcript or its scrollport.
     // The selected turn and the progress band must still describe the viewport.
     for (const expanded of [true, false]) {
       await page.getByText("Archive details", { exact: true }).click();
       assert.equal(await page.locator(".archive-details").evaluate(details => details.open), expanded);
+      if(expanded){
+        const details=page.locator('.archive-body');
+        for(const text of ['Retained archive evidence','candidate-1','Related source identities','Preservation receipt','test-hash'])assert.ok(await details.getByText(text,{exact:false}).count(),`${text} remains in Archive details`);
+        assert.doesNotMatch(await details.innerText(),/Source · claude/);
+      }
       await settled();
       await page.locator(".turn").nth(6).evaluate(turn => turn.scrollIntoView({ block: "center", behavior: "instant" }));
       await page.waitForFunction(() => {
@@ -1435,6 +1454,31 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
         return middle >= viewport.left && middle <= viewport.right;
       });
     }
+    sourceOnly=true;
+    await page.reload();
+    await page.locator('.reader-navigator').waitFor();
+    const context=await page.locator('.work-heading > .meta').innerText();
+    assert.match(context,/Repository not identified/);
+    assert.match(context,/Source: chatgpt/);
+    assert.equal(await page.locator('.archive-details').isVisible(),false,'source alone does not need Archive details');
+    assert.doesNotMatch(await page.locator('.coverage-warning').innerText(),/See Archive details/);
+    await shot('source-only-heading');
+  } else {
+    // The child fixture is a single exchange without context measurements.
+    // Keep unavailable choices in the URL so they return on another session.
+    const all = encodeURIComponent(JSON.stringify(['timeline','context','turns']));
+    await page.evaluate(url=>window.pharosNavigate(url), `/work/${workID}/conversation/conv-child?reader_navigator=${all}`);
+    await page.getByRole('article',{name:'User message',exact:true}).getByText('Review the change (conv-child)',{exact:true}).waitFor();
+    await page.locator('.reader-navigator-timeline').waitFor();
+    for(const name of ['Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).count(),0,`${name} is unavailable`);
+    await shot('session-navigator-unmeasured');
+    await page.getByRole('checkbox',{name:'Timeline',exact:true}).uncheck();
+    const state=new URL(page.url()).searchParams.get('reader_navigator');
+    assert.deepEqual(JSON.parse(state),['context','turns']);
+    await page.evaluate(url=>window.pharosNavigate(url), `/work/${workID}/conversation/conv-root?reader_navigator=${encodeURIComponent(state)}`);
+    await page.locator('.reader-navigator-context .token-marker').first().waitFor();
+    for(const name of ['Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).isChecked(),true,`${name} returns when available`);
+    await shot('session-navigator-measured');
   }
 });
 
@@ -1458,28 +1502,75 @@ test('overlapping context profiles reveal the stream actually clicked', {skip}, 
 });
 
 test('untimed session navigator draws calls and failures and reveals by message order', {skip}, async t=>{
-  const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-timeline',api:{
+  let timed=false;
+  const {page,settled,shot}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-timeline',viewport:{width:1920,height:1050},api:{
     'GET /api/work/:id/conversations/:conversation':call=>{
       const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
       if(call.params.conversation!=='conv-root')return body;
-      const event=(id,kind,text,extra={})=>({id,native_id:id,kind,role:'assistant',created_at:null,text:typeof text==='string'?text:JSON.stringify(text),...extra});
+      let tick=0;
+      const event=(id,kind,text,extra={})=>({id,native_id:id,kind,role:'assistant',created_at:timed?new Date(Date.UTC(2026,10,1)+tick++*10000).toISOString():null,text:typeof text==='string'?text:JSON.stringify(text),...extra});
       return {...body,messages:[event('prompt','message','Check the files',{role:'user'}),
         event('command','tool_call',{name:'Bash',input:{command:'check'}},{call_id:'cmd'}),
         event('result','tool_result',{exit_code:1,content:'Process exited with code 1'},{call_id:'cmd'}),
         event('delegate','delegation',{name:'Task',input:{description:'Review files'}},{call_id:'agent'}),
         event('done','delegation_result',{content:'Reviewed'},{call_id:'agent'}),
-        event('reply','message','Finished checking the files')]};
+        event('search','tool_call',{name:'Search',input:{query:'climate outlook'}},{call_id:'search-call'}),
+        event('search-result','tool_result',{content:'Search results'},{call_id:'search-call'}),
+        event('web','tool_call',{name:'Browser',input:{url:'https://example.com/report'}},{call_id:'web-call'}),
+        event('reply','message','Finished checking the files',{agent_events:[{id:'obstacle',kind:'obstacle',label:'Obstacle',group:'Friction',probability:.9,sentence:[0,27],subject:[],response:[]}]})]};
     },
   }});
-  const navigator=page.locator('.reader-navigator'),key=navigator.getByLabel('Timeline key');
-  for(const name of ['Run','Delegation','Error'])assert.ok(await key.getByText(name,{exact:true}).isVisible());
+  const navigator=page.locator('.reader-navigator'),key=page.getByRole('group',{name:'Timeline key',exact:true});
+  for(const name of ['Delegate / message','Error','Network'])await key.getByRole('button',{name,exact:true}).waitFor();
   assert.ok(await navigator.getByText('Message order · timestamps unavailable',{exact:true}).isVisible());
+  assert.equal(await key.getByText('End time unknown',{exact:true}).count(),0,'ordinal timelines have no seconds-based guide');
+  assert.equal(await navigator.locator('.reader-navigator-timeline [data-tool-id="web-call"] line').count(),0);
+  assert.equal(await page.locator('.timeline-entry[data-message-id="search"] .timeline-time').innerText(),'—');
+  const sections=navigator.locator('.reader-section-node').first();
+  await sections.locator(':scope > summary .reader-section-label').click();
+  await navigator.getByText('Message modes',{exact:true}).waitFor();
+  await navigator.getByText('Agent events',{exact:true}).waitFor();
+  const events=navigator.locator('.reader-section-node').filter({has:page.getByText('Agent events',{exact:true})}).last();
+  await events.locator(':scope > summary .reader-section-label').click();
+  await events.getByText('Friction',{exact:true}).waitFor();
+  const tools=navigator.locator('.reader-section-node').filter({has:page.getByText('Tool actions',{exact:true})}).last();
+  await tools.locator(':scope > summary .reader-section-label').click();
+  await navigator.locator('.reader-section-node').getByText('Run',{exact:true}).waitFor();
+  await key.getByRole('button',{name:'Error',exact:true}).click();
+  await page.getByRole('menuitem',{name:'Hide',exact:true}).click();
+  await page.waitForFunction(()=>!document.querySelector('.reader-navigator [data-tool-id="cmd"]'));
+  await key.getByRole('button',{name:'Error',exact:true}).click();
+  await page.getByRole('menuitem',{name:'Show',exact:true}).click();
+  await navigator.locator('[data-tool-id="cmd"]').first().waitFor({state:'attached'});
+  const search=page.locator('.query-chip').filter({hasText:'climate outlook'});
+  await search.click();assert.equal(await search.getAttribute('aria-expanded'),'true');
+  await search.click();assert.equal(await search.getAttribute('aria-expanded'),'false');
+  const web=page.locator('.action-web-link');assert.equal(await web.getAttribute('href'),'https://example.com/report');
+  assert.ok(await web.locator('.markdown-link-icon :is(img,svg)').count());
+  assert.ok(await web.locator('.external-indicator').isVisible());
+  assert.ok(await page.locator('.action-row').filter({has:web}).getByText('Network',{exact:true}).isVisible());
+  await shot('reader-timeline-sections');
+  await page.setViewportSize({width:320,height:900});
+  assert.ok(await navigator.evaluate(element=>element.scrollWidth<=element.clientWidth),'expanded timeline fits on a narrow screen');
+  await shot('reader-timeline-mobile');
+  await page.setViewportSize({width:1920,height:1050});
+  await page.reload();await navigator.locator('.reader-navigator-timeline').waitFor();
+  await navigator.getByText('Agent events',{exact:true}).waitFor();
+  await navigator.locator('.reader-section-node').getByText('Run',{exact:true}).waitFor();
   await navigator.getByRole('button',{name:'Browse session timeline'}).focus();
   await page.keyboard.press('End');await settled();
   await page.waitForFunction(()=>{
     const target=document.querySelector('[data-message-id="reply"].authorship-target'),bounds=target?.getBoundingClientRect();
     return bounds?.height>0&&bounds.top<innerHeight&&bounds.bottom>document.querySelector('.reader-navigator-host').getBoundingClientRect().bottom;
   });
+  timed=true;
+  await page.reload();await navigator.locator('.reader-navigator-timeline').waitFor();
+  await key.getByText('End time unknown',{exact:true}).waitFor();
+  assert.ok(await navigator.locator('.reader-navigator-timeline [data-tool-id="web-call"] line').count(),'timed calls with an unknown end show a guide');
+  await key.getByRole('button',{name:'Network',exact:true}).click();
+  await page.getByRole('menuitem',{name:'Hide',exact:true}).click();
+  await key.getByText('End time unknown',{exact:true}).waitFor({state:'detached'});
+  assert.equal(await navigator.locator('[data-tool-id="web-call"]').count(),0);
 });
 
 test('session navigator scrolling reuses transcript geometry on a long session', {skip}, async t=>{
@@ -2625,7 +2716,7 @@ test('Ask Pharos full screen keeps a chat that is still loading', {skip}, async 
   const held=id=>new Promise(resolve=>{gates[id]=resolve;});
   let waiting={};
   t.after(()=>Object.values(gates).forEach(open=>open()));
-  const {page,settled}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+  const {page,settled,shot}=await open(t,{url:'/',viewport:{width:1920,height:1050},ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:Object.values(chats)}),
@@ -2641,13 +2732,14 @@ test('Ask Pharos full screen keeps a chat that is still loading', {skip}, async 
   await page.waitForURL(url=>url.pathname==='/ask'&&url.searchParams.get('ask_chat')==='slow');
   release('slow');waiting={};
   await page.locator('#askPage .pharos-user-question').filter({hasText:'Slow question'}).waitFor();
+  await shot('fullscreen-conversation');
   // Leaving full screen for the dialog while another chat loads keeps that chat.
   await activateHeaderTool(page,'settingsToggle');await page.waitForURL(url=>url.pathname==='/settings');
   await activateHeaderTool(page,'askPharosToggle');
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/ask');
-  await page.locator('.pharos-ai').getByRole('button',{name:'New Chat',exact:true}).click();
   if(!await page.getByRole('dialog',{name:'Chat history',exact:true}).isVisible())await page.getByRole('button',{name:'History',exact:true}).click();
+  await page.getByRole('dialog',{name:'Chat history',exact:true}).getByRole('button',{name:'New chat',exact:true}).click();
   waiting={other:held('other')};
   await page.getByRole('link',{name:'Open chat: Other question',exact:true}).click();
   await page.getByRole('button',{name:'Exit full screen',exact:true}).click();
@@ -2707,7 +2799,7 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   let finish;
   const response=new Promise(resolve=>{finish=resolve;});t.after(()=>finish());
-  const {page}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+  const {page,shot}=await open(t,{url:'/',viewport:{width:1920,height:1050},ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':{sessions:[]},
@@ -2770,6 +2862,7 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   await page.keyboard.press('Escape');
   await page.locator('body>header .brand').click();
   await page.locator('#homeAskSearch').getByRole('button',{name:'A. Tokens',exact:true}).waitFor();
+  await shot('home-answer');
   assert.ok((await homeFrame.boundingBox()).width>emptyHomeWidth,'a restored conversation uses more of the available Home width');
   await page.locator('#homeAskSearch').getByRole('button',{name:'New Chat',exact:true}).click();
   assert.ok(Math.abs((await homeFrame.boundingBox()).width-emptyHomeWidth)<1,'clearing the conversation restores the Home composer width');
@@ -2933,21 +3026,26 @@ test('Ask Pharos loads chart previews behind the floating panel so a ready answe
   assert.equal(queries(),loaded,'opening a just-loaded answer reuses its charts');
 });
 
-for (const width of [1440,320]) test(`Ask Pharos work previews fit beside their links @ ${width}`, {skip}, async t => {
+for (const width of [1920,320]) test(`Ask Pharos work previews fit beside their links @ ${width}`, {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
-  const cards=[{id:'work',title:'Long work',description:'The whole workspace.',href:'/work/'+workID},{id:'conversation',title:'Root conversation',description:'One conversation in it.',href:'/work/'+workID+'?conversation=conv-root'}];
+  const cards=[{id:'work',title:'Long work',description:'The whole workspace.',href:'/work/'+workID},{id:'conversation',title:'Root conversation',description:'One conversation in it.',href:'/work/'+workID+'?conversation=conv-root'},{id:'child',title:'Child conversation',description:'A second conversation.',href:'/work/'+workID+'/conversation/conv-child'}];
+  // Synthetic ribbon used only to exercise image loading and preview layout.
+  const colors=['#399bed','#20bfae','#b36df1','#f4b632','#ef9535','#2bc48e','#f16b52','#eace32'];
+  const ribbon='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 40">'+colors.map((color,index)=>`<rect x="${index*40}" y="${8+index%3*4}" width="38" height="${24-index%3*8}" fill="${color}"/>`).join('')+'</svg>');
   let session;
-  const {page,shot}=await open(t,{url:'/library',ready:'.conversation-result-card',viewport:{width,height:900},api:{
+  const home=width===1920;
+  const {page,shot,calls}=await open(t,{url:home?'/':'/library',ready:home?'#pharos-ask .pharos-ai:not([hidden])':'.conversation-result-card',viewport:{width,height:home?1050:900},api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:session?[session]:[]}),
     'GET /api/ask/session':()=>session,
     'POST /api/ask/session':({body})=>(session={...session,...body}),
     'POST /api/ask/send':({body})=>(session={id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'Your work.',cards}]}),
+    'POST /api/fingerprints':({body})=>({items:body.items.map(item=>({...item,state:'ready',href:'/work/'+workID+'/conversation/'+item.id,images:{light:ribbon,dark:ribbon}}))}),
   }});
   await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
-  await activateHeaderTool(page,'askPharosToggle');
-  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
+  if(!home)await activateHeaderTool(page,'askPharosToggle');
+  const surface=home?page.locator('#homeAskSearch'):page.getByRole('dialog',{name:'Ask Pharos',exact:true});
   const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
   await question.fill('What did I do in the long work?');
   const before=page.url();
@@ -2957,10 +3055,14 @@ for (const width of [1440,320]) test(`Ask Pharos work previews fit beside their 
     await figure.waitFor();await figure.scrollIntoViewIfNeeded();
     await page.waitForFunction(title=>document.querySelector(`figure[aria-label="Work preview: ${title}"]`)?.getAttribute('aria-busy')==='false',card.title);
     assert.equal(await page.getByRole('link',{name:new RegExp(card.title)}).getAttribute('href'),card.href);
+    if(card.id!=='work')await figure.getByRole('img',{name:'Conversation fingerprint',exact:true}).waitFor();
   }
+  const requested=calls.filter(call=>call.path==='/api/fingerprints').flatMap(call=>call.body.items);
+  for(const id of ['conv-root','conv-child'])assert.ok(requested.some(item=>item.entity==='conversation'&&item.id===id),'the conversation ID selects its fingerprint');
   for (const card of cards) assert.equal(await page.getByRole('figure',{name:'Work preview: '+card.title,exact:true}).locator('p').count(),2,'where/when and who/how much render');
-  assert.equal(page.url(),before,'previews leave the underlying page URL alone');
-  assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'loading previews must not move focus out of Ask');
+  const after=new URL(page.url());if(home)after.searchParams.delete('ask_chat');
+  assert.equal(after.href,before,'previews leave the underlying page URL alone');
+  assert.ok(await surface.evaluate(element=>element.contains(document.activeElement)),'loading previews must not move focus out of Ask');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'work preview overflowed the viewport');
   assert.ok(await page.evaluate(()=>[...document.querySelectorAll('.pharos-work-preview')].every(el=>el.scrollWidth<=el.clientWidth)),'work preview content overflowed its card');
   await shot('ask-work-previews');
@@ -3294,12 +3396,17 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   let recordFirst,releaseReceipt,receiptStarted,secondAttempt;
   const firstRecording=new Promise(resolve=>{recordFirst=resolve;}),oldReceipt=new Promise(resolve=>{releaseReceipt=resolve;});
   const readingError=new Promise(resolve=>{receiptStarted=resolve;});
-  t.after(()=>{recordFirst();releaseReceipt();});
+  const heldSearch=Promise.withResolvers(),searchStarted=Promise.withResolvers();
+  t.after(()=>{recordFirst();releaseReceipt();heldSearch.resolve();});
   t.after(()=>{for(const resolve of finish.values())resolve();});
-  const {page,settled,shot,calls}=await open(t,{url:'/ask',ready:'.pharos-new-chat',api:{
+  const {page,settled,shot,calls}=await open(t,{url:'/ask',viewport:{width:1920,height:1050},ready:'.pharos-new-chat',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
-    'GET /api/ask/sessions':()=>({sessions:[...sessions.values()]}),
+    'GET /api/ask/sessions':async({query})=>{
+      const term=query.get('q')||'';
+      if(term==='First'){searchStarted.resolve();await heldSearch.promise;}
+      return {sessions:[...sessions.values()].filter(session=>!term||session.conversation.some(turn=>turn.prompt.includes(term)))};
+    },
     'GET /api/ask/session':({query})=>sessions.get(query.get('id')),
     'POST /api/ask/session':({body})=>{const saved={createdAt:Date.now(),updatedAt:Date.now(),conversation:[],...sessions.get(body.id),...body};sessions.set(body.id,saved);return saved;},
     'POST /api/ask/read':async({body})=>{
@@ -3344,7 +3451,7 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   assert.ok(await question.evaluate(element=>element===document.activeElement),'background completion preserves focus');
   await shot('ask-inbox-background-answer');
   await first.click();await page.getByRole('status').filter({hasText:'The answer to First question'}).waitFor();
-  await page.locator('.pharos-receipt').filter({hasText:'Seen'}).waitFor();
+  await first.locator('.pharos-history-state').filter({hasText:'Seen'}).waitFor();
   finish.get('Second question')();await settled();
   assert.ok(calls.some(call=>call.path==='/api/ask/read'),'viewing an answer saves a receipt');
   const transcript=page.getByRole('region',{name:'Chat messages, scroll for earlier replies'});
@@ -3358,7 +3465,7 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   await first.click();await page.getByRole('status').filter({hasText:'The answer to First question'}).waitFor();
   await second.click();await page.getByRole('button',{name:'Try again',exact:true}).click();
   await page.getByRole('status').filter({hasText:'Recovered answer'}).waitFor();
-  await page.locator('.pharos-receipt').filter({hasText:'Seen'}).waitFor();
+  await second.locator('.pharos-history-state').filter({hasText:'Seen'}).waitFor();
   const acknowledged=page.waitForResponse(response=>response.url().endsWith('/api/ask/read')&&response.request().postDataJSON()?.startedAt===secondAttempt);
   releaseReceipt();const response=await acknowledged;await response.finished();await settled();
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
@@ -3371,6 +3478,20 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   assert.match(await first.getAttribute('aria-describedby').then(id=>page.locator('#'+id).textContent()),/Current chat/);
   await second.click();await page.getByRole('status').filter({hasText:'Recovered answer'}).waitFor();
   assert.equal(await second.getAttribute('aria-current'),'true');assert.equal(await first.getAttribute('aria-current'),'false');
+  await shot('ask-inbox-selected');
+  const sendsBeforeSearch=calls.filter(call=>call.path==='/api/ask/send').length;
+  const filter=drawer.getByRole('searchbox',{name:'Find a prior chat',exact:true}),search=drawer.getByRole('button',{name:'Search',exact:true});
+  await filter.fill('First');await search.click();await searchStarted.promise;
+  await drawer.getByRole('status').filter({hasText:'Searching…'}).waitFor();
+  await shot('ask-inbox-searching');
+  await filter.fill('Second');await filter.press('Enter');
+  await second.waitFor();await drawer.getByRole('status').filter({hasText:'Searching…'}).waitFor({state:'hidden'});
+  const stale=page.waitForResponse(response=>response.url().includes('/api/ask/sessions?')&&new URL(response.url()).searchParams.get('q')==='First');
+  heldSearch.resolve();await stale;await settled();
+  assert.equal(await first.count(),0,'an older search must not replace the latest results');
+  assert.ok(await filter.evaluate(element=>element===document.activeElement),'search keeps keyboard focus');
+  await filter.fill('');await search.click();await first.waitFor();await second.waitFor();
+  assert.equal(calls.filter(call=>call.path==='/api/ask/send').length,sendsBeforeSearch,'searching does not send a question');
   await newChat.click();
   assert.equal(await first.getAttribute('aria-current'),'false');assert.equal(await second.getAttribute('aria-current'),'false');
   await page.setViewportSize({width:390,height:844});

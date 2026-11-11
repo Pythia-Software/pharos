@@ -243,11 +243,13 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   const { clause, result } = selected;
   if (result.error) throw new Error(result.error);
   // All-time clock-hour covers fold native hourly totals rather than loading
-  // every message's text into the bounded contribution study.
+  // every message's text into the bounded contribution study. A bucket of
+  // several hours would credit its later hours to its first, so only one-hour
+  // buckets fold.
   const hourly = recipe?.measures.find(metric => metric.id === clause.id);
   if (recipe?.humanStudy === "hours" && !options.window && humanStudyCoverMatches(recipe, options.cover, options.coverMetricId)
     && clause.op === "sum" && clause.field === "typed_words" && !clause.expression && !clause.distribution && !clause.expressionY
-    && JSON.stringify(clause.groupBy) === JSON.stringify(hourly?.groupBy) && clause.dateGrouping?.interval === "hour") {
+    && JSON.stringify(clause.groupBy) === JSON.stringify(hourly?.groupBy) && clause.dateGrouping?.interval === "hour" && (clause.dateGrouping.every ?? 1) === 1) {
     if (payload.find?.limited || payload.find?.search?.complete === false || result.coverage === "partial" || result.hiddenGroups || (result.groupCount ?? 0) > result.buckets.length || result.buckets.some(bucket => bucket.error || bucket.yError || typeof bucket.value !== "number")) throw new Error("Complete hourly totals are required for the clock-hour view.");
     const timeZone = clause.dateGrouping.timeZone ?? "UTC", format = new Intl.DateTimeFormat("en-US", { hour: "2-digit", hourCycle: "h23", timeZone });
     const hours = Array.from({ length: 24 }, (_, hour) => ({ label: `${String(hour).padStart(2, "0")}:00`, value: 0 }));

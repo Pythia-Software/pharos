@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -385,6 +386,160 @@ func TestDelegationPaginationFilteringAndSnapshot(t *testing.T) {
 		t.Fatal("workspace scope must be enforced")
 	}
 }
+func TestDelegationTimelineSnapshotDependencies(t *testing.T) {
+	c, config := testCatalog(t)
+	seedDelegation(t, c)
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('unrelated-work','codex','local','unrelated','Other work','2026-01-01')`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('other-unrelated-work','codex','local','other-unrelated','Another work','2026-01-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('unrelated','unrelated-work','codex','local','unrelated')`)
+	server := testServer(t, config, c)
+	base := "/api/work/delegation-work/delegation?limit=1"
+	_, page := delegationGET(t, server, base)
+	before, err := c.delegationSnapshot(t.Context(), "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := `INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule) VALUES(?,'late','record','launch_outcome','launch:call-late','','derived','test/v1')`
+	fixtureExec(t, c, claim, "unrelated")
+	fixtureExec(t, c, `UPDATE conversations SET workspace_id='other-unrelated-work' WHERE id='unrelated'`)
+	after, err := c.delegationSnapshot(t.Context(), "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before || after.Revision == before.Revision || after.ID != before.ID {
+		t.Fatalf("unrelated evidence must refresh the cached resolution but preserve the view token: %s -> %s, revisions %v -> %v", before.ID, after.ID, before.Revision, after.Revision)
+	}
+	if _, _, err := c.delegationTimelineMessages(t.Context(), before, []string{"root-session"}, 0, 4e12); err != nil {
+		t.Fatal("unrelated evidence invalidated the lane transaction", err)
+	}
+	if status, body := delegationGET(t, server, "/api/work/delegation-work/parallel?sessions=root-session&labels=1&snapshot="+before.ID); status != 200 || body["snapshot"] != before.ID {
+		t.Fatal("unrelated evidence invalidated the timeline", status, body)
+	}
+	if status, body := delegationGET(t, server, base+"&cursor="+url.QueryEscape(firstString(page["next_cursor"]))); status != 200 || body["snapshot"] != before.ID {
+		t.Fatal("unrelated evidence invalidated pagination", status, body)
+	}
+	// Evidence-only changes still expire the view even if the visible rows
+	// happen to be identical: later lane ownership reads depend on it.
+	fixtureExec(t, c, claim, "root")
+	changed, err := c.delegationSnapshot(t.Context(), "delegation-work")
+	if err != nil || changed.ID == before.ID {
+		t.Fatal("local execution evidence must expire the view", err)
+	}
+	if _, _, err := c.delegationTimelineMessages(t.Context(), before, []string{"root-session"}, 0, 4e12); !errors.Is(err, errDelegationSnapshotChanged) {
+		t.Fatal("changed dependencies must reject a stale lane transaction", err)
+	}
+	if status, body := delegationGET(t, server, "/api/work/delegation-work/parallel?sessions=root-session&labels=1&snapshot="+before.ID); status != 409 || body["code"] != "snapshot_changed" {
+		t.Fatal("changed dependencies must reject a stale timeline", status, body)
+	}
+}
+
+func TestDelegationTimelineExternalDependencies(t *testing.T) {
+	for _, change := range []string{"parent evidence", "late original", "deleted original", "conversation workspace", "session workspace", "workspace move", "parent workspace"} {
+		t.Run(change, func(t *testing.T) {
+			c := executionFixture(t,
+				executionFixtureConversation{id: "parent", workspace: "parent-work"},
+				executionFixtureConversation{id: "fork", workspace: "fork-work", parent: "parent", depth: 1})
+			message := `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected) VALUES(?,?,'evt_copy','user','message','x','x','2026-01-01T00:00:30Z',1)`
+			fixtureExec(t, c, message, "fork-copy", "fork")
+			if change == "deleted original" {
+				fixtureExec(t, c, message, "parent-original", "parent")
+			}
+			before, err := c.delegationSnapshot(t.Context(), "fork-work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if change == "workspace move" {
+				lanes, _, err := c.delegationTimelineMessages(t.Context(), before, []string{"s-fork"}, 0, 4e12)
+				if err != nil || len(lanes["s-fork"]["messages"].([]map[string]any)) != 1 {
+					t.Fatal("fixture must have a populated lane before regrouping", err, lanes)
+				}
+			}
+			switch change {
+			case "parent evidence":
+				fixtureExec(t, c, `INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule) VALUES('parent','late','record','launch_outcome','launch:call-late','','derived','test/v1')`)
+			case "late original":
+				// This append changes occurrence ownership alone. Execution
+				// identity and its revision remain the same.
+				fixtureExec(t, c, message, "parent-original", "parent")
+			case "deleted original":
+				fixtureExec(t, c, `DELETE FROM messages WHERE id='parent-original'`)
+			case "conversation workspace":
+				fixtureExec(t, c, `UPDATE conversations SET workspace_id='parent-work' WHERE id='fork'`)
+			case "session workspace":
+				fixtureExec(t, c, `UPDATE agent_sessions SET workspace_id='parent-work' WHERE id='s-fork'`)
+			case "workspace move":
+				execTx(t, c.DB,
+					`UPDATE conversations SET workspace_id='parent-work' WHERE id='fork'`,
+					`UPDATE agent_sessions SET workspace_id='parent-work' WHERE id='s-fork'`)
+			case "parent workspace":
+				execTx(t, c.DB,
+					`UPDATE conversations SET workspace_id='fork-work' WHERE id='parent'`,
+					`UPDATE agent_sessions SET workspace_id='fork-work' WHERE id='s-parent'`)
+			}
+			after, err := c.delegationSnapshot(t.Context(), "fork-work")
+			if err != nil || after.ID == before.ID {
+				t.Fatal("external dependencies must expire the token", err)
+			}
+			if change == "late original" && after.Revision != before.Revision {
+				t.Fatal("fixture must preserve execution identity while changing copied-message ownership")
+			}
+			// A warm execution digest cache must not bypass placement checks.
+			if _, err := executionDependencyDigests(t.Context(), c.DB); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := c.delegationTimelineMessages(t.Context(), before, []string{"s-fork"}, 0, 4e12); !errors.Is(err, errDelegationSnapshotChanged) {
+				t.Fatal("external dependency change must reject stale lanes", err)
+			}
+			if change == "late original" {
+				lanes, _, err := c.delegationTimelineMessages(t.Context(), after, []string{"s-fork"}, 0, 4e12)
+				if err != nil || len(lanes["s-fork"]["messages"].([]map[string]any)) != 0 || lanes["s-fork"]["inherited_messages"] != 1 {
+					t.Fatal("refreshed lane must exclude the newly recognized copy", err, lanes)
+				}
+			}
+			if change == "workspace move" {
+				moved, err := c.delegationSnapshot(t.Context(), "parent-work")
+				if err != nil {
+					t.Fatal(err)
+				}
+				lanes, _, err := c.delegationTimelineMessages(t.Context(), moved, []string{"s-fork"}, 0, 4e12)
+				if err != nil || len(lanes["s-fork"]["messages"].([]map[string]any)) != 1 {
+					t.Fatal("a refreshed lane must show its messages in the destination workspace", err, lanes)
+				}
+			}
+		})
+	}
+}
+
+func TestDelegationTimelineMissingReferentArrives(t *testing.T) {
+	c := executionFixture(t, executionFixtureConversation{id: "root", workspace: "root-work"})
+	fixtureExec(t, c, `INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule) VALUES('root','late','record','launch_outcome','launch:call-late',?,'derived','test/v1')`, executionNativeKey("codex", "local", "missing"))
+	before, err := c.delegationSnapshot(t.Context(), "root-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// There was no conversation ID to capture for the referent at the time
+	// of the first read. Its arrival joins the component through the lookup key.
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('new-work','codex','local','new','New work','2026-01-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('arrived','new-work','codex','local','missing')`)
+	after, err := c.delegationSnapshot(t.Context(), "root-work")
+	if err != nil || after.ID == before.ID {
+		t.Fatal("a newly answered dependency must expire the token", err)
+	}
+	if _, _, err := c.delegationTimelineMessages(t.Context(), before, []string{"s-root"}, 0, 4e12); !errors.Is(err, errDelegationSnapshotChanged) {
+		t.Fatal("a newly answered dependency must reject stale lanes", err)
+	}
+	fixtureExec(t, c, `DELETE FROM conversations WHERE id='arrived'`)
+	deleted, err := c.delegationSnapshot(t.Context(), "root-work")
+	if err != nil || deleted.ID == after.ID {
+		t.Fatal("a removed referent must expire the token", err)
+	}
+	if _, _, err := c.delegationTimelineMessages(t.Context(), after, []string{"s-root"}, 0, 4e12); !errors.Is(err, errDelegationSnapshotChanged) {
+		t.Fatal("a removed referent must reject stale lanes", err)
+	}
+}
+
 func TestDelegationTimelineWindowEvidenceAndErrorReferences(t *testing.T) {
 	c, config := testCatalog(t)
 	seedDelegation(t, c)
@@ -408,8 +563,8 @@ INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_mes
 		t.Fatal("requested lane scope")
 	}
 	childMark := lanes[0].(map[string]any)["marks"].([]any)[0].(map[string]any)
-	if childMark["end_known"] != false {
-		t.Fatal("missing end evidence must not imply a zero-duration call")
+	if childMark["end_known"] != false || childMark["start"] != childMark["end"] {
+		t.Fatalf("missing end evidence must be represented as a point, not a duration: %v", childMark)
 	}
 	mark := lanes[1].(map[string]any)["marks"].([]any)[0].(map[string]any)
 	if mark["error"] != true || mark["tool_id"] != "t-error" {

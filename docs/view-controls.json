@@ -120,6 +120,10 @@
       "field": "disclosures"
     },
     {
+      "file": "web/src/reader-navigator.tsx",
+      "field": "disclosures"
+    },
+    {
       "file": "web/src/thinking-dashboard.tsx",
       "field": "disclosures"
     },
@@ -429,6 +433,10 @@
     },
     {
       "file": "web/src/delegation.tsx",
+      "field": "timeline_visibility"
+    },
+    {
+      "file": "web/src/reader-navigator.tsx",
       "field": "timeline_visibility"
     }
   ],
@@ -779,6 +787,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:17fab1344161a155:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-history-search-button cursor-interaction\">",
+      "contract": "action",
+      "reason": "Runs the private Ask chat history search using the existing history filter."
+    },
+    {
       "key": "fragment:18322884faef50c0:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -888,6 +905,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:712048819a5a92d8:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-new-chat cursor-interaction\" aria-label=\"New chat\">",
+      "contract": "action",
+      "reason": "Starts a fresh private Ask chat while preserving requests in other chats; the selected chat continues to use ask_chat."
+    },
+    {
       "key": "fragment:7597ea97e661871b:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -949,15 +975,6 @@
       "control": "<details class=\"pharos-activity\" hidden>",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
-      "key": "fragment:92fa25b9d573a1de:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-new-chat cursor-interaction\">",
-      "contract": "action",
-      "reason": "Starts a fresh private Ask chat while preserving requests in other chats; the selected chat continues to use ask_chat."
     },
     {
       "key": "fragment:9669fb9a199fe943:0",
@@ -5287,15 +5304,6 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
-      "key": "7387f1cf2fb13437:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "button",
-      "control": "onClick={() => { resetPage(); setRevision((v) => v + 1); }}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
       "key": "7c36e39864e8e78f:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5351,6 +5359,15 @@
       "control": "onClick={() => single ? setReaderView(t) : display(t)} onKeyDown={(event) => { if ( ![\"ArrowLeft\", \"ArrowRight\", \"Home\", \"End\"].includes( event.key, ) ) return; event.preventDefault(); const nextIndex = event.key === \"Home\" ? 0 : event.key === \"End\" ? tabs.length - 1 : (index + (event.key === \"ArrowRight\" ? 1 : tabs.length - 1)) % tabs.length; if (single) setReaderView(tabs[nextIndex]); else display(tabs[nextIndex]); event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>(\"button\")[nextIndex].focus(); }}",
       "contract": "view.reader_view",
       "reason": "Single-agent tabs bind reader_view through useViewState; workspace tabs use the existing explorer URL owner (readDelegationRoute/display), including keyboard selection and workspace-history restoration."
+    },
+    {
+      "key": "ee2c45eb4ad775d6:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "onClick={() => { snapshotRecovery.current.reset(); resetPage(); setRevision((v) => v + 1); }}",
+      "contract": "delegation",
+      "reason": "Refresh analysis retries current archive reads and resets delegation_page through useViewState; zoom, selected session and disclosures retain their URL owners. The recovery retry budget is transient request state."
     },
     {
       "key": "ef8df6715bf8aa5d:0",
@@ -7692,6 +7709,16 @@
       "reason": "A whole-key default atomically writes reader_filter_level, reader_filter, reader_writing, reader_events, reader_labels and reader_highlight_hidden through the classic reader owner; its selected radio is derived from those fields."
     },
     {
+      "key": "80bfd41f2f6475ec:0",
+      "file": "web/src/reader-key-filter.tsx",
+      "owner": "ReaderKeyFilter",
+      "tag": "button",
+      "control": "data-view-field=\"reader_highlight_hidden\" onClick={() => onChange(visible ? [] : all, true)}",
+      "binding": "reader_highlight_hidden",
+      "contract": "view.reader_highlight_hidden",
+      "reason": "The master toggle writes reader_writing, reader_events, reader_labels and available highlight exclusions through the classic reader owner; unavailable exclusions are preserved."
+    },
+    {
       "key": "58b5064e2d686b61:0",
       "file": "web/src/reader-navigator.tsx",
       "owner": "choice",
@@ -7700,6 +7727,16 @@
       "binding": "reader_navigator",
       "contract": "view.reader_navigator",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "4c7e0bb9e5848e3c:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "TimelineLegend",
+      "control": "data-view-field=\"timeline_visibility\" onSelect={(section,values,action)=>setVisibility(previous=>updateTimelineVisibility(previous,section,values,action))}",
+      "binding": "timeline_visibility",
+      "contract": "view.timeline_visibility",
+      "reason": "The embedded timeline key writes timeline_visibility through the shared view state and filters the reader's ribbon."
     },
     {
       "key": "5c536168277a2959:0",
@@ -7736,6 +7773,26 @@
       "control": "onClick={()=>data.jumpContext(entry)}",
       "contract": "transient",
       "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
+    },
+    {
+      "key": "29cfe359713cf44e:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderRibbonSection",
+      "tag": "span",
+      "control": "onClick={event=>{event.preventDefault();event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width);}}",
+      "contract": "transient",
+      "reason": "Clicking a ribbon scrolls and highlights its source message; scroll position is transient and the accordion uses ViewDisclosure."
+    },
+    {
+      "key": "e14ad9c01a55f876:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderRibbonSection",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={viewKey}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "110c067b8fa806e8:0",
@@ -8729,6 +8786,15 @@
       "reason": "Range and preset-driven time buckets update the shared Thinking URL state. Date inputs use the viewer’s local zone; custom and brushed boundaries remain half-open ISO instants."
     },
     {
+      "key": "25857434f6090cdb:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "button",
+      "control": "onClick={() => setReload((n) => n + 1)}",
+      "contract": "editing",
+      "reason": "Try again retries a failed read without changing the applied view."
+    },
+    {
       "key": "27abd21aa517ce02:0",
       "file": "web/src/thinking-dashboard.tsx",
       "owner": "ThinkingDashboard",
@@ -8886,15 +8952,6 @@
       "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
     },
     {
-      "key": "fe037810cdd7016d:0",
-      "file": "web/src/thinking-dashboard.tsx",
-      "owner": "ThinkingDashboard",
-      "tag": "button",
-      "control": "onClick={() => setRefresh((n) => n + 1)}",
-      "contract": "editing",
-      "reason": "Refresh retries a read without changing the applied view."
-    },
-    {
       "key": "ff2a2d2e22b3d073:0",
       "file": "web/src/thinking-dashboard.tsx",
       "owner": "ThinkingDashboard",
@@ -8934,6 +8991,16 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "The shared disclosure keeps the Key control visible in both presentations. disclosures[\"timeline-key\"] stores the expanded labeled Key (default true) or the compact icon-only Key; icons retain their existing visibility menus."
+    },
+    {
+      "key": "bb7bbe4ad6c301fc:0",
+      "file": "web/src/timeline-legend.tsx",
+      "owner": "TimelineLegend",
+      "tag": "button",
+      "control": "data-view-field=\"timeline_visibility\" onClick={()=>onSelect('sections',populated.map(([section])=>section),visible?'hide':'show')}",
+      "binding": "timeline_visibility",
+      "contract": "view.timeline_visibility",
+      "reason": "The embedded timeline master toggle updates timeline_visibility for the sections represented by this conversation."
     },
     {
       "key": "c2ef28fbea4ddd0a:0",
@@ -9264,11 +9331,11 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "700edc4b2becb461:0",
+      "key": "c202d5e5f4e27369:0",
       "file": "web/src/usage-chart.tsx",
       "owner": "CustomPeriod",
       "tag": "input",
-      "control": "aria-label={`Number of ${period}`} value={draft} onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber)) onChange(event.target.valueAsNumber); }} onBlur={() => setDraft(String(value))}",
+      "control": "aria-label={`Number of ${period}`} value={draft} onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber) && event.target.valueAsNumber <= max) onChange(event.target.valueAsNumber); }} onBlur={() => setDraft(String(value))}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
@@ -9289,6 +9356,15 @@
       "control": "onClick={onExpand}",
       "contract": "dashboard",
       "reason": "The shared legend delegates expansion to AnalysisTrend, which writes analyze_chart.seriesLimit through changeState and the dashboard URL owner. Group outlines add no independent state."
+    },
+    {
+      "key": "1875b96cf86486ff:0",
+      "file": "web/src/usage-chart.tsx",
+      "owner": "PeriodControl",
+      "tag": "ChartSelect",
+      "control": "value={String(view.hours)} onChange={value => onChange({ hours: Number(value) })}",
+      "contract": "dashboard",
+      "reason": "The page's applied view (analyze_chart, or view.thinking on Thinking) carries the chosen hours; the select offers only hour counts the page's engine supports."
     },
     {
       "key": "5c8d176e8700d3fd:0",
@@ -9495,6 +9571,15 @@
       "control": "\"button\"",
       "contract": "action",
       "reason": "Transient context menu action clears linked attention from the URL."
+    },
+    {
+      "key": "49d6d21da0c782c6:0",
+      "file": "web/src/view-attention.ts",
+      "owner": "syncDismissButtons",
+      "tag": "button",
+      "control": "\"button\"",
+      "contract": "action",
+      "reason": "Dismisses linked attention by clearing its highlight and reveal URL parameters."
     },
     {
       "key": "a77d7bde4338f61f:0",

@@ -37,6 +37,43 @@ function shortText(value,limit=150){const text=String(value??'').replace(/\s+/g,
 function displayText(message){const value=messageJSON(message);return commonEventText(value)||(value?eventDescription(value):String(message?.text??''))}
 function eventDescription(value){if(Array.isArray(value))return `${value.length} recorded items`;if(!value||typeof value!=='object')return String(value??'');return shortText([value.type||value.kind||'Recorded event',value.subtype,value.description||value.summary||value.status].filter(Boolean).join(' · '),180)}
 
+// Claude exports keep citations beside the prose, not in its Markdown.
+// Link only web URLs; document citations retain their source label and quote.
+function messageCitations(message){
+  const value=messageJSON(message,true);
+  const citations=[...(Array.isArray(value?.citations)?value.citations:[])];
+  if(value?.display_content?.type==='rich_link'&&value.display_content.link)citations.push({details:value.display_content.link});
+  return citations.map(citation=>{
+    const details=citation.details||citation;let url='';
+    try{const parsed=new URL(details.url);if(['http:','https:'].includes(parsed.protocol))url=parsed.href}catch{}
+    return {title:details.title||details.file_name||details.document_title||url||details.type||'Recorded citation',url,quote:details.cited_text||citation.cited_text||''};
+  });
+}
+function attachmentSummary(message){
+  const value=messageJSON(message)||{};
+  if(value.file_name||value.title)return String(value.file_name||value.title);
+  if(Array.isArray(value.file_names))return value.file_names.filter(Boolean).join(', ')||`${value.file_names.length} files attached`;
+  if(value.type==='image')return 'Image'+(value.file_uuid?' · '+value.file_uuid:'');
+  if(value.file_uuid)return 'Document · '+value.file_uuid;
+  return `${value.count||1} ${value.count===1?'image':'images'} attached`;
+}
+function exportDocumentSections(value){
+  if(value?.type!=='export_file')return [];
+  if(/\.md(?:own)?$/i.test(value.file_name||'')&&typeof value.extracted_content==='string')return [{title:value.file_name,text:value.extracted_content}];
+  if(!String(value.file_name||'').endsWith('.json'))return [];
+  const document=parsedJSON(value.extracted_content),sections=[];
+  const visit=(item,label)=>{
+    if(Array.isArray(item)){item.forEach((entry,index)=>visit(entry,`${label} ${index+1}`));return}
+    if(!item||typeof item!=='object')return;
+    const title=item.filename||item.file_name||item.path||item.name||item.period||label;
+    for(const [key,text] of Object.entries(item)){
+      if(typeof text==='string'&&text.trim()&&['content','text','body','description','prompt_template','instructions','prompt'].includes(key))sections.push({title:key==='content'||key==='text'||key==='body'?String(title):`${title} · ${key.replace(/_/g,' ')}`,text});
+      else if(text&&typeof text==='object')visit(text,String(title));
+    }
+  };
+  visit(document,value.file_name);return sections;
+}
+
 // Token accounting
 // Cached input is part of Codex input; Claude reports it separately. Reasoning is
 // part of output. Never add either subset a second time to a reported total.
@@ -282,8 +319,24 @@ function conversationGraph(messages){
   messages.filter(message=>message.parent_native_id).forEach(message=>{if(!childrenByParent.has(message.parent_native_id))childrenByParent.set(message.parent_native_id,[]);childrenByParent.get(message.parent_native_id).push(message);});
   messages.filter(message=>message.call_id&&['delegation_result','tool_result','error'].includes(message.kind)).forEach(message=>{const delegation=delegationCalls.has(message.call_id),regular=(message.kind==='tool_result'||message.kind==='error')&&toolCalls.has(message.call_id),map=delegation?delegationResultsByCall:regular?toolResultsByCall:null;if(map){if(!map.has(message.call_id))map.set(message.call_id,[]);map.get(message.call_id).push(message);consumed.add(message.native_id)}});
   const parentIds=new Set(messages.filter(message=>message.kind==='delegation').flatMap(message=>[message.native_id,message.call_id]).filter(Boolean)),top=messages.filter(message=>(!message.parent_native_id||!parentIds.has(message.parent_native_id))&&!consumed.has(message.native_id)),turns=[];
+  // Export summaries are archive metadata, not an extra agent setup turn.
+  // Keep them with the first recorded user turn when one exists.
+  const user=top.find(message=>message.role==='user'&&message.kind==='message');
+  if(user){const metadata=top.filter(message=>message.kind==='metadata'&&messageJSON(message)?.type==='claude_ai_conversation');for(const message of metadata)top.splice(top.indexOf(message),1);top.splice(top.indexOf(user)+1,0,...metadata)}
   let current=null;for(const message of top){if(message.role==='user'&&message.kind==='message'){if(current)turns.push(current);current={human:message,events:[]}}else{if(!current)current={human:null,events:[]};current.events.push(message)}}if(current)turns.push(current);
   return{childrenByParent,delegationResultsByCall,toolResultsByCall,consumed,turns};
+}
+function turnSummaryData(conversation){
+  return conversationGraph(conversationMessages(conversation)).turns.map(turn=>({
+    human:turn.human,
+    response:turn.events.filter(message=>message.kind==='message').at(-1)||null,
+    prompt:messageSummary(turn.human)||'Agent setup',
+    outcome:messageSummary(turn.events.filter(message=>message.kind==='message').at(-1))||'',
+    replies:turn.events.filter(message=>message.kind==='message').length,
+    activities:turn.events.filter(message=>message.kind!=='message').length,
+    tools:turn.events.filter(message=>message.kind==='tool_call').length,
+    subagents:turn.events.filter(message=>message.kind==='delegation').length,
+  }));
 }
 // A compact outline for result cards, using the reader's normalized graph.
 // Inline delegations stay under their owning turn; paired results are not turns.
@@ -314,10 +367,175 @@ function ownedMessages(roots,context,visited=new Set()){const owned=[],queue=roo
 // Tool calls
 function readableValue(value){if(typeof value==='string'){const parsed=parsedJSON(value);return parsed?readableValue(parsed):value}if(Array.isArray(value))return value.map(readableValue).filter(Boolean).join('\n');if(value&&typeof value==='object')return commonEventText(value)||value.text||value.content&&readableValue(value.content)||value.output&&readableValue(value.output)||JSON.stringify(value,null,2);return String(value??'')}
 function toolPayload(message){const parsed=messageJSON(message);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))return{raw:parsed,input:{value:message?.text??''},name:'',content:message?.text??''};let source=parsed.input??parsed.arguments??parsed;source=parsedJSON(source)||source;const input=conventionalInput(source&&typeof source==='object'&&!Array.isArray(source)?source:{value:source});return{raw:parsed,input,name:String(parsed.tool||parsed.name||''),content:parsed.content??parsed.output??parsed.result??''}}
+// MCP tool names have used both server__method and server.method. Match known
+// families explicitly; an arbitrary tool with “edit” in its name stays generic.
+function mcpIdentity(message){
+  const name=toolPayload(message).name,match=name.match(/^mcp__(.+)(?:__|\.)([^.]+)$/i);
+  if(!match)return null;
+  const server=match[1].toLowerCase(),method=match[2].toLowerCase();
+  const family=server==='claude_docs'?'docs':server==='memory'?'memory':server==='gmail'?'gmail':/^(?:remote_)?claude-in-chrome$|^(?:remote-devices__)?claude_browser$|^chrome$/.test(server)?'browser':server==='remote-devices'?'device':server==='pharos'?'pharos':server==='conductor'?'conductor':server==='codex_apps'&&method.startsWith('github_')?'github':server==='codex_apps__github'?'github':'';
+  return family?{family,method:family==='github'?method.replace(/^github_/,''):method}:null;
+}
+// Some Docs receipts append viewer instructions after their JSON. Decode only
+// the balanced first value; the rest remains accessible in the raw result.
+function mcpJSON(value){
+  if(typeof value!=='string')return value;
+  const parsed=parsedJSON(value);if(parsed!==null)return parsed;
+  const text=value.trimStart();if(!text.startsWith('{')&&!text.startsWith('['))return value;
+  let depth=0,quoted=false,escaped=false;
+  for(let i=0;i<text.length;i++){const c=text[i];if(quoted){if(escaped)escaped=false;else if(c==='\\')escaped=true;else if(c==='"')quoted=false;continue}if(c==='"')quoted=true;else if(c==='{'||c==='[')depth++;else if(c==='}'||c===']'){if(--depth===0)return parsedJSON(text.slice(0,i+1))??value}}
+  return value;
+}
+function mcpRecords(results){
+  const records=[];
+  const visit=(value,depth)=>{if(depth>10)return;const decoded=mcpJSON(value);if(decoded!==value){visit(decoded,depth+1);return}if(Array.isArray(value)){value.forEach(item=>visit(item,depth+1));return}if(!value||typeof value!=='object')return;records.push(value);for(const key of ['content','output','result','structuredContent','structured_content','acks','operation_results'])if(value[key]!=null)visit(value[key],depth+1);if(['text','input_text','output_text'].includes(value.type))visit(value.text,depth+1)};
+  results.forEach(result=>{visit(toolPayload(result).raw,0);visit(result.mcp_receipts,0)});return records;
+}
+// Outcome flags belong to MCP envelopes and Docs receipts. A fetched JSON
+// file or a web page containing an “error” field is still successful data.
+function mcpOutcome(results,family=''){
+  if(!results.length)return'missing';
+  let failed=results.some(r=>r.kind==='error'),applied=false,unknown=false;
+  const visit=(value,depth,envelope=false)=>{
+    if(depth>10)return;const decoded=mcpJSON(value);if(decoded!==value){visit(decoded,depth+1,envelope);return}
+    if(Array.isArray(value)){value.forEach(item=>visit(item,depth+1));return}if(!value||typeof value!=='object')return;
+    const wrapper=envelope||(Array.isArray(value.content)&&value.content.every(block=>block&&typeof block.type==='string'))||'structuredContent' in value||'structured_content' in value||('isError' in value&&Array.isArray(value.content))||('is_error' in value&&'content' in value);
+    if(wrapper&&(value.is_error===true||value.isError===true||value.error))failed=true;
+    if(family==='docs'){
+      if(['deny','denied','reject','rejected','error'].includes(value.verdict)||['failed','rejected'].includes(value.status))failed=true;
+      if(value.verdict==='allow'||value.status==='applied')applied=true;
+      if(value.status==='unknown'||value.commit_status==='unknown')unknown=true;
+      for(const key of ['acks','operation_results'])if(value[key])visit(value[key],depth+1);
+    }
+    for(const key of ['structuredContent','structured_content'])if(value[key])visit(value[key],depth+1,true);
+    if(wrapper)for(const key of ['content','output','result'])if(value[key]!=null)visit(value[key],depth+1);
+    if(['text','input_text','output_text'].includes(value.type))visit(value.text,depth+1);
+  };
+  results.forEach(result=>{visit(toolPayload(result).raw,0,true);visit(result.mcp_receipts,0)});
+  return failed?(applied?'partial':'failed'):unknown?'unknown':'recorded';
+}
+function mcpCategory(identity){
+  const {family,method}=identity;
+  if(family==='browser')return'web';
+  if(family==='device')return method==='device_bash'?'command':'tool';
+  if(family==='gmail')return'search';
+  if(family==='docs')return ['update','create','batch'].includes(method)?'edit':'read';
+  if(family==='memory')return /write|edit|delete/.test(method)?'edit':/search/.test(method)?'search':'read';
+  if(family==='conductor')return method==='diffcomment'?'edit':'read';
+  return /search|query/.test(method)?'search':'read';
+}
+function mcpTextSections(results){
+  const sections=[];
+  const visit=(value,depth=0)=>{if(depth>8||value==null)return;const decoded=mcpJSON(value);if(decoded!==value){visit(decoded,depth+1);return}if(typeof value==='string'){if(value.trim())sections.push({text:value,format:'text'});return}if(Array.isArray(value)){value.forEach(item=>visit(item,depth+1));return}if(typeof value!=='object')return;if(value.structuredContent??value.structured_content){visit(value.structuredContent??value.structured_content,depth+1);return}if(value.type==='text'||value.type==='input_text'||value.type==='output_text'){visit(value.text,depth+1);return}if(value.parsed?.body){sections.push({title:value.parsed.name||value.path,text:value.parsed.body,format:'markdown'});return}for(const key of ['content','output','result','text','body','markdown'])if(value[key]!=null){visit(value[key],depth+1);return}sections.push({text:JSON.stringify(value,null,2),format:'code'})};
+  results.forEach(result=>visit(toolPayload(result).raw));return sections;
+}
+function mcpXMLText(xml){
+  return String(xml||'').replace(/<gap\b[^>]*\/>/g,'\n[Excerpt: blocks omitted]\n').replace(/<\/(?:paragraph|list|row|doc)>/g,'\n').replace(/<[^>]*>/g,'').replace(/&(lt|gt|amp|quot|apos);/g,(_,entity)=>({lt:'<',gt:'>',amp:'&',quot:'"',apos:"'"})[entity]).trim();
+}
+function mcpMarkdownExport(data){
+  if(data?.format!=='markdown'||typeof data.bytes_b64!=='string'||data.bytes_b64.length>2_000_000)return'';
+  try{const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/',source=data.bytes_b64.replace(/\s/g,'');if(!/^[A-Za-z0-9+/]*={0,2}$/.test(source)||source.length%4)return'';let bits=0,buffer=0,encoded='';for(const c of source.replace(/=+$/,'')){buffer=(buffer<<6)|alphabet.indexOf(c);bits+=6;if(bits>=8){bits-=8;encoded+='%'+((buffer>>bits)&255).toString(16).padStart(2,'0')}}return decodeURIComponent(encoded)}catch{return''}
+}
+// A presentation is source evidence, never a reconstructed document version.
+// Unknown operations fall back to the original generic tool view.
+function mcpPresentation(message,results=[],artifactLinks={}){
+  if(message.kind!=='tool_call')return null;
+  const identity=mcpIdentity(message);if(!identity)return null;
+  const {family,method}=identity,{input}=toolPayload(message),records=mcpRecords(results),status=mcpOutcome(results,family),sections=[],facts=[];
+  const add=(title,text,format='text')=>{if(typeof text==='string'&&text.trim())sections.push({title,text,format})};
+  const resultText=()=>sections.push(...mcpTextSections(results));
+  let label='',target='',href='',category='tool';
+  if(family==='docs'){
+    const receipt=records.find(r=>r.verdict||r.frame||r.created)||{},payload=mcpJSON(input.payload)||{},create=input.container?.create;
+    const artifactId=input.container?.id||receipt.frame?.slug||receipt.created?.minted,link=artifactLinks[artifactId];
+    target=link?.title||create?.name||artifactId||'Claude document';href=link?.href||'';
+    const confirmed=status==='recorded'&&records.some(r=>r.verdict==='allow'),verb=(done,request)=>confirmed?done:request;
+    category=['update','create','batch'].includes(method)?'edit':'read';
+    if(method==='update'&&Array.isArray(payload.ops)){
+      if(payload.ops.some(op=>!op||!['replace','insert','append','prepend'].includes(op.op)||typeof op.with?.from?.content!=='string'))return null;
+      const notices=records.flatMap(r=>Array.isArray(r.data?.notices)?r.data.notices.filter(Boolean):[]);let additions=0;
+      payload.ops.forEach((op,index)=>{
+        const content=op.with?.from?.content;
+        const added=op.op==='replace'&&op.target?.ids?.length>0&&notices.some(n=>n.code==='pending_ended'&&n.as==='resolved'&&n.opIndex===index&&op.target?.ids?.every(id=>n.ids?.includes(id)));
+        if(added)additions++;
+        if(['replace','insert','append','prepend'].includes(op.op)&&typeof content==='string')add(added?'Added content':op.op==='replace'?'Replacement content':'New content',content,op.with?.as==='markdown'?'markdown':'text');
+        else add('Operation',JSON.stringify(op,null,2),'code');
+      });
+      label=additions===payload.ops.length&&additions?verb('Added to document','Requested addition to document'):verb('Updated document','Requested document update');
+    }else if((method==='batch'||method==='create')&&create){label=verb('Created document','Requested document creation');add('Initial content',create.doc?.markdown,'markdown')}
+    else if(method==='batch'&&Array.isArray(input.batch)){
+      const operations=input.batch.filter(Boolean),nodes=operations.filter(op=>op.verb==='create'&&op.object==='node'&&op.engine==='prose');
+      if(!nodes.length||operations.some(op=>!(op.verb==='create'&&['file','node'].includes(op.object)||op.verb==='update'&&['file','project'].includes(op.ref?.object))))return null;
+      for(const op of nodes){const source=op.payload?.source;if(source?.as!=='markdown'||typeof source.from?.content!=='string')return null;const parent=op.payload?.parent?.id;
+        const tab=operations.flatMap(item=>Array.isArray(item.payload?.patch)?item.payload.patch:[]).find(patch=>patch?.path?.[0]==='tabs'&&patch.path[1]===parent)?.value?.name;
+        add(tab?'New tab · '+tab:'New tab',source.from.content,'markdown');
+      }
+      label=verb('Added document tab','Requested document tab');
+    }
+    else if(method==='create'&&input.object==='utterance'&&payload.value?.body){label=verb('Commented on document','Requested document comment');add('Quoted passage',payload.value.parent?.anchor?.text);add('Comment',payload.value.body,'markdown')}
+    else if(method==='read'){label=payload.kind==='search'?'Searched document':'Read document';if(payload.text)facts.push(['Search',payload.text]);const data=records.find(r=>r.data?.xml)?.data;if(data)add('Recorded excerpt',mcpXMLText(data.xml));if(data?.complete===false)facts.push(['Coverage','Partial excerpt'])}
+    else if(method==='export'){label=verb('Exported document','Requested document export');const data=records.find(r=>r.data?.bytes_b64)?.data;add(data?.name||'Exported Markdown',mcpMarkdownExport(data),'markdown');if(input.format)facts.push(['Format',input.format])}
+    else if(method==='guide'){label='Read Claude Docs guide';target=input.topic||input.engine||'Claude Docs';resultText()}
+    else return null;
+    if(status==='partial')label='Partially updated document';
+    if(!sections.length)resultText();
+  }else if(family==='memory'&&/^memory_(read|write|edit|delete|list|search)$/.test(method)){
+    label=({memory_read:'Read memory',memory_write:'Write memory',memory_edit:'Edit memory',memory_delete:'Delete memory',memory_list:'List memories',memory_search:'Search memories'})[method];target=input.path||input.query||'Memory';category=/write|edit|delete/.test(method)?'edit':'read';
+    add('Content',input.content||input.body,'markdown');resultText();
+  }else if(family==='browser'){
+    label=/^(browser_)?batch$/.test(method)?'Browser actions':method==='javascript_tool'?'Run browser JavaScript':method.replace(/_/g,' ');category='web';target=input.url||input.action_summary||input.action||input.text||'Browser';
+    if(Array.isArray(input.actions))input.actions.filter(Boolean).forEach((action,index)=>{const args=action.input||{};add(`${index+1}. ${action.name||'Browser action'}`,args.action_summary||args.url||args.text||args.action||JSON.stringify(args),/javascript/.test(action.name)?'code':'text')});
+    else add('Action',input.action_summary||input.url||input.text||input.action,/javascript/.test(method)?'code':'text');resultText();
+  }else if(family==='gmail'&&method==='search_threads'){
+    label='Search email threads';category='search';target=input.query||'Gmail';const data=records.find(r=>Array.isArray(r.threads));
+    if(data){facts.push(['Threads retained',String(data.threads.length)]);if(data.resultCountEstimate!=null)facts.push(['Estimated matches',String(data.resultCountEstimate)]);for(const thread of data.threads)add(thread.subject||thread.id,thread.snippet||thread.body);if(data.nextPageToken)facts.push(['Coverage','More results available in source'])}else resultText();
+  }else if(family==='device'&&method==='device_bash'){
+    label='Run on device';category='command';target=input.description||input.command||'Device';add('Command',input.command,'code');resultText();
+  }else if(family==='conductor'&&['getworkspacediff','getdiffcomments','diffcomment','getterminaloutput'].includes(method)){
+    label=({getworkspacediff:'Read workspace diff',getdiffcomments:'Read review comments',diffcomment:'Leave review comments',getterminaloutput:'Read terminal output'})[method];category=method==='diffcomment'?'edit':'read';target=input.file||input.source||'Conductor';
+    for(const comment of Array.isArray(input.comments)?input.comments.filter(Boolean):[])add([comment.file,comment.lineNumber].filter(Boolean).join(':'),comment.body,'markdown');resultText();
+  }else if(family==='github'&&['fetch_file','fetch','get_pr_info','fetch_pr','fetch_issue','fetch_pr_comments','fetch_issue_comments','search','search_issues','search_prs'].includes(method)){
+    label=method==='fetch_file'?'Read GitHub file':/search/.test(method)?'Search GitHub':'Read GitHub';category='read';target=[input.repository_full_name||input.repo_full_name,input.path||input.pr_number||input.issue_number||input.query].filter(Boolean).join(' · ')||input.url||'GitHub';
+    const data=records.find(r=>r.display_url)||{};if(/^https:\/\/(github\.com|api\.github\.com|raw\.githubusercontent\.com)\//.test(data.display_url||input.url||''))href=data.display_url||input.url;
+    if(method==='fetch_file')add(input.path,data.content,'code');else resultText();
+  }else if(family==='pharos'){
+    const labels={get_conversation_messages:'Read conversation messages',get_conversation_excerpt:'Read conversation excerpt',get_conversation_overview:'Read conversation overview',get_work_detail:'Read workspace',search_messages:'Search messages',search_conversations:'Search conversations',search_work:'Search workspaces',query_statistics:'Query statistics',archive_status:'Read archive status',site_link:'Resolve Pharos link'};
+    label=labels[method];if(!label)return null;category=/search|query/.test(method)?'search':'read';target=input.query||input.conversation_id||input.workspace_id||'Pharos';
+    for(const [key,value] of Object.entries(input))if(value!=null&&typeof value!=='object')facts.push([key.replace(/_/g,' '),String(value)]);
+    const data=records.find(r=>r.items||r.messages||r.rows||r.groups||r.overview||r.statistics||r.url)||records.at(-1)||{};
+    const items=data.items||data.messages;
+    for(const item of method!=='query_statistics'&&Array.isArray(items)?items.filter(Boolean):[]){
+      const prose=item.snippet||item.text||item.body||item.content;
+      if(typeof prose==='string')add(item.title||item.role||'Recorded result',prose,'markdown');
+      else{add('Title',item.title);for(const key of ['purpose','outcome','first_input','last_response','description','assignment'])add(key.replace(/_/g,' '),item[key],'markdown')}
+    }
+    if(method==='get_conversation_overview'){
+      target=data.title||target;add('Request',data.request?.text,'markdown');add('Last response',data.last_response?.text,'markdown');add('Workspace outcome',data.workspace_outcome,'markdown');add('Source note',data.note);
+    }
+    add(data.title||'Summary',data.summary,'markdown');
+    if(method==='site_link'&&/^\/(?!\/)/.test(data.url||'')){href=data.url;target=data.title||target}
+    const rows=data.rows||(method==='query_statistics'?data.items||data.groups?.map(group=>({...group.keys,...group.values})):null);
+    if(Array.isArray(rows)&&rows.length){const columns=[...new Set(rows.flatMap(row=>Object.keys(row)))].filter(key=>rows.some(row=>row[key]==null||typeof row[key]!=='object'));sections.push({title:'Results',columns,rows:rows.map(row=>columns.map(key=>row[key]==null?'Unavailable':String(row[key])))})}
+    if(method==='query_statistics'&&data.population_complete===false)facts.push(['Population','Incomplete']);
+    if(typeof data.coverage==='string')facts.push(['Coverage',data.coverage]);
+    if(!sections.length)resultText();
+    if(data.truncated||data.has_more||data.next_cursor||data.next_offset!=null)facts.push(['Coverage','More results available in source']);
+    // Retain useful scalar statistics without turning provenance into prose.
+    if(!sections.length)for(const [key,value]of Object.entries(data))if(value!=null&&typeof value!=='object')facts.push([key.replace(/_/g,' '),String(value)]);
+  }else return null;
+  if(!label)return null;
+  if(status==='failed'||status==='partial'||status==='unknown'){
+    const error=records.find(r=>r.error||r.verdict==='deny'||r.verdict==='reject');
+    resultText();
+    add('Tool outcome',typeof error?.error==='string'?error.error:error?JSON.stringify(error,null,2):status==='unknown'?'The source did not confirm the outcome.':'The tool reported an error.');
+  }
+  return{family,label,target,href,category,status,sections,facts};
+}
+
 // Antigravity names tool arguments in PascalCase; the reader looks for the conventional names.
 const INPUT_ALIASES={CommandLine:'command',AbsolutePath:'file_path',TargetFile:'file_path',DirectoryPath:'path',SearchPath:'path',Url:'url',Query:'query',Prompt:'prompt'};
 function conventionalInput(input){if(!Object.keys(INPUT_ALIASES).some(key=>key in input))return input;const result={};for(const [key,value] of Object.entries(input)){const alias=INPUT_ALIASES[key];result[alias&&!(alias in input)&&!(alias in result)?alias:key]=value}return result}
-function toolCategory(message){const payload=toolPayload(message),name=payload.name.toLowerCase(),input=payload.input;if(message.kind==='error'||payload.raw?.is_error)return'error';if(message.kind==='reasoning')return'reasoning';if(message.kind==='metadata'||message.kind==='result')return'run';if(message.kind==='context'||message.kind==='attachment')return'context';if(message.kind.includes('delegation')||/^(task|agent)$|spawn_agent/.test(name))return'agent';if(/todo|task(create|update|delete|list|get)|update_plan/.test(name))return'todo';if(/patch|edit|write|replace/.test(name))return'edit';if(/exec|command|shell|terminal|bash/.test(name)||input.cmd||input.command)return'command';if(/grep|search|find|glob|query/.test(name))return'search';if(/browser|web|navigate|click/.test(name)||input.url)return'web';if(/read|open|view|list/.test(name))return'read';return'tool'}
+function toolCategory(message){const mcp=message.kind==='tool_call'?mcpIdentity(message):null;if(mcp)return mcpCategory(mcp);const payload=toolPayload(message),name=payload.name.toLowerCase(),input=payload.input;if(message.kind==='error'||payload.raw?.is_error)return'error';if(message.kind==='reasoning')return'reasoning';if(message.kind==='metadata'||message.kind==='result')return'run';if(message.kind==='context'||message.kind==='attachment')return'context';if(message.kind.includes('delegation')||/^(task|agent)$|spawn_agent/.test(name))return'agent';if(/todo|task(create|update|delete|list|get)|update_plan/.test(name))return'todo';if(/patch|edit|write|replace/.test(name))return'edit';if(/exec|command|shell|terminal|bash/.test(name)||input.cmd||input.command)return'command';if(/grep|search|find|glob|query/.test(name))return'search';if(/browser|web|navigate|click/.test(name)||input.url)return'web';if(/read|open|view|list/.test(name))return'read';return'tool'}
 function commandKind(message){if(toolCategory(message)!=='command')return toolCategory(message);const input=toolPayload(message).input,cmd=String(input.cmd||input.command||'');if(/(?:^|[\s/;&|])(tsc|typecheck|pyright|mypy)(?=$|[\s;&|])|--noEmit/.test(cmd))return'typecheck';if(/(?:^|[\s/;&|])(pytest|vitest|jest)(?=$|[\s;&|])|\b(?:npm|pnpm|yarn|go|cargo)\s+(?:run\s+)?test\b/.test(cmd))return'test';if(/(?:^|[\s/;&|])git(?=$|[\s;&|])/.test(cmd))return'git';if(/(?:^|[\s/;&|])python(?:3(?:\.\d+)?)?(?=$|[\s;&|])/.test(cmd))return'python';if(/\b(?:eslint|ruff|lint)\b/.test(cmd))return'lint';return'command'}
 function todoItems(message,results=[]){const {input}=toolPayload(message);let items=Array.isArray(input.todos)?input.todos:Array.isArray(input.plan)?input.plan:null;if(!items)for(const result of results){const payload=toolPayload(result),value=parsedJSON(readableValue(payload.content))||payload.raw;const candidates=value?.todos||value?.tasks||value?.items||(Array.isArray(value)?value:null);if(Array.isArray(candidates))items=candidates}return(items||[input]).map(item=>({...item,content:item.content||item.text,status:item.status||(item.completed?'completed':'pending')}))}
 function describeTodoChanges(messages,context){
@@ -347,7 +565,20 @@ function fileChanges(message,result){
   else if(fallbackPath)files.push({path:fallbackPath,diff:'',unknown:true});
   return files.length?files:null;
 }
-function toolFailed(message,results){const category=toolCategory(message);return Boolean(category==='error'||toolPayload(message).raw?.is_error||results.some(item=>item.kind==='error'||toolPayload(item).raw?.is_error||Number(toolPayload(item).raw?.exit_code)>0||(category==='command'&&/^(?:Process exited with code|Exit code:)\s*[1-9]/im.test(readableValue(toolPayload(item).content)))))}
+function toolFailed(message,results){const category=toolCategory(message);return Boolean(category==='error'||toolPayload(message).raw?.is_error||(mcpIdentity(message)&&['failed','partial'].includes(mcpOutcome(results,mcpIdentity(message).family)))||results.some(item=>item.kind==='error'||toolPayload(item).raw?.is_error||Number(toolPayload(item).raw?.exit_code)>0||(category==='command'&&/^(?:Process exited with code|Exit code:)\s*[1-9]/im.test(readableValue(toolPayload(item).content)))))}
+
+// The reader uses the same action categories as the timeline ribbon.
+function readerTimelineCategory(message){
+  const payload=toolPayload(message),name=String(payload.name||'').toLowerCase(),category=toolCategory(message);
+  if(['wait_agent','wait','taskoutput'].includes(name))return 'wait';
+  if(/sleep|poll/.test(name)||name==='write_stdin')return 'poll';
+  if(category==='agent'||/delegate|spawn/.test(name)||name==='task')return 'delegate';
+  if(['read','search'].includes(category)||/read|search|glob/.test(name))return 'read';
+  if(['edit','write'].includes(category)||/patch|write/.test(name)||name==='edit')return 'write';
+  if(name.includes('git'))return 'git';
+  if(category==='web'||/web|fetch/.test(name))return 'network';
+  return category==='command'||/exec|terminal/.test(name)||name==='bash'?'run':'other';
+}
 
 // Retain calls with missing timestamps; the navigator chooses a real clock or
 // message order for the entire session before placing these marks.
@@ -357,7 +588,7 @@ function readerNavigatorMarks(model,describe=message=>({name:toolPayload(message
     const results=(message.kind==='delegation'?model.delegationResultsByCall:model.toolResultsByCall).get(message.call_id)||[],end=Date.parse(results.at(-1)?.created_at);
     return{start,end:start!==null&&Number.isFinite(end)?Math.max(start,end):null,
       end_known:start!==null&&Number.isFinite(end)&&end>=start,
-      category:({edit:'write',search:'read',command:'run',agent:'delegate',web:'network',read:'read'})[toolCategory(message)]||'other',
+      category:readerTimelineCategory(message),
       count:1,error:toolFailed(message,results),message_id:message.id,tool_id:message.call_id||message.native_id,...describe(message)};
   });
 }

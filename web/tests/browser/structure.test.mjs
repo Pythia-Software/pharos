@@ -44,6 +44,21 @@ const markdownLinkAPI = {
   },
   "POST /api/markdown-link": ({query}) => ({opened:"/workspace/"+query.get("href").split(":")[0],revealed:false}),
 };
+// Synthetic Claude export data exercises sources and non-coding attachments.
+const claudeResearchAPI = {
+  "GET /api/work/:id/conversations/:conversation": { id: rootConversation, workspace_id: workID, provider: "claude", harness: "claude-ai-export", artifact_links:{"synthetic-doc":{title:"synthetic-doc",href:`/work/${workID}/conversation/${rootConversation}?message=export-project`}}, messages: [
+    {id:"research-question",native_id:"research-question",role:"user",kind:"message",text:"Compare the published company reports."},
+    {id:"research-attachment",native_id:"research-attachment",role:"user",kind:"attachment",text:JSON.stringify({type:"file_attachment",file_name:"notes.pdf",file_type:"application/pdf",file_size:48,extracted_content:"Archived research notes\n<script>window.exportScriptRan=true</script>"})},
+    {id:"export-project",native_id:"export-project",role:"system",kind:"attachment",text:JSON.stringify({type:"export_file",file_name:"projects/report.json",extracted_content:JSON.stringify({name:"Research",docs:[{filename:"report.md",content:"# Exported report\nA document paragraph, retained with its source metadata."}]})})},
+    {id:"doc-add",native_id:"doc-add",role:"assistant",kind:"tool_call",call_id:"docs-add",text:JSON.stringify({tool:"mcp__Claude_Docs__update",input:{container:{id:"synthetic-doc"},payload:{ops:[{op:"replace",target:{ids:["pending.1"]},with:{as:"markdown",from:{kind:"inline",content:"## Added research\n\nA **readable** addition with [a source](https://example.com/report).\n\n<script>window.exportScriptRan=true</script>"}}}]}}})},
+    {id:"doc-result",native_id:"doc-result",role:"tool",kind:"tool_result",call_id:"docs-add",text:JSON.stringify({content:[{type:"text",text:JSON.stringify({verdict:"allow",data:{notices:[{code:"pending_ended",as:"resolved",opIndex:0,ids:["pending.1"]}]}})}]})},
+    {id:"stat-call",native_id:"stat-call",role:"assistant",kind:"tool_call",call_id:"stats",text:JSON.stringify({tool:"mcp__pharos__query_statistics",input:{metric:"calls"}})},
+    {id:"stat-result",native_id:"stat-result",role:"tool",kind:"tool_result",call_id:"stats",text:JSON.stringify({content:[{type:"text",text:JSON.stringify({rows:[{tool:"Docs",count:3},{tool:"Browser",count:0}]})}]})},
+    {id:"github-read",native_id:"github-read",role:"assistant",kind:"tool_call",call_id:"github-read",text:JSON.stringify({tool:"mcp__codex_apps__github.fetch_file",input:{repository_full_name:"example/repo",path:"report.md"}})},
+    {id:"github-result",native_id:"github-result",role:"tool",kind:"tool_result",call_id:"github-read",text:JSON.stringify({content:JSON.stringify({structuredContent:{encoding:"utf-8",content:"# Report",display_url:"https://github.com/example/repo/blob/main/report.md"}})})},
+    {id:"research-answer",native_id:"research-answer",role:"assistant",kind:"message",text:"The reports describe different assumptions. Review the sources before comparing their forecasts.",raw_text:JSON.stringify({type:"text",text:"The reports describe different assumptions.",citations:[{details:{type:"web_search_citation",url:"https://example.com/company/reports/annual-report",title:"Published company report"}},{details:{type:"document_citation",document_title:"Uploaded notes"}}]})},
+  ]},
+};
 const work = `/work/${workID}`;
 const tokenEvidenceAPI = {
   "GET /api/work/:id/delegation": request => {
@@ -462,6 +477,19 @@ const ROUTES = [
   { name: "Daily repository writing", url: "/cards?cards=library&card_search=human-repository-words-trend", ready: '[data-card-id="human-repository-words-trend"] .query-cover-columns' },
   { name: "Weekday distributions", url: "/cards?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
   { name: "Search table", url: "/library?view=table", ready: "#queryTableLibrary .qt-row" },
+  { name: "Claude export research", url: `${work}/conversation/${rootConversation}`, api: claudeResearchAPI, ready: ".message-citations", open: async page => {
+    await page.locator('.tool-event > summary').filter({hasText:'notes.pdf'}).click();
+    await page.locator('.tool-output').filter({hasText:'Archived research notes'}).waitFor();
+    await page.locator('.tool-event > summary').filter({hasText:'projects/report.json'}).click();
+    await page.locator('.export-document').waitFor();
+    await page.locator('.tool-event > summary').filter({hasText:'synthetic-doc'}).click();
+    await page.locator('.mcp-presentation a.markdown-link').waitFor();
+    await page.locator('.tool-event > summary').filter({hasText:'Query statistics'}).click();
+    await page.locator('.mcp-presentation table').waitFor();
+  }, shown: ".tool-event[open] .tool-output", check: async page => {
+    assert.equal(await page.locator('.claude-export-usage-note').isVisible(),true);
+    assert.equal(await page.evaluate(()=>window.exportScriptRan),undefined,'exported source is displayed as text');
+  } },
   { name: "Markdown links in transcript", url: `${work}/conversation/${rootConversation}`, api: markdownLinkAPI, ready: ".conversation-panel .markdown-link" },
   { name: "Markdown links in Search", url: "/library", api: {...conversationResultAPI,...markdownLinkAPI}, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("link",{name:"Running dev server",exact:true}).waitFor();}, shown: ".result-turn-content .markdown-link" },
   { name: "Search nested reviews and human writing", url: "/library?reader_writing=0&reader_events=1&reader_labels=1", api: authoredTurnAPI, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("button",{name:/Sub-agent · Reviewer 5/}).waitFor();}, shown: ".result-turn-content .human-written",
@@ -1853,6 +1881,18 @@ test('Older card dashboard restoration cannot overwrite a later route', { skip }
   await app.settled();
   assert.equal(new URL(page.url()).searchParams.get('analyze_topic'), 'calls');
   await page.getByRole('heading', { name: 'Tool Calls', exact: true }).waitFor();
+});
+
+test("MCP targets navigate to imported documents and external GitHub files", {skip}, async t=>{
+ const app=await open(t,{url:`${work}/conversation/${rootConversation}`,api:claudeResearchAPI,ready:".mcp-target"});
+ const {page}=app;
+ await page.locator('a.mcp-target').filter({hasText:'synthetic-doc'}).first().click();
+ await page.waitForURL(url=>url.searchParams.get('message')==='export-project');
+ await page.locator('.export-document').first().waitFor();
+ await page.route('https://github.com/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>GitHub destination</title><main>Archived file destination</main>'}));
+ await page.locator('a.mcp-target[href="https://github.com/example/repo/blob/main/report.md"]').first().click();
+ await page.waitForURL('https://github.com/example/repo/blob/main/report.md');
+ await page.getByRole('main').waitFor();
 });
 
 test("Markdown local destinations become navigable only after availability is confirmed", { skip }, async t => {

@@ -376,6 +376,72 @@
       }
     },
     {
+      "name": "hour_of_day",
+      "label": "Hour of day",
+      "type": "number",
+      "group": "Request",
+      "bindings": {
+        "postgres": {
+          "expr": "hour_of_day",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"hour_of_day\"",
+          "expressionNumeric": true
+        }
+      },
+      "select": {
+        "align": "right"
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "description": "The local hour (0–23) of the request, in the library's time zone, like Day, Week and Month."
+    },
+    {
+      "name": "gap_bin",
+      "label": "Wait band",
+      "type": "enum",
+      "group": "Timing",
+      "bindings": {
+        "postgres": {
+          "expr": "gap_bin",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"gap_bin\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "description": "The observed wait's band on the Thinking dashboard's edges, from 0.1–0.2 s to 500–600 s. Empty without a usable wait.",
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            "0.1–0.2 s",
+            "0.2–0.3 s",
+            "0.3–0.5 s",
+            "0.5–1 s",
+            "1–2 s",
+            "2–3 s",
+            "3–5 s",
+            "5–10 s",
+            "10–20 s",
+            "20–30 s",
+            "30–50 s",
+            "50–100 s",
+            "100–200 s",
+            "200–300 s",
+            "300–500 s",
+            "500–600 s"
+          ]
+        }
+      }
+    },
+    {
       "name": "sequence",
       "label": "Sequence",
       "type": "number",
@@ -516,7 +582,9 @@
       "label": "Response event",
       "type": "datetime",
       "group": "Timing",
-      "aggregate": { "groupable": true },
+      "aggregate": {
+        "groupable": true
+      },
       "bindings": {
         "postgres": {
           "expr": "requested_at",
