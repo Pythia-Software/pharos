@@ -129,22 +129,22 @@ with a leading NUL and shown in quotes, on both sides. These answers
 go through the result cache like other query-v3 reads.
 
 Each view is one metric request of 9–19 metrics, which Query Table (1.0.7 and
-later) answers in one read of the population. That read needs a source of
-stored values only, so while no conversation awaits a timing refresh and the
-exclusions are current, query-v3 reads `model_request_timings` directly
-(`thinkingQueryDataset`); otherwise it reads `thinkingSource`, which derives
-the marked conversations again, with the same answers more slowly. The
-choice is made before the query's transaction, so a query on the stored
-timings checks them again inside it and, if a conversation was marked in
-between, is read again from the derived source. Blank
-labels are stored as missing ones, so the label fields are plain columns, and
-the wait band is an enum, since the shared read groups only text, enum and
-boolean fields. Metric-only requests on Model Requests carry no host population
-counter, which would also turn the shared read off. The shared read groups
-only stored text, enum and boolean fields, so the breakdown by agent depth (a
-number) reads the population once per metric: about 17 s for all history on
-the replica (measurements below), where other breakdowns take 2–3 s
-([handoff](handoffs/query-table-shared-scan-groupings.md)). Hour buckets divide a
+later) answers in one read of the population. While no conversation awaits a
+timing refresh and the exclusions are current, query-v3 reads
+`model_request_timings` directly (`thinkingQueryDataset`); otherwise it reads
+`thinkingSource`, which derives the marked conversations again, with the same
+answers. The choice is made before the query's transaction, so a query on the
+stored timings checks them again inside it and, if a conversation was marked
+in between, is read again from the derived source. Blank labels are stored as
+missing ones and the wait band is a stored enum, so a view's fields are plain
+columns. Query Table proves on its own that such a read touches only stored
+columns; where it cannot (the derived source, or a request that reads a
+computed field such as the zoned day or hour), Pharos asserts that the source
+is deterministic (`SQLiteSharedMetricsSource`, Query Table 1.0.8), and the
+read is shared all the same, materializing the population first. That costs a
+stored read about a tenth, so it is asserted only where the proof would fail.
+Metric-only requests on Model Requests carry no host population counter,
+which would turn the shared read off. Hour buckets divide a
 day (1, 2, 3, 4, 6, 8, 12 or 24 hours) and day buckets count at most 1,000
 days, as Query Table's `every` supports; older links read as the nearest.
 
@@ -153,11 +153,11 @@ workload fit's supported estimates by time of day (cells, three-hour bands and
 paired comparisons), the Waiting factors, compaction pairs and traces, and
 validation. It also gives the time-of-day view's raw cells (median wait,
 timed requests and conversations per row period and local hour, shown when a
-cell has 20 waits from 3 conversations) beside the fitted ones. Query Table
-takes one calendar key per metric, and the zoned day and hour are computed
-columns, which its shared read cannot use: as query-v3 metrics those two
-cells alone took 17.5 s on the replica, against under 2 s for the rest of the
-view. It is read-only, cancellable and has a two-minute execution
+cell has 20 waits from 3 conversations) beside the fitted ones, from the rows
+the fit already loads. As query-v3 metrics (grouped by the zoned row period
+and `hour_of_day`, since a metric takes one calendar key) they would read
+computed columns, so the whole view's batch would take the materialized shared
+read: 4.7 s on the replica, against about 2 s with the cells here. It is read-only, cancellable and has a two-minute execution
 budget for fits. The views that join it (time of day, the Waiting overview)
 read query-v3 live rather than from the result cache, and send both reads the
 same `now`, so a Today or rolling Range ends at one instant and both describe
@@ -194,10 +194,10 @@ loop rebuilds it in the background when it was used recently. See
 measurements and remaining costs.
 
 The fits and SVGs are host-owned. Counts, percentiles, periods and curves,
-native evidence queries and compact cards use published Query Table 1.0.7 APIs. No local package
+native evidence queries and compact cards use published Query Table 1.0.9 APIs. No local package
 patches, generated-bundle edits or dependency replacements are used.
 
-Measured 2026-11-11 on a replica of a production catalog (1.43 million stored
+Measured 2026-11-11 (Query Table 1.0.8, whose Go backend 1.0.9 keeps unchanged) on a replica of a production catalog (1.43 million stored
 requests; a 30-day range holds about 297,000), warm, with stored timings
 current. Each view's answer matched `/api/thinking` from before the move
 exactly, except the calendar's ratio view: its groups' wait-band counts there
@@ -210,16 +210,15 @@ counted fitted requests and now count timed ones, as every other view does
 | Time, 6-hour periods, 7 days | 49 ms | 1.6 s |
 | Time, weekly, all history, by model and effort | 0.8 s | 4.3 s |
 | Histogram or heatmap, all history, by agent app, provider, machine, project or preceding tool | 0.4 s | 2.5–2.6 s |
-| Histogram, all history, by agent depth | 0.4 s | 17 s |
+| Histogram, all history, by agent depth | 0.4 s | 2.8–3.1 s |
 | Reasoning, Wait box, Histogram, 30 days | 0.2–0.4 s | 1.6–1.7 s |
 | Calendar, 30 days or all history | 0.4–1.6 s | 1.8–3.3 s |
 | Waiting, 30 days or all history | 0.9–1.8 s | 1.8–3.4 s |
 
 `/api/thinking` answered from a population it kept in memory once built; the
 query-v3 answers read the catalog each time, through the result cache. While
-conversations await a timing refresh, query-v3 reads the derived source, which
-reads the population once per metric: 16 s to over 30 s per view in the
-measurements before the stored source, until the refresh completes.
+conversations await a timing refresh (20 marked on the replica), views read
+the derived source in 4–6 s; without the determinism assertion they timed out.
 
 ## Statistical support and limits
 

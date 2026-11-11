@@ -401,6 +401,17 @@ func thinkingTimingsCurrent(ctx context.Context, q interface {
 	return nil
 }
 
+// computes says whether any of fields is computed rather than read from a
+// column of the source.
+func (d sqlDataset) computes(fields []string) bool {
+	for _, field := range fields {
+		if sql, ok := d.columns[field]; ok && sql != "d."+field {
+			return true
+		}
+	}
+	return false
+}
+
 func thinkingZonedDataset(table sqlDataset, zone string) (sqlDataset, error) {
 	if zone == "" {
 		return table, nil
