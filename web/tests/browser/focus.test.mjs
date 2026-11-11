@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
-import { claudeImportFixture, defaultApi, workID, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
+import { claudeImportFixture, claudeSettingsSourceFixture, defaultApi, workID, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 test('the Lighthouse menu action shares its saved setting with App preferences', {skip}, async t => {
@@ -3564,4 +3564,82 @@ test('Claude export inspection preserves the replacement form when an older requ
   await completed;
   assert.equal(await newer.inputValue(),'/new-export-draft');
   assert.ok(await newer.evaluate(element=>document.activeElement===element));
+});
+
+
+test('Claude settings recording keeps focus on its action and restores active status after reload', {skip}, async t => {
+  const {page}=await open(t,{url:'/settings/sources',api:{
+    'GET /api/sources':{configured:1,enabled:1,items:[claudeSettingsSourceFixture]},
+  }});
+  const start=page.getByRole('button',{name:'Record me for 30 minutes',exact:true});
+  await start.click();
+  const stop=page.getByRole('button',{name:'Stop recording',exact:true});
+  await stop.waitFor();
+  assert.equal(await stop.evaluate(el=>document.activeElement===el),true,'updating progress leaves focus on the action');
+  await page.reload();
+  await page.getByRole('button',{name:'Stop recording',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Stop recording',exact:true}).click();
+  await page.getByRole('button',{name:'Record me for 30 minutes',exact:true}).waitFor();
+});
+
+test('Claude import offers settings in its modal, allows skipping and retrying, then keeps enabled setup out of the way', {skip},async t=>{
+  const job={...claudeImportFixture,source:{added:['claude-ai-imports'],enabled:[],declined:[],skipped:[]}},setup={source:'',path:'/Users/example/Library/Application Support/Claude',account:'local',configured:false,enabled:false,scope:'host'};
+  let failOnce=true;
+  const {page,calls,shot}=await open(t,{url:'/settings/sources',api:{
+    'GET /api/claude-imports':({query})=>query.get('id')?job:{jobs:[job],run:{running:false,id:job.id,name:job.name}},
+    'POST /api/claude-imports':{started:true},
+    'GET /api/claude-chat-settings/setup':()=>setup,
+    'POST /api/claude-chat-settings/setup':()=>{if(failOnce){failOnce=false;return {enabled:false}}Object.assign(setup,{source:'claude-chat-settings',configured:true,enabled:true});return setup},
+    'POST /api/capture':({body})=>({run:{id:'claude-import-capture',state:'complete',sources:body.sources,bytes_copied:2000,results:[]}}),
+  }});
+  const guide=page.locator('#pharosOnboarding');
+  const start=async()=>{
+    await page.evaluate(()=>window.pharosOnboarding.open({mode:'import'}));
+    await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+    await guide.getByRole('textbox',{name:'Export',exact:true}).fill('/example/claude-export.json');
+    await guide.getByRole('button',{name:'Import',exact:true}).click();
+  };
+  await start();
+  await guide.getByRole('heading',{name:'Add model and thinking settings?',exact:true}).waitFor();
+  assert.ok(await guide.evaluate(el=>el.matches(':modal')),'settings setup remains inside the import modal');
+  assert.equal(await page.locator('dialog:modal').count(),1,'setup does not stack another modal');
+  assert.ok(await guide.getByRole('heading',{name:'Add model and thinking settings?',exact:true}).evaluate(el=>el===document.activeElement));
+  await shot('claude-import-settings');
+  await guide.getByRole('button',{name:'Continue without settings',exact:true}).click();
+  await guide.getByRole('button',{name:'Capture and index conversations',exact:true}).waitFor();
+  assert.ok(!calls.some(call=>call.method==='POST'&&call.path==='/api/claude-chat-settings/setup'),'skipping leaves the source disabled');
+  await guide.getByRole('button',{name:'Done',exact:true}).click();
+  await start();
+  await guide.getByRole('button',{name:'Enable and continue',exact:true}).click();
+  await guide.getByRole('status').filter({hasText:'Settings capture was not enabled'}).waitFor();
+  assert.ok(await guide.getByRole('button',{name:'Continue without settings',exact:true}).isEnabled(),'an enable error leaves importing available');
+  await guide.getByRole('button',{name:'Enable and continue',exact:true}).click();
+  await guide.getByRole('button',{name:'Capture and index conversations',exact:true}).waitFor();
+  await guide.getByRole('button',{name:'Done',exact:true}).click();
+  await start();
+  await guide.getByRole('button',{name:'Capture and index conversations',exact:true}).waitFor();
+  assert.equal(await guide.getByRole('heading',{name:'Add model and thinking settings?',exact:true}).count(),0,'an enabled source needs no prompt');
+  await guide.getByRole('button',{name:'Capture and index conversations',exact:true}).click();
+  await guide.getByRole('button',{name:'Index now',exact:true}).waitFor();
+  assert.ok(await guide.getByRole('button',{name:'Index now',exact:true}).evaluate(el=>el===document.activeElement),'capture continues in the same modal');
+});
+
+test('a late Claude settings check leaves a replacement import form and its focus alone', {skip},async t=>{
+  const pending=Promise.withResolvers(),job={...claudeImportFixture,source:{added:['claude-ai-imports'],enabled:[],declined:[],skipped:[]}};
+  const {page}=await open(t,{url:'/settings/sources',api:{
+    'GET /api/claude-imports':({query})=>query.get('id')?job:{jobs:[job],run:{running:false}},
+    'GET /api/claude-chat-settings/setup':()=>pending.promise,
+  }});
+  await page.evaluate(()=>window.pharosOnboarding.open({mode:'import'}));
+  const guide=page.locator('#pharosOnboarding');
+  await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+  const requested=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/claude-chat-settings/setup');
+  await guide.getByRole('button',{name:/Resume export/}).click();await requested;
+  await page.keyboard.press('Escape');
+  const field=guide.getByRole('textbox',{name:'Export',exact:true});await field.fill('/replacement-import');
+  const completed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/claude-chat-settings/setup');
+  pending.resolve({enabled:false,path:'/example/Claude',account:'local'});await completed;
+  assert.equal(await field.inputValue(),'/replacement-import');
+  assert.ok(await field.evaluate(el=>el===document.activeElement));
+  assert.equal(await guide.getByRole('heading',{name:'Add model and thinking settings?',exact:true}).count(),0);
 });

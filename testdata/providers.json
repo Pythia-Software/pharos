@@ -1374,6 +1374,93 @@
       ]
     },
     {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "support": "not-applicable"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "support": "not-applicable"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "note": "Observed conversation selection, not the model used for every message.",
+          "support": "varies"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "note": "Observed effort and thinking mode, when cached.",
+          "support": "varies"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "support": "not-applicable"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "support": "not-applicable"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "not-applicable"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "support": "not-applicable"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "support": "not-applicable"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "note": "Observed conversation selection only, when present in Claude’s cache.",
+          "support": "varies"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "support": "not-applicable"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "support": "not-applicable"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "support": "not-applicable"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "not-applicable"
+        }
+      ],
+      "display_name": "Claude Chat settings",
+      "folder_hint": "Claude’s app data folder (~/Library/Application Support/Claude), or its Cache/Cache_Data folder.",
+      "kind": "claude-ai-settings",
+      "locations": [
+        "~/Library/Application Support/Claude"
+      ],
+      "setup": true,
+      "summary": "Cached conversation selections: model, effort and thinking mode. No chat text or token counts.",
+      "when_found": true
+    },
+    {
       "automatic": false,
       "capabilities": [
         {

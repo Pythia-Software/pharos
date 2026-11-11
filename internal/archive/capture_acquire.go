@@ -34,7 +34,7 @@ func productionAdapter(adapter Adapter) bool {
 // experimental storage policy out of ordinary indexing until collection is
 // bounded. SQLite has its separately gated transactional exporter.
 func retainedAcquisitionEnabled(source SourceConfig) bool {
-	return source.Options["retained_input_capture"] == true || source.Options["sqlite_record_capture"] == true
+	return strings.EqualFold(source.Kind, claudeSettingsKind) || source.Options["retained_input_capture"] == true || source.Options["sqlite_record_capture"] == true
 }
 
 func (c *Catalog) acquireRetainedInput(ctx context.Context, adapter Adapter, progress ProgressFunc) (input retainedInput, failure error) {
@@ -104,7 +104,7 @@ func (c *Catalog) acquireRetainedInput(ctx context.Context, adapter Adapter, pro
 		}
 	}
 	captured := session.source(ctx, source, nil)
-	if captured.State != "complete" || len(captured.Warnings) > 0 {
+	if captured.State != "complete" || (len(captured.Warnings) > 0 && !strings.EqualFold(source.Kind, claudeSettingsKind)) {
 		return result, captureResultError(captured)
 	}
 	target := captureTarget{Host: session.host, Source: source.Name, Dir: captured.Dir}

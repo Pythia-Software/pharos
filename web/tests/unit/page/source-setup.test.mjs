@@ -22,13 +22,13 @@ test('setup lists found tools, then the common ones, and keeps niche tools out o
   const wizard=create();wizard.detect([{kind:'codex'},{kind:'tl1'},{kind:'unknown'},{kind:'codex'}]);
   const groups=plain(wizard.toolGroups());
   assert.deepEqual(groups.found,['codex','tl1'],'a niche tool found here is listed with the others found');
-  assert.deepEqual(groups.more,['conductor'],'a niche tool not found here is only under More tools');
+  assert.deepEqual(groups.more,['conductor','claude-ai-settings'],'a niche tool not found here is only under More tools');
   assert.ok(!groups.offered.includes('tl1')&&!groups.offered.includes('conductor'));
   assert.equal(groups.offered[0],'claude','the most used tools come first');
   assert.deepEqual(plain(wizard.request().kinds),['codex','tl1']);
   const empty=create();empty.detect([]);
   assert.deepEqual(plain(empty.request().kinds),[]);
-  assert.deepEqual(plain(empty.toolGroups().more),['conductor','tl1']);
+  assert.deepEqual(plain(empty.toolGroups().more),['conductor','tl1','claude-ai-settings']);
   assert.ok(!empty.toolGroups().offered.includes('chatgpt'),'exports are imported, not found');
   assert.deepEqual(plain(empty.exports().map(item=>item.kind)),['chatgpt','claude-ai']);
   assert.ok(empty.exports().every(item=>item.how),'each export says how to download it');

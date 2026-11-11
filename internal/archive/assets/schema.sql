@@ -1796,3 +1796,13 @@ CREATE INDEX IF NOT EXISTS operation_journal_recent ON operation_journal(host_id
 CREATE INDEX IF NOT EXISTS operation_journal_root ON operation_journal(root_id);
 -- The freshness ledger reads each analysis stage's latest outcome (§5).
 CREATE INDEX IF NOT EXISTS operation_journal_kind ON operation_journal(host_id, kind, started_at DESC);
+
+-- Observed Claude Chat selections, independent of transcript or execution data.
+CREATE TABLE IF NOT EXISTS claude_chat_settings_observations (
+ host_id TEXT NOT NULL, source_name TEXT NOT NULL, account TEXT NOT NULL,
+ organization_uuid TEXT NOT NULL, conversation_uuid TEXT NOT NULL,
+ observed_at TEXT NOT NULL, time_basis TEXT NOT NULL, cache_entry TEXT NOT NULL,
+ snapshot_id TEXT NOT NULL, model TEXT, effort_level TEXT, thinking_mode TEXT,
+ PRIMARY KEY(host_id,source_name,account,snapshot_id,conversation_uuid)
+);
+CREATE INDEX IF NOT EXISTS claude_chat_settings_conversation_idx ON claude_chat_settings_observations(account,conversation_uuid,observed_at);

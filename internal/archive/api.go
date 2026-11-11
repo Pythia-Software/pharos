@@ -100,20 +100,23 @@ type Server struct {
 	freshFiles freshnessFileCache
 	// resources samples this process and its library's other Pharos
 	// processes for the status snapshot (resources.go).
-	resources           *resourceSampler
-	work                *workService
-	workError           error
-	resourceBrokerOwned bool
-	historyLeases       resourceLeaseCache // owned only by the history collector
-	claudeImports       claudeImportRun
-	claudeWatch         *claudeDownloads
-	claudeWatchWake     chan struct{}
+	resources               *resourceSampler
+	work                    *workService
+	workError               error
+	resourceBrokerOwned     bool
+	historyLeases           resourceLeaseCache // owned only by the history collector
+	claudeImports           claudeImportRun
+	claudeWatch             *claudeDownloads
+	claudeWatchWake         chan struct{}
+	claudeSettingsRecording claudeSettingsRecording
+	claudeSettingsWake      chan struct{}
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
 	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
 	server.background.wake = make(chan struct{}, 1)
 	server.claudeWatchWake = make(chan struct{}, 1)
+	server.claudeSettingsWake = make(chan struct{}, 1)
 	server.claudeWatch = server.newClaudeDownloads()
 	server.life.init()
 	server.ops = newOpRegistry("service")
@@ -218,6 +221,7 @@ func (s *Server) Serve() error {
 		s.daemon("refreshResults", func(ctx context.Context) { s.refreshResults(ctx, i == 0) })
 	}
 	s.daemon("claudeDownloads", s.claudeDownloadsLoop)
+	s.daemon("claudeSettingsRecording", s.claudeSettingsRecordingLoop)
 	s.refreshGitInBackground(true)
 	s.countUpgradeInBackground()
 	s.warmAskModelsOnStart()
@@ -405,6 +409,10 @@ var uiAssets = map[string]struct{ name, contentType string }{
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
+	case path == "/api/claude-chat-settings/setup":
+		s.getClaudeSettingsSetup(w, r)
+	case path == "/api/claude-chat-settings/recording":
+		s.getClaudeSettingsRecording(w, r)
 	case path == "/api/claude-imports":
 		s.getClaudeImports(w, r)
 	case path == "/api/markdown-link":
@@ -1045,6 +1053,10 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.acceptProbe(w, body)
 	case path == "/api/sources/import":
 		s.importSource(w, body)
+	case path == "/api/claude-chat-settings/setup":
+		s.postClaudeSettingsSetup(w, body)
+	case path == "/api/claude-chat-settings/recording":
+		s.postClaudeSettingsRecording(w, body)
 	case path == "/api/claude-imports/watch":
 		s.postClaudeWatch(w, body)
 	case path == "/api/claude-imports" || path == "/api/claude-imports/links" || path == "/api/claude-imports/cancel":
@@ -1188,6 +1200,9 @@ func (s *Server) setSourceEnabled(name string, enabled bool) error {
 	sources := slices.Clone(s.config.Sources)
 	sources[index].Enabled = enabled
 	s.config.Sources = sources
+	if !enabled {
+		s.stopClaudeSettingsRecording(name, 0, "Recording stopped because the source was paused.")
+	}
 	return nil
 }
 
@@ -1210,6 +1225,7 @@ func (s *Server) removeSource(name string) error {
 	if err != nil {
 		return err
 	}
+	s.stopClaudeSettingsRecording(name, 0, "Recording stopped because the source was removed.")
 	return s.reloadSources()
 }
 
