@@ -236,7 +236,8 @@ Bookmark identity and saved bookmark URLs exclude `overlay`, `history_search`, `
 
 The **Key** label opens whole-key defaults. Each choice sets content visibility
 and all three highlight switches together, clears individual hue exclusions,
-and saves the same choices as the fallback for unlinked readers. Default shows
+clears hidden activity tags present in the conversation, and saves the same
+choices as the fallback for unlinked readers. Default shows
 all content with human writing highlighted; Read replies shows prompts and final
 responses with human writing; Follow reasoning shows prompts, replies and thinking
 with agent events and message labels; Review shows everything except token usage
@@ -253,5 +254,12 @@ These choices write existing canonical fields together: `reader_filter_level`,
 `reader_filter`, `reader_writing`, `reader_events`, `reader_labels`, and
 `reader_highlight_hidden`. The displayed default is derived from those fields,
 so old visibility links, custom categories, copied links and history still restore
-without a separate preset-name field. The standalone Show row is removed; Page
-Find can still reveal hidden content through its existing Show action.
+without a separate preset-name field. Activity line tags open the same visibility
+menu as the key. Their hidden
+labels live in `reader_hidden_tags` as `tag:[category,label]` strings; hidden
+labels appear in the key so they can be shown again. Labels shared by categories
+are distinct. Older unscoped labels still hide every matching category; a
+`show:tag:[category,label]` entry overrides one such legacy hide. A tag can
+represent several activity labels, such as Read. Choices preserve labels absent
+from the conversation. Page Find can reveal hidden content through its existing
+Show action.

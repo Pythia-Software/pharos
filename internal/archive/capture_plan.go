@@ -17,6 +17,8 @@ type captureItem struct {
 
 type capturePlan struct {
 	files, databases []captureItem
+	projections      []captureProjection
+	retainAbsent     bool
 	// skipped exist but are not captured (databases without conversations),
 	// so they are not missing either.
 	skipped []string

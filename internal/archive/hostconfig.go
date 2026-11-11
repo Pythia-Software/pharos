@@ -111,7 +111,11 @@ func hostFileHeader(host Host) string {
 }
 
 func sourceBlock(source SourceConfig) string {
-	return fmt.Sprintf("[[sources]]\nname = %q\nkind = %q\npath = %q\nenabled = %t\n", source.Name, source.Kind, tildePath(source.Path), source.Enabled)
+	block := fmt.Sprintf("[[sources]]\nname = %q\nkind = %q\npath = %q\nenabled = %t\n", source.Name, source.Kind, tildePath(source.Path), source.Enabled)
+	if source.Account != "" && source.Account != "local" {
+		block += fmt.Sprintf("account = %q\n", source.Account)
+	}
+	return block
 }
 
 // tildePath writes a home-relative path as ~/..., which keeps a host file

@@ -455,7 +455,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 					return err
 				}
 			}
-			if mode.written != nil && !copied {
+			if mode.written != nil && !copied && record.ClaudeSettings == nil {
 				workspaceID, err = storedWorkspaceID(tx, *record)
 				if err != nil {
 					return err
@@ -485,7 +485,9 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			result.SkippedCurrent++
 			return nil
 		}
-		result.Workspaces++
+		if record.ClaudeSettings == nil {
+			result.Workspaces++
+		}
 		result.Conversations += conversations
 		result.Messages += messages
 		if mode.written != nil && workspaceID != "" {
@@ -676,7 +678,9 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 			return commitErr
 		}
 		c.boundWAL(context.Background(), walSizeLimit)
-		result.Workspaces++
+		if record.ClaudeSettings == nil {
+			result.Workspaces++
+		}
 		result.Conversations += conversations
 		result.Messages += messages
 		delete(selected, record.SourceID)
@@ -753,6 +757,9 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 }
 
 func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture, force bool, repositoryOptions ...repositoryOptions) (int, int, error) {
+	if record.ClaudeSettings != nil {
+		return 0, 0, ingestClaudeSettings(ctx, tx, record, host, source)
+	}
 	// The caller already holds the catalog writer. Check cancellation within
 	// this atomic record, but never pause for queries while holding that lock.
 	if err := ctx.Err(); err != nil {

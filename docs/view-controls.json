@@ -349,6 +349,10 @@
     },
     {
       "file": "internal/archive/assets/ui.py",
+      "field": "reader_hidden_tags"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
       "field": "reader_highlight_hidden"
     },
     {
@@ -1149,6 +1153,16 @@
       "reason": "Closes or floats the private Ask composer; Ask chat identity continues to use ask_chat."
     },
     {
+      "key": "7ba5bc15f450ed24:0",
+      "file": "internal/archive/assets/ask-pharos.js",
+      "owner": "<module>",
+      "tag": "aria-expanded",
+      "control": "headerButton",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Reports whether the private Ask composer dialog is open; Ask chat identity uses ask_chat and composer presentation is restored by Ask."
+    },
+    {
       "key": "eedffbde75af05e5:0",
       "file": "internal/archive/assets/ask-pharos.js",
       "owner": "closeHistory",
@@ -1215,6 +1229,16 @@
       "disclosure": true,
       "contract": "editing",
       "reason": "Ask prompt ideas are suggestions for the unapplied chat composer; their picker visibility is editor state."
+    },
+    {
+      "key": "af298390432d54c5:0",
+      "file": "internal/archive/assets/ask-pharos.js",
+      "owner": "updateSurface",
+      "tag": "aria-expanded",
+      "control": "headerButton",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Reports whether the private Ask composer dialog is open; Ask chat identity uses ask_chat and composer presentation is restored by Ask."
     },
     {
       "key": "6c90fe78404cee3a:0",
@@ -1639,6 +1663,16 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
+    },
+    {
+      "key": "7226953cc5aabf08:0",
+      "file": "internal/archive/assets/data-guide.js",
+      "owner": "Qh",
+      "tag": "aria-expanded",
+      "control": "document.getElementById(\"dataGuideToggle\")",
+      "disclosure": true,
+      "contract": "view.guide_open",
+      "reason": "The header reflects the Data Guide dialog state owned by the shared guide_open view binding."
     },
     {
       "key": "6a2c5c95cbcbc1d8:0",
@@ -2764,16 +2798,6 @@
       "reason": "Navigation, clipboard, refresh or bookmark/history mutation action; no applied content view state."
     },
     {
-      "key": "html:2ce0e745682cc646:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:shell>",
-      "tag": "button",
-      "control": "<button id=\"dataGuideToggle\" class=\"header-icon\" type=\"button\" hidden data-view-field=\"guide_open\" aria-label=\"Data Guide\" title=\"Data Guide\" aria-haspopup=\"dialog\" onclick=\"pharosOpenDataGuide(undefined,headerToolAnchor(this))\">",
-      "binding": "guide_open",
-      "contract": "view.guide_open",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
       "key": "html:302c09e984c88945:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
@@ -3124,6 +3148,17 @@
       "reason": "Opens an unapplied composer or transient navigation/tools menu."
     },
     {
+      "key": "html:f7a4636522ae6053:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"dataGuideToggle\" class=\"header-icon\" type=\"button\" hidden data-view-field=\"guide_open\" aria-label=\"Data Guide\" title=\"Data Guide\" aria-haspopup=\"dialog\" aria-controls=\"dataGuideDialog\" aria-expanded=\"false\" onclick=\"pharosOpenDataGuide(undefined,headerToolAnchor(this))\">",
+      "binding": "guide_open",
+      "disclosure": true,
+      "contract": "view.guide_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "html:faaffa7fb259a5cc:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
@@ -3282,6 +3317,34 @@
       "disclosure": true,
       "contract": "reader",
       "reason": "Raw message disclosure is bound by stable message identity through reader_content using bindViewContent and saveViewContent, shared by prose and reasoning cards."
+    },
+    {
+      "key": "b47c85f8099cfd6e:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "button",
+      "tag": "aria-expanded",
+      "control": "trigger",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "The tag menu is transient; its visibility actions write reader_hidden_tags."
+    },
+    {
+      "key": "dd6a02887789ab38:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "button",
+      "tag": "button",
+      "control": "'button', '', label",
+      "contract": "view.reader_hidden_tags",
+      "reason": "Line tag menus write reader_hidden_tags through the transcript tag filter; the menu itself is transient."
+    },
+    {
+      "key": "364915225a5a7100:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "claudeSettingsRecordingControl",
+      "tag": "button",
+      "control": "'button', 'source-remove', 'Record me for 30 minutes'",
+      "contract": "settings",
+      "reason": "Starts or stops a bounded collection action for a configured source; recording status is service state, not URL view state."
     },
     {
       "key": "b9d31ba372bfa501:0",
@@ -5124,6 +5187,16 @@
       "reason": "Composite illustration delegates term and conversation selections to guide_entity and guide_example through shared useViewState bindings."
     },
     {
+      "key": "3adcb82a9b8d8169:0",
+      "file": "web/src/data-taxonomy.tsx",
+      "owner": "DataTaxonomyModal",
+      "tag": "aria-expanded",
+      "control": "document.getElementById(\"dataGuideToggle\")",
+      "disclosure": true,
+      "contract": "view.guide_open",
+      "reason": "The header reflects the Data Guide dialog state owned by the shared guide_open view binding."
+    },
+    {
       "key": "66209fc099270fa0:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "DataTaxonomyModal",
@@ -5144,14 +5217,14 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "aa1d3fedd850af1b:0",
+      "key": "f6f8510693f78716:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "DataTaxonomyModal",
       "tag": "dialog",
-      "control": "data-view-field=\"guide_open\" onClick={event => { if (event.target !== event.currentTarget) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.currentTarget.close(); }}",
+      "control": "id=\"dataGuideDialog\" data-view-field=\"guide_open\" onClick={event => { if (event.target !== event.currentTarget) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.currentTarget.close(); }}",
       "binding": "guide_open",
       "contract": "view.guide_open",
-      "reason": "Bound by the shared view-state primitive."
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "2aeccf1d7c617d6b:0",
@@ -9131,6 +9204,16 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "99007fa4a5a1f099:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "<module>",
+      "tag": "aria-expanded",
+      "control": "header",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Reports whether the feedback draft dialog is open; feedback editing is excluded from URL view state."
+    },
+    {
       "key": "0b44ca3da1ae991b:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
@@ -9210,6 +9293,26 @@
       "control": "onClick={proposal ? () => void send() : undefined}",
       "contract": "action",
       "reason": "Explicit user approval submits the currently reviewed feedback report; consent is never restored from a URL."
+    },
+    {
+      "key": "6c546552716af68f:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "aria-expanded",
+      "control": "header",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Reports whether the feedback draft dialog is open; feedback editing is excluded from URL view state."
+    },
+    {
+      "key": "6c546552716af68f:1",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "aria-expanded",
+      "control": "header",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Reports whether the feedback draft dialog is open; feedback editing is excluded from URL view state."
     },
     {
       "key": "6f6ae816efe5c29f:0",

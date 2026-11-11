@@ -462,7 +462,8 @@ datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.
 
 // Settings, sync and the header's library status.
 const hosts = [{ id: "studio", label: "Mac Studio", sources: [{ name: "Claude", captured_at: iso(3 * day), indexed_at: iso(3600000) }] }, { id: "air", label: "MacBook Air with a long machine name", sources: [{ name: "Codex", last_data_at: iso(125 * 60000) }] }, { id: "new", label: "New Mac", sources: [] }];
-const sources = { configured: 2, enabled: 2, items: [
+export const claudeSettingsSourceFixture={name:'claude-chat-settings',kind:'claude-ai-settings',tool:'Claude Chat settings',scope:'host',enabled:true,path:'/Users/example/Library/Application Support/Claude',path_status:'available',coverage:'partial',account:'local'};
+const sources = { configured: 3, enabled: 2, items: [claudeSettingsSourceFixture,
   { name: "claude", kind: "claude", tool: "Claude Code", scope: "host", enabled: true, path: "/Users/someone/.claude/projects", last_success_at: iso(3600000), last_attempt_at: iso(3600000), coverage: "complete", account: "someone@example.com",
     not_recorded: ["Reported cost"], sometimes_recorded: ["Effort", "Title"] },
   { name: "codex", kind: "codex", tool: "Codex", scope: "library", enabled: false, path: "/Users/someone/.codex/sessions/a/very/long/path/that/should/wrap/inside/its/card", last_success_at: iso(day), last_attempt_at: iso(day), coverage: "partial", error: "The source directory could not be read." },
@@ -1028,6 +1029,10 @@ export const defaultApi = {
   "GET /api/index": { active: false, sync_active: false, hosts },
   "GET /api/capture": { active: false, runs: [] },
   "GET /api/sources": sources,
+  "GET /api/claude-chat-settings/setup": ({state})=>state.claudeSettingsSetup??{source:'claude-chat-settings',path:claudeSettingsSourceFixture.path,account:'local',configured:true,enabled:true,scope:'host'},
+  "POST /api/claude-chat-settings/setup": ({state,body})=>state.claudeSettingsSetup={source:'claude-chat-settings',path:body.path,account:'local',configured:true,enabled:true,scope:'host'},
+  "GET /api/claude-chat-settings/recording": ({state,query}) => ({source:query.get('source'),active:false,known_conversations:67,new_conversations:0,...state.claudeSettingsRecording}),
+  "POST /api/claude-chat-settings/recording": ({state,body}) => state.claudeSettingsRecording={source:body.source,active:body.active,known_conversations:67,new_conversations:0,expires_at:new Date(Date.now()+1800000).toISOString()},
   "GET /api/sync/status": syncStatus,
   "GET /api/operations": { journal: { recent: [
     { id: "op-index-history", root_id: "op-index-history", kind: "index.changes.manual", label: "Index changes", trigger: "user", process: "service", state: "succeeded", started_at: iso(145000), updated_at: iso(120000), ended_at: iso(120000), legacy_ref: "run-0" },

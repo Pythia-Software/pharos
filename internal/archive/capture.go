@@ -582,12 +582,15 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 	for _, rel := range plan.skipped {
 		present[path.Join(captureFilesDir, rel)] = true
 	}
-	err = c.captureFiles(plan.files, present)
+	err = c.captureProjections(plan.projections, present)
+	if err == nil {
+		err = c.captureFiles(plan.files, present)
+	}
 	if err == nil {
 		c.phase("copying database snapshots")
 		err = c.captureDatabases(plan.databases, present)
 	}
-	if err == nil && plan.complete {
+	if err == nil && plan.complete && !plan.retainAbsent {
 		c.markMissing(present)
 	}
 	if err == nil && plan.complete && len(c.result.Errors) == 0 && source.Options["sqlite_record_capture"] == true {
@@ -850,7 +853,7 @@ func (c *sourceCapture) captureFiles(items []captureItem, present map[string]boo
 		jobs = append(jobs, job{item, previous})
 		c.result.BytesPlanned += info.Size()
 	}
-	c.result.FilesPlanned = len(jobs)
+	c.result.FilesPlanned += len(jobs)
 	if err := c.ensureSpace(c.result.BytesPlanned); err != nil {
 		return err
 	}
