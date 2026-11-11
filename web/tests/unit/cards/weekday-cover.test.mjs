@@ -130,6 +130,10 @@ test("weekday templates retain daily detail queries and switch edited covers to 
     assert.ok(!usesWeekdayCover(recipe, item.query.aggregations[0], { ...recipe.cover, kind: "line" }));
     assert.ok(!usesWeekdayCover(recipe, { ...item.query.aggregations[0], groupBy: ["project_name"] }, recipe.cover));
     assert.ok(!usesWeekdayCover(recipe, { ...item.query.aggregations[0], op: "avg" }, recipe.cover));
+    // A bucket of several days is not one day's total.
+    const daily = item.query.aggregations[0];
+    assert.ok(usesWeekdayCover(recipe, { ...daily, dateGrouping: { ...daily.dateGrouping, every: 1 } }, recipe.cover));
+    assert.ok(!usesWeekdayCover(recipe, { ...daily, dateGrouping: { ...daily.dateGrouping, every: 2 } }, recipe.cover));
     assert.equal(cardLoadingPresentation(item.query, { recipe, cover: { ...recipe.cover, maxGroups: 4 } }).count, 4);
     const date = { field: item.query.aggregations[0].dateGrouping.field, op: ">=", value: "2026-10-12T12:00:00Z" };
     const calendarFilters = ["day", "week", "month", "date", "hour_of_day"].filter(field => core.resolveFieldName(schemas[recipe.dataset], field)).flatMap(field => {
