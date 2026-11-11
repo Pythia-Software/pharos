@@ -1778,6 +1778,14 @@ test('Compaction chart controls and source query restore in a fresh browser', {s
  const control = name => page.locator('.usage-compaction-dashboard').getByRole('combobox', {name, exact:true});
  await control('Breakdown').selectOption('trigger_provider'); await app.settled();
  await control('Range').selectOption('30d'); await app.settled();
+ for (const drawing of ['trend_line', 'trend_bar']) {
+  await control('Analysis').selectOption(drawing); await page.locator(ready).waitFor(); await app.settled();
+  assert.equal(JSON.parse(new URL(page.url()).searchParams.get('analyze_chart')).view, drawing);
+  await app.shot(`compaction-${drawing}`);
+  const restored = await open(t, {url:path(page), ready});
+  assert.equal(await restored.page.getByRole('combobox', {name:'Analysis', exact:true}).inputValue(), drawing);
+  assert.equal(await restored.page.getByRole('combobox', {name:'Breakdown', exact:true}).inputValue(), 'trigger_provider');
+ }
  await control('Analysis').selectOption('compare');
  await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor(); await app.settled();
  const saved = path(page);
@@ -1788,6 +1796,24 @@ test('Compaction chart controls and source query restore in a fresh browser', {s
  await source.click(); await fresh.page.locator('.usage-workspace-table .qt-row').first().waitFor(); await fresh.settled();
  assert.equal(new URL(fresh.page.url()).searchParams.get('analyze_data'), 'compactions');
  await app.shot('compaction-compare');
+});
+
+test('time-series drawing choices restore across heatmaps, lines and bars', {skip}, async t => {
+ const ready = '.usage-session-shape-dashboard section[aria-label="Over time"][aria-busy="false"] .usage-query-destinations';
+ const app = await open(t, {url:'/analyze?analyze_topic=session_shape', ready}), {page} = app;
+ const control = () => page.getByRole('combobox', {name:'Analysis', exact:true});
+ assert.equal(await control().inputValue(), 'trend');
+ await page.locator('.dashboard-heatmap').waitFor();
+ for (const drawing of ['trend_line', 'trend_bar', 'trend']) {
+  await control().selectOption(drawing); await page.locator(ready).waitFor(); await app.settled();
+  if (drawing === 'trend') await page.locator('.dashboard-heatmap').waitFor();
+  else await page.locator('.usage-chart-bars').waitFor();
+  const saved = path(page);
+  await page.reload(); await page.locator(ready).waitFor(); await app.settled();
+  assert.equal(await control().inputValue(), drawing);
+  assert.equal(path(page), saved);
+  await app.shot(`session-shape-${drawing}`);
+ }
 });
 
 
@@ -1994,7 +2020,7 @@ test('component share charts restore their controls across reloads and view swit
  await app.shot('human-text-category-shares');
  const fresh=await open(t,{api,url:saved,ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
  for(const [name,value] of [['Analysis','compare'],['Metric','words'],['Breakdown','category'],['Show as','share']])assert.equal(await fresh.page.getByRole('combobox',{name,exact:true}).inputValue(),value);
- await fresh.page.getByRole('combobox',{name:'Analysis',exact:true}).selectOption('trend');
+ await fresh.page.getByRole('combobox',{name:'Analysis',exact:true}).selectOption('trend_line');
  await fresh.page.locator('.usage-chart-bars:not(.loading) > button').first().waitFor();await fresh.settled();
  await fresh.page.getByRole('combobox',{name:'Analysis',exact:true}).selectOption('compare');
  await fresh.page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await fresh.settled();
