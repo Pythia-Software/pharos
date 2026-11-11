@@ -2,24 +2,24 @@
   "version": 1,
   "dependencies": {
     "@pythia-software/query-table-core": {
-      "version": "1.0.7",
+      "version": "1.0.9",
       "status": "reviewed",
-      "reason": "Reviewed the published Query Table 1.0.7 packages against 1.0.5: all installed files in core, React, UI and codegen are byte-identical except package.json release and dependency version pins. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed the published Query Table 1.0.9 packages against 1.0.7: core, React and codegen are byte-identical except package.json release and dependency version pins; 1.0.8 changed only the Go backend. UI 1.0.9 splits MetricsEditor.tsx and QueryBuilder.tsx into metricsEditor/ and queryBuilder/ modules (MetricsEditor now takes its props object whole); its sources keep the same user-visible strings, aria-label and role attributes, onChange handlers and useState/useEffect/useLayoutEffect calls (178/52/9), with no storage, history or URL access. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-react": {
-      "version": "1.0.7",
+      "version": "1.0.9",
       "status": "reviewed",
-      "reason": "Reviewed the published Query Table 1.0.7 packages against 1.0.5: all installed files in core, React, UI and codegen are byte-identical except package.json release and dependency version pins. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed the published Query Table 1.0.9 packages against 1.0.7: core, React and codegen are byte-identical except package.json release and dependency version pins; 1.0.8 changed only the Go backend. UI 1.0.9 splits MetricsEditor.tsx and QueryBuilder.tsx into metricsEditor/ and queryBuilder/ modules (MetricsEditor now takes its props object whole); its sources keep the same user-visible strings, aria-label and role attributes, onChange handlers and useState/useEffect/useLayoutEffect calls (178/52/9), with no storage, history or URL access. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-ui": {
-      "version": "1.0.7",
+      "version": "1.0.9",
       "status": "reviewed",
-      "reason": "Reviewed the published Query Table 1.0.7 packages against 1.0.5: all installed files in core, React, UI and codegen are byte-identical except package.json release and dependency version pins. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed the published Query Table 1.0.9 packages against 1.0.7: core, React and codegen are byte-identical except package.json release and dependency version pins; 1.0.8 changed only the Go backend. UI 1.0.9 splits MetricsEditor.tsx and QueryBuilder.tsx into metricsEditor/ and queryBuilder/ modules (MetricsEditor now takes its props object whole); its sources keep the same user-visible strings, aria-label and role attributes, onChange handlers and useState/useEffect/useLayoutEffect calls (178/52/9), with no storage, history or URL access. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-codegen": {
-      "version": "1.0.7",
+      "version": "1.0.9",
       "status": "reviewed",
-      "reason": "Reviewed the published Query Table 1.0.7 packages against 1.0.5: all installed files in core, React, UI and codegen are byte-identical except package.json release and dependency version pins. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed the published Query Table 1.0.9 packages against 1.0.7: core, React and codegen are byte-identical except package.json release and dependency version pins; 1.0.8 changed only the Go backend. UI 1.0.9 splits MetricsEditor.tsx and QueryBuilder.tsx into metricsEditor/ and queryBuilder/ modules (MetricsEditor now takes its props object whole); its sources keep the same user-visible strings, aria-label and role attributes, onChange handlers and useState/useEffect/useLayoutEffect calls (178/52/9), with no storage, history or URL access. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
     }
   },
   "bindings": [

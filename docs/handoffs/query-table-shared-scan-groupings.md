@@ -1,5 +1,15 @@
 # Query Table: shared metric reads for number, calendar and derived keys
 
+**Resolved in Query Table 1.0.8**: the shared read groups by number fields,
+and a host may assert that its source is deterministic
+(`SQLiteSharedMetricsSource`), so the read is shared over a source that fails
+the stored-source proof (derived rows, computed calendar columns). On the
+replica below, the agent depth breakdown takes 2.8–3.1 s (from 17 s), and
+views while conversations await refresh 4–6 s (from timeouts). Pharos keeps
+the time-of-day cells on `/api/thinking`: on query-v3 they would put the
+calendar's whole batch on the materialized read, 4.7 s against about 2 s
+([measurements](../thinking-dashboards.md)).
+
 Pharos consumes unmodified Query Table 1.0.7 (Go `backends/go` v1.0.7, npm
 `@pythia-software/query-table-*` 1.0.7). No local dependency patches are
 permitted; this is a request for upstream work. It follows
