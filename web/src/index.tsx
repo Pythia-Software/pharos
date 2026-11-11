@@ -153,7 +153,7 @@ import { readDashboardLink, parallelismSelectionQuery, authorshipStatusText, typ
 import { conversationAnalysisCatalog } from "./conversation-analysis-catalog";
 import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
-import { isTrendView, analysisVersion, canonicalState, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { isTrendView, analysisVersion, canonicalState, readAnalysisLink, chooseAnalysisView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { dashboardDefaults, legacyViewDefaults } from "./dashboard-defaults";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { PricingNotice } from "./pricing-notice";
@@ -1239,7 +1239,7 @@ const validTokenDashboard = (view: TokenTrendView) => validAnalysisState(tokenAn
 
 function TokenUsageDashboard() {
   const state = useUsageDashboardState<TokenTrendView>(dashboardDefaults.tokens as TokenTrendView, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where, legacyViewDefaults.tokens));
-  const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
+  const choose = (next: AnalysisView) => state.update(chooseAnalysisView(tokenAnalysisCatalog, state.view, next));
   return <><PricingNotice copy={copyText} />{state.error ? <p className="query-table-error" role="alert">{state.error}</p>
     : !isTrendView(state.view.view) ? <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
     onChange={state.update} onView={choose} onFilter={state.onFilter} />
@@ -1356,7 +1356,7 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
   const resolved=peopleMessageLabelCatalog(catalog,state.view), resolvedDataset=resolved.dataset as UsageDataset;
   const schema = schemas[resolvedDataset];
   const views: CatalogViews = (drawn, amount = format) => {
-    const choose = (next: AnalysisView) => state.update(switchView(isTrendView(next)||next==="compare"?drawn:catalog, state.view, next));
+    const choose = (next: AnalysisView) => state.update(chooseAnalysisView(isTrendView(next)||next==="compare"?drawn:catalog, state.view, next));
     return <>
       {!isTrendView(state.view.view)
         ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={resolvedDataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>

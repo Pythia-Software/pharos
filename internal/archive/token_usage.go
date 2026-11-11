@@ -784,6 +784,7 @@ type agentSessionSummary struct {
 	counts                   tokenCounts
 	usage                    map[usageBucket]tokenCounts
 	startedAt, endedAt       string
+	timeBoundsSource         string
 }
 
 // usageBucket places reconciled usage on the timeline at the UTC hour of the
@@ -926,8 +927,14 @@ func agentSessionSummariesWithCostState(messages []MessageRecord, suppressCostSt
 	}
 	for _, session := range sessions {
 		session.startedAt, session.endedAt = "", ""
+		session.timeBoundsSource = "unavailable"
 		for _, index := range session.messageIndexes {
 			timestamp := messages[index].CreatedAt
+			if _, ok := parseTime(timestamp); !ok {
+				continue
+			}
+			timestamp = iso(timestamp)
+			session.timeBoundsSource = "message-span"
 			if timestamp != "" && (session.startedAt == "" || timestamp < session.startedAt) {
 				session.startedAt = timestamp
 			}

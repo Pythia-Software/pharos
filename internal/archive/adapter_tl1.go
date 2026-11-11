@@ -349,7 +349,7 @@ func tl1ReadsTranscriptFile(name string) bool {
 	return false
 }
 
-func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v5-execution-model" }
+func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v6-execution-model" }
 
 func (a *tl1Adapter) Discover(emit func(WorkspaceRecord) error) error {
 	a.snapshots = nil
@@ -703,12 +703,16 @@ func (a *tl1Adapter) task(installation tl1Installation, task map[string]any, nat
 				metrics[pair[1]] = metric{old.value + value, "count", "reported-incremental"}
 			}
 		}
-		for _, filename := range attemptTranscripts(attempt, summaries[attemptID], files) {
+		transcripts := attemptTranscripts(attempt, summaries[attemptID], files)
+		for _, filename := range transcripts {
 			conversation, ok, err := a.transcript(installation, taskID, attempt, filename)
 			if err != nil {
 				return WorkspaceRecord{}, err
 			}
 			if ok {
+				if len(transcripts) == 1 {
+					conversation.SessionBounds = attemptSessionBounds(iso(attempt["started_at"]), iso(attempt["completed_at"]))
+				}
 				conversations = append(conversations, conversation)
 			}
 		}
@@ -824,7 +828,7 @@ func (a *tl1Adapter) transcript(installation tl1Installation, taskID string, att
 		source.StartedAt = iso(attempt["started_at"])
 	}
 	if source.EndedAt == "" {
-		source.EndedAt = iso(firstNonNil(attempt["completed_at"], attempt["started_at"]))
+		source.EndedAt = iso(attempt["completed_at"])
 	}
 	for index := range source.Messages {
 		if source.Messages[index].Model == "" {

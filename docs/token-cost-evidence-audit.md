@@ -134,7 +134,7 @@ Conversation, session, message and request identities remain stable.
 
 Claude extractor `claude-v3-execution-model`, Conductor extractor
 `conductor-v15-execution-model`, and TL1 index
-`tl1-analysis-v5-execution-model` revisit unchanged originals when they remain
+`tl1-analysis-v6-execution-model` revisit unchanged originals when they remain
 available. Provider golden records carry these versions. The stored-data repair
 also runs before a complete ingest marks an older workspace current, so an
 unreconstructable legacy session does not miss the summary repair.
@@ -194,11 +194,11 @@ independently of any selected placeholder bucket in its input inventory.
 Validation: the focused parser, attribution, preservation, pricing and provider
 conformance checks passed. The full Go fast tier remained incomplete at its
 ten-minute limit under concurrent machine load; earlier maintenance and Ask
-deadline failures passed their direct retries. The normal `-tags probe` build
-also encounters pre-existing Git API compile errors in
+deadline failures passed their direct retries. Earlier audit runs encountered pre-existing Git API compile errors in
 `outcome_stages_probe_test.go`; the read-only replay above was validated by
 compiling the normal `go list` source/test file set plus
-`usage_audit_probe_test.go` explicitly. No live migration was run.
+`usage_audit_probe_test.go` explicitly. The PR incorporates the upstream probe
+build repair from master. No live migration was run.
 
 PR validation subsequently passed the frontend checks and full frontend matrix.
 The full Go suite completed with one failure: `TestIncrementalWriterRowBudget`

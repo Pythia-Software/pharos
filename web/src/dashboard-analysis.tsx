@@ -6,7 +6,7 @@ import { MetricCard, defaultRenderers, formatMetricOutput, type MetricTheme } fr
 import { BinnedHistogram, histogramOf } from "./dashboard-histogram";
 import { chartSeriesStyle, colorFields, keyColorTheme, metricSeriesColor } from "./chart-colors";
 import { orderedValues } from "./session-shape-bands";
-import { isTrendView, changeState, canonicalState, clearView, viewChosen, cycleUnavailable, notTrended, sampleSubject, analysisResult, analysisLabels, analysisFields, comparisonComponentUnavailable, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, scatterUnitChange, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, percentileLimit, distributionBins, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { isTrendView, changeState, canonicalState, clearView, viewChosen, cycleUnavailable, notTrended, sampleSubject, analysisResult, analysisLabels, analysisFields, comparisonComponentUnavailable, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, analysisViewValue, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, scatterUnitChange, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, percentileLimit, distributionBins, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery } from "./analysis-request";
 import type { RequestParams } from "./metric-request";
 import { useDatasetRefresh } from "./use-dataset-refresh";
@@ -51,8 +51,7 @@ export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, que
 
 export function AnalysisViewControl({ catalog, state, onChange }: { catalog: AnalysisCatalog; state: AnalysisState; onChange: (view: AnalysisView) => void }) {
   const options = viewOptions(catalog, state), blocked = options.find(([view, , reason]) => isTrendView(view) && reason)?.[2];
-  // A catalog that draws Over time as lines or bars itself lists one Over time.
-  const value = state.view ?? "trend", shown = isTrendView(value) && !options.some(([view]) => view === value) ? "trend" : value;
+  const shown = analysisViewValue(catalog, state);
   return <ChartSelect label="Analysis" value={shown} options={options} note={blocked} title="Over time, or one value per group across the range" onChange={onChange} />;
 }
 
