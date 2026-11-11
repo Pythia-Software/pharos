@@ -2,12 +2,222 @@ package archive
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRepairAgentSessionModelsPreservesAccounting(t *testing.T) {
+	c, config := testCatalog(t)
+	seedDelegation(t, c)
+	execSQL(t, c.DB, `DELETE FROM meta WHERE key='agent_session_model_version'; UPDATE conversations SET model='opus'; UPDATE agent_sessions SET model='opus';
+		INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,attribution,total_tokens) VALUES
+		('child-session','2026-03-01','haiku','request',200),
+		('nested-session','2026-03-01','haiku','request',100),
+		('nested-session','2026-03-02','sonnet','request',200),
+		('embedded','2026-03-01','','session-start',50);
+		UPDATE model_requests SET model='opus';`)
+	// A retained request beats stale configured and derived model fields.
+	execSQL(t, c.DB, `UPDATE messages SET raw_text='{"type":"assistant","message":{"model":"claude-haiku-4-5-20251001"}}',role='assistant',kind='metadata' WHERE id='nested-result';
+		INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES('child-session','nested-result',0);
+		INSERT INTO messages(id,conversation_id,native_id,role,kind,text,raw_text,content_hash)
+		VALUES('json-answer','child','json-answer','assistant','message','{"object":"response","model":"gpt-4.1","output":[]}','', 'json-answer');
+		INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES('child-session','json-answer',1);
+		UPDATE model_requests SET final_message_id='json-answer' WHERE agent_session_id='child-session'`)
+	before := func() string {
+		t.Helper()
+		snapshot := map[string]any{}
+		for _, table := range []string{"messages", "agent_session_messages", "agent_session_usage", "agent_session_token_evidence", "model_requests", "tool_calls", "metrics", "usage_attribution_state"} {
+			rows, err := queryMaps(c.DB, "SELECT * FROM "+table+" ORDER BY rowid")
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot[table] = rows
+		}
+		rows, err := queryMaps(c.DB, `SELECT id,workspace_id,conversation_id,native_id,parent_id,child_conversation_id,kind,depth,started_at,ended_at,total_tokens,input_tokens,output_tokens,usage_status FROM agent_sessions ORDER BY id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot["sessions"] = rows
+		data, _ := json.Marshal(snapshot)
+		return string(data)
+	}
+	wantAccounting := before()
+	var generation int64
+	if err := c.DB.QueryRow(`SELECT value FROM query_cache_generation WHERE id=1`).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	if got := upgradePending(t, c)["session-models"]; got != 1 {
+		t.Fatalf("pending=%d", got)
+	}
+	// Warm the cached projection before repair.
+	if _, err := c.delegationSnapshot(t.Context(), "delegation-work"); err != nil {
+		t.Fatal(err)
+	}
+	report, err := c.RepairAgentSessionModels(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Updated != 4 || report.Multiple != 1 || report.PricingFallback != 1 {
+		t.Fatalf("report=%+v", report)
+	}
+	for id, want := range map[string]string{"child-session": "claude-haiku-4-5-20251001", "launch-alias": "claude-haiku-4-5-20251001", "nested-session": multipleSessionModels, "nested-alias": "Unknown model", "embedded": "opus", "root-session": "opus"} {
+		var got string
+		if err := c.DB.QueryRow(`SELECT model FROM agent_sessions WHERE id=?`, id).Scan(&got); err != nil || got != want {
+			t.Errorf("%s model=%q want %q: %v", id, got, want, err)
+		}
+	}
+	if before() != wantAccounting {
+		t.Fatal("metadata repair changed accounting, hierarchy, IDs or retained evidence")
+	}
+	var afterGeneration int64
+	if err := c.DB.QueryRow(`SELECT value FROM query_cache_generation WHERE id=1`).Scan(&afterGeneration); err != nil || afterGeneration <= generation {
+		t.Fatal("model writes did not invalidate cached views", err)
+	}
+	if got := upgradePending(t, c)["session-models"]; got != 0 {
+		t.Fatalf("pending after repair=%d", got)
+	}
+	if again, err := c.RepairAgentSessionModels(t.Context(), nil); err != nil || again.Updated != 0 {
+		t.Fatalf("repeat=%+v: %v", again, err)
+	}
+	if before() != wantAccounting {
+		t.Fatal("repeat repair changed accounting")
+	}
+	snapshot, err := c.delegationSnapshot(t.Context(), "delegation-work")
+	if err != nil || snapshot.ByID["child-session"].Model != "claude-haiku-4-5-20251001" {
+		t.Fatal("delegation did not see repaired metadata", err)
+	}
+	status, body := delegationGET(t, testServer(t, config, c), "/api/work/delegation-work/delegation?mode=rank&search=claude-haiku-4-5-20251001")
+	if status != 200 || len(body["rows"].([]any)) != 1 || body["rows"].([]any)[0].(map[string]any)["model"] != "claude-haiku-4-5-20251001" {
+		t.Fatal("delegation filtering/JSON did not use repaired metadata", status, body)
+	}
+	tx, err := c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	metas, err := loadDelegationConversationMeta(t.Context(), tx, []string{"child"})
+	if err != nil || metas["child"].Model != "claude-haiku-4-5-20251001" {
+		t.Fatal("external child metadata reverted to conversation model", metas, err)
+	}
+}
+
+func sessionModelLinkedFixture() WorkspaceRecord {
+	return WorkspaceRecord{SourceID: "linked-model", SourceKind: "claude", Account: "local", Conversations: []ConversationRecord{
+		{NativeID: "session", Provider: "claude", Account: "local", Model: "opus", Messages: []MessageRecord{
+			{NativeID: "launch", Role: "assistant", Kind: "delegation", CallID: "child-call", Text: `{"tool":"Agent","input":{"model":"sonnet","prompt":"Child assignment"}}`, Selected: true},
+			{NativeID: "result", Role: "user", Kind: "delegation_result", CallID: "child-call", Text: `{"details":{"agentId":"x"}}`, Selected: true},
+		}},
+		{NativeID: "session:subagent:agent-x", ParentNativeID: "session", AgentDepth: 1, Provider: "claude", Account: "local", Model: "haiku", Messages: []MessageRecord{
+			{NativeID: "assignment", Role: "agent", Kind: "message", Text: "Child assignment", Selected: true},
+			{NativeID: "usage", Role: "system", Kind: "metadata", Model: "haiku", Text: `{"type":"assistant","message":{"model":"haiku","usage":{"input_tokens":10}}}`, Selected: true},
+		}},
+	}}
+}
+
+func TestRepairAgentSessionModelsLinkedIngest(t *testing.T) {
+	c, _ := testCatalog(t)
+	record := sessionModelLinkedFixture()
+	model := func() string {
+		t.Helper()
+		var model string
+		if err := c.DB.QueryRow(`SELECT model FROM agent_sessions WHERE native_id='child-call' AND child_conversation_id IS NOT NULL`).Scan(&model); err != nil {
+			t.Fatal(err)
+		}
+		return model
+	}
+	ingestRecordTx(t, c, record)
+	if got := model(); got != "haiku" {
+		t.Fatalf("initial linked launch model=%q", got)
+	}
+	before, err := queryMaps(c.DB, `SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A catalog repaired by an older build must stay correct on the next
+	// parent edit, even though its one-time upgrade is already complete.
+	execSQL(t, c.DB, `UPDATE agent_sessions SET model='sonnet' WHERE native_id='child-call'`)
+	if _, err := c.RepairAgentSessionModels(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		record.Conversations[0].Messages = append(record.Conversations[0].Messages, MessageRecord{NativeID: fmt.Sprint("later-", i), Role: "assistant", Kind: "message", Text: `{"object":"response","model":"gpt-4.1"}`, Selected: true})
+		ingestRecordTx(t, c, record)
+		if got := model(); got != "haiku" {
+			t.Fatalf("reingest linked launch model=%q", got)
+		}
+		if pending := upgradePending(t, c)["session-models"]; pending != 0 {
+			t.Fatalf("normal ingest scheduled another repair: %d", pending)
+		}
+	}
+	after, err := queryMaps(c.DB, `SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model`)
+	if err != nil || jsonText(before) != jsonText(after) {
+		t.Fatalf("reingest changed accounted usage: %v", err)
+	}
+	// A conversation keeps its latest real request, while its embedded
+	// execution and linked launch summarize all of the child's models.
+	record.Conversations[1].Messages = append(record.Conversations[1].Messages, MessageRecord{
+		NativeID: "later-model", Role: "assistant", Kind: "metadata", Model: "sonnet", Selected: true,
+		Text: `{"type":"assistant","message":{"id":"later-model","model":"sonnet","usage":{"input_tokens":5}}}`,
+	})
+	ingestRecordTx(t, c, record)
+	checkModels := func() {
+		t.Helper()
+		if got := model(); got != multipleSessionModels {
+			t.Fatalf("mixed linked launch model=%q", got)
+		}
+		var session, conversation string
+		if err := c.DB.QueryRow(`SELECT s.model,c.model FROM agent_sessions s JOIN conversations c ON c.id=s.conversation_id
+			WHERE s.native_id='main' AND s.kind='subagent'`).Scan(&session, &conversation); err != nil || session != multipleSessionModels || conversation != "sonnet" {
+			t.Fatalf("mixed child session=%q conversation=%q: %v", session, conversation, err)
+		}
+	}
+	checkModels()
+	before, err = queryMaps(c.DB, `SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, c.DB, `DELETE FROM usage_attribution_state`)
+	if _, err := c.RepairUsageAttribution(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	checkModels()
+	after, err = queryMaps(c.DB, `SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model`)
+	if err != nil || jsonText(before) != jsonText(after) {
+		t.Fatalf("summary replay changed accounted usage: %v", err)
+	}
+}
+
+func TestRepairAgentSessionModelsResumes(t *testing.T) {
+	c, _ := testCatalog(t)
+	seedDelegation(t, c)
+	execSQL(t, c.DB, `DELETE FROM meta WHERE key='agent_session_model_version'; UPDATE agent_sessions SET model='opus';
+		INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('later','claude','local','later','Later','2026-01-01');
+		INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('later','later','claude','local','later');
+		INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,model) VALUES('later','later','later','child','subagent','claude','opus')`)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if _, err := c.RepairAgentSessionModels(ctx, func(done, total int) {
+		if done == 1 {
+			cancel()
+		}
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("interruption=%v", err)
+	}
+	if version, err := c.metaValue(t.Context(), "agent_session_model_version"); err != nil || version != "" {
+		t.Fatalf("interrupted pass marked current: %q %v", version, err)
+	}
+	if report, err := c.RepairAgentSessionModels(t.Context(), nil); err != nil || report.Updated != 1 {
+		t.Fatalf("resume=%+v: %v", report, err)
+	}
+	if report, err := c.RepairAgentSessionModels(t.Context(), nil); err != nil || report.Updated != 0 {
+		t.Fatalf("repeat=%+v: %v", report, err)
+	}
+}
 
 func TestRepairSessionBoundsPreservesAccounting(t *testing.T) {
 	c, _ := testCatalog(t)
@@ -319,6 +529,8 @@ func TestModelSummaryUsesItsOwnSessionEvidence(t *testing.T) {
 		{NativeID: "launch", Role: "assistant", Kind: "delegation", Model: "opus", CallID: "child"},
 		{NativeID: "child-reply", Role: "assistant", Kind: "message", Model: "haiku", ParentNativeID: "child"},
 		{NativeID: "error", Role: "assistant", Kind: "message", Model: "<synthetic>"},
+		{NativeID: "json-answer", Role: "assistant", Kind: "message", Text: `{"type":"assistant","message":{"model":"gpt-4.1"}}`},
+		{NativeID: "child-json-answer", Role: "assistant", Kind: "message", ParentNativeID: "child", Text: `{"type":"assistant","message":{"model":"gpt-4.1"}}`},
 	}
 	for _, summary := range agentSessionSummaries(messages) {
 		want := map[string]string{"main": "opus", "child": "haiku"}[summary.nativeID]

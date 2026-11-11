@@ -496,7 +496,11 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		if main {
 			label = firstString(cv["native_id"], label)
 		}
-		n := &delegationNode{ID: nid, WorkspaceID: workspace, ConversationID: cid, Provider: firstString(lead["provider"], cv["provider"]), Model: firstString(lead["model"], cv["model"]), Label: label, Coverage: firstString(cv["coverage"]), TimeBoundsSource: firstString(lead["time_bounds_source"]), Usage: "unavailable", envelopeStart: delegationTime(lead["started_at"]), envelopeEnd: delegationTime(lead["ended_at"]), MessageID: firstString(lead["delegation_message_id"]), Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
+		model := firstString(lead["model"])
+		if main && model == "" {
+			model = firstString(cv["model"])
+		}
+		n := &delegationNode{ID: nid, WorkspaceID: workspace, ConversationID: cid, Provider: firstString(lead["provider"], cv["provider"]), Model: model, Label: label, Coverage: firstString(cv["coverage"]), TimeBoundsSource: firstString(lead["time_bounds_source"]), Usage: "unavailable", envelopeStart: delegationTime(lead["started_at"]), envelopeEnd: delegationTime(lead["ended_at"]), MessageID: firstString(lead["delegation_message_id"]), Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
 		// Embedded executions must not inherit the parent agent's effort.
 		n.Effort = firstString(lead["effort"])
 		if main && n.Effort == "" {

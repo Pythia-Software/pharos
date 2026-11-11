@@ -1978,7 +1978,6 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 		if childAgent {
 			depth += conversation.AgentDepth
 		}
-		model := sessionSummaryModel(summary, conversation.Messages, conversation.Model)
 		usage := summary.usage
 		usageFallback := defaultString(strings.TrimSpace(conversation.Model), "Unknown model")
 		if preserveUnavailable {
@@ -1989,6 +1988,13 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 				return err
 			}
 			usageFallback = "Unknown model"
+		}
+		conversationSummary := summary
+		conversationSummary.usage = usage
+		conversationModel := sessionSummaryModel(conversationSummary, conversation.Messages, conversation.Model)
+		model := conversationModel
+		if kind == "subagent" {
+			model = summarySessionModel(summary, conversation)
 		}
 		status := "unavailable"
 		unclassified := max(summary.counts["total_tokens"]-summary.counts["input_tokens"]-summary.counts["output_tokens"], 0)
@@ -2020,7 +2026,7 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 			return err
 		}
 		if summary.nativeID == "main" {
-			if _, err := tx.Exec(`UPDATE conversations SET model=? WHERE id=? AND COALESCE(model,'')<>?`, nilIfEmpty(model), conversationID, model); err != nil {
+			if _, err := tx.Exec(`UPDATE conversations SET model=? WHERE id=? AND COALESCE(model,'')<>?`, nilIfEmpty(conversationModel), conversationID, conversationModel); err != nil {
 				return err
 			}
 		}
@@ -2107,20 +2113,24 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 			}
 		}
 	}
-	if preserveExisting {
-		return nil
-	}
-	retained := map[string]bool{}
-	for _, id := range ids {
-		retained[id] = true
-	}
-	for _, session := range priorSessions {
-		id := firstString(session["id"])
-		if !retained[id] && !preserved[id] {
-			if _, err := tx.Exec("DELETE FROM agent_sessions WHERE id=?", id); err != nil {
-				return err
+	if !preserveExisting {
+		retained := map[string]bool{}
+		for _, id := range ids {
+			retained[id] = true
+		}
+		for _, session := range priorSessions {
+			id := firstString(session["id"])
+			if !retained[id] && !preserved[id] {
+				if _, err := tx.Exec("DELETE FROM agent_sessions WHERE id=?", id); err != nil {
+					return err
+				}
 			}
 		}
+	}
+	// Both ordinary and reference ingestion now have the same retained
+	// membership and effective usage models, including normalized missing models.
+	if conversation.AgentDepth > 0 || len(summaries) > 1 {
+		return refreshLinkedSessionModels(tx, []string{conversationID})
 	}
 	return nil
 }

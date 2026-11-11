@@ -338,7 +338,7 @@ func addCost(total any, value *float64) any {
 // Claude Code's "<synthetic>" messages or usage with no model recorded. They
 // stay unpriced but are never sent to the pricing agent.
 func placeholderModel(model string) bool {
-	return model == "Unknown model" || (strings.HasPrefix(model, "<") && strings.HasSuffix(model, ">"))
+	return model == "Unknown model" || model == multipleSessionModels || (strings.HasPrefix(model, "<") && strings.HasSuffix(model, ">"))
 }
 
 // modelsWithStatus lists reported model strings whose usage has the given

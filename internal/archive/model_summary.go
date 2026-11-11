@@ -28,7 +28,11 @@ func sessionSummaryModel(summary agentSessionSummary, messages []MessageRecord, 
 	latest, last := "", -1
 	for _, index := range summary.messageIndexes {
 		m := messages[index]
-		raw, value := tokenObject(m)
+		// JSON in an assistant answer is prose, not a protocol envelope.
+		raw, value := map[string]any{}, map[string]any{}
+		if strings.TrimSpace(m.RawText) != "" || m.Kind == "metadata" {
+			raw, value = tokenObject(m)
+		}
 		typ := firstString(value["type"], raw["type"])
 		if matchesFold(typ, "result", "cost-state", "turn.completed") || m.Kind == "result" || firstString(value["advisor_of"], raw["advisor_of"]) != "" {
 			continue
@@ -72,7 +76,7 @@ func repairModelSummaries(tx *sql.Tx, workspace string, conversations []Conversa
 		for _, summary := range agentSessionSummaries(c.Messages) {
 			summaries[summary.nativeID] = summary
 		}
-		rows, err := queryMaps(tx, `SELECT id,native_id,model FROM agent_sessions WHERE conversation_id=?`, ids[i])
+		rows, err := queryMaps(tx, `SELECT id,native_id,kind,model FROM agent_sessions WHERE conversation_id=?`, ids[i])
 		if err != nil {
 			return err
 		}
@@ -90,7 +94,13 @@ func repairModelSummaries(tx *sql.Tx, workspace string, conversations []Conversa
 				summary.usage[usageBucket{model: firstString(row["model"])}] = tokenCounts{"total_tokens": float64(integer(row["total_tokens"]))}
 			}
 			before := firstString(session["model"])
-			model := sessionSummaryModel(summary, c.Messages, before)
+			fallback := before
+			if native == "main" && session["kind"] == "subagent" {
+				// The embedded summary can be mixed or unknown; it is not
+				// the conversation's last observed model.
+				fallback = c.Model
+			}
+			model := sessionSummaryModel(summary, c.Messages, fallback)
 			if before != model {
 				if err := preserveSummaryUsageModel(tx, sessionID, before); err != nil {
 					return err
@@ -106,7 +116,9 @@ func repairModelSummaries(tx *sql.Tx, workspace string, conversations []Conversa
 			}
 		}
 	}
-	return nil
+	// Conversation summaries retain their latest-model policy. Reconcile the
+	// complete embedded executions after replay has restored all evidence.
+	return refreshLinkedSessionModels(tx, ids)
 }
 
 // Empty legacy usage models use the session label as a pricing fallback.

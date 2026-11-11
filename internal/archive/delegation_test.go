@@ -892,6 +892,16 @@ func TestDelegationCostFollowsUsageModelAndHistoricalDate(t *testing.T) {
 	if metric := snapshot.ByID["child-session"].Self["cost"]; !near(metric.Value, 17) || metric.Quality != "estimated" {
 		t.Fatalf("usage-specific model/date prices should sum to $10 + $5 + $2: %+v", metric)
 	}
+	if _, err := c.RepairAgentSessionModels(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = c.delegationSnapshot(t.Context(), "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node := snapshot.ByID["child-session"]; node.Model != multipleSessionModels || !near(node.Self["cost"].Value, 17) {
+		t.Fatalf("mixed model summary changed historical pricing: %+v", node)
+	}
 }
 
 func TestDelegationDeepAncestorContextIsBounded(t *testing.T) {
@@ -1180,7 +1190,9 @@ func TestWorkPreviewSummarizesWorkspaceAndConversation(t *testing.T) {
 	if workspace["sessions"] != float64(4) || value(workspace, "children") != float64(3) || value(workspace, "tokens") != float64(600) || value(workspace, "errors") != float64(1) || work["conversation"] != nil {
 		t.Fatalf("workspace scope: %v", workspace)
 	}
-	if models := workspace["models"].([]any); len(models) != 4 || models[0].(map[string]any)["model"] != "gemini" {
+	// The embedded session has no own model evidence and must not create a
+	// fourth group by borrowing the Claude conversation's Opus model.
+	if models := workspace["models"].([]any); len(models) != 3 || models[0].(map[string]any)["model"] != "gemini" {
 		t.Fatalf("models must be ordered by tokens: %v", models)
 	}
 	// A child conversation's preview covers the agents it delegated to.
