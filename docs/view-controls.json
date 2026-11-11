@@ -9555,6 +9555,15 @@
       "reason": "Transient context menu action clears linked attention from the URL."
     },
     {
+      "key": "49d6d21da0c782c6:0",
+      "file": "web/src/view-attention.ts",
+      "owner": "syncDismissButtons",
+      "tag": "button",
+      "control": "\"button\"",
+      "contract": "action",
+      "reason": "Dismisses linked attention by clearing its highlight and reveal URL parameters."
+    },
+    {
       "key": "a77d7bde4338f61f:0",
       "file": "web/src/view-attention.ts",
       "owner": "update",
