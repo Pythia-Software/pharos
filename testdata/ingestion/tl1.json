@@ -1,5 +1,5 @@
 {
-  "index_version": "tl1-analysis-v4-origins",
+  "index_version": "tl1-analysis-v5-execution-model",
   "records": [
     {
       "SourceID": "install-1:task-claude",

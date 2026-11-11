@@ -97,6 +97,71 @@ func TestPricingValidationRejectsUncitedAndConflictingRows(t *testing.T) {
 	}
 }
 
+func TestSyntheticModelRepairPricesOnlyExactAllocation(t *testing.T) {
+	for _, check := range []struct {
+		name, models string
+		pricedTokens int64
+	}{
+		{"context metadata", `{"claude-opus-4-8":{"contextWindow":200000},"claude-haiku-5":{"contextWindow":200000}}`, 11},
+		{"exact model counters", `{"claude-opus-4-8":{"inputTokens":60,"outputTokens":6},"claude-haiku-5":{"inputTokens":40,"outputTokens":4}}`, 110},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			doc := testPricing()
+			doc.Changes = append(doc.Changes, priceChange{Provider: "anthropic", Model: "claude-haiku-5", EffectiveFrom: "2026-01-01", Input: rate(1), Output: rate(5), Status: "confirmed", SourceURL: "https://example.com/haiku"})
+			if err := c.replacePricing(doc, "test"); err != nil {
+				t.Fatal(err)
+			}
+			record := WorkspaceRecord{SourceID: "synthetic-cost", SourceKind: "tl1", Account: "local", Conversations: []ConversationRecord{{NativeID: "synthetic-cost", Provider: "claude", Account: "local", Model: "<synthetic>", StartedAt: "2026-09-20T12:00:00Z", Messages: []MessageRecord{
+				{NativeID: "request", Role: "assistant", Kind: "metadata", Model: "claude-opus-4-8", CreatedAt: "2026-09-20T12:00:00Z", Text: `{"type":"assistant","message":{"id":"request","model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":1}}}`},
+				{NativeID: "result", Role: "system", Kind: "result", Model: "<synthetic>", CreatedAt: "2026-09-20T12:01:00Z", Text: `{"type":"result","usage":{"input_tokens":100,"output_tokens":10},"modelUsage":` + check.models + `}`},
+			}}}}
+			tx, err := c.DB.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = ingestWorkspace(tx, record, false); err != nil {
+				tx.Rollback()
+				t.Fatal(err)
+			}
+			if err = tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			// An older allocator put the whole run under its error envelope.
+			if _, err = c.DB.Exec(`DELETE FROM agent_session_usage; INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,attribution,input_tokens,uncached_input_tokens,output_tokens,total_tokens) SELECT id,'2026-09-20T12:00:00Z','<synthetic>','run-remainder',100,100,10,110 FROM agent_sessions; UPDATE conversations SET model='<synthetic>'; UPDATE agent_sessions SET model='<synthetic>'; UPDATE usage_attribution_state SET version='8'`); err != nil {
+				t.Fatal(err)
+			}
+			before, err := c.usageRows(time.UTC)
+			if err != nil || len(before) != 1 || before[0]["cost_usd"] != nil {
+				t.Fatalf("old usage=%v %v", before, err)
+			}
+			if _, err = c.RepairUsageAttribution(t.Context(), nil); err != nil {
+				t.Fatal(err)
+			}
+			after, err := c.usageRows(time.UTC)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var total, priced int64
+			for _, row := range after {
+				total += integer(row["total_tokens"])
+				if row["cost_usd"] != nil {
+					priced += integer(row["total_tokens"])
+				} else if !placeholderModel(firstString(row["model"])) {
+					t.Fatalf("unexpected unpriced model: %v", row)
+				}
+			}
+			if total != 110 || priced != check.pricedTokens {
+				t.Fatalf("total/priced=%d/%d, want 110/%d: %v", total, priced, check.pricedTokens, after)
+			}
+			var model string
+			if err := c.DB.QueryRow(`SELECT model FROM agent_sessions`).Scan(&model); err != nil || model != "claude-opus-4-8" {
+				t.Fatalf("summary=%q: %v", model, err)
+			}
+		})
+	}
+}
+
 func TestUsageAndLibraryRowsCarryCost(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	doc := testPricing()
