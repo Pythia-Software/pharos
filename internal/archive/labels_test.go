@@ -1559,6 +1559,54 @@ func TestMessageLabelFacts(t *testing.T) {
 	if scalar("SELECT count(*) FROM message_label_facts") != 3 || scalar("SELECT count(*) FROM message_label_memberships") != 5 {
 		t.Fatal("fact/membership grain differs")
 	}
+	// The V3 trend batches family counts and its distinct-message denominator.
+	// Sibling labels in one family and overlap across families must not inflate
+	// either count when the upstream executor shares their filtered inputs.
+	for _, tc := range []struct {
+		name         string
+		where        []qt.WhereTerm
+		families     map[string]float64
+		messages     float64
+		observations int64
+	}{
+		{"all labels", nil, map[string]float64{"P.request": 1, "C.report": 2, "?": 1}, 3, 5},
+		{"parent label filter", query.Where, map[string]float64{"P.request": 1}, 1, 2},
+	} {
+		t.Run("trend "+tc.name, func(t *testing.T) {
+			where := append([]qt.WhereTerm{
+				{Field: "occurred_at", Op: ">=", Value: "2026-01-01T00:00:00Z"},
+				{Field: "occurred_at", Op: "<", Value: "2026-01-02T00:00:00Z"},
+			}, tc.where...)
+			q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: false,
+				Result: qt.WireQuery{Select: []string{"id"}, Where: where, Limit: 100},
+				Metrics: []qt.AggSpec{
+					{ID: "trend", Op: "count_distinct", Field: "message_id", GroupBy: []string{"day", "family"}},
+					{ID: "trend:population", Op: "count_distinct", Field: "message_id", GroupBy: []string{"day"}},
+				}}
+			result, _, err := srv.executeQueryV3(ctx, "message_labels", nil, PharosMessageLabelsSchema(), q)
+			if err != nil || len(result.Metrics) != 2 || result.SourceTotal != tc.observations {
+				t.Fatalf("trend batch: %+v, %v", result, err)
+			}
+			families, population := result.Metrics[0], result.Metrics[1]
+			if families.Error != "" || population.Error != "" || len(population.Buckets) != 1 || population.Buckets[0].Value != tc.messages {
+				t.Fatalf("trend metrics: %+v", result.Metrics)
+			}
+			actual := map[string]float64{}
+			for _, bucket := range families.Buckets {
+				if len(bucket.Keys) != 2 || bucket.Keys[0] != population.Buckets[0].Keys[0] || bucket.Error != "" {
+					t.Fatalf("family bucket: %+v", bucket)
+				}
+				value, ok := bucket.Value.(float64)
+				if !ok {
+					t.Fatalf("family count: %+v", bucket)
+				}
+				actual[fmt.Sprint(bucket.Keys[1])] = value
+			}
+			if !reflect.DeepEqual(actual, tc.families) {
+				t.Fatalf("family message counts: %v, want %v", actual, tc.families)
+			}
+		})
+	}
 	// A page sorted newest first reads only the newest stored facts
 	// (newestBound), and all of them when those do not fill it. Either way
 	// it has the rows and total of the whole source.

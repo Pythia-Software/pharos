@@ -1,15 +1,15 @@
-# Query Table 1.0.5 in Pharos
+# Query Table 1.0.7 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **1.0.5** packages,
-and the Go backend to **v1.0.5**. The lockfile and `go.sum` record the released
+Pharos pins core, React, UI and codegen to the published npm **1.0.7** packages,
+and the Go backend to **v1.0.7**. The lockfile and `go.sum` record the released
 sources. There are no vendored copies, module replacements, package patches or
 build-time source rewrites. Optional upstream worktree linking is described in
 [local development](query-table-local-development.md); ordinary builds need no
 Query Table checkout.
 
-The [1.0.5 release](https://github.com/Pythia-Software/query-table/releases/tag/v1.0.5),
-[wire protocol](https://github.com/Pythia-Software/query-table/blob/v1.0.5/docs/wire-protocol.md)
-and [error contract](https://github.com/Pythia-Software/query-table/blob/v1.0.5/docs/errors.md)
+The [1.0.7 release](https://github.com/Pythia-Software/query-table/releases/tag/v1.0.7),
+[wire protocol](https://github.com/Pythia-Software/query-table/blob/v1.0.7/docs/wire-protocol.md)
+and [error contract](https://github.com/Pythia-Software/query-table/blob/v1.0.7/docs/errors.md)
 define the integration. Query Table 1.0.2 added the run-bar host slot used for
 the readiness indicator; 1.0.3 added the host population counter that Pharos's
 count cache plugs into (below); 1.0.4 sped up the SQLite executor. 1.0.5 adds
@@ -22,6 +22,27 @@ colouring key. The service advertises each through `Capabilities()`; the
 SQLite functions and aggregates it needs are registered from the complete
 `SQLiteV2Functions()` and `SQLiteV2Aggregates()` lists on every connection.
 The remaining 1.0.0 follow-ups below still apply.
+
+## SQLite reduction reuse in 1.0.7
+
+Query Table 1.0.7 automatically shares filtered, validated text inputs across
+eligible exact `COUNT_DISTINCT` metrics with different grouping lists. Pharos's
+Labels trend already sends its `[day,family]` count and independent `[day]`
+denominator in one V3 request, so the released executor selects this path without
+a host flag or source rewrite. Keep these metrics batched; labels overlap and
+the denominator cannot be derived by summing the family counts. Repeated sort,
+top-N and minimum-count variants can also reuse their grouped reductions.
+
+Mixed scalar, distribution and calendar metric batches gain stored-source scan
+sharing where eligible. Computed fields, scopes and filters retain the upstream
+fallback and diagnostic rules. Pharos continues to use its normal source
+projection, population counter and temporary-storage lease; no host reducer or
+dependency patch is needed.
+
+The [upstream performance report](https://github.com/Pythia-Software/query-table/blob/v1.0.7/docs/sqlite-text-distinct-performance.md)
+describes eligibility and correctness coverage. The
+[Labels handoff](handoffs/query-table-label-trend-latency.md) retains the original
+request and a standalone reproduction for comparing released versions.
 
 ## Analyze dataset pages
 
