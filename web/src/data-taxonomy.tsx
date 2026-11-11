@@ -96,7 +96,7 @@ export function DataTaxonomyModal() {
       if (document.activeElement === target) break;
     }
   }, [entity, conversation]);
-  useEffect(()=>{const element=dialog.current!;if(shown&&!element.open)element.showModal();else if(!shown&&element.open)element.close();},[shown]);
+  useEffect(()=>{const element=dialog.current!;if(shown&&!element.open)element.showModal();else if(!shown&&element.open)element.close();document.getElementById("dataGuideToggle")?.setAttribute("aria-expanded",String(shown));},[shown]);
   useEffect(() => {
     const element = dialog.current!;
     let invoker: HTMLElement | null = null;
@@ -136,7 +136,7 @@ export function DataTaxonomyModal() {
     target?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [entity, shown]);
   const selected = dataEntities[entity];
-  return <dialog data-view-field="guide_open" ref={dialog} className="data-guide" aria-labelledby="dataGuideTitle" onClick={event => {
+  return <dialog id="dataGuideDialog" data-view-field="guide_open" ref={dialog} className="data-guide" aria-labelledby="dataGuideTitle" onClick={event => {
     if (event.target !== event.currentTarget) return;
     const rect = event.currentTarget.getBoundingClientRect();
     if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.currentTarget.close();
