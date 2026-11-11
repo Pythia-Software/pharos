@@ -176,6 +176,15 @@ func (c *Catalog) fingerprintImagesPending(ctx context.Context) (bool, error) {
 // Waiting is a held pass, not a success or a rendering failure. The background
 // loop retains its accepted demand until analysis (or a render retry) is ready.
 var errFingerprintWaiting = fmt.Errorf("%w: fingerprints are waiting for analysis or retry", errWorkHeld)
+var errFingerprintPreempted = fmt.Errorf("%w: fingerprints yielded to manual indexing or verification", errWorkHeld)
+
+func (s *Server) retainFingerprintPass(cadence string) {
+	s.background.mu.Lock()
+	defer s.background.mu.Unlock()
+	if s.background.fingerprintRetry != "requested" {
+		s.background.fingerprintRetry = cadence
+	}
+}
 
 func (s *Server) fingerprintPassReady(ctx context.Context) (bool, error) {
 	pending, err := catalogExists(ctx, s.Catalog, `SELECT 1 FROM fingerprint_entities WHERE dirty=1`)
@@ -220,7 +229,7 @@ func (s *Server) runFingerprintPass(ctx context.Context) error {
 	return nil
 }
 
-func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
+func (c *Catalog) refreshFingerprintImages(ctx context.Context) (more bool, err error) {
 	if c.readOnly || c.queryOnly {
 		return false, nil
 	}
@@ -283,6 +292,18 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	stage, started := "check cached images", time.Now()
+	failure := func(err error) error {
+		if cause := context.Cause(ctx); ctx.Err() != nil && cause != ctx.Err() {
+			err = fmt.Errorf("%w (cause: %v)", err, cause)
+		}
+		return fmt.Errorf("fingerprint %s %s: %s after %s (appearance=%d attempt=%d): %w", entity, id, stage, time.Since(started).Round(time.Millisecond), mask, attempts+1, err)
+	}
+	defer func() {
+		if err != nil {
+			err = failure(err)
+		}
+	}()
 	needed := mask
 	available, err := queryMapsContext(ctx, c.reader(), `SELECT events,COUNT(*) count FROM fingerprint_images WHERE entity=? AND entity_id=? AND revision=? AND renderer=? GROUP BY events`, entity, id, revision, fingerprintRendererVersion())
 	if err != nil {
@@ -311,6 +332,7 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 	// straddles a change is not drawn. It is conservative: any execution
 	// source write counts, related or not, so the retry takes the same
 	// backoff, bounding repeated reads while an ingest writes.
+	stage = "check execution evidence"
 	generation, tracked, err := executionSourceGeneration(ctx, c.reader())
 	if err != nil {
 		return false, err
@@ -324,6 +346,7 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 	}
 	renderCtx, cancel := context.WithTimeout(ctx, fingerprintRenderTimeout)
 	defer cancel()
+	stage = "load input"
 	input, err := c.messageLabelFingerprintInput(renderCtx, id, entity == "workspace", 0, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return true, c.writeTransaction(ctx, "discard deleted fingerprint", func(tx *sql.Tx) error {
@@ -349,6 +372,7 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 	}
 	var result fingerprintRendered
 	if err == nil {
+		stage = "render images"
 		input["events"] = input["agent_events"]
 		result, err = renderer.Render(renderCtx, input, needed)
 	}
@@ -357,23 +381,24 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (bool, error) {
 			return false, ctx.Err()
 		}
 		delay := min(300, 5*(1<<min(attempts, 6)))
-		failure := err.Error()
-		if len(failure) > 1000 {
-			failure = failure[:1000]
+		problem := failure(err).Error()
+		if len(problem) > 1000 {
+			problem = problem[:1000]
 		}
 		stored := c.writeTransaction(ctx, "defer failed fingerprint", func(tx *sql.Tx) error {
-			_, e := tx.ExecContext(ctx, `UPDATE fingerprint_entities SET attempts=attempts+1,next_attempt=unixepoch()+?,last_error=? WHERE entity=? AND id=? AND revision=?`, delay, failure, entity, id, revision)
+			_, e := tx.ExecContext(ctx, `UPDATE fingerprint_entities SET attempts=attempts+1,next_attempt=unixepoch()+?,last_error=? WHERE entity=? AND id=? AND revision=?`, delay, problem, entity, id, revision)
 			return e
 		})
 		if stored != nil {
 			return false, stored
 		}
-		fmt.Fprintf(os.Stderr, "Fingerprint %s %s: %v\n", entity, id, err)
+		fmt.Fprintf(os.Stderr, "Fingerprint retry in %ds: %s\n", delay, problem)
 		return true, nil // other entities progress while this one backs off
 	}
 	// Publication and acknowledgement are atomic. A source change or deletion
 	// while loading/rendering leaves the new generation queued, never stale PNGs
 	// stamped current. A concurrently requested event-hidden variant stays queued.
+	stage = "publish images"
 	err = c.publishFingerprintImages(ctx, entity, id, revision, result)
 	return true, err
 }

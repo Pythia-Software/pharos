@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -35,7 +36,13 @@ func (s *Server) getMessageLabelFingerprint(w http.ResponseWriter, r *http.Reque
 
 // limit=0 reads the full retained evidence for background image generation.
 // The public evidence endpoint keeps its existing bounded, read-only contract.
-func (c *Catalog) messageLabelFingerprintInput(ctx context.Context, id string, workspace bool, limit int, includeTools bool) (map[string]any, error) {
+func (c *Catalog) messageLabelFingerprintInput(ctx context.Context, id string, workspace bool, limit int, includeTools bool) (input map[string]any, err error) {
+	stage := "metadata"
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("%s: %w", stage, err)
+		}
+	}()
 	scope := "c.id=?"
 	metadataSQL := `SELECT c.id,c.workspace_id work_id,COALESCE(NULLIF(c.agent_nickname,''),w.title,c.id) title,c.provider,repo.display_name repository,c.started_at FROM conversations c LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories repo ON repo.id=w.repository_id WHERE c.id=?`
 	if workspace {
@@ -50,6 +57,7 @@ func (c *Catalog) messageLabelFingerprintInput(ctx context.Context, id string, w
 		return nil, sql.ErrNoRows
 	}
 	conversation := rows[0]
+	stage = "messages"
 	labelJoin := "LEFT JOIN message_labels l ON l.message_id=m.id"
 	var hasLabels int
 	if err := c.reader().QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='message_labels'").Scan(&hasLabels); err != nil {
@@ -84,6 +92,7 @@ func (c *Catalog) messageLabelFingerprintInput(ctx context.Context, id string, w
 		byConversation[key] = append(byConversation[key], firstString(message["id"]))
 	}
 	if includeTools {
+		stage = "tool calls"
 		tools, err := queryMapsContext(ctx, c.reader(), `SELECT id,conversation_id,agent_session_id session_id,call_message_id message_id,tool_name name,tool_category category,command_category,status,started_at start,ended_at end,duration_ms FROM tool_calls WHERE conversation_id IN (SELECT c.id FROM conversations c WHERE `+scope+`) ORDER BY sequence,id`, id)
 		if err != nil {
 			return nil, err
@@ -107,6 +116,7 @@ func (c *Catalog) messageLabelFingerprintInput(ctx context.Context, id string, w
 	taxonomy, knownTaxonomy := []map[string]any{}, map[string]bool{}
 	pending := false
 	for _, key := range keys {
+		stage = "labels for conversation " + key
 		messageIDs := byConversation[key]
 		attach, summary, err := c.messageLabelsAttacherContext(ctx, key, messageIDs)
 		if err != nil {
@@ -146,6 +156,7 @@ func (c *Catalog) messageLabelFingerprintInput(ctx context.Context, id string, w
 			}
 		}
 	}
+	stage = "agent sessions"
 	sessions, err := queryMapsContext(ctx, c.reader(), `WITH RECURSIVE represented(id) AS (
  SELECT id FROM agent_sessions WHERE conversation_id IN (SELECT value FROM json_each(?)) AND (native_id='main' OR id IN (SELECT value FROM json_each(?)))
  UNION SELECT a.parent_id FROM agent_sessions a JOIN represented r ON a.id=r.id WHERE a.parent_id IS NOT NULL
@@ -215,12 +226,14 @@ func (c *Catalog) messageLabelFingerprintInput(ctx context.Context, id string, w
 	// Events resting on superseded execution evidence are left out, as the
 	// Agent Experience datasets leave them out, and reported separately from
 	// label freshness; the conversation reader still shows them, marked pending.
+	stage = "event freshness"
 	withheld, dirty, err := delegationEventFreshness(ctx, c.reader())
 	if err != nil {
 		return nil, err
 	}
 	events, eventsPending := []map[string]any{}, []string{}
 	for _, key := range keys {
+		stage = "event targets for conversation " + key
 		if withheld[key] || dirty[key] {
 			eventsPending = append(eventsPending, key)
 		}

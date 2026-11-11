@@ -75,6 +75,15 @@ resumes when work becomes eligible even if continuous rendering is disabled;
 scheduled retries retain scheduled priority and power policy. A requested
 maintenance task likewise stays blocked rather than acknowledging an empty pass.
 
+Manual indexing or verification can preempt the background pass to take the
+ingest lock. This interruption retains the fingerprint request and its original
+cadence, including an Ad hoc Run now, so it resumes after manual work releases
+the lock and analysis is ready. It records neither a render failure nor a
+successful pass. An explicit Stop clears retained demand even on a resumed pass
+or before the fingerprint stage starts, while leaving dirty images pending. The
+service log names the cancellation cause; the parent operation records an
+interruption rather than reporting preemption as a failed render.
+
 Opening a catalog adds queue metadata for existing entities. A changed renderer
 version requeues existing images while retaining the last good PNGs, unless
 `fingerprintSameImages` records that the earlier renderer drew the same images:
@@ -106,6 +115,12 @@ and record a bounded error with exponential retry delay (5 seconds to 5 minutes)
 Retries survive restart. A per-unit two-minute deadline prevents a pathological
 conversation from monopolizing the worker indefinitely; other entities progress
 while it backs off.
+Retry diagnostics name the entity, input-loading or rendering stage, elapsed
+time, requested appearance and attempt. Input diagnostics distinguish messages,
+tool calls, labels, agent sessions, event freshness and event target matching;
+renderer diagnostics distinguish SVG preparation from profile/theme PNG work.
+Publication errors retain the entity and publication stage too. These diagnostics
+contain identities and timings, without retained message bodies.
 
 ## HTTP and UI
 

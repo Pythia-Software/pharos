@@ -179,13 +179,13 @@ func renderFingerprintSVG(ctx context.Context, input any, eventsMask int) (finge
 func (renderer *fingerprintRenderer) Render(ctx context.Context, input any, eventsMask int) (fingerprintRendered, error) {
 	result, err := renderFingerprintSVG(ctx, input, eventsMask)
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("prepare SVG: %w", err)
 	}
 	for i := range result.Images {
 		image := &result.Images[i]
 		image.PNG, err = renderer.cachedRasterize(ctx, image.SVG)
 		if err != nil {
-			return result, err
+			return result, fmt.Errorf("rasterize/encode %s %s: %w", image.Profile, image.Theme, err)
 		}
 		sum := sha256.Sum256(image.PNG)
 		image.Hash = hex.EncodeToString(sum[:])
