@@ -349,6 +349,10 @@
     },
     {
       "file": "internal/archive/assets/ui.py",
+      "field": "reader_hidden_tags"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
       "field": "reader_highlight_hidden"
     },
     {
@@ -3313,6 +3317,25 @@
       "disclosure": true,
       "contract": "reader",
       "reason": "Raw message disclosure is bound by stable message identity through reader_content using bindViewContent and saveViewContent, shared by prose and reasoning cards."
+    },
+    {
+      "key": "b47c85f8099cfd6e:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "button",
+      "tag": "aria-expanded",
+      "control": "trigger",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "The tag menu is transient; its visibility actions write reader_hidden_tags."
+    },
+    {
+      "key": "dd6a02887789ab38:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "button",
+      "tag": "button",
+      "control": "'button', '', label",
+      "contract": "view.reader_hidden_tags",
+      "reason": "Line tag menus write reader_hidden_tags through the transcript tag filter; the menu itself is transient."
     },
     {
       "key": "364915225a5a7100:0",

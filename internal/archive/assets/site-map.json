@@ -71,6 +71,7 @@
    "timeline_idle": {"param":"timeline_idle","pages":["work"],"kind":"boolean","description":"Skip idle gaps on the session timeline: stretches of 15 minutes or more with nothing running in any session (no message, model request or tool call in flight) that end with the caller speaking. Each skipped gap is a bar marked with the time the session resumed; the overview, zoom, axis and agent event arcs use the same compressed clock. Default on; a checkbox beside the timeline's zoom controls.","default":true},
    "reader_filter_level": {"param":"reader_filter_level","pages":["work"],"kind":"enum","description":"Content visibility portion of the conversation Key defaults, or a custom category selection. Choosing a whole-key default also sets reader_writing, reader_events, reader_labels and reader_highlight_hidden together.","values":["all","all-minus-usage","thought","primary","custom"]},
    "reader_filter": {"param":"reader_filter","pages":["work"],"kind":"strings","description":"Visible transcript category IDs (reader-model TRANSCRIPT_CATEGORIES)."},
+   "reader_hidden_tags": {"param":"reader_hidden_tags","pages":["work"],"kind":"strings","description":"Hidden conversation activity tags as tag:[category,label] strings. Legacy unscoped labels hide all matching categories; show:tag:[category,label] overrides a legacy hide for one category. These refine reader_filter without changing its presets.","default":[]},
    "reader_collapsed": {"param":"reader_collapsed","pages":["work"],"kind":"strings","description":"Explicitly collapsed disclosure identities, overriding initially open content."},
    "reader_expanded": {"param":"reader_expanded","pages":["work"],"kind":"strings","description":"Expanded disclosure identities: message:<id>, call:<id>, or section:<key>."},
    "reader_writing": {"param":"reader_writing","pages":["work"],"kind":"boolean","description":"Highlight human-written text (typed or dictated, not pasted, quoted or templated) in the conversation reader. Default on; controlled by the reader's Highlight keys.","default":true},
@@ -146,7 +147,7 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 1003
+   "controls": 1005
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],
