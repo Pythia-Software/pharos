@@ -129,3 +129,93 @@ func preserveSummaryUsageModel(tx *sql.Tx, sessionID, model string) error {
 	_, err = tx.Exec(`DELETE FROM agent_session_usage WHERE agent_session_id=? AND TRIM(model)='' AND total_tokens>0`, sessionID)
 	return err
 }
+
+// A replay can reconstruct counters without the request's model. Preserve its
+// previous effective allocation only if subtracting the explicit request models
+// leaves exactly those counters in the same hour, effort and attribution. A
+// derived summary is never a new allocation source, even on a later replay.
+func preserveReplayedUsageModels(tx *sql.Tx, sessionID string, usage map[usageBucket]tokenCounts, startedAt string) (map[usageBucket]tokenCounts, error) {
+	missing := false
+	for bucket := range usage {
+		missing = missing || bucket.model == ""
+	}
+	if !missing {
+		return usage, nil
+	}
+	rows, err := queryMaps(tx, `SELECT u.*,u.model AS usage_model,a.model AS session_model FROM agent_session_usage u
+		JOIN agent_sessions a ON a.id=u.agent_session_id WHERE a.id=? AND u.total_tokens>0`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	prior := map[usageBucket]tokenCounts{}
+	for _, row := range rows {
+		bucket := usageBucket{hour: firstString(row["usage_hour"]), model: ledgerModel(row), effort: firstString(row["effort"]), attribution: firstString(row["attribution"])}
+		if prior[bucket] == nil {
+			prior[bucket] = tokenCounts{}
+		}
+		for _, field := range usageTokenFields {
+			prior[bucket][field] += float64(integer(row[field]))
+		}
+	}
+	resolved := map[usageBucket]tokenCounts{}
+	normalized := map[usageBucket]tokenCounts{}
+	for bucket, counts := range usage {
+		bucket.hour = defaultString(bucket.hour, usageHour(startedAt))
+		if normalized[bucket] == nil {
+			normalized[bucket] = tokenCounts{}
+		}
+		addTokenCounts(normalized[bucket], counts)
+	}
+	for bucket, counts := range normalized {
+		if bucket.model == "" {
+			continue
+		}
+		resolved[bucket] = counts
+		// Keep negative residuals: an overdrawn category must fail the exact
+		// comparison below, rather than manufacturing a balanced allocation.
+		for _, field := range usageTokenFields {
+			if prior[bucket] != nil {
+				prior[bucket][field] -= counts[field]
+			}
+		}
+	}
+	for bucket, counts := range normalized {
+		if bucket.model != "" {
+			continue
+		}
+		total, valid := tokenCounts{}, true
+		for old, remaining := range prior {
+			if old.hour != bucket.hour || old.effort != bucket.effort || old.attribution != bucket.attribution {
+				continue
+			}
+			for _, field := range usageTokenFields {
+				if field == "uncached_input_tokens" || field == "unclassified_tokens" {
+					continue // Derived again by the session writer.
+				}
+				valid = valid && remaining[field] >= 0
+				total[field] += remaining[field]
+			}
+		}
+		for field, value := range total {
+			valid = valid && value == counts[field]
+		}
+		valid = valid && total["total_tokens"] == counts["total_tokens"]
+		if valid {
+			for old, remaining := range prior {
+				if old.hour == bucket.hour && old.effort == bucket.effort && old.attribution == bucket.attribution && remaining["total_tokens"] > 0 {
+					if resolved[old] == nil {
+						resolved[old] = tokenCounts{}
+					}
+					addTokenCounts(resolved[old], remaining)
+				}
+			}
+		} else {
+			bucket.model = "Unknown model"
+			if resolved[bucket] == nil {
+				resolved[bucket] = tokenCounts{}
+			}
+			addTokenCounts(resolved[bucket], counts)
+		}
+	}
+	return resolved, nil
+}

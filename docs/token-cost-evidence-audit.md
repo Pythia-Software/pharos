@@ -130,7 +130,15 @@ still supersede obsolete facts. A legacy empty usage model inherits its old
 session model for pricing: the repair makes that old effective model explicit
 before changing the summary, merging overlapping hourly buckets without
 changing token categories. It never assigns such usage to the new summary.
-Conversation, session, message and request identities remain stable.
+A reconstructed request with no model also keeps its previous effective usage
+allocation only when all counters still reconcile in the same hour, effort and
+attribution after explicit request models are subtracted. Otherwise its bucket
+stays explicitly `Unknown model`, including on repeated replay. Conversation,
+session, message and request identities remain stable.
+
+Complete and partial repeat deliveries retain the derived main-session model.
+When Conductor borrows a model from a shorter structured envelope, its child
+ownership follows both the display record and any retained accounting record.
 
 Claude extractor `claude-v3-execution-model`, Conductor extractor
 `conductor-v15-execution-model`, and TL1 index

@@ -621,6 +621,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 		sender := conductorSender(message)
 		for item := range parsed {
 			parsed[item].Model = messageModel
+			parsed[item].ParentNativeID = firstString(parsed[item].ParentNativeID, envelope["parent_tool_use_id"])
 			parsed[item].Effort = currentEffort
 			if parsed[item].Role == "user" {
 				parsed[item].Sender = sender
@@ -632,7 +633,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 			alternative := messageText(message[candidate])
 			var envelope map[string]any
 			if alternative != text && json.Unmarshal([]byte(alternative), &envelope) == nil && hasUsageEvidence(envelope) {
-				parsed = append(parsed, MessageRecord{NativeID: baseID + ":accounting:" + candidate, Role: "system", Kind: "metadata", Text: alternative, Model: messageModel, Effort: currentEffort, CreatedAt: createdAt, EvidenceLocator: locator + ":" + candidate, Selected: true})
+				parsed = append(parsed, MessageRecord{NativeID: baseID + ":accounting:" + candidate, Role: "system", Kind: "metadata", Text: alternative, ParentNativeID: firstString(envelope["parent_tool_use_id"]), Model: messageModel, Effort: currentEffort, CreatedAt: createdAt, EvidenceLocator: locator + ":" + candidate, Selected: true})
 			}
 		}
 		for i := range parsed {

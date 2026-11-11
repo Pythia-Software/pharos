@@ -350,6 +350,40 @@ func TestConductorObservedModelSurvivesSyntheticError(t *testing.T) {
 	}
 }
 
+func TestConductorAlternateModelRetainsChildOwnership(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	dir := t.TempDir()
+	db := openWritableSQLite(t, filepath.Join(dir, "conductor.db"))
+	execSQL(t, db,
+		`CREATE TABLE sessions(id TEXT PRIMARY KEY,model TEXT,agent_type TEXT)`,
+		`CREATE TABLE session_messages(id TEXT PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,created_at TEXT,full_message TEXT)`,
+		`INSERT INTO sessions VALUES('s','claude-opus-4-8','claude')`,
+		`INSERT INTO session_messages VALUES('a','s','assistant','{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"parent"},{"type":"tool_use","id":"child","name":"Task","input":{}}]}}','2026-09-20T12:00:00Z',NULL)`)
+	display := strings.Repeat("child reply ", 50)
+	if _, err := db.Exec(`INSERT INTO session_messages VALUES('b','s','assistant',?,'2026-09-20T12:01:00Z',?)`, display,
+		`{"type":"assistant","parent_tool_use_id":"child","message":{"id":"child-request","model":"claude-haiku-5","usage":{"input_tokens":10,"output_tokens":1}}}`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	ingestFixture(t, catalog, "conductor", dir)
+	var model string
+	if err := catalog.DB.QueryRow(`SELECT model FROM conversations`).Scan(&model); err != nil || model != "claude-opus-4-8" {
+		t.Fatalf("parent conversation model=%q: %v", model, err)
+	}
+	for native, want := range map[string]string{"main": "claude-opus-4-8", "child": "claude-haiku-5"} {
+		if err := catalog.DB.QueryRow(`SELECT model FROM agent_sessions WHERE native_id=?`, native).Scan(&model); err != nil || model != want {
+			t.Fatalf("%s model=%q, want %q: %v", native, model, want, err)
+		}
+	}
+	var parent string
+	if err := catalog.DB.QueryRow(`SELECT parent_native_id FROM messages WHERE text=?`, display).Scan(&parent); err != nil || parent != "child" {
+		t.Fatalf("child display parent=%q: %v", parent, err)
+	}
+	if total := countRows(t, catalog, `SELECT SUM(u.total_tokens) FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id WHERE a.native_id='child'`); total != 11 {
+		t.Fatalf("child tokens=%d", total)
+	}
+}
+
 func TestConductorSessionEffortUsesOnlyActiveAgentSetting(t *testing.T) {
 	for _, fixture := range []struct {
 		name    string

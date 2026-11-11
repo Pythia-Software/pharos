@@ -403,6 +403,105 @@ func TestModelSummaryRepairPreservesLegacyPricingFallback(t *testing.T) {
 	}
 }
 
+func TestModelSummaryRepairPreservesReconstructedUnknownUsage(t *testing.T) {
+	for _, check := range []struct {
+		model             string
+		changedCategories bool
+	}{
+		{model: ""}, {model: "   "}, {model: "<synthetic>"},
+		{model: "gpt-5.5"}, {model: "claude-opus-4-8"},
+		{model: "gpt-5.5", changedCategories: true},
+	} {
+		t.Run(fmt.Sprintf("legacy model=%q/changed categories=%t", check.model, check.changedCategories), func(t *testing.T) {
+			c, _ := testCatalog(t)
+			if err := c.replacePricing(testPricing(), "test"); err != nil {
+				t.Fatal(err)
+			}
+			record := WorkspaceRecord{SourceID: "unknown-request", SourceKind: "tl1", Account: "local", Conversations: []ConversationRecord{{
+				NativeID: "unknown-request", Provider: "claude", Account: "local", StartedAt: "2026-09-20T12:00:00Z",
+				Messages: []MessageRecord{
+					{NativeID: "request", Role: "assistant", Kind: "metadata", Text: `{"type":"assistant","message":{"id":"request","usage":{"input_tokens":10,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":1},"output_tokens":1,"reasoning_output_tokens":1}}}`},
+					{NativeID: "known", Role: "assistant", Kind: "metadata", Model: "claude-opus-4-8", Text: `{"type":"assistant","message":{"id":"known","model":"claude-opus-4-8","usage":{"input_tokens":2,"output_tokens":1}}}`},
+				},
+			}}}
+			ingestRecordTx(t, c, record)
+			// Recreate the legacy ledger. The later known request supplies no
+			// allocation for the first request's 16 tokens. Its own 3 tokens
+			// can share a bucket after the old fallback is made explicit.
+			for _, table := range []string{"conversations", "agent_sessions"} {
+				if _, err := c.DB.Exec("UPDATE "+table+" SET model=?", check.model); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := c.DB.Exec(`UPDATE agent_session_usage SET model='' WHERE model='Unknown model'`); err != nil {
+				t.Fatal(err)
+			}
+			totals := func() string {
+				t.Helper()
+				fields := []string{}
+				for _, field := range usageTokenFields {
+					fields = append(fields, "SUM("+field+") AS "+field)
+				}
+				rows, err := queryMaps(c.DB, "SELECT "+strings.Join(fields, ",")+" FROM agent_session_usage")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return jsonText(rows)
+			}
+			priced := func() (float64, int64) {
+				t.Helper()
+				rows, err := c.usageRows(time.UTC)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cost, unpriced := 0.0, int64(0)
+				for _, row := range rows {
+					if value, ok := row["cost_usd"].(float64); ok {
+						cost += value
+					} else {
+						unpriced += integer(row["total_tokens"])
+					}
+				}
+				return cost, unpriced
+			}
+			before := totals()
+			cost, unpriced := priced()
+			if check.changedCategories {
+				// Equal totals with different cache lifetimes cannot freeze an
+				// old allocation. Retained source counters must win, unpriced.
+				if _, err := c.DB.Exec(`UPDATE agent_session_usage SET cache_creation_5m_input_tokens=1,
+					cache_creation_1h_input_tokens=2 WHERE model=''`); err != nil {
+					t.Fatal(err)
+				}
+				book, err := c.loadPriceBook()
+				if err != nil {
+					t.Fatal(err)
+				}
+				cost = *book.cost("claude-opus-4-8", "2026-09-20", map[string]int64{"uncached_input_tokens": 2, "output_tokens": 1}).cost
+				unpriced = 16
+			}
+			for range 2 {
+				if _, err := c.DB.Exec(`DELETE FROM usage_attribution_state`); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := c.RepairUsageAttribution(t.Context(), nil); err != nil {
+					t.Fatal(err)
+				}
+				if gotCost, gotUnpriced := priced(); !near(&gotCost, cost) || gotUnpriced != unpriced {
+					t.Fatalf("summary changed pricing: %g/%d -> %g/%d", cost, unpriced, gotCost, gotUnpriced)
+				}
+				if after := totals(); after != before {
+					t.Fatalf("token categories changed: %s -> %s", before, after)
+				}
+				var model string
+				if err := c.DB.QueryRow(`SELECT model FROM agent_sessions`).Scan(&model); err != nil || model != "claude-opus-4-8" {
+					t.Fatalf("session model=%q: %v", model, err)
+				}
+			}
+		})
+	}
+}
+
 func TestSubagentCountRequiresLinkedChildConversation(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	statements := []string{
