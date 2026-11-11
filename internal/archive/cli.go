@@ -328,6 +328,15 @@ func Run(arguments []string) error {
 				return fmt.Errorf("repair usage attribution after %d workspaces: %w", repaired, err)
 			}
 			return printJSON(map[string]any{"workspaces_repaired": repaired})
+		case "repair-session-bounds":
+			if len(args) > 1 || len(args) == 1 && args[0] != "--apply" {
+				return fmt.Errorf("usage: pharos repair-session-bounds [--apply]")
+			}
+			result, err := catalog.RepairSessionBounds(ctx, slices.Contains(args, "--apply"))
+			if err != nil {
+				return fmt.Errorf("repair session bounds after %d updates: %w", result.Updated, err)
+			}
+			return printJSON(result)
 		case "upgrade":
 			return runUpgradeCLIContext(ctx, catalog, args)
 		case "pricing":
@@ -382,7 +391,7 @@ func cliCatalogOperation(command string, args []string) OperationSpec {
 		default:
 			return OperationSpec{Kind: "analysis.agent_events.import"}
 		}
-	case "refine-usage", "repair-usage-attribution", "repair-session-models":
+	case "refine-usage", "repair-usage-attribution", "repair-session-models", "repair-session-bounds":
 		return OperationSpec{Kind: "catalog.repair", Variant: command}
 	case "upgrade":
 		if !slices.Contains(args, "--status") && !slices.Contains(args, "--preview") {
@@ -584,7 +593,7 @@ func firstOf(args []string) string {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,claude-import,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,repair-session-models,upgrade,build-tools,agent-events,execution-evidence,conversation-names,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,claude-import,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,repair-session-models,repair-session-bounds,upgrade,build-tools,agent-events,execution-evidence,conversation-names,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
 
 }
 func urlQueryEscape(value string) string {

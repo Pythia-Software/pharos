@@ -130,7 +130,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
     const ready = built.buckets.some(bucket => series.some(item => bucket.values[item.key] !== undefined));
     return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, drawn), action: DASHBOARD_CARD_ACTION,
       buckets: built.buckets, series, note: analysisNote(catalog, drawn),
-      dashboardTrend: { prepared: true, lines: drawing !== "trend_bar" && (built.lines || drawn.display === "cumulative"), bars: drawing === "trend_bar", grouped: drawing === "trend_bar" && (!built.additive || drawn.scale === "logarithmic" && !drawn.share), percent: drawn.share, nonzero: drawn.nonzero && !drawn.share, scale: drawn.scale, references: built.references,
+      dashboardTrend: { prepared: true, lines: drawing !== "trend_bar" && (built.lines || drawn.display === "cumulative"), bars: drawing === "trend_bar", grouped: drawing === "trend_bar" && (!built.additive || drawn.scale === "logarithmic" && !drawn.share), additive: built.additive, percent: drawn.share, nonzero: drawn.nonzero && !drawn.share, scale: drawn.scale, references: built.references,
         unit: percent ? "percent" : catalog.measures[drawn.metric].format.kind === "duration" ? "ms" : catalog.measures[drawn.metric].unit,
         xLabel: drawn.period, yLabel: trendTitle(catalog, drawn) } };
   }

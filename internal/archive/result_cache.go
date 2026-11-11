@@ -598,7 +598,7 @@ type derivedFollower struct {
 	rebuilt map[string]int64
 }
 
-var derivedGenerationScopes = []string{generationCore, generationEvents, generationAll}
+var derivedGenerationScopes = []string{generationCore, generationEvents, generationSessionShape, generationAll}
 
 func (s *Server) rebuildDerivedAfterChange(ctx context.Context, f *derivedFollower, free func() bool) {
 	c := s.Catalog

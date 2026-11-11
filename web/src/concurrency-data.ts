@@ -19,12 +19,6 @@ export const minute = 60_000;
 // (a repository or folder; "No project" for neither) and its workspace.
 export const concurrencyThreadPlace = (thread: Pick<ConcurrencyThread, "project" | "workspace_name">) => `${thread.project || "No project"} / ${thread.workspace_name}`;
 
-// Ribbon colors, by project: the chart and its Home card share them.
-export const concurrencyPalette = ["var(--sea)", "var(--gold)", "var(--heat-0)", "var(--heat-1)", "var(--heat-2)", "var(--heat-3)",
-  "color-mix(in srgb,var(--sea) 45%,var(--gold))", "color-mix(in srgb,var(--heat-1) 55%,var(--heat-3))",
-  "color-mix(in srgb,var(--sea) 40%,var(--heat-0))", "color-mix(in srgb,var(--gold) 65%,var(--heat-2))",
-  "color-mix(in srgb,var(--heat-0) 40%,var(--heat-1))", "color-mix(in srgb,var(--heat-2) 60%,var(--heat-0))"];
-
 export function formatConcurrencyDuration(ms: number): string {
   if (ms < minute) return `${Math.round(ms / 1000)}s`;
   const minutes = Math.round(ms / minute);

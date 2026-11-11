@@ -240,7 +240,9 @@ func (c *Catalog) Close() error {
 // Older writers cannot preserve these dispositions or the queue timestamps.
 // 24: scoped token evidence and aggregate ledger attribution. Older writers
 // cannot replace these observations or preserve their consuming-layer scope.
-const catalogSchemaVersion = 24
+// 25: explicit root session envelopes and their provenance. Older writers
+// would replace these session bounds with unavailable message-only spans.
+const catalogSchemaVersion = 25
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -322,6 +324,8 @@ func (c *Catalog) Initialize() error {
 		return err
 	}
 	for _, migration := range []struct{ table, column, statement string }{
+		{"conversations", "session_bounds_json", "ALTER TABLE conversations ADD COLUMN session_bounds_json TEXT"},
+		{"agent_sessions", "time_bounds_source", "ALTER TABLE agent_sessions ADD COLUMN time_bounds_source TEXT NOT NULL DEFAULT 'unavailable'"},
 		{"conversation_derivation_inputs", "child_usage", "ALTER TABLE conversation_derivation_inputs ADD COLUMN child_usage TEXT NOT NULL DEFAULT ''"},
 		{"tool_query_facts", "day", "ALTER TABLE tool_query_facts ADD COLUMN day TEXT"},
 		{"git_repository_scans", "history_since", "ALTER TABLE git_repository_scans ADD COLUMN history_since TEXT"},

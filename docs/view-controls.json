@@ -7399,6 +7399,33 @@
       "reason": "Read-only generated prompt provided for manual clipboard copying; its content comes from the pricing endpoint."
     },
     {
+      "key": "6ac02c902ff3da6e:0",
+      "file": "web/src/project-color-settings.tsx",
+      "owner": "ProjectColorRow",
+      "tag": "button",
+      "control": "onClick={() => void save(project, \"\")} aria-label={`Restore default color for ${project.name}`}",
+      "contract": "settings",
+      "reason": "Edits or restores a persistent library project-color preference; the picker holds an unapplied draft until Save color."
+    },
+    {
+      "key": "82e573ce4c92f212:0",
+      "file": "web/src/project-color-settings.tsx",
+      "owner": "ProjectColorRow",
+      "tag": "input",
+      "control": "aria-label={`Color for ${project.name}`} value={draft} onChange={event => setDraft(event.target.value)}",
+      "contract": "settings",
+      "reason": "Edits or restores a persistent library project-color preference; the picker holds an unapplied draft until Save color."
+    },
+    {
+      "key": "8558a59ac261f6f4:0",
+      "file": "web/src/project-color-settings.tsx",
+      "owner": "ProjectColorRow",
+      "tag": "button",
+      "control": "onClick={() => void save(project, draft)} aria-label={`Save color for ${project.name}`}",
+      "contract": "settings",
+      "reason": "Edits or restores a persistent library project-color preference; the picker holds an unapplied draft until Save color."
+    },
+    {
       "key": "502369976da84683:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",

@@ -219,3 +219,18 @@ test("percentage timeline labels retain percentage units across scales while sha
   assert.equal(shares.y(.5), 50, "share-of-total charts keep the whole 0–100% axis");
   assert.deepEqual(shares.ticks, [.25, .5, .75, 1]);
 });
+
+test("timeline hover totals the displayed additive series using their units", () => {
+  const series = [{ key: "a", label: "Alpha", color: "#aabbcc" }, { key: "b", label: "Beta", color: "#ddeeff" }];
+  const bucket = { key: "day", date: new Date(2026, 9, 1), values: { a: 1200, b: 300, hidden: 9999 }, detail: "Coverage note" };
+  const render = (changes = {}, options = {}) => renderToStaticMarkup(React.createElement(CompactColumns, {
+    buckets: [{ ...bucket, ...changes }], series, prepared: true, unit: "calls", ...options,
+  }));
+  const html = render();
+  assert.match(html, /Alpha: 1,200 calls\nBeta: 300 calls\nTotal: 1,500 calls\nCoverage note/);
+  assert.match(html, /data-chart-colors="\[null,&quot;#aabbcc&quot;,&quot;#ddeeff&quot;,null,null\]"/);
+  assert.doesNotMatch(render({ values: { a: 1200, b: 0 } }), /Total:/, "one contributing series has no redundant total");
+  assert.doesNotMatch(render({}, { additive: false, grouped: true }), /Total:/, "non-additive series cannot be summed");
+  assert.match(render({ values: { a: .25, b: .75 } }, { percent: true }), /Total: 100%/);
+  assert.match(render({ values: { a: 1, b: 2 } }, { unit: "USD", grouped: true }), /Total: \$3/);
+});

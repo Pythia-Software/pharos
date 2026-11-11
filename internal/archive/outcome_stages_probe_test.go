@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -64,6 +65,67 @@ func TestOutcomeStagesProbe(t *testing.T) {
 	}
 }
 
+// calibrationSessions hides evidence without changing the source sessions:
+// Git operations can carry printed hashes as well as session.Printed.
+func calibrationSessions(sessions map[string]*gitSession, printed, ops bool) map[string]*gitSession {
+	hidden := map[string]*gitSession{}
+	for id, session := range sessions {
+		copied := *session
+		if ops {
+			copied.Ops = nil
+		} else if printed {
+			copied.Ops = slices.Clone(session.Ops)
+			for index := range copied.Ops {
+				copied.Ops[index].Hashes = nil
+			}
+		}
+		if printed {
+			copied.Printed = nil
+		}
+		hidden[id] = &copied
+	}
+	return hidden
+}
+
+// readCalibrationCommits reads the same clone histories as a production scan,
+// keeping each clone's ownership for inferLinks' diff signals. GitHub committers
+// are collected from every clone, including detached heads, for coverage counts.
+// All Git processes are owned and waited for by outcomeGitCommand.
+func readCalibrationCommits(ctx context.Context, clones []*gitClone, after string) (map[string]*gitCommit, map[string]bool, error) {
+	commits, byGitHub := map[string]*gitCommit{}, map[string]bool{}
+	for _, clone := range clones {
+		worktrees, err := outcomeGitCommand(ctx, clone.Dir, outcomeGitShortTimeout, nil, "worktree", "list", "--porcelain")
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", clone.Dir, err)
+		}
+		clone.Heads = detachedHeads(string(worktrees))
+		read, err := readGitCommits(ctx, clone.Dir, after, clone.Heads...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", clone.Dir, err)
+		}
+		clone.Has = map[string]bool{}
+		for hash, commit := range read {
+			clone.Has[hash] = true
+			if commits[hash] == nil {
+				commits[hash] = commit
+			} else if !commit.Replaced {
+				commits[hash].Replaced = false
+			}
+		}
+		args := append([]string{"-c", "log.showSignature=false", "log", "--branches", "--remotes", "--tags"}, clone.Heads...)
+		committers, err := outcomeGitCommand(ctx, clone.Dir, outcomeGitLogTimeout, nil, append(args, after, "--format=%H %ce")...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", clone.Dir, err)
+		}
+		for _, line := range strings.Split(string(committers), "\n") {
+			if hash, email, ok := strings.Cut(line, " "); ok && email == "noreply@github.com" {
+				byGitHub[hash] = true
+			}
+		}
+	}
+	return commits, byGitHub, nil
+}
+
 // TestCommitLinkCalibrationProbe links each repository's commits with the
 // printed hashes hidden and scores every link against them, by method; and
 // counts the commits each pipeline links: edits alone (the sessions' git
@@ -79,21 +141,11 @@ func TestCommitLinkCalibrationProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hide := func(printed, ops bool) map[string]*gitSession {
-		hidden := map[string]*gitSession{}
-		for id, session := range sessions {
-			copied := *session
-			if printed {
-				copied.Printed = nil
-			}
-			if ops {
-				copied.Ops = nil
-			}
-			hidden[id] = &copied
-		}
-		return hidden
+	identities, err := catalog.gitIdentities(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	blind, editsOnly := hide(true, false), hide(false, true)
+	blind, editsOnly := calibrationSessions(sessions, true, false), calibrationSessions(sessions, true, true)
 	// Commits after the snapshot's last activity, and those GitHub committed
 	// (squash merges), are no session's to link.
 	var last string
@@ -111,8 +163,9 @@ func TestCommitLinkCalibrationProbe(t *testing.T) {
 	}
 	totals := map[string]int{}
 	for _, repository := range slices.Sorted(maps.Keys(byRepository)) {
-		dir, _ := gitCheckout(locations[repository])
-		if dir == "" {
+		clones, reason := gitCheckouts(ctx, locations[repository], identities[repository])
+		if len(clones) == 0 {
+			t.Logf("%s: %s", repository, reason)
 			continue
 		}
 		members := byRepository[repository]
@@ -132,13 +185,13 @@ func TestCommitLinkCalibrationProbe(t *testing.T) {
 		}
 		after := "--since=" + strconv.FormatInt(since.Add(-24*time.Hour).Unix(), 10)
 		started := time.Now()
-		commits, err := readGitCommits(ctx, dir, after)
+		commits, byGitHub, err := readCalibrationCommits(ctx, clones, after)
 		if err != nil {
 			t.Logf("%s: %v", repository, err)
 			continue
 		}
 		truth := map[string]string{}
-		all, _ := inferLinks(ctx, dir, after, sessions, members, repository, commits)
+		all, _ := inferLinks(ctx, clones, sessions, members, repository, commits)
 		for _, link := range all {
 			if link.Method == "transcript" {
 				if previous, ok := truth[link.Hash]; ok && previous != link.Session {
@@ -148,7 +201,7 @@ func TestCommitLinkCalibrationProbe(t *testing.T) {
 				}
 			}
 		}
-		hidden, _ := inferLinks(ctx, dir, after, blind, members, repository, commits)
+		hidden, _ := inferLinks(ctx, clones, blind, members, repository, commits)
 		found := map[string]bool{}
 		for _, link := range hidden {
 			session, ok := truth[link.Hash]
@@ -230,18 +283,7 @@ func TestCommitLinkCalibrationProbe(t *testing.T) {
 			}
 			score("missed: "+why, 2)
 		}
-		old, _ := inferLinks(ctx, dir, after, editsOnly, members, repository, commits)
-		committers, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, "-c", "log.showSignature=false", "log", "--branches", "--remotes", "--tags", after, "--format=%H %ce")
-		if err != nil {
-			t.Logf("%s: %v", repository, err)
-			continue
-		}
-		byGitHub := map[string]bool{}
-		for _, line := range strings.Split(string(committers), "\n") {
-			if hash, email, ok := strings.Cut(line, " "); ok && email == "noreply@github.com" {
-				byGitHub[hash] = true
-			}
-		}
+		old, _ := inferLinks(ctx, clones, editsOnly, members, repository, commits)
 		counts := func(commit *gitCommit) bool {
 			return commit.Parents <= 1 && !commit.Replaced && !byGitHub[commit.Hash] && !commit.Author.Before(since) && !commit.Author.After(until)
 		}
@@ -265,8 +307,8 @@ func TestCommitLinkCalibrationProbe(t *testing.T) {
 		}
 		oldCommits, oldLines := linked(old)
 		newCommits, newLines := linked(all)
-		t.Logf("%s (%s): %d commits by sessions' time, %d lines; edits alone link %d (%d lines); everything %d (%d lines); %s",
-			repository, dir, held, heldLines, oldCommits, oldLines, newCommits, newLines, time.Since(started).Round(time.Second))
+		t.Logf("%s (%d clones): %d commits by sessions' time, %d lines; edits alone link %d (%d lines); everything %d (%d lines); %s",
+			repository, len(clones), held, heldLines, oldCommits, oldLines, newCommits, newLines, time.Since(started).Round(time.Second))
 		for key, value := range map[string]int{"held": held, "old": oldCommits, "new": newCommits} {
 			totals[key] += value
 		}
@@ -278,5 +320,89 @@ func TestCommitLinkCalibrationProbe(t *testing.T) {
 	for _, key := range slices.Sorted(maps.Keys(scores)) {
 		value := scores[key]
 		t.Logf("%-32s right %5d  wrong %4d  missed %5d", key, value[0], value[1], value[2])
+	}
+}
+
+// These fixture checks need no stage catalog or recorded checkouts.
+func TestCommitLinkCalibrationInputs(t *testing.T) {
+	at := time.Unix(1700000000, 0).UTC()
+	hash := strings.Repeat("a", 40)
+	subject := subjectFingerprint("A commit made during the session")
+	sessions := map[string]*gitSession{"session": {
+		ID: "session", Repository: "repo", Timed: true, First: at.Add(-time.Minute), Last: at,
+		Files:   map[string]map[string]editSpan{"repo": {"a.go": {First: at.Add(-time.Minute), Last: at}}},
+		Printed: []outcomeCommit{{Hash: hash}},
+		Ops: []gitOp{{Kind: "commit", At: at.Add(-time.Second).Format(time.RFC3339), Until: at.Add(time.Second).Format(time.RFC3339),
+			Hashes: []string{hash}, Subjects: []string{subject}}},
+	}}
+	commits := map[string]*gitCommit{hash: {Hash: hash, Author: at, Commit: at, Subject: subject, Files: map[string][2]int64{"a.go": {1, 0}}}}
+	for _, check := range []struct {
+		name         string
+		printed, ops bool
+		method       string
+		confidence   float64
+	}{
+		{"everything", false, false, "transcript", 1},
+		{"printed hashes hidden", true, false, "message", 0.95},
+		{"edits alone", true, true, "inferred", 0.7},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			hidden := calibrationSessions(sessions, check.printed, check.ops)
+			links, _ := inferLinks(t.Context(), nil, hidden, []string{"session"}, "repo", commits)
+			if len(links) != 1 || links[0].Method != check.method || links[0].Confidence != check.confidence {
+				t.Fatalf("links = %+v, want %s at %g", links, check.method, check.confidence)
+			}
+			if len(sessions["session"].Printed) != 1 || len(sessions["session"].Ops) != 1 || !slices.Equal(sessions["session"].Ops[0].Hashes, []string{hash}) {
+				t.Fatal("hiding evidence changed the source sessions")
+			}
+		})
+	}
+}
+
+func TestCommitLinkCalibrationClones(t *testing.T) {
+	repo := newGitRepository(t)
+	at := time.Now().Add(-4 * time.Hour).Truncate(time.Second)
+	root := repo.git(at, "rev-parse", "HEAD")
+	shared := repo.commitAt(at, "Shared commit", map[string]string{"shared.go": "package shared\n"})
+	other := &gitRepository{t, filepath.Join(t.TempDir(), "clone")}
+	repo.git(at, "clone", "-q", "--no-local", repo.dir, other.dir)
+	// A commit held only by one clone's reflog is still live in another.
+	repo.git(at, "reset", "-q", "--hard", root)
+	first := repo.commitAt(at.Add(time.Hour), "First clone only", map[string]string{"first.go": "package first\n"})
+	second := other.commitAt(at.Add(2*time.Hour), "Second clone only", map[string]string{"second.go": "package second\n"})
+	detached := &gitRepository{t, filepath.Join(t.TempDir(), "detached")}
+	other.git(at, "worktree", "add", "-q", "--detach", detached.dir, "HEAD")
+	detached.commitAt(at.Add(3*time.Hour), "Detached GitHub commit", map[string]string{"detached.go": "package detached\n"})
+	detached.git(at.Add(3*time.Hour), "-c", "user.email=noreply@github.com", "commit", "-q", "--amend", "--no-edit")
+	github := detached.git(at, "rev-parse", "HEAD")
+	clones, reason := gitCheckouts(t.Context(), []string{repo.dir, other.dir, detached.dir}, gitIdentity{Root: root})
+	if len(clones) != 2 || reason != "" {
+		t.Fatalf("checkouts = %v, reason = %q; want two clones", clones, reason)
+	}
+	commits, byGitHub, err := readCalibrationCommits(t.Context(), clones, "--since="+strconv.FormatInt(at.Add(-time.Hour).Unix(), 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hash := range []string{shared, first, second, github} {
+		if commits[hash] == nil || commits[hash].Replaced {
+			t.Fatalf("live commit %s missing or marked replaced: %+v", hash, commits[hash])
+		}
+	}
+	if !clones[0].Has[shared] || !clones[1].Has[shared] || !clones[0].Has[first] || clones[1].Has[first] || clones[0].Has[second] || !clones[1].Has[second] || !clones[1].Has[github] {
+		t.Fatalf("incorrect per-clone ownership: %v, %v", clones[0].Has, clones[1].Has)
+	}
+	if !slices.Contains(clones[1].Heads, github) || !byGitHub[github] || byGitHub[second] {
+		t.Fatalf("detached head or GitHub committer missing: heads %v, GitHub %v", clones[1].Heads, byGitHub)
+	}
+	// No partial population should be scored if a clone fails to read.
+	run := outcomeGitCommand
+	override(t, &outcomeGitCommand, func(ctx context.Context, dir string, timeout time.Duration, stdin []byte, args ...string) ([]byte, error) {
+		if dir == other.dir {
+			return nil, errGitTimeout
+		}
+		return run(ctx, dir, timeout, stdin, args...)
+	})
+	if commits, byGitHub, err := readCalibrationCommits(t.Context(), clones, "--since=0"); err == nil || commits != nil || byGitHub != nil {
+		t.Fatalf("failed read returned commits %v, GitHub %v, error %v", commits, byGitHub, err)
 	}
 }

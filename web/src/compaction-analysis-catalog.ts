@@ -33,5 +33,5 @@ export const compactionAnalysisCatalog: AnalysisCatalog = {
   units: {}, periods: { day: "day", week: "week", month: "month" }, timestamp: "occurred_at",
   cycle: { hour: { kind: "timestamp", field: "occurred_at" }, weekday: { kind: "timestamp", field: "occurred_at" } },
   trend: { metric: "compactions", split: "trigger" }, scatter: ["compactions", "conversations"],
-  views: ["trend", "trend_line", "trend_bar", "compare", "cycle"],
+  views: ["trend", "compare", "cycle"],
 };

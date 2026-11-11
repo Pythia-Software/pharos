@@ -186,6 +186,130 @@ func TestRepairAgentSessionModelsResumes(t *testing.T) {
 	}
 }
 
+func TestRepairSessionBoundsPreservesAccounting(t *testing.T) {
+	c, _ := testCatalog(t)
+	override(t, &sessionBoundsRepairBatchSize, 2)
+	start, end := "2026-09-20T10:00:00.000Z", "2026-09-20T10:20:00.000Z"
+	cases := []struct {
+		name, start, end, completed, coverage string
+		files                                 []string
+		timed, envelope, eligible             bool
+	}{
+		{name: "complete", start: start, end: end, completed: end, eligible: true},
+		{name: "ongoing historical zero", start: start, end: start, eligible: true},
+		{name: "ongoing", start: start, eligible: true},
+		{name: "zero completed", start: start, end: start, completed: start, eligible: true},
+		{name: "mismatch", start: start, end: start, completed: end},
+		{name: "reversed", start: end, end: start, completed: start},
+		{name: "invalid", start: "unknown", end: end, completed: end},
+		{name: "invalid end", start: start, end: "unknown", completed: "unknown"},
+		{name: "multiple", start: start, end: end, completed: end, files: []string{"1-codex.jsonl", "1-claude.jsonl"}},
+		{name: "partial", start: start, end: end, completed: end, coverage: "partial"},
+		{name: "timed", start: start, end: end, completed: end, timed: true},
+		{name: "explicit envelope", start: start, end: end, envelope: true, eligible: true},
+	}
+	record := WorkspaceRecord{SourceID: "timing", SourceKind: "tl1", Account: "local"}
+	want := 0
+	for i, tc := range cases {
+		m := MessageRecord{NativeID: "request", Kind: "metadata", Model: "gpt-5", RawText: `{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}`}
+		if tc.timed {
+			m.CreatedAt = start
+		}
+		conversation := ConversationRecord{NativeID: tl1ConversationNativeID("install", fmt.Sprint(i), "1-codex.jsonl"), Provider: "codex", Account: "local", Model: "gpt-5", StartedAt: tc.start, EndedAt: tc.end, Coverage: tc.coverage, Messages: []MessageRecord{m, {NativeID: "launch", CallID: "child", Kind: "delegation"}}}
+		if tc.envelope {
+			conversation.SessionBounds = attemptSessionBounds(start, end)
+		}
+		record.Conversations = append(record.Conversations, conversation)
+		if tc.eligible {
+			want++
+		}
+	}
+	ingestRecordTx(t, c, record)
+	tx, err := c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for i, tc := range cases {
+		if tc.envelope {
+			continue
+		} // source-independent retained proof
+		files := tc.files
+		if files == nil {
+			files = []string{"1-codex.jsonl"}
+		}
+		if _, err := tx.Exec(`INSERT INTO tl1_attempts(installation_id,attempt_id,task_id,started_at,completed_at,transcripts_json,conversation_native_id) VALUES('install',?,'task',?,?,?,?)`, fmt.Sprint(i), tc.start, nilIfEmpty(tc.completed), jsonText(files), record.Conversations[i].NativeID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tx.Exec(`UPDATE agent_sessions SET started_at=NULL,ended_at=NULL,time_bounds_source='unavailable' WHERE native_id='main'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	facts := func() string {
+		t.Helper()
+		result := []any{}
+		for _, query := range []string{
+			`SELECT * FROM agent_sessions ORDER BY id`, `SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model,effort,attribution`,
+			`SELECT * FROM model_requests ORDER BY id`, `SELECT * FROM messages ORDER BY id`, `SELECT * FROM usage_attribution_state ORDER BY workspace_id`,
+		} {
+			rows, err := queryMaps(c.DB, query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range rows {
+				delete(row, "started_at")
+				delete(row, "ended_at")
+				delete(row, "time_bounds_source")
+			}
+			result = append(result, rows)
+		}
+		return jsonText(result)
+	}
+	before := facts()
+	preview, err := c.RepairSessionBounds(t.Context(), false)
+	if err != nil || preview.Eligible != want || preview.Updated != 0 || facts() != before {
+		t.Fatalf("preview=%+v, %v", preview, err)
+	}
+	result, err := c.RepairSessionBounds(t.Context(), true)
+	if err != nil || result.Updated != want || result.WithTokens != want || facts() != before {
+		t.Fatalf("repair=%+v, %v", result, err)
+	}
+	for i, tc := range cases {
+		var gotStart, gotEnd, source string
+		if err := c.DB.QueryRow(`SELECT COALESCE(s.started_at,''),COALESCE(s.ended_at,''),s.time_bounds_source FROM agent_sessions s JOIN conversations c ON c.id=s.conversation_id WHERE c.native_id=? AND s.native_id='main'`, record.Conversations[i].NativeID).Scan(&gotStart, &gotEnd, &source); err != nil {
+			t.Fatal(err)
+		}
+		if tc.eligible {
+			wantEnd := tc.completed
+			if tc.envelope {
+				wantEnd = end
+			}
+			if gotStart != start || gotEnd != wantEnd || source != "attempt-envelope" {
+				t.Errorf("%s: %s / %s (%s)", tc.name, gotStart, gotEnd, source)
+			}
+		} else if gotStart != "" || gotEnd != "" || source != "unavailable" {
+			t.Errorf("%s was filled", tc.name)
+		}
+	}
+	if again, err := c.RepairSessionBounds(t.Context(), true); err != nil || again.Updated != 0 {
+		t.Fatalf("second repair=%+v, %v", again, err)
+	}
+	// A later usage replay must retain the explicit timing provenance too.
+	if _, err := c.DB.Exec(`DELETE FROM usage_attribution_state`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RepairUsageAttribution(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	var envelopes int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM agent_sessions WHERE time_bounds_source='attempt-envelope'`).Scan(&envelopes); err != nil || envelopes != want {
+		t.Fatalf("usage replay lost envelopes: %d, %v", envelopes, err)
+	}
+}
+
 func TestClaudeNonWriterCopyPreservesRootUsage(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	makeRecord := func(origin string, complete bool) WorkspaceRecord {

@@ -7,6 +7,7 @@ import messagesDocument from "../../schemas/messages.schema.json";
 import { DataReadinessModal, HeaderDataReadiness, BackgroundProcessingWorkload, DataReadinessEmpty, DataReadinessIndicator } from "./data-readiness";
 import { startReadiness } from "./data-readiness-store";
 import {peopleMessageLabelCatalog} from "./people-message-labels";
+import { sessionShapeFreshnessNote, useSessionShapeCoverage } from "./session-shape-freshness";
 import { agentEventDatasets, agentEventItemPendingMessage, agentEventsFreshnessMark, agentEventsFreshnessNote, agentEventsNeverRead, useAgentEventsCoverage } from "./agent-events-freshness";
 import peopleMessageLabelsDocument from "../../schemas/people_message_labels.schema.json";
 import { formatUSD } from "./currency";
@@ -75,6 +76,9 @@ import { PageLink, useLocationRevision } from "./nested-pages";
 import { LibraryContent } from "./library-content";
 import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
+import { ProjectColorSettings } from "./project-color-settings";
+import { chartMetricTheme } from "./chart-colors";
+import { loadProjectColors, useProjectColorRevision } from "./project-colors";
 import { LogsPage } from "./logs-page";
 import { installAppNavigation } from "./app-navigation";
 import { EMPTY_QUERY, groupKeyField, groupKeyFields, groupSourceQuery, predicatesOf, httpComputedColumnStore, inspectBucketQuery, encodeQuery, loadSchema, type ComputedColumnStore, type HostQueryState, type QueryCapabilitiesV3, type QueryResultV3, type ComputedExecution, type AggregationClause, type FieldSchema, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
@@ -152,7 +156,7 @@ import { readDashboardLink, parallelismSelectionQuery, authorshipStatusText, typ
 import { conversationAnalysisCatalog } from "./conversation-analysis-catalog";
 import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
-import { isTrendView, analysisVersion, canonicalState, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { isTrendView, analysisVersion, canonicalState, readAnalysisLink, chooseAnalysisView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { dashboardDefaults, legacyViewDefaults } from "./dashboard-defaults";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { PricingNotice } from "./pricing-notice";
@@ -509,6 +513,7 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
 // onFind receives Library message-search coverage when present.
 type SurfaceHost = { query: HostQueryOptions; find: (state: HostQueryState | undefined) => string; onState?: (state: HostQueryState | undefined) => void };
 function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, trailing, selectionBar, queryHistory = false, controls, queryContent, querySummary, resultPresentation, presets, optimizeTitle, tableHeading }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; selectionBar?: (api: QueryTableApi<Row>) => React.ReactNode; queryHistory?: boolean; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; optimizeTitle?: string; tableHeading?: (api: QueryTableApi<Row>, fallback: React.ReactNode, schemas: OptimizeTableSchemas) => React.ReactNode }) {
+  useProjectColorRevision();
   const attention = useMemo(() => createAttentionRegistry(), [dataset]);
   const visible = datasetIsVisible(dataset);
   const schema = useMemo(() => {
@@ -649,7 +654,8 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   const failed = api.execution ? api.execution.rows === "failed" : Boolean(api.error);
   // Agent-event rows the server withheld or is rebuilding read as pending.
   const agentEventsCoverage = useAgentEventsCoverage();
-  const eventsNote = (agentEventDatasets as readonly string[]).includes(dataset) ? agentEventsFreshnessNote(agentEventsCoverage) : "";
+  const shapeCoverage = useSessionShapeCoverage();
+  const freshnessNote = dataset === "session_shape" ? sessionShapeFreshnessNote(shapeCoverage) : (agentEventDatasets as readonly string[]).includes(dataset) ? agentEventsFreshnessNote(agentEventsCoverage) : "";
   const resultsView = dataset==="message_labels"?labelResultsMode(api.query):searchResultsView(api.query, dataset === "library" ? readLibraryHost(hostState).view : "table");
   const attentionSchema = api.itemDetails?.schema.name;
   const detailsReady = nativeDetailsReady({ visible: Boolean(visible), restored: api.restoration.ready, loading: api.loading, rows: api.execution?.rows, schema: attentionSchema });
@@ -760,12 +766,12 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
         {queryContent?.(api)}
       </>} /> : api.query.grouping ? <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={api} dataset={dataset} layout={<SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
     {queryContent ? controls?.(api, null) : null}
-    <MetricsPanel api={api} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers}
+    <MetricsPanel api={api} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers} theme={chartMetricTheme()}
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }} />
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
     {selectionBar && !api.query.grouping ? selectionBar(api) : null}
-    {eventsNote ? <p className="usage-dashboard-note" role="status">{eventsNote}</p> : null}
+    {freshnessNote ? <p className="usage-dashboard-note" role="status">{freshnessNote}</p> : null}
     <DataReadinessEmpty id={`query:${dataset}`} title={dataSources[dataset].label} dataset={dataset} query={api.query} empty={api.execution?.rows==="succeeded"&&!api.loading&&!api.error&&api.rows.length===0}>{dataset==="message_labels"&&resultsView==="cards"?<MessageLabelCards api={api}/>:dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
 
       : <DataTable
@@ -783,7 +789,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
       onNavigate={navigateLink}
       total={api.total}
       loading={api.loading}
-      emptyMessage={api.loading ? "Loading results…" : failed ? failedMessage : searching ? "No workspaces match this search and these filters." : eventsNote ? `No current rows match. ${eventsNote}` : emptyMessages[dataset]}
+      emptyMessage={api.loading ? "Loading results…" : failed ? failedMessage : searching ? "No workspaces match this search and these filters." : freshnessNote ? `No current rows match. ${freshnessNote}` : emptyMessages[dataset]}
       classNames={{ empty: api.loading ? "pharos-table-loading" : undefined }}
       {...(api.query.grouping ? { trailing: (row: Row) => {
         const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, groupKeyField(key)));
@@ -1237,7 +1243,7 @@ const validTokenDashboard = (view: TokenTrendView) => validAnalysisState(tokenAn
 
 function TokenUsageDashboard() {
   const state = useUsageDashboardState<TokenTrendView>(dashboardDefaults.tokens as TokenTrendView, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where, legacyViewDefaults.tokens));
-  const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
+  const choose = (next: AnalysisView) => state.update(chooseAnalysisView(tokenAnalysisCatalog, state.view, next));
   return <><PricingNotice copy={copyText} />{state.error ? <p className="query-table-error" role="alert">{state.error}</p>
     : !isTrendView(state.view.view) ? <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
     onChange={state.update} onView={choose} onFilter={state.onFilter} />
@@ -1354,7 +1360,7 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
   const resolved=peopleMessageLabelCatalog(catalog,state.view), resolvedDataset=resolved.dataset as UsageDataset;
   const schema = schemas[resolvedDataset];
   const views: CatalogViews = (drawn, amount = format) => {
-    const choose = (next: AnalysisView) => state.update(switchView(isTrendView(next)||next==="compare"?drawn:catalog, state.view, next));
+    const choose = (next: AnalysisView) => state.update(chooseAnalysisView(isTrendView(next)||next==="compare"?drawn:catalog, state.view, next));
     return <>
       {!isTrendView(state.view.view)
         ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={resolvedDataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
@@ -1458,7 +1464,9 @@ function AgentEventRatesDashboard() {
 // read as durations.
 const sessionShapeAmount: AmountFormat = (value, measure) => measure.format.kind === "duration" && measure.format.sourceUnit === "seconds" ? formatSeconds(value) : catalogAmount(value, measure);
 function SessionShapeDashboard() {
+  const note = sessionShapeFreshnessNote(useSessionShapeCoverage());
   return <CatalogDashboard catalog={sessionShapeAnalysisCatalog} dataset="session_shape" name="session-shape" defaults={dashboardDefaults.session_shape} format={sessionShapeAmount}
+    before={note ? <p className="usage-dashboard-note" role="status">{note}</p> : null}
     panels={where => <>
       <p className="usage-dashboard-note">Separate signals, each against your own history; there is no score. Every rate counts only sessions with the evidence it needs and says how many. <button type="button" className="usage-preset-clear" onClick={revealDefinitions}>Definitions</button></p>
       <h2 className="session-shape-heading">Forensics</h2>
@@ -1773,6 +1781,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["syncHistoryTables", <SyncTables />],
   ["backgroundProcessingWorkload", <BackgroundProcessingWorkload />],
   ["askSettingsPage", <AskPharosSettings />],
+  ["projectColorSettings", <ProjectColorSettings />],
   ["settingsPage", <SettingsWorkspace content={document.getElementById("settingsContent")!} />],
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],
@@ -1810,6 +1819,10 @@ if (concurrencyPrototypeEnabled) {
   createRoot(modalHost).render(<ConcurrencyModal />);
 }
 startConcurrencySummary();
+// New projects discovered while the page stays open join the same palette.
+const refreshProjectColors = () => { void loadProjectColors().catch(() => { /* Retain the last saved palette; Settings exposes a failed read. */ }); };
+window.addEventListener("pharos:usage-refresh", refreshProjectColors);
+window.addEventListener("pharos:data-refresh", refreshProjectColors);
 // Carbon and Parallelism settings shape Usage and parallelism values on the
 // server. Refresh their cards once the saved settings have landed; query
 // tables rerun only through their own Run Now and auto-refresh.

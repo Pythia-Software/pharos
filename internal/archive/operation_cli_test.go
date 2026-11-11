@@ -16,7 +16,7 @@ var cliCommandCoverage = map[string]string{
 	"library-transfer": "", "library-recover": "", "add-this-mac": "", "capture": "", "index": "", "history-backfill": "",
 	"sqlite-records": "", "backup": "", "cloud-backup": "", "ingest": "", "repositories": "", "repair-existing": "",
 	"claude-import": "",
-	"refine-usage":  "", "repair-usage-attribution": "", "repair-session-models": "", "upgrade": "", "build-tools": "", "agent-events": "", "findings": "",
+	"refine-usage":  "", "repair-usage-attribution": "", "repair-session-models": "", "repair-session-bounds": "", "upgrade": "", "build-tools": "", "agent-events": "", "findings": "",
 	"app":                   "the broker itself: its operations are in its registry",
 	"mcp-app":               "relays MCP calls to the broker; writes nothing",
 	"init":                  "writes a new configuration file, not library data",
