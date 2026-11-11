@@ -1,9 +1,11 @@
 import {shortLabel,stateColor} from "./conversation-labels";
 import catalog from "../../pricing/model_colors.json";
+import { modelColorKey, modelProvider, modelSeriesColor, knownModels, knownSources, modelProviders } from "./model-colors";
+export { modelColorKey } from "./model-colors";
 import { activities, activityPresentation } from "./machine-activity-data";
 import { orderedValues } from "./session-shape-bands";
 import agentEventKinds from "./agent-event-kinds.json";
-import type { MetricValue } from "@pythia-software/query-table-core";
+import type { AggregationClause, AggregationResult, MetricValue } from "@pythia-software/query-table-core";
 import type { MetricTheme } from "@pythia-software/query-table-ui";
 import { fitProjectColor, projectColorFields, projectMetricTheme, projectSeriesColor } from "./project-colors";
 
@@ -29,21 +31,11 @@ type SourceStyle = { provider: Provider; color: string };
 export type SeriesStyle = { color: string; group?: string; groupPath?: string[]; order?: string };
 const models = catalog.models as Record<string, ModelStyle>;
 const sources = catalog.sources as Record<string, SourceStyle>;
+const effortLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max"];
 const providerOrder: Provider[] = ["anthropic", "google", "openai", "other"];
 export const otherSeriesColor = "#85909b";
 const allocated = new Map<string, string>();
 const reserved = new Set([otherSeriesColor, ...Object.values(orderedValues).flatMap(ordered => ordered.colors),...Object.values(models).map(model => model.color), ...Object.values(sources).map(source => source.color), ...Object.values(catalog.providers).map(provider => provider.color)]);
-
-export function modelColorKey(name: string): string {
-  return name.trim().toLowerCase().replace(/^claude-/, "").replace(/(-1m|\[1m\])$/, "").replace(/-\d{8}$/, "");
-}
-
-function modelProvider(name: string): Provider {
-  if (/^(opus|sonnet|haiku|fable)(-|$)/.test(name)) return "anthropic";
-  if (/^(gemini|gemma)(-|$)/.test(name)) return "google";
-  if (/^(gpt|chatgpt|codex|o[134])(-|$)/.test(name)) return "openai";
-  return "other";
-}
 
 function hashName(name: string): number {
   let hash = 2166136261;
@@ -115,12 +107,15 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
     const model = separator < 0 ? name : name.slice(0, separator);
     const effort = separator < 0 ? "" : name.slice(separator + 3);
     const modelStyle = chartSeriesStyle("model_family", model), effortStyle = chartSeriesStyle("effort", effort);
-    return { color: generatedColor(`${scope}:${name}`, modelProvider(modelColorKey(model))), group: modelStyle.group, order: `${modelStyle.order}:${effortStyle.order}` };
+    const level = effortLevels.indexOf(effort.trim().toLowerCase());
+    // Higher recorded effort keeps more of the model's color. Every supported
+    // level has its own weight; missing/unrecognized effort has a separate one.
+    const weight = level < 0 ? 25 : 35 + level * 9;
+    return { color: `color-mix(in srgb, ${modelStyle.color} ${weight}%, var(--bg))`, group: modelStyle.group, order: `${modelStyle.order}:${effortStyle.order}` };
   }
   if (scope === "effort") {
-    const levels = ["none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max"];
     const colors = ["#eee7fa", "#dac9f2", "#c3a7e7", "#a982d8", "#8d60c3", "#7443a9", "#5c2e8c", "#45206d"];
-    const index = levels.indexOf(name.toLowerCase());
+    const index = effortLevels.indexOf(name.trim().toLowerCase());
     return { color: index < 0 ? otherSeriesColor : colors[index], order: `${index < 0 ? 99 : index}:${name}` };
   }
   if (Object.hasOwn(orderedValues, scope)) {
@@ -138,7 +133,7 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
     const key = modelColorKey(name), model = Object.hasOwn(models, key) ? models[key] : undefined, provider = model?.provider ?? modelProvider(key);
     const modelClass = model?.class ?? (/codex/.test(key) ? "Codex" : /gemini.*flash/.test(key) ? "Flash" : /gemini.*pro/.test(key) ? "Pro" : key.split(/[-.]/)[0]);
     return {
-      color: model?.color ?? generatedColor(`${scope}:${key}`, provider),
+      color: modelSeriesColor("model", key),
       group: catalog.providers[provider].label,
       order: `${providerOrder.indexOf(provider)}:${modelClass}:${key}`,
     };
@@ -147,7 +142,7 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
     const source = Object.hasOwn(sources, name) ? sources[name] : undefined;
     const provider = source?.provider ?? (Object.hasOwn(catalog.providers, name) ? name as Provider : "other");
     return {
-      color: source?.color ?? generatedColor(`${scope}:${name}`, provider),
+      color: modelSeriesColor("source", name),
       group: catalog.providers[provider].label,
       order: `${providerOrder.indexOf(provider)}:${name}`,
     };
@@ -166,8 +161,24 @@ export function colorFields(clause: { groupBy: string[]; dateGrouping?: { interv
 // model its family's colour beside a provider, repository or effort.
 export const keyColorFields = ["family", "family_group", "root_model_family", "model_family", "root_effort", "effort", "root_provider", "provider", "project_id", "root_project_id", "repository_id", "root_repository_id", "project_name", "root_project_name", "repository_name", "root_repository_name"];
 
-export function chartMetricTheme(): MetricTheme {
-  return { ...projectMetricTheme(), colorBy: keyColorFields };
+export function chartMetricTheme(clauses: Pick<AggregationClause, "id" | "groupBy">[] = [], results?: AggregationResult | null): MetricTheme {
+  const projects = projectMetricTheme();
+  const values: Record<string, Set<MetricValue>> = {};
+  for (const [field, entries] of Object.entries({ model_family: knownModels(), provider: [...knownSources(), ...modelProviders] })) {
+    for (const key of [field, `root_${field}`]) values[key] = new Set(entries);
+  }
+  // Raw snapshot names and unpriced local models need overrides under the
+  // actual result keys as well as their normalized family identities.
+  for (const clause of clauses) {
+    const metric = results?.metrics.find(metric => metric.id === clause.id);
+    clause.groupBy.forEach((field, index) => {
+      if (Object.hasOwn(values, field)) for (const bucket of metric?.buckets ?? []) values[field].add(bucket.keys[index]);
+    });
+  }
+  const dimensions = Object.fromEntries(Object.entries(values).map(([field, entries]) => [field, {
+    layer: field.replace(/^root_/, ""), overrides: [...entries].map(value => ({ value, color: chartSeriesStyle(field, String(value ?? "Unspecified")).color })),
+  }]));
+  return { ...projects, colorBy: keyColorFields, dimensions: { ...projects.dimensions, ...dimensions } };
 }
 
 // Compound metric groups retain their model palette even when their first key
@@ -181,7 +192,7 @@ export function metricSeriesColor(fields: string[], keys: unknown[]): string {
 // several keys by that palette key (Query Table's colorBy), so the chart
 // agrees with its legend and with the compact covers.
 export function keyColorTheme(fields: string[], buckets: ReadonlyArray<{ keys: ReadonlyArray<unknown> }>): MetricTheme | undefined {
-  const field = fields.length > 1 ? keyColorFields.find(field => fields.includes(field)) ?? projectColorFields.find(field => fields.includes(field)) : fields.find(field => projectColorFields.includes(field));
+  const field = fields.length > 1 ? keyColorFields.find(field => fields.includes(field)) ?? projectColorFields.find(field => fields.includes(field)) : fields.find(field => projectColorFields.includes(field) || ["model_family", "root_model_family", "provider", "root_provider"].includes(field));
   if (!field) return undefined;
   const index = fields.indexOf(field), values = [...new Set(buckets.map(bucket => bucket.keys[index]))];
   return { colorBy: field, dimensions: { [field]: { layer: field, overrides: values.map(value => ({ value: value as MetricValue, color: chartSeriesStyle(field, String(value ?? "Unspecified")).color })) } } };

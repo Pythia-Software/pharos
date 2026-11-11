@@ -349,7 +349,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/projects", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings", "/ask", "/files":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/projects", "/settings/models", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings", "/ask", "/files":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -639,6 +639,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		s.getFindings(w, r)
 	case path == "/api/preferences" || path == "/assets/preferences.js":
 		s.getPreferences(w, r)
+	case path == "/api/model-colors":
+		colors, err := s.Catalog.modelColors(r.Context(), r.URL.Query().Get("inventory") == "1")
+		writeResult(w, colors, err)
 	case path == "/api/project-colors":
 		colors, err := s.Catalog.projectColors(r.Context())
 		writeResult(w, colors, err)
@@ -970,6 +973,19 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.postFindings(w, r, body)
 	case path == "/api/preferences":
 		s.postPreferences(w, r, body)
+	case path == "/api/model-colors":
+		id, idOK := body["id"].(string)
+		color, colorOK := body["color"].(string)
+		if !idOK || !colorOK {
+			writeError(w, fmt.Errorf("id and color are required"), http.StatusBadRequest)
+			return
+		}
+		if err := s.Catalog.setModelColor(r.Context(), id, color); err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
+		colors, err := s.Catalog.modelColors(r.Context(), false)
+		writeResult(w, colors, err)
 	case path == "/api/project-colors":
 		id, idOK := body["id"].(string)
 		color, colorOK := body["color"].(string)

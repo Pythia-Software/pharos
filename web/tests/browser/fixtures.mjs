@@ -831,6 +831,13 @@ export const defaultApi = {
   "POST /api/ask/remove-visit": {ok:true},
 
   // Library preferences, saved views and snapshots.
+  "GET /api/model-colors": ({ state }) => state.modelColors ??= { overrides: {}, models: ["gpt-local"], sources: [] },
+  "POST /api/model-colors": ({ body, state }) => {
+    state.modelColors ??= { overrides: {}, models: ["gpt-local"], sources: [] };
+    if (body.color) state.modelColors.overrides[body.id] = body.color;
+    else delete state.modelColors.overrides[body.id];
+    return state.modelColors;
+  },
   "GET /api/project-colors": ({ state }) => state.projectColors ??= structuredClone(projectColorFixture),
   "POST /api/project-colors": ({ body, state }) => {
     state.projectColors = state.projectColors.map(project => project.id === body.id ? { ...project, custom_color: body.color || undefined } : project);

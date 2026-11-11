@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strings"
 )
 
 // Interface preferences live in the catalog's ui_preferences table, so a
@@ -181,6 +182,16 @@ func (s *Server) getPreferences(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
+	// The blocking first-paint script needs only saved choices, not a scan of
+	// recorded models. Settings discovers the inventory after the page mounts.
+	modelColors := modelColorPalette{Overrides: map[string]string{}}
+	for key, raw := range values {
+		var color string
+		if strings.HasPrefix(key, modelColorPrefix) && json.Unmarshal(raw, &color) == nil && validProjectColor(color) {
+			modelColors.Overrides[strings.TrimPrefix(key, modelColorPrefix)] = color
+		}
+	}
+	modelPayload, _ := json.Marshal(modelColors)
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -191,6 +202,7 @@ func (s *Server) getPreferences(w http.ResponseWriter, r *http.Request) {
 	scope := sha256.Sum256([]byte(s.Catalog.Path + "\x00" + s.config.APIToken))
 	_, _ = fmt.Fprintf(w, "window.pharosPreviewScope=%q;", fmt.Sprintf("%x", scope))
 	_, _ = w.Write(append(append([]byte("window.pharosProjectColors="), colorPayload...), ';'))
+	_, _ = w.Write(append(append([]byte("window.pharosModelColors="), modelPayload...), ';'))
 	// Feature flags the library's configuration turns on, which no
 	// preference records: agent_events_enabled lists Agent Experience as
 	// its Settings switch does.

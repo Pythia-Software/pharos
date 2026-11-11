@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { chartSeriesStyle } from '../../../src/chart-colors';
 import { chartCellColor, chartFacetPalette, usageTableRenderers } from '../../../src/usage-chart-colors';
 const series = [
   { key: 's:opus-5-5', label: 'opus-5-5', value: 'opus-5-5', color: '#f4a664' },
@@ -22,13 +23,19 @@ test('reported model variants match their graph family without changing their va
 });
 
 test('combined model-effort facet keeps distinct chart and table colors for each pair', () => {
-  const pairs = [
-    { key: 'low', value: 'claude-opus-5-5 · low', color: '#123456' },
-    { key: 'high', value: 'claude-opus-5-5 · high', color: '#654321' },
-  ];
+  const efforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'];
+  const pairs = efforts.map(effort => {
+    const value = `claude-opus-5-5 · ${effort}`;
+    return { key: effort, value, color: chartSeriesStyle('model_effort', value).color };
+  });
+  assert.equal(new Set(pairs.map(pair => pair.color)).size, efforts.length);
   const palette = chartFacetPalette('model_effort', pairs);
-  assert.equal(chartCellColor(palette, 'model_effort', pairs[0].value), '#123456');
-  assert.equal(chartCellColor(palette, 'model_effort', pairs[1].value), '#654321');
+  for (const pair of pairs) {
+    assert.equal(chartCellColor(palette, 'model_effort', pair.value), pair.color);
+    assert.equal(chartSeriesStyle('root_model_effort', pair.value).color, pair.color);
+  }
+  assert.equal(chartSeriesStyle('model_effort', 'claude-opus-5-5 · HIGH').color, pairs.find(pair => pair.key === 'high').color);
+  assert.ok(!pairs.some(pair => pair.color === chartSeriesStyle('model_effort', 'claude-opus-5-5 · Unspecified').color));
   assert.equal(chartCellColor(palette, 'model', 'claude-opus-5-5'), undefined);
 });
 

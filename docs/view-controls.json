@@ -7216,6 +7216,64 @@
       "reason": "Bound directly to the registered view field."
     },
     {
+      "key": "02550ec595dc5885:0",
+      "file": "web/src/model-color-settings.tsx",
+      "owner": "ColorEditor",
+      "tag": "button",
+      "control": "onClick={() => void save(kind, name, draft)} aria-label={`Save color for ${label}`}",
+      "contract": "settings",
+      "reason": "Edits or restores a persistent library provider/model color preference. Pickers and shade suggestions hold a draft until Save color; automatic model shades follow the provider."
+    },
+    {
+      "key": "0b72ead045cf49ee:0",
+      "file": "web/src/model-color-settings.tsx",
+      "owner": "ColorEditor",
+      "tag": "input",
+      "control": "aria-label={`Color for ${label}`} value={draft} onChange={event => setDraft(event.target.value)}",
+      "contract": "settings",
+      "reason": "Edits or restores a persistent library provider/model color preference. Pickers and shade suggestions hold a draft until Save color; automatic model shades follow the provider."
+    },
+    {
+      "key": "3c1e4f6836df7e32:0",
+      "file": "web/src/model-color-settings.tsx",
+      "owner": "ColorEditor",
+      "tag": "button",
+      "control": "onClick={() => void save(kind, name, \"\")} aria-label={`Restore ${kind === \"provider\" ? \"brand color\" : kind === \"model\" ? \"recommended shade\" : \"provider color\"} for ${label}`}",
+      "contract": "settings",
+      "reason": "Edits or restores a persistent library provider/model color preference. Pickers and shade suggestions hold a draft until Save color; automatic model shades follow the provider."
+    },
+    {
+      "key": "9e410a841f70ee04:0",
+      "file": "web/src/model-color-settings.tsx",
+      "owner": "ColorEditor",
+      "tag": "button",
+      "control": "aria-label={`Try ${shade} for ${label}`} onClick={() => setDraft(shade)}",
+      "contract": "settings",
+      "reason": "Edits or restores a persistent library provider/model color preference. Pickers and shade suggestions hold a draft until Save color; automatic model shades follow the provider."
+    },
+    {
+      "key": "c6f66cb6cbeb0232:0",
+      "file": "web/src/model-color-settings.tsx",
+      "owner": "ModelColorSettings",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`source-colors:${provider}`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "f86d32b79c4b6b87:0",
+      "file": "web/src/model-color-settings.tsx",
+      "owner": "ModelColorSettings",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`model-colors:${provider}`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "1cd6c49e2f9528e1:0",
       "file": "web/src/nested-pages.tsx",
       "owner": "PageLink",

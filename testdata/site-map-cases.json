@@ -340,6 +340,7 @@
   {"path":"settings/layout","url":"/settings/layout"},
   {"path":"settings/ask","url":"/settings/ask"},
   {"path":"settings/projects","url":"/settings/projects"},
+  {"path":"settings/models","url":"/settings/models"},
   {"path":"settings/preferences","url":"/settings/preferences"},
   {"path":"settings/logs","url":"/settings/logs"},
   {"path":"settings/libraries","url":"/settings/libraries"},

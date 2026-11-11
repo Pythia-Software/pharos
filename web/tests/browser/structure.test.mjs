@@ -725,6 +725,7 @@ const ROUTES = [
   { name: "Quick Stats settings", url: "/settings/layout", ready: "#quickStatsExpand", open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsEditor button' },
   { name: "Quick Stats toolbox", url: "/settings/layout", ready: "#quickStatsExpand", preferences: { "pharos-quick-stats-v1": { metrics: ['human_words', 'tokens'], windows: ['today', '24h'] } }, open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsPreview td' },
   { name: "App preferences", url: "/settings/preferences", ready: "#lighthouseSpinOnClick" },
+  { name: "Model colors", url: "/settings/models", ready: ".model-provider-card", open: async page => { await page.locator(".model-provider-card summary").first().click(); }, shown: ".model-provider-card details[open] .model-color-model" },
   { name: "Project colors", url: "/settings/projects", ready: ".project-color-row" },
   { name: "Mac menu disabled", url: "/settings/layout", ready: "#showMacMenuBar", preferences: { 'pharos-menu-bar': { enabled: false } } },
   { name: "Mac menu expanded", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button' },
@@ -1854,4 +1855,43 @@ test('Scatter card opens the standalone dashboard with its selected axes and sou
  await page.getByRole('link',{name:/^Back to dashboard/}).click();
  await page.getByRole('combobox',{name:'X axis',exact:true}).waitFor();
  await app.settled();
+});
+
+
+test("model color editors save inherited palettes, retain focus, and restore provider disclosures", { skip }, async t => {
+  let inventoryReads = 0;
+  const { page, shot } = await open(t, { url: "/settings/projects", ready: ".project-color-settings", api: {
+    "GET /api/model-colors": call => { if (call.query.get("inventory") === "1") inventoryReads++; return defaultApi["GET /api/model-colors"](call); },
+  } });
+  assert.equal(inventoryReads, 0, "other settings pages leave model discovery idle");
+  await page.evaluate(() => window.pharosNavigate("/settings/models"));
+  await page.getByLabel("Color for gpt-local", { exact: true }).waitFor({ state: "attached" });
+  const provider = page.getByLabel("Color for OpenAI", { exact: true });
+  await provider.focus();
+  await page.evaluate(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
+  assert.equal(await provider.evaluate(element => element === document.activeElement), true);
+  await provider.fill("#7547b3");
+  await page.getByRole("button", { name: "Save color for OpenAI", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Color for Codex"]')?.value === "#7547b3");
+  const card = page.getByRole("region", { name: "OpenAI colors", exact: true });
+  await card.locator("summary").first().click();
+  const model = page.getByLabel("Color for gpt-6-sol", { exact: true });
+  await model.waitFor({ state: "visible" });
+  await model.focus();
+  await model.fill("#ee1122");
+  assert.equal(await model.evaluate(element => element === document.activeElement), true);
+  await page.getByRole("button", { name: "Save color for gpt-6-sol", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Restore recommended shade for gpt-6-sol"]')?.disabled === false);
+  await page.reload();
+  await model.waitFor({ state: "visible" });
+  await page.waitForFunction(() => document.querySelector('[aria-label="Color for gpt-6-sol"]')?.value === "#ee1122");
+  assert.equal(await model.inputValue(), "#ee1122");
+  await page.getByRole("button", { name: "Restore brand color for OpenAI", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Color for Codex"]')?.value === "#10a37f");
+  assert.equal(await model.inputValue(), "#ee1122", "provider reset preserves the model choice");
+  await page.getByRole("button", { name: "Restore recommended shade for gpt-6-sol", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Color for gpt-6-sol"]')?.value !== "#ee1122");
+  await card.locator("summary").first().click();
+  await page.evaluate(() => window.scrollTo({ top: 0 }));
+  await shot("model-provider-colors");
 });
