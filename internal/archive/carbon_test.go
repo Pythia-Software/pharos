@@ -222,7 +222,7 @@ func TestCarbonUsageFiltersAndHourlyTotals(t *testing.T) {
 func TestCarbonUsageNamesFallbacksAndUnclassifiedTokens(t *testing.T) {
 	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog)
-	execTx(t, catalog.DB, `UPDATE agent_sessions SET model='mystery-model'`, `UPDATE agent_session_usage SET unclassified_tokens=10,total_tokens=total_tokens+10 WHERE output_tokens=30`)
+	execTx(t, catalog.DB, `UPDATE agent_sessions SET model='mystery-model'`, `UPDATE agent_session_usage SET model='mystery-model'`, `UPDATE agent_session_usage SET unclassified_tokens=10,total_tokens=total_tokens+10 WHERE output_tokens=30`)
 	read := carbonUsageV3(t, testServer(t, config, catalog), nil)
 	if len(read.Models) != 1 || read.Models["mystery-model"] != 3060 || read.Unknown != 0 || read.Unclassified != 10 {
 		t.Fatalf("named fallback provenance: %+v", read)

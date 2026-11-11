@@ -141,7 +141,10 @@ func resolveProjects(ctx context.Context, tx *sql.Tx, predicate string, args ...
 	if err != nil {
 		return err
 	}
-	return applyProjectChanges(ctx, tx, changes)
+	if err := applyProjectChanges(ctx, tx, changes); err != nil {
+		return err
+	}
+	return ensureProjectColors(ctx, tx, predicate, args...)
 }
 
 // resolveFolderProjects resolves again the workspaces without a repository
@@ -235,13 +238,18 @@ func (c *Catalog) migrateProjects() error {
 // takes no write lock.
 func (c *Catalog) repairProjects(ctx context.Context) error {
 	changes, err := projectChanges(ctx, c.DB, "1")
-	if err != nil || len(changes) == 0 {
+	if err != nil {
 		return err
 	}
-	return c.writeTransaction(ctx, "repair projects", func(tx *sql.Tx) error {
-		// Derive again under the write lock, in case a writer changed them.
-		return resolveProjects(ctx, tx, "w.id IN (SELECT value FROM json_each(?))", jsonText(projectChangeIDs(changes)))
-	})
+	if len(changes) > 0 {
+		if err := c.writeTransaction(ctx, "repair projects", func(tx *sql.Tx) error {
+			// Derive again under the write lock, in case a writer changed them.
+			return resolveProjects(ctx, tx, "w.id IN (SELECT value FROM json_each(?))", jsonText(projectChangeIDs(changes)))
+		}); err != nil {
+			return err
+		}
+	}
+	return c.repairProjectColors(ctx)
 }
 
 func projectChangeIDs(changes []projectChange) []string {

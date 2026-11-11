@@ -444,6 +444,7 @@ func TestLibraryFindPricesMatchingWorkspaces(t *testing.T) {
 
 func TestWorkMatchesPlacesMatchesBetweenSummaryMessages(t *testing.T) {
 	c := textFixture(t)
+	execTx(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('harness','c','h','user','message','<system_instruction>Setup</system_instruction>','h','2026-10-10T12:00:00Z')`)
 	type placed struct{ Kind, ID, Preview string }
 	matches := func(query string) ([]placed, []int, workMatches) {
 		t.Helper()

@@ -473,11 +473,26 @@ func TestLibraryPreviewsFollowTheirMessages(t *testing.T) {
 		}
 		return count
 	}
+	execTx(t, catalog.DB,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES('cc-helper','c','claude','local','helper','cc',1)`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('helper-prompt','cc-helper','p','user','message','Investigate this delegated task','2026-09-23T01:57:00Z','h')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('m0','cc','0','user','message','<system_instruction>Injected setup</system_instruction>','2026-09-23T01:59:00Z','h')`,
+		`UPDATE messages SET text='<system_instruction>Injected setup</system_instruction>
+
+Please fix the parser' WHERE id='m1'`)
 	if err := catalog.refreshAllLibrary(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if first, last := preview(); first != "Please fix the parser" || last != "Fixed it" || stored() != 1 {
 		t.Fatalf("preview %q/%q, stored %d", first, last, stored())
+	}
+	// A retained copied message must not displace the first human writing,
+	// including when an older preview ID has already been cached.
+	execTx(t, catalog.DB,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('copied','cc','copy','user','message','Copied agent output','2026-09-23T01:58:00Z','h')`,
+		`INSERT INTO message_authorship(message_id,conversation_id,workspace_id,sent_at,day,total_chars,spans_json) VALUES('copied','cc','c','2026-09-23T01:58:00Z','2026-09-23',19,'[{"start":0,"end":19,"category":"quoted"}]')`)
+	if first, _ := preview(); first != "Please fix the parser" {
+		t.Fatalf("copied text used as first ask: %q", first)
 	}
 	// A new response marks the workspace dirty, which drops the stored
 	// preview until the refresh; meanwhile the page finds it itself.

@@ -34,7 +34,7 @@ export function ColumnMarks({ bucket, series, scale, percent = false, grouped = 
     style={{ height: `${stacked || percent ? height : Math.max(1.5, height)}%`, background: item.color }} />)}</>;
 }
 
-export type CompactTimelineOptions = { unit?: string; showLegend?: boolean; legendColumns?: 1 | 2 | 3; xLabel?: string; yLabel?: string; rollingPeriods?: number; percent?: boolean; scale?: ChartScale; display?: ChartDisplay; prepared?: boolean; lines?: boolean; bars?: boolean; grouped?: boolean; references?: CompactReference[]; nonzero?: boolean };
+export type CompactTimelineOptions = { unit?: string; showLegend?: boolean; legendColumns?: 1 | 2 | 3; xLabel?: string; yLabel?: string; rollingPeriods?: number; percent?: boolean; scale?: ChartScale; display?: ChartDisplay; prepared?: boolean; lines?: boolean; bars?: boolean; grouped?: boolean; additive?: boolean; references?: CompactReference[]; nonzero?: boolean };
 // A trend card's reference levels, as its dashboard's %ile control draws them.
 export type CompactReference = { value: number; level: PercentileLevel };
 // percent selects a share-of-total axis. Percentage-valued measures keep
@@ -43,7 +43,7 @@ export function compactTimelineScale(buckets: ChartBucket[], series: ChartSeries
   const geometry = timelineGeometry(buckets, series, { percent, lines, bars, grouped, scale, reference: Math.max(0, ...references.map(item => item.value)) });
   return percent ? { ...geometry, y: (value: number) => value * 100, ticks: [.25, .5, .75, 1] } : geometry;
 }
-export function CompactColumns({ buckets: sourceBuckets, series, unit = "", showLegend = series.length > 1, legendColumns, xLabel = "Day", yLabel = unit || "Value", rollingPeriods = 0, percent = false, scale = "linear", display = "interval", prepared = false, lines = false, bars = false, grouped = false, references = [], nonzero = false }: { buckets: ChartBucket[]; series: ChartSeries[] } & CompactTimelineOptions) {
+export function CompactColumns({ buckets: sourceBuckets, series, unit = "", showLegend = series.length > 1, legendColumns, xLabel = "Day", yLabel = unit || "Value", rollingPeriods = 0, percent = false, scale = "linear", display = "interval", prepared = false, lines = false, bars = false, grouped = false, additive = true, references = [], nonzero = false }: { buckets: ChartBucket[]; series: ChartSeries[] } & CompactTimelineOptions) {
   const accumulated = display === "cumulative";
   // Prepared buckets arrive without their zeroes (trendSeries).
   const buckets = (prepared ? sourceBuckets : compactTimelineBuckets(sourceBuckets, { display, rollingPeriods, percent, nonzero })).map(bucket => ({ ...bucket, date: new Date(bucket.date) }));
@@ -57,8 +57,10 @@ export function CompactColumns({ buckets: sourceBuckets, series, unit = "", show
   const tooltipLines = (bucket: typeof buckets[number]) => {
     const notes = [dateLabel(bucket.date, true), accumulated ? "Cumulative from range start" : rollingPeriods > 1 ? `${bucket.windowSize}d rolling average` : undefined, scale === "logarithmic" && !percent ? "Log scale" : undefined].filter(Boolean) as string[];
     const values = series.filter(item => !nonzero || bucket.values[item.key] !== undefined);
-    return { "data-chart-colors": JSON.stringify([...notes.map(() => null), ...values.map(item => item.color), ...(bucket.detail ? [null] : [])]),
-      "data-chart-tooltip": [...notes, ...values.map(item => `${item.label}: ${tooltipValue(bucket.values[item.key] ?? 0, percent ? "percent" : unit)}`), bucket.detail].filter(Boolean).join("\n") };
+    const total = additive && values.filter(item => (bucket.values[item.key] ?? 0) > 0).length > 1
+      ? `Total: ${tooltipValue(series.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0), percent ? "percent" : unit)}` : undefined;
+    return { "data-chart-colors": JSON.stringify([...notes.map(() => null), ...values.map(item => item.color), ...(total ? [null] : []), ...(bucket.detail ? [null] : [])]),
+      "data-chart-tooltip": [...notes, ...values.map(item => `${item.label}: ${tooltipValue(bucket.values[item.key] ?? 0, percent ? "percent" : unit)}`), total, bucket.detail].filter(Boolean).join("\n") };
   };
   return <span className="query-cover-timeline" aria-hidden="true">
     <span className="query-timeline-plot">

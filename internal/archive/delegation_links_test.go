@@ -651,6 +651,8 @@ func TestDelegationIncomingLargeAncestorWorkspace(t *testing.T) {
 	for _, records := range []string{"conversations", "sessions", "outside siblings"} {
 		t.Run(records, func(t *testing.T) {
 			c, config := testCatalog(t)
+			// The ancestor's workspace is past the analysis limit; the child's is not.
+			override(t, &delegationAnalysisLimit, 40)
 			run := func(q string) {
 				t.Helper()
 				if _, err := c.DB.Exec(q); err != nil {
@@ -662,11 +664,11 @@ func TestDelegationIncomingLargeAncestorWorkspace(t *testing.T) {
 			run(`INSERT INTO conversations(id,workspace_id,native_id,provider,account,parent_id,agent_depth) VALUES('child','child-work','child','codex','local','parent',1)`)
 			switch records {
 			case "conversations":
-				run(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<10000) INSERT INTO conversations(id,workspace_id,native_id,provider,account) SELECT 'unrelated-'||n,'parent-work','unrelated-'||n,'codex','local' FROM seq`)
+				run(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<40) INSERT INTO conversations(id,workspace_id,native_id,provider,account) SELECT 'unrelated-'||n,'parent-work','unrelated-'||n,'codex','local' FROM seq`)
 			case "sessions":
-				run(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<10001) INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider) SELECT 'unrelated-'||n,'parent-work','parent','unrelated-'||n,'subagent','codex' FROM seq`)
+				run(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<41) INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider) SELECT 'unrelated-'||n,'parent-work','parent','unrelated-'||n,'subagent','codex' FROM seq`)
 			case "outside siblings":
-				run(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<10000) INSERT INTO conversations(id,workspace_id,native_id,provider,account,parent_id,agent_depth) SELECT 'unrelated-'||n,'sibling-work','unrelated-'||n,'codex','local','parent',1 FROM seq`)
+				run(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<40) INSERT INTO conversations(id,workspace_id,native_id,provider,account,parent_id,agent_depth) SELECT 'unrelated-'||n,'sibling-work','unrelated-'||n,'codex','local','parent',1 FROM seq`)
 			}
 			// Siblings are family context up to a bound; past it, coverage says
 			// so instead of quietly building a smaller tree.

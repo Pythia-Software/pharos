@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const usageAttributionVersion = "8"
+const usageAttributionVersion = "9"
 
 func claudeChildren(conversations []ConversationRecord, root ConversationRecord) []ConversationRecord {
 	if root.Provider != "claude" || root.AgentDepth != 0 {
@@ -391,6 +391,9 @@ func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int,
 				}
 			}
 			if err != nil {
+				return err
+			}
+			if err := repairModelSummaries(tx, workspaceID, conversations, ids); err != nil {
 				return err
 			}
 			_, err = tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)

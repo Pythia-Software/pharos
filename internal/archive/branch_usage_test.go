@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 // usageEvent is a Claude Code assistant event in a session with usage, on
@@ -215,10 +217,13 @@ func TestBranchUsageRows(t *testing.T) {
 
 	// A mirror of the switching session, a Conductor workspace on its last
 	// branch, counts once: the totals are the Usage dataset's.
-	var switching, conversation string
+	var switching, plain, conversation string
 	for id, session := range ids {
 		if session == "s-switch" {
 			switching = id
+		}
+		if session == "s-plain" {
+			plain = id
 		}
 	}
 	if err := library.catalog.DB.QueryRow(`SELECT id FROM conversations WHERE workspace_id=?`, switching).Scan(&conversation); err != nil {
@@ -227,11 +232,26 @@ func TestBranchUsageRows(t *testing.T) {
 	execTx(t, library.catalog.DB,
 		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at,repository_id,branch)
 			SELECT 'mirror','conductor','local','mirror','Mirror',indexed_at,repository_id,'feature/b' FROM workspaces WHERE id='`+switching+`'`,
-		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('mirror-c','mirror','conductor','local','mirror-c')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('mirror-c','mirror','conductor','local','mirror-c','conductor')`,
 		`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,model,total_tokens) VALUES('mirror-s','mirror','mirror-c','main','root','conductor','claude-test',7000)`,
 		`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,effort,attribution,input_tokens,uncached_input_tokens,total_tokens)
 			VALUES('mirror-s','2026-09-02T10:00:00Z','claude-test','','request',7000,7000,7000)`,
-		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('`+conversation+`','mirror-c','mirror',1,'{}')`)
+		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('`+conversation+`','mirror-c','native-alias',1,'{}')`,
+		// Helpers share the plain workspace, model, hour and branch coverage,
+		// but inherit the switching conversation's Conductor channel. One
+		// parent link is recorded but unverified, the other inferred from a
+		// command launch. Preserve those existing resolver qualifications.
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,harness)
+			VALUES('helper','`+plain+`','claude','local','helper','`+conversation+`',1,'claude-code/cli'),
+			('launched','`+plain+`','claude','local','launched',NULL,0,'claude-code/cli')`,
+		`INSERT INTO conversation_launches(child_id,parent_id,tool_call_id,program) VALUES('launched','`+conversation+`','launch-call','claude')`,
+		`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,model,total_tokens)
+			VALUES('helper-s','`+plain+`','helper','main','root','claude','claude-test',500),
+			('launched-s','`+plain+`','launched','main','root','claude','claude-test',250)`,
+		`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,effort,attribution,input_tokens,uncached_input_tokens,total_tokens)
+			VALUES('helper-s','2026-09-02T12:00:00Z','claude-test','','request',500,500,500),
+			('launched-s','2026-09-02T12:00:00Z','claude-test','','request',250,250,250)`)
+	publishOrigins(t, library.catalog)
 	rows, err = library.catalog.branchUsageRows(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -245,10 +265,21 @@ func TestBranchUsageRows(t *testing.T) {
 		inRepository[firstString(row["id"])] = true
 	}
 	var branchTotal, usageTotal int64
+	channels := map[string]int64{}
+	rowIDs := map[string]bool{}
 	for _, row := range rows {
 		if row["workspace_id"] == "mirror" {
 			t.Fatalf("a mirror has spend by branch: %#v", row)
 		}
+		id := firstString(row["id"])
+		if rowIDs[id] {
+			t.Fatalf("different channel attributions share a row identity: %#v", row)
+		}
+		rowIDs[id] = true
+		if row["source_kind"] != "claude" {
+			t.Fatalf("channel replaced the retained native source: %#v", row)
+		}
+		channels[fmt.Sprintf("%v %v", row["channel"], row["channel_status"])] += integer(row["tokens"])
 		branchTotal += integer(row["tokens"])
 	}
 	for _, row := range usage {
@@ -258,6 +289,51 @@ func TestBranchUsageRows(t *testing.T) {
 	}
 	if branchTotal != usageTotal || usageTotal == 0 {
 		t.Fatalf("spend by branch %d tokens, usage in repositories %d", branchTotal, usageTotal)
+	}
+	wantChannels := map[string]int64{"conductor direct": 7000, "conductor inherited_unverified": 500, "conductor inherited_inferred": 250, "<nil> unknown": 500}
+	if !maps.Equal(channels, wantChannels) {
+		t.Fatalf("branch channels: got %v, want %v", channels, wantChannels)
+	}
+	// The public query can filter the initiating channel and its quality,
+	// while both source grouping and branch totals retain native usage once.
+	server := testServer(t, library.config, library.catalog)
+	for _, check := range []struct {
+		where  []qt.WhereTerm
+		tokens int64
+	}{
+		{[]qt.WhereTerm{{Field: "channel", Op: "=", Value: "conductor"}}, 7750},
+		{[]qt.WhereTerm{{Field: "channel_status", Op: "=", Value: "inherited_inferred"}}, 250},
+		{[]qt.WhereTerm{{Field: "channel", Op: "is_null"}}, 500},
+	} {
+		q := groupRequest("source_kind", qt.SummaryColumn{ID: "usage_tokens", Op: "sum", Field: "tokens"}, qt.SummaryColumn{ID: "spend", Op: "sum", Field: "cost_usd"})
+		q.Source.Where = check.where
+		got, _, err := server.executeQueryV3(ctx, "branch_usage", nil, PharosBranchUsageSchema(), q)
+		if err != nil || len(got.Rows) != 1 || got.Rows[0]["source_kind"] != "claude" || integer(got.Rows[0]["usage_tokens"]) != check.tokens || math.Abs(floatOr(got.Rows[0]["spend"])-float64(check.tokens)*0.00001) > 1e-9 {
+			t.Fatalf("branch channel query %v: %+v, %v", check.where, got, err)
+		}
+	}
+	// A later, explicit initiation observation replaces the channel without
+	// changing row identities or requiring usage to be indexed again.
+	execTx(t, library.catalog.DB, `INSERT INTO origin_observations(conversation_id,evidence_key,channel,priority,evidence)
+		VALUES('`+conversation+`','producer','desktop',30,'explicit initiation')`)
+	publishOrigins(t, library.catalog)
+	updated, err := library.catalog.branchUsageRows(ctx)
+	if err != nil || len(updated) != len(rows) {
+		t.Fatalf("updated channel rows: %d, %v", len(updated), err)
+	}
+	previous := map[string]map[string]any{}
+	for _, row := range rows {
+		previous[firstString(row["id"])] = row
+	}
+	for _, row := range updated {
+		before := previous[firstString(row["id"])]
+		wantChannel := before["channel"]
+		if wantChannel == "conductor" {
+			wantChannel = "desktop"
+		}
+		if before == nil || row["channel"] != wantChannel || row["tokens"] != before["tokens"] || row["cost_usd"] != before["cost_usd"] {
+			t.Fatalf("late channel observation lost or replaced usage: %#v", row)
+		}
 	}
 }
 

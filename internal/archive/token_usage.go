@@ -458,6 +458,14 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 				for model := range modelUsage {
 					r.model = model
 				}
+			} else if len(modelUsage) > 1 {
+				// A result may list only model context windows. Its aggregate
+				// usage cannot inherit the parser's last execution model. Exact
+				// counters below still replace this fallback when they reconcile.
+				r.model = "Unknown model"
+				if placeholderModel(m.Model) {
+					r.model = m.Model
+				}
 			}
 			for model, usage := range modelUsage {
 				key := stream + ":" + firstString(raw["session_id"], v["session_id"]) + ":" + model

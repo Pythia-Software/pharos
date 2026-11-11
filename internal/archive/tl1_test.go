@@ -142,6 +142,28 @@ func ingestTL1Fixture(t *testing.T, catalog *Catalog, extraFailures int) {
 	}
 }
 
+func TestTL1AttemptModelIsOnlyASummaryFallback(t *testing.T) {
+	for _, observed := range []string{"<synthetic>", "claude-sonnet-5"} {
+		t.Run(observed, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "task", "1-claude.jsonl")
+			parseJSONL(t, "claude", path, claudeTurn("s", "reply", "", "assistant", text("reply"), claudeEntry{"message": map[string]any{"model": observed}}), claudeTurn("s", "error", "", "assistant", text("failed"), claudeEntry{"message": map[string]any{"model": "<synthetic>"}}))
+			adapter := &tl1Adapter{}
+			c, ok, err := adapter.transcript(tl1Installation{ID: "install", Transcripts: dir}, "task", map[string]any{"id": "attempt", "model": "claude-opus-5"}, "1-claude.jsonl")
+			want := observed
+			if observed == "<synthetic>" {
+				want = "claude-opus-5"
+			}
+			if err != nil || !ok || c.Model != want {
+				t.Fatalf("model=%q want %q: %v", c.Model, want, err)
+			}
+			if m := byNativeID(c.Messages)["error"]; m.Model != "<synthetic>" {
+				t.Fatalf("synthetic message changed: %+v", m)
+			}
+		})
+	}
+}
+
 func TestTL1IngestCapturesWorkflowAndCodexTranscripts(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	ingestTL1Fixture(t, catalog, 0)
