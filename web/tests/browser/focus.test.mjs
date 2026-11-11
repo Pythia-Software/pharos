@@ -1458,7 +1458,7 @@ test('overlapping context profiles reveal the stream actually clicked', {skip}, 
 });
 
 test('untimed session navigator draws calls and failures and reveals by message order', {skip}, async t=>{
-  const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-timeline',api:{
+  const {page,settled,shot}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-timeline',viewport:{width:1920,height:1050},api:{
     'GET /api/work/:id/conversations/:conversation':call=>{
       const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
       if(call.params.conversation!=='conv-root')return body;
@@ -1468,12 +1468,43 @@ test('untimed session navigator draws calls and failures and reveals by message 
         event('result','tool_result',{exit_code:1,content:'Process exited with code 1'},{call_id:'cmd'}),
         event('delegate','delegation',{name:'Task',input:{description:'Review files'}},{call_id:'agent'}),
         event('done','delegation_result',{content:'Reviewed'},{call_id:'agent'}),
-        event('reply','message','Finished checking the files')]};
+        event('search','tool_call',{name:'Search',input:{query:'climate outlook'}},{call_id:'search-call'}),
+        event('search-result','tool_result',{content:'Search results'},{call_id:'search-call'}),
+        event('web','tool_call',{name:'Browser',input:{url:'https://example.com/report'}},{call_id:'web-call'}),
+        event('reply','message','Finished checking the files',{agent_events:[{id:'obstacle',kind:'obstacle',label:'Obstacle',group:'Friction',probability:.9,sentence:[0,27],subject:[],response:[]}]})]};
     },
   }});
   const navigator=page.locator('.reader-navigator'),key=navigator.getByLabel('Timeline key');
   for(const name of ['Run','Delegation','Error'])assert.ok(await key.getByText(name,{exact:true}).isVisible());
   assert.ok(await navigator.getByText('Message order · timestamps unavailable',{exact:true}).isVisible());
+  assert.equal(await navigator.getByText('End time unknown',{exact:true}).count(),0,'ordinal timelines have no seconds-based guide');
+  assert.equal(await navigator.locator('.reader-navigator-timeline [data-tool-id="web-call"] line').count(),0);
+  assert.equal(await page.locator('.timeline-entry[data-message-id="search"] .timeline-time').innerText(),'—');
+  const sections=navigator.locator('.reader-section-node').first();
+  await sections.locator(':scope > summary .reader-section-label').click();
+  await navigator.getByText('Message modes',{exact:true}).waitFor();
+  await navigator.getByText('Agent events',{exact:true}).waitFor();
+  const events=navigator.locator('.reader-section-node').filter({has:page.getByText('Agent events',{exact:true})}).last();
+  await events.locator(':scope > summary .reader-section-label').click();
+  await events.getByText('Friction',{exact:true}).waitFor();
+  const tools=navigator.locator('.reader-section-node').filter({has:page.getByText('Tool actions',{exact:true})}).last();
+  await tools.locator(':scope > summary .reader-section-label').click();
+  await navigator.locator('.reader-section-node').getByText('Run',{exact:true}).waitFor();
+  const search=page.locator('.query-chip').filter({hasText:'climate outlook'});
+  await search.click();assert.equal(await search.getAttribute('aria-expanded'),'true');
+  await search.click();assert.equal(await search.getAttribute('aria-expanded'),'false');
+  const web=page.locator('.action-web-link');assert.equal(await web.getAttribute('href'),'https://example.com/report');
+  assert.ok(await web.locator('.markdown-link-icon :is(img,svg)').count());
+  assert.ok(await web.locator('.external-indicator').isVisible());
+  assert.ok(await page.locator('.action-row').filter({has:web}).getByText('Network',{exact:true}).isVisible());
+  await shot('reader-timeline-sections');
+  await page.setViewportSize({width:320,height:900});
+  assert.ok(await navigator.evaluate(element=>element.scrollWidth<=element.clientWidth),'expanded timeline fits on a narrow screen');
+  await shot('reader-timeline-mobile');
+  await page.setViewportSize({width:1920,height:1050});
+  await page.reload();await navigator.locator('.reader-navigator-timeline').waitFor();
+  await navigator.getByText('Agent events',{exact:true}).waitFor();
+  await navigator.locator('.reader-section-node').getByText('Run',{exact:true}).waitFor();
   await navigator.getByRole('button',{name:'Browse session timeline'}).focus();
   await page.keyboard.press('End');await settled();
   await page.waitForFunction(()=>{

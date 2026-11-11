@@ -5,7 +5,7 @@ import type {TimeRange} from './timeline-label-model';
 
 export type ReaderContext={title:string;color:string;message:{id:string};sample:{stream:string;compact?:boolean;trigger?:string;size:number|null;window?:number|null};from:number;width:number;label:string};
 export type ReaderNavigatorMark=Omit<ActivityMark,'start'|'end'>&{start:number|null;end:number|null};
-export type ReaderNavigatorData={messages:LabelMessage[];marks:ReaderNavigatorMark[];events:AgentEventLink[];taxonomy:Taxonomy;turns:{target:HTMLDetailsElement;messages:string[];label:string}[];contexts:ReaderContext[];jumpContext:(entry:ReaderContext)=>void;jumpMessage:(id:string)=>void};
+export type ReaderNavigatorData={sessionID:string;messages:LabelMessage[];marks:ReaderNavigatorMark[];events:AgentEventLink[];taxonomy:Taxonomy;turns:{target:HTMLDetailsElement;messages:string[];label:string}[];contexts:ReaderContext[];jumpContext:(entry:ReaderContext)=>void;jumpMessage:(id:string)=>void};
 export type ReaderSpan={top:number;bottom:number;start:number;end:number};
 export type ReaderGeometry={spans:ReaderSpan[];ends:number[]};
 
