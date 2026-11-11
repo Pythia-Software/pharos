@@ -488,7 +488,7 @@ func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, comput
 // them current. A value that starts reading one must leave this list, or it
 // would keep showing what that table held when it was computed.
 var derivedCoreFamilies = map[string]bool{
-	"rhythm": true, "parallelism": true, "parallelism-threads": true, "session-shape": true,
+	"rhythm": true, "parallelism": true, "parallelism-threads": true,
 	"usage": true, "usage-hourly": true, "usage-base": true, "usage-ledger": true, "usage-roots": true, "workspace-usage": true,
 	"thinking": true, "writing": true, "writing-hourly": true, "conversation-activity": true,
 }
@@ -497,6 +497,8 @@ var derivedCoreFamilies = map[string]bool{
 // makes key's value stale.
 func derivedKeyGeneration(key string) string {
 	switch family := derivedKeyFamily(key); {
+	case family == "session-shape":
+		return generationSessionShape
 	case derivedCoreFamilies[family]:
 		return generationCore
 	case family == "delegation":

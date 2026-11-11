@@ -349,3 +349,24 @@ function weekdayParity(id) {
   assert.deepEqual(summaries(native.result.buckets.map(bucket => ({ ...bucket, keys: [weekdays[bucket.keys[0] - 1]] }))), summaries(card.result.buckets));
   assert.ok(card.result.buckets.some(bucket => bucket.distribution.summary?.max > 0));
 }
+
+
+test("session shape reads disclose older and missing statistics, and clear once current", async () => {
+  const { sessionShapeFreshnessNote } = await import("../../../src/session-shape-freshness");
+  const { withSessionShapeFreshness } = await import("../../../src/query-previews");
+  assert.equal(sessionShapeFreshnessNote(null), "");
+  assert.equal(sessionShapeFreshnessNote({ state: "current" }), "");
+  const coverage = { state: "pending", pending_sessions: 5, stale_sessions: 2, missing_sessions: 3 };
+  const note = sessionShapeFreshnessNote(coverage);
+  assert.match(note, /across the library/);
+  assert.match(note, /2 agent sessions use older statistics/);
+  assert.match(note, /3 agent sessions are not included yet/);
+  assert.match(note, /totals may change/);
+  assert.match(sessionShapeFreshnessNote({ state: "pending", missing_sessions: 1 }), /1 agent session is not included/);
+  const preview = { summary: "4 sessions", note: "Available evidence" };
+  const marked = withSessionShapeFreshness(preview, "session_shape", { coverage });
+  assert.equal(marked.summary, "≈4 sessions");
+  assert.match(marked.note, /older statistics.*Available evidence/);
+  assert.equal(withSessionShapeFreshness(preview, "session_shape", { coverage: { state: "current" } }), preview);
+  assert.equal(withSessionShapeFreshness(preview, "usage", { coverage }), preview);
+});
