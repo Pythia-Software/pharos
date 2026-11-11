@@ -96,15 +96,16 @@ type delegationNode struct {
 	// Label is the execution's one name in every reader and projection
 	// (delegationProjection.label). Subtitle is local context, such as the
 	// workspace title, that never replaces it.
-	Label       string `json:"label"`
-	LabelSource string `json:"label_source"`
-	NativeID    string `json:"native_id,omitempty"`
-	Subtitle    string `json:"subtitle,omitempty"`
-	Provider    string `json:"provider"`
-	Model       string `json:"model"`
-	Effort      string `json:"effort"`
-	Coverage    string `json:"coverage"`
-	Usage       string `json:"usage_status"`
+	Label         string                `json:"label"`
+	LabelSource   string                `json:"label_source"`
+	NativeID      string                `json:"native_id,omitempty"`
+	Subtitle      string                `json:"subtitle,omitempty"`
+	Provider      string                `json:"provider"`
+	Model         string                `json:"model"`
+	Effort        string                `json:"effort"`
+	EffortSummary *sessionEffortSummary `json:"effort_summary"`
+	Coverage      string                `json:"coverage"`
+	Usage         string                `json:"usage_status"`
 	// Depth is layout indentation within this snapshot. Ancestry carries the
 	// semantic parent state; its depth is absent unless the chain reaches a
 	// known root. AncestorIDs are the resolved chain, nearest first.
@@ -348,8 +349,8 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	// fields. Codex can retain a readable task_name beside an encrypted message.
 	// Extract before clipping: the name may follow a very large message. Unknown
 	// structured payloads and opaque messages must not become display labels.
-	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,`+delegationAssignmentCandidatesSQL+` assignment_candidates
- FROM agent_sessions a LEFT JOIN messages m ON m.id=a.delegation_message_id
+	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,es.summary_json effort_summary,`+delegationAssignmentCandidatesSQL+` assignment_candidates
+ FROM agent_sessions a`+sessionEffortSummaryJoin+`LEFT JOIN messages m ON m.id=a.delegation_message_id
  WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT 10001`, workspace)
 	if err != nil {
 		return nil, err
@@ -494,6 +495,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		n := &delegationNode{ID: nid, WorkspaceID: workspace, ConversationID: cid, Provider: firstString(lead["provider"], cv["provider"]), Model: firstString(lead["model"], cv["model"]), Label: label, Coverage: firstString(cv["coverage"]), Usage: "unavailable", envelopeStart: delegationTime(lead["started_at"]), envelopeEnd: delegationTime(lead["ended_at"]), MessageID: firstString(lead["delegation_message_id"]), Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
 		// Embedded executions must not inherit the parent agent's effort.
 		n.Effort = firstString(lead["effort"])
+		n.EffortSummary = readSessionEffortSummary(lead["effort_summary"])
 		if main && n.Effort == "" {
 			n.Effort = firstString(cv["effort"])
 		}
@@ -515,6 +517,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			if meta, ok := metas[x.Conversation]; ok && !p.hasTranscriptIn(x, workspace) {
 				n.ConversationID, n.WorkspaceID, n.Provider = meta.ID, meta.WorkspaceID, meta.Provider
 				n.Model, n.Effort, n.Coverage = meta.Model, meta.Effort, meta.Coverage
+				n.EffortSummary = nil
 				n.ExternalChild = &delegationReference{ConversationID: meta.ID, WorkspaceID: meta.WorkspaceID, Label: n.Label, Provider: meta.Provider}
 			}
 		}

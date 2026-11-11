@@ -12,7 +12,7 @@ var workDetailSections = map[string]string{
 	"identity":       `SELECT w.*,r.display_name repository_name,r.canonical_remote FROM workspaces w LEFT JOIN repositories r ON r.id=w.repository_id WHERE w.id=?`,
 	"conversations":  `SELECT c.*,(SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) message_count FROM conversations c WHERE c.workspace_id=? ORDER BY c.started_at,c.id`,
 	"lineage":        `SELECT c.id conversation_id,c.native_id,c.parent_id,c.agent_depth,c.agent_path,c.agent_nickname,c.origin,p.native_id parent_native_id,p.workspace_id parent_workspace_id FROM conversations c LEFT JOIN conversations p ON p.id=c.parent_id WHERE c.workspace_id=? ORDER BY c.agent_depth,c.started_at,c.id`,
-	"agent_sessions": `SELECT a.* FROM agent_sessions a WHERE a.workspace_id=? ORDER BY a.depth,a.started_at,a.id`,
+	"agent_sessions": `SELECT a.*,es.summary_json effort_summary FROM agent_sessions a` + sessionEffortSummaryJoin + `WHERE a.workspace_id=? ORDER BY a.depth,a.started_at,a.id`,
 	"changes":        `SELECT cs.*,cf.path,cf.old_path,cf.status,cf.tracked,cf.bytes,cf.evidence_locator FROM change_sets cs LEFT JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=? ORDER BY cs.id,cf.path`,
 	"outcomes":       `SELECT * FROM summaries WHERE workspace_id=?`,
 	// What became of the session's changes (docs/projects-and-outcomes.md);
@@ -153,6 +153,9 @@ func (c *Catalog) boundedWorkDetail(args map[string]any) (map[string]any, error)
 		return result, nil
 	}
 	for index, item := range items {
+		if section == "agent_sessions" {
+			item["effort_summary"] = readSessionEffortSummary(item["effort_summary"])
+		}
 		item["item_offset"] = offset + index
 		truncated := map[string]any{}
 		for field, value := range item {

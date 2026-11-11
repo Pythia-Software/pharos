@@ -455,6 +455,9 @@ func (c *Catalog) Initialize() error {
 			return err
 		}
 	}
+	if err := c.ensureSessionEffortSummaries(); err != nil {
+		return err
+	}
 	// Its triggers read request and tool-call columns migrated above.
 	// Index an existing optional ledger without creating or running it.
 	if c.hasLabelsLedger() {
@@ -1331,8 +1334,8 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 	}
 	result["conversations"] = conversations
 	queries := []struct{ key, sql string }{
-		{"agent_sessions", `SELECT a.*,(SELECT COUNT(*) FROM agent_session_messages am WHERE am.agent_session_id=a.id) message_count
-			FROM agent_sessions a WHERE a.workspace_id=? AND a.usage_status<>'in-child-conversation' ORDER BY a.depth,a.started_at,a.id`},
+		{"agent_sessions", `SELECT a.*,es.summary_json effort_summary,(SELECT COUNT(*) FROM agent_session_messages am WHERE am.agent_session_id=a.id) message_count
+			FROM agent_sessions a` + sessionEffortSummaryJoin + `WHERE a.workspace_id=? AND a.usage_status<>'in-child-conversation' ORDER BY a.depth,a.started_at,a.id`},
 		{"token_evidence", `SELECT e.*,m.conversation_id FROM agent_session_token_evidence e JOIN agent_sessions a ON a.id=e.agent_session_id JOIN messages m ON m.id=e.message_id WHERE a.workspace_id=? ORDER BY e.agent_session_id,e.message_id`},
 		{"changes", `SELECT cs.id,cs.classification,cs.base_id,cs.head_id,cs.complete,cf.path,cf.old_path,cf.status,cf.tracked,cf.bytes,cf.evidence_locator FROM change_sets cs LEFT JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=? ORDER BY cf.path`},
 		{"metrics", "SELECT * FROM metrics WHERE workspace_id=? ORDER BY name"},
@@ -1354,6 +1357,11 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 			return nil, e
 		}
 		result[query.key] = values
+		if query.key == "agent_sessions" {
+			for _, session := range values {
+				session["effort_summary"] = readSessionEffortSummary(session["effort_summary"])
+			}
+		}
 	}
 	if includeMessages {
 		usageByConversation := map[string]tokenCounts{}

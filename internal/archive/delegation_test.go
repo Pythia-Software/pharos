@@ -266,6 +266,31 @@ func TestDelegationEffortUsesOwnSessionAndConversation(t *testing.T) {
 	if s.ByID["root-session"].Effort != "high" || s.ByID["child-session"].Effort != "low" || s.ByID["embedded"].Effort != "" {
 		t.Fatal("effort must use own session, fall back for main, and never inherit for embedded children")
 	}
+	if s.ByID["root-session"].EffortSummary != nil {
+		t.Fatal("pending request summary must not fall back to conversation effort")
+	}
+	execTx(t, c.DB,
+		`UPDATE model_requests SET effort='low' WHERE id='request'`,
+		`INSERT INTO model_requests(id,conversation_id,agent_session_id,sequence,effort) VALUES('root-effort','root','root-session',0,'high'),('embedded-effort','root','embedded',1,NULL)`)
+	if _, err := c.RepairSessionEffortSummaries(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	after, err := c.delegationSnapshot(t.Context(), "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, state := range map[string]string{"root-session": "single", "child-session": "single", "embedded": "unknown"} {
+		summary := after.ByID[id].EffortSummary
+		if summary == nil || summary.State != state || summary.Coverage != "recorded-requests" {
+			t.Fatalf("%s summary: %+v", id, summary)
+		}
+	}
+	if got := after.ByID["embedded"].EffortSummary; len(got.Levels) != 0 || got.UnknownRequests != 1 {
+		t.Fatalf("embedded summary inherited parent effort: %+v", got)
+	}
+	if after == s {
+		t.Fatal("summary backfill left delegation cache stale")
+	}
 }
 
 func TestDelegationLegacyMessagesExcludeAlreadyOwnedEvents(t *testing.T) {

@@ -464,6 +464,14 @@ CREATE INDEX IF NOT EXISTS agent_sessions_workspace_idx ON agent_sessions(worksp
 CREATE INDEX IF NOT EXISTS agent_sessions_child_idx ON agent_sessions(child_conversation_id);
 CREATE INDEX IF NOT EXISTS agent_sessions_parent_idx ON agent_sessions(parent_id);
 
+-- Observed request effort is independent of the strict session configuration
+-- and of all token/cost attribution. Absence means the projection is pending.
+CREATE TABLE IF NOT EXISTS agent_session_effort_summaries (
+  agent_session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  version TEXT NOT NULL,
+  summary_json TEXT NOT NULL
+);
+
 -- Hourly usage ledger beneath agent_sessions: each session's reconciled usage
 -- split by the UTC hour and model of the accounting events that reported it.
 -- 'session-start' rows had no event timestamp and sit at the session start.
