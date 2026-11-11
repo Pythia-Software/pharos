@@ -47,7 +47,7 @@ export function usesWeekdayCover(recipe: QueryRecipe | undefined, metric: Aggreg
   const original = recipe?.measures.find(item => item.id === recipe.weekday?.metricId);
   return recipe?.weekday?.metricId === metric.id && (!cover || cover.mode === "source" && cover.metricId === metric.id && (!cover.kind || cover.kind === "auto"))
     && original?.op === metric.op && original.field === metric.field && original.expression === metric.expression
-    && !metric.distribution && !metric.expressionY && metric.scope !== "shownRows" && metric.dateGrouping?.interval === "day" && metric.dateGrouping.includeEmpty
+    && !metric.distribution && !metric.expressionY && metric.scope !== "shownRows" && metric.dateGrouping?.interval === "day" && (metric.dateGrouping.every ?? 1) === 1 && metric.dateGrouping.includeEmpty
     && metric.dateGrouping.range === "observed"
     && metric.groupBy.length === 1 && metric.groupBy[0] === metric.dateGrouping.field
     && weekdayDatePredicates(metric, query) !== undefined;
