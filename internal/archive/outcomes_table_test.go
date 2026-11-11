@@ -18,7 +18,7 @@ func TestOutcomeRowsCarryCostAndMainModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	ingestUsageFixture(t, catalog)
-	execTx(t, catalog.DB, `UPDATE agent_sessions SET model='gpt-6-sol'`)
+	execTx(t, catalog.DB, `UPDATE agent_sessions SET model='gpt-6-sol'`, `UPDATE agent_session_usage SET model='gpt-6-sol'`)
 	// Its edits are past the rework window and kept: a priced kept change.
 	execTx(t, catalog.DB, `INSERT INTO session_outcomes(workspace_id,tool_calls_recorded,files_changed,last_edit_at,rework_days,kept_lines,rework_removed_lines)
 		SELECT id,3,1,'2026-01-01T00:00:00Z',14,40,2 FROM workspaces`)

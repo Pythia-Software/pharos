@@ -24,7 +24,7 @@ type conductorAdapter struct {
 	selected map[string]bool
 }
 
-const conductorExtractor = "conductor-v14-inference-speed"
+const conductorExtractor = "conductor-v15-execution-model"
 
 // conductorPartExtractor versions the parser for per-session part states
 // (source_item_states). It changes separately from conductorExtractor, which
@@ -576,15 +576,28 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 			createdAt = iso(message["created_at"])
 		}
 		locator := fmt.Sprintf("sqlite:%s:%s:%s:%s:%d", path, messageTable, sid, field, index)
-		if reported := firstString(message["model"]); reported != "" {
-			currentModel = reported
-		} else {
-			var envelope map[string]any
-			if json.Unmarshal([]byte(text), &envelope) == nil {
-				if embedded := firstString(mapValue(envelope["message"])["model"]); embedded != "" {
-					currentModel = embedded
+		reportedModel := firstString(message["model"])
+		var envelope map[string]any
+		if json.Unmarshal([]byte(text), &envelope) == nil {
+			reportedModel = firstString(mapValue(envelope["message"])["model"], envelope["model"], reportedModel)
+		}
+		// A shorter structured column may hold the actual request model while
+		// the longest column contains only display text. Observed requests
+		// take precedence over a row's configured model.
+		if firstString(mapValue(envelope["message"])["model"], envelope["model"]) == "" {
+			for _, candidate := range []string{"content", "full_message", "text"} {
+				var alternative map[string]any
+				if json.Unmarshal([]byte(messageText(message[candidate])), &alternative) == nil {
+					if model := firstString(mapValue(alternative["message"])["model"], alternative["model"]); model != "" {
+						reportedModel, envelope = model, alternative
+						break
+					}
 				}
 			}
+		}
+		messageModel := firstString(reportedModel, currentModel)
+		if role != "user" && firstString(envelope["parent_tool_use_id"]) == "" {
+			currentModel = advanceExecutionModel(currentModel, reportedModel)
 		}
 		// Unset nullable columns carry no configuration change. Explicit
 		// resets in the event envelopes below still clear the current effort.
@@ -607,7 +620,8 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 		parsed := conductorEvents(baseID, role, text, createdAt, locator, delegated)
 		sender := conductorSender(message)
 		for item := range parsed {
-			parsed[item].Model = currentModel
+			parsed[item].Model = messageModel
+			parsed[item].ParentNativeID = firstString(parsed[item].ParentNativeID, envelope["parent_tool_use_id"])
 			parsed[item].Effort = currentEffort
 			if parsed[item].Role == "user" {
 				parsed[item].Sender = sender
@@ -619,7 +633,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 			alternative := messageText(message[candidate])
 			var envelope map[string]any
 			if alternative != text && json.Unmarshal([]byte(alternative), &envelope) == nil && hasUsageEvidence(envelope) {
-				parsed = append(parsed, MessageRecord{NativeID: baseID + ":accounting:" + candidate, Role: "system", Kind: "metadata", Text: alternative, Model: currentModel, Effort: currentEffort, CreatedAt: createdAt, EvidenceLocator: locator + ":" + candidate, Selected: true})
+				parsed = append(parsed, MessageRecord{NativeID: baseID + ":accounting:" + candidate, Role: "system", Kind: "metadata", Text: alternative, ParentNativeID: firstString(envelope["parent_tool_use_id"]), Model: messageModel, Effort: currentEffort, CreatedAt: createdAt, EvidenceLocator: locator + ":" + candidate, Selected: true})
 			}
 		}
 		for i := range parsed {
@@ -755,10 +769,8 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 	if scols["status"] {
 		metadata["status"] = session["status"]
 	}
-	model, started := "", ""
-	if scols["model"] {
-		model = firstString(session["model"])
-	}
+	model, started := currentModel, ""
+	model = conversationSummaryModel(ConversationRecord{Model: model, Messages: messages})
 	if scols["created_at"] {
 		started = iso(session["created_at"])
 	}
@@ -1076,7 +1088,7 @@ func conductorEvents(nativeID, fallbackRole, text, createdAt, locator string, de
 		}
 	}
 	if len(output) > 0 {
-		if hasUsageEvidence(object) || reasoningSeen {
+		if hasUsageEvidence(object) || reasoningSeen || placeholderModel(firstString(message["model"], object["model"])) {
 			output[0].RawText = text
 		}
 		return output

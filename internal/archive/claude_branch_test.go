@@ -74,6 +74,48 @@ func entrySelected(t *testing.T, messages []MessageRecord) map[string]bool {
 	return selected
 }
 
+func TestClaudeExecutionModelSurvivesSyntheticErrors(t *testing.T) {
+	for _, check := range []struct {
+		name   string
+		models []string
+		want   string
+	}{
+		{"real then error", []string{"claude-sonnet-5", "<synthetic>"}, "claude-sonnet-5"},
+		{"synthetic only", []string{"<synthetic>"}, "<synthetic>"},
+		{"model change then error", []string{"claude-opus-5", "claude-sonnet-5", "<synthetic>"}, "claude-sonnet-5"},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "s.jsonl")
+			lines := []string{}
+			for i, model := range check.models {
+				lines = append(lines, claudeTurn("s", fmt.Sprint(i), "", "assistant", text("reply"), claudeEntry{"message": map[string]any{"model": model, "usage": usage(10, 1)}}))
+			}
+			lines = append(lines, `{"type":"result","usage":{"input_tokens":100,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":200000},"claude-haiku-5-5":{"contextWindow":200000}}}`)
+			parseJSONL(t, "claude", path, lines...)
+			record, ok, err := (&jsonlAdapter{provider: "claude"}).parse(path)
+			if err != nil || !ok || record.Conversations[0].Model != check.want {
+				t.Fatalf("conversation = %+v, %v", record, err)
+			}
+			c := record.Conversations[0]
+			if got := conversationSummaryModel(c); got != check.want {
+				t.Fatalf("summary model = %q, want %q", got, check.want)
+			}
+			errorMessage := byNativeID(c.Messages)[fmt.Sprint(len(check.models)-1)]
+			_, envelope := tokenObject(errorMessage)
+			if errorMessage.Model != "<synthetic>" || firstString(mapValue(envelope["message"])["model"]) != "<synthetic>" {
+				t.Fatalf("synthetic evidence lost: %+v", errorMessage)
+			}
+			// The later aggregate retains unknown allocation even though the
+			// parser now keeps a real execution model in its state.
+			for bucket, counts := range agentSessionSummaries(c.Messages)[0].usage {
+				if bucket.attribution == "run-remainder" && counts["total_tokens"] > 0 && !placeholderModel(bucket.model) {
+					t.Fatalf("ambiguous aggregate allocated to %q", bucket.model)
+				}
+			}
+		})
+	}
+}
+
 func TestClaudeSelectsTheActiveBranch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	lines := []string{
@@ -164,6 +206,9 @@ func TestClaudeCountsAdvisorIterationsUnderTheirModel(t *testing.T) {
 	}
 	if total := conversationTokenCounts(messages)["total_tokens"]; total != 330+185 {
 		t.Fatalf("total tokens = %v, want %d", total, 330+185)
+	}
+	if model := sessionSummaryModel(agentSessionSummaries(messages)[0], messages, "<synthetic>"); model != "claude-test" {
+		t.Fatalf("advisor replaced primary execution model: %q", model)
 	}
 	// A subagent's advisor is counted in its stream, which its task's
 	// cumulative usage covers.

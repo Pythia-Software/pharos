@@ -1,5 +1,5 @@
 {
-  "index_version": "tl1-analysis-v5-session-bounds",
+  "index_version": "tl1-analysis-v6-execution-model",
   "records": [
     {
       "SourceID": "install-1:task-claude",

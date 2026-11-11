@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -205,6 +206,299 @@ func TestRepairUsageAttributionBoundsWAL(t *testing.T) {
 	after, err := os.Stat(catalog.Path + "-wal")
 	if err != nil || after.Size() >= before.Size() {
 		t.Fatalf("WAL did not shrink after repair: before=%d after=%v err=%v", before.Size(), after, err)
+	}
+}
+
+func TestRepairUsageAttributionModelSummaries(t *testing.T) {
+	for _, check := range []struct {
+		name    string
+		models  []string
+		missing bool
+		want    string
+	}{
+		{"last request survives error", []string{"claude-opus-4-8", "claude-sonnet-5"}, false, "claude-sonnet-5"},
+		{"single ledger model without originals or messages", []string{"claude-opus-4-8"}, true, "claude-opus-4-8"},
+		{"mixed ledger without chronology", []string{"claude-opus-4-8", "claude-sonnet-5"}, true, "Unknown model"},
+		{"synthetic only remains unknown", nil, false, "<synthetic>"},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			messages := []MessageRecord{}
+			for i, model := range check.models {
+				messages = append(messages, MessageRecord{NativeID: model, Role: "assistant", Kind: "metadata", Model: model, Text: jsonText(map[string]any{"type": "assistant", "message": map[string]any{"id": model, "model": model, "usage": map[string]any{"input_tokens": 10 + i, "output_tokens": 1}}})})
+			}
+			messages = append(messages, MessageRecord{NativeID: "error", Role: "assistant", Kind: "message", Model: "<synthetic>", Text: "failed", RawText: `{"type":"assistant","message":{"model":"<synthetic>","content":"failed"}}`})
+			record := WorkspaceRecord{SourceID: "summary-repair", SourceKind: "tl1", Account: "local", Conversations: []ConversationRecord{{NativeID: "summary-repair", Provider: "claude", Account: "local", Model: "<synthetic>", Messages: messages}}}
+			tx, err := c.DB.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = ingestWorkspace(tx, record, false); err != nil {
+				tx.Rollback()
+				t.Fatal(err)
+			}
+			if err = tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = c.DB.Exec(`UPDATE conversations SET model='<synthetic>'; UPDATE agent_sessions SET model='<synthetic>'; UPDATE usage_attribution_state SET version='8'`); err != nil {
+				t.Fatal(err)
+			}
+			if check.missing {
+				if _, err = c.DB.Exec(`DELETE FROM messages`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			snapshot := func() string {
+				t.Helper()
+				state := map[string]any{}
+				for _, table := range []string{"messages", "agent_session_usage", "model_requests", "tool_calls"} {
+					rows, err := queryMaps(c.DB, "SELECT * FROM "+table+" ORDER BY 1,2,3")
+					if err != nil {
+						t.Fatal(err)
+					}
+					state[table] = rows
+				}
+				rows, err := queryMaps(c.DB, `SELECT id,`+strings.Join(usageTokenFields, ",")+` FROM agent_sessions ORDER BY id`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				state["totals"] = rows
+				metrics, err := queryMaps(c.DB, `SELECT workspace_id,name,value FROM metrics WHERE unit='tokens' ORDER BY workspace_id,name`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				state["metrics"] = metrics
+				return jsonText(state)
+			}
+			before := snapshot()
+			if repaired, err := c.RepairUsageAttribution(t.Context(), nil); err != nil || repaired != 1 {
+				t.Fatalf("repair=%d %v", repaired, err)
+			}
+			for _, table := range []string{"conversations", "agent_sessions"} {
+				var model string
+				if err := c.DB.QueryRow("SELECT model FROM " + table).Scan(&model); err != nil || model != check.want {
+					t.Fatalf("%s model=%q, want %q: %v", table, model, check.want, err)
+				}
+			}
+			if after := snapshot(); after != before {
+				t.Fatalf("label repair changed evidence/accounting:\nbefore=%s\nafter=%s", before, after)
+			}
+			if repaired, err := c.RepairUsageAttribution(t.Context(), nil); err != nil || repaired != 0 {
+				t.Fatalf("second repair=%d %v", repaired, err)
+			}
+			if len(check.models) > 0 && !check.missing {
+				// A later partial delivery contains just the error. Retained
+				// requests still determine both summaries after the upgrade.
+				record.Conversations[0].Coverage = "partial"
+				record.Conversations[0].Messages = messages[len(messages)-1:]
+				tx, err := c.DB.Begin()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err = ingestWorkspace(tx, record, false); err != nil {
+					tx.Rollback()
+					t.Fatal(err)
+				}
+				if err = tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				for _, table := range []string{"conversations", "agent_sessions"} {
+					var model string
+					if err := c.DB.QueryRow("SELECT model FROM " + table).Scan(&model); err != nil || model != check.want {
+						t.Fatalf("partial %s model=%q: %v", table, model, err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestModelSummaryUsesItsOwnSessionEvidence(t *testing.T) {
+	messages := []MessageRecord{
+		{NativeID: "parent", Role: "assistant", Kind: "message", Model: "opus"},
+		{NativeID: "launch", Role: "assistant", Kind: "delegation", Model: "opus", CallID: "child"},
+		{NativeID: "child-reply", Role: "assistant", Kind: "message", Model: "haiku", ParentNativeID: "child"},
+		{NativeID: "error", Role: "assistant", Kind: "message", Model: "<synthetic>"},
+	}
+	for _, summary := range agentSessionSummaries(messages) {
+		want := map[string]string{"main": "opus", "child": "haiku"}[summary.nativeID]
+		if model := sessionSummaryModel(summary, messages, "<synthetic>"); model != want {
+			t.Fatalf("%s model=%q, want %q", summary.nativeID, model, want)
+		}
+	}
+}
+
+func TestModelSummaryRepairPreservesLegacyPricingFallback(t *testing.T) {
+	c, _ := testCatalog(t)
+	if err := c.replacePricing(testPricing(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	record := WorkspaceRecord{SourceID: "legacy-model", SourceKind: "tl1", Account: "local", Conversations: []ConversationRecord{{NativeID: "legacy-model", Provider: "claude", Account: "local", Model: "<synthetic>", StartedAt: "2026-09-20T12:00:00Z"}}}
+	tx, err := c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = ingestWorkspace(tx, record, false); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.DB.Exec(`UPDATE agent_sessions SET total_tokens=33,input_tokens=30,output_tokens=3;
+ INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,attribution,input_tokens,uncached_input_tokens,output_tokens,total_tokens)
+ SELECT a.id,'2026-09-20T12:00:00Z',m.value,'session-start',10,10,1,11 FROM agent_sessions a,json_each('["claude-opus-4-8","","<synthetic>"]') m;
+ UPDATE usage_attribution_state SET version='8'`); err != nil {
+		t.Fatal(err)
+	}
+	before, err := c.usageRows(time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost := func(rows []map[string]any) float64 {
+		total := 0.0
+		for _, row := range rows {
+			if v, ok := row["cost_usd"].(float64); ok {
+				total += v
+			}
+		}
+		return total
+	}
+	if cost(before) == 0 {
+		t.Fatal("expected known-model usage alongside unknown usage")
+	}
+	for range 2 {
+		if _, err := c.DB.Exec(`UPDATE usage_attribution_state SET version='8'`); err != nil {
+			t.Fatal(err)
+		}
+		if repaired, err := c.RepairUsageAttribution(t.Context(), nil); err != nil || repaired != 1 {
+			t.Fatalf("repair=%d: %v", repaired, err)
+		}
+		after, err := c.usageRows(time.UTC)
+		if err != nil || cost(after) != cost(before) {
+			t.Fatalf("label changed cost: %v -> %v: %v", before, after, err)
+		}
+		var model string
+		var total int64
+		if err := c.DB.QueryRow(`SELECT model,total_tokens FROM agent_sessions`).Scan(&model, &total); err != nil || model != "claude-opus-4-8" || total != 33 {
+			t.Fatalf("session=%q/%d: %v", model, total, err)
+		}
+		var unknown int64
+		if err := c.DB.QueryRow(`SELECT total_tokens FROM agent_session_usage WHERE model='<synthetic>'`).Scan(&unknown); err != nil || unknown != 22 {
+			t.Fatalf("unknown tokens=%d: %v", unknown, err)
+		}
+	}
+	// Blank legacy summary labels also mean unknown. Making the pricing
+	// fallback explicit must retain their usage, including whitespace labels.
+	if _, err := c.DB.Exec(`UPDATE agent_sessions SET model='   '; UPDATE conversations SET model='   ';
+ UPDATE agent_session_usage SET model='' WHERE model='<synthetic>'; UPDATE usage_attribution_state SET version='8'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RepairUsageAttribution(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	var unknown int64
+	if err := c.DB.QueryRow(`SELECT total_tokens FROM agent_session_usage WHERE model='Unknown model'`).Scan(&unknown); err != nil || unknown != 22 {
+		t.Fatalf("blank model lost usage: %d, %v", unknown, err)
+	}
+}
+
+func TestModelSummaryRepairPreservesReconstructedUnknownUsage(t *testing.T) {
+	for _, check := range []struct {
+		model             string
+		changedCategories bool
+	}{
+		{model: ""}, {model: "   "}, {model: "<synthetic>"},
+		{model: "gpt-5.5"}, {model: "claude-opus-4-8"},
+		{model: "gpt-5.5", changedCategories: true},
+	} {
+		t.Run(fmt.Sprintf("legacy model=%q/changed categories=%t", check.model, check.changedCategories), func(t *testing.T) {
+			c, _ := testCatalog(t)
+			if err := c.replacePricing(testPricing(), "test"); err != nil {
+				t.Fatal(err)
+			}
+			record := WorkspaceRecord{SourceID: "unknown-request", SourceKind: "tl1", Account: "local", Conversations: []ConversationRecord{{
+				NativeID: "unknown-request", Provider: "claude", Account: "local", StartedAt: "2026-09-20T12:00:00Z",
+				Messages: []MessageRecord{
+					{NativeID: "request", Role: "assistant", Kind: "metadata", Text: `{"type":"assistant","message":{"id":"request","usage":{"input_tokens":10,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":1},"output_tokens":1,"reasoning_output_tokens":1}}}`},
+					{NativeID: "known", Role: "assistant", Kind: "metadata", Model: "claude-opus-4-8", Text: `{"type":"assistant","message":{"id":"known","model":"claude-opus-4-8","usage":{"input_tokens":2,"output_tokens":1}}}`},
+				},
+			}}}
+			ingestRecordTx(t, c, record)
+			// Recreate the legacy ledger. The later known request supplies no
+			// allocation for the first request's 16 tokens. Its own 3 tokens
+			// can share a bucket after the old fallback is made explicit.
+			for _, table := range []string{"conversations", "agent_sessions"} {
+				if _, err := c.DB.Exec("UPDATE "+table+" SET model=?", check.model); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := c.DB.Exec(`UPDATE agent_session_usage SET model='' WHERE model='Unknown model'`); err != nil {
+				t.Fatal(err)
+			}
+			totals := func() string {
+				t.Helper()
+				fields := []string{}
+				for _, field := range usageTokenFields {
+					fields = append(fields, "SUM("+field+") AS "+field)
+				}
+				rows, err := queryMaps(c.DB, "SELECT "+strings.Join(fields, ",")+" FROM agent_session_usage")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return jsonText(rows)
+			}
+			priced := func() (float64, int64) {
+				t.Helper()
+				rows, err := c.usageRows(time.UTC)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cost, unpriced := 0.0, int64(0)
+				for _, row := range rows {
+					if value, ok := row["cost_usd"].(float64); ok {
+						cost += value
+					} else {
+						unpriced += integer(row["total_tokens"])
+					}
+				}
+				return cost, unpriced
+			}
+			before := totals()
+			cost, unpriced := priced()
+			if check.changedCategories {
+				// Equal totals with different cache lifetimes cannot freeze an
+				// old allocation. Retained source counters must win, unpriced.
+				if _, err := c.DB.Exec(`UPDATE agent_session_usage SET cache_creation_5m_input_tokens=1,
+					cache_creation_1h_input_tokens=2 WHERE model=''`); err != nil {
+					t.Fatal(err)
+				}
+				book, err := c.loadPriceBook()
+				if err != nil {
+					t.Fatal(err)
+				}
+				cost = *book.cost("claude-opus-4-8", "2026-09-20", map[string]int64{"uncached_input_tokens": 2, "output_tokens": 1}).cost
+				unpriced = 16
+			}
+			for range 2 {
+				if _, err := c.DB.Exec(`DELETE FROM usage_attribution_state`); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := c.RepairUsageAttribution(t.Context(), nil); err != nil {
+					t.Fatal(err)
+				}
+				if gotCost, gotUnpriced := priced(); !near(&gotCost, cost) || gotUnpriced != unpriced {
+					t.Fatalf("summary changed pricing: %g/%d -> %g/%d", cost, unpriced, gotCost, gotUnpriced)
+				}
+				if after := totals(); after != before {
+					t.Fatalf("token categories changed: %s -> %s", before, after)
+				}
+				var model string
+				if err := c.DB.QueryRow(`SELECT model FROM agent_sessions`).Scan(&model); err != nil || model != "claude-opus-4-8" {
+					t.Fatalf("session model=%q: %v", model, err)
+				}
+			}
+		})
 	}
 }
 

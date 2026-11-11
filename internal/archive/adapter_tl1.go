@@ -349,7 +349,7 @@ func tl1ReadsTranscriptFile(name string) bool {
 	return false
 }
 
-func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v5-session-bounds" }
+func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v6-execution-model" }
 
 func (a *tl1Adapter) Discover(emit func(WorkspaceRecord) error) error {
 	a.snapshots = nil
@@ -819,7 +819,7 @@ func (a *tl1Adapter) transcript(installation tl1Installation, taskID string, att
 	source.Provider = provider
 	source.Account = a.config.Account
 	source.Aliases = aliases
-	if source.Model == "" {
+	if !executionModel(source.Model) && executionModel(model) {
 		source.Model = model
 	}
 	// Codex exec transcripts carry no timestamps; the attempt bounds place

@@ -1069,6 +1069,13 @@ func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord
 		// A claim can change what an unchanged conversation's replies count:
 		// another conversation's start moved, or it came or went.
 		if !force && usageCurrent && input == priorInput && !usageChanged && childUsage == priorChildUsage {
+			// A partial delivery, or one without retained accounting, may not
+			// carry all evidence that established the persisted main summary.
+			if _, err := tx.Exec(`UPDATE conversations SET model=a.model FROM agent_sessions a
+				WHERE a.conversation_id=conversations.id AND a.native_id='main' AND conversations.id=?
+				AND COALESCE(conversations.model,'')<>COALESCE(a.model,'')`, conversationID); err != nil {
+				return 0, 0, err
+			}
 			continue
 		}
 		if force {
@@ -1133,6 +1140,20 @@ func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord
 			}
 		}
 		if complete {
+			if !usageCurrent {
+				var missingModel bool
+				if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE workspace_id=?
+					AND (COALESCE(model,'') IN ('','Unknown model') OR model GLOB '<*>'))
+					OR EXISTS(SELECT 1 FROM conversations WHERE workspace_id=?
+					AND (COALESCE(model,'') IN ('','Unknown model') OR model GLOB '<*>'))`, workspaceID, workspaceID).Scan(&missingModel); err != nil {
+					return 0, 0, err
+				}
+				if missingModel {
+					if err := repairModelSummaries(tx, workspaceID, record.Conversations, conversationIDs); err != nil {
+						return 0, 0, err
+					}
+				}
+			}
 			if _, err := tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
 				ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`, workspaceID, usageAttributionVersion); err != nil {
 				return 0, 0, err
@@ -1957,6 +1978,18 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 		if childAgent {
 			depth += conversation.AgentDepth
 		}
+		model := sessionSummaryModel(summary, conversation.Messages, conversation.Model)
+		usage := summary.usage
+		usageFallback := defaultString(strings.TrimSpace(conversation.Model), "Unknown model")
+		if preserveUnavailable {
+			// Stored conversation models are derived labels. Reuse old effective
+			// allocations only when their counters still match the replay.
+			usage, err = preserveReplayedUsageModels(tx, ids[summary.nativeID], summary.usage, conversation.StartedAt)
+			if err != nil {
+				return err
+			}
+			usageFallback = "Unknown model"
+		}
 		status := "unavailable"
 		unclassified := max(summary.counts["total_tokens"]-summary.counts["input_tokens"]-summary.counts["output_tokens"], 0)
 		if unclassified > 0 {
@@ -1978,7 +2011,7 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 			cache_creation_1h_input_tokens=excluded.cache_creation_1h_input_tokens,output_tokens=excluded.output_tokens,
 			reasoning_output_tokens=excluded.reasoning_output_tokens,unclassified_tokens=excluded.unclassified_tokens,total_tokens=excluded.total_tokens,usage_status=excluded.usage_status,time_bounds_source=excluded.time_bounds_source`,
 			ids[summary.nativeID], workspaceID, conversationID, summary.nativeID, parentID, delegationMessageID,
-			kind, conversation.Provider, nilIfEmpty(conversation.Model), nilIfEmpty(sessionMessageEffort(summary.messageIndexes, conversation.Messages)), depth, nilIfEmpty(summary.startedAt), nilIfEmpty(summary.endedAt),
+			kind, conversation.Provider, nilIfEmpty(model), nilIfEmpty(sessionMessageEffort(summary.messageIndexes, conversation.Messages)), depth, nilIfEmpty(summary.startedAt), nilIfEmpty(summary.endedAt),
 			integer(summary.counts["input_tokens"]), integer(summary.counts["uncached_input_tokens"]),
 			integer(summary.counts["cache_read_input_tokens"]), integer(summary.counts["cache_creation_input_tokens"]),
 			integer(summary.counts["cache_creation_5m_input_tokens"]), integer(summary.counts["cache_creation_1h_input_tokens"]),
@@ -1986,10 +2019,15 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 			integer(unclassified), integer(summary.counts["total_tokens"]), status, summary.timeBoundsSource); err != nil {
 			return err
 		}
+		if summary.nativeID == "main" {
+			if _, err := tx.Exec(`UPDATE conversations SET model=? WHERE id=? AND COALESCE(model,'')<>?`, nilIfEmpty(model), conversationID, model); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec("DELETE FROM agent_session_usage WHERE agent_session_id=?", ids[summary.nativeID]); err != nil {
 			return err
 		}
-		for bucket, counts := range summary.usage {
+		for bucket, counts := range usage {
 			if counts["total_tokens"] <= 0 {
 				continue
 			}
@@ -2010,7 +2048,7 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 					reasoning_output_tokens=reasoning_output_tokens+excluded.reasoning_output_tokens,
 					unclassified_tokens=unclassified_tokens+excluded.unclassified_tokens,
 					total_tokens=total_tokens+excluded.total_tokens`,
-				ids[summary.nativeID], hour, defaultString(bucket.model, strings.TrimSpace(conversation.Model)), bucket.effort, bucket.attribution,
+				ids[summary.nativeID], hour, defaultString(bucket.model, usageFallback), bucket.effort, bucket.attribution,
 				integer(counts["input_tokens"]),
 				integer(max(counts["input_tokens"]-counts["cache_read_input_tokens"]-counts["cache_creation_input_tokens"], 0)),
 				integer(counts["cache_read_input_tokens"]), integer(counts["cache_creation_input_tokens"]),
