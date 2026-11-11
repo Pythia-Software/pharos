@@ -5286,15 +5286,6 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
-      "key": "7387f1cf2fb13437:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "button",
-      "control": "onClick={() => { resetPage(); setRevision((v) => v + 1); }}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
       "key": "7c36e39864e8e78f:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5350,6 +5341,15 @@
       "control": "onClick={() => single ? setReaderView(t) : display(t)} onKeyDown={(event) => { if ( ![\"ArrowLeft\", \"ArrowRight\", \"Home\", \"End\"].includes( event.key, ) ) return; event.preventDefault(); const nextIndex = event.key === \"Home\" ? 0 : event.key === \"End\" ? tabs.length - 1 : (index + (event.key === \"ArrowRight\" ? 1 : tabs.length - 1)) % tabs.length; if (single) setReaderView(tabs[nextIndex]); else display(tabs[nextIndex]); event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>(\"button\")[nextIndex].focus(); }}",
       "contract": "view.reader_view",
       "reason": "Single-agent tabs bind reader_view through useViewState; workspace tabs use the existing explorer URL owner (readDelegationRoute/display), including keyboard selection and workspace-history restoration."
+    },
+    {
+      "key": "ee2c45eb4ad775d6:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "onClick={() => { snapshotRecovery.current.reset(); resetPage(); setRevision((v) => v + 1); }}",
+      "contract": "delegation",
+      "reason": "Refresh analysis retries current archive reads and resets delegation_page through useViewState; zoom, selected session and disclosures retain their URL owners. The recovery retry budget is transient request state."
     },
     {
       "key": "ef8df6715bf8aa5d:0",

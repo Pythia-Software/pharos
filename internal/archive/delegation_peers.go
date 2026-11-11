@@ -123,10 +123,19 @@ func mergeDelegationSnapshots(parts []*delegationSnapshot, workspaces []string, 
 		}
 	}
 	s := &delegationSnapshot{ByID: map[string]*delegationNode{}, Aliases: map[string]string{}, Warnings: []string{}, members: map[string][]string{},
-		Revision: parts[0].Revision, projection: parts[0].projection, FamilyComplete: true}
+		Revision: parts[0].Revision, projection: parts[0].projection, FamilyComplete: true, dependencies: map[string]string{}, dependencyGeneration: parts[0].dependencyGeneration}
 	// The workspace each node was read for, which decides what it left unqueried.
 	readFor := map[string]string{}
 	for i, part := range parts {
+		if part.dependencyGeneration != s.dependencyGeneration {
+			s.dependencyGeneration = 0 // parts span generations: recheck their digests
+		}
+		for id, digest := range part.dependencies {
+			if held, ok := s.dependencies[id]; ok && held != digest {
+				return nil, errWorkGroupRevisions
+			}
+			s.dependencies[id] = digest
+		}
 		for _, n := range part.Nodes {
 			existing := s.ByID[n.ID]
 			if existing != nil && (n.ContextOnly || !existing.ContextOnly) {

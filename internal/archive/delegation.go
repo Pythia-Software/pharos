@@ -192,6 +192,13 @@ type delegationTool struct {
 type delegationSnapshot struct {
 	ID       string
 	Revision executionRevision
+	// Conversation seeds and signatures of their execution/occurrence components
+	// and transcript/session workspace placement, captured with the rows. A
+	// global revision is still used to compose peers, not as a validity token.
+	dependencies map[string]string
+	// An exact source generation allows lane reads at that same generation
+	// to reuse the captured signatures without walking the components again.
+	dependencyGeneration int64
 	// FamilyComplete is false when a family exceeded delegationFamilyLimit.
 	FamilyComplete bool
 	// Coverage is what the resolution could not establish for these rows.
@@ -1313,6 +1320,18 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			}
 		}
 	}
+	dependencies := slices.Clone(cids)
+	for _, n := range s.Nodes {
+		dependencies = append(dependencies, delegationNodeTranscripts(n)...)
+	}
+	s.dependencies, err = delegationExecutionDependencies(ctx, committedReads{tx}, dependencies)
+	if err != nil {
+		return nil, err
+	}
+	s.dependencyGeneration, _, err = executionSourceGeneration(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	s.finish()
 	for _, n := range s.Nodes {
 		switch {
@@ -1401,14 +1420,69 @@ func (s *delegationSnapshot) finish() {
 			}
 		}
 	}
-	// A content hash rejects continuations after sync or a different filter/sort.
-	hashInput := []any{s.Revision, s.Nodes, s.Aliases}
+	// The graph's evidence component, not the catalog-wide revision: activity
+	// in unrelated work must not expire this view or its pagination cursors.
+	hashInput := []any{s.Revision.Resolver, s.dependencies, s.Nodes, s.Aliases}
 	for _, n := range s.Nodes {
 		hashInput = append(hashInput, n.tools, n.requests)
 	}
 	payload, _ := json.Marshal(hashInput)
 	hash := sha256.Sum256(payload)
 	s.ID = fmt.Sprintf("%x", hash[:12])
+}
+
+// delegationExecutionDependencies records the named conversation seeds. Each
+// signature combines its execution/occurrence component digest with the seed's
+// transcript and session workspace placement. Execution component digests
+// omit placement, but a regrouping changes which rows a lane's workspace filter
+// reads. Reuse cached execution digests when available, otherwise walk these
+// components; placement always comes from the graph or lane read transaction q.
+func delegationExecutionDependencies(ctx context.Context, q queryer, conversations []string) (map[string]string, error) {
+	ids := slices.DeleteFunc(workDomainIDs(conversations), func(id string) bool { return id == "" })
+	out := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	digests, err := cachedExecutionDependencyDigests(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	if digests == nil {
+		digests, err = executionDependencyDigestsFor(ctx, q, ids)
+		if err != nil {
+			return nil, err
+		}
+	}
+	rows, err := queryMapsContext(ctx, q, `SELECT id conversation_id,'conversation' source_kind,id source_id,workspace_id
+ FROM conversations WHERE id IN (SELECT value FROM json_each(?))
+ UNION ALL SELECT conversation_id,'session',id,workspace_id
+ FROM agent_sessions WHERE conversation_id IN (SELECT value FROM json_each(?))
+ ORDER BY conversation_id,source_kind,source_id`, jsonText(ids), jsonText(ids))
+	if err != nil {
+		return nil, err
+	}
+	placement := map[string][][3]string{}
+	for _, row := range rows {
+		id := firstString(row["conversation_id"])
+		placement[id] = append(placement[id], [3]string{firstString(row["source_kind"]), firstString(row["source_id"]), firstString(row["workspace_id"])})
+	}
+	for _, id := range ids {
+		hash := sha256.Sum256([]byte(jsonText([]any{digests[id], placement[id]})))
+		out[id] = fmt.Sprintf("%x", hash[:12])
+	}
+	return out, nil
+}
+
+func (s *delegationSnapshot) executionDependenciesCurrent(ctx context.Context, q queryer) (bool, error) {
+	generation, tracked, err := executionSourceGeneration(ctx, q)
+	if err != nil {
+		return false, err
+	}
+	if tracked && generation == s.dependencyGeneration {
+		return true, nil
+	}
+	dependencies, err := delegationExecutionDependencies(ctx, q, slices.Sorted(maps.Keys(s.dependencies)))
+	return err == nil && maps.Equal(dependencies, s.dependencies), err
 }
 
 // Prefer repository identity so the same logical file across checkouts counts
