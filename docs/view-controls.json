@@ -787,6 +787,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:17fab1344161a155:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-history-search-button cursor-interaction\">",
+      "contract": "action",
+      "reason": "Runs the private Ask chat history search using the existing history filter."
+    },
+    {
       "key": "fragment:18322884faef50c0:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -896,6 +905,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:712048819a5a92d8:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-new-chat cursor-interaction\" aria-label=\"New chat\">",
+      "contract": "action",
+      "reason": "Starts a fresh private Ask chat while preserving requests in other chats; the selected chat continues to use ask_chat."
+    },
+    {
       "key": "fragment:7597ea97e661871b:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -957,15 +975,6 @@
       "control": "<details class=\"pharos-activity\" hidden>",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
-      "key": "fragment:92fa25b9d573a1de:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-new-chat cursor-interaction\">",
-      "contract": "action",
-      "reason": "Starts a fresh private Ask chat while preserving requests in other chats; the selected chat continues to use ask_chat."
     },
     {
       "key": "fragment:9669fb9a199fe943:0",
@@ -8809,6 +8818,15 @@
       "reason": "Range and preset-driven time buckets update the shared Thinking URL state. Date inputs use the viewer’s local zone; custom and brushed boundaries remain half-open ISO instants."
     },
     {
+      "key": "25857434f6090cdb:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "button",
+      "control": "onClick={() => setReload((n) => n + 1)}",
+      "contract": "editing",
+      "reason": "Try again retries a failed read without changing the applied view."
+    },
+    {
       "key": "27abd21aa517ce02:0",
       "file": "web/src/thinking-dashboard.tsx",
       "owner": "ThinkingDashboard",
@@ -8964,15 +8982,6 @@
       "control": "value={state.normalization} onChange={(v) => change({ normalization: v as ThinkingState[\"normalization\"] }) }",
       "contract": "view.thinking",
       "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
-    },
-    {
-      "key": "fe037810cdd7016d:0",
-      "file": "web/src/thinking-dashboard.tsx",
-      "owner": "ThinkingDashboard",
-      "tag": "button",
-      "control": "onClick={() => setRefresh((n) => n + 1)}",
-      "contract": "editing",
-      "reason": "Refresh retries a read without changing the applied view."
     },
     {
       "key": "ff2a2d2e22b3d073:0",
@@ -9384,11 +9393,11 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "700edc4b2becb461:0",
+      "key": "c202d5e5f4e27369:0",
       "file": "web/src/usage-chart.tsx",
       "owner": "CustomPeriod",
       "tag": "input",
-      "control": "aria-label={`Number of ${period}`} value={draft} onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber)) onChange(event.target.valueAsNumber); }} onBlur={() => setDraft(String(value))}",
+      "control": "aria-label={`Number of ${period}`} value={draft} onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber) && event.target.valueAsNumber <= max) onChange(event.target.valueAsNumber); }} onBlur={() => setDraft(String(value))}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
@@ -9409,6 +9418,15 @@
       "control": "onClick={onExpand}",
       "contract": "dashboard",
       "reason": "The shared legend delegates expansion to AnalysisTrend, which writes analyze_chart.seriesLimit through changeState and the dashboard URL owner. Group outlines add no independent state."
+    },
+    {
+      "key": "1875b96cf86486ff:0",
+      "file": "web/src/usage-chart.tsx",
+      "owner": "PeriodControl",
+      "tag": "ChartSelect",
+      "control": "value={String(view.hours)} onChange={value => onChange({ hours: Number(value) })}",
+      "contract": "dashboard",
+      "reason": "The page's applied view (analyze_chart, or view.thinking on Thinking) carries the chosen hours; the select offers only hour counts the page's engine supports."
     },
     {
       "key": "5c8d176e8700d3fd:0",
@@ -9615,6 +9633,15 @@
       "control": "\"button\"",
       "contract": "action",
       "reason": "Transient context menu action clears linked attention from the URL."
+    },
+    {
+      "key": "49d6d21da0c782c6:0",
+      "file": "web/src/view-attention.ts",
+      "owner": "syncDismissButtons",
+      "tag": "button",
+      "control": "\"button\"",
+      "contract": "action",
+      "reason": "Dismisses linked attention by clearing its highlight and reveal URL parameters."
     },
     {
       "key": "a77d7bde4338f61f:0",

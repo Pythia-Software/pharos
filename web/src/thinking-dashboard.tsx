@@ -48,20 +48,14 @@ import {
   ThinkingHourly,
   ThinkingScatter,
 } from "./thinking-charts";
+import { loadThinkingData, loadThinkingFit, supportedThinkingPeriod, thinkingHourChoices, maxThinkingDays } from "./thinking-query";
+import { loadFollowing, type ServedReadiness } from "./result-cache";
+import { useDatasetRefresh } from "./use-dataset-refresh";
 import "./thinking.css";
 
 // The page's address is its cards' definition (thinking-card.ts).
 const cardSource = { page: true as const, schema: loadSchema(modelRequestDocument) };
 
-async function loadThinking(
-  url: string,
-  signal: AbortSignal,
-): Promise<ThinkingResponse> {
-  const response = await fetch(url, { signal });
-  const body = await response.json();
-  if (!response.ok) throw Error(body.error ?? "Unable to load request timing.");
-  return body;
-}
 const amount = (value: number | null) =>
   value === null ? "—" : value.toFixed(2) + "×";
 export function thinkingDashboardURL(
@@ -347,16 +341,19 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
     () => initialThinking(new URLSearchParams(location.search)),
   );
   const initial = initialThinking(new URLSearchParams(location.search));
-  const state: ThinkingState = {
+  // Hour and day buckets are those query-v3 supports; older links read as
+  // the nearest one.
+  const state: ThinkingState = supportedThinkingPeriod({
       ...initial,
       ...linked,
       minimum: 0,
       timezone: initial.timezone,
-    },
+    }),
     [data, setData] = useState<ThinkingResponse | null>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true),
-    [refresh, setRefresh] = useState(0),
+    [reload, setReload] = useState(0),
+    [readiness, setReadiness] = useState<ServedReadiness>(),
     [rangeVersion, setRangeVersion] = useState(0),
     [evidenceOpen] = useViewEntry("disclosures", "thinking:validation", false, !detail),
     [validation, setValidation] = useState<ThinkingResponse["validation"]>(),
@@ -364,7 +361,8 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
   // Capture effective viewer defaults even for partial card links.
   useEffect(() => {
     if (Object.keys(defaultThinking).some((key) => !Object.hasOwn(linked, key)) ||
-        linked.timezone !== state.timezone || linked.minimum !== 0)
+        linked.timezone !== state.timezone || linked.minimum !== 0 ||
+        linked.hours !== state.hours || linked.days !== state.days)
       setLinked(state);
   }, [JSON.stringify(linked)]);
   const brushOrigin = useRef<Pick<
@@ -398,32 +396,37 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
       brushOrigin.current = null;
     setLinked((p) => ({ ...state, ...p, ...next }));
   };
-  const request = thinkingRequest(state, !detail, false, nativeFilters);
+  // The page's reads, as a key: the state's query inputs and its filters.
+  const request = JSON.stringify([thinkingRequest(state, !detail, false, nativeFilters), nativeFilters]);
+  // Refresh asks for current answers ("fresh"); a new day, Try again or a
+  // changed control takes what the result cache holds, shown with its age.
+  const [datasetRefresh, takePolicy] = useDatasetRefresh("model_requests"),
+    refresh = datasetRefresh + reload;
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setError("");
-    void loadThinking(request, controller.signal)
-      .then((value) => {
+    void loadFollowing(
+      (signal) => loadThinkingData({ state, overview: !detail, where: nativeQuery.where, filters: nativeFilters }, signal),
+      (value, served) => {
         setData({ ...value, groups: orderThinkingGroups(value.groups, state) });
+        setReadiness(served);
         setLoading(false);
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted) {
-          setError(String(e.message ?? e));
-          setLoading(false);
-        }
-      });
+      },
+      controller.signal,
+      takePolicy(),
+    ).catch((e) => {
+      if (!controller.signal.aborted) {
+        setError(String(e.message ?? e));
+        setLoading(false);
+      }
+    });
     return () => controller.abort();
   }, [request, refresh]);
   useEffect(() => {
-    const update = () => setRefresh((n) => n + 1);
-    window.addEventListener("pharos:usage-refresh", update);
+    const update = () => setReload((n) => n + 1);
     window.addEventListener("pharos:day-change", update);
-    return () => {
-      window.removeEventListener("pharos:usage-refresh", update);
-      window.removeEventListener("pharos:day-change", update);
-    };
+    return () => window.removeEventListener("pharos:day-change", update);
   }, []);
   const evidenceRequest = thinkingRequest(
     { ...state, view: "histogram" },
@@ -436,7 +439,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
     const controller = new AbortController();
     setValidation(undefined);
     setValidationError("");
-    void loadThinking(evidenceRequest, controller.signal)
+    void loadThinkingFit(evidenceRequest, controller.signal)
       .then((d) => setValidation(d.validation))
       .catch((e) => {
         if (!controller.signal.aborted) setValidationError(e.message);
@@ -598,7 +601,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
           }
         />
         {detail && state.view === "time" ? (
-          <PeriodControl view={state} onChange={(next) => change(next)} />
+          <PeriodControl view={state} onChange={(next) => change(next)} every={{ hours: thinkingHourChoices, maxDays: maxThinkingDays }} />
         ) : null}
         {detail && state.view === "calendar" ? (
           <>
@@ -646,7 +649,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
       {error ? (
         <p role="alert" className="query-table-error">
           {error}{" "}
-          <button type="button" onClick={() => setRefresh((n) => n + 1)}>
+          <button type="button" onClick={() => setReload((n) => n + 1)}>
             Try again
           </button>
         </p>
@@ -807,7 +810,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                         : "≥1.5×"}
                     </span>
                   </div>
-                  <h3>Is one time of day consistently faster? <DataReadinessIndicator id="thinking:hour" title="Is one time of day consistently faster?" dataset="model_requests" query={{state,nativeFilters}} /></h3>
+                  <h3>Is one time of day consistently faster? <DataReadinessIndicator id="thinking:hour" title="Is one time of day consistently faster?" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></h3>
                   <p className="usage-dashboard-note">
                     Day-balanced workload-adjusted gaps in three-hour windows.
                     Each day/window needs 20 modeled gaps from three
@@ -888,17 +891,17 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
             <>
               <div className="thinking-stat-cards thinking-overview-stats">
                 <div>
-                  <span>Typical wait<DataReadinessIndicator id="thinking:metric:typical-wait" title="Typical wait" dataset="model_requests" query={{state,nativeFilters}} /></span>
+                  <span>Typical wait<DataReadinessIndicator id="thinking:metric:typical-wait" title="Typical wait" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></span>
                   <strong>{thinkingDuration(data.summary.median)}</strong>
                   <small>Median observed gap</small>
                 </div>
                 <div>
-                  <span>Slowest 10% begin at<DataReadinessIndicator id="thinking:metric:slowest-10%-begin-at" title="Slowest 10% begin at" dataset="model_requests" query={{state,nativeFilters}} /></span>
+                  <span>Slowest 10% begin at<DataReadinessIndicator id="thinking:metric:slowest-10%-begin-at" title="Slowest 10% begin at" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></span>
                   <strong>{thinkingDuration(data.summary.p90)}</strong>
                   <small>90th percentile</small>
                 </div>
                 <div>
-                  <span>Timing coverage<DataReadinessIndicator id="thinking:metric:timing-coverage" title="Timing coverage" dataset="model_requests" query={{state,nativeFilters}} /></span>
+                  <span>Timing coverage<DataReadinessIndicator id="thinking:metric:timing-coverage" title="Timing coverage" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></span>
                   <strong>
                     {data.Retained
                       ? ((100 * data.Timed) / data.Retained).toFixed(1)
@@ -908,7 +911,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   <small>Usable gaps / retained requests</small>
                 </div>
                 <div>
-                  <span>Conversations represented<DataReadinessIndicator id="thinking:metric:conversations-represented" title="Conversations represented" dataset="model_requests" query={{state,nativeFilters}} /></span>
+                  <span>Conversations represented<DataReadinessIndicator id="thinking:metric:conversations-represented" title="Conversations represented" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></span>
                   <strong>{thinkingCount(data.Conversations)}</strong>
                   <small>Including requests without timing</small>
                 </div>
@@ -926,7 +929,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   action={<DashboardResultActions target="thinking-waits" />}
                 />
                 <div>
-                  <h2>What affects the wait? <DataReadinessIndicator id="thinking:factors" title="What affects the wait?" dataset="model_requests" query={{state,nativeFilters}} /></h2>
+                  <h2>What affects the wait? <DataReadinessIndicator id="thinking:factors" title="What affects the wait?" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></h2>
                   <p className="usage-dashboard-note">
                     Associated wait multiplier when each input doubles.
                   </p>
@@ -1010,12 +1013,12 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 summary="Which models and agents have usable timing?"
                 className="usage-query-search thinking-disclosure"
               >
-                <h3>By recorded model <DataReadinessIndicator id="thinking:models" title="By recorded model" dataset="model_requests" query={{state,nativeFilters}} /></h3>
+                <h3>By recorded model <DataReadinessIndicator id="thinking:models" title="By recorded model" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></h3>
                 <GroupTable
                   data={{ ...data, groups: data.coverage ?? [] }}
                   state={{ ...state, view: "histogram", groupBy: "model" }}
                 />
-                <h3>By agent app <DataReadinessIndicator id="thinking:harness" title="By agent app" dataset="model_requests" query={{state,nativeFilters}} /></h3>
+                <h3>By agent app <DataReadinessIndicator id="thinking:harness" title="By agent app" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></h3>
                 <GroupTable
                   data={{ ...data, groups: data.agentCoverage ?? [] }}
                   state={{ ...state, view: "histogram", groupBy: "harness" }}
