@@ -565,7 +565,12 @@ const ROUTES = [
   { name: "Analyze trend heatmap", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "sessions", split: "autonomy_band", display: "heatmap", period: "day" }))}`, ready: '.usage-session-shape-dashboard section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
   { name: "Human Words conversation heatmap", url: `/analyze?analyze_topic=human&analyze_days=30&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "typed", split: "none", display: "heatmap", period: "day" }))}`, ready: 'section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
   // Spend by branch: the coverage split above the compared branches.
-  { name: "Analyze spend by branch dashboard", url: "/analyze?analyze_topic=branches", ready: `.usage-branches-dashboard ${analysisReady}` },
+  { name: "Analyze spend by branch dashboard", url: "/analyze?analyze_topic=branches", ready: `.usage-branches-dashboard ${analysisReady}`,
+    check: async page => {
+      await page.locator(".usage-branches-dashboard").getByRole("combobox", { name: "Breakdown", exact: true }).selectOption("channel");
+      await page.locator(`.usage-branches-dashboard ${analysisReady}`).waitFor();
+      assert.deepEqual(await page.locator(".usage-branches-dashboard [role=alert], .usage-branches-dashboard .query-table-error").allTextContents(), [], "the Channel breakdown reports an error");
+    } },
   // Outcomes: the chart and its panels, each read from the outcomes dataset.
   { name: "Analyze outcomes dashboard", url: "/analyze?analyze_topic=outcomes", ready: `.usage-outcomes-dashboard ${overTimeReady}`,
     check: async page => {

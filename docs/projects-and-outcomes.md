@@ -581,6 +581,13 @@ each branch. It follows CodeBurn's by-branch lens (see References).
 - **Mirrors count once.** A Conductor workspace that mirrors a Claude Code
   session carries the same usage. As in Tokens and Cost, only the native
   session counts, with its per-turn branches.
+- **Source and Channel.** Source is the retained history source, such as
+  Claude or Codex after duplicate copies are folded. Channel is how the
+  top-level conversation started: work started in Conductor keeps the
+  Conductor channel, including linked helpers using other agent apps.
+  The dataset preserves Channel attribution (`channel_status`), including
+  inherited, inferred and unknown attribution. Usage with different channels
+  or attribution quality stays separate even within one workspace and hour.
 - **Branches are per project.** The default view compares spend by project
   and branch (`project_branch`), and the Branches count counts each
   project's branches, so `main` in ten repositories is ten branches. The

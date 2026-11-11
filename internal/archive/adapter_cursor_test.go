@@ -346,6 +346,29 @@ func TestCursorUsageCountsEachRequestOnce(t *testing.T) {
 	}
 }
 
+func TestCursorObservedModelSurvivesRepeatedDelivery(t *testing.T) {
+	c, _ := testCatalog(t)
+	root := cursorFixture(t)
+	cursorWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`UPDATE cursorDiskKV SET value=json_set(value,'$.modelInfo.modelName','claude-opus-4-8') WHERE key=?`, "bubbleId:"+cursorOld+":o4")
+		return err
+	})
+	record := cursorRecords(t, root)[cursorOld]
+	for delivery := range 4 {
+		if delivery == 2 {
+			record.Conversations[0].Coverage = "partial"
+			record.Conversations[0].Messages = record.Conversations[0].Messages[:1]
+		}
+		ingestRecordTx(t, c, record)
+		for _, table := range []string{"conversations", "agent_sessions"} {
+			var model string
+			if err := c.DB.QueryRow("SELECT model FROM " + table).Scan(&model); err != nil || model != "claude-opus-4-8" {
+				t.Fatalf("%s model=%q: %v", table, model, err)
+			}
+		}
+	}
+}
+
 // A capture holds the composers, their messages and the windows' lists of
 // them, not Cursor's sign-in tokens, settings, other rows or a composer's
 // encryption keys. Another Mac indexes the same messages from it, as from

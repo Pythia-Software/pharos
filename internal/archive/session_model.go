@@ -287,20 +287,23 @@ func planSessionModelRows(ctx context.Context, q queryer, rows []map[string]any,
 	return changes, report, nil
 }
 
-// Reconcile launch labels only after the group's sessions and links exist.
+// Reconcile embedded labels only after the group's sessions and links exist.
 // This also handles retained-lineage restoration and withdrawn child links.
 // It shares the backfill's evidence/pricing rules without rescanning unrelated
 // executions in the workspace or advancing the one-time upgrade marker.
 func refreshLinkedSessionModels(tx *sql.Tx, conversations []string) error {
 	rows, err := queryMaps(tx, `WITH handles AS (
-		SELECT * FROM agent_sessions WHERE conversation_id IN (SELECT value FROM json_each(?)) AND native_id<>'main')
+		SELECT * FROM agent_sessions WHERE conversation_id IN (SELECT value FROM json_each(?)) AND kind='subagent')
 		SELECT s.*,c.model conversation_model FROM agent_sessions s JOIN conversations c ON c.id=s.conversation_id
 		WHERE s.id IN (SELECT id FROM handles) OR (s.native_id='main' AND s.conversation_id IN (SELECT child_conversation_id FROM handles))`, jsonText(conversations))
 	if err != nil {
 		return err
 	}
+	if len(rows) == 0 {
+		return nil
+	}
 	changes, _, err := planSessionModelRows(context.Background(), tx, rows, func(row map[string]any) bool {
-		return row["native_id"] != "main" && row["kind"] == "subagent"
+		return row["kind"] == "subagent"
 	})
 	if err != nil {
 		return err

@@ -65,6 +65,8 @@ configured and observed models disagree. With neither, the label is
 `Unknown model`. A separate child transcript can supply its own evidence before
 falling back to launch configuration. A transcript's main session may use that
 transcript's own conversation configuration.
+Conversation summaries keep their latest real request model; an embedded session
+summarizes the child's whole execution, including when it has a separate transcript.
 
 The next Library upgrade automatically runs **Correct agent session models**
 once to correct existing **subagent session rows**, including those whose native
