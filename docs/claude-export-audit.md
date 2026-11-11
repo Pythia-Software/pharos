@@ -2,6 +2,10 @@
 
 Audited 2026-11-11 against the original collected export, including the conversation named **Fervo Energy financial outlook**. Counts below describe that export, not every version of Claude's export format. Private export contents and identifiers remain outside the repository.
 
+For the proposed storage and incremental import architecture, see
+[Claude export lifecycle](claude-export-lifecycle.md). Its measurements use
+synthetic exports, separately from this source coverage audit.
+
 ## Tokens and API cost
 
 The conversation export contains **168 conversations, 912 chat messages and 3,796 content blocks**. None of its conversation or message envelopes contains a model name, request usage, input/output token counts, cache usage or billing amounts. All **30 `token_budget` blocks have `remaining: null`**. The only numeric token-related field found in structured conversation data is one tool input, `text_content_token_limit: 60000`: a requested output limit, not measured model consumption. MCP `serverInfo` metadata describes a tool server, not a model.
