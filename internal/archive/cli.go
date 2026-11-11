@@ -185,6 +185,12 @@ func Run(arguments []string) error {
 	if _, err := os.Stat(pendingDeliveryPath(config)); err == nil {
 		return fmt.Errorf("a verified library move needs to finish cleanup; resume its transfer before opening or capturing this library")
 	}
+	// Compaction owns the library-use lease itself: shared for a plan and
+	// exclusive for retirement. Taking the generic shared CLI lease first
+	// would prevent its own exclusive acquisition.
+	if command == "claude-import" && firstOf(args) == "compact" {
+		return runClaudeImportCommand(config, args)
+	}
 	if _, err := os.Stat(config.CatalogPath); err == nil {
 		use, err := fileLease(libraryUseLock(config), false)
 		if err != nil {

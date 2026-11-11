@@ -554,8 +554,8 @@ single-ZIP exports do, the collected copy leaves it out; a ZIP with nothing
 else is not kept.
 
 **Capture and index conversations** uses the existing capture/index workflow.
-Projects, memory, artifact files and unknown ZIP categories are retained as raw
-export evidence; this importer currently indexes conversations. It preserves the
+Projects, memory, artifacts, reflections and cloud transcripts are indexed as
+source documents/conversations; unknown ZIP categories remain retained evidence. It preserves the
 existing account identity configuration and records native account UUIDs as
 metadata. It does not infer missing project associations or token usage. A set
 without a manifest has unknown completeness; an incomplete manifest remains
@@ -646,6 +646,8 @@ pharos --config /path/to/library.toml claude-import collect /path/to/manifest.js
 pharos --config /path/to/library.toml claude-import status
 pharos --config /path/to/library.toml claude-import collect --job JOB_ID /path/to/downloaded/file.zip
 pharos --config /path/to/library.toml claude-import watch /path/to/claude-export-inbox
+pharos --config /path/to/library.toml claude-import compact --prepare
+pharos --config /path/to/library.toml claude-import compact --apply PLAN_ID
 ```
 
 `collect` also accepts a folder or several ZIP/JSON paths. Put flags before paths;
@@ -660,6 +662,15 @@ The authenticated local API exposes the same jobs through `POST /api/claude-impo
 `GET /api/claude-imports?id=JOB_ID&name=NAME`. POST returns acceptance; poll the GET
 response's `run` and the saved job for completion. Closing the UI does not stop
 collection. `POST /api/claude-imports/cancel` requests cancellation.
+
+The explicit `compact` command plans and verifies source-unit replacements;
+`--prepare` also migrates legacy parts additively. Review its returned plan, then
+apply its ID with services using that library closed. Apply removes only verified
+managed native parts; Downloads, captured native copies, pins and backups remain.
+Incomplete jobs stay protected. Graph-only retirement requires newer Pharos
+readers (library descriptor 2, capture manifest 9). See [source units and
+compaction](claude-export-storage.md) for the format, recovery and remaining
+metadata-scan limits. Automatic cleanup is not enabled.
 
 Collected snapshots and credential-free receipts live in
 `<capture_root>/.claude-imports/<host-id>/<source-name>/snapshots/`. Expiring download
