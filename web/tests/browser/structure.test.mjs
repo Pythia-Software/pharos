@@ -398,7 +398,7 @@ const ROUTES = [
       assert.equal(await unmeasured.getAttribute('aria-valuenow'), null, 'unknown work is accessible without a fabricated percentage');
     },
   },
-  { name: "Home", url: "/", ready: ".home-recent-grid .conversation-result-card" },
+  { name: "Home", url: "/", ready: ".home-recent-grid .home-recent-card" },
   { name: "Home without recent conversations", url: "/", ready: ".home-recent-empty", api: { "GET /api/library/recent-conversations": { items: [] } } },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",
     check: page => page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input")) },
@@ -1322,9 +1322,9 @@ test("dashboard loading follows the chart and keeps controls usable", { skip }, 
 });
 
 test('Recent conversation links open the selected conversation and search', { skip }, async t => {
-  const { page, settled, calls } = await open(t, { url: '/', ready: '.home-recent-grid .conversation-result-card' });
+  const { page, settled, calls } = await open(t, { url: '/', ready: '.home-recent-grid .home-recent-card' });
   assert.equal(calls.some(call => /\/api\/work\/.+\/conversations\//.test(call.path)), false, 'previews do not load transcripts');
-  await page.locator('.home-recent-grid .conversation-result-title').first().click();
+  await page.locator('.home-recent-grid .home-recent-title').first().click();
   await page.waitForURL(url => url.pathname === `/work/${workID}/conversation/${rootConversation}`);
   await page.locator('#detail .conversation-panel:not(.conversation-loading)').first().waitFor();
   await settled();

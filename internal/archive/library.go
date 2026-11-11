@@ -947,7 +947,18 @@ func (c *Catalog) attachLibraryPreviews(ctx context.Context, page []map[string]a
 	}
 	for _, row := range page {
 		preview := byWorkspace[firstString(row["id"])]
-		row["first_input"], row["last_response"] = texts[firstString(preview["first_input_id"])], texts[firstString(preview["last_response_id"])]
+		firstID, firstText, firstAt, err := c.firstHumanPreview(ctx, firstString(row["id"]), "")
+		if err != nil {
+			return err
+		}
+		preview["first_input_id"] = firstID
+		if firstID != "" {
+			texts[firstID] = firstText
+			if stamp, ok := parseTime(firstAt); ok {
+				timestamps[firstID] = stamp
+			}
+		}
+		row["first_input"], row["last_response"] = nilIfEmpty(firstText), texts[firstString(preview["last_response_id"])]
 		// The card view opens its conversation browser at these messages.
 		for _, field := range []string{"first_input_id", "last_response_id"} {
 			row[field] = nil
