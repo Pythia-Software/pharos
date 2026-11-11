@@ -182,6 +182,9 @@ func verifyClaudeReplacement(ctx context.Context, config Config, job *claudeImpo
 	if err := verifyClaudeStoredPart(ctx, claudeImportJobDir(config, job.Name, job.ID), part); err != nil {
 		return err
 	}
+	if err := verifyClaudeUnitPacks(ctx, root, units); err != nil {
+		return err
+	}
 	byMember := map[string][]claudeConversationUnit{}
 	for _, unit := range units.Conversations {
 		byMember[unit.Member] = append(byMember[unit.Member], unit)
@@ -302,7 +305,37 @@ func verifyClaudeReplacement(ctx context.Context, config Config, job *claudeImpo
 	return nil
 }
 
+// Retirement verifies the physical pack identity as well as logical values.
+// A modified header/trailer outside an object's section must not leave a graph
+// that capture's immutable-pack verification would refuse to preserve.
+func verifyClaudeUnitPacks(ctx context.Context, root string, units *claudeSourceUnits) error {
+	for _, pack := range units.packs() {
+		name, err := claudeOwnedPath(root, pack)
+		if err != nil {
+			return err
+		}
+		file, err := os.Open(name)
+		if err != nil {
+			return err
+		}
+		hash := sha256.New()
+		size, err := io.Copy(hash, claudeContextReader{ctx, io.LimitReader(file, claudeObjectPackLimit+1)})
+		closeErr := file.Close()
+		if err != nil || closeErr != nil {
+			return errors.Join(err, closeErr)
+		}
+		expected := strings.TrimSuffix(filepath.Base(pack), ".pack")
+		if size > claudeObjectPackLimit || hex.EncodeToString(hash.Sum(nil)) != expected {
+			return errors.New("Claude source pack failed physical identity verification")
+		}
+	}
+	return nil
+}
+
 func verifyClaudeUnitClosure(ctx context.Context, root string, units *claudeSourceUnits) error {
+	if err := verifyClaudeUnitPacks(ctx, root, units); err != nil {
+		return err
+	}
 	for hash, ref := range units.Objects {
 		if err := ctx.Err(); err != nil {
 			return err

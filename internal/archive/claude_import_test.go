@@ -1366,7 +1366,7 @@ func TestClaudeImportCompactionResumesPublicationBoundaries(t *testing.T) {
 }
 
 func TestClaudeImportCompactionRefusesChangedDependencies(t *testing.T) {
-	for _, damage := range []string{"native", "receipt", "pack", "library", "proof", "prepare-native", "snapshot-link"} {
+	for _, damage := range []string{"native", "receipt", "pack", "library", "proof", "prepare-native", "snapshot-link", "pack-tail"} {
 		t.Run(damage, func(t *testing.T) {
 			config, job, _ := claudeCompactionFixture(t)
 			plan, err := planClaudeCompaction(t.Context(), config, job.Name, false)
@@ -1403,6 +1403,17 @@ func TestClaudeImportCompactionRefusesChangedDependencies(t *testing.T) {
 				}
 			case "receipt":
 				probePut(t, filepath.Join(dir, part.Units), "{}")
+			case "pack-tail":
+				units, err := readClaudeSourceUnits(sourceFiles{}, filepath.Join(dir, part.Units), part.SHA256, part.UnitsSHA256)
+				if err != nil {
+					t.Fatal(err)
+				}
+				file := filepath.Join(claudeImportRoot(config, job.Name), units.packs()[0])
+				data, err := os.ReadFile(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				probePut(t, file, string(append(data, 'x')))
 			case "pack":
 				units, err := readClaudeSourceUnits(sourceFiles{}, filepath.Join(dir, part.Units), part.SHA256, part.UnitsSHA256)
 				if err != nil {
