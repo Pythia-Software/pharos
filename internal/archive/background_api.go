@@ -816,7 +816,7 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 	indexing.NextAt = at.Add(time.Duration(indexing.Interval) * time.Second).UTC().Format(time.RFC3339Nano)
 	s.auto.mu.Lock()
 	if (!indexing.Enabled || paused != "") && s.auto.cancel != nil {
-		s.auto.cancel()
+		s.auto.cancel(errAutomaticPaused)
 	}
 	err = s.Catalog.writeTransaction(ctx, "background settings", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO sync_settings(host_id,enabled,interval_seconds,sources_json,next_at) VALUES(?,?,?,?,?)

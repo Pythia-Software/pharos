@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"runtime"
 	"slices"
 	"sort"
@@ -495,6 +496,24 @@ func backgroundWithdrawn(err error) bool {
 	return errors.Is(err, errWorkHeld) && len(withoutHeld(err)) == 0
 }
 
+// cancellationOnly keeps a second worker's real failure visible even when
+// another worker was cancelled at the same time. Diagnostic wrappers preserve
+// their underlying identity; a joined error must contain only cancellations.
+func cancellationOnly(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, part := range joined.Unwrap() {
+			if !cancellationOnly(part) {
+				return false
+			}
+		}
+		return errors.Is(err, context.Canceled)
+	}
+	if inner := errors.Unwrap(err); inner != nil {
+		return cancellationOnly(inner)
+	}
+	return err == context.Canceled
+}
+
 // dailyInstant is the latest daily time at or before at, in local time.
 func dailyInstant(at time.Time, dailyAt string) time.Time {
 	clock, err := time.Parse("15:04", dailyAt)
@@ -834,8 +853,9 @@ type backgroundState struct {
 	mu        sync.Mutex
 	requested map[string]bool
 	wake      chan struct{}
-	// fingerprintRetry retains an accepted pass waiting for analysis, with
-	// its original cadence so a scheduled retry stays scheduled demand.
+	// fingerprintRetry retains an accepted pass waiting for analysis or
+	// preempted by manual ingest, with its original cadence so a scheduled
+	// retry stays scheduled demand.
 	fingerprintRetry string
 	costs            map[string]itemCost
 	costsAt          time.Time
@@ -1081,9 +1101,10 @@ func (s *Server) runBackgroundPass(parent context.Context, cadence string, ids [
 		trigger = triggerUser
 	}
 	ctx, handle := s.begin(parent, OperationSpec{Kind: "background.update", Variant: cadence, Trigger: trigger})
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancelCause := context.WithCancelCause(ctx)
+	cancel := func() { cancelCause(nil) }
 	done := make(chan struct{})
-	s.auto.cancel, s.auto.done = cancel, done
+	s.auto.cancel, s.auto.done = cancelCause, done
 	s.auto.mu.Unlock()
 	// A run in /api/activity (not shadowing the operation, which has its
 	// own steps), so open pages refresh once a pass changed something, as
@@ -1099,15 +1120,25 @@ func (s *Server) runBackgroundPass(parent context.Context, cadence string, ids [
 		state := "complete"
 		if ctx.Err() != nil {
 			state = "interrupted"
+			fmt.Fprintf(os.Stderr, "Background pass interrupted: cadence=%s cause=%v\n", cadence, context.Cause(ctx))
 		} else if failure != nil {
 			state = "failed"
 		}
+		stopped := false
 		s.updateRun(run.ID, func(run *SyncRun) {
+			stopped = run.StopRequested
 			run.State, run.Phase, run.Changed, run.CompletedAt, run.CurrentSource = state, state, changed, now(), nil
 			if failure != nil {
 				run.Error = failure.Error()
 			}
 		})
+		if stopped && slices.Contains(ids, "fingerprints") {
+			// Stop withdraws this pass's retained demand, including when an
+			// earlier stage was cancelled before fingerprints could run.
+			s.background.mu.Lock()
+			s.background.fingerprintRetry = ""
+			s.background.mu.Unlock()
+		}
 		stop()
 		end()
 		cancel()
@@ -1116,7 +1147,14 @@ func (s *Server) runBackgroundPass(parent context.Context, cadence string, ids [
 		s.ingestMu.Unlock()
 		close(done)
 		s.auto.mu.Unlock()
-		handle.Finish(failure)
+		if state == "interrupted" {
+			// The ingest context can be preempted while the operation's parent
+			// remains live. Preserve the run's actual interrupted outcome.
+			handle.legacyOutcome(state, failure)
+			handle.Finish(nil)
+		} else {
+			handle.Finish(failure)
+		}
 	}()
 	for _, id := range ids {
 		s.background.mu.Lock()
@@ -1177,9 +1215,12 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 		return len(item.Stages) > 0 || id == "review"
 	}
 	standalone := func(after bool) {
-		for _, id := range ids {
+		for index, id := range ids {
 			item, _ := backgroundItemByID(id)
 			if ctx.Err() != nil {
+				if after && errors.Is(context.Cause(ctx), errAutomaticPreempted) && slices.Contains(ids[index:], "fingerprints") {
+					s.retainFingerprintPass(cadence)
+				}
 				break
 			}
 			if chainItem(id) || item.afterChain != after {
@@ -1190,15 +1231,18 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
 			err := s.runBackgroundItem(ctx, op, id)
 			if id == "fingerprints" {
-				s.background.mu.Lock()
-				if errors.Is(err, errFingerprintWaiting) {
-					if s.background.fingerprintRetry != "requested" {
-						s.background.fingerprintRetry = cadence
-					}
-				} else if err == nil || backgroundWithdrawn(err) {
-					s.background.fingerprintRetry = ""
+				if cancellationOnly(err) && errors.Is(context.Cause(ctx), errAutomaticPreempted) {
+					// Manual indexing owns the ingest lock next. Keep this pass's
+					// demand so even an Ad hoc Run now resumes after it releases.
+					err = errFingerprintPreempted
 				}
-				s.background.mu.Unlock()
+				if errors.Is(err, errFingerprintWaiting) || errors.Is(err, errFingerprintPreempted) {
+					s.retainFingerprintPass(cadence)
+				} else if err == nil || backgroundWithdrawn(err) {
+					s.background.mu.Lock()
+					s.background.fingerprintRetry = ""
+					s.background.mu.Unlock()
+				}
 			}
 			if ctx.Err() != nil && err == nil {
 				err = ctx.Err()
