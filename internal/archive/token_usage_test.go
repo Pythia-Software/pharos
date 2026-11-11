@@ -103,6 +103,38 @@ func TestTokenUsageFixtures(t *testing.T) {
 }
 
 func TestNestedSubagentsArePersistedWithCostDimensions(t *testing.T) {
+	t.Run("execution model evidence", func(t *testing.T) {
+		launch := MessageRecord{NativeID: "launch", Kind: "delegation", CallID: "child", Model: "opus", Text: `{"input":{"model":"sonnet"}}`}
+		request := func(model string) MessageRecord {
+			return MessageRecord{NativeID: model, Kind: "metadata", ParentNativeID: "launch", Model: "opus", RawText: `{"type":"assistant","message":{"model":"` + model + `","usage":{"input_tokens":10}}}`}
+		}
+		for _, tc := range []struct {
+			name     string
+			messages []MessageRecord
+			want     string
+		}{
+			{"observed beats configured and inherited", []MessageRecord{launch, request("claude-haiku-4-5-20251001")}, "claude-haiku-4-5-20251001"},
+			{"two observed models", []MessageRecord{launch, request("haiku"), request("sonnet")}, multipleSessionModels},
+			{"aliases remain distinct", []MessageRecord{launch, request("haiku"), request("claude-haiku-4-5-20251001")}, multipleSessionModels},
+			{"context variants remain distinct", []MessageRecord{launch, request("opus"), request("opus[1m]")}, multipleSessionModels},
+			{"synthetic error preserves observed model", []MessageRecord{launch, request("haiku"), request("<synthetic>")}, "haiku"},
+			{"configured without usage", []MessageRecord{launch}, "sonnet"},
+			{"unknown never inherits", []MessageRecord{{NativeID: "launch", Kind: "delegation", CallID: "child", Model: "opus"}}, "Unknown model"},
+			{"tool output cannot claim model", []MessageRecord{{NativeID: "launch", Kind: "delegation", CallID: "child"}, {Kind: "tool_result", ParentNativeID: "child", Text: `{"type":"assistant","model":"haiku"}`}}, "Unknown model"},
+			{"assistant JSON response example", []MessageRecord{launch, request("haiku"), {Kind: "message", Role: "assistant", ParentNativeID: "child", Text: `{"object":"response","model":"gpt-4.1","output":[]}`}}, "haiku"},
+			{"assistant JSON without envelopes", []MessageRecord{launch, {Kind: "message", Role: "assistant", ParentNativeID: "child", Text: `{"type":"assistant","message":{"model":"gpt-4.1"}}`}}, "sonnet"},
+			{"metadata text retains protocol evidence", []MessageRecord{launch, {Kind: "metadata", Role: "system", ParentNativeID: "child", Text: `{"type":"assistant","message":{"model":"haiku"}}`}}, "haiku"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				conversation := ConversationRecord{Model: "opus", Messages: tc.messages}
+				for _, summary := range agentSessionSummaries(tc.messages) {
+					if summary.nativeID == "child" && summarySessionModel(summary, conversation) != tc.want {
+						t.Fatalf("model=%q want %q", summarySessionModel(summary, conversation), tc.want)
+					}
+				}
+			})
+		}
+	})
 	t.Run("structured Agent result fallback", func(t *testing.T) {
 		launch := MessageRecord{NativeID: "launch", Kind: "delegation", CallID: "child", Model: "claude-opus-5", Text: `{"tool":"Agent","input":{"model":"sonnet"}}`}
 		result := MessageRecord{NativeID: "handback", Kind: "delegation_result", CallID: "child", Model: "claude-opus-5", CreatedAt: "2026-08-05T13:17:21Z", Text: `{"details":{"status":"completed","totalToolUseCount":0,"totalTokens":110,"usage":{"input_tokens":5,"cache_read_input_tokens":90,"cache_creation_input_tokens":5,"output_tokens":10}},"content":"Finished"}`}
@@ -181,7 +213,7 @@ func TestNestedSubagentsArePersistedWithCostDimensions(t *testing.T) {
 	}
 	messages := []MessageRecord{
 		{NativeID: "delegate-outer", Role: "assistant", Kind: "delegation", CallID: "outer", Text: `{"tool":"spawn_agent"}`, Selected: true},
-		{NativeID: "outer-usage", Role: "assistant", Kind: "metadata", ParentNativeID: "outer", Text: `{"type":"assistant","parent_tool_use_id":"outer","message":{"id":"outer-request","usage":{"input_tokens":10,"cache_read_input_tokens":90,"output_tokens":10}}}`, Selected: true},
+		{NativeID: "outer-usage", Role: "assistant", Kind: "metadata", ParentNativeID: "outer", Model: "claude-haiku-4-5-20251001", Text: `{"type":"assistant","parent_tool_use_id":"outer","message":{"id":"outer-request","model":"claude-haiku-4-5-20251001","usage":{"input_tokens":10,"cache_read_input_tokens":90,"output_tokens":10}}}`, Selected: true},
 		{NativeID: "delegate-inner", Role: "assistant", Kind: "delegation", ParentNativeID: "outer", CallID: "inner", Text: `{"tool":"spawn_agent"}`, Selected: true},
 		{NativeID: "inner-usage", Role: "assistant", Kind: "metadata", ParentNativeID: "inner", Text: `{"type":"assistant","parent_tool_use_id":"inner","message":{"id":"inner-request","usage":{"input_tokens":20,"cache_creation_input_tokens":30,"output_tokens":5}}}`, Selected: true},
 		{NativeID: "result", Role: "system", Kind: "result", Text: `{"type":"result","usage":{"total_tokens":165}}`, Selected: true},
@@ -198,7 +230,7 @@ func TestNestedSubagentsArePersistedWithCostDimensions(t *testing.T) {
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := queryMaps(catalog.DB, `SELECT native_id,depth,uncached_input_tokens,cache_read_input_tokens,
+	rows, err := queryMaps(catalog.DB, `SELECT native_id,model,depth,uncached_input_tokens,cache_read_input_tokens,
 		cache_creation_input_tokens,output_tokens,total_tokens FROM agent_sessions ORDER BY depth,native_id`)
 	if err != nil {
 		t.Fatal(err)
@@ -209,6 +241,9 @@ func TestNestedSubagentsArePersistedWithCostDimensions(t *testing.T) {
 	byID := map[string]map[string]any{}
 	for _, row := range rows {
 		byID[firstString(row["native_id"])] = row
+	}
+	if byID["outer"]["model"] != "claude-haiku-4-5-20251001" || byID["inner"]["model"] != "Unknown model" {
+		t.Fatalf("embedded model metadata inherited the parent: %#v", byID)
 	}
 	if integer(byID["outer"]["depth"]) != 1 || integer(byID["outer"]["uncached_input_tokens"]) != 10 ||
 		integer(byID["outer"]["cache_read_input_tokens"]) != 90 || integer(byID["outer"]["total_tokens"]) != 110 {

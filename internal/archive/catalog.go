@@ -654,7 +654,7 @@ func (c *Catalog) Initialize() error {
 	}
 	// A catalog with nothing indexed yet resolves repositories and records
 	// harness versions as it ingests, so it never needs those upgrade steps.
-	for key, version := range map[string]string{"repository_merge_version": repositoryMergeVersion, "harness_version_upgrade": "1"} {
+	for key, version := range map[string]string{"repository_merge_version": repositoryMergeVersion, "harness_version_upgrade": "1", "agent_session_model_version": agentSessionModelVersion} {
 		if _, err := c.DB.Exec(`INSERT INTO meta(key,value) SELECT ?,?
 			WHERE NOT EXISTS (SELECT 1 FROM workspaces) AND NOT EXISTS (SELECT 1 FROM meta WHERE key=?)`, key, version, key); err != nil {
 			return err
