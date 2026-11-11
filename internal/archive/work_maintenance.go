@@ -229,6 +229,7 @@ const (
 	kindOrigins        = "maintenance.origins"
 	kindLibraryView    = "maintenance.library-view"
 	kindPreviews       = "maintenance.previews"
+	kindMetrics        = "maintenance.workspace-metrics"
 	kindNames          = "maintenance.conversation-names"
 	kindSubstring      = "maintenance.search.substring"
 	kindToolOutput     = "maintenance.search.tool-output"
@@ -254,11 +255,11 @@ const (
 
 // searchKinds are what the Search item (and the continuous Frequently
 // schedule) keeps current: the stored projection, then the index backfills.
-var searchKinds = []string{kindOrigins, kindLibraryView, kindNames, kindPreviews, kindParallelism, kindSessionShape, kindSubstring, kindToolOutput, kindTextSearch, kindToolSearch, kindQueryText}
+var searchKinds = []string{kindOrigins, kindLibraryView, kindMetrics, kindNames, kindPreviews, kindParallelism, kindSessionShape, kindSubstring, kindToolOutput, kindTextSearch, kindToolSearch, kindQueryText}
 
 // projectionKinds are held by the Library refresh's Stop, as the classic
 // maintainLibrary pass that ran them was.
-var projectionKinds = []string{kindOrigins, kindLibraryView, kindNames, kindPreviews, kindParallelism, kindSessionShape}
+var projectionKinds = []string{kindOrigins, kindLibraryView, kindMetrics, kindNames, kindPreviews, kindParallelism, kindSessionShape}
 
 // stageKinds maps the analysis chain's stage names to their task kinds.
 var stageKinds = map[string]string{"identities": kindIdentities, "git": kindGit, "tools": kindTools, "authorship": kindAuthorship,
@@ -347,13 +348,27 @@ func (s *Server) maintenanceWorkDefinitions(_ *workAuthority) ([]workDefinition,
 			}},
 		{kind: kindLibraryView, phase: "refresh", hold: projectionHold, loop: true,
 			probe: func(ctx context.Context) (bool, error) {
-				return catalogExists(ctx, c, "SELECT 1 FROM workspace_library_dirty UNION ALL SELECT 1 FROM mcp_metric_dirty")
+				return catalogExists(ctx, c, "SELECT 1 FROM workspace_library_dirty")
 			},
 			step: libraryStep(func(ctx context.Context) (int, error) {
-				count, err := c.RefreshLibrary(ctx, 10)
+				count, err := c.refreshLibrary(ctx, 10, nil)
 				c.noteLibraryRefresh(count, err)
 				return count, err
 			})},
+		// Metrics are computed from a read snapshot and published only for
+		// workspaces nothing wrote meanwhile, so an index and its analyses
+		// do not hold them: only the Search view's Stop does.
+		{kind: kindMetrics, phase: "refresh", loop: true,
+			hold: func(ctx context.Context) workBlocker {
+				if blocker := projectionHold(ctx); blocker.Reason == workBlockedHeld {
+					return blocker
+				}
+				return workBlocker{}
+			},
+			probe: func(ctx context.Context) (bool, error) {
+				return catalogExists(ctx, c, "SELECT 1 FROM mcp_metric_dirty")
+			},
+			step: libraryStep(func(ctx context.Context) (int, error) { return c.refreshMetricProjections(ctx, metricProjectionBatch) })},
 		{kind: kindPreviews, phase: "fill", hold: projectionHold, loop: true,
 			probe: func(ctx context.Context) (bool, error) {
 				return catalogExists(ctx, c, `SELECT 1 FROM workspace_library l WHERE l.turn_count+l.tool_use_count>200

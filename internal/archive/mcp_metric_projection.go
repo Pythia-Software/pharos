@@ -6,13 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"time"
 )
 
 const metricProjectionVersion = "metrics-v4-consuming-layer-leaves"
 
-// Projections are invalidated by authoritative table writes, never by MCP audit
+// Projections are invalidated by authoritative table writes and by price
+// changes that reprice a workspace's usage (replacePricing), never by MCP audit
 // writes. A projection is computed from a read snapshot and published in a
 // short write (refreshMetricProjections). Before it reads, the refresh claims
 // the workspaces it will compute; every write that would mark a workspace
@@ -50,8 +52,16 @@ func (c *Catalog) ensureMetricSchema() error {
 		},
 		"metrics":                       func(row string) string { return "SELECT " + row + ".workspace_id AS workspace_id" },
 		"conversation_group_membership": func(row string) string { return "SELECT " + row + ".workspace_id AS workspace_id" },
-		"cost_changes":                  func(string) string { return "SELECT id AS workspace_id FROM workspaces" },
-		"model_aliases":                 func(string) string { return "SELECT id AS workspace_id FROM workspaces" },
+	}
+	// Prices are not a trigger dependency: replacePricing marks the
+	// workspaces whose usage a price change reprices. Earlier builds marked
+	// every workspace for each price row written.
+	for _, table := range []string{"cost_changes", "model_aliases"} {
+		for _, event := range []string{"insert", "update", "delete"} {
+			if _, err = c.DB.Exec(`DROP TRIGGER IF EXISTS mcp_metric_` + table + `_` + event + `; DROP TRIGGER IF EXISTS mcp_metric_release_` + table + `_` + event); err != nil {
+				return err
+			}
+		}
 	}
 	for table, lookup := range dependencies {
 		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
@@ -97,6 +107,69 @@ func (c *Catalog) ensureMetricSchema() error {
 // outlives its claim publishes nothing for those workspaces.
 var metricClaimAbandoned = 10 * time.Minute
 
+// metricProjectionBatch is how many workspaces the service computes from one
+// snapshot and publishes in one write. Small enough that the publication
+// holds the writer for tens of milliseconds and one written workspace wastes
+// little; large enough that a full recomputation is not thousands of commits.
+var metricProjectionBatch = 100
+
+// maintainWorkspaceMetrics stores dirty workspaces' metrics as its own
+// operation. It does not wait for an index or its analysis chain: a batch is
+// computed from a read snapshot and published in one short write, and a
+// workspace written meanwhile loses its claim and is computed again later.
+// The Search view's Stop and the Search schedule hold it like the view.
+func (c *Catalog) maintainWorkspaceMetrics(ctx context.Context) {
+	schedule := searchScheduleGate{}
+	var pass *daemonPass
+	defer func() { pass.end(nil) }()
+	for {
+		if schedule.wait(ctx, c, &pass) != nil || c.queries.wait(pass.context(ctx)) != nil {
+			return
+		}
+		wait := 2 * time.Second
+		if batch, done, running := c.libraryPass(ctx); running {
+			if pass == nil {
+				pass = c.beginPass(ctx, kindMetrics, triggerChained)
+			}
+			var count, published int
+			var err error
+			pass.runIO(batch, func(ctx context.Context) { count, published, err = c.refreshMetricBatch(ctx, metricProjectionBatch) })
+			stopped := batch.Err() != nil
+			done()
+			pass.worked(published)
+			if err != nil || count == 0 {
+				pass.end(err)
+				pass = nil
+			}
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				if !stopped {
+					fmt.Fprintf(os.Stderr, "Workspace metrics: %v\n", err)
+					wait = 5 * time.Second
+				}
+			} else if published > 0 {
+				wait = 0
+			} else if count > 0 {
+				// Everything it computed was written meanwhile (an index is
+				// on those workspaces): let it finish rather than recompute
+				// them as fast as they change.
+				wait = time.Second
+			}
+		} else if pass != nil {
+			// Stopped: no operation stays open to hold up an eject.
+			pass.end(nil)
+			pass = nil
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+	}
+}
+
 // metricProjectionComputedHook, when set (tests), runs after a refresh has
 // computed its batch and before it publishes.
 var metricProjectionComputedHook func()
@@ -106,6 +179,14 @@ var metricProjectionComputedHook func()
 // twice, briefly: to claim them, and to store what it computed in between
 // from a read snapshot.
 func (c *Catalog) refreshMetricProjections(ctx context.Context, batch int, workspaceIDs ...string) (int, error) {
+	attempted, _, err := c.refreshMetricBatch(ctx, batch, workspaceIDs...)
+	return attempted, err
+}
+
+// refreshMetricBatch is refreshMetricProjections, also reporting how many of
+// the attempted workspaces it published: fewer when writes released claims
+// while it computed.
+func (c *Catalog) refreshMetricBatch(ctx context.Context, batch int, workspaceIDs ...string) (attempted, published int, err error) {
 	where, args := "", []any{}
 	if workspaceIDs != nil {
 		where = " WHERE workspace_id IN (SELECT value FROM json_each(?))"
@@ -126,7 +207,7 @@ func (c *Catalog) refreshMetricProjections(ctx context.Context, batch int, works
 	// Nothing dirty and unclaimed: return without waiting for the writer.
 	pending, err := queryMapsContext(ctx, c.reader(), `SELECT workspace_id FROM mcp_metric_dirty`+where+` LIMIT ?`, args...)
 	if err != nil || len(pending) == 0 {
-		return 0, err
+		return 0, 0, err
 	}
 	ids := make([]string, 0, len(pending))
 	for _, row := range pending {
@@ -144,12 +225,13 @@ func (c *Catalog) refreshMetricProjections(ctx context.Context, batch int, works
 			token, time.Now().Unix(), jsonText(ids))
 		return err
 	}); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	// Compute what the claim covers from one snapshot that includes it.
 	type projection struct {
 		entity, id string
 		values     map[string]statMetricValue
+		json       string
 	}
 	computed := map[string][]projection{}
 	completed := func(error) {}
@@ -169,26 +251,28 @@ func (c *Catalog) refreshMetricProjections(ctx context.Context, batch int, works
 		if err != nil {
 			return err
 		}
+		claims := make([]string, 0, len(claimed))
 		for _, row := range claimed {
 			id := firstString(row["workspace_id"])
-			computed[id] = []projection{}
-			if err := c.projectWorkspaceMetrics(ctx, snapshot, book, id, func(entity, entityID string, values map[string]statMetricValue) error {
-				computed[id] = append(computed[id], projection{entity, entityID, values})
-				return nil
-			}); err != nil {
-				return err
-			}
+			claims, computed[id] = append(claims, id), []projection{}
+		}
+		if err := c.projectMetrics(ctx, snapshot, book, claims, func(id, entity, entityID string, values map[string]statMetricValue) error {
+			data, err := json.Marshal(values)
+			computed[id] = append(computed[id], projection{entity, entityID, values, string(data)})
+			return err
+		}); err != nil {
+			return err
 		}
 		return nil
 	}(); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if metricProjectionComputedHook != nil {
 		metricProjectionComputedHook()
 	}
 	tx, finish, err := c.beginTrackedWrite(ctx, "metric-projection")
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	defer func() { _ = tx.Rollback(); finish() }()
 	for id, rows := range computed {
@@ -196,31 +280,42 @@ func (c *Catalog) refreshMetricProjections(ctx context.Context, batch int, works
 		// what was computed may be obsolete. It is still dirty.
 		var held int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM mcp_metric_claims WHERE workspace_id=? AND token=?`, id, token).Scan(&held); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		if held == 0 {
 			continue
 		}
-		if _, err = tx.ExecContext(ctx, "DELETE FROM mcp_metric_projection WHERE workspace_id=?", id); err != nil {
-			return 0, err
+		published++
+		// Most recomputations change nothing (a version change, or one
+		// conversation of many written), and every row written moves four
+		// indexes: drop what the workspace no longer has, store what differs.
+		kept := make([]string, 0, len(rows))
+		for _, row := range rows {
+			kept = append(kept, row.entity+":"+row.id)
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM mcp_metric_projection WHERE workspace_id=? AND entity||':'||entity_id NOT IN (SELECT value FROM json_each(?))`, id, jsonText(kept)); err != nil {
+			return 0, 0, err
 		}
 		for _, row := range rows {
-			if err := storeMetricProjection(ctx, tx, row.entity, row.id, id, row.values); err != nil {
-				return 0, err
+			if err := storeMetricProjection(ctx, tx, row.entity, row.id, id, row.values, row.json); err != nil {
+				return 0, 0, err
 			}
 		}
 		if _, err = tx.ExecContext(ctx, "DELETE FROM mcp_metric_dirty WHERE workspace_id=?", id); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM mcp_metric_claims WHERE token=?", token); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	err = tx.Commit()
 	completed(err)
 	// Workspaces written to meanwhile stay dirty and count as attempted, so
 	// the caller comes back for them.
-	return len(ids), err
+	if err != nil {
+		published = 0
+	}
+	return len(ids), published, err
 }
 
 // metricProjections are metrics computed for reading but not stored, keyed by
@@ -240,13 +335,15 @@ func (c *Catalog) currentMetrics(ctx context.Context, tx *sql.Tx, workspaces []s
 	if err != nil {
 		return nil, err
 	}
+	ids := make([]string, 0, len(dirty))
 	for _, row := range dirty {
-		if err = c.projectWorkspaceMetrics(ctx, tx, book, firstString(row["workspace_id"]), func(entity, entityID string, values map[string]statMetricValue) error {
-			fresh[entity][entityID] = values
-			return nil
-		}); err != nil {
-			return nil, err
-		}
+		ids = append(ids, firstString(row["workspace_id"]))
+	}
+	if err = c.projectMetrics(ctx, tx, book, ids, func(_, entity, entityID string, values map[string]statMetricValue) error {
+		fresh[entity][entityID] = values
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return fresh, nil
 }
@@ -263,13 +360,137 @@ func absentMetrics(status string) map[string]statMetricValue {
 // conversations_parent_idx alone.
 const childConversationQuery = "SELECT EXISTS(SELECT 1 FROM conversations WHERE parent_id=?)"
 
-// projectWorkspaceMetrics computes workspace id's metrics and its current
-// conversations' metrics from tx, passing each entity's values to store.
-func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book priceBook, id string, store func(entity, entityID string, values map[string]statMetricValue) error) error {
-	conversations, err := queryMapsContext(ctx, tx, `SELECT c.id,c.provider,c.started_at,c.ended_at FROM conversations c WHERE c.workspace_id=? AND `+currentGroupConversation("c"), id)
+// metricStore receives one computed entity ("workspace" or "conversation").
+type metricStore func(workspace, entity, entityID string, values map[string]statMetricValue) error
+
+// metricQueryChunk is how many workspaces one set of grouped queries reads.
+// A statement per conversation costs more than what it reads once the pages
+// are cached, so the inputs of a chunk's conversations are read together.
+var metricQueryChunk = 100
+
+// projectMetrics computes the metrics of each of the workspaces and of their
+// current conversations from tx, passing each entity's values to store: a
+// workspace's conversations first, then the workspace.
+func (c *Catalog) projectMetrics(ctx context.Context, tx *sql.Tx, book priceBook, workspaces []string, store metricStore) error {
+	for offset := 0; offset < len(workspaces); offset += metricQueryChunk {
+		if err := projectMetricChunk(ctx, tx, book, workspaces[offset:min(offset+metricQueryChunk, len(workspaces))], store); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// metricInputs are what a chunk's conversations contribute, keyed by
+// conversation ID. fallback is keyed by workspace and conversation ("" for
+// the workspace's own rows), newest evidence first.
+type metricInputs struct {
+	counts, calls map[string]map[string]any
+	ledger        map[string]string
+	usage         map[string][]map[string]any
+	delegates     map[string]bool
+	fallback      map[[2]string][]map[string]any
+}
+
+func loadMetricInputs(ctx context.Context, tx *sql.Tx, workspaces, conversations string) (metricInputs, error) {
+	in := metricInputs{counts: map[string]map[string]any{}, calls: map[string]map[string]any{}, ledger: map[string]string{},
+		usage: map[string][]map[string]any{}, delegates: map[string]bool{}, fallback: map[[2]string][]map[string]any{}}
+	const chosen = ` IN (SELECT value FROM json_each(?))`
+	const delegated = `EXISTS(SELECT 1 FROM agent_session_messages am JOIN agent_sessions a ON a.id=am.agent_session_id WHERE am.message_id=m.id AND a.native_id<>'main')`
+	const compaction = `m.kind='metadata' AND (m.text LIKE '%"subtype":"compact_boundary"%' OR m.text LIKE '%"compaction_trigger":"%')`
+	rows, err := queryMapsContext(ctx, tx, `SELECT m.conversation_id,
+		COUNT(CASE WHEN m.role='user' AND m.kind='message' THEN 1 END) turns,
+		COUNT(CASE WHEN `+compaction+` THEN 1 END) compactions,
+		COUNT(CASE WHEN m.role='user' AND m.kind='message' AND NOT `+delegated+` THEN 1 END) own_turns,
+		COUNT(CASE WHEN `+compaction+` AND NOT `+delegated+` THEN 1 END) own_compactions
+		FROM messages m WHERE m.conversation_id`+chosen+` GROUP BY m.conversation_id`, conversations)
+	if err != nil {
+		return in, err
+	}
+	for _, row := range rows {
+		in.counts[firstString(row["conversation_id"])] = row
+	}
+	rows, err = queryMapsContext(ctx, tx, `SELECT t.conversation_id,COUNT(*) calls,COUNT(CASE WHEN t.status='error' THEN 1 END) errors,
+		COUNT(CASE WHEN a.native_id='main' OR t.agent_session_id IS NULL THEN 1 END) own_calls,
+		COUNT(CASE WHEN t.status='error' AND (a.native_id='main' OR t.agent_session_id IS NULL) THEN 1 END) own_errors
+		FROM tool_calls t LEFT JOIN agent_sessions a ON a.id=t.agent_session_id AND a.conversation_id=t.conversation_id
+		WHERE t.conversation_id`+chosen+` GROUP BY t.conversation_id`, conversations)
+	if err != nil {
+		return in, err
+	}
+	for _, row := range rows {
+		in.calls[firstString(row["conversation_id"])] = row
+	}
+	rows, err = queryMapsContext(ctx, tx, `SELECT conversation_id,version FROM tool_ledger_state WHERE conversation_id`+chosen, conversations)
+	if err != nil {
+		return in, err
+	}
+	for _, row := range rows {
+		in.ledger[firstString(row["conversation_id"])] = firstString(row["version"])
+	}
+	// One conversation's rows keep the order they are stored in: costs are
+	// summed in it, and a different order moves a sum's last digits.
+	rows, err = queryMapsContext(ctx, tx, `SELECT u.*,a.id session_id,a.native_id,a.model session_model,a.usage_status,a.conversation_id usage_conversation
+		FROM json_each(?) chosen CROSS JOIN agent_sessions a ON a.conversation_id=chosen.value CROSS JOIN agent_session_usage u ON u.agent_session_id=a.id
+		WHERE a.usage_status<>'in-child-conversation'`, conversations)
+	if err != nil {
+		return in, err
+	}
+	for _, row := range rows {
+		id := firstString(row["usage_conversation"])
+		in.usage[id] = append(in.usage[id], row)
+	}
+	// Navigation placeholders and external children are delegates too.
+	rows, err = queryMapsContext(ctx, tx, `SELECT chosen.value id FROM json_each(?) chosen
+		WHERE EXISTS(SELECT 1 FROM agent_sessions WHERE conversation_id=chosen.value AND native_id<>'main')
+		OR EXISTS(SELECT 1 FROM conversations WHERE parent_id=chosen.value)`, conversations)
+	if err != nil {
+		return in, err
+	}
+	for _, row := range rows {
+		in.delegates[firstString(row["id"])] = true
+	}
+	// +name: by workspace. The index on name holds every workspace's rows.
+	rows, err = queryMapsContext(ctx, tx, `SELECT workspace_id,COALESCE(conversation_id,'') conversation_id,name,value,status,coverage FROM metrics
+		WHERE workspace_id`+chosen+` AND +name IN ('total_tokens','input_tokens','output_tokens','cache_read_input_tokens')
+		ORDER BY observed_at DESC,extractor_version DESC,id DESC`, workspaces)
+	if err != nil {
+		return in, err
+	}
+	for _, row := range rows {
+		key := [2]string{firstString(row["workspace_id"]), firstString(row["conversation_id"])}
+		in.fallback[key] = append(in.fallback[key], row)
+	}
+	return in, nil
+}
+
+func projectMetricChunk(ctx context.Context, tx *sql.Tx, book priceBook, workspaces []string, store metricStore) error {
+	chosen := jsonText(workspaces)
+	rows, err := queryMapsContext(ctx, tx, `SELECT c.id,c.workspace_id,c.provider,c.started_at,c.ended_at FROM conversations c
+		WHERE c.workspace_id IN (SELECT value FROM json_each(?)) AND `+currentGroupConversation("c"), chosen)
 	if err != nil {
 		return err
 	}
+	conversations, ids := map[string][]map[string]any{}, []string{}
+	for _, row := range rows {
+		workspace := firstString(row["workspace_id"])
+		conversations[workspace] = append(conversations[workspace], row)
+		ids = append(ids, firstString(row["id"]))
+	}
+	in, err := loadMetricInputs(ctx, tx, chosen, jsonText(ids))
+	if err != nil {
+		return err
+	}
+	for _, id := range workspaces {
+		if err := projectWorkspaceMetrics(book, id, conversations[id], in, store); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// projectWorkspaceMetrics computes workspace id's metrics and its current
+// conversations' metrics from what was read for them.
+func projectWorkspaceMetrics(book priceBook, id string, conversations []map[string]any, in metricInputs, store metricStore) error {
 	workspace := absentMetrics("unavailable")
 	for _, name := range []string{"user_turn_count", "tool_call_count", "tool_error_count", "compaction_count"} {
 		workspace[name] = metricNumber(0)
@@ -280,16 +501,7 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 	for _, conv := range conversations {
 		cid := firstString(conv["id"])
 		own := absentMetrics("unavailable")
-		countRows, err := queryMapsContext(ctx, tx, `SELECT
-		COUNT(CASE WHEN m.role='user' AND m.kind='message' THEN 1 END) turns,
-		COUNT(CASE WHEN m.kind='metadata' AND (m.text LIKE '%"subtype":"compact_boundary"%' OR m.text LIKE '%"compaction_trigger":"%') THEN 1 END) compactions,
-		COUNT(CASE WHEN m.role='user' AND m.kind='message' AND NOT EXISTS(SELECT 1 FROM agent_session_messages am JOIN agent_sessions a ON a.id=am.agent_session_id WHERE am.message_id=m.id AND a.native_id<>'main') THEN 1 END) own_turns,
-		COUNT(CASE WHEN m.kind='metadata' AND (m.text LIKE '%"subtype":"compact_boundary"%' OR m.text LIKE '%"compaction_trigger":"%') AND NOT EXISTS(SELECT 1 FROM agent_session_messages am JOIN agent_sessions a ON a.id=am.agent_session_id WHERE am.message_id=m.id AND a.native_id<>'main') THEN 1 END) own_compactions
-		FROM messages m WHERE m.conversation_id=?`, cid)
-		if err != nil {
-			return err
-		}
-		count := countRows[0]
+		count := in.counts[cid]
 		own["user_turn_count"] = metricNumber(float64(integer(count["own_turns"])))
 		addMetricCount(workspace, "user_turn_count", float64(integer(count["turns"])))
 		// Only providers with a retained event contract can establish zero.
@@ -299,28 +511,16 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 		} else {
 			workspace["compaction_count"] = statMetricValue{Value: workspace["compaction_count"].Value, Status: "partial"}
 		}
-		calls, err := queryMapsContext(ctx, tx, `SELECT COUNT(*) calls,COUNT(CASE WHEN t.status='error' THEN 1 END) errors,
-		COUNT(CASE WHEN a.native_id='main' OR t.agent_session_id IS NULL THEN 1 END) own_calls,
-		COUNT(CASE WHEN t.status='error' AND (a.native_id='main' OR t.agent_session_id IS NULL) THEN 1 END) own_errors
-		FROM tool_calls t LEFT JOIN agent_sessions a ON a.id=t.agent_session_id AND a.conversation_id=t.conversation_id
-		WHERE t.conversation_id=?`, cid)
-		if err != nil {
-			return err
-		}
-		var ledgerVersion string
-		e := tx.QueryRowContext(ctx, "SELECT version FROM tool_ledger_state WHERE conversation_id=?", cid).Scan(&ledgerVersion)
-		if e != nil && e != sql.ErrNoRows {
-			return e
-		}
+		calls := in.calls[cid]
 		status := "complete"
-		if ledgerVersion != toolLedgerVersion {
+		if in.ledger[cid] != toolLedgerVersion {
 			status = "pending"
 		}
 		for _, pair := range [][3]string{{"tool_call_count", "calls", "own_calls"}, {"tool_error_count", "errors", "own_errors"}} {
-			v := metricNumber(float64(integer(calls[0][pair[2]])))
+			v := metricNumber(float64(integer(calls[pair[2]])))
 			v.Status = status
 			own[pair[0]] = v
-			addMetricCount(workspace, pair[0], float64(integer(calls[0][pair[1]])))
+			addMetricCount(workspace, pair[0], float64(integer(calls[pair[1]])))
 			if status == "pending" {
 				v = workspace[pair[0]]
 				v.Status = "pending"
@@ -340,18 +540,10 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 		} else {
 			spanValid = false
 		}
-		usage, err := queryMapsContext(ctx, tx, `SELECT u.*,a.id session_id,a.native_id,a.model session_model,a.usage_status
-		FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id WHERE a.conversation_id=? AND a.usage_status<>'in-child-conversation'`, cid)
-		if err != nil {
-			return err
-		}
+		usage := in.usage[cid]
 		// Aggregate usage belongs to the owner when there are no delegates that
-		// could share it. Include navigation placeholders and external children.
-		var hasDelegates bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE conversation_id=? AND native_id<>'main')
-			OR (`+childConversationQuery+`)`, cid, cid).Scan(&hasDelegates); err != nil {
-			return err
-		}
+		// could share it.
+		hasDelegates := in.delegates[cid]
 		ownUsage := []map[string]any{}
 		unassigned := false
 		for _, u := range usage {
@@ -385,10 +577,8 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 			}
 		}
 		mergeUsageMetrics(workspace, part)
-		if err = metricFallback(ctx, tx, id, cid, own); err != nil {
-			return err
-		}
-		if err = store("conversation", cid, own); err != nil {
+		metricFallback(in.fallback[[2]string{id, cid}], true, own)
+		if err := store(id, "conversation", cid, own); err != nil {
 			return err
 		}
 	}
@@ -402,10 +592,8 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 			workspace[name] = v
 		}
 	}
-	if err = metricFallback(ctx, tx, id, "", workspace); err != nil {
-		return err
-	}
-	return store("workspace", id, workspace)
+	metricFallback(in.fallback[[2]string{id, ""}], false, workspace)
+	return store(id, "workspace", id, workspace)
 }
 
 func addMetricCount(values map[string]statMetricValue, name string, n float64) {
@@ -489,15 +677,11 @@ func mergeUsageMetrics(dest, src map[string]statMetricValue) {
 // Only token evidence is a fallback; legacy textual error metrics are never
 // promoted to tool failures. Deterministic selection prevents scope/version rows
 // from silently overwriting one another.
-func metricFallback(ctx context.Context, tx *sql.Tx, workspace, cid string, values map[string]statMetricValue) error {
-	rows, err := queryMapsContext(ctx, tx, `SELECT name,value,status,coverage FROM metrics WHERE workspace_id=? AND COALESCE(conversation_id,'')=? AND name IN ('total_tokens','input_tokens','output_tokens','cache_read_input_tokens') ORDER BY observed_at DESC,extractor_version DESC,id DESC`, workspace, cid)
-	if err != nil {
-		return err
-	}
+func metricFallback(rows []map[string]any, conversation bool, values map[string]statMetricValue) {
 	seen := map[string]bool{}
 	for _, row := range rows {
 		name := firstString(row["name"])
-		if seen[name] || values[name].Status == "unattributable" || values[name].Value != nil && (cid != "" || values[name].Status == "complete") {
+		if seen[name] || values[name].Status == "unattributable" || values[name].Value != nil && (conversation || values[name].Status == "complete") {
 			continue
 		}
 		seen[name] = true
@@ -519,18 +703,16 @@ func metricFallback(ctx context.Context, tx *sql.Tx, workspace, cid string, valu
 			values[name] = v
 		}
 	}
-	return nil
 }
 
 // A conversation can move between workspaces. Its new workspace may publish
 // before the old workspace clears its projection, so replace that same entity.
-func storeMetricProjection(ctx context.Context, tx *sql.Tx, entity, id, workspace string, values map[string]statMetricValue) error {
-	data, err := json.Marshal(values)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO mcp_metric_projection(entity,entity_id,workspace_id,metrics_json,total_tokens,cost_usd,tool_error_count) VALUES(?,?,?,?,?,?,?)
- ON CONFLICT(entity,entity_id) DO UPDATE SET workspace_id=excluded.workspace_id,metrics_json=excluded.metrics_json,total_tokens=excluded.total_tokens,cost_usd=excluded.cost_usd,tool_error_count=excluded.tool_error_count`, entity, id, workspace, string(data), values["total_tokens"].effective("complete"), values["cost_usd"].effective("complete"), values["tool_error_count"].effective("complete"))
+// The sorted columns are functions of data, so a row whose data and workspace
+// are already stored is left unwritten.
+func storeMetricProjection(ctx context.Context, tx *sql.Tx, entity, id, workspace string, values map[string]statMetricValue, data string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO mcp_metric_projection(entity,entity_id,workspace_id,metrics_json,total_tokens,cost_usd,tool_error_count) VALUES(?,?,?,?,?,?,?)
+ ON CONFLICT(entity,entity_id) DO UPDATE SET workspace_id=excluded.workspace_id,metrics_json=excluded.metrics_json,total_tokens=excluded.total_tokens,cost_usd=excluded.cost_usd,tool_error_count=excluded.tool_error_count
+ WHERE workspace_id<>excluded.workspace_id OR metrics_json<>excluded.metrics_json`, entity, id, workspace, data, values["total_tokens"].effective("complete"), values["cost_usd"].effective("complete"), values["tool_error_count"].effective("complete"))
 	return err
 }
 

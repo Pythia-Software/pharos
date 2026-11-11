@@ -156,6 +156,11 @@ func (c *Catalog) replacePricing(doc pricingDocument, digest string) error {
 		return err
 	}
 	defer tx.Rollback()
+	ctx := context.Background()
+	before, err := c.loadPriceBookFrom(ctx, tx)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec("DELETE FROM cost_changes; DELETE FROM model_aliases"); err != nil {
 		return err
 	}
@@ -178,7 +183,98 @@ func (c *Catalog) replacePricing(doc pricingDocument, digest string) error {
 	if _, err := tx.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES('pricing_digest',?)", digest); err != nil {
 		return err
 	}
+	after, err := c.loadPriceBookFrom(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := markRepricedWorkspaces(ctx, tx, before, after); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+// quote is what the book charges for model's usage on day, as text: the
+// resolved rates and whether they are an assumption, or "" when unpriced.
+// Two books with the same quote give that usage the same cost and status.
+func (b priceBook) quote(model, day string) string {
+	if day == "" {
+		return ""
+	}
+	at := b.price(b.resolve(model, day), day)
+	if at == nil {
+		return ""
+	}
+	var text strings.Builder
+	for _, rate := range at.rates {
+		if rate == nil {
+			text.WriteString("-|")
+		} else {
+			fmt.Fprintf(&text, "%g|", *rate)
+		}
+	}
+	fmt.Fprint(&text, at.assumption)
+	return text.String()
+}
+
+// markRepricedWorkspaces leaves the stored metrics of workspaces whose usage
+// after prices differently from before to be computed again, and releases a
+// computation of them already running. A pricing file usually adds a model or
+// a dated price, which reprices the few workspaces that used it; the rest
+// keep what is stored.
+func markRepricedWorkspaces(ctx context.Context, tx *sql.Tx, before, after priceBook) error {
+	// A catalog without the projection (one this build has not initialized)
+	// has nothing stored to mark.
+	var projected int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='mcp_metric_dirty'`).Scan(&projected); err != nil || projected == 0 {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT a.workspace_id,u.model,COALESCE(a.model,''),u.usage_hour
+		FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	days, repriced, marked := map[string]string{}, map[string]bool{}, map[string]bool{}
+	for rows.Next() {
+		var workspace, own, session, hour string
+		if err := rows.Scan(&workspace, &own, &session, &hour); err != nil {
+			return err
+		}
+		if marked[workspace] {
+			continue
+		}
+		day, known := days[hour]
+		if !known {
+			if at, ok := parseTime(hour); ok {
+				day = localMidnight(at, time.Local).Format("2006-01-02")
+			}
+			days[hour] = day
+		}
+		// The model and day usageMetrics prices a ledger row by.
+		model := firstString(own, session)
+		key := model + "\x00" + day
+		changed, known := repriced[key]
+		if !known {
+			changed = before.quote(model, day) != after.quote(model, day)
+			repriced[key] = changed
+		}
+		if changed {
+			marked[workspace] = true
+		}
+	}
+	if err := rows.Err(); err != nil || len(marked) == 0 {
+		return err
+	}
+	ids := make([]string, 0, len(marked))
+	for id := range marked {
+		ids = append(ids, id)
+	}
+	chosen := jsonText(ids)
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO mcp_metric_dirty SELECT value FROM json_each(?) WHERE value IN (SELECT id FROM workspaces)`, chosen); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM mcp_metric_claims WHERE workspace_id IN (SELECT value FROM json_each(?))`, chosen)
+	return err
 }
 
 type priceInterval struct {

@@ -354,7 +354,7 @@ Notes:
 
 ### 3.4 C. Continuous maintenance
 
-The loops started in `Serve` (`maintainLibrary`, `maintainSubstringIndex`,
+The loops started in `Serve` (`maintainLibrary`, `maintainWorkspaceMetrics`, `maintainSubstringIndex`,
 `maintainToolOutputIndex`, `maintainTextSearch`, `maintainToolSearch`, `maintainQueryTextIndexes`,
 `maintainMessageLabelFacts`, `maintainFingerprintImages`, `maintainFingerprintImagesSecondary`, `keepWALSmall`, `automaticLoop`, `cloudScheduleLoop`, `compressCaptures`, `claudeDownloads`, and the broker's
 `maintain`) are **daemons**, not operations: they are registered by name so
@@ -366,6 +366,7 @@ operation.
 |---|---|---|---|---|---|---|---|---|---|---|
 | `maintenance.fingerprints` | Render fingerprints · Rendering fingerprints | schedule, user, read | svc | D:w W:w | — | — | Stops during rendering; unfinished images stay queued and resume next time. | record | >10 s | bg |
 | `maintenance.library-view` | Index the Search view · Indexing the Search view | chained (dirty workspaces), version | svc | D:w W:w | view | view | Stops; the batch in progress is abandoned, and it carries on when Pharos next opens the library or on Resume. | record | >15 s (today's `libraryCatchUpShown`) | bg |
+| `maintenance.workspace-metrics` | Update workspace metrics · Updating workspace metrics | chained (dirty workspaces), version, pricing | svc | D:w W:w | — | — | Stops; the batch in progress is abandoned, and it carries on later. | record | >15 s | bg |
 | `maintenance.previews` | Fill in previews · Filling in previews | daemon pass | svc | D:w W:w | view | — | Stops; it carries on later. | record | never | bg |
 | `maintenance.conversation-names` | Name conversations · Naming conversations | daemon pass | svc | D:w W:w | view | — | Stops between batches; unfinished names carry on later. | record | never | bg |
 | `maintenance.parallelism` | Measure parallel work · Measuring parallel work | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
@@ -398,6 +399,11 @@ not call `Wrote()`, so they are journaled only past their threshold.
 When source indexing pauses the Library maintenance loop, all its published
 passes become blocked until indexing and its follow-up analysis finish. Their
 committed counts remain visible; waiting does not publish zero-work probes.
+Workspace metrics (`maintenance.workspace-metrics`) are not part of that loop
+and do not wait for indexing: each batch is computed from a read snapshot and
+published in one short write, and a workspace written meanwhile keeps its
+place in the queue. Only the Search view's Stop and the Search schedule hold
+them.
 Stopping the Search view refresh likewise blocks its open passes until Resume.
 
 Maintenance batches report named phases and actual units: conversations for
