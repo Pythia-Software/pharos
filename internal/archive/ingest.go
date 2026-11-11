@@ -1964,19 +1964,14 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 		} else if summary.counts["total_tokens"] > 0 {
 			status = "reported-reconciled"
 		}
-		if _, err := tx.Exec(`INSERT INTO agent_sessions(
+		// Appending an untimed message can change membership without changing
+		// the session's facts. Avoid rewriting it and firing maintenance triggers.
+		if _, err := tx.Exec(changedUpsertSQL(`INSERT INTO agent_sessions(
 			id,workspace_id,conversation_id,native_id,parent_id,delegation_message_id,kind,provider,model,effort,depth,
 			started_at,ended_at,input_tokens,uncached_input_tokens,cache_read_input_tokens,
 			cache_creation_input_tokens,cache_creation_5m_input_tokens,cache_creation_1h_input_tokens,
-			output_tokens,reasoning_output_tokens,unclassified_tokens,total_tokens,usage_status,time_bounds_source)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
-			workspace_id=excluded.workspace_id,native_id=excluded.native_id,parent_id=excluded.parent_id,delegation_message_id=excluded.delegation_message_id,
-			child_conversation_id=NULL,kind=excluded.kind,provider=excluded.provider,model=excluded.model,effort=excluded.effort,depth=excluded.depth,
-			started_at=excluded.started_at,ended_at=excluded.ended_at,input_tokens=excluded.input_tokens,
-			uncached_input_tokens=excluded.uncached_input_tokens,cache_read_input_tokens=excluded.cache_read_input_tokens,
-			cache_creation_input_tokens=excluded.cache_creation_input_tokens,cache_creation_5m_input_tokens=excluded.cache_creation_5m_input_tokens,
-			cache_creation_1h_input_tokens=excluded.cache_creation_1h_input_tokens,output_tokens=excluded.output_tokens,
-			reasoning_output_tokens=excluded.reasoning_output_tokens,unclassified_tokens=excluded.unclassified_tokens,total_tokens=excluded.total_tokens,usage_status=excluded.usage_status,time_bounds_source=excluded.time_bounds_source`,
+			output_tokens,reasoning_output_tokens,unclassified_tokens,total_tokens,usage_status,time_bounds_source,child_conversation_id)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)`, "id"),
 			ids[summary.nativeID], workspaceID, conversationID, summary.nativeID, parentID, delegationMessageID,
 			kind, conversation.Provider, nilIfEmpty(conversation.Model), nilIfEmpty(sessionMessageEffort(summary.messageIndexes, conversation.Messages)), depth, nilIfEmpty(summary.startedAt), nilIfEmpty(summary.endedAt),
 			integer(summary.counts["input_tokens"]), integer(summary.counts["uncached_input_tokens"]),
