@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { EMPTY_QUERY, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
+import { canonicalAnalyzeURL, readUsageWorkspace } from "./usage-workspace-model";
+import { useLocationRevision } from "./nested-pages";
 
 // Empty columns/order use the source schema defaults, including host-added
 // detail columns. Never reuse a named baseline or a grouped result schema.
@@ -7,20 +9,24 @@ export function tableRecoveryQuery(schema: FieldSchema, scopeWhere: WhereTerm[] 
   return { ...EMPTY_QUERY, where: [...scopeWhere], limit: schema.defaultLimit ?? EMPTY_QUERY.limit };
 }
 
-// Explicit route options bypass all saved Analyze tabs and machine filters. The
-// storage adapter's fresh flag also bypasses last-used and named default queries.
+// Keep the page identity while clearing its controls, filters and landing target.
+// The storage adapter's fresh flag bypasses last-used and named default queries.
 // Saved views stay available in Saved; a reset never deletes them.
 export function freshPageURL(href: string): string {
   const url = new URL(href);
+  const current = new URLSearchParams(url.search);
   url.search = "fresh=1";
   url.hash = "";
-  if (url.pathname === "/analyze") {
-    for (const [key, value] of Object.entries({ analyze_mode: "dashboards", analyze_topic: "tokens" })) url.searchParams.set(key, value);
+  if (url.pathname === "/analyze" || url.pathname === "/tools") {
+    const { mode, topic, dataset } = readUsageWorkspace(new URL(canonicalAnalyzeURL(url.pathname, current), url.origin).searchParams);
+    url.pathname = "/analyze";
+    for (const [key, value] of Object.entries({ analyze_mode: mode, analyze_topic: topic, analyze_data: dataset })) url.searchParams.set(key, value);
   }
   return `${url.pathname}${url.search}`;
 }
 
 export function ResetPage() {
+  useLocationRevision();
   return <a className="query-reset-page" href={freshPageURL(location.href)}>Reset page</a>;
 }
 
