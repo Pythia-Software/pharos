@@ -188,6 +188,17 @@ func TestUsageAndLibraryRowsCarryCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, row := range rows {
+		if row["cost_usd"] != nil || row["price_status"] != "unpriced" {
+			t.Fatalf("summary label priced unknown usage: %#v", row)
+		}
+	}
+	// Pricing requires a usage allocation, independently of the label above.
+	execTx(t, catalog.DB, `UPDATE agent_session_usage SET model='gpt-6-sol'`)
+	rows, err = catalog.usageRows(time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
 	total := 0.0
 	for _, row := range rows {
 		if row["price_status"] != "priced" || row["priced_model"] != "gpt-6-sol" {
