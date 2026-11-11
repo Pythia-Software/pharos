@@ -1,9 +1,13 @@
 import { decodeQueryStrict, localQuerySnapshotCache, EMPTY_QUERY, encodeQuery, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
 import { newKeywordSearch, readTextSearch, type TextSearchDraft } from "./text-search-model";
-import { readRollingWindow, resolveRollingQuery, rollingQueryMatches, type RollingWindow } from "./query-links";
+import { queryURL, readRollingWindow, resolveRollingQuery, rollingQueryMatches, type RollingWindow } from "./query-links";
 export type SearchComposerState = { text: TextSearchDraft; kind: "text" | "file" | "url"; file: string; fileCase: boolean; query: QueryState; window?: RollingWindow; error?: string };
 export function freshSearch(schema: FieldSchema): SearchComposerState {
   return { text: newKeywordSearch(), kind: "text", file: "", fileCase: false, query: { ...EMPTY_QUERY, where: [], orderBy: schema.defaultSort ?? [], select: schema.defaultSelect ?? [], limit: schema.defaultLimit ?? 50 } };
+}
+export function sourceConversationsURL(schema: FieldSchema, source: string): string {
+  const query = freshSearch(schema).query;
+  return queryURL("library", { ...query, where: [{ field: "source_kind", op: "=", value: source }] });
 }
 export function restoreSearch(params: URLSearchParams, schema: FieldSchema): SearchComposerState {
   const state = freshSearch(schema), text = readTextSearch(params);

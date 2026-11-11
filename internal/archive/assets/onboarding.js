@@ -1022,6 +1022,10 @@ function pharosClaudeWatchLine(item) {
       const when=item.exported_at?new Date(item.exported_at).toLocaleString():'Claude export';
       row.append(node('h4','',`Export from ${when}`),node('p','',line.text));
       if(line.detail)row.append(node('p',line.attention?'sync-note badtext':'muted',line.detail));
+      if(item.state==='imported'&&window.pharosQueryTables?.sourceConversationsURL){
+        const link=node('a','','View Claude.ai conversations →');link.href=window.pharosQueryTables.sourceConversationsURL('claude-ai');
+        const destination=node('p');destination.append(link);row.append(destination);
+      }
       if(line.actions.length){
         const actions=node('div','claude-watch-actions');
         let profile=null;
