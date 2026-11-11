@@ -29,7 +29,10 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
   project_name: projectBreakdown(),
   provider: { label: "Provider", fields: ["provider"], order: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"] },
   model_family: { label: "Model", fields: ["model_family"], empty: "Unknown model" },
-  source_kind: { label: "Harness", fields: ["source_kind"] },
+  source_kind: { label: "Source", fields: ["source_kind"],
+    note: "The retained history source. Linked copies count once, so work started in Conductor can have a native Claude or Codex source." },
+  channel: { label: "Channel", fields: ["channel"], empty: "Unknown channel",
+    note: "How the top-level conversation started. Linked helpers inherit that channel, including when their usage comes from a native Claude or Codex transcript. Channel attribution records whether this is direct, inherited or inferred." },
   branch_source: { label: "Branch recorded", fields: ["branch_source"], where: onBranch, order: ["turn", "session"], values: { turn: "Per turn", session: "Per session" } },
 };
 

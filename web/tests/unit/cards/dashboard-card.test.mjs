@@ -140,7 +140,7 @@ test('every dashboard creation target supplies bounded default copy from its own
   // Future measures and views therefore have to produce usable defaults too.
   for (const [topic, defaults] of Object.entries(dashboardDefaults)) {
     const catalog = analysisCatalogs[topic], schema = schemas[catalog.dataset];
-    for (const metric of Object.keys(catalog.measures)) for (const [view] of allAnalysisViews) for (const split of [defaults.split, ...Object.keys(catalog.components ?? {})]) {
+    for (const metric of Object.keys(catalog.measures)) for (const [view] of allAnalysisViews) for (const split of [defaults.split, ...Object.keys(catalog.components ?? {}), ...topic === 'branches' ? ['source_kind', 'channel'] : []]) {
       const state = normalizeAnalysis(catalog, { ...defaults, metric, view, split });
       if (!validAnalysisState(catalog, state)) continue;
       check(dashboardCardURL(`/analyze?analyze_topic=${topic}`, catalog, state, []), schema);
@@ -181,6 +181,10 @@ test('catalog default copy follows chart semantics, selections, time windows and
   assert.match(scatter.title, /vs.*cost.*per conversation/i);
   assert.match(copy({ view: 'cycle', cycle: 'hour', reduce: 'mean' }).title, /Mean.*hour of day/);
   assert.match(copy({ selection: { values: ['codex'], excluded: true } }).title, /Exclude provider: codex/);
+  const branchCopy = split => dashboardCardMetadata(dashboardCardURL('/analyze?analyze_topic=branches', analysisCatalogs.branches,
+    { ...dashboardDefaults.branches, view: 'trend', metric: 'cost', split }, [{ field: 'channel', op: '=', value: 'conductor' }]), 'chart', schemas.branch_usage);
+  assert.match(branchCopy('source_kind').title, /by source/i);
+  assert.match(branchCopy('channel').title, /by channel/i);
   for (const excluded of [false, true]) {
     const selected = { ...dashboardDefaults.tokens, metric: 'tokens', split: 'provider', selection: { values: ['codex'], excluded } };
     for (const cycle of ['hour', 'weekday']) {

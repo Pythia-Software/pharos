@@ -60,17 +60,27 @@ func (c *Catalog) branchUsageRows(ctx context.Context) ([]map[string]any, error)
 		if err != nil {
 			return nil, err
 		}
+		origins, err := c.conversationOrigins(ctx)
+		if err != nil {
+			return nil, err
+		}
 		book, err := c.loadPriceBook()
 		if err != nil {
 			return nil, err
 		}
-		type rowKey struct{ workspace, branch, coverage, source, model, hour string }
+		type rowKey struct{ workspace, branch, coverage, source, model, hour, conversation string }
 		rows := map[rowKey]map[string]any{}
 		add := func(entry map[string]any, key rowKey, day string, cost *float64, status string, tokens int64) {
+			// Conversations sharing a workspace and hour can have different
+			// initiating channels or attribution quality. Pool within each
+			// conversation, keeping its identity stable as attribution improves.
+			key.conversation = firstString(entry["conversation_id"])
 			row := rows[key]
 			if row == nil {
-				row = map[string]any{"id": stableID("branch-usage", key.workspace, key.branch, key.coverage, key.source, key.model, key.hour),
+				origin := origins[key.conversation]
+				row = map[string]any{"id": stableID("branch-usage", key.workspace, key.branch, key.coverage, key.source, key.model, key.hour, key.conversation),
 					"workspace_id": key.workspace, "title": entry["title"], "source_kind": entry["source_kind"], "project_name": entry["project_name"],
+					"channel": origin["channel"], "channel_status": defaultString(firstString(origin["channel_status"]), "unknown"),
 					"branch": nilIfEmpty(key.branch), "project_branch": nil, "coverage": key.coverage, "branch_source": nilIfEmpty(key.source),
 					"provider": nilIfEmpty(firstString(entry["provider"])), "model": key.model, "model_family": nilIfEmpty(modelFamily(key.model)),
 					"day": day, "usage_at": key.hour, "cost_usd": nil, "tokens": int64(0), "price_status": ""}
@@ -104,7 +114,7 @@ func (c *Catalog) branchUsageRows(ctx context.Context) ([]map[string]any, error)
 			priced := book.cost(model, day, tokens)
 			session := firstString(entry["agent_session_id"])
 			whole := func(branch, coverage, source string) {
-				add(entry, rowKey{workspace, branch, coverage, source, model, hour}, day, priced.cost, priced.status, tokens["total_tokens"])
+				add(entry, rowKey{workspace: workspace, branch: branch, coverage: coverage, source: source, model: model, hour: hour}, day, priced.cost, priced.status, tokens["total_tokens"])
 			}
 			switch turns := shares[session]; {
 			case turns == nil && branch != "":
@@ -143,7 +153,7 @@ func (c *Catalog) branchUsageRows(ctx context.Context) ([]map[string]any, error)
 					if name == "" {
 						coverage, source = branchUnknown, ""
 					}
-					add(entry, rowKey{workspace, name, coverage, source, model, hour}, day, cost, priced.status, taken)
+					add(entry, rowKey{workspace: workspace, branch: name, coverage: coverage, source: source, model: model, hour: hour}, day, cost, priced.status, taken)
 				}
 			}
 		}
