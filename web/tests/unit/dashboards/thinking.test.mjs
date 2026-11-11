@@ -194,6 +194,11 @@ test('query-v3 Thinking periods hold every observation across clock changes and 
     assert.ok(key&&g.periods[key],`${row.requested_at} outside its bucket`);
    }
   }
+ // A request without a timestamp counts in its group but in no period.
+ const undated={...request('undated','2026-11-02T10:00:00Z',3,{bin:6}),requested_at:null,day:null,month:null,hour_of_day:null};
+ const all=evaluate([request('dated','2026-11-02T10:00:00Z',2,{bin:5}),undated],{...defaultThinking,timezone:'UTC',view:'time',period:'day',range:'all'});
+ assert.equal(all.groups[0].Retained,2);
+ assert.deepEqual(Object.keys(all.groups[0].periods),['2026-11-02']);assert.equal(all.groups[0].periods['2026-11-02'].stats.n,1);
  // Both occurrences of the repeated 1 a.m. keep their own offset.
  assert.equal(thinkingPeriodKey(Date.parse('2026-11-01T07:00:00Z'),'hour','America/Denver'),'2026-11-01T01:00:00-06:00');
  assert.equal(thinkingPeriodKey(Date.parse('2026-11-01T08:00:00Z'),'hour','America/Denver'),'2026-11-01T01:00:00-07:00');

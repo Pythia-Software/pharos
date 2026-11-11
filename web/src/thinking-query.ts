@@ -194,8 +194,12 @@ export function thinkingFromMetrics(state: ThinkingState, overview: boolean, res
   let periods = { keys: [] as string[], bounds: {} as Record<string, { From: string; To: string }> }, calendar = periods;
   if (!overview && state.view === "time") {
     periods = thinkingPeriods(thinkingInterval(state), zone, range, observed, ms => thinkingPeriodKey(ms, state.period, zone));
+    // A request without a timestamp is in its group's totals but in no
+    // period: its date bucket has no key.
     const cell = (keys: readonly unknown[]): ThinkingCell => {
-      const g = group(keys.slice(1)), name = thinkingPeriodKey(instant(keys[0]), state.period, zone);
+      const at = instant(keys[0]);
+      if (!Number.isFinite(at)) return { stats: emptyThinkingStats(), retained: 0, conversations: 0, counts: Array(bands).fill(0) };
+      const g = group(keys.slice(1)), name = thinkingPeriodKey(at, state.period, zone);
       return g.periods[name] ??= { stats: emptyThinkingStats(), retained: 0, conversations: 0, counts: Array(bands).fill(0) };
     };
     for (const b of buckets("period_retained")) cell(b.keys).retained = number(b.value);

@@ -65,6 +65,13 @@ func readThinkingOptions(q url.Values, now time.Time) (thinkingOptions, error) {
 			return o, err
 		}
 	}
+	o.Zone = time.Local
+	if zone := q.Get("timezone"); zone != "" {
+		o.Zone, err = time.LoadLocation(zone)
+		if err != nil {
+			return o, fmt.Errorf("invalid timezone")
+		}
+	}
 	if token := q.Get("filters"); token != "" {
 		query, e := qt.DecodeQueryLink(token)
 		if e != nil || query.Grouping != nil {
@@ -83,16 +90,18 @@ func readThinkingOptions(q url.Values, now time.Time) (thinkingOptions, error) {
 		if e = wire.Validate(); e != nil {
 			return o, e
 		}
-		o.FilterSQL, o.FilterArgs, e = thinkingRequestDataset.where(query.Where, schema)
+		// Filters on the calendar fields read them in the viewer's zone, as
+		// query-v3 does for the same request, so the fit and the page's
+		// metrics count the same requests.
+		table := thinkingRequestDataset
+		if zone := q.Get("timezone"); zone != "" && zone != "Local" {
+			if table, e = thinkingZonedDataset(table, zone); e != nil {
+				return o, e
+			}
+		}
+		o.FilterSQL, o.FilterArgs, e = table.where(query.Where, schema)
 		if e != nil {
 			return o, e
-		}
-	}
-	o.Zone = time.Local
-	if zone := q.Get("timezone"); zone != "" {
-		o.Zone, err = time.LoadLocation(zone)
-		if err != nil {
-			return o, fmt.Errorf("invalid timezone")
 		}
 	}
 	for _, v := range []struct {

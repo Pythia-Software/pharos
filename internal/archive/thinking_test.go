@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"sort"
 	"strings"
 	"testing"
@@ -805,5 +806,31 @@ func TestThinkingQueryV3Shapes(t *testing.T) {
 	}
 	if want := len(slices.Concat(slices.Collect(maps.Values(gaps))...)); cells != want {
 		t.Fatalf("cells hold %d of %d waits", cells, want)
+	}
+	// A filter on a calendar field selects the same requests for the fit
+	// (/api/thinking) as for query-v3: both read it in the viewer's zone.
+	hour := records[0].At.In(kathmandu).Hour()
+	want := 0
+	for _, r := range records {
+		if r.At.In(kathmandu).Hour() == hour {
+			want++
+		}
+	}
+	filter := []qt.WhereTerm{{Field: "hour_of_day", Op: "=", Value: strconv.Itoa(hour)}}
+	token, err := qt.EncodeQueryLink(qt.LinkQuery{Where: filter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := readThinkingOptions(url.Values{"filters": {token}, "timezone": {"Asia/Kathmandu"}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fitted, err := c.thinkingRecords(t.Context(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = ask("?timezone=Asia%2FKathmandu", map[string]any{"id": "n", "op": "count", "groupBy": []string{}, "where": []map[string]any{{"field": "hour_of_day", "op": "=", "value": strconv.Itoa(hour)}}})
+	if len(fitted) != want || int(integer(got["n"][0].Value)) != want {
+		t.Fatalf("hour %d in Kathmandu: fit reads %d requests, query-v3 %v, want %d", hour, len(fitted), got["n"][0].Value, want)
 	}
 }
