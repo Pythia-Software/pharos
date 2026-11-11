@@ -26,6 +26,7 @@ export SDKROOT
 if [ -z "${PHAROS_RELEASE_KEYCHAIN_SESSION:-}" ]; then
     /bin/sh "$ROOT/macos/swift-toolchain.sh" preflight
 fi
+python3 "$ROOT/macos/build_dmg.py" --check
 if [ "$MODE" = developer-id ]; then
     python3 "$ROOT/macos/release_support.py"
     if [ -z "${PHAROS_RELEASE_KEYCHAIN_SESSION:-}" ]; then
@@ -44,7 +45,7 @@ if [ "$MODE" = developer-id ] && { [ -z "$IDENTITY" ] || [ -z "$PROFILE" ]; }; t
     echo "Use --adhoc to publish an ad hoc signed release instead." >&2
     exit 2
 fi
-for command in git gh go swiftc lipo npm xcrun codesign ditto hdiutil tiffutil uvx shasum spctl awk python3 curl; do
+for command in git gh go swiftc lipo npm xcrun codesign ditto hdiutil tiffutil shasum spctl awk python3 curl; do
     command -v "$command" >/dev/null 2>&1 || { echo "$command is required." >&2; exit 2; }
 done
 case "$(git remote get-url origin)" in

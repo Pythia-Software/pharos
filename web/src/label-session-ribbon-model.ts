@@ -120,10 +120,14 @@ export function ribbonHits(items:RibbonObservation[],at:number,tolerance:number)
  * call takes the first lane, centre out, where its dot and duration touch no
  * other call or event marker, so simultaneous and near-simultaneous calls sit
  * apart whenever the row has room. x maps a time to the ribbon's pixels. */
-export const TOOL_RADIUS=3,MARK_GAP=.5;
-export function ribbonToolPlacement(items:RibbonObservation[],x:(at:number)=>number,height:number,occupied:PlacedMark[]=[],r=TOOL_RADIUS,gap=MARK_GAP){
+export const TOOL_RADIUS=3,MARK_GAP=.5,UNKNOWN_TOOL_TAIL_MS=5000;
+/** Display-only placeholder: never changes a call's recorded end or duration. */
+export function toolVisualEnd(mark:ActivityMark,rangeEnd:number){
+ return mark.end_known?mark.end:Math.max(mark.start,Math.min(mark.start+UNKNOWN_TOOL_TAIL_MS,rangeEnd));
+}
+export function ribbonToolPlacement(items:RibbonObservation[],x:(at:number)=>number,height:number,occupied:PlacedMark[]=[],{r=TOOL_RADIUS,gap=MARK_GAP,visualEnd=(item:RibbonObservation)=>item.end}:{r?:number;gap?:number;visualEnd?:(item:RibbonObservation)=>number}={}){
  const lanes=laneCandidates(height,r,gap),tools=[...new Map(items.filter(item=>item.mark).map(item=>[item.id,item])).values()];
- return new Map(placeMarks(tools.map(item=>laneMark(item.id,x(item.start),r,lanes,item.end>item.start?x(item.end):x(item.start))),{gap,occupied}).map(m=>[m.id,m]));
+ return new Map(placeMarks(tools.map(item=>laneMark(item.id,x(item.start),r,lanes,x(Math.max(item.start,visualEnd(item))))),{gap,occupied}).map(m=>[m.id,m]));
 }
 export type RibbonHitTarget=HitTarget&{ids:string[]};
 /** One hit test for every mark in a ribbon: the tool dot or event marker

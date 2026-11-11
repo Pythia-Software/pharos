@@ -550,3 +550,67 @@ func TestClaudeAIExportReadLiveAfterItsCapture(t *testing.T) {
 		t.Fatalf("live read after capture = %+v", result)
 	}
 }
+
+func TestClaudeAIExportToolTimesAndStoredReplay(t *testing.T) {
+	const export = `[{"uuid":"timing","name":"Timing","chat_messages":[
+ {"uuid":"prompt","sender":"human","created_at":"2026-10-01T10:00:00Z","content":[{"type":"text","text":"Check"}]},
+ {"uuid":"reply","sender":"assistant","created_at":"2026-10-01T10:30:00Z","content":[
+  {"type":"tool_use","id":"missing","name":"Missing end","start_timestamp":"2026-10-01T10:00:01Z","stop_timestamp":"2026-10-01T10:00:02Z"},
+  {"type":"tool_result","tool_use_id":"missing","start_timestamp":null,"stop_timestamp":null,"content":"ok"},
+  {"type":"tool_use","id":"known","name":"Known","start_timestamp":"2026-10-01T10:00:04Z"},
+  {"type":"tool_result","tool_use_id":"known","start_timestamp":"2026-10-01T10:00:06Z","content":"ok"},
+  {"type":"tool_use","id":"nostart","name":"Missing start"},
+  {"type":"tool_result","tool_use_id":"nostart","start_timestamp":"2026-10-01T10:00:08Z","content":"ok"},
+  {"type":"tool_use","id":"stop","name":"Result stop","start_timestamp":"2026-10-01T10:00:10Z"},
+  {"type":"tool_result","tool_use_id":"stop","stop_timestamp":"2026-10-01T10:00:11Z","content":"ok"},
+  {"type":"text","text":"Done"}]}]}]`
+	path := writeSourceFileAt(t, export)
+	catalog, _ := testCatalog(t)
+	ingestSource(t, catalog, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: path, Account: "me", Enabled: true})
+	check := func(stage string) {
+		t.Helper()
+		rows, err := queryMaps(catalog.DB, `SELECT tool_name,started_at,ended_at,duration_ms,duration_source FROM tool_calls ORDER BY sequence`)
+		if err != nil || len(rows) != 4 {
+			t.Fatalf("%s: calls %v: %v", stage, rows, err)
+		}
+		want := []struct {
+			name, start, end string
+			duration         any
+		}{
+			{"Missing end", "2026-10-01T10:00:01.000Z", "", nil},
+			{"Known", "2026-10-01T10:00:04.000Z", "2026-10-01T10:00:06.000Z", int64(2000)},
+			{"Missing start", "", "2026-10-01T10:00:08.000Z", nil},
+			{"Result stop", "2026-10-01T10:00:10.000Z", "2026-10-01T10:00:11.000Z", int64(1000)},
+		}
+		for i, expected := range want {
+			row := rows[i]
+			if row["tool_name"] != expected.name || firstString(row["started_at"]) != expected.start || firstString(row["ended_at"]) != expected.end || row["duration_ms"] != expected.duration {
+				t.Errorf("%s: call %d = %v, want %+v", stage, i, row, expected)
+			}
+		}
+	}
+	check("new ingestion")
+	// Simulate the old adapter's enclosing-message fallback and old ledger;
+	// replay must repair the retained messages as well as their derived calls.
+	if _, err := catalog.DB.Exec(`UPDATE messages SET created_at='2026-10-01T10:30:00.000Z' WHERE kind IN ('tool_call','tool_result');
+ UPDATE tool_calls SET started_at='2026-10-01T10:30:00.000Z',ended_at='2026-10-01T10:30:00.000Z',duration_ms=0,duration_source='timestamps';
+ UPDATE tool_ledger_state SET version='tools-v14-code-mode-patches'`); err != nil {
+		t.Fatal(err)
+	}
+	if built, err := catalog.BackfillToolLedger(t.Context(), nil); err != nil || built != 1 {
+		t.Fatalf("replay: %d %v", built, err)
+	}
+	check("stored replay")
+	rows, err := queryMaps(catalog.DB, `SELECT kind,created_at,raw_text FROM messages WHERE call_id='missing' ORDER BY source_order`)
+	if err != nil || len(rows) != 2 || firstString(rows[0]["created_at"]) != "2026-10-01T10:00:01.000Z" || rows[1]["created_at"] != nil || !strings.Contains(firstString(rows[1]["raw_text"]), `"type":"tool_result"`) {
+		t.Fatalf("retained evidence after replay: %v %v", rows, err)
+	}
+	if built, err := catalog.BackfillToolLedger(t.Context(), nil); err != nil || built != 0 {
+		t.Fatalf("second replay: %d %v", built, err)
+	}
+	for _, raw := range []string{"", `{"type":"tool_result"`, `{"type":"text"}`} {
+		if _, ok := claudeAIRetainedToolTime(MessageRecord{Kind: "tool_result", RawText: raw, CreatedAt: "keep"}); ok {
+			t.Fatalf("unrecognized evidence %q must remain untouched", raw)
+		}
+	}
+}

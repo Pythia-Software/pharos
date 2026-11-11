@@ -1051,6 +1051,7 @@
 .lt-timeline-legend .event-link-glyph{width:9px;height:9px}
 .lt-timeline-legend .lt-legend-line>span{vertical-align:middle;margin-right:3px;line-height:18px}
 .lt-timeline-legend .lt-legend-line>span>svg:not(.event-link-glyph){width:20px;height:10px;flex:none}
+.lt-unknown-tail-key{display:inline-flex;align-items:center;gap:4px;margin:0 5px;color:var(--muted);font-size:var(--fs-2xs)}.lt-tool-swatch.lt-unknown-tail{height:0;border-top:1.5px dotted currentColor;background:none}
 .lt-tool-swatch{display:inline-block;width:14px;height:1px;background:currentColor;position:relative;margin:4px 1px}.lt-tool-swatch:before{content:'';position:absolute;top:-2px;left:0;width:5px;height:5px;border-radius:50%;background:currentColor}
 .lt-source-swatch.is-diagonal{background-image:repeating-linear-gradient(135deg,transparent 0 2px,color-mix(in srgb,var(--ink) 65%,transparent) 2px 2.8px,transparent 2.8px 4px)}.lt-source-swatch.is-dots{background-image:radial-gradient(color-mix(in srgb,var(--ink) 65%,transparent) .65px,transparent .65px);background-size:3px 3px}
 

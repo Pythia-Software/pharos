@@ -567,6 +567,19 @@ function fileChanges(message,result){
 }
 function toolFailed(message,results){const category=toolCategory(message);return Boolean(category==='error'||toolPayload(message).raw?.is_error||(mcpIdentity(message)&&['failed','partial'].includes(mcpOutcome(results,mcpIdentity(message).family)))||results.some(item=>item.kind==='error'||toolPayload(item).raw?.is_error||Number(toolPayload(item).raw?.exit_code)>0||(category==='command'&&/^(?:Process exited with code|Exit code:)\s*[1-9]/im.test(readableValue(toolPayload(item).content)))))}
 
+// The reader uses the same action categories as the timeline ribbon.
+function readerTimelineCategory(message){
+  const payload=toolPayload(message),name=String(payload.name||'').toLowerCase(),category=toolCategory(message);
+  if(['wait_agent','wait','taskoutput'].includes(name))return 'wait';
+  if(/sleep|poll/.test(name)||name==='write_stdin')return 'poll';
+  if(category==='agent'||/delegate|spawn/.test(name)||name==='task')return 'delegate';
+  if(['read','search'].includes(category)||/read|search|glob/.test(name))return 'read';
+  if(['edit','write'].includes(category)||/patch|write/.test(name)||name==='edit')return 'write';
+  if(name.includes('git'))return 'git';
+  if(category==='web'||/web|fetch/.test(name))return 'network';
+  return category==='command'||/exec|terminal/.test(name)||name==='bash'?'run':'other';
+}
+
 // Retain calls with missing timestamps; the navigator chooses a real clock or
 // message order for the entire session before placing these marks.
 function readerNavigatorMarks(model,describe=message=>({name:toolPayload(message).name||'Tool'})){
@@ -575,7 +588,7 @@ function readerNavigatorMarks(model,describe=message=>({name:toolPayload(message
     const results=(message.kind==='delegation'?model.delegationResultsByCall:model.toolResultsByCall).get(message.call_id)||[],end=Date.parse(results.at(-1)?.created_at);
     return{start,end:start!==null&&Number.isFinite(end)?Math.max(start,end):null,
       end_known:start!==null&&Number.isFinite(end)&&end>=start,
-      category:({edit:'write',search:'read',command:'run',agent:'delegate',web:'network',read:'read'})[toolCategory(message)]||'other',
+      category:readerTimelineCategory(message),
       count:1,error:toolFailed(message,results),message_id:message.id,tool_id:message.call_id||message.native_id,...describe(message)};
   });
 }

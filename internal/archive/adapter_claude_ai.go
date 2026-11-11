@@ -19,7 +19,7 @@ import (
 type claudeAIAdapter struct{ baseAdapter }
 
 // claudeAIExtractor versions the parser; bump it when parsing changes.
-const claudeAIExtractor = "claude-ai-v3"
+const claudeAIExtractor = "claude-ai-v4"
 
 // claudeAIRoot is the parent a conversation's first message names.
 const claudeAIRoot = "00000000-0000-4000-8000-000000000000"
@@ -269,7 +269,7 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 	if len(conversation.Fields) > 0 {
 		messages = append(messages, MessageRecord{NativeID: conversation.UUID + ":export", Role: "system", Kind: "metadata", Selected: true,
 			EvidenceLocator: origin + ":" + conversation.UUID,
-			Text: jsonText(map[string]any{"type": "claude_ai_conversation", "text": conversation.Summary, "details": conversation.Fields}), RawText: jsonText(map[string]any{"claude_ai_conversation": conversation.Fields})})
+			Text:            jsonText(map[string]any{"type": "claude_ai_conversation", "text": conversation.Summary, "details": conversation.Fields}), RawText: jsonText(map[string]any{"claude_ai_conversation": conversation.Fields})})
 	}
 	toolNames, delegated := map[string]string{}, map[string]bool{}
 	for _, message := range conversation.Messages {
@@ -341,6 +341,9 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 				}
 				messages = append(messages, reasoningRecord(item, text, format, unavailable))
 			case "tool_use":
+				// The enclosing assistant message can be stamped after all its
+				// blocks. Only the tool block's own timestamp locates a call.
+				item.CreatedAt = claudeAIToolBlockTime(block, false)
 				name := defaultString(block["name"], "tool")
 				toolNames[callID] = name
 				item.Kind = "tool_call"
@@ -351,6 +354,9 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 				item.CallID, item.Text = callID, jsonText(claudeAIToolPayload(block, name))
 				messages = append(messages, item)
 			case "tool_result":
+				// A missing result timestamp is not the enclosing message's
+				// timestamp and does not establish when the call finished.
+				item.CreatedAt = claudeAIToolBlockTime(block, true)
 				item.Role, item.Kind, item.CallID = "tool", "tool_result", callID
 				if delegated[callID] {
 					item.Kind = "delegation_result"
@@ -457,6 +463,39 @@ func claudeAIToolPayload(block map[string]any, name string) map[string]any {
 		}
 	}
 	return value
+}
+
+// A result block's start is when the output was observed; its stop is a
+// fallback when only that observation is present. A tool-use block's stop
+// marks the emitted input, not necessarily the tool's completion.
+func claudeAIToolBlockTime(block map[string]any, result bool) string {
+	if at := iso(block["start_timestamp"]); at != "" {
+		return at
+	}
+	if result {
+		return iso(block["stop_timestamp"])
+	}
+	return ""
+}
+
+// Repair only recognizable retained export blocks. A missing, truncated or
+// unrelated raw record does not justify changing an existing timestamp.
+func claudeAIRetainedToolTime(message MessageRecord) (string, bool) {
+	var block map[string]any
+	if json.Unmarshal([]byte(message.RawText), &block) != nil {
+		return "", false
+	}
+	switch firstString(block["type"]) {
+	case "tool_use":
+		if message.Kind == "tool_call" || message.Kind == "delegation" {
+			return claudeAIToolBlockTime(block, false), true
+		}
+	case "tool_result":
+		if message.Kind == "tool_result" || message.Kind == "delegation_result" {
+			return claudeAIToolBlockTime(block, true), true
+		}
+	}
+	return "", false
 }
 
 func claudeConversationMetadata(c claudeAIConversation) map[string]any {

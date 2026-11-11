@@ -284,17 +284,21 @@ class SwiftToolchainTests(unittest.TestCase):
                               'SDKROOT=${SDKROOT:-/wrong/MacOSX.sdk}\n'
                               'test "$SDKROOT" = /fake/sdk || exit 98\n'
                               'printf "%s\\n" "$2" >> "$PHAROS_TEST_CALLS"\n'
-                              'case "$2" in sdk) echo /fake/sdk;; preflight) exit 42;; *) exit 99;; esac\n')
+                              'case "$2" in sdk) echo /fake/sdk;; "$PHAROS_TEST_FAIL") exit 42;; preflight|--check) exit 0;; *) exit 99;; esac\n')
             python.chmod(0o755)
             xcrun = root / 'xcrun'
             xcrun.write_text('#!/bin/sh\necho /fake/sdk\n')
             xcrun.chmod(0o755)
             env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
                        PHAROS_TEST_CALLS=str(log), PHAROS_RELEASE_KEYCHAIN_SESSION='', SDKROOT='')
-            result = subprocess.run(['/bin/sh', str(SOURCE.with_name('release.sh')), '0.8.5'],
-                                    env=env, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 42, result.stderr)
-            self.assertEqual(log.read_text().splitlines(), ['sdk', 'preflight'])
+            for failure, expected in [('preflight', ['sdk', 'preflight']),
+                                      ('--check', ['sdk', 'preflight', '--check'])]:
+                with self.subTest(failure=failure):
+                    log.unlink(missing_ok=True)
+                    result = subprocess.run(['/bin/sh', str(SOURCE.with_name('release.sh')), '0.8.5'],
+                                            env=dict(env, PHAROS_TEST_FAIL=failure), capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 42, result.stderr)
+                    self.assertEqual(log.read_text().splitlines(), expected)
 
 
 class CredentialRehearsalTests(unittest.TestCase):

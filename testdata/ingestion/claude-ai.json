@@ -1,5 +1,5 @@
 {
-  "index_version": "claude-ai-v3",
+  "index_version": "claude-ai-v4",
   "records": [
     {
       "SourceID": "conv-1",
@@ -134,7 +134,7 @@
               "Text": "{\"input\":{\"query\":\"quiet beaches\"},\"tool\":\"WebSearch\"}",
               "Model": "",
               "Effort": "",
-              "CreatedAt": "2026-10-01T10:01:00.000Z",
+              "CreatedAt": "",
               "ParentNativeID": "",
               "PreviousNativeID": "m1",
               "CallID": "tu1",
@@ -150,7 +150,7 @@
               "Text": "{\"content\":[{\"text\":\"Results\",\"type\":\"text\"}],\"is_error\":false,\"tool\":\"WebSearch\"}",
               "Model": "",
               "Effort": "",
-              "CreatedAt": "2026-10-01T10:01:00.000Z",
+              "CreatedAt": "",
               "ParentNativeID": "",
               "PreviousNativeID": "m1",
               "CallID": "tu1",

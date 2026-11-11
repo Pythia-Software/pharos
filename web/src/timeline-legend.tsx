@@ -9,12 +9,12 @@ import {ChartTooltip} from './chart-tooltip';
 import {ViewDisclosure} from './view-disclosure';
 import {useViewEntry} from './view-state';
 import {sliceGroupState,type LegendAction} from './chart-selection';
-import {timelineSelection,timelineSectionVisible,timelineGroupCounts,type TimelineVisibility,type TimelineVisibilitySection,type TimelineVisibilityKey} from './timeline-visibility';
+import {timelineSelection,timelineSectionVisible,timelineGroupCounts,timelineValueVisible,type TimelineVisibility,type TimelineVisibilitySection,type TimelineVisibilityKey} from './timeline-visibility';
 import {EVENT_GROUPS,eventGroup,type AgentEventLink} from './event-link-layout';
 
 /** Compact, read-only key for a single summary ribbon. Shares the timeline's
  * family palette, event shapes and tool swatches without its filter menus. */
-export function TimelineKey({messages,taxonomy,marks,events,children}:{messages:LabelMessage[];taxonomy:Taxonomy;marks:ActivityMark[];events:AgentEventLink[];children?:React.ReactNode}){
+export function TimelineKey({messages,taxonomy,marks,events,children,showUnknownTail=true}:{messages:LabelMessage[];taxonomy:Taxonomy;marks:ActivityMark[];events:AgentEventLink[];children?:React.ReactNode;showUnknownTail?:boolean}){
   const families=timelineModeGroups(messages,taxonomy),tools=[...new Set(marks.map(mark=>mark.category))];
   return <div className="reader-navigator-key" aria-label="Timeline key">
     {families.map(family=><span key={family.id}><i style={{background:stateColor(family.id)}}/>{family.name}</span>)}
@@ -22,13 +22,16 @@ export function TimelineKey({messages,taxonomy,marks,events,children}:{messages:
     {EVENT_GROUPS.filter(group=>events.some(event=>event.group===group.name)).map(group=><span key={group.key}><EventGlyph group={group.name}/>{group.short}</span>)}
     {tools.map(id=><span key={id}><i className="lt-tool-swatch" style={{color:`var(--activity-${id})`}}/>{({read:'Read',write:'Write',run:'Run',git:'Git',network:'Network',delegate:'Delegation',wait:'Wait',poll:'Poll',other:'Other'} as Record<string,string>)[id]??id}</span>)}
     {marks.some(mark=>mark.error)?<span><i className="lt-tool-swatch" style={{color:'var(--activity-error)'}}/>Error</span>:null}
+    {showUnknownTail&&marks.some(mark=>!mark.end_known)?<UnknownToolKey/>:null}
     {children}
   </div>;
 }
 
+function UnknownToolKey(){return <span className="lt-unknown-tail-key"><i className="lt-tool-swatch lt-unknown-tail" aria-hidden="true"/>End time unknown</span>}
+
 /** Use the same elapsed attribution and text composition as the drawn ribbons. */
 export function timelineLegendWindow(streams:{id?:string;messages:LabelMessage[];marks:ActivityMark[];neighbors?:LabelMessage[];caller?:boolean}[],range:TimeRange){
-  const messages=new Map<string,LabelMessage>(),origins=new Set<string>(),tools=new Set<string>(),populated=new Set<string>();let error=false;
+  const messages=new Map<string,LabelMessage>(),origins=new Set<string>(),tools=new Set<string>(),unknownTools=new Set<string>(),populated=new Set<string>();let error=false;
   const overlaps=(start:number,end:number)=>start<=range[1]&&end>=range[0];
   for(const stream of streams){
     for(const {message,start,end} of labelIntervals(stream.messages,stream.marks,30*60*1000,stream.neighbors??stream.messages)){
@@ -37,9 +40,9 @@ export function timelineLegendWindow(streams:{id?:string;messages:LabelMessage[]
       messages.set(JSON.stringify([message.session_id,message.id]),message);
       if(stream.caller)for(const part of authorshipSegments(message))if(overlaps(start+(end-start)*part.start,start+(end-start)*part.end))origins.add(part.category);
     }
-    if(!stream.caller)for(const mark of stream.marks)if(overlaps(mark.start,mark.end_known?Math.max(mark.start,mark.end):mark.start)){if(stream.id)populated.add(stream.id);if(mark.error)error=true;else tools.add(mark.category);}
+    if(!stream.caller)for(const mark of stream.marks)if(overlaps(mark.start,mark.end_known?Math.max(mark.start,mark.end):mark.start)){if(stream.id)populated.add(stream.id);if(mark.error)error=true;else tools.add(mark.category);if(!mark.end_known)unknownTools.add(mark.error?'error':mark.category);}
   }
-  return {messages:[...messages.values()],origins:[...origins],tools:[...tools],error,populated:[...populated]};
+  return {messages:[...messages.values()],origins:[...origins],tools:[...tools],unknownTools:[...unknownTools],error,populated:[...populated]};
 }
 
 /** Keep only present specific colors, ordered beside their parent mode and role. */
@@ -52,7 +55,7 @@ export function timelineModeGroups(messages:LabelMessage[],taxonomy:Taxonomy=[])
   });
 }
 
-export function TimelineLegend({messages,origins,taxonomy,tools,error,events=[],visibility,onSelect,previewOnly=false,onOpenTimeline}:{previewOnly?:boolean;onOpenTimeline?:()=>void;messages:LabelMessage[];origins:string[];taxonomy:Taxonomy;tools:Record<string,string>;error:boolean;events?:AgentEventLink[];visibility:TimelineVisibility;onSelect:(section:TimelineVisibilityKey,values:string[],action:LegendAction)=>void}){
+export function TimelineLegend({messages,origins,taxonomy,tools,error,unknownTools=[],events=[],visibility,onSelect,previewOnly=false,onOpenTimeline}:{previewOnly?:boolean;onOpenTimeline?:()=>void;messages:LabelMessage[];origins:string[];taxonomy:Taxonomy;tools:Record<string,string>;error:boolean;unknownTools?:string[];events?:AgentEventLink[];visibility:TimelineVisibility;onSelect:(section:TimelineVisibilityKey,values:string[],action:LegendAction)=>void}){
   const [fullExpanded]=useViewEntry('disclosures','timeline-key',true,!previewOnly);
   const expanded=!previewOnly&&fullExpanded;
   const previewHint='Open the full Timeline to change visibility.';
@@ -94,5 +97,6 @@ export function TimelineLegend({messages,origins,taxonomy,tools,error,events=[],
   return <ChartTooltip><div className={`lt-timeline-legend${expanded?'':' is-compact'}${previewOnly?' is-readonly':''}`} data-view-field="timeline_visibility">
     {previewOnly?<button type="button" className="lt-key-open" aria-label="Edit key in full Timeline" data-chart-tooltip={previewHint} onClick={onOpenTimeline}>Key</button>:<ViewDisclosure viewKey="timeline-key" className="lt-key-disclosure" defaultOpen summary="Key">{expanded?content:null}</ViewDisclosure>}
     {!expanded?content:null}
+    {unknownTools.some(id=>timelineSectionVisible(visibility,'tools')&&timelineValueVisible(visibility,'tools',id))?<UnknownToolKey/>:null}
   </div></ChartTooltip>;
 }
