@@ -143,6 +143,61 @@ test('saved Parallel activity links open the native Timeline and retain the sele
  assert.equal(await copy.page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
 });
 
+test('Timeline recovers an archive change without losing its zoom, selection, disclosures or focus',{skip},async t=>{
+ const analysis=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const range=[analysis.start+10000,analysis.end-10000];
+ const disclosures={'timeline-key':true,'delegation-labels:s-root:session':true};
+ const params=new URLSearchParams({explorer:'timeline',delegation_start:String(range[0]),delegation_end:String(range[1]),delegation_session:'s-root',disclosures:JSON.stringify(disclosures)});
+ let revision=0,stableSnapshot=false;
+ const api={
+  'GET /api/work/:id/delegation':request=>{revision++;return {...defaultApi['GET /api/work/:id/delegation'](request),snapshot:stableSnapshot?'stable':`revision-${revision}`};},
+  'GET /api/work/:id/parallel':request=>({...defaultApi['GET /api/work/:id/parallel'](request),snapshot:request.query.get('snapshot')}),
+ };
+ const app=await open(t,{url:`/work/${workID}?${params}`,api,ready:'.lt-session-root'}),{page}=app;
+ await app.settled();
+ // Return real error responses without the browser's resource-error console
+ // noise, which the harness correctly rejects for ordinary requests.
+ await page.evaluate(full=>{
+  const original=window.fetch;
+  window.timelineConflicts=0;
+  window.timelineConflictWindow='all';
+  window.fetch=(input,options)=>{
+   const query=new URL(String(input),location.href).searchParams;
+   if(String(input).includes('/parallel?')&&window.timelineConflicts>0&&(window.timelineConflictWindow!=='whole'||query.get('start')===String(full[0])&&query.get('end')===String(full[1]))){
+    window.timelineConflicts--;
+    return Promise.resolve(new Response(JSON.stringify({code:'snapshot_changed',error:'Archive changed; refresh the explorer.'}),{status:409,headers:{'Content-Type':'application/json'}}));
+   }
+   return original(input,options);
+  };
+ },[analysis.start,analysis.end]);
+ const settings=()=>page.evaluate(()=>{const query=new URLSearchParams(location.search);return Object.fromEntries(['delegation_start','delegation_end','delegation_session','disclosures'].map(key=>[key,query.get(key)]));});
+ const end=page.getByRole('slider',{name:'Timeline window end',exact:true});
+ await end.focus();
+ const before=await settings(),loads=revision;
+ await page.evaluate(()=>{window.timelineConflicts=2;window.dispatchEvent(new Event('pharos:data-refresh'));});
+ await page.waitForFunction(()=>window.timelineConflicts===0);
+ await app.settled();
+ assert.equal(revision,loads+2,'one requested refresh and one recovery for both lane requests');
+ assert.deepEqual(await settings(),before);
+ assert.equal(await end.evaluate(element=>document.activeElement===element),true);
+ assert.equal(await page.getByRole('alert').count(),0);
+ await page.locator('.lt-session-root').first().waitFor();
+ // A race after the list was read can keep its token unchanged. A healthy
+ // visible window must not rearm retries of a failing whole-window read.
+ revision=0;stableSnapshot=true;
+ const stable=await settings();
+ await page.evaluate(()=>{window.timelineConflicts=100;window.timelineConflictWindow='whole';window.dispatchEvent(new Event('pharos:data-refresh'));});
+ await page.getByRole('button',{name:'Refresh analysis',exact:true}).waitFor();
+ await app.settled();
+ assert.ok(revision<=3,'continuous changes stop after the two recovery attempts');
+ assert.deepEqual(await settings(),stable);
+ await page.evaluate(()=>{window.timelineConflicts=0;});
+ await page.getByRole('button',{name:'Refresh analysis',exact:true}).click();
+ await app.settled();
+ assert.equal(await page.getByRole('alert').count(),0);
+ await page.locator('.lt-session-root').first().waitFor();
+});
+
 test('legacy delegation session IDs restore to canonical sessions once and keep unrelated state',{skip},async t=>{
  // s-legacy is an old row ID of s-child; s-split no longer names one session.
  const aliases={'s-legacy':'s-child','s-split':null};
