@@ -9,7 +9,7 @@ import { freshPageURL, tableRecoveryQuery } from '../../../src/query-recovery';
 import { core, schemas, execution } from '../helpers/recipes.mjs';
 import { categoryForQuery } from '../../../src/query-categories';
 import { instantiateRecipe, queryRecipes } from '../../../src/curiosity-data';
-import { usageDatasets, usageWorkspaceURL } from '../../../src/usage-workspace-model';
+import { usageDatasets, usageTopics, readUsageWorkspace, usageWorkspaceURL } from '../../../src/usage-workspace-model';
 const m={...storageModule,...bookmarksModule,...queryLinksModule,encodeQuery,normalizeQueryState,createQueryLinkService,httpQuerySnapshotStore,QuerySnapshotHttpError};
 const prefs=new Map(),cache=new Map(),snapshots=new Map();
 let fail=false,writes=0;
@@ -284,10 +284,11 @@ test('fresh page links bypass cached queries and named defaults, preserving the 
  assert.equal(await storage.loadDefaultSaved('pharos_tool_calls'),null);
  const url=new URL(freshPageURL('http://localhost/analyze?q_usage=invalid&analyze_topic=human&activity_repo=gone#chart'),location.origin);
  assert.equal(url.pathname,'/analyze');assert.equal(url.searchParams.get('fresh'),'1');
- assert.equal(url.searchParams.get('analyze_topic'),'tokens');assert.equal(url.searchParams.get('analyze_mode'),'dashboards');
+ assert.equal(url.searchParams.get('analyze_topic'),'human');assert.equal(url.searchParams.get('analyze_mode'),'dashboards');
  assert.equal(url.searchParams.has('activity_repo'),false);assert.equal(url.searchParams.has('q_usage'),false);assert.equal(url.hash,'');
  assert.equal(JSON.stringify(m.readBookmarks()),before);
- assert.equal(freshPageURL('http://localhost/tools?tools_view=skills&q_skill_usages=invalid'),'/tools?fresh=1');
+ const legacy=new URL(freshPageURL('http://localhost/tools?tools_view=skills&q_skill_usages=invalid'),location.origin);
+ assert.equal(legacy.pathname,'/analyze');assert.equal(legacy.searchParams.get('analyze_mode'),'query');assert.equal(legacy.searchParams.get('analyze_data'),'skill_usages');
  // Table reset starts from source-schema defaults even when the restored
  // baseline contains removed columns, metrics, grouping or invalid filters.
  for(const dataset of ['usage','tool_calls','mcp_calls']){
@@ -303,6 +304,20 @@ test('fresh page links bypass cached queries and named defaults, preserving the 
   assert.deepEqual(core.selectedFields(schema,reset).map(field=>field.name),schema.defaultSelect.map(column=>column.field));
   assert.deepEqual(request.result.where,scope);
  }
+});
+
+test('reset page retains every Analyze dashboard and query dataset while clearing view options',()=>{
+ const options={analyze_days:'7',analyze_chart:'invalid',analyze_filters:'invalid',analyze_report:'old-report',analyze_search:'1',card_id:'saved-card',card_query:'invalid',activity_machine_id:'missing',disclosures:'invalid',highlight:'chart:old',reveal:'chart:old'};
+ const targets=[...Object.keys(usageTopics).map(topic=>({analyze_mode:'dashboards',analyze_topic:topic})),...Object.keys(usageDatasets).map(dataset=>({analyze_mode:'query',analyze_data:dataset}))];
+ for(const target of targets){
+  const params=new URLSearchParams({...options,...target,q_usage:'invalid'}),before=readUsageWorkspace(params);
+  const reset=new URL(freshPageURL(`http://localhost/analyze?${params}#chart`),location.origin),after=readUsageWorkspace(reset.searchParams);
+  assert.deepEqual({mode:after.mode,topic:after.topic,dataset:after.dataset},{mode:before.mode,topic:before.topic,dataset:before.dataset},JSON.stringify(target));
+  assert.deepEqual([...reset.searchParams.keys()].sort(),['analyze_data','analyze_mode','analyze_topic','fresh']);
+  assert.equal(reset.hash,'');assert.equal(reset.searchParams.get('fresh'),'1');
+  assert.equal(freshPageURL(reset.href),reset.pathname+reset.search,'resetting twice keeps the destination');
+ }
+ assert.equal(freshPageURL('http://localhost/library?q_library=invalid&find=word#row'),'/library?fresh=1');
 });
 
 

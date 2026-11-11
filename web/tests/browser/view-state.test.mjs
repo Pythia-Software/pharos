@@ -2053,9 +2053,10 @@ test('dataset query ideas restore their query and disclosure, and All records cl
  assert.equal(await record.getAttribute('aria-pressed'),'true','a record idea stays selected after native evidence and Detail columns are restored');
 });
 
-test('scatter axes search by dashboard, retain keyboard focus and restore their committed choices',{skip},async t=>{
- const app=await open(t,{url:'/analyze?analyze_topic=scatter&analyze_data=scatter',ready:'.usage-scatter-dashboard'}),{page}=app;
+test('scatter axes search by dashboard, retain keyboard focus, restore and reset on the same page',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_topic=scatter&analyze_data=scatter',viewport:{width:1920,height:1050},ready:'.usage-scatter-dashboard'}),{page}=app;
  const x=page.getByRole('combobox',{name:'X axis',exact:true});
+ const defaultX=await x.inputValue(),defaultUnit=await page.getByLabel('Count each',{exact:true}).inputValue();
  await x.fill('cache write');
  await page.getByRole('listbox',{name:'X axis metrics'}).getByRole('option').first().waitFor();
  await x.press('Enter');
@@ -2077,4 +2078,19 @@ test('scatter axes search by dashboard, retain keyboard focus and restore their 
  await fresh.page.getByLabel('Count each',{exact:true}).selectOption('message');
  await fresh.page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).unit==='message');
  await app.settled();await fresh.settled();
+ await app.shot('before-reset');
+ await page.getByRole('link',{name:'Reset page',exact:true}).click();
+ await page.locator('.usage-scatter-dashboard').waitFor();await app.settled();
+ assert.equal(await x.inputValue(),defaultX);
+ assert.equal(await page.getByLabel('Count each',{exact:true}).inputValue(),defaultUnit);
+ await app.shot('after-reset');
+ // Switch pages through the app so the reset action must follow navigation.
+ const navigation=page.locator('#appNavigationRail');
+ await navigation.getByText('Tools & context',{exact:true}).click();
+ await navigation.getByRole('link',{name:'Tool calls',exact:true}).click();
+ await page.locator('.usage-workspace-table .qt-row').first().waitFor();await app.settled();
+ await page.getByRole('link',{name:'Reset page',exact:true}).click();
+ await page.locator('.usage-workspace-table .qt-row').first().waitFor();await app.settled();
+ assert.ok(await page.getByRole('heading',{name:'Tool calls',exact:true}).isVisible());
+ await app.shot('query-after-reset');
 });
