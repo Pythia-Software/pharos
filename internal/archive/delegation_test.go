@@ -408,8 +408,8 @@ INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_mes
 		t.Fatal("requested lane scope")
 	}
 	childMark := lanes[0].(map[string]any)["marks"].([]any)[0].(map[string]any)
-	if childMark["end_known"] != false {
-		t.Fatal("missing end evidence must not imply a zero-duration call")
+	if childMark["end_known"] != false || childMark["start"] != childMark["end"] {
+		t.Fatalf("missing end evidence must be represented as a point, not a duration: %v", childMark)
 	}
 	mark := lanes[1].(map[string]any)["marks"].([]any)[0].(map[string]any)
 	if mark["error"] != true || mark["tool_id"] != "t-error" {

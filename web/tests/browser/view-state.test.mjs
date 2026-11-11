@@ -673,7 +673,7 @@ test('timeline zoom retains sessions and blanks out-of-window usage',{skip},asyn
 test('Timeline tool hover selects the recorded call on each overlapping track',{skip},async t=>{
  const api={'GET /api/work/:id/parallel':({query})=>{
   const data=defaultApi['GET /api/work/:id/parallel']({query});
-  return {...data,lanes:data.lanes.map(lane=>lane.session!=='s-root'?lane:{...lane,marks:[lane.marks[0],{...lane.marks[1],start:lane.marks[0].start+20000,end:lane.marks[0].end-10000}]})};
+  return {...data,lanes:data.lanes.map(lane=>lane.session!=='s-root'?lane:{...lane,marks:[lane.marks[0],{...lane.marks[1],start:lane.marks[0].start+20000,end:lane.marks[0].end-10000},{...lane.marks[0],tool_id:'tool-unknown',name:'Claude Docs update',preview:'Update document',start:lane.marks[0].end+20000,end:lane.marks[0].end+20000,end_known:false}]})};
  }};
  const app=await open(t,{url:`/work/${workID}?explorer=timeline`,api,ready:'.lt-session-root'}),{page}=app;
  const root=page.locator('[data-session-id="s-root"] .lt-session-root > summary');
@@ -687,6 +687,14 @@ test('Timeline tool hover selects the recorded call on each overlapping track',{
   const content=page.getByRole('tooltip').locator('pre');await content.waitFor();
   assert.equal(await content.textContent(),preview);
  }
+ const unknown=root.locator('[data-tool-id="tool-unknown"]');
+ const guide=unknown.locator('line');
+ assert.notEqual(await guide.evaluate(line=>getComputedStyle(line).strokeDasharray),'none','an unrecorded end uses a dotted guide');
+ await page.locator('.lt-timeline-legend').getByText('End time unknown',{exact:true}).waitFor();
+ const point=await guide.evaluate(line=>{const p=new DOMPoint((Number(line.getAttribute('x1'))+Number(line.getAttribute('x2')))/2,Number(line.getAttribute('y1'))).matrixTransform(line.getScreenCTM());return {x:p.x,y:p.y};});
+ await page.mouse.move(point.x,point.y);
+ await page.getByRole('tooltip').getByText('End time unknown',{exact:true}).waitFor();
+ await app.shot('tool-end-not-recorded');
 });
 
 test('Timeline Key menus filter ribbons and restore selections with keyboard access',{skip},async t=>{
