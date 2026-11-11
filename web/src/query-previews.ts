@@ -1,5 +1,6 @@
 import { formatUSD } from "./currency";
 import { combineServed, noteServed, resultPolicyHeaders, resultScope, resultServed, servedOf, type ResultPolicy, type ResultServed } from "./result-cache";
+import { reportSessionShapeCoverage, sessionShapeFreshnessNote, type SessionShapeCoverage } from "./session-shape-freshness";
 import { agentEventDatasetOf, agentEventsFreshnessMark, agentEventsFreshnessNote, reportQueryCoverage, type AgentEventsCoverage } from "./agent-events-freshness";
 import { cardQualification } from "./card-qualifier";
 import { isOriginDimension, originLabel, loadOriginMetadata } from "./origin-dimensions";
@@ -53,7 +54,7 @@ export type QueryPreview = {
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget; groups?: number };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
 type Context = { schema: FieldSchema; execution: ComputedExecution; queryCapabilities: QueryCapabilitiesV3 };
-type Payload = { served?: ResultServed; now?: number; coverage?: AgentEventsCoverage; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
+type Payload = { served?: ResultServed; now?: number; coverage?: AgentEventsCoverage & SessionShapeCoverage; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
 const cache = new Map<string, Cached>();
 // An answer is reused for a minute. After that it only holds memory: whole
@@ -98,6 +99,7 @@ async function fetchPreview<T>(url: string, signal?: AbortSignal, request?: unkn
     const body = await response.json();
     if (!response.ok) throw new PreviewHTTPError(typeof body.error === "string" ? body.error : body.error?.message ?? "Preview unavailable", response.status);
     reportQueryCoverage(url, body);
+    reportSessionShapeCoverage(url, body);
     return noteServed(body, resultServed(response.headers));
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
 }
@@ -195,6 +197,11 @@ export function withAgentEventsFreshness(preview: QueryPreview, dataset: string,
   const note = agentEventsFreshnessNote(payload.coverage);
   if (!note) return preview;
   return { ...preview, summary: `${agentEventsFreshnessMark(payload.coverage)}${preview.summary}`, note: [note, preview.note].filter(Boolean).join(" · ") };
+}
+
+export function withSessionShapeFreshness(preview: QueryPreview, dataset: string, payload: { coverage?: SessionShapeCoverage }): QueryPreview {
+  const note = dataset === "session_shape" ? sessionShapeFreshnessNote(payload.coverage) : "";
+  return note ? { ...preview, summary: `≈${preview.summary}`, note: [note, preview.note].filter(Boolean).join(" · ") } : preview;
 }
 
 function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema: FieldSchema, history?: SmoothingHistory): QueryPreview {
@@ -558,7 +565,8 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     const complete = () => {
       if (done || signal?.aborted || !visible || historyQuery && !history) return;
       try {
-        const preview = withAgentEventsFreshness(previewOf(item.job, item.query, visible.payload, visible.schema, historyQuery && history ? { query: historyQuery, payload: history.payload } : undefined), item.job.dataset, visible.payload);
+        const drawn = previewOf(item.job, item.query, visible.payload, visible.schema, historyQuery && history ? { query: historyQuery, payload: history.payload } : undefined);
+        const preview = withSessionShapeFreshness(withAgentEventsFreshness(drawn, item.job.dataset, visible.payload), item.job.dataset, visible.payload);
         const served = combineServed(visible.payload.served, history?.payload.served);
         done = true; publish(item.job.id, served ? { ...preview, served } : preview);
       } catch (error) { fail(error); }

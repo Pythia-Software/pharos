@@ -64,8 +64,19 @@ func TestPriceBookUsesPriceOnDateAliasesAndTodaysPrice(t *testing.T) {
 	if openai.status != "partial" || !near(openai.cost, 2+0.2+16) {
 		t.Fatalf("missing rate should be partial: %+v", openai)
 	}
-	if unknown := book.cost("<synthetic>", "2026-06-01", tokens); unknown.status != "unpriced" {
-		t.Fatalf("unknown model: %+v", unknown)
+	for _, model := range []string{"<synthetic>", "Unknown model", "codex-auto-review"} {
+		if unknown := book.cost(model, "2026-06-01", tokens); unknown.status != "unpriced" || unknown.cost != nil || unknown.costToday != nil {
+			t.Fatalf("unmapped model %q must stay unpriced: %+v", model, unknown)
+		}
+	}
+	// A total-only remainder does not erase the known categories' cost or
+	// become input/output at the model's rates. Only the remainder is unknown.
+	partial := book.cost("opus", "2026-07-10", map[string]int64{
+		"uncached_input_tokens": 1_000_000, "output_tokens": 100_000,
+		"unclassified_tokens": 7, "total_tokens": 1_100_007,
+	})
+	if partial.status != "partial" || !near(partial.cost, 7.5) {
+		t.Fatalf("known cost with a small uncategorized remainder: %+v", partial)
 	}
 }
 

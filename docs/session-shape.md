@@ -201,10 +201,14 @@ The derivation follows Parallelism's precedent
   after the view, previews and Parallelism have caught up. Explicit Search
   catch-up runs also fill these facts. A build clears only the token it read,
   so a change made during the build is derived again.
-- A page never writes. It reads stored facts and derives up to 32 pending
-  conversations afresh. Larger backlogs return an indexing message instead of
-  scanning every transcript or reporting incomplete totals. Damaged stored
-  facts are derived again. Message-body checks read only the message kinds
+- A page never writes. When at most 32 conversations need statistics, it
+  derives them afresh, including missing or damaged stored facts. For larger
+  backlogs it reads available stored facts: older statistics still count,
+  and sessions without usable statistics are left out until maintenance
+  measures them. Query responses carry coverage from the same statistics
+  snapshot, before view filters; dashboards, tables and card previews disclose
+  older or missing sessions. Maintenance publication invalidates Session Shape
+  caches without invalidating other core derived views. Message-body checks read only the message kinds
   they need: prompt whitespace for user messages and compaction text for metadata.
 - Every requesting page can cancel its wait for shared preparation, including
   the page that starts the build. A build no page waits for stops after a

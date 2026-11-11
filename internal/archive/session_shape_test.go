@@ -13,8 +13,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 // shapeScript builds a session's inputs in order: each step adds messages at
@@ -496,17 +494,102 @@ func TestSessionShapeIncremental(t *testing.T) {
 			}
 		}
 	})
-	t.Run("large backlog stays in maintenance", func(t *testing.T) {
+	t.Run("large backlogs serve available statistics", func(t *testing.T) {
+		c, config := parallelismTestCatalog(t)
 		override(t, &sessionShapeInlineLimit, 1)
-		rows, err := c.sessionShapeQueryRows(t.Context(), nil)
-		var diagnostic *qt.PlanDiagnostic
-		if len(rows) != 0 || !errors.As(err, &diagnostic) || diagnostic.Code != qt.ErrorCodeResourceLimit {
-			t.Fatalf("a page derived an unbounded backlog or returned partial totals: %d rows, %v", len(rows), err)
+		table, err := c.sessionShapeTable(t.Context())
+		if err != nil || len(table.records) != 0 || table.coverage.State != "pending" || table.coverage.Missing == 0 {
+			t.Fatalf("cold statistics: %+v, %v", table, err)
 		}
+		all := countRows(t, c, "SELECT COUNT(*) FROM conversations")
 		if countRows(t, c, "SELECT COUNT(*) FROM session_shape_facts") != 0 || countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty") != all {
 			t.Fatal("a page published the backfill")
 		}
+		// Another process publishes a portion without changing source evidence.
+		// Session statistics refresh, while unrelated core views stay cached.
+		var builds int
+		core := func(context.Context) (int, error) { builds++; return 42, nil }
+		if _, err := cachedValue(t.Context(), c, "usage:probe", core); err != nil {
+			t.Fatal(err)
+		}
+		libraryBefore := libraryRowsByID(t, c)
+		var broadBuilds int
+		broad := func(context.Context) (int, error) { broadBuilds++; return 42, nil }
+		if _, err := cachedValue(t.Context(), c, "probe", broad); err != nil {
+			t.Fatal(err)
+		}
+		other := otherProcess(t, c)
+		if _, err := other.refreshSessionShapeFor(t.Context(), []string{"cv-a1", "cv-a2"}); err != nil {
+			t.Fatal(err)
+		}
+		rows := shapeRows(t, c)
+		if len(rows) != 2 || rows["cv-a1"]["messages"] != int64(12) {
+			t.Fatalf("published statistics stayed cached: %v", rows)
+		}
+		if _, err := cachedValue(t.Context(), c, "usage:probe", core); err != nil || builds != 1 {
+			t.Fatalf("session publication rebuilt core views: %d, %v", builds, err)
+		}
+		if _, err := cachedValue(t.Context(), c, "probe", broad); err != nil || broadBuilds != 1 {
+			t.Fatalf("session publication rebuilt unrelated views: %d, %v", broadBuilds, err)
+		}
+		libraryAfter := libraryRowsByID(t, c)
+		for id, row := range libraryBefore {
+			if !sameRow(row, libraryAfter[id]) {
+				t.Fatal("session publication rebuilt the Library", id)
+			}
+		}
+		// A changed conversation keeps its older facts in a large backlog.
+		execTx(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('cv-a1-new','cv-a1','new','assistant','message','','h','2026-11-03T16:50:00.000Z')`)
+		rows = shapeRows(t, c)
+		if rows["cv-a1"]["messages"] != int64(12) {
+			t.Fatal("older usable statistics were not retained", rows)
+		}
+		server := testServer(t, config, c)
+		request := fmt.Sprintf(`{"version":3,"profile":"qt-sqlite-v1","now":%d,"rows":true,"source":{},"result":{"select":["id","messages"],"limit":50}}`, time.Now().UnixMilli())
+		read := func() sessionShapeCoverage {
+			t.Helper()
+			w := queryExplorationCall(server, config.APIToken, http.MethodPost, "/api/query/session_shape/query-v3", request)
+			var body struct {
+				Coverage sessionShapeCoverage `json:"coverage"`
+				Rows     []map[string]any     `json:"rows"`
+			}
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			if len(body.Rows) == 0 {
+				t.Fatal("available rows were withheld", w.Body.String())
+			}
+			return body.Coverage
+		}
+		coverage := read()
+		if coverage.State != "pending" || coverage.Stale != 1 || coverage.Missing == 0 || coverage.Pending != coverage.Stale+coverage.Missing {
+			t.Fatalf("partial coverage: %+v", coverage)
+		}
+		if _, err := other.refreshSessionShape(t.Context(), 100, true); err != nil {
+			t.Fatal(err)
+		}
+		if coverage := read(); coverage.State != "current" || coverage.Pending != 0 {
+			t.Fatalf("completed statistics stayed cached: %+v", coverage)
+		}
+		if shapeRows(t, c)["cv-a1"]["messages"] != int64(13) {
+			t.Fatal("updated statistics stayed cached")
+		}
+		// Corruption recovery uses the same budget as dirty conversations.
+		execTx(t, c.DB, `UPDATE session_shape_facts SET facts='{' WHERE conversation_id IN ('cv-a1','cv-a2')`)
+		snapshot, err := c.readSessionShapeSnapshot(t.Context())
+		if err != nil || len(snapshot.pending) != 2 {
+			t.Fatalf("unbounded corruption recovery: %+v, %v", snapshot.pending, err)
+		}
+		if _, ok := snapshot.facts["cv-a1"]; ok {
+			t.Fatal("damaged statistics were counted")
+		}
+		// A disappearing conversation is absent even before maintenance deletes its facts.
+		execTx(t, c.DB, `DELETE FROM conversations WHERE id='cv-old'`)
+		if shapeRows(t, c)["cv-old"] != nil {
+			t.Fatal("deleted conversation still counted")
+		}
 	})
+
 	// Pages derive dirty conversations without storing them; maintenance does.
 	if len(shapeRows(t, c)) == 0 || countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty") != all {
 		t.Fatal("a page stored session shape")

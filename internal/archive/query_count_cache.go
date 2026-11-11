@@ -135,6 +135,9 @@ var queryCoreDatasets = map[string]bool{
 // queryDatasetGeneration is the generation scope dataset's counts are
 // current for.
 func queryDatasetGeneration(dataset string) string {
+	if dataset == "session_shape" {
+		return generationSessionShape
+	}
 	if queryCoreDatasets[dataset] {
 		return generationCore
 	}

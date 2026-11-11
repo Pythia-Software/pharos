@@ -6,6 +6,10 @@ its hourly ledger with Pharos's historical price book. It includes partially
 unpriced sessions and retained mirrors, not just the Library's representative
 rows.
 
+The [November 2026 cost coverage investigation](cost-coverage-investigation.md)
+classifies the remaining model gaps and distinguishes uncategorized remainders
+from the full token totals of partially priced buckets.
+
 ```sh
 mkdir -p .context/token-cost-audit
 PHAROS_USAGE_AUDIT_CATALOG=/path/to/catalog.sqlite3 \
@@ -195,3 +199,8 @@ also encounters pre-existing Git API compile errors in
 `outcome_stages_probe_test.go`; the read-only replay above was validated by
 compiling the normal `go list` source/test file set plus
 `usage_audit_probe_test.go` explicitly. No live migration was run.
+
+PR validation subsequently passed the frontend checks and full frontend matrix.
+The full Go suite completed with one failure: `TestIncrementalWriterRowBudget`
+observed 81 changed rows against an 80-row budget; the same test on the merged
+master baseline (`f5c656e1`) also observed 81 rows, without these feature changes.
